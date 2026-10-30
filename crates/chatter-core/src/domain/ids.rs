@@ -47,10 +47,6 @@ pub struct IntegrationId(pub Uuid);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct NotificationId(pub Uuid);
 
-/// Unique identifier for a draft (UUID v4).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
-pub struct DraftId(pub Uuid);
-
 /// Unique identifier for a saved message in personal vault (UUID v4).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct SavedMessageId(pub Uuid);
@@ -156,7 +152,6 @@ impl_uuid_id!(
     ReactionId,
     IntegrationId,
     NotificationId,
-    DraftId,
     SavedMessageId,
     SectionId
 );
@@ -221,6 +216,19 @@ impl From<UserId> for ChannelId {
 // ============================================================================
 
 impl MessageId {
+    /// Stable identity for a received secret-chat message. The conversation
+    /// scope prevents an author reusing a sent clock in another mailbox from
+    /// colliding with this message during receive replay.
+    #[must_use]
+    pub fn from_secret_sender_timestamp(
+        conversation_id: &ChannelId,
+        sender_id: &UserId,
+        sent_at_ns: u64,
+    ) -> Self {
+        let input = format!("secret-msg:{conversation_id}:{sender_id}:{sent_at_ns}");
+        Self(Uuid::new_v5(&Uuid::nil(), input.as_bytes()))
+    }
+
     /// Create a deterministic MessageId from a timestamp.
     ///
     /// Used for Signal-style message identification where messages are

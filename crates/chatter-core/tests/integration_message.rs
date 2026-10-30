@@ -3,19 +3,22 @@
 //! Tests message operations including send, edit, delete, reactions,
 //! pins, search, and streaming against a running server.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use chatter_core::error::NetworkError;
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
 use chatter_core::proto::chat_v1::{
-    message::content::Type as ContentType, message::Content, ChannelType, MessageSortDirection,
+    ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };
 use tokio_stream::StreamExt;
 
 use common::*;
 
 /// Helper to create a test channel and return its ID.
-async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool) -> String {
+async fn create_test_channel(
+    pool: &chatter_core::network::grpc::GrpcClientPool,
+    user: &TestUser,
+) -> String {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("test_channel_{}", unique_username());
 
@@ -24,10 +27,9 @@ async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool)
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
-            None,
             Some("Test channel for integration tests"),
             None,
+            Some(membership::genesis(user, true).1),
         )
         .await
         .expect("Failed to create channel");
@@ -73,8 +75,8 @@ async fn test_send_and_get_message() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-    let channel_id = create_test_channel(&pool).await;
+    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let channel_id = create_test_channel(&pool, &user).await;
 
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
 
@@ -86,7 +88,6 @@ async fn test_send_and_get_message() {
                 text_content("Hello, integration test!"),
                 None,
                 false,
-                None,
                 None,
                 vec![],
                 false,
@@ -141,8 +142,8 @@ async fn test_delete_message() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-    let channel_id = create_test_channel(&pool).await;
+    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let channel_id = create_test_channel(&pool, &user).await;
 
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
 
@@ -154,7 +155,6 @@ async fn test_delete_message() {
                 text_content("Message to delete"),
                 None,
                 false,
-                None,
                 None,
                 vec![],
                 false,
@@ -225,8 +225,8 @@ async fn test_message_search() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-    let channel_id = create_test_channel(&pool).await;
+    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let channel_id = create_test_channel(&pool, &user).await;
 
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
 
@@ -239,7 +239,6 @@ async fn test_message_search() {
                 text_content(&format!("This message contains {}", unique_word)),
                 None,
                 false,
-                None,
                 None,
                 vec![],
                 false,
@@ -297,11 +296,10 @@ async fn test_send_to_nonexistent_channel() {
 
     let result = msg_client
         .send_message(
-            "nonexistent-channel-id",
+            &uuid::Uuid::new_v4().to_string(),
             text_content("This should fail"),
             None,
             false,
-            None,
             None,
             vec![],
             false,
@@ -327,8 +325,8 @@ async fn test_stream_messages() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-    let channel_id = create_test_channel(&pool).await;
+    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let channel_id = create_test_channel(&pool, &user).await;
 
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
 
@@ -343,11 +341,7 @@ async fn test_stream_messages() {
     // Optionally consume the initial "stream ready" message
     let mut stream = stream_result.unwrap();
     use tokio_stream::StreamExt;
-    let first_msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        stream.next(),
-    )
-    .await;
+    let first_msg = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await;
 
     // Should receive initial message within 2 seconds
     assert!(first_msg.is_ok(), "Should receive initial stream message");

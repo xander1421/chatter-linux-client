@@ -1,0 +1,133 @@
+import { Colors } from "theme/colors.slint";
+import { SidebarPane } from "app_sidebar_pane.slint";
+import { ModalHostState } from "app_modal_host_state.slint";
+import { AvatarOption } from "components/avatar_picker.slint";
+import { ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
+import { MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
+import { ConversationKind } from "chat/conversation_kind.slint";
+import { EmojiData } from "components/emoji_picker.slint";
+import { GifData } from "components/gif_picker.slint";
+import { MentionSuggestion } from "components/mention_autocomplete.slint";
+import { AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
+import { SharedContentItem, SharedTab } from "modals/mod.slint";
+import { FriendData, FriendRequestData, BlockedUserData } from "modals/friends.slint";
+import { ForwardTarget } from "modals/forward_message.slint";
+import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
+import { SearchResultChannel } from "modals/join_channel.slint";
+import { ChannelMemberData, BannedMemberData } from "modals/channel_member_types.slint";
+import { InviteUser } from "modals/invite_member.slint";
+import { QuickSwitcherItem, SearchResult, CalendarDay } from "components/unified_search.slint";
+import { PinnedItem } from "modals/pinned_messages.slint";
+import { MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData } from "modals/jarvis_memory.slint";
+import { IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
+
+export global CallView {
+    // ========== Call properties ==========
+    in-out property <bool> incoming-call-visible: false;
+    // Back while ringing hides the full-screen ring (Signal): the call keeps
+    // ringing and the notification keeps Accept / Decline. Separate from
+    // `incoming-call-visible`, which is "a call is ringing" to the call code.
+    in-out property <bool> incoming-call-minimized: false;
+    in property <IncomingCallData> incoming-call-data;
+    /// True when a newly arrived incoming call will replace the active call
+    /// if accepted — driven by the call orchestrator.
+    in-out property <bool> incoming-call-replaces-active: false;
+    in-out property <bool> active-call-visible: false;
+    in-out property <string> active-channel-call-id: "";
+    in-out property <bool> active-channel-call-video: false;
+    in-out property <int> active-channel-call-participants: 0;
+    // True when the call dock has been expanded to fill the chat column.
+    // Bound to ActiveCallView.fullscreen. Hides the ChatLayout sibling.
+    in-out property <bool> active-call-fullscreen: false;
+    in property <ActiveCallData> active-call-data;
+    pure callback select-call-tile-indices([CallParticipantData], string) -> [int];
+    in-out property <bool> call-is-muted: false;
+    in-out property <bool> call-is-video-enabled: true;
+    in-out property <bool> call-is-screen-sharing: false;
+    // Android call audio route (platform/android/audio_route.rs). Desktop never
+    // sets `call-speaker-toggle`, so its speaker button stays the output picker.
+    in property <bool> call-speaker-toggle: false;
+    in property <bool> call-speaker-on: false;
+    callback call-toggle-speaker();
+    // A call screen opened (true) or closed (false), and whether the local
+    // camera is on at that moment; then camera changes mid-call.
+    callback call-audio-session(bool, bool);
+    callback call-audio-video(bool);
+    // Set by `open_call_screen` (calls/incoming.rs) when answering raised the
+    // phone pane over the list; the call's end lowers it again.
+    in-out property <bool> call-raised-pane: false;
+    // Accept presents the call in Chats; minimize uncovers the prior route.
+    in-out property <bool> call-route-saved: false;
+    in-out property <string> call-return-tab: "chats";
+    in-out property <bool> call-return-show-chat: false;
+    in-out property <[string]> call-return-modal-stack: [];
+    in-out property <bool> call-return-settings-open: false;
+    public function save-call-route() {
+        if call-route-saved { return; }
+        call-return-tab = SidebarPane.active-tab;
+        call-return-show-chat = SidebarPane.mobile-show-chat;
+        call-return-modal-stack = ModalHostState.modal-stack;
+        call-return-settings-open = ModalHostState.settings-open;
+        call-route-saved = true;
+    }
+    public function restore-call-route() {
+        if !call-route-saved { return; }
+        SidebarPane.active-tab = call-return-tab;
+        SidebarPane.mobile-show-chat = call-return-show-chat;
+        ModalHostState.modal-stack = call-return-modal-stack;
+        ModalHostState.settings-open = call-return-settings-open;
+        call-raised-pane = false;
+        call-route-saved = false;
+    }
+    in property <image> call-local-video-frame;
+    in property <[image]> call-remote-video-frames;
+    // Device picker properties
+    in-out property <bool> device-picker-visible: false;
+    in-out property <string> device-picker-type: "audio"; // "audio", "audio_output", or "screen"
+    in property <[AudioDeviceData]> audio-devices: [];
+    in-out property <string> selected-audio-device-id: "";
+    in property <[AudioDeviceData]> audio-output-devices: [];
+    in-out property <string> selected-audio-output-id: "";
+    in property <[ScreenSourceData]> screen-monitors: [];
+    in property <[ScreenSourceData]> screen-windows: [];
+    in-out property <string> selected-screen-source-id: "";
+    // ========== Call callbacks ==========
+    callback calls-tab-clicked();  // mobile nav "Calls" tab — loads call history
+    // Call history (Calls screen). Rows come from core pre-formatted.
+    in property <[CallHistoryRow]> call-history-rows: [];
+    in property <bool> call-history-loading: false;
+    // Automatic paging stopped at its empty-page budget with older calls left.
+    in property <bool> call-history-paging-paused: false;
+    in-out property <string> call-history-error: "";
+    // Shared with the Calls screen so root Back dismisses its local overlay first.
+    in-out property <bool> calls-more-menu-visible: false;
+    in-out property <string> call-history-filter: "all";  // "all" | "missed"
+    in property <int> missed-call-count: 0;
+    callback call-history-filter-changed(string);
+    callback call-history-open(string, string);        // conversation-id, conversation-type
+    callback call-history-redial(string, string, bool); // conversation-id, conversation-type, is-video
+    callback call-history-clear();
+    callback call-history-retry();
+    callback call-history-load-more();  // list within a screen of its loaded end
+    // Calls-screen row selection (features/calls/history.rs owns the marks).
+    in-out property <bool> call-history-selecting: false;
+    in property <int> call-history-selected-count: 0;
+    callback call-history-toggle-select(string);  // row id
+    callback call-history-select-all(bool);
+    callback call-history-end-selection();
+    callback call-history-delete-selected();
+    callback accept-incoming-call(string);  // call_id
+    callback decline-incoming-call(string); // call_id
+    callback call-toggle-mute();
+    callback call-toggle-video();
+    callback call-toggle-screen-share();
+    callback call-end();
+    callback call-peer-audio-mute-toggle(string);
+    callback call-peer-video-pause-toggle(string);
+    callback show-audio-device-picker();
+    callback show-audio-output-picker();
+    callback show-screen-source-picker();
+    callback audio-device-selected(string);   // device_id
+    callback audio-output-selected(string);   // device_id
+    callback screen-source-selected(string);  // source_id
+}

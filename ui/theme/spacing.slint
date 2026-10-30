@@ -1,7 +1,18 @@
-// Spacing and sizing tokens for Chatter — Neomorphism 2.0
+// Spacing and sizing tokens for Chatter.
+
+import { Appearance } from "appearance.slint";
 
 export global Spacing {
+    out property <length> radius-chrome: 24px;
+    out property <length> radius-sheet: 28px;
+    // Controls nested in chrome are concentric with it: inner radius = outer
+    // radius − the inset between them, so the two curves run parallel. The
+    // composer's field and buttons sit `chrome-inset` inside its shell.
+    out property <length> chrome-inset: xs;
+    out property <length> radius-chrome-inner: radius-chrome - chrome-inset;
+
     // Base spacing
+    out property <length> none: 0px;
     out property <length> xxs: 2px;
     out property <length> xs: 4px;
     out property <length> sm: 8px;
@@ -11,23 +22,37 @@ export global Spacing {
     out property <length> xxl: 32px;
     out property <length> xxxl: 48px;
 
-    // Border radius — Neo 2.0 uses generous radii (superellipse-approximate)
+    // Content radii stay stable; chrome and sheet radii are separate above.
     out property <length> radius-sm: 6px;
     out property <length> radius-md: 10px;
     out property <length> radius-lg: 16px;
     out property <length> radius-xl: 20px;            // Neo bubble radius (18-24px range)
     out property <length> radius-full: 9999px;
+    // Message bubbles (text, media, call): round corners, and the outer-side
+    // tail / same-sender joint corner (message_item.slint).
+    out property <length> radius-bubble: 18px;
+    out property <length> radius-bubble-joint: 6px;
+
+    // Shared control geometry
+    out property <length> button-height: 44px;
+    out property <length> button-min-width: 80px;
+    out property <length> button-icon: 18px;
+    out property <length> switch-width: 44px;
+    out property <length> switch-track-height: 24px;
+    out property <length> switch-thumb: 20px;
 
     // Component sizes
     out property <length> avatar-sm: 32px;
     out property <length> avatar-md: 40px;
-    out property <length> avatar-lg: 56px;
-    out property <length> sidebar-width: 240px;
+    // A wide window (a tablet, a maximised desktop) gives the chat list the
+    // ~320px Signal and Telegram use; at 240px a tablet elided "Ops 263d".
+    // app.slint sets `wide-window` from the window width.
+    in-out property <bool> wide-window: false;
+    out property <length> sidebar-width: root.wide-window ? 320px : 240px;
     out property <length> sidebar-width-collapsed: 60px;
     // Touch icon rail: a 44px slot with 12px gutters either side. The 60px
     // desktop rail leaves a 44px slot only 8px of breathing room, which reads
     // as cramped at phone density.
-    out property <length> sidebar-width-collapsed-touch: 68px;
     out property <length> sidebar-width-hidden: 0px;
     out property <length> thread-panel-width: 360px;
 
@@ -38,9 +63,16 @@ export global Spacing {
     // were each carrying their own numbers (52px/32px here, 56px/40px there)
     // and read as three different apps stacked together. Anything that lists
     // people reads these, so they cannot drift apart again.
-    out property <length> row-height-touch: 72px;
-    out property <length> row-avatar-touch: 52px;
-    out property <length> bottom-nav-height: 56px;
+    //
+    // Rows that hold text grow with the text size (`text-grow`), and the
+    // list rows tighten under Settings › Appearance › Message spacing: Compact.
+    out property <length> row-height-touch: (Appearance.compact ? 60px : 72px) * Appearance.text-grow;
+    out property <length> row-avatar-touch: Appearance.compact ? 44px : 52px;
+    out property <length> bottom-nav-height: 56px * Appearance.text-grow;
+    // The chat list's compose button (Signal / Telegram FAB) and the plain
+    // one-line list row (menus, Search, Saved Messages).
+    out property <length> fab-size: 56px;
+    out property <length> list-row-height-touch: 56px * Appearance.text-grow;
 
     // The same two roles at mouse density. Desktop was hardcoding them per
     // component — 52px/32px in the DM row, 44px in the channel and private-
@@ -48,14 +80,14 @@ export global Spacing {
     // in two heights depending on what kind of conversation each row was.
     // Same rule as the touch pair: one number per role, read by everything
     // that lists a conversation.
-    out property <length> row-height-desktop: 52px;
+    out property <length> row-height-desktop: (Appearance.compact ? 44px : 52px) * Appearance.text-grow;
     out property <length> row-avatar-desktop: 32px;
 
     // The app's top row: the sidebar's first row and the conversation header
     // are the same row across the seam between the two panes, and on macOS
     // the native traffic lights sit inside it. One number, or the seam shows.
-    out property <length> header-height: 52px;
-    out property <length> header-height-touch: 64px;
+    out property <length> header-height: 52px * Appearance.text-grow;
+    out property <length> header-height-touch: 64px * Appearance.text-grow;
     // Every control in a header/toolbar row — back, close, call, video, pin,
     // kebab — is ONE glyph size in ONE box size, so the row sits on a single
     // vertical centre. Screens were each picking their own (24-in-48 next to
@@ -67,12 +99,27 @@ export global Spacing {
     out property <length> header-glyph-touch: 26px;
     out property <length> header-action-box: 44px;
     out property <length> header-action-box-touch: 48px;
+    // Between two adjacent header buttons, in every header.
+    out property <length> header-action-gap: 4px;
 
-    // Neo 2.0 shadow offsets — 145° light angle
-    out property <length> neo-offset-sm: 3px;          // Small elements (toggles, chips)
-    out property <length> neo-offset-md: 5px;          // Buttons, inputs
-    out property <length> neo-offset-lg: 8px;          // Cards, modals, bubbles
-    out property <length> neo-blur-sm: 6px;            // Subtle depth
-    out property <length> neo-blur-md: 10px;           // Standard depth
-    out property <length> neo-blur-lg: 16px;           // Deep depth (modals, popups)
+    // The ONE stroke width. A stroke carries meaning or it is not drawn: a
+    // text input's edge (Colors.border, Colors.primary when focused), a
+    // selected/checked state (Colors.primary), an unchecked checkbox or radio
+    // (Colors.text-muted). Cards, rows, sheets, menus, chips, avatars and
+    // buttons are flat — separated by background tone, not outlines.
+    // The sole optical exception is Materials.glass-edge inside GlassSurface.
+    out property <length> stroke: 1.5px;
+
+    // Count and label badges (unread, missed calls, member counts, role
+    // tags). They hold Typography.xs/xxs text, so they grow with it; pills
+    // take `self.height / 2` as their radius so the ends stay round.
+    out property <length> badge-sm: 16px * Appearance.text-grow;
+    out property <length> badge-md: 18px * Appearance.text-grow;
+
+    // Message list density (Settings › Appearance › Message spacing). The
+    // vertical padding around a message row — a group's first message and a
+    // same-sender continuation — and the gap between rows.
+    out property <length> message-padding: Appearance.compact ? xxs : xs;
+    out property <length> message-padding-continuation: Appearance.compact ? 0px : xxs;
+    out property <length> message-gap: Appearance.compact ? 0px : 2px;
 }

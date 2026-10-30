@@ -1,6 +1,10 @@
 // InvitePrivateGroupModal - Modal for inviting members to an existing private group
 
+import { KeyFocus } from "../components/key_focus.slint";
+import { Avatar } from "../components/avatar.slint";
+import { Icons } from "../theme/icons.slint";
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
@@ -20,8 +24,10 @@ export component InvitePrivateGroupModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: "Invite Members";
+        title: "Invite members";
         modal-width: 480px;
+        max-modal-height: 640px;
+        fill-height: true;
 
         close => {
             root.close();
@@ -40,12 +46,9 @@ export component InvitePrivateGroupModal inherits Rectangle {
             // Friend list (scrollable)
             Rectangle {
                 min-height: 200px;
-                max-height: 350px;
                 vertical-stretch: 1;
                 background: Colors.surface;
                 border-radius: Spacing.radius-md;
-                border-width: 1px;
-                border-color: Colors.text-muted.with-alpha(0.2);
 
                 if root.available-friends.length == 0: Rectangle {
                     Text {
@@ -65,29 +68,40 @@ export component InvitePrivateGroupModal inherits Rectangle {
                         padding: Spacing.xs;
 
                         for friend[index] in root.available-friends: Rectangle {
-                            height: 52px;
-                            background: friend-touch.has-hover ? Colors.surface-hover : transparent;
+                            height: max(52px, Spacing.touch-target-min);
+                            background: friend.selected ? Colors.inset : friend-touch.pressed ? Materials.pressed : friend-touch.has-hover ? Colors.surface-hover : transparent;
                             border-radius: Spacing.radius-md;
+                            transform-scale-x: friend-touch.pressed ? 0.97 : 1;
+                            transform-scale-y: friend-touch.pressed ? 0.94 : 1;
+                            animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                            accessible-role: checkbox;
+                            accessible-label: friend.display-name;
+                            accessible-checkable: true;
+                            accessible-checked: friend.selected;
+                            accessible-action-default => { root.toggle-selection(index); }
+                            KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-selection(index); } }
+
+                            // Keep the row target behind the role chip so
+                            // pressing Admin/Member changes the role instead
+                            // of deselecting the friend.
+                            friend-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.toggle-selection(index); }
+                            }
 
                             HorizontalLayout {
                                 padding-left: Spacing.sm;
                                 padding-right: Spacing.sm;
                                 spacing: Spacing.sm;
 
-                                // Avatar placeholder
-                                Rectangle {
-                                    width: 36px;
-                                    height: 36px;
-                                    border-radius: 18px;
-                                    background: Colors.surface-hover;
-
-                                    Text {
-                                        text: friend.display-name != "" ? friend.display-name : "?";
-                                        color: Colors.text-secondary;
-                                        font-size: Typography.sm;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
+                                Avatar {
+                                    size: 36px;
+                                    source: friend.avatar-source;
+                                    anonymous: friend.anonymous;
+                                    name: friend.display-name;
+                                    fallback-text: "?";
                                 }
 
                                 // Name
@@ -96,6 +110,7 @@ export component InvitePrivateGroupModal inherits Rectangle {
                                     alignment: center;
 
                                     Text {
+                                        accessible-role: none;
                                         text: friend.display-name;
                                         color: Colors.text-primary;
                                         font-size: Typography.sm;
@@ -111,29 +126,48 @@ export component InvitePrivateGroupModal inherits Rectangle {
                                     }
                                 }
 
-                                // Role selector (only shown when selected)
-                                if friend.selected: Rectangle {
-                                    width: invite-role-text.width + Spacing.sm * 2;
-                                    height: 24px;
-                                    border-radius: Spacing.radius-sm;
-                                    background: friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover;
-                                    border-width: 1px;
-                                    border-color: friend.role == "admin" ? Colors.warning.with-alpha(0.5) : Colors.text-muted.with-alpha(0.3);
+                                // The chip grows from the selected row, then
+                                // returns to zero width when deselected.
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 0;
+                                    Rectangle {
+                                        width: friend.selected ? invite-role-text.preferred-width + Spacing.sm * 2 : 0px;
+                                        height: Spacing.button-height;
+                                        border-radius: Spacing.radius-sm;
+                                        background: friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover;
+                                        opacity: friend.selected ? 1 : 0;
+                                        clip: true;
+                                        animate width { duration: Materials.motion-standard; easing: Materials.spring; }
+                                        animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+                                        transform-scale-x: invite-role-touch.pressed ? 0.9 : 1;
+                                        transform-scale-y: invite-role-touch.pressed ? 0.9 : 1;
+                                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                                        accessible-role: button;
+                                        accessible-label: "Role for " + friend.display-name + ": " + invite-role-text.text;
+                                        accessible-enabled: friend.selected;
+                                        accessible-action-default => { if friend.selected { root.toggle-role(index); } }
+                                        KeyFocus { border-radius: parent.border-radius; activate => { if friend.selected { root.toggle-role(index); } } }
 
-                                    invite-role-text := Text {
-                                        text: friend.role == "admin" ? "Admin" : "Member";
-                                        color: friend.role == "admin" ? Colors.warning : Colors.text-secondary;
-                                        font-size: Typography.xs;
-                                        font-weight: Typography.medium;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-
-                                    invite-role-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.toggle-role(index);
+                                        invite-role-text := Text {
+                                            accessible-role: none;
+                                            text: friend.role == "admin" ? "Admin" : "Member";
+                                            color: friend.role == "admin" ? Colors.warning : Colors.text-secondary;
+                                            font-size: Typography.xs;
+                                            font-weight: Typography.medium;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
                                         }
+
+                                        invite-role-touch := TouchArea {
+                                            enabled: friend.selected;
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.toggle-role(index);
+                                            }
+                                        }
+
                                     }
                                 }
 
@@ -142,28 +176,21 @@ export component InvitePrivateGroupModal inherits Rectangle {
                                     width: 20px;
                                     height: 20px;
                                     border-radius: Spacing.radius-sm;
-                                    border-width: friend.selected ? 0 : 2px;
+                                    border-width: friend.selected ? 0px : Spacing.stroke;
                                     border-color: Colors.text-muted;
-                                    background: friend.selected ? Colors.primary : transparent;
+                                    background: friend.selected ? Colors.action-fill : transparent;
 
-                                    if friend.selected: Text {
-                                        text: "\u{2713}";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.xs;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
+                                    if friend.selected: Image {
+                                        source: Icons.check;
+                                        width: 12px;
+                                        height: 12px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: Colors.on-action;
                                     }
                                 }
                             }
 
-                            friend-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.toggle-selection(index);
-                                }
-                            }
                         }
                     }
                 }

@@ -1,0 +1,137 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { RichTextBlock } from "types.slint";
+
+// Core's `util::emoji::jumbo_count` (wired in lib.rs): 1-3 for a body made
+// only of that many emoji, which draw large as on Signal and Telegram.
+export global EmojiText {
+    pure callback jumbo-count(string) -> int;
+}
+
+export component MessageBody inherits VerticalLayout {
+    in property <length> bubble-right;
+    in property <length> bubble-y;
+    in property <string> content;
+    in property <int> hold-tier;
+    in property <bool> is-own;
+    in property <string> message-id;
+    in property <bool> mobile;
+    in property <bool> media-caption: false;
+    in property <length> press-anchor-x;
+    in property <length> press-anchor-y;
+    in property <[RichTextBlock]> rich-content;
+    in property <bool> selection-mode;
+    in property <bool> swipe-active;
+    in property <length> text-max-width;
+    callback begin-message-press(length, length, length, length, length, length);
+    callback move-message-press(length, length);
+    callback end-swipe(bool);
+    callback cancel-hold();
+    callback selection-toggled(string);
+    callback open-message-link(string, string);
+    callback message-clicked(string);
+    callback clear-hold-tier();
+
+    if root.content != "" && root.rich-content.length > 0: VerticalLayout {
+        spacing: Spacing.xs;
+        width: root.media-caption ? root.text-max-width : min(self.preferred-width, root.text-max-width);
+
+        for block in root.rich-content: VerticalLayout {
+            if block.is-code-block: Rectangle {
+                background: Colors.bubble-inset;
+                border-radius: 4px;
+
+                VerticalLayout {
+                    padding: Spacing.sm;
+
+                    Text {
+                        text: block.plain;
+                        color: !root.is-own ? Colors.code-text : Colors.text-primary;
+                        font-family: Typography.font-family-mono;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                        max-width: root.text-max-width - 16px;
+                    }
+                }
+            }
+
+            if !block.is-code-block: StyledText {
+                width: root.media-caption ? root.text-max-width : min(self.preferred-width, root.text-max-width);
+                text: block.text;
+                link-color: root.is-own ? Colors.text-primary : Colors.primary;
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down) {
+                        root.begin-message-press(
+                            self.absolute-position.x + self.mouse-x,
+                            self.absolute-position.y + self.mouse-y,
+                            root.press-anchor-x,
+                            root.press-anchor-y,
+                            root.bubble-y,
+                            root.bubble-right);
+                    }
+                    if (event.kind == PointerEventKind.move) {
+                        root.move-message-press(self.absolute-position.x + self.mouse-x,
+                            self.absolute-position.y + self.mouse-y);
+                    }
+                    if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                        root.end-swipe(event.kind == PointerEventKind.cancel);
+                        root.cancel-hold();
+                    }
+                }
+                link-clicked(url, display-text) => {
+                    if (root.swipe-active) { return; }
+                    if (root.hold-tier != 0) { return; }
+                    if root.selection-mode { root.selection-toggled(root.message-id); }
+                    else { root.open-message-link(url, display-text); }
+                }
+                // Text gets these implicitly; StyledText does not.
+                accessible-role: text;
+                accessible-label: block.plain;
+                default-color: Colors.text-primary;
+                default-font-size: Typography.sm;
+            }
+        }
+    }
+
+    // A body with no markdown: one plain Text.
+    if root.content != "" && root.rich-content.length == 0: Text {
+        property <int> jumbo: root.media-caption ? 0 : EmojiText.jumbo-count(root.content);
+        width: root.media-caption ? root.text-max-width : min(self.preferred-width, root.text-max-width);
+        text: root.content;
+        color: Colors.text-primary;
+        font-size: self.jumbo == 1 ? Typography.huge : self.jumbo == 2 ? Typography.huge * 0.8 : self.jumbo == 3 ? Typography.huge * 0.65 : Typography.sm;
+        font-family: self.jumbo > 0 ? Typography.font-family-emoji : Typography.font-family;
+        wrap: word-wrap;
+
+        // Text owns its pointer events. Give touch the same
+        // swipe/hold stream as the surrounding bubble;
+        // desktop keeps native text selection.
+        if root.mobile: TouchArea {
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down) {
+                    root.begin-message-press(self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y,
+                        root.press-anchor-x,
+                        root.press-anchor-y,
+                        root.bubble-y,
+                        root.bubble-right);
+                }
+                if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                    root.end-swipe(event.kind == PointerEventKind.cancel);
+                    root.cancel-hold();
+                }
+            }
+            moved => {
+                root.move-message-press(self.absolute-position.x + self.mouse-x,
+                    self.absolute-position.y + self.mouse-y);
+            }
+            clicked => {
+                if (root.swipe-active) { return; }
+                if (root.selection-mode) { root.selection-toggled(root.message-id); return; }
+                if (root.hold-tier != 0) { root.clear-hold-tier(); return; }
+                root.message-clicked(root.message-id);
+            }
+        }
+    }
+}

@@ -6,19 +6,29 @@ use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::Utc;
 use rusqlite::params;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::sync::Arc;
 
 /// Well-known setting keys.
 pub mod keys {
     // App settings
     pub const THEME: &str = "app.theme";
+    /// Settings › Appearance › Text size — `services::appearance::TextSize`.
+    pub const TEXT_SIZE: &str = "app.text_size";
+    /// Settings › Appearance › Message spacing — `services::appearance::MessageDensity`.
+    pub const MESSAGE_DENSITY: &str = "app.message_density";
+    /// Device-local chrome effects preference, enabled by default.
+    pub const GLASS_EFFECTS: &str = "app.glass_effects";
+    /// Device-local motion preference: skip decorative animation.
+    pub const REDUCE_MOTION: &str = "app.reduce_motion";
+    /// Last measured native IME height and window width, in logical pixels.
+    pub const COMPOSER_KEYBOARD_GEOMETRY: &str = "app.composer_keyboard_geometry";
     pub const NOTIFICATION_SOUND: &str = "app.notification_sound";
-    pub const NOTIFICATION_ENABLED: &str = "app.notification_enabled";
     /// Opaque ntfy push topic issued by the server in AuthResponse. The client
     /// subscribes to this instead of deriving `chatter_{user_id}` locally
     /// (which leaked the user_id and didn't match the server's publish topic).
+    pub const DEVICE_WAKE_TOPIC: &str = "push.device_wake_topic";
     pub const PUSH_TOPIC: &str = "push.topic";
 
     // Privacy settings
@@ -28,14 +38,35 @@ pub mod keys {
     /// "auto" (default) = start online, idle detector may set away.
     pub const PRESENCE_MODE: &str = "presence.mode";
 
-    // Sync settings
-    pub const LAST_SYNC_TIMESTAMP: &str = "sync.last_timestamp";
-
     // Auth settings
     pub const CURRENT_USER_ID: &str = "auth.current_user_id";
     pub const CURRENT_DEVICE_ID: &str = "auth.current_device_id";
+    /// The account this install belonged to when the server said it was
+    /// unlinked (`storage::unlink`). Signal-Desktop keeps the same fact
+    /// (`uuid_id`, StorageKeys.std.ts STORAGE_KEYS_TO_PRESERVE_AFTER_UNLINK) to
+    /// tell a relink of that account from a link to a different one.
+    pub const UNLINKED_ACCOUNT_ID: &str = "auth.unlinked_account_id";
     /// Device authentication token (32 bytes, base64 encoded)
     pub const DEVICE_AUTH_TOKEN: &str = "auth.device_token";
+    /// Recovery codes awaiting explicit acknowledgment. The SQLCipher settings
+    /// database keeps the one-time plaintext available across app restarts.
+    pub const UNACKNOWLEDGED_RECOVERY_CODES_PREFIX: &str = "auth.unacknowledged_recovery_codes.";
+
+    pub fn unacknowledged_recovery_codes_key(user_id: crate::domain::ids::UserId) -> String {
+        format!("{UNACKNOWLEDGED_RECOVERY_CODES_PREFIX}{}", user_id.0)
+    }
+    /// Prefix of the per-account trusted-device token (server OPEN-ITEMS
+    /// §134, OWASP "device cookie"): `auth.trusted_device_token.{login
+    /// identifier}`. Kept across logout on purpose — it is what lets this
+    /// device sign back in while strangers burn the account's shared login
+    /// ceiling. In this (SQLCipher) database like every other credential.
+    pub const TRUSTED_DEVICE_TOKEN_PREFIX: &str = "auth.trusted_device_token.";
+
+    /// Settings key of this device's trusted-device token for the login
+    /// identifier `identifier`.
+    pub fn trusted_device_token_key(identifier: &str) -> String {
+        format!("{TRUSTED_DEVICE_TOKEN_PREFIX}{identifier}")
+    }
     /// Current user's plaintext display name
     pub const DISPLAY_NAME: &str = "auth.display_name";
     /// Full Signal-style `nickname.discriminator` chosen at registration.
@@ -74,6 +105,17 @@ pub mod keys {
     /// prekeys nobody can complete a handshake with: the original bug, reached
     /// by a different road. This flag is what makes the retry happen.
     pub const KEY_REPUBLISH_PENDING: &str = "crypto.key_republish_pending";
+    /// Who receives our profile key ("everyone" | "contacts" | "nobody"),
+    /// see `services::profile_visibility`. Absent = everyone.
+    pub const PROFILE_VISIBILITY: &str = "privacy.profile_visibility";
+    /// A rotated profile key not yet committed: generated and being written
+    /// to the SVR backup. Reused by a retry so the backup and the local key
+    /// can never name two different fresh keys.
+    pub const PROFILE_KEY_NEXT: &str = "crypto.profile_key_next";
+    /// Set while a committed profile-key rotation still owes our other
+    /// devices, the server UAK and the server profile the new key; nothing is
+    /// shared with anyone until it clears.
+    pub const PROFILE_KEY_ROTATION_PENDING: &str = "crypto.profile_key_rotation_pending";
     /// Cached sender certificate (serialized bytes, base64 encoded)
     pub const SENDER_CERTIFICATE: &str = "crypto.sender_certificate";
     /// When to refresh sender certificate (Unix timestamp ms)
@@ -84,28 +126,21 @@ pub mod keys {
     /// Set on register / change-pin via `crypto::svr::derive_pin_fingerprint`.
     /// Never sent to the server. Used by [`LinkDeviceService::verify_pin`].
     pub const PIN_FINGERPRINT: &str = "crypto.pin_fingerprint";
-    /// Local-only password re-auth fingerprint (32 bytes, encrypted-at-rest).
-    /// Equal to `derive_login_auth_hash(SHA-256(password), username)`. Lets
-    /// [`LinkDeviceService::verify_password`] re-check the user password
-    /// without a network round-trip. Same value (hex-encoded) is what the
-    /// server stores in the `username` column for login lookup.
-    pub const AUTH_LOOKUP_HASH: &str = "crypto.auth_lookup_hash";
 
     // UI settings
-    pub const WINDOW_WIDTH: &str = "ui.window_width";
-    pub const WINDOW_HEIGHT: &str = "ui.window_height";
-    pub const WINDOW_MAXIMIZED: &str = "ui.window_maximized";
-    pub const SIDEBAR_WIDTH: &str = "ui.sidebar_width";
     pub const SIDEBAR_COLLAPSED: &str = "ui.sidebar_collapsed";
-    pub const FONT_SIZE: &str = "ui.font_size";
     pub const SEARCH_SHORTCUT: &str = "ui.search_shortcut";
 
-    /// Whether the user wants the BLE mesh running. Absent means yes.
-    ///
-    /// Opt-*out*, not opt-in: the mesh exists for the moment the network fails,
-    /// and a feature that has to be enabled from a working app before it can help
-    /// is not available when it is needed.
+    /// Whether the user enabled the BLE mesh. Absent means off; radio use is opt-in.
     pub const MESH_ENABLED: &str = "mesh.enabled";
+    /// Self-asserted display name sent in mesh announces.
+    pub const MESH_NICKNAME: &str = "mesh.nickname";
+    pub const MESH_MUTED_CHANNELS: &str = "mesh.muted_channels";
+    pub const MESH_BLOCKED_PEERS: &str = "mesh.blocked_peers";
+    pub const MESH_MUTED_PEERS: &str = "mesh.muted_peers";
+
+    /// Group resends this device asked for — see `SolicitedResends`.
+    pub const SOLICITED_RESENDS: &str = "message.solicited_resends";
 
     // Notification privacy settings
     // Controls what metadata leaks to the OS notification system.
@@ -150,14 +185,22 @@ impl SettingsRepository {
     /// Returns `None` if the key doesn't exist.
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
+        // Cached per pooled connection: this one statement is read very often
+        // (every get/get_string/get_bool routes here — e.g. the current user id
+        // is read a few times per message row while a conversation loads), so
+        // reusing the prepared statement avoids re-parsing the SQL each call.
+        let mut stmt = conn.prepare_cached("SELECT value FROM settings WHERE key = ?1")?;
 
         let result: Result<String, _> = stmt.query_row(params![key], |row| row.get(0));
 
         match result {
             Ok(json) => {
-                let value: T = serde_json::from_str(&json)
-                    .map_err(|e| StorageError::InvalidData(format!("Failed to deserialize setting '{}': {}", key, e)))?;
+                let value: T = serde_json::from_str(&json).map_err(|e| {
+                    StorageError::InvalidData(format!(
+                        "Failed to deserialize setting '{}': {}",
+                        key, e
+                    ))
+                })?;
                 Ok(Some(value))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -170,8 +213,9 @@ impl SettingsRepository {
     /// Uses upsert semantics: creates if new, updates if exists.
     pub fn set<T: Serialize>(&self, key: &str, value: &T) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        let json = serde_json::to_string(value)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize setting '{}': {}", key, e)))?;
+        let json = serde_json::to_string(value).map_err(|e| {
+            StorageError::InvalidData(format!("Failed to serialize setting '{}': {}", key, e))
+        })?;
         let now = Utc::now().to_rfc3339();
 
         conn.execute(
@@ -259,13 +303,16 @@ impl SettingsRepository {
     ///
     /// Used for cryptographic keys like profile_key that should be stored as raw bytes.
     pub fn get_bytes(&self, key: &str) -> Result<Option<Vec<u8>>, StorageError> {
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 
         let b64: Option<String> = self.get(key)?;
         match b64 {
             Some(encoded) => {
                 let bytes = BASE64.decode(&encoded).map_err(|e| {
-                    StorageError::InvalidData(format!("Failed to decode bytes for '{}': {}", key, e))
+                    StorageError::InvalidData(format!(
+                        "Failed to decode bytes for '{}': {}",
+                        key, e
+                    ))
                 })?;
                 Ok(Some(bytes))
             }
@@ -277,7 +324,7 @@ impl SettingsRepository {
     ///
     /// Used for cryptographic keys like profile_key that should be stored as raw bytes.
     pub fn set_bytes(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 
         let encoded = BASE64.encode(value);
         self.set(key, &encoded)
@@ -337,7 +384,11 @@ impl SettingsRepository {
     }
 
     /// Set the local AI model configuration.
-    pub fn set_local_ai_model(&self, model_id: &str, quantized_file: Option<&str>) -> Result<(), StorageError> {
+    pub fn set_local_ai_model(
+        &self,
+        model_id: &str,
+        quantized_file: Option<&str>,
+    ) -> Result<(), StorageError> {
         self.set_string(keys::LOCAL_AI_MODEL_ID, model_id)?;
         if let Some(qf) = quantized_file {
             self.set_string(keys::LOCAL_AI_QUANTIZED_FILE, qf)?;

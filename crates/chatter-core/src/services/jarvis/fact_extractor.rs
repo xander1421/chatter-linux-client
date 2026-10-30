@@ -8,8 +8,8 @@
 
 use std::sync::Arc;
 
-use crate::domain::jarvis::{JarvisContext, JarvisFact};
 use crate::domain::UserId;
+use crate::domain::jarvis::{JarvisContext, JarvisFact};
 use crate::services::ai::SampleParams;
 use crate::storage::repositories::JarvisMemoryRepository;
 
@@ -147,7 +147,6 @@ JSON:"#,
     }
 
     fn items_to_facts(items: Vec<serde_json::Value>) -> Vec<ExtractedFact> {
-
         items
             .into_iter()
             .filter_map(|item| {
@@ -158,8 +157,12 @@ JSON:"#,
                 }
                 // Junk filter: tiny models pad with non-facts.
                 let o = object.to_lowercase();
-                if o == "unknown" || o == "none" || o == "n/a" || o == "work"
-                    || o.starts_with("no ") || o.starts_with("not ")
+                if o == "unknown"
+                    || o == "none"
+                    || o == "n/a"
+                    || o == "work"
+                    || o.starts_with("no ")
+                    || o.starts_with("not ")
                 {
                     return None;
                 }
@@ -208,15 +211,23 @@ mod tests {
             "Sure! Here are the facts:\n[{\"predicate\": \"lives in\", \"object\": \"Berlin\"}]\nDone.",
         );
         assert_eq!(facts.len(), 1);
-        assert_eq!(facts[0].predicate, "lives_in", "spaces normalized to snake_case");
-        assert!((facts[0].confidence - 0.7).abs() < 1e-9, "missing confidence defaults");
+        assert_eq!(
+            facts[0].predicate, "lives_in",
+            "spaces normalized to snake_case"
+        );
+        assert!(
+            (facts[0].confidence - 0.7).abs() < 1e-9,
+            "missing confidence defaults"
+        );
     }
 
     #[test]
     fn garbage_and_empty_yield_nothing() {
         assert!(FactExtractor::parse_response("no json here").is_empty());
         assert!(FactExtractor::parse_response("[]").is_empty());
-        assert!(FactExtractor::parse_response("[{\"predicate\": \"\", \"object\": \"x\"}]").is_empty());
+        assert!(
+            FactExtractor::parse_response("[{\"predicate\": \"\", \"object\": \"x\"}]").is_empty()
+        );
     }
 
     #[test]

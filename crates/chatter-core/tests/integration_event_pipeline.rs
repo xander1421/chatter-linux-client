@@ -15,7 +15,11 @@ fn test_event_bus_domain_publish_subscribe() {
     let user_id = UserId::new();
     let channel_id = ChannelId::new();
 
-    let sent = bus.emit_domain(DomainEvent::TypingStarted { user_id, channel_id });
+    let sent = bus.emit_domain(DomainEvent::TypingStarted {
+        user_id,
+        channel_id,
+        timestamp: 0,
+    });
     assert!(sent > 0, "Should have at least one subscriber");
 
     let event = rx.try_recv().expect("Should receive the domain event");
@@ -23,6 +27,7 @@ fn test_event_bus_domain_publish_subscribe() {
         DomainEvent::TypingStarted {
             user_id: recv_uid,
             channel_id: recv_cid,
+            ..
         } => {
             assert_eq!(recv_uid, user_id);
             assert_eq!(recv_cid, channel_id);
@@ -41,27 +46,13 @@ fn test_event_bus_multiple_subscribers() {
     let sent = bus.emit_domain(DomainEvent::TypingStopped {
         user_id: UserId::new(),
         channel_id: ChannelId::new(),
+        timestamp: 0,
     });
     assert_eq!(sent, 3, "Should deliver to 3 subscribers");
 
     assert!(rx1.try_recv().is_ok());
     assert!(rx2.try_recv().is_ok());
     assert!(rx3.try_recv().is_ok());
-}
-
-#[test]
-fn test_event_bus_ui_channel_separate() {
-    let bus = EventBus::new();
-    let mut domain_rx = bus.subscribe_domain();
-    let mut ui_rx = bus.subscribe_ui();
-
-    bus.emit_domain(DomainEvent::TypingStarted {
-        user_id: UserId::new(),
-        channel_id: ChannelId::new(),
-    });
-
-    assert!(domain_rx.try_recv().is_ok(), "Domain channel should receive");
-    assert!(ui_rx.try_recv().is_err(), "UI channel should NOT receive domain event");
 }
 
 #[test]
@@ -73,6 +64,7 @@ fn test_event_bus_broadcast_capacity() {
         bus.emit_domain(DomainEvent::TypingStarted {
             user_id: UserId::new(),
             channel_id: ChannelId::new(),
+            timestamp: 0,
         });
     }
 
@@ -89,11 +81,19 @@ fn test_domain_event_key_variants() {
     let channel_id = ChannelId::new();
     let message_id = MessageId::new();
 
-    let typing = DomainEvent::TypingStarted { user_id, channel_id };
+    let typing = DomainEvent::TypingStarted {
+        user_id,
+        channel_id,
+        timestamp: 0,
+    };
     let _ = typing.clone();
     let _ = format!("{:?}", typing);
 
     let reaction = DomainEvent::ReactionAdded {
+        scope: chatter_core::domain::reaction::ReactionScope::new(
+            channel_id,
+            chatter_core::domain::message::ConversationType::Channel,
+        ),
         sender_id: user_id,
         sent_at_ns: 1234567890,
         reactor_id: UserId::new(),
@@ -114,6 +114,7 @@ fn test_domain_event_key_variants() {
         message_id,
         pinner_id: user_id,
         channel_id,
+        conversation_type: chatter_core::domain::ConversationType::Channel,
         target_sent_timestamp: 1234567890,
     };
     let _ = format!("{:?}", pin);

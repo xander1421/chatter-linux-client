@@ -1,0 +1,3 @@
+Compile the production helper with `./gradlew :app:compileDebugKotlin` from the Android project, then run `./thumbnail-host-tests/run.sh` from that project.
+
+The harness loads the real compiled Kotlin helper with deterministic Android framework doubles. It checks frame-at-zero selection, scaled dimensions, compressed-byte and source-pixel limits, malformed/unsupported fallback, resource release, deadline return, no queued replacement decoder after timeout, and eventual work-permit recovery. Native range authentication, source budgets and persistence fences are tested by the Rust `video_thumbnail` filters. This does not replace decoding an owned MP4 on Android during release acceptance.

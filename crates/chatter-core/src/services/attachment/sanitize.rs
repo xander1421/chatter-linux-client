@@ -17,7 +17,7 @@
 //! Detection is content-based (magic bytes), not MIME-based, because our
 //! renderers also sniff content — a lying MIME type must not bypass validation.
 //!
-//! ponytail: coverage ceiling — sanitized: ISO-BMFF MP4 (isom brands), WebP
+//! coverage ceiling — sanitized: ISO-BMFF MP4 (isom brands), WebP
 //! (validate), JPEG, PNG. Passes through byte-identical: GIF, MOV, HEIC, MKV,
 //! PDF, …; non-`isom` ftyp is outside mp4san's scope and passes unchanged.
 //! Filenames are NOT metadata we strip: `FileMetadata.filename` is E2E-
@@ -126,7 +126,9 @@ fn strip_png_metadata(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentError> {
         }
         let len = u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize;
         let ty = &data[i + 4..i + 8];
-        let total = len.checked_add(12).ok_or_else(|| bad("chunk length overflow"))?;
+        let total = len
+            .checked_add(12)
+            .ok_or_else(|| bad("chunk length overflow"))?;
         if i + total > data.len() {
             return Err(bad("chunk length out of bounds"));
         }
@@ -211,7 +213,8 @@ pub fn validate_media(content: &[u8]) -> Result<(), AttachmentError> {
 pub fn sanitize_media_file(
     path: &Path,
 ) -> Result<Option<tempfile::NamedTempFile>, AttachmentError> {
-    let open_err = |e| AttachmentError::FileError(format!("Failed to open file for sanitizing: {e}"));
+    let open_err =
+        |e| AttachmentError::FileError(format!("Failed to open file for sanitizing: {e}"));
     let mut file = std::fs::File::open(path).map_err(open_err)?;
 
     let mut magic = [0u8; 12];
@@ -238,16 +241,22 @@ pub fn sanitize_media_file(
         } else {
             strip_png_metadata(&content)?
         };
-        let Some(bytes) = stripped else { return Ok(None) };
-        super::ensure_attachments_dir()
-            .map_err(|e| AttachmentError::FileError(format!("Failed to create attachments dir: {e}")))?;
-        let mut out = tempfile::NamedTempFile::new_in(super::attachments_dir())
-            .map_err(|e| AttachmentError::FileError(format!("Failed to create sanitize temp: {e}")))?;
+        let Some(bytes) = stripped else {
+            return Ok(None);
+        };
+        super::ensure_attachments_dir().map_err(|e| {
+            AttachmentError::FileError(format!("Failed to create attachments dir: {e}"))
+        })?;
+        let mut out = tempfile::NamedTempFile::new_in(super::attachments_dir()).map_err(|e| {
+            AttachmentError::FileError(format!("Failed to create sanitize temp: {e}"))
+        })?;
         use std::io::Write;
-        out.write_all(&bytes)
-            .map_err(|e| AttachmentError::FileError(format!("Failed to write stripped image: {e}")))?;
-        out.flush()
-            .map_err(|e| AttachmentError::FileError(format!("Failed to flush stripped image: {e}")))?;
+        out.write_all(&bytes).map_err(|e| {
+            AttachmentError::FileError(format!("Failed to write stripped image: {e}"))
+        })?;
+        out.flush().map_err(|e| {
+            AttachmentError::FileError(format!("Failed to flush stripped image: {e}"))
+        })?;
         return Ok(Some(out));
     }
 
@@ -260,7 +269,10 @@ pub fn sanitize_media_file(
         Ok(s) => s,
         // Same carve-out as the bytes path: non-isom ftyp is outside scope.
         Err(mp4san::Error::Parse(report))
-            if matches!(report.get_ref(), mp4san::parse::ParseError::UnsupportedFormat(_)) =>
+            if matches!(
+                report.get_ref(),
+                mp4san::parse::ParseError::UnsupportedFormat(_)
+            ) =>
         {
             tracing::debug!("ftyp file outside mp4san scope, passing through");
             return Ok(None);
@@ -268,7 +280,7 @@ pub fn sanitize_media_file(
         Err(e) => {
             return Err(AttachmentError::InvalidAttachment(format!(
                 "malformed MP4 rejected: {e}"
-            )))
+            )));
         }
     };
 
@@ -282,14 +294,16 @@ pub fn sanitize_media_file(
         None => metadata,
     };
 
-    super::ensure_attachments_dir()
-        .map_err(|e| AttachmentError::FileError(format!("Failed to create attachments dir: {e}")))?;
+    super::ensure_attachments_dir().map_err(|e| {
+        AttachmentError::FileError(format!("Failed to create attachments dir: {e}"))
+    })?;
     let mut out = tempfile::NamedTempFile::new_in(super::attachments_dir())
         .map_err(|e| AttachmentError::FileError(format!("Failed to create sanitize temp: {e}")))?;
 
     use std::io::Write;
-    out.write_all(&metadata)
-        .map_err(|e| AttachmentError::FileError(format!("Failed to write sanitized metadata: {e}")))?;
+    out.write_all(&metadata).map_err(|e| {
+        AttachmentError::FileError(format!("Failed to write sanitized metadata: {e}"))
+    })?;
     file.seek(SeekFrom::Start(sanitized.data.offset))
         .map_err(|e| AttachmentError::FileError(format!("Failed to seek media data: {e}")))?;
     let copied = std::io::copy(&mut (&mut file).take(sanitized.data.len), out.as_file_mut())
@@ -305,7 +319,6 @@ pub fn sanitize_media_file(
 
     Ok(Some(out))
 }
-
 
 /// File-streaming variant of [`strip_mp4_privacy_boxes`] for the case where
 /// mp4san reports the layout already clean: walk top-level boxes via seeks,
@@ -362,11 +375,14 @@ fn strip_mp4_file_privacy_boxes(
         off += size;
     }
 
-    let Some(new_moov) = stripped_moov else { return Ok(None) };
+    let Some(new_moov) = stripped_moov else {
+        return Ok(None);
+    };
 
     // Pass 2: splice.
-    super::ensure_attachments_dir()
-        .map_err(|e| AttachmentError::FileError(format!("Failed to create attachments dir: {e}")))?;
+    super::ensure_attachments_dir().map_err(|e| {
+        AttachmentError::FileError(format!("Failed to create attachments dir: {e}"))
+    })?;
     let mut out = tempfile::NamedTempFile::new_in(super::attachments_dir())
         .map_err(|e| AttachmentError::FileError(format!("Failed to create sanitize temp: {e}")))?;
     for (boff, bsize, is_moov) in boxes {
@@ -374,8 +390,7 @@ fn strip_mp4_file_privacy_boxes(
             out.write_all(&new_moov).map_err(ferr)?;
         } else {
             file.seek(SeekFrom::Start(boff)).map_err(ferr)?;
-            let copied =
-                std::io::copy(&mut file.take(bsize), out.as_file_mut()).map_err(ferr)?;
+            let copied = std::io::copy(&mut file.take(bsize), out.as_file_mut()).map_err(ferr)?;
             if copied != bsize {
                 return Err(bad("box copy truncated"));
             }
@@ -397,13 +412,14 @@ fn read_up_to(r: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
     Ok(filled)
 }
 
-
-/// Drop privacy metadata children from a top-level `moov` box: `udta` (Apple
+/// Erase privacy metadata children from a top-level `moov` box: `udta` (Apple
 /// ©xyz GPS, iTunes ilst under udta.meta) and `meta`. mp4san normalizes
 /// layout and validates structure but deliberately PRESERVES these boxes —
 /// proven by the real-sample harness (exiftool-tagged GPSCoordinates
 /// survived) — so we strip them ourselves. Presentation is unaffected: both
-/// are non-presentation by definition.
+/// are non-presentation by definition. Replace them with equally sized,
+/// zero-filled `free` boxes: shrinking moov would move mdat without updating
+/// the absolute stco/co64 offsets already calculated by mp4san.
 ///
 /// `data` is a whole MP4 (small enough to hold: callers pass either full
 /// bytes or the mp4san metadata buffer, never a multi-GB mdat). Returns
@@ -439,7 +455,7 @@ fn strip_mp4_privacy_boxes(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentErr
             if hdr == 16 {
                 return Err(bad("moov with 64-bit size unsupported"));
             }
-            // Walk moov children, dropping udta/meta.
+            // Walk moov children, erasing udta/meta without moving sample data.
             let mut kept: Vec<u8> = Vec::with_capacity(size as usize);
             let mut j = i + 8;
             while j < end {
@@ -455,7 +471,10 @@ fn strip_mp4_privacy_boxes(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentErr
                         if j + 16 > end {
                             return Err(bad("truncated moov child largesize"));
                         }
-                        (16u64, u64::from_be_bytes(data[j + 8..j + 16].try_into().unwrap()))
+                        (
+                            16u64,
+                            u64::from_be_bytes(data[j + 8..j + 16].try_into().unwrap()),
+                        )
                     }
                     s => (8u64, s),
                 };
@@ -464,14 +483,19 @@ fn strip_mp4_privacy_boxes(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentErr
                 }
                 if cty == b"udta" || cty == b"meta" {
                     dropped = true;
+                    let start = kept.len();
+                    kept.extend_from_slice(&data[j..j + chdr as usize]);
+                    kept[start + 4..start + 8].copy_from_slice(b"free");
+                    kept.resize(start + csize as usize, 0);
                 } else {
                     kept.extend_from_slice(&data[j..j + csize as usize]);
                 }
                 j += csize as usize;
             }
             let new_size = 8 + kept.len();
-            out.extend_from_slice(&(u32::try_from(new_size).map_err(|_| bad("moov too large"))?)
-                .to_be_bytes());
+            out.extend_from_slice(
+                &(u32::try_from(new_size).map_err(|_| bad("moov too large"))?).to_be_bytes(),
+            );
             out.extend_from_slice(b"moov");
             out.extend_from_slice(&kept);
         } else {
@@ -492,9 +516,12 @@ async fn sanitize_mp4(content: &[u8]) -> Result<SanitizeOutcome, AttachmentError
                 let len = usize::try_from(sanitized.data.len).map_err(|_| {
                     AttachmentError::InvalidAttachment("MP4 data length overflow".into())
                 })?;
-                let end = start.checked_add(len).filter(|&e| e <= content.len()).ok_or_else(
-                    || AttachmentError::InvalidAttachment("MP4 data span out of bounds".into()),
-                )?;
+                let end = start
+                    .checked_add(len)
+                    .filter(|&e| e <= content.len())
+                    .ok_or_else(|| {
+                        AttachmentError::InvalidAttachment("MP4 data span out of bounds".into())
+                    })?;
 
                 let mut output = Vec::with_capacity(metadata.len() + len);
                 output.extend_from_slice(&metadata);
@@ -529,7 +556,6 @@ async fn sanitize_mp4(content: &[u8]) -> Result<SanitizeOutcome, AttachmentError
 mod tests {
     use super::*;
 
-
     // Minimal valid MP4 boxes, byte-for-byte from mp4san-test's
     // example_ftyp/example_mdat/example_moov fixtures.
 
@@ -546,14 +572,7 @@ mod tests {
 
     /// ftyp with a non-isom (QuickTime) brand — outside mp4san's scope.
     fn ftyp_qt() -> Vec<u8> {
-        [
-            &[0, 0, 0, 20][..],
-            b"ftyp",
-            b"qt  ",
-            &[0, 0, 0, 0],
-            b"qt  ",
-        ]
-        .concat()
+        [&[0, 0, 0, 20][..], b"ftyp", b"qt  ", &[0, 0, 0, 0], b"qt  "].concat()
     }
 
     fn mdat() -> Vec<u8> {
@@ -606,6 +625,84 @@ mod tests {
     }
 
     #[test]
+    fn privacy_erasure_preserves_absolute_media_chunk_offsets() {
+        fn atom(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+            [
+                ((8 + payload.len()) as u32).to_be_bytes().as_slice(),
+                kind,
+                payload,
+            ]
+            .concat()
+        }
+        let sample = b"synthetic media sample";
+        for wide in [false, true] {
+            for trailing_moov in [false, true] {
+                // Both privacy box header forms must retain their full extent.
+                let private = [
+                    atom(b"udta", b"private-location"),
+                    [
+                        1u32.to_be_bytes().as_slice(),
+                        b"meta",
+                        &32u64.to_be_bytes(),
+                        b"private-metadata",
+                    ]
+                    .concat(),
+                ]
+                .concat();
+                let make_moov = |offset: u64| {
+                    let entry = if wide {
+                        offset.to_be_bytes().to_vec()
+                    } else {
+                        (offset as u32).to_be_bytes().to_vec()
+                    };
+                    let table = atom(
+                        if wide { b"co64" } else { b"stco" },
+                        &[vec![0; 4], 1u32.to_be_bytes().to_vec(), entry].concat(),
+                    );
+                    let track = atom(
+                        b"trak",
+                        &atom(b"mdia", &atom(b"minf", &atom(b"stbl", &table))),
+                    );
+                    atom(b"moov", &[track, private.clone()].concat())
+                };
+                let head = ftyp();
+                let sample_offset =
+                    head.len() + 8 + if trailing_moov { 0 } else { make_moov(0).len() };
+                let movie = make_moov(sample_offset as u64);
+                let media = atom(b"mdat", sample);
+                let input = if trailing_moov {
+                    [head, media, movie].concat()
+                } else {
+                    [head, movie, media].concat()
+                };
+                let memory = strip_mp4_privacy_boxes(&input).unwrap().unwrap();
+                let mut file = tempfile::NamedTempFile::new().unwrap();
+                std::io::Write::write_all(&mut file, &input).unwrap();
+                let stripped_file = strip_mp4_file_privacy_boxes(file.as_file_mut())
+                    .unwrap()
+                    .unwrap();
+                let streamed = std::fs::read(stripped_file.path()).unwrap();
+                for output in [&memory, &streamed] {
+                    // Follow the actual chunk table, not a rewritten-length expectation.
+                    let kind = if wide { b"co64" } else { b"stco" };
+                    let table = output.windows(4).position(|w| w == kind).unwrap();
+                    let entry = table + 12;
+                    let offset = if wide {
+                        u64::from_be_bytes(output[entry..entry + 8].try_into().unwrap()) as usize
+                    } else {
+                        u32::from_be_bytes(output[entry..entry + 4].try_into().unwrap()) as usize
+                    };
+                    assert_eq!(offset, sample_offset);
+                    assert_eq!(&output[offset..offset + sample.len()], sample);
+                    assert_eq!(output.len(), input.len());
+                    assert!(!output.windows(8).any(|w| w == b"private-"));
+                    assert!(!output.windows(4).any(|w| w == b"udta" || w == b"meta"));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn malformed_mp4_is_rejected() {
         // Valid ftyp followed by a moov whose declared size exceeds the input
         // (truncated box).
@@ -614,7 +711,10 @@ mod tests {
         input.extend_from_slice(b"moov");
 
         let err = sanitize_media(&input).expect_err("truncated mp4 must be rejected");
-        assert!(matches!(err, AttachmentError::InvalidAttachment(_)), "got: {err:?}");
+        assert!(
+            matches!(err, AttachmentError::InvalidAttachment(_)),
+            "got: {err:?}"
+        );
 
         // Incoming path applies the same policy.
         assert!(validate_media(&input).is_err());
@@ -642,7 +742,10 @@ mod tests {
         input.extend_from_slice(b"VP8L\xff\xff\xff\xffgarbage");
 
         let err = sanitize_media(&input).expect_err("malformed webp must be rejected");
-        assert!(matches!(err, AttachmentError::InvalidAttachment(_)), "got: {err:?}");
+        assert!(
+            matches!(err, AttachmentError::InvalidAttachment(_)),
+            "got: {err:?}"
+        );
         assert!(validate_media(&input).is_err());
     }
 
@@ -656,12 +759,19 @@ mod tests {
         let temp = sanitize_media_file(&dirty)
             .expect("valid mp4 must sanitize")
             .expect("trailing moov must be rewritten");
-        assert_eq!(std::fs::read(temp.path()).unwrap(), [ftyp(), moov(), mdat()].concat());
+        assert_eq!(
+            std::fs::read(temp.path()).unwrap(),
+            [ftyp(), moov(), mdat()].concat()
+        );
 
         // Clean layout → None (upload the original).
         let clean = dir.path().join("clean.mp4");
         std::fs::write(&clean, [ftyp(), moov(), mdat()].concat()).unwrap();
-        assert!(sanitize_media_file(&clean).expect("clean mp4 must pass").is_none());
+        assert!(
+            sanitize_media_file(&clean)
+                .expect("clean mp4 must pass")
+                .is_none()
+        );
 
         // Malformed → rejected, same policy as the bytes path.
         let bad = dir.path().join("bad.mp4");
@@ -677,9 +787,12 @@ mod tests {
         // Non-covered type → None, file untouched.
         let png = dir.path().join("x.png");
         std::fs::write(&png, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).unwrap();
-        assert!(sanitize_media_file(&png).expect("non-covered must pass").is_none());
+        assert!(
+            sanitize_media_file(&png)
+                .expect("non-covered must pass")
+                .is_none()
+        );
     }
-
 
     /// Minimal JPEG: SOI, APP0(JFIF), APP1(Exif with a GPS IFD), COM, SOS +
     /// fake entropy data, EOI. Not decodable — structural, for the segment
@@ -718,7 +831,8 @@ mod tests {
             c.extend_from_slice(data);
             let mut crc = crc32(&[&ty[..], data].concat());
             c.extend_from_slice(&crc.to_be_bytes());
-            crc = 0; let _ = crc; // silence
+            crc = 0;
+            let _ = crc; // silence
             c
         }
         // minimal crc32 (IEEE) — tables not worth it for a test
@@ -727,7 +841,11 @@ mod tests {
             for &b in data {
                 crc ^= b as u32;
                 for _ in 0..8 {
-                    crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+                    crc = if crc & 1 != 0 {
+                        (crc >> 1) ^ 0xEDB8_8320
+                    } else {
+                        crc >> 1
+                    };
                 }
             }
             !crc
@@ -736,7 +854,10 @@ mod tests {
         v.extend(chunk(b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0]));
         v.extend(chunk(b"eXIf", b"MM\0*GPSLATITUDE:48.8583N"));
         v.extend(chunk(b"tEXt", b"Comment\0taken at my house"));
-        v.extend(chunk(b"IDAT", &[0x78, 0x9C, 0x62, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01]));
+        v.extend(chunk(
+            b"IDAT",
+            &[0x78, 0x9C, 0x62, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01],
+        ));
         v.extend(chunk(b"IEND", b""));
         v
     }
@@ -750,8 +871,14 @@ mod tests {
             SanitizeOutcome::Unchanged => input.clone(),
         };
         let hay = |needle: &[u8], hay: &[u8]| hay.windows(needle.len()).any(|w| w == needle);
-        assert!(!hay(b"GPSLATITUDE", &out), "JPEG GPS EXIF leaked to outgoing bytes");
-        assert!(!hay(b"shot on my phone", &out), "JPEG COM leaked to outgoing bytes");
+        assert!(
+            !hay(b"GPSLATITUDE", &out),
+            "JPEG GPS EXIF leaked to outgoing bytes"
+        );
+        assert!(
+            !hay(b"shot on my phone", &out),
+            "JPEG COM leaked to outgoing bytes"
+        );
         assert_eq!(&out[..2], &[0xFF, 0xD8], "SOI must survive");
         assert!(hay(b"JFIF", &out), "APP0/JFIF must survive (not metadata)");
         assert_eq!(&out[out.len() - 2..], &[0xFF, 0xD9], "EOI must survive");
@@ -762,8 +889,14 @@ mod tests {
             SanitizeOutcome::Rewritten(b) => b,
             SanitizeOutcome::Unchanged => input.clone(),
         };
-        assert!(!hay(b"GPSLATITUDE", &out), "PNG eXIf GPS leaked to outgoing bytes");
-        assert!(!hay(b"taken at my house", &out), "PNG tEXt leaked to outgoing bytes");
+        assert!(
+            !hay(b"GPSLATITUDE", &out),
+            "PNG eXIf GPS leaked to outgoing bytes"
+        );
+        assert!(
+            !hay(b"taken at my house", &out),
+            "PNG tEXt leaked to outgoing bytes"
+        );
         assert!(hay(b"IHDR", &out) && hay(b"IDAT", &out) && hay(b"IEND", &out));
 
         // Incoming validate must NOT reject clean-but-unstripped media (it is
@@ -771,55 +904,59 @@ mod tests {
         assert!(validate_media(&jpeg_with_gps()).is_ok());
     }
 
-
-    /// Real-sample harness (opt-in): point GPS_SAMPLES_DIR at a directory of
-    /// GPS-tagged .jpg/.png/.mp4 files. Each is sanitized; the output must
-    /// contain no GPS bytes, still decode (images), and is written back as
-    /// <name>.sanitized.<ext> for external verification (exiftool).
-    /// Run: GPS_SAMPLES_DIR=... cargo test -p chatter-core --lib sanitize -- --ignored
-    /// This is the ONLY coverage of the MP4 moov.udta/meta GPS strip on a
-    /// real (mp4san-valid) file — a hand-crafted moov can't satisfy mp4san's
-    /// required-trak validation, so the crafted tests cover JPEG/PNG only.
+    /// Real, decodable GPS-tagged fixtures, generated from a black 16x16 frame
+    /// with FFmpeg; JPEG/PNG GPS EXIF was added with ExifTool. No external
+    /// services, tools or GPS_SAMPLES_DIR are needed to run this regression.
     #[test]
-    #[ignore]
     fn real_gps_samples_are_stripped_and_still_decode() {
-        let dir = std::env::var("GPS_SAMPLES_DIR").expect("set GPS_SAMPLES_DIR");
-        let hay = |needle: &[u8], hay: &[u8]| hay.windows(needle.len()).any(|w| w == needle);
-        let mut checked = 0;
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if path.to_string_lossy().contains(".sanitized.")
-                || !matches!(ext, "jpg" | "jpeg" | "png" | "mp4")
-            {
-                continue;
-            }
-            let input = std::fs::read(&path).unwrap();
-            let out = match sanitize_media(&input)
-                .unwrap_or_else(|e| panic!("{path:?} must sanitize: {e:?}"))
-            {
-                SanitizeOutcome::Rewritten(b) => b,
-                SanitizeOutcome::Unchanged => input.clone(),
+        let samples: [(&str, &[u8]); 3] = [
+            (
+                "jpg",
+                include_bytes!("../../../tests/fixtures/gps/location.jpg"),
+            ),
+            (
+                "png",
+                include_bytes!("../../../tests/fixtures/gps/location.png"),
+            ),
+            (
+                "mp4",
+                include_bytes!("../../../tests/fixtures/gps/location.mp4"),
+            ),
+        ];
+        let hay = |needle: &[u8], bytes: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+        for (ext, input) in samples {
+            let out = match sanitize_media(input).expect("GPS fixture must sanitize") {
+                SanitizeOutcome::Rewritten(bytes) => bytes,
+                SanitizeOutcome::Unchanged => panic!("{ext}: GPS fixture was not stripped"),
             };
-            for needle in [&b"GPSLatitude"[..], b"48.8583", b"2.2944", b"+48.8583"] {
-                assert!(
-                    !hay(needle, &out),
-                    "{path:?}: GPS needle {:?} survived sanitize",
-                    String::from_utf8_lossy(needle)
-                );
-            }
             if ext != "mp4" {
-                assert!(!hay(b"Exif", &out), "{path:?}: Exif block survived");
-                image::load_from_memory(&out)
-                    .unwrap_or_else(|e| panic!("{path:?}: stripped image no longer decodes: {e}"));
+                assert!(out.len() < input.len(), "{ext}: metadata must be removed");
             }
-            let out_path = path.with_extension(format!("sanitized.{ext}"));
-            std::fs::write(&out_path, &out).unwrap();
-            checked += 1;
+            assert!(
+                validate_media(&out).is_ok(),
+                "{ext}: sanitized media must remain valid"
+            );
+            if ext == "mp4" {
+                assert!(
+                    hay(b"udta", input),
+                    "fixture must exercise moov.udta stripping"
+                );
+                assert!(!hay(b"udta", &out), "MP4 private metadata survived");
+                assert!(!hay(b"+48.8583", &out), "MP4 GPS location survived");
+            } else {
+                // JPEG EXIF APP1 and PNG eXIf both carry binary GPS rationals;
+                // testing just an ASCII coordinate would miss those encodings.
+                if ext == "jpg" {
+                    assert!(hay(b"Exif", input));
+                    assert!(!hay(b"Exif", &out));
+                } else {
+                    assert!(hay(b"eXIf", input));
+                    assert!(!hay(b"eXIf", &out));
+                }
+                image::load_from_memory(&out).expect("stripped image must still decode");
+            }
         }
-        assert!(checked >= 3, "expected at least 3 sample files, checked {checked}");
     }
-
 
     #[test]
     fn non_covered_type_passes_through_byte_identical() {

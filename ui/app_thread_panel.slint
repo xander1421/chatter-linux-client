@@ -1,0 +1,138 @@
+import { ChatPane } from "app_chat_pane.slint";
+import { ThreadPanel } from "chat/thread_panel.slint";
+import { MessageItemData } from "chat/chat_layout.slint";
+import { ConversationKind } from "chat/conversation_kind.slint";
+
+export component AppThreadPanel inherits Rectangle {
+    out property <length> composer-top: thread-panel.composer-top;
+    changed composer-top => { ChatPane.thread-composer-top = root.composer-top; }
+    in-out property <length> context-menu-anchor-bottom;
+    in-out property <length> context-menu-anchor-left;
+    in-out property <length> context-menu-anchor-right;
+    in-out property <length> context-menu-anchor-top;
+    in-out property <bool> context-menu-preview-from-thread;
+    in-out property <MessageItemData> context-menu-preview-message;
+    in-out property <bool> context-menu-preview-mobile;
+    in-out property <length> context-menu-preview-row-width;
+    in-out property <length> context-menu-preview-row-x;
+    in-out property <length> context-menu-preview-row-y;
+    in property <bool> is-small-screen;
+    // Same rule as the main composer (app_conversation_layout.slint).
+    in property <bool> composer-enter-sends: true;
+    in property <bool> touch;
+    in property <bool> keyboard-open;
+    in-out property <int> reply-focus-serial;
+    in-out property <length> viewer-origin-width;
+    background: transparent;
+    thread-panel := ThreadPanel {
+        // The host hides this wrapper; the panel's own entrance and composer
+        // focus run on its `visible` changing, which never did while it
+        // stayed true inside a hidden parent.
+        visible: root.visible;
+        width: 100%;
+        height: 100%;
+        // Same expression `thread-panel-w` uses to give the panel
+        // the whole row: at that width it is a pushed page, so it
+        // dismisses with a back chevron rather than an X.
+        mobile: root.is-small-screen;
+        composer-enter-sends: root.composer-enter-sends;
+        touch: root.touch;
+        root-message-id: ChatPane.thread-root-message-id;
+        root-sender-name: ChatPane.thread-root-sender-name;
+        root-content-preview: ChatPane.thread-root-content-preview;
+        reply-count: ChatPane.thread-reply-count;
+        channel-name: ChatPane.channel-name;  // threads open on the active conversation
+        conversation-kind: ChatPane.conversation-kind;
+        private-channel: ChatPane.private-channel;
+        replies: ChatPane.thread-replies;
+        loading: ChatPane.thread-loading;
+        tail-serial: ChatPane.thread-tail-serial;
+        focus-index: ChatPane.thread-focus-index;
+        focus-serial: ChatPane.thread-focus-serial;
+        highlighted-id: ChatPane.thread-highlighted-id;
+        composer-text <=> ChatPane.thread-composer-text;
+        composer-caret-end-seq: ChatPane.thread-composer-caret-end-seq;
+        pending-attachments: ChatPane.thread-pending-attachments;
+        keyboard-open: root.keyboard-open;
+        emoji-list: ChatPane.thread-emoji-list;
+        emoji-category <=> ChatPane.thread-emoji-category;
+        emoji-search <=> ChatPane.thread-emoji-search;
+        emoji-skin-tone <=> ChatPane.thread-emoji-skin-tone;
+        mention-suggestions: ChatPane.thread-mention-suggestions;
+        mention-visible: ChatPane.thread-mention-visible;
+        mention-selected-index <=> ChatPane.thread-mention-selected-index;
+        is-replying: ChatPane.thread-composer-is-replying;
+        is-editing <=> ChatPane.thread-composer-is-editing;
+        edit-message-id <=> ChatPane.thread-composer-edit-message-id;
+        reply-to-sender-name: ChatPane.thread-reply-to-sender-name;
+        reply-preview: ChatPane.thread-reply-preview;
+        reply-has-thumbnail: ChatPane.thread-reply-has-thumbnail;
+        reply-thumbnail: ChatPane.thread-reply-thumbnail;
+        attachment-prepare-serial: ChatPane.thread-attachment-prepare-serial;
+        attachment-restore-serial: ChatPane.thread-attachment-restore-serial;
+
+        close-clicked => {
+            ChatPane.close-thread-clicked();
+            // Keys typed next go to the conversation's composer, not nowhere.
+            if !root.touch { root.reply-focus-serial += 1; }
+        }
+        send-reply(text) => { return ChatPane.send-thread-reply(text); }
+        attachment-clicked => { ChatPane.thread-attachment-clicked(); }
+        remove-attachment(id) => { ChatPane.thread-remove-attachment(id); }
+        paste-image => { ChatPane.thread-paste-image(); }
+        mention-triggered(query) => { ChatPane.thread-mention-triggered(query); }
+        mention-selected(id, display) => { ChatPane.thread-mention-selected(id, display); }
+        cancel-reply => { ChatPane.thread-cancel-reply(); }
+        send-edit(msg-id, text) => { ChatPane.send-edit(msg-id, text); }
+        cancel-edit => { ChatPane.thread-cancel-edit(); }
+        emoji-category-changed(category) => { ChatPane.thread-emoji-category-changed(category); }
+        emoji-search-changed(query) => { ChatPane.thread-emoji-search-changed(query); }
+        emoji-skin-tone-changed(tone) => { ChatPane.thread-emoji-skin-tone-changed(tone); }
+        load-more-replies => { ChatPane.load-more-thread-replies(); }
+        open-message-link(url, display-text) => { ChatPane.open-message-link(url, display-text); }
+        message-clicked(id) => { ChatPane.message-clicked(id); }
+        menu-open: ChatPane.context-menu-visible || ChatPane.reaction-picker-visible;
+        reply-clicked(sender-id, timestamp-ns) => {
+            ChatPane.reply-clicked(sender-id, timestamp-ns);
+            root.reply-focus-serial += 1;
+        }
+        quote-clicked(id) => { ChatPane.quote-clicked(id); }
+        edit-last-requested => { ChatPane.thread-edit-last-requested(); }
+        sender-profile-requested(user-id) => { ChatPane.sender-profile-requested(user-id); }
+        current-playing-attachment-id: ChatPane.current-playing-attachment-id;
+        is-media-playing: ChatPane.is-media-playing;
+        audio-progress: ChatPane.audio-progress;
+        audio-elapsed: ChatPane.audio-elapsed;
+        view-attachment(id) => {
+            root.viewer-origin-width = 0px;
+            ChatPane.view-attachment(id);
+        }
+        audio-seek(id, pos) => { ChatPane.audio-seek(id, pos); }
+        more-clicked(sender-id, timestamp-ns, x, y) => {
+            root.context-menu-preview-message = self.menu-preview-message;
+            root.context-menu-preview-row-x = self.menu-preview-row-x;
+            root.context-menu-preview-row-y = self.menu-preview-row-y;
+            root.context-menu-preview-row-width = self.menu-preview-row-width;
+            root.context-menu-preview-mobile = self.mobile;
+            root.context-menu-preview-from-thread = true;
+            // The panel's own header is the menu's ceiling.
+            ChatPane.context-menu-content-top = self.absolute-position.y;
+            root.context-menu-anchor-top = self.menu-anchor-top;
+            root.context-menu-anchor-bottom = self.menu-anchor-bottom;
+            root.context-menu-anchor-left = self.menu-anchor-left;
+            root.context-menu-anchor-right = self.menu-anchor-right;
+            ChatPane.more-clicked(sender-id, timestamp-ns, x, y);
+        }
+        react-clicked(sender-id, timestamp-ns, x, y) => {
+            ChatPane.reaction-picker-sender-id = sender-id;
+            ChatPane.reaction-picker-timestamp-ns = timestamp-ns;
+            ChatPane.reaction-picker-anchor-x = x;
+            ChatPane.reaction-picker-anchor-y = y;
+            ChatPane.reaction-picker-visible = true;
+            ChatPane.react-clicked(sender-id, timestamp-ns, x, y);
+        }
+        reaction-toggled(sender-id, timestamp-ns, emoji) => {
+            ChatPane.reaction-selected(sender-id, timestamp-ns, "", emoji);
+        }
+    }
+}

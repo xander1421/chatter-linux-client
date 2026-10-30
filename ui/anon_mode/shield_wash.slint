@@ -1,0 +1,15 @@
+import { Appearance } from "../theme/appearance.slint";
+import { Materials } from "../theme/materials.slint";
+import { AnonMode } from "anon_mode_global.slint";
+
+// A single transparent wash crosses the chrome as Shield changes state.
+// No pointer item is placed here, so controls underneath keep their hit
+// targets and the signed-in/onboarding Tor behavior remains independent.
+export component ShieldWash inherits Rectangle {
+    background: Appearance.dark
+        ? @linear-gradient(145deg, #36d9ba18 0%, #238cdb0c 100%)
+        : @linear-gradient(145deg, #14ab8d14 0%, #547fd20a 100%);
+    opacity: AnonMode.enabled ? 1 : 0;
+    visible: self.opacity > 0;
+    animate opacity { duration: Materials.motion-emphasized; easing: Materials.glide; }
+}

@@ -9,8 +9,8 @@ use chrono::{DateTime, Utc};
 use rusqlite::params;
 
 use crate::domain::jarvis::{
-    ContextType, EntityKnowledge, EntityType, JarvisContext, JarvisEntity, JarvisEntityId,
-    JarvisEntityMention, JarvisRelationship, JarvisRelationshipId, SubjectType,
+    EntityKnowledge, EntityType, JarvisEntity, JarvisEntityId, JarvisEntityMention,
+    JarvisRelationship, JarvisRelationshipId, SubjectType,
 };
 use crate::error::StorageError;
 use crate::storage::Database;
@@ -33,9 +33,8 @@ impl JarvisGraphRepository {
     /// Get the total number of entities in the knowledge graph.
     pub fn count_entities(&self) -> Result<u32, StorageError> {
         let conn = self.db.read_connection()?;
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM jarvis_entities", [], |row| {
-            row.get(0)
-        })?;
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM jarvis_entities", [], |row| row.get(0))?;
         Ok(count as u32)
     }
 
@@ -364,61 +363,6 @@ impl JarvisGraphRepository {
         Ok(())
     }
 
-    /// Get mentions of an entity.
-    pub fn get_mentions(
-        &self,
-        entity_id: &JarvisEntityId,
-        limit: u32,
-    ) -> Result<Vec<JarvisEntityMention>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, entity_id, context_type, context_id, message_id, timestamp
-             FROM jarvis_entity_mentions
-             WHERE entity_id = ?1
-             ORDER BY timestamp DESC
-             LIMIT ?2",
-        )?;
-
-        let mut rows = stmt.query(params![entity_id.as_str(), limit])?;
-        let mut mentions = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            mentions.push(row_to_mention(row)?);
-        }
-
-        Ok(mentions)
-    }
-
-    /// Get entities mentioned in a context.
-    pub fn get_context_entities(
-        &self,
-        context: &JarvisContext,
-        limit: u32,
-    ) -> Result<Vec<JarvisEntity>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT e.id, e.entity_type, e.name, e.normalized_name, e.aliases_json, e.properties_json, e.first_seen_at, e.last_seen_at, e.mention_count, e.created_at
-             FROM jarvis_entity_mentions m
-             JOIN jarvis_entities e ON e.id = m.entity_id
-             WHERE m.context_type = ?1 AND m.context_id = ?2
-             ORDER BY m.timestamp DESC
-             LIMIT ?3",
-        )?;
-
-        let mut rows = stmt.query(params![
-            context.context_type.to_i32(),
-            context.context_id,
-            limit,
-        ])?;
-        let mut entities = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            entities.push(row_to_entity(row)?);
-        }
-
-        Ok(entities)
-    }
-
     // ========================================================================
     // High-level Knowledge Queries
     // ========================================================================
@@ -451,60 +395,6 @@ impl JarvisGraphRepository {
             related,
             facts,
         })
-    }
-
-    /// Get entities co-mentioned with given entities in a context.
-    pub fn get_co_mentioned_entities(
-        &self,
-        entity_ids: &[JarvisEntityId],
-        limit: u32,
-    ) -> Result<Vec<JarvisEntity>, StorageError> {
-        if entity_ids.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let conn = self.db.read_connection()?;
-
-        // Build placeholders for IN clause
-        let placeholders: Vec<String> = entity_ids.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect();
-        let in_clause = placeholders.join(", ");
-
-        let sql = format!(
-            "SELECT DISTINCT e.id, e.entity_type, e.name, e.normalized_name, e.aliases_json, e.properties_json, e.first_seen_at, e.last_seen_at, e.mention_count, e.created_at
-             FROM jarvis_entity_mentions m1
-             JOIN jarvis_entity_mentions m2 ON m1.context_type = m2.context_type AND m1.context_id = m2.context_id
-             JOIN jarvis_entities e ON e.id = m2.entity_id
-             WHERE m1.entity_id IN ({}) AND m2.entity_id NOT IN ({})
-             ORDER BY e.mention_count DESC
-             LIMIT ?{}",
-            in_clause,
-            in_clause,
-            entity_ids.len() * 2 + 1
-        );
-
-        let mut stmt = conn.prepare(&sql)?;
-
-        // Build params: entity_ids twice (for both IN clauses) + limit
-        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = entity_ids
-            .iter()
-            .map(|id| Box::new(id.as_str().to_string()) as Box<dyn rusqlite::ToSql>)
-            .collect();
-        params_vec.extend(
-            entity_ids
-                .iter()
-                .map(|id| Box::new(id.as_str().to_string()) as Box<dyn rusqlite::ToSql>),
-        );
-        params_vec.push(Box::new(limit));
-
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
-        let mut rows = stmt.query(params_refs.as_slice())?;
-        let mut entities = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            entities.push(row_to_entity(row)?);
-        }
-
-        Ok(entities)
     }
 
     /// Delete old mentions and prune unused entities.
@@ -543,7 +433,10 @@ fn row_to_entity(row: &rusqlite::Row) -> Result<JarvisEntity, rusqlite::Error> {
     row_to_entity_offset(row, 0)
 }
 
-fn row_to_entity_offset(row: &rusqlite::Row, offset: usize) -> Result<JarvisEntity, rusqlite::Error> {
+fn row_to_entity_offset(
+    row: &rusqlite::Row,
+    offset: usize,
+) -> Result<JarvisEntity, rusqlite::Error> {
     let id: String = row.get(offset)?;
     let entity_type: i32 = row.get(offset + 1)?;
     let name: String = row.get(offset + 2)?;
@@ -588,25 +481,6 @@ fn row_to_relationship(row: &rusqlite::Row) -> Result<JarvisRelationship, rusqli
         last_seen_at: parse_datetime(&last_seen_at_str),
         context_count: context_count as u32,
         created_at: parse_datetime(&created_at_str),
-    })
-}
-
-fn row_to_mention(row: &rusqlite::Row) -> Result<JarvisEntityMention, rusqlite::Error> {
-    let id: String = row.get(0)?;
-    let entity_id: String = row.get(1)?;
-    let context_type: i32 = row.get(2)?;
-    let context_id: String = row.get(3)?;
-    let message_id: Option<String> = row.get(4)?;
-    let timestamp: i64 = row.get(5)?;
-
-    #[allow(clippy::cast_sign_loss)]
-    Ok(JarvisEntityMention {
-        id,
-        entity_id: JarvisEntityId::from_string(entity_id),
-        context_type: ContextType::from_i32(context_type),
-        context_id,
-        message_id,
-        timestamp: timestamp as u64,
     })
 }
 

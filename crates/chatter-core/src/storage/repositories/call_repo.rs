@@ -11,9 +11,13 @@ use crate::domain::call::{CallDirection, CallHistoryEntry, CallHistoryFilter, Ca
 use crate::domain::message::ConversationType;
 use crate::error::StorageError;
 use crate::storage::Database;
+use crate::storage::repositories::SettingsRepository;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, params_from_iter, types::Value as SqlValue};
 use std::sync::Arc;
+
+/// `settings` key holding when the Calls screen was last opened (RFC3339).
+const MISSED_SEEN_AT_KEY: &str = "calls.missed_seen_at";
 
 /// Local call history data repository.
 ///
@@ -71,22 +75,17 @@ impl CallHistoryRepository {
         Ok(())
     }
 
-    /// Mark a previously-inserted call as ended with a duration.
-    ///
-    /// Sets `ended_at = now`, `duration_secs = duration`, and flips `result`
-    /// from any non-terminal value to `'completed'`. Missed/declined/failed
-    /// entries are left alone (their result is already terminal).
-    pub fn mark_ended(&self, id: &str, duration_secs: i64) -> Result<(), StorageError> {
+    /// Close out a call that CONNECTED: `ended_at = now`, the duration, and
+    /// `result = 'completed'`. A connected call was answered, so this
+    /// overrides the pessimistic `'missed'` an incoming row starts as.
+    pub fn mark_completed(&self, id: &str, duration_secs: i64) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let now = Utc::now().to_rfc3339();
         let rows = conn.execute(
             "UPDATE call_history
              SET ended_at = ?1,
                  duration_secs = ?2,
-                 result = CASE
-                    WHEN result IN ('missed', 'declined', 'failed') THEN result
-                    ELSE 'completed'
-                 END
+                 result = 'completed'
              WHERE id = ?3",
             params![now, duration_secs, id],
         )?;
@@ -102,9 +101,8 @@ impl CallHistoryRepository {
     /// Close out a call that never connected: stamp `ended_at`, leave
     /// `duration_secs` NULL, and record the terminal `result`.
     ///
-    /// Separate from [`mark_ended`](Self::mark_ended) because that one exists
-    /// to *preserve* an already-terminal result; this one is the write that
-    /// sets it.
+    /// The other half of [`mark_completed`](Self::mark_completed), which is
+    /// only for a call that connected.
     pub fn mark_unconnected(&self, id: &str, result: CallResult) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
@@ -122,20 +120,47 @@ impl CallHistoryRepository {
         Ok(())
     }
 
-    /// Delete a single entry by id. Silently succeeds if the row is absent —
-    /// the UI's "swipe to delete" should be idempotent.
-    pub fn delete(&self, id: &str) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        conn.execute("DELETE FROM call_history WHERE id = ?1", params![id])?;
-        Ok(())
-    }
-
-    /// Delete every call history entry.
+    /// Delete the entries named in `ids` — the rows the user selected,
+    /// snapshotted when they confirmed. Absent ids are skipped, so a repeat
+    /// is idempotent. A call still open in this process (no `ended_at`,
+    /// started at or after `live_since`) is kept: its recorder still has to
+    /// close the row and file the chat's Call bubble from it.
     ///
     /// Returns the number of rows deleted.
-    pub fn delete_all(&self) -> Result<u64, StorageError> {
+    pub fn delete_ids(&self, ids: &[String], live_since: DateTime<Utc>) -> Result<u64, StorageError> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
         let conn = self.db.connection()?;
-        let rows = conn.execute("DELETE FROM call_history", [])?;
+        let marks = vec!["?"; ids.len()].join(",");
+        let sql = format!(
+            "DELETE FROM call_history WHERE id IN ({marks}) AND {CLOSED_OR_ORPHANED}"
+        );
+        let mut args: Vec<SqlValue> = ids.iter().cloned().map(SqlValue::Text).collect();
+        args.push(SqlValue::Text(live_since.to_rfc3339()));
+        let rows = conn.execute(&sql, params_from_iter(args.iter()))?;
+        Ok(rows as u64)
+    }
+
+    /// Delete every entry `filter` lists that started no later than `cutoff`
+    /// — the moment the list the user is clearing was read — so a call that
+    /// arrived after it is never deleted unseen. Open calls are kept as in
+    /// [`delete_ids`](Self::delete_ids).
+    ///
+    /// Returns the number of rows deleted.
+    pub fn delete_matching(
+        &self,
+        filter: CallHistoryFilter,
+        cutoff: DateTime<Utc>,
+        live_since: DateTime<Utc>,
+    ) -> Result<u64, StorageError> {
+        let conn = self.db.connection()?;
+        let sql = format!(
+            "DELETE FROM call_history WHERE julianday(started_at) <= julianday(?1){} AND {}",
+            filter_sql(filter),
+            CLOSED_OR_ORPHANED.replace('?', "?2"),
+        );
+        let rows = conn.execute(&sql, params![cutoff.to_rfc3339(), live_since.to_rfc3339()])?;
         Ok(rows as u64)
     }
 
@@ -165,18 +190,7 @@ impl CallHistoryRepository {
         );
         let mut args: Vec<SqlValue> = Vec::new();
 
-        match filter {
-            CallHistoryFilter::All => {}
-            CallHistoryFilter::Missed => {
-                sql.push_str(" AND result = 'missed'");
-            }
-            CallHistoryFilter::Outgoing => {
-                sql.push_str(" AND direction = 'outgoing'");
-            }
-            CallHistoryFilter::Incoming => {
-                sql.push_str(" AND direction = 'incoming'");
-            }
-        }
+        sql.push_str(filter_sql(filter));
 
         if let Some((cursor_ts, cursor_id)) = cursor {
             // Strictly-older-than cursor with id tiebreaker.
@@ -202,6 +216,18 @@ impl CallHistoryRepository {
         Ok(out)
     }
 
+    /// One entry by id.
+    pub fn get(&self, id: &str) -> Result<Option<CallHistoryEntry>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, conversation_id, conversation_type, peer_name,
+                    started_at, ended_at, direction, result, duration_secs, has_video
+             FROM call_history WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query(params![id])?;
+        rows.next()?.map(row_to_entry).transpose()
+    }
+
     /// Total number of entries. Cheap — uses SQLite's cached index count.
     pub fn count(&self) -> Result<u64, StorageError> {
         let conn = self.db.read_connection()?;
@@ -209,21 +235,55 @@ impl CallHistoryRepository {
         Ok(n as u64)
     }
 
-    /// Number of missed calls (for the Calls tab badge).
+    /// Number of UNSEEN missed incoming calls — the Calls tab badge.
+    ///
+    /// Outgoing rows are excluded: an unanswered call we placed is stored as
+    /// `'missed'` too, but it is nothing the user missed. "Unseen" means it
+    /// ended after the last [`mark_missed_seen`](Self::mark_missed_seen); a
+    /// row still ringing (no `ended_at`) is judged by when it started.
     pub fn missed_count(&self) -> Result<u64, StorageError> {
+        let seen_at = SettingsRepository::new(self.db.clone())
+            .get_string(MISSED_SEEN_AT_KEY)?
+            .unwrap_or_default();
         let conn = self.db.read_connection()?;
         let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM call_history WHERE result = 'missed'",
-            [],
+            "SELECT COUNT(*) FROM call_history
+             WHERE result = 'missed' AND direction = 'incoming'
+               AND (?1 = '' OR julianday(COALESCE(ended_at, started_at)) > julianday(?1))",
+            params![seen_at],
             |row| row.get(0),
         )?;
         Ok(n as u64)
+    }
+
+    /// The user has looked at the Calls screen: every missed call so far is
+    /// seen, so [`missed_count`](Self::missed_count) drops to zero.
+    pub fn mark_missed_seen(&self) -> Result<(), StorageError> {
+        SettingsRepository::new(self.db.clone())
+            .set_string(MISSED_SEEN_AT_KEY, &Utc::now().to_rfc3339())
     }
 }
 
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/// A row a delete may remove: closed, or left open by an earlier process
+/// (app killed mid-call) and so never closing. One `?` binds `live_since`.
+const CLOSED_OR_ORPHANED: &str =
+    "(ended_at IS NOT NULL OR julianday(started_at) < julianday(?))";
+
+/// `AND …` clause selecting the rows `filter` lists.
+fn filter_sql(filter: CallHistoryFilter) -> &'static str {
+    match filter {
+        CallHistoryFilter::All => "",
+        // An unanswered call we placed is stored as 'missed' too; the filter
+        // means calls the user missed.
+        CallHistoryFilter::Missed => " AND result = 'missed' AND direction = 'incoming'",
+        CallHistoryFilter::Outgoing => " AND direction = 'outgoing'",
+        CallHistoryFilter::Incoming => " AND direction = 'incoming'",
+    }
+}
 
 fn parse_datetime(s: &str) -> Result<DateTime<Utc>, StorageError> {
     DateTime::parse_from_rfc3339(s)
@@ -283,12 +343,12 @@ mod tests {
         // SQLCipher's :memory: handling requires a passphrase after attach,
         // and the existing `Database::open` assumes a real path — so a temp
         // file on disk is the closest we can get to in-memory without
-        // refactoring `Database`. Temp dir is leaked for test lifetime.
+        // refactoring `Database`. The temp dir lives until the test ends.
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("call_history_test.db");
         let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
         db.run_migrations().unwrap();
-        Box::leak(Box::new(temp_dir));
+        crate::test_tempdir::hold(temp_dir);
         db
     }
 
@@ -321,6 +381,11 @@ mod tests {
         assert_eq!(rows[0].peer_name, "Alice");
         assert_eq!(rows[0].duration_secs, Some(42));
         assert_eq!(rows[0].result, CallResult::Completed);
+        assert_eq!(
+            repo.get("call-1").unwrap().map(|e| e.peer_name),
+            Some("Alice".into())
+        );
+        assert!(repo.get("call-2").unwrap().is_none());
     }
 
     #[test]
@@ -385,6 +450,40 @@ mod tests {
     }
 
     #[test]
+    fn badge_counts_only_unseen_missed_incoming() {
+        let db = setup_db();
+        let repo = CallHistoryRepository::new(db);
+        let t = Utc::now() - chrono::Duration::minutes(1);
+
+        // Our own unanswered call: stored 'missed', but not a missed call.
+        let mut out = sample_entry("out-unanswered", t);
+        out.result = CallResult::Missed;
+        out.duration_secs = None;
+        repo.insert_entry(&out).unwrap();
+
+        let mut inc = out.clone();
+        inc.id = "in-missed".into();
+        inc.direction = CallDirection::Incoming;
+        repo.insert_entry(&inc).unwrap();
+
+        assert_eq!(repo.missed_count().unwrap(), 1);
+        let missed = repo.list(CallHistoryFilter::Missed, 10, None).unwrap();
+        assert_eq!(missed.len(), 1);
+        assert_eq!(missed[0].id, "in-missed");
+
+        // Opening the Calls screen clears it...
+        repo.mark_missed_seen().unwrap();
+        assert_eq!(repo.missed_count().unwrap(), 0);
+
+        // ...and a call missed afterwards counts again.
+        let mut later = inc.clone();
+        later.id = "in-missed-later".into();
+        later.started_at = Utc::now() + chrono::Duration::seconds(1);
+        repo.insert_entry(&later).unwrap();
+        assert_eq!(repo.missed_count().unwrap(), 1);
+    }
+
+    #[test]
     fn pagination_cursor_is_strictly_older() {
         let db = setup_db();
         let repo = CallHistoryRepository::new(db);
@@ -417,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn mark_ended_sets_duration_and_flips_result() {
+    fn mark_completed_sets_duration_and_result() {
         let db = setup_db();
         let repo = CallHistoryRepository::new(db);
 
@@ -428,7 +527,7 @@ mod tests {
         e.result = CallResult::Completed; // pre-populated in-progress
         repo.insert_entry(&e).unwrap();
 
-        repo.mark_ended("call-live", 125).unwrap();
+        repo.mark_completed("call-live", 125).unwrap();
 
         let rows = repo.list(CallHistoryFilter::All, 10, None).unwrap();
         assert_eq!(rows.len(), 1);
@@ -438,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn mark_ended_preserves_terminal_result() {
+    fn mark_completed_overrides_the_pessimistic_missed() {
         let db = setup_db();
         let repo = CallHistoryRepository::new(db);
 
@@ -448,23 +547,25 @@ mod tests {
         e.duration_secs = None;
         repo.insert_entry(&e).unwrap();
 
-        // A late "mark_ended" shouldn't clobber a missed outcome.
-        repo.mark_ended("call-missed", 0).unwrap();
+        // An incoming row starts as missed; answering and talking makes it
+        // a completed call.
+        repo.mark_completed("call-missed", 11).unwrap();
         let rows = repo.list(CallHistoryFilter::All, 10, None).unwrap();
-        assert_eq!(rows[0].result, CallResult::Missed);
+        assert_eq!(rows[0].result, CallResult::Completed);
+        assert_eq!(rows[0].duration_secs, Some(11));
     }
 
     #[test]
-    fn mark_ended_missing_row_errors() {
+    fn mark_completed_missing_row_errors() {
         let db = setup_db();
         let repo = CallHistoryRepository::new(db);
 
-        let err = repo.mark_ended("nope", 10).unwrap_err();
+        let err = repo.mark_completed("nope", 10).unwrap_err();
         matches!(err, StorageError::NotFound(_));
     }
 
     #[test]
-    fn delete_and_delete_all() {
+    fn delete_ids_and_delete_matching() {
         let db = setup_db();
         let repo = CallHistoryRepository::new(db);
 
@@ -476,13 +577,15 @@ mod tests {
         }
         assert_eq!(repo.count().unwrap(), 3);
 
-        repo.delete("call-1").unwrap();
+        repo.delete_ids(&["call-1".into()], t0).unwrap();
         assert_eq!(repo.count().unwrap(), 2);
 
         // idempotent: deleting a missing row is fine
-        repo.delete("nonexistent").unwrap();
+        repo.delete_ids(&["nonexistent".into()], t0).unwrap();
 
-        let n = repo.delete_all().unwrap();
+        let n = repo
+            .delete_matching(CallHistoryFilter::All, Utc::now(), Utc::now())
+            .unwrap();
         assert_eq!(n, 2);
         assert_eq!(repo.count().unwrap(), 0);
     }
@@ -529,7 +632,6 @@ mod tests {
         let types = [
             ConversationType::Channel,
             ConversationType::ServerDm,
-            ConversationType::MailboxDm,
             ConversationType::AnonDm,
             ConversationType::AnonGroup,
         ];
@@ -542,7 +644,10 @@ mod tests {
         let rows = repo.list(CallHistoryFilter::All, 10, None).unwrap();
         assert_eq!(rows.len(), types.len());
         for ct in &types {
-            assert!(rows.iter().any(|r| &r.conversation_type == ct), "{ct:?} lost");
+            assert!(
+                rows.iter().any(|r| &r.conversation_type == ct),
+                "{ct:?} lost"
+            );
         }
     }
 }

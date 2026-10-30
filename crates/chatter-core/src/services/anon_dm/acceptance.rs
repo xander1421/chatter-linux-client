@@ -1,25 +1,45 @@
-use chrono::Utc;
+use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmStatus};
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
-use crate::domain::UserId;
 use crate::proto::content_v1::{self, AnonDmAccept, Content};
 use crate::util::time::TimestampNanos;
+use chrono::Utc;
 
 use super::{AnonDmError, AnonDmService, DecryptedPeerProfile};
 
 impl AnonDmService {
+    // A request decision includes its network send and local status change.
+    // Reject overlapping actions instead of queuing a stale button press.
+    fn decision_lock(&self, id: AnonDmId) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.decision_locks.lock().expect("decision locks poisoned");
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(&id).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        locks.insert(id, std::sync::Arc::downgrade(&lock));
+        lock
+    }
+
     /// Accept an incoming message request.
     ///
     /// Creates our mailbox and sends acceptance to initiator's anonymous mailbox.
+    /// The acceptance never waits on a first avatar upload over Tor (RC108
+    /// O3, as the request): an avatar not uploaded yet follows in a profile
+    /// update sent in the background once the chat is active.
     pub async fn accept_request(
-        &self,
+        self: &std::sync::Arc<Self>,
         conversation_id: AnonDmId,
     ) -> Result<AnonDm, AnonDmError> {
+        let lock = self.decision_lock(conversation_id);
+        let _decision = lock.try_lock().map_err(|_| {
+            AnonDmError::InvalidData("Request decision already in progress".to_string())
+        })?;
         let _current_user = self.current_user_id()?;
 
         // Get the conversation
-        let mut dm = self
+        let dm = self
             .anon_dm_repo
             .get_conversation(&conversation_id)?
             .ok_or(AnonDmError::ConversationNotFound(conversation_id))?;
@@ -47,64 +67,78 @@ impl AnonDmService {
         let my_display_name = self.get_my_display_name().unwrap_or_default();
 
         // Send acceptance to initiator's anonymous mailbox
-        self.send_acceptance(
-            &dm.peer_id,
-            &conversation_id,
-            &peer_mailbox_pk,
-            &mailbox.public_key,
-            profile_key.as_ref(),
-            &my_display_name,
-        )
-        .await?;
+        let avatar_owed = self
+            .send_acceptance(
+                &dm,
+                &peer_mailbox_pk,
+                &mailbox.public_key,
+                profile_key.as_ref(),
+                &my_display_name,
+            )
+            .await?;
 
-        // Update conversation status
-        dm.status = AnonDmStatus::Active;
-        dm.updated_at = Utc::now();
-        self.anon_dm_repo.update_conversation(&dm)?;
+        // Status alone: `dm` is a snapshot from before the sends above, and a
+        // peer avatar fetched meanwhile must not be overwritten with it.
+        self.anon_dm_repo
+            .update_status(&conversation_id, AnonDmStatus::Active)?;
+        let dm = self
+            .anon_dm_repo
+            .get_conversation(&conversation_id)?
+            .ok_or(AnonDmError::ConversationNotFound(conversation_id))?;
 
-        tracing::info!(
-            "Accepted anonymous DM conversation {} from {}",
-            conversation_id,
-            dm.peer_id
-        );
+        // Secret chat: no peer identity in the log.
+        tracing::info!(%conversation_id, "Accepted secret chat");
+
+        if avatar_owed && tokio::runtime::Handle::try_current().is_ok() {
+            let service = std::sync::Arc::clone(self);
+            let name = Some(my_display_name).filter(|n| !n.is_empty());
+            tokio::spawn(async move {
+                // Ephemeral: logs and returns Ok on a failed send.
+                let _ = service
+                    .send_profile_update(&conversation_id, name, None, None)
+                    .await;
+            });
+        }
 
         Ok(dm)
     }
 
-    /// Send acceptance to initiator's anonymous mailbox.
+    /// Send acceptance to initiator's anonymous mailbox. `Ok(true)` when our
+    /// avatar is owed: it was never uploaded, so the acceptance went without
+    /// it and a profile update must follow.
     pub(crate) async fn send_acceptance(
         &self,
-        peer_id: &UserId,
-        conversation_id: &AnonDmId,
+        dm: &AnonDm,
         peer_mailbox_pk: &[u8; 32],
         our_mailbox_pk: &[u8; 32],
         profile_key: Option<&[u8; 32]>,
         display_name: &str,
-    ) -> Result<(), AnonDmError> {
-        // Encrypt display name and avatar with profile key if available
-        // (matches AnonDmRequest encryption for consistency)
-        let (encrypted_display_name, encrypted_avatar) = if let Some(pk) = profile_key {
+    ) -> Result<bool, AnonDmError> {
+        // Name under the profile key, avatar as a pointer (as in AnonDmRequest),
+        // only an already-uploaded one: no upload over Tor here.
+        let mut avatar_owed = false;
+        let (encrypted_display_name, avatar) = if let Some(pk) = profile_key {
             // Encrypt display name
             let enc_name = if !display_name.is_empty() {
                 crate::crypto::profile_crypto::encrypt_display_name(pk, display_name).ok()
             } else {
                 None
             };
-            // Encrypt avatar (stored locally, shared encrypted during bootstrap)
-            let enc_avatar = self.get_encrypted_avatar(pk);
-            (enc_name, enc_avatar)
+            let (cached, owed) = self.my_uploaded_avatar_pointer();
+            avatar_owed = owed;
+            (enc_name, cached)
         } else {
             (None, None)
         };
 
+        let conversation_id = &dm.id;
         let accept = AnonDmAccept {
             conversation_id: conversation_id.to_vec(),
             responder_mailbox_pk: our_mailbox_pk.to_vec(),
             profile_key: profile_key.map(|k| k.to_vec()),
             timestamp: TimestampNanos::now().as_u64(),
-            responder_display_name: display_name.to_string(),
             encrypted_display_name,
-            encrypted_avatar,
+            avatar,
         };
 
         let content = Content {
@@ -115,40 +149,64 @@ impl AnonDmService {
         };
 
         // Send to initiator's anonymous mailbox
-        self.send_to_anon_mailbox(peer_id, peer_mailbox_pk, content)
+        self.send_to_anon_mailbox(dm, peer_mailbox_pk, content)
             .await?;
 
-        tracing::debug!(
-            "Sent acceptance for conversation {} to {}",
-            conversation_id,
-            peer_id
-        );
-        Ok(())
+        tracing::debug!(%conversation_id, "Sent secret chat acceptance");
+        Ok(avatar_owed)
     }
 
-    /// Decline an incoming message request.
-    pub fn decline_request(&self, conversation_id: &AnonDmId) -> Result<(), AnonDmError> {
+    /// Decline an incoming message request: tell the initiator over Tor
+    /// (an end signal into the mailbox their request announced, so their
+    /// side shows it declined), then delete the request. Fails closed like
+    /// "Delete chat": if that send fails nothing is deleted and the error is
+    /// returned. A request whose mailbox is already gone has nobody left to
+    /// tell and goes locally. We hold no mailbox of our own yet (one is
+    /// created on accept), so the row is all there is.
+    pub async fn decline_request(&self, conversation_id: &AnonDmId) -> Result<(), AnonDmError> {
+        let lock = self.decision_lock(*conversation_id);
+        let _decision = lock.try_lock().map_err(|_| {
+            AnonDmError::InvalidData("Request decision already in progress".to_string())
+        })?;
         let dm = self
             .anon_dm_repo
             .get_conversation(conversation_id)?
             .ok_or(AnonDmError::ConversationNotFound(*conversation_id))?;
 
         // Must be an incoming request
-        if dm.initiated_by_us || dm.status != AnonDmStatus::Pending {
+        if dm.initiated_by_us {
             return Err(AnonDmError::InvalidData(
                 "Not a pending incoming request".to_string(),
             ));
         }
 
-        // Update status to declined
-        self.anon_dm_repo
-            .update_status(conversation_id, AnonDmStatus::Declined)?;
+        // A delayed Decline after a completed Accept must end the chat for
+        // both peers. The accepted conversation owns a server mailbox too.
+        if dm.status == AnonDmStatus::Active {
+            return self.end_conversation(conversation_id).await;
+        }
+        if dm.status != AnonDmStatus::Pending {
+            return Err(AnonDmError::InvalidData(
+                "Not a pending incoming request".to_string(),
+            ));
+        }
 
-        tracing::info!(
-            "Declined anonymous DM conversation {} from {}",
-            conversation_id,
-            dm.peer_id
-        );
+        if let Some(peer_mailbox_pk) = dm.peer_mailbox_pk {
+            match self
+                .send_to_anon_mailbox(
+                    &dm,
+                    &peer_mailbox_pk,
+                    super::blocking::end_content(conversation_id),
+                )
+                .await
+            {
+                Ok(()) | Err(AnonDmError::PeerMailboxGone) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        self.delete_conversation(conversation_id)?;
+
+        tracing::info!(%conversation_id, "Declined secret chat");
 
         Ok(())
     }
@@ -160,6 +218,8 @@ impl AnonDmService {
         &self,
         conversation_id: AnonDmId,
         peer_id: UserId,
+        // Sealed-sender-authenticated device the acceptance came from.
+        peer_device_id: u32,
         responder_mailbox_pk: [u8; 32],
         profile_key: Option<[u8; 32]>,
         peer_display_name: Option<String>,
@@ -177,6 +237,24 @@ impl AnonDmService {
             ));
         }
 
+        // An end can arrive before an earlier acceptance is processed. Once
+        // the initiator has marked the request declined, a late acceptance
+        // must not bring the ended chat back to Active.
+        if matches!(dm.status, AnonDmStatus::Declined | AnonDmStatus::Superseded) {
+            return Err(AnonDmError::InvalidData(
+                "Acceptance for an ended request".to_string(),
+            ));
+        }
+
+        // The chat is bound to the device our request was sealed to (a
+        // private-code request: the device the code names); an acceptance
+        // from any other device is refused.
+        self.anon_dm_repo
+            .pin_peer_device(&conversation_id, peer_device_id)
+            .map_err(|_| {
+                AnonDmError::InvalidData("Acceptance from an unexpected device".to_string())
+            })?;
+
         // Update with peer's mailbox, display name, avatar, and activate
         dm.peer_mailbox_pk = Some(responder_mailbox_pk);
         dm.peer_profile_key = profile_key;
@@ -186,11 +264,7 @@ impl AnonDmService {
         dm.updated_at = Utc::now();
         self.anon_dm_repo.update_conversation(&dm)?;
 
-        tracing::info!(
-            "Received acceptance for conversation {} from {}",
-            conversation_id,
-            peer_id
-        );
+        tracing::info!(%conversation_id, "Received secret chat acceptance");
 
         Ok(())
     }
@@ -202,6 +276,9 @@ impl AnonDmService {
         &self,
         conversation_id: AnonDmId,
         sender_id: UserId,
+        // Sealed-sender-authenticated device the request came from: the chat
+        // is bound to it.
+        sender_device_id: u32,
         sender_mailbox_pk: [u8; 32],
         intro_message: Option<&str>,
         profile_key: Option<[u8; 32]>,
@@ -215,18 +292,45 @@ impl AnonDmService {
             return Err(AnonDmError::CannotMessageSelf);
         }
 
-        // Check if conversation already exists
-        if let Some(existing) = self.anon_dm_repo.get_conversation(&conversation_id)? {
-            // Already have this conversation
-            return Ok(existing);
+        // A peer-level block outlives any one conversation row. Check it
+        // before accepting a fresh request ID, including after chat deletion.
+        if self.is_user_blocked(&sender_id)? {
+            return Err(AnonDmError::ConversationExists(sender_id));
+        }
+
+        // A request we already hold is a resend of it (the initiator resends
+        // an uncertain request under the same id): nothing new to show.
+        if self
+            .anon_dm_repo
+            .get_conversation(&conversation_id)?
+            .is_some()
+        {
+            return Err(AnonDmError::ConversationExists(sender_id));
+        }
+        if let Some(old) = self.anon_dm_repo.get_live_conversation_by_peer(&sender_id)? {
+            // A blocked peer must not escape the block by starting over.
+            if old.status == AnonDmStatus::Blocked {
+                tracing::info!(%conversation_id, "Dropped secret-chat request from blocked peer");
+                return Err(AnonDmError::ConversationExists(sender_id));
+            }
+            if old.status == AnonDmStatus::Active {
+                tracing::warn!(%conversation_id, "peer restarted secret chat");
+            }
         }
 
         // Create conversation as incoming request
         let mut dm = AnonDm::from_request(conversation_id, sender_id, sender_mailbox_pk);
+        dm.peer_device_id = Some(sender_device_id);
         dm.peer_profile_key = profile_key;
         dm.peer_display_name = peer_display_name;
         dm.peer_avatar = peer_avatar;
-        self.anon_dm_repo.insert_conversation(&dm)?;
+        self.anon_dm_repo.insert_incoming_replacing_live(&dm)?;
+        crate::services::disappearing::initialize_anon_dm_timer(
+            &self.settings_repo, &self.message_repo,
+            &conversation_id,
+            &sender_id,
+            TimestampNanos::now().as_u64(),
+        )?;
 
         // Store the intro message if present
         if let Some(text) = intro_message {
@@ -265,16 +369,17 @@ impl AnonDmService {
                     mentioned_integrations: Vec::new(),
                     targets_ai_bot: false,
                     delivery_status: String::new(),
+                    failure_reason: None,
                 };
                 self.message_repo.insert(&msg)?;
+                crate::storage::repositories::ephemeral_repo::EphemeralRepository::new(
+                    self.settings_repo.database().clone(),
+                )
+                .insert_armed(&msg.id, crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS)?;
             }
         }
 
-        tracing::info!(
-            "Received message request {} from {}",
-            conversation_id,
-            sender_id
-        );
+        tracing::info!(%conversation_id, "Received secret chat request");
 
         Ok(dm)
     }
@@ -282,32 +387,52 @@ impl AnonDmService {
     /// Create an incoming conversation from ECIES init message (NDSS'21 private contact).
     ///
     /// This is called when we receive a Phase 1 HPKE-encrypted initial contact message.
-    /// Stores the conversation and peer's keys for Phase 2 Double Ratchet setup.
+    /// Returns whether this request was newly stored; redelivery must not notify again.
     pub fn create_incoming_conversation(
         &self,
         dm: &AnonDm,
         _peer_identity_key: &[u8; 33],
         _peer_delivery_token: &[u8; 12],
-    ) -> Result<(), AnonDmError> {
+    ) -> Result<bool, AnonDmError> {
+        // Private-code init takes a separate ingestion path from sealed
+        // requests, but the peer-level block must apply to both.
+        if self.is_user_blocked(&dm.peer_id)? {
+            return Ok(false);
+        }
         // Check if conversation already exists
         if let Some(_existing) = self.anon_dm_repo.get_conversation(&dm.id)? {
             tracing::warn!(
                 conversation_id = %dm.id,
                 "Conversation already exists from ECIES init"
             );
-            return Ok(());
+            return Ok(false);
+        }
+        if let Some(old) = self.anon_dm_repo.get_live_conversation_by_peer(&dm.peer_id)? {
+            // A blocked peer must not escape the block by starting over.
+            if old.status == AnonDmStatus::Blocked {
+                tracing::info!(conversation_id = %dm.id, "Dropped secret-chat request from blocked peer");
+                return Ok(false);
+            }
+            if old.status == AnonDmStatus::Active {
+                tracing::warn!(conversation_id = %dm.id, "peer restarted secret chat");
+            }
         }
 
         // Store the conversation
-        self.anon_dm_repo.insert_conversation(dm)?;
+        self.anon_dm_repo.insert_incoming_replacing_live(dm)?;
+        crate::services::disappearing::initialize_anon_dm_timer(
+            &self.settings_repo, &self.message_repo,
+            &dm.id,
+            &dm.peer_id,
+            TimestampNanos::now().as_u64(),
+        )?;
 
         tracing::info!(
             conversation_id = %dm.id,
-            peer_id = %dm.peer_id,
             "Created incoming conversation from ECIES init message"
         );
 
-        Ok(())
+        Ok(true)
     }
 
     /// Handle an incoming message request with encrypted profile data.
@@ -324,11 +449,13 @@ impl AnonDmService {
         &self,
         conversation_id: AnonDmId,
         sender_id: UserId,
+        sender_device_id: u32,
         sender_mailbox_pk: [u8; 32],
         intro_message: Option<&str>,
         profile_key: Option<Vec<u8>>,
         encrypted_display_name: Option<Vec<u8>>,
-        encrypted_avatar: Option<Vec<u8>>,
+        // Already fetched from the sender's avatar pointer.
+        avatar: Option<Vec<u8>>,
     ) -> Result<(crate::domain::anon_dm::AnonDm, DecryptedPeerProfile), AnonDmError> {
         use crate::crypto::profile_crypto;
 
@@ -354,17 +481,7 @@ impl AnonDmService {
             _ => "Unknown".to_string(),
         };
 
-        // Decrypt avatar
-        let avatar = match (&profile_key_arr, &encrypted_avatar) {
-            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                profile_crypto::decrypt_avatar(pk, encrypted).ok()
-            }
-            _ => None,
-        };
-
-        tracing::info!(
-            peer_id = %sender_id,
-            display_name = %display_name,
+        tracing::debug!(
             has_avatar = avatar.is_some(),
             "Decrypted sender profile from AnonDmRequest"
         );
@@ -379,6 +496,7 @@ impl AnonDmService {
         let dm = self.handle_request(
             conversation_id,
             sender_id,
+            sender_device_id,
             sender_mailbox_pk,
             intro_message,
             profile_key_arr,
@@ -402,10 +520,12 @@ impl AnonDmService {
         &self,
         conversation_id: AnonDmId,
         peer_id: UserId,
+        peer_device_id: u32,
         responder_mailbox_pk: [u8; 32],
         profile_key: Option<Vec<u8>>,
         encrypted_display_name: Option<Vec<u8>>,
-        encrypted_avatar: Option<Vec<u8>>,
+        // Already fetched from the sender's avatar pointer.
+        avatar: Option<Vec<u8>>,
     ) -> Result<DecryptedPeerProfile, AnonDmError> {
         use crate::crypto::profile_crypto;
 
@@ -431,17 +551,7 @@ impl AnonDmService {
             _ => "Unknown".to_string(),
         };
 
-        // Decrypt avatar
-        let avatar = match (&profile_key_arr, &encrypted_avatar) {
-            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                profile_crypto::decrypt_avatar(pk, encrypted).ok()
-            }
-            _ => None,
-        };
-
-        tracing::info!(
-            peer_id = %peer_id,
-            display_name = %display_name,
+        tracing::debug!(
             has_avatar = avatar.is_some(),
             "Decrypted responder profile from AnonDmAccept"
         );
@@ -456,6 +566,7 @@ impl AnonDmService {
         self.handle_acceptance(
             conversation_id,
             peer_id,
+            peer_device_id,
             responder_mailbox_pk,
             profile_key_arr,
             Some(display_name),

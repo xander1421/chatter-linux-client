@@ -2,16 +2,26 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Release distribution controls this at build time: Play must never
+         request REQUEST_INSTALL_PACKAGES. Its placeholder resolves to the
+         already-declared INTERNET permission, which manifest merge dedupes. -->
+    <uses-permission android:name="${updateInstallPermission}" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Shield's Tor directory and hidden-service sockets need network access
+         while locked; a CPU wake lock alone does not bypass Doze. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Full-screen incoming-call notification (ring UI when locked). -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- Screen share (Phase 2): MediaProjection runs inside a typed FGS. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Continuous private messaging is not a bounded cloud dataSync job. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
@@ -44,12 +54,33 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="false"
         android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="false"
         android:theme="@style/Theme.Chatter">
+        <!-- enableOnBackInvokedCallback=false: targetSdk 36 otherwise turns on
+             predictive back, which stops dispatching KEYCODE_BACK. Slint's
+             in-app navigation consumes that key (GameActivity -> Key::Back,
+             features/back.rs) and MainActivity.onKeyPreIme uses it to close
+             the IME/selection; without it Back would just finish the app. -->
 
-        <!-- GameActivity host. Native entry resolved from android.app.lib_name. -->
+        <!-- Older Android Beam stacks may advertise the foreground app's URI
+             even without app NFC code. Chatter does not offer NFC sharing. -->
+        <meta-data android:name="android.nfc.disable_beam_default"
+            android:value="true" />
+
+        <provider android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.viewer-media"
+            android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/viewer_media_paths" />
+        </provider>
+
+        <!-- GameActivity host. Native entry resolved from android.app.lib_name.
+             singleTask: the native app is one per process, and a start that did not
+             come from the top stacked a second MainActivity over it. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|density|uiMode"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.Chatter">
@@ -65,11 +96,26 @@
             </intent-filter>
         </activity>
 
+        <activity android:name=".VideoPlaybackActivity" android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/Theme.Chatter.Translucent" />
+
         <!-- Accept/Decline buttons on the incoming-call notification. Explicit
              broadcasts from PendingIntents; not exported. -->
         <receiver
             android:name=".CallActionReceiver"
             android:exported="false" />
+
+        <receiver android:name=".UpdateInstallReceiver" android:exported="false" />
+
+        <!-- BOOT_COMPLETED arrives after credential-encrypted storage is unlocked.
+             Package replacement is an Android background FGS-start exemption. -->
+        <receiver android:name=".MessagingRestartReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Keeps the BLE mesh radio running while the app is backgrounded.
              Started and stopped by MeshBleBridge; nothing binds to it. The
@@ -78,5 +124,12 @@
             android:name=".MeshService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+        <service android:name=".MessagingService" android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Continuous end-to-end encrypted message reception using self-hosted push and anonymous Tor mailboxes without third-party push infrastructure" />
+        </service>
+        <service android:name=".ScreenShareService" android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
     </application>
 </manifest>

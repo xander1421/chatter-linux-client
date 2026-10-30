@@ -1,0 +1,11 @@
+# Sender-scoped profile shared content
+
+Channel and anonymous-group avatar profiles now request only the selected sender's shared items inside the source conversation. Server/anonymous DMs retain the existing conversation-wide shared history. Self-avatar profiles in channels/groups also load their scoped content, without refreshing the current user's profile as a peer.
+
+`ChatterClient::shared_content_page_scoped` and `shared_content_tabs_scoped` accept an optional `UserId`; their original entry points remain compatible wrappers with no sender filter. Repository `list_scoped` / `counts_scoped` join `messages` by the indexed message ID, applying conversation type, conversation ID, category and optional sender before SQL LIMIT/OFFSET or COUNT. No schema migration or identity lookup is involved. Anonymous group callers pass the existing scoped sender identity. Unknown/null authors cannot match a supplied sender.
+
+The profile's peer/conversation/generation/tab response guards remain intact. The one-time backfill remains conversation-wide so opening one sender never suppresses another sender's historical index population.
+
+Validation completed: rustfmt on all three edited Rust files; git diff --check; execution of the actual source SQL in in-memory SQLite across six categories, channel/group/DM conversation types, interleaved authors, another conversation, null authors, two pages, exhaustion, matching counts and unfiltered compatibility. Added Rust repository regression test `sender_scope_filters_before_paging_and_counts_in_channel_and_group`, covering media/files/voice/GIFs, interleaved other authors and another channel, filtering before page offsets, counts, empty unknown sender and wrong conversation type. Rust tests have not been compiled/run because this dispatch explicitly prohibits Cargo while writers are active.
+
+Integration follow-up: root owns `crates/chatter-ui/tests/ui_wiring.rs`; its profile contract needles `.shared_content_tabs(` / `.shared_content_page(` at approximately lines 1664–1665 must become `.shared_content_tabs_scoped(` / `.shared_content_page_scoped(`. Coordinator should run the new repository regression test and the existing profile wiring contract after the all-writer gate. No APK, Gradle, or full Cargo build was run.

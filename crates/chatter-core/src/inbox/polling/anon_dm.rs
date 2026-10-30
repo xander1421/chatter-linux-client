@@ -16,20 +16,19 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use prost::Message as ProstMessage;
 use tokio::sync::mpsc;
 
-use crate::domain::anon_dm::AnonDmId;
 use crate::domain::UserId;
+use crate::domain::anon_dm::AnonDmId;
+use crate::domain::ids::ChannelId;
+use crate::domain::message::ConversationType;
+use crate::inbox::ack_policy::{self, AckDecision, MarkerTarget};
 use crate::inbox::events::InboxEvent;
+use crate::inbox::handlers::DomainEvent;
 use crate::mailbox::anon_dm::AnonDmPollResult;
 use crate::network::validation::MessageDeduplicator;
 use crate::proto::content_v1::{self, Content};
 use crate::services::pairwise::PairwiseService;
-use crate::domain::ids::ChannelId;
-use crate::domain::message::ConversationType;
-use crate::inbox::ack_policy::{self, AckDecision, MarkerTarget};
-use crate::inbox::handlers::DomainEvent;
 use crate::storage::MessageRepository;
 
 /// Decide what to do with an anonymous-DM envelope whose decrypt or decode
@@ -87,6 +86,8 @@ pub(crate) enum AnonDmRoute {
 pub(crate) fn route_anon_dm_content(
     content: Content,
     sender_id: UserId,
+    // The sealed-sender-authenticated device it came from.
+    sender_device_id: u32,
     conversation_id: AnonDmId,
 ) -> AnonDmRoute {
     // Kept for the envelopes that are re-wrapped into a fresh `Content` below.
@@ -108,33 +109,21 @@ pub(crate) fn route_anon_dm_content(
 
     match content.content {
         Some(content_v1::content::Content::AnonDmAccept(accept)) => {
-            tracing::info!(
-                sender_id = %sender_id,
-                conversation_id = %conversation_id,
-                "Received anonymous DM acceptance from mailbox poll"
-            );
-
-            // Use plaintext display name if non-empty, otherwise None
-            let display_name = if accept.responder_display_name.is_empty() {
-                None
-            } else {
-                Some(accept.responder_display_name)
-            };
+            tracing::info!(%conversation_id, "Received secret chat acceptance");
 
             AnonDmRoute::Deliver(vec![InboxEvent::AnonDmAccept {
                 peer_id: sender_id,
+                sender_device_id,
                 conversation_id: conversation_bytes,
                 responder_mailbox_pk: accept.responder_mailbox_pk,
                 profile_key: accept.profile_key,
-                responder_display_name: display_name,
                 encrypted_display_name: accept.encrypted_display_name,
-                encrypted_avatar: accept.encrypted_avatar,
+                avatar: accept.avatar,
                 timestamp: accept.timestamp,
             }])
         }
         Some(content_v1::content::Content::AnonDmMessage(dm_msg)) => {
             tracing::info!(
-                sender_id = %sender_id,
                 conversation_id = %conversation_id,
                 has_inner = dm_msg.inner_content.is_some(),
                 "Received anonymous DM message from mailbox poll"
@@ -154,45 +143,37 @@ pub(crate) fn route_anon_dm_content(
             // Check if the inner content is an anon group management message
             match inner.content.as_ref() {
                 Some(content_v1::content::Content::AnonGroupInvite(invite)) => {
-                    tracing::info!(
-                        sender_id = %sender_id,
-                        group_id = %hex::encode(&invite.group_id),
-                        "Received anonymous group invite inside anon DM"
-                    );
+                    tracing::info!("Received secret group invite inside a secret chat");
                     AnonDmRoute::Deliver(vec![InboxEvent::AnonGroupInvite {
                         peer_id: sender_id,
+                        sender_device_id,
                         group_id: invite.group_id.clone(),
                         group_name: invite.group_name.clone(),
                         inviter_mailbox_pk: invite.inviter_mailbox_pk.clone(),
                         timestamp: invite.timestamp,
                         profile_key: invite.profile_key.clone(),
                         encrypted_display_name: invite.encrypted_display_name.clone(),
-                        encrypted_avatar: invite.encrypted_avatar.clone(),
+                        avatar: invite.avatar.clone(),
                     }])
                 }
                 Some(content_v1::content::Content::AnonGroupJoinAck(ack)) => {
                     tracing::info!(
-                        sender_id = %sender_id,
-                        group_id = %hex::encode(&ack.group_id),
                         has_profile = ack.profile_key.is_some(),
-                        "Received anonymous group join ack inside anon DM"
+                        "Received secret group join ack inside a secret chat"
                     );
                     AnonDmRoute::Deliver(vec![InboxEvent::AnonGroupJoinAck {
                         peer_id: sender_id,
+                        sender_device_id,
                         group_id: ack.group_id.clone(),
                         joiner_mailbox_pk: ack.joiner_mailbox_pk.clone(),
                         timestamp: ack.timestamp,
                         profile_key: ack.profile_key.clone(),
                         encrypted_display_name: ack.encrypted_display_name.clone(),
-                        encrypted_avatar: ack.encrypted_avatar.clone(),
+                        avatar: ack.avatar.clone(),
                     }])
                 }
                 Some(content_v1::content::Content::AnonGroupMemberList(list)) => {
-                    tracing::info!(
-                        sender_id = %sender_id,
-                        group_id = %hex::encode(&list.group_id),
-                        "Received anonymous group member list inside anon DM"
-                    );
+                    tracing::info!("Received anonymous group member list inside anon DM");
                     AnonDmRoute::Deliver(vec![InboxEvent::AnonGroupMemberList {
                         peer_id: sender_id,
                         group_id: list.group_id.clone(),
@@ -213,11 +194,9 @@ pub(crate) fn route_anon_dm_content(
         Some(content_v1::content::Content::Receipt(receipt)) => {
             // Handle read/delivery receipts
             tracing::info!(
-                sender_id = %sender_id,
                 conversation_id = %conversation_id,
                 receipt_type = receipt.r#type,
                 timestamp_count = receipt.timestamps.len(),
-                timestamps = ?receipt.timestamps,
                 "[ANON_DM_RECEIPT] Received receipt from peer"
             );
             AnonDmRoute::Deliver(vec![rewrap(content_v1::content::Content::Receipt(receipt))])
@@ -225,7 +204,6 @@ pub(crate) fn route_anon_dm_content(
         Some(content_v1::content::Content::Typing(typing)) => {
             // Handle typing indicators
             tracing::debug!(
-                sender_id = %sender_id,
                 conversation_id = %conversation_id,
                 "[ANON_DM] Received typing indicator from peer"
             );
@@ -234,22 +212,20 @@ pub(crate) fn route_anon_dm_content(
         Some(content_v1::content::Content::AnonDmPresence(presence)) => {
             // Handle presence updates
             tracing::debug!(
-                sender_id = %sender_id,
                 conversation_id = %conversation_id,
                 status = ?presence.status,
                 "[ANON_DM] Received presence update from peer"
             );
-            AnonDmRoute::Deliver(vec![rewrap(
-                content_v1::content::Content::AnonDmPresence(presence),
-            )])
+            AnonDmRoute::Deliver(vec![rewrap(content_v1::content::Content::AnonDmPresence(
+                presence,
+            ))])
         }
         Some(content_v1::content::Content::AnonDmProfileUpdate(profile_update)) => {
             // Handle profile updates
             tracing::info!(
-                sender_id = %sender_id,
                 conversation_id = %conversation_id,
-                has_display_name = profile_update.display_name.is_some(),
-                has_avatar = profile_update.encrypted_avatar.is_some(),
+                has_encrypted_display_name = profile_update.encrypted_display_name.is_some(),
+                has_avatar = profile_update.avatar.is_some(),
                 has_avatar_url = profile_update.avatar_url.is_some(),
                 has_bio = profile_update.bio.is_some(),
                 "[ANON_DM] Received profile update from peer"
@@ -267,7 +243,6 @@ pub(crate) fn route_anon_dm_content(
                 _ => "Other",
             };
             tracing::warn!(
-                sender_id = %sender_id,
                 conversation_id = %conversation_id,
                 content_type = content_type,
                 "[ANON_DM] Unexpected content type in anonymous DM mailbox"
@@ -276,6 +251,14 @@ pub(crate) fn route_anon_dm_content(
             AnonDmRoute::Deliver(Vec::new())
         }
     }
+}
+
+/// Whether an envelope from `sender_device_id` must be refused by a chat
+/// bound to `bound`. An unbound chat is not yet active (a request binds the
+/// sender's device, an acceptance pins ours), so only its acceptance can be
+/// processed downstream; that acceptance is what binds it.
+pub(crate) fn from_unbound_device(bound: Option<u32>, sender_device_id: u32) -> bool {
+    bound.is_some_and(|device| device != sender_device_id)
 }
 
 /// Result of processing anonymous DM poll results.
@@ -302,10 +285,15 @@ pub async fn process_anon_dm_results(
     deduplicator: &MessageDeduplicator,
     current_user_id: Option<&UserId>,
     is_blocked: &(dyn Fn(&UserId, &AnonDmId) -> bool + Send + Sync),
+    // The peer device the conversation is bound to (v103), if any.
+    bound_device: &(dyn Fn(&AnonDmId) -> Option<u32> + Send + Sync),
     message_repo: &Arc<MessageRepository>,
+    anon_group_repo: &crate::storage::repositories::AnonGroupRepository,
     domain_tx: Option<&tokio::sync::broadcast::Sender<DomainEvent>>,
+    content_handoff: Option<&Arc<crate::inbox::content_handoff::ContentHandoff>>,
 ) -> ProcessedAnonDmMessages {
     let mut processed: ProcessedAnonDmMessages = HashMap::new();
+    crate::inbox::reaction_handoff::replay(message_repo, domain_tx);
 
     for result in results {
         let conversation_id = result.conversation_id;
@@ -325,16 +313,85 @@ pub async fn process_anon_dm_results(
                     "Anon DM message already processed, skipping decryption"
                 );
                 // Still add to processed list so we acknowledge it again
-                processed.entry(conversation_id).or_default().push(message_id);
+                processed
+                    .entry(conversation_id)
+                    .or_default()
+                    .push(message_id);
                 continue;
             }
 
+            let key = match message_repo.reaction_receive_key(
+                "anon_dm",
+                conversation_id.into(),
+                &message_id,
+                msg.server_timestamp,
+            ) {
+                Ok(key) => key,
+                Err(_) => {
+                    tracing::warn!("Anonymous receive binding unavailable; envelope retained");
+                    continue;
+                }
+            };
             // Decrypt using pairwise service (sealed sender)
-            let (sender_uuid, plaintext) = match pairwise_service
-                .decrypt_sealed_sender(&msg.encrypted_envelope)
+            let (sender_uuid, sender_device_id, plaintext) = match pairwise_service
+                .decrypt_reaction_durable(&msg.encrypted_envelope, &key)
                 .await
             {
-                Ok(result) => result,
+                Ok(received) => {
+                    if let Some(artifact) = received.artifact {
+                        if artifact.kind.is_content() {
+                            let Some(handoff) = content_handoff else {
+                                tracing::warn!(
+                                    "Anonymous DM data handoff unavailable; envelope retained"
+                                );
+                                continue;
+                            };
+                            if let Err(error) = handoff.apply(message_repo, &artifact).await {
+                                tracing::warn!(envelope_id = %artifact.key.envelope_id, %error, "Anonymous DM post awaits replay");
+                            }
+                            deduplicator.mark_processed(&message_id);
+                            processed
+                                .entry(conversation_id)
+                                .or_default()
+                                .push(message_id);
+                            continue;
+                        }
+                        if crate::inbox::reaction_handoff::apply(message_repo, &artifact, domain_tx)
+                            .is_ok()
+                        {
+                            deduplicator.mark_processed(&message_id);
+                            processed
+                                .entry(conversation_id)
+                                .or_default()
+                                .push(message_id);
+                        } else {
+                            tracing::warn!(
+                                "Anonymous reaction application failed; envelope retained"
+                            );
+                        }
+                        continue;
+                    }
+                    (
+                        received.address.name().to_string(),
+                        u32::from(received.address.device_id()),
+                        received.content,
+                    )
+                }
+                Err(crate::error::ServiceError::Crypto(
+                    crate::error::CryptoError::DuplicateMessage { .. },
+                )) => {
+                    deduplicator.mark_processed(&message_id);
+                    processed
+                        .entry(conversation_id)
+                        .or_default()
+                        .push(message_id);
+                    continue;
+                }
+                Err(crate::error::ServiceError::Storage(_))
+                | Err(crate::error::ServiceError::Crypto(crate::error::CryptoError::Storage(_))) => {
+                    tracing::warn!("Atomic anonymous receive storage failed; envelope retained");
+                    continue;
+                }
                 Err(e) => {
                     tracing::warn!(
                         conversation_id = %conversation_id,
@@ -354,7 +411,10 @@ pub async fn process_anon_dm_results(
                     .should_ack()
                     {
                         deduplicator.mark_processed(&message_id);
-                        processed.entry(conversation_id).or_default().push(message_id);
+                        processed
+                            .entry(conversation_id)
+                            .or_default()
+                            .push(message_id);
                     }
                     continue;
                 }
@@ -366,7 +426,6 @@ pub async fn process_anon_dm_results(
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
-                        sender_uuid = %sender_uuid,
                         "Invalid sender UUID in anonymous DM"
                     );
                     if anon_dm_failure_decision(
@@ -379,7 +438,10 @@ pub async fn process_anon_dm_results(
                     .should_ack()
                     {
                         deduplicator.mark_processed(&message_id);
-                        processed.entry(conversation_id).or_default().push(message_id);
+                        processed
+                            .entry(conversation_id)
+                            .or_default()
+                            .push(message_id);
                     }
                     continue;
                 }
@@ -395,7 +457,10 @@ pub async fn process_anon_dm_results(
                     "Skipping own message echoed back from anon DM mailbox poll"
                 );
                 deduplicator.mark_processed(&message_id);
-                processed.entry(conversation_id).or_default().push(message_id);
+                processed
+                    .entry(conversation_id)
+                    .or_default()
+                    .push(message_id);
                 continue;
             }
 
@@ -405,23 +470,42 @@ pub async fn process_anon_dm_results(
             if is_blocked(&sender_id, &conversation_id) {
                 tracing::debug!(
                     conversation_id = %conversation_id,
-                    sender_id = %sender_id,
                     "Dropping message from blocked sender/conversation"
                 );
                 deduplicator.mark_processed(&message_id);
-                processed.entry(conversation_id).or_default().push(message_id);
+                processed
+                    .entry(conversation_id)
+                    .or_default()
+                    .push(message_id);
                 continue;
             }
 
-            tracing::info!(
+            // A secret chat is bound to one peer device: anything another
+            // device sends into it is refused, on every message, not only at
+            // acceptance. Deterministic in the envelope, so drain it.
+            if from_unbound_device(bound_device(&conversation_id), sender_device_id) {
+                tracing::warn!(
+                    conversation_id = %conversation_id,
+                    "[ANON_DM] Dropping message from a device this chat is not bound to"
+                );
+                deduplicator.mark_processed(&message_id);
+                processed
+                    .entry(conversation_id)
+                    .or_default()
+                    .push(message_id);
+                continue;
+            }
+
+            tracing::debug!(
                 conversation_id = %conversation_id,
-                sender_id = %sender_id,
-                plaintext_len = plaintext.len(),
                 "[ANON_DM] Decrypted message, parsing Content proto"
             );
 
             // Decode Content proto
-            let content: Content = match ProstMessage::decode(plaintext.as_slice()) {
+            let content: Content = match crate::network::validation::protovalidate::decode_inbound(
+                plaintext.as_slice(),
+                "anon_dm",
+            ) {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::warn!(
@@ -441,7 +525,10 @@ pub async fn process_anon_dm_results(
                     .should_ack()
                     {
                         deduplicator.mark_processed(&message_id);
-                        processed.entry(conversation_id).or_default().push(message_id);
+                        processed
+                            .entry(conversation_id)
+                            .or_default()
+                            .push(message_id);
                     }
                     continue;
                 }
@@ -450,10 +537,65 @@ pub async fn process_anon_dm_results(
             // Route based on content type. The routing table itself is
             // `route_anon_dm_content`, so every outcome is one value the ack
             // policy can be applied to instead of a bare bool.
-            let decision = match route_anon_dm_content(content, sender_id, conversation_id) {
+            let decision = match route_anon_dm_content(
+                content,
+                sender_id,
+                sender_device_id,
+                conversation_id,
+            ) {
                 AnonDmRoute::Deliver(events) => {
+                    // The mailbox is acknowledged immediately after this function returns.
+                    // Retain invitations here, before handing them to the asynchronous processor.
+                    let mut persisted = true;
+                    for event in &events {
+                        if let InboxEvent::AnonGroupInvite {
+                            peer_id,
+                            sender_device_id,
+                            group_id,
+                            group_name,
+                            inviter_mailbox_pk,
+                            timestamp,
+                            profile_key,
+                            encrypted_display_name,
+                            ..
+                        } = event
+                        {
+                            if let (Some(group_id), Ok(mailbox_pk)) = (
+                                crate::domain::anon_group::AnonGroupId::try_from_slice(group_id),
+                                <[u8; 32]>::try_from(inviter_mailbox_pk.as_slice()),
+                            ) {
+                                let key = profile_key
+                                    .as_ref()
+                                    .and_then(|key| <[u8; 32]>::try_from(key.as_slice()).ok());
+                                let name = key
+                                    .as_ref()
+                                    .zip(encrypted_display_name.as_ref())
+                                    .and_then(|(key, encrypted)| {
+                                        crate::crypto::profile_crypto::decrypt_display_name(
+                                            key, encrypted,
+                                        )
+                                        .ok()
+                                    });
+                                let invite = crate::storage::repositories::anon_group_repo::PendingAnonGroupInvite {
+                                    group_id, invite_epoch: *timestamp, group_name: group_name.clone(), inviter_id: *peer_id,
+                                    inviter_device_id: *sender_device_id, inviter_mailbox_pk: mailbox_pk,
+                                    profile_key: key, inviter_display_name: name, inviter_avatar: None,
+                                };
+                                if let Err(error) = anon_group_repo.save_pending_invite(&invite) {
+                                    tracing::error!(%error, "Failed to retain group invite before mailbox acknowledgment");
+                                    persisted = false;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if !persisted {
+                        continue;
+                    }
                     for event in events {
-                        let _ = event_tx.send(event).await;
+                        if event_tx.send(event).await.is_err() {
+                            return processed;
+                        }
                     }
                     AckDecision::Ack
                 }
@@ -478,4 +620,23 @@ pub async fn process_anon_dm_results(
     }
 
     processed
+}
+
+#[cfg(test)]
+mod bound_device_tests {
+    use super::from_unbound_device;
+
+    #[test]
+    fn bound_secret_chat_refuses_every_other_device() {
+        assert!(
+            from_unbound_device(Some(2), 3),
+            "another device of the peer is refused"
+        );
+        assert!(
+            !from_unbound_device(Some(2), 2),
+            "the bound device is accepted"
+        );
+        // Unbound chats are not yet active; their acceptance binds them.
+        assert!(!from_unbound_device(None, 3));
+    }
 }

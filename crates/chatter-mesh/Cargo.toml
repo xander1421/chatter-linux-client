@@ -6,7 +6,7 @@ authors = ["xander1421"]
 description = "bitchat mesh wire protocol — sans-IO codec, TLV payloads, and routing policy"
 license = "GPL-3.0"
 repository = "https://github.com/xander1421/chatter"
-rust-version = "1.85"
+rust-version = "1.99"
 
 [lib]
 name = "chatter_mesh"
@@ -14,18 +14,18 @@ path = "src/lib.rs"
 
 [dependencies]
 # Packet IDs, dedup digests, GCS bucket hashing, courier recipient tags.
-sha2 = "0.10"
+sha2 = "0.11.0"
 # Courier recipient tag: HMAC-SHA256(recipient static key, ctx || utc_day).
-hmac = "0.12"
+hmac = "0.13.0"
 # Payload compression. NOTE: bitchat uses Apple's COMPRESSION_ZLIB, which emits
 # RAW DEFLATE (RFC 1951) — no zlib header, no adler32. Use DeflateEncoder /
 # DeflateDecoder here, never ZlibEncoder. See the design doc, trap #1.
 flate2 = "1"
 thiserror = "2"
+hex = "0.4"
 
 [dev-dependencies]
 # Conformance vectors are JSON data files transcribed from bitchat's own test
-# suite. Test-only: the production dependency surface stays at four crates.
+# suite.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-hex = "0.4"

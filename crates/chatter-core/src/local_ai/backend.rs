@@ -131,11 +131,7 @@ pub trait LocalAIBackend: Send + Sync {
     ) -> Result<ChatResponse, BackendError>;
 
     /// Generate embeddings for a list of texts.
-    async fn embed(
-        &self,
-        model: &str,
-        texts: &[String],
-    ) -> Result<Vec<Vec<f32>>, BackendError>;
+    async fn embed(&self, model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>, BackendError>;
 
     /// List available models on the server.
     async fn list_models(&self) -> Result<Vec<AvailableModel>, BackendError>;

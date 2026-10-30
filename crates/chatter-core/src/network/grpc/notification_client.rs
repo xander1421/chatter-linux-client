@@ -3,14 +3,13 @@
 //! Client for notification service operations including notification management,
 //! preferences, and real-time notification streaming.
 
+use crate::network::grpc::transport::GrpcTransport;
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    notification_service_client::NotificationServiceClient as ProtoNotificationServiceClient,
     CreateBatchNotificationsRequest, CreateBatchNotificationsResponse, CreateNotificationRequest,
     CreateNotificationResponse, DeleteNotificationRequest, DeleteNotificationResponse,
     GetNotificationRequest, GetNotificationResponse, GetPreferencesRequest, GetPreferencesResponse,
@@ -19,6 +18,7 @@ use crate::proto::chat_v1::{
     MarkAsReadResponse, NotificationPreferences, NotificationPriority, NotificationType,
     StreamNotificationsRequest, StreamNotificationsResponse, UpdatePreferencesRequest,
     UpdatePreferencesResponse,
+    notification_service_client::NotificationServiceClient as ProtoNotificationServiceClient,
 };
 
 /// Notification service client wrapper.
@@ -32,7 +32,7 @@ use crate::proto::chat_v1::{
 /// pool.connect().await?;
 ///
 /// let mut notification = NotificationClient::new(pool.channel(), pool.auth_clone());
-/// let unread = notification.get_unread_count(None).await?;
+/// let unread = notification.get_unread_count(vec![]).await?;
 /// ```
 pub struct NotificationClient {
     inner: ProtoNotificationServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
@@ -52,7 +52,6 @@ impl NotificationClient {
     ///
     /// # Arguments
     ///
-    /// * `user_id` - Target user ID
     /// * `notification_type` - Type of notification
     /// * `priority` - Notification priority
     /// * `title` - Notification title
@@ -64,7 +63,6 @@ impl NotificationClient {
     #[allow(clippy::too_many_arguments)]
     pub async fn create_notification(
         &mut self,
-        user_id: &str,
         notification_type: NotificationType,
         priority: NotificationPriority,
         title: &str,
@@ -75,7 +73,6 @@ impl NotificationClient {
         actor_id: Option<&str>,
     ) -> Result<CreateNotificationResponse, NetworkError> {
         let request = CreateNotificationRequest {
-            user_id: user_id.to_string(),
             r#type: notification_type.into(),
             priority: priority.into(),
             title: title.to_string(),
@@ -137,21 +134,18 @@ impl NotificationClient {
     ///
     /// # Arguments
     ///
-    /// * `user_id` - User ID to list notifications for (uses authenticated user if None)
     /// * `unread_only` - Filter to only unread notifications
     /// * `types` - Optional filter by notification types
     /// * `limit` - Maximum number of notifications to return
     /// * `offset` - Pagination offset
     pub async fn list_notifications(
         &mut self,
-        user_id: Option<&str>,
         unread_only: bool,
         types: Vec<NotificationType>,
         limit: i32,
         offset: i32,
     ) -> Result<ListNotificationsResponse, NetworkError> {
         let request = ListNotificationsRequest {
-            user_id: user_id.unwrap_or("").to_string(),
             unread_only,
             types: types.into_iter().map(|t| t.into()).collect(),
             limit,
@@ -209,15 +203,12 @@ impl NotificationClient {
     ///
     /// # Arguments
     ///
-    /// * `user_id` - User ID (uses authenticated user if None)
     /// * `types` - Optional filter to only mark specific notification types
     pub async fn mark_all_as_read(
         &mut self,
-        user_id: Option<&str>,
         types: Vec<NotificationType>,
     ) -> Result<MarkAllAsReadResponse, NetworkError> {
         let request = MarkAllAsReadRequest {
-            user_id: user_id.unwrap_or("").to_string(),
             types: types.into_iter().map(|t| t.into()).collect(),
         };
 
@@ -232,15 +223,12 @@ impl NotificationClient {
     ///
     /// # Arguments
     ///
-    /// * `user_id` - User ID (uses authenticated user if None)
     /// * `types` - Optional filter to count specific notification types
     pub async fn get_unread_count(
         &mut self,
-        user_id: Option<&str>,
         types: Vec<NotificationType>,
     ) -> Result<GetUnreadCountResponse, NetworkError> {
         let request = GetUnreadCountRequest {
-            user_id: user_id.unwrap_or("").to_string(),
             types: types.into_iter().map(|t| t.into()).collect(),
         };
 
@@ -253,18 +241,9 @@ impl NotificationClient {
 
     // ==================== Preferences RPCs ====================
 
-    /// Get notification preferences for a user.
-    ///
-    /// # Arguments
-    ///
-    /// * `user_id` - User ID (uses authenticated user if None)
-    pub async fn get_preferences(
-        &mut self,
-        user_id: Option<&str>,
-    ) -> Result<GetPreferencesResponse, NetworkError> {
-        let request = GetPreferencesRequest {
-            user_id: user_id.unwrap_or("").to_string(),
-        };
+    /// Get notification preferences for the authenticated user.
+    pub async fn get_preferences(&mut self) -> Result<GetPreferencesResponse, NetworkError> {
+        let request = GetPreferencesRequest {};
 
         self.inner
             .get_preferences(request)
@@ -277,15 +256,12 @@ impl NotificationClient {
     ///
     /// # Arguments
     ///
-    /// * `user_id` - User ID (uses authenticated user if None)
     /// * `preferences` - The new notification preferences
     pub async fn update_preferences(
         &mut self,
-        user_id: Option<&str>,
         preferences: NotificationPreferences,
     ) -> Result<UpdatePreferencesResponse, NetworkError> {
         let request = UpdatePreferencesRequest {
-            user_id: user_id.unwrap_or("").to_string(),
             preferences: Some(preferences),
         };
 
@@ -304,16 +280,13 @@ impl NotificationClient {
     ///
     /// # Arguments
     ///
-    /// * `user_id` - User ID (uses authenticated user if None)
     /// * `types` - Optional filter by notification types
     pub async fn stream_notifications(
         &mut self,
-        user_id: Option<&str>,
         types: Vec<NotificationType>,
     ) -> Result<impl Stream<Item = Result<StreamNotificationsResponse, NetworkError>>, NetworkError>
     {
         let request = StreamNotificationsRequest {
-            user_id: user_id.unwrap_or("").to_string(),
             types: types.into_iter().map(|t| t.into()).collect(),
         };
 
@@ -350,7 +323,6 @@ mod tests {
     fn test_create_notification_request_construction() {
         // Verify CreateNotificationRequest can be constructed
         let request = CreateNotificationRequest {
-            user_id: "user-123".to_string(),
             r#type: NotificationType::Message as i32,
             priority: NotificationPriority::Normal as i32,
             title: "New Message".to_string(),
@@ -363,7 +335,6 @@ mod tests {
             action_url: String::new(),
         };
 
-        assert_eq!(request.user_id, "user-123");
         assert_eq!(request.r#type, NotificationType::Message as i32);
         assert_eq!(request.priority, NotificationPriority::Normal as i32);
         assert_eq!(request.title, "New Message");
@@ -373,14 +344,15 @@ mod tests {
     fn test_list_notifications_request_construction() {
         // Verify ListNotificationsRequest can be constructed with filters
         let request = ListNotificationsRequest {
-            user_id: "user-123".to_string(),
             unread_only: true,
-            types: vec![NotificationType::Message as i32, NotificationType::Mention as i32],
+            types: vec![
+                NotificationType::Message as i32,
+                NotificationType::Mention as i32,
+            ],
             limit: 20,
             offset: 0,
         };
 
-        assert_eq!(request.user_id, "user-123");
         assert!(request.unread_only);
         assert_eq!(request.types.len(), 2);
         assert_eq!(request.limit, 20);
@@ -390,7 +362,11 @@ mod tests {
     fn test_mark_as_read_request_construction() {
         // Verify MarkAsReadRequest can be constructed with notification_ids
         let request = MarkAsReadRequest {
-            notification_ids: vec!["notif-1".to_string(), "notif-2".to_string(), "notif-3".to_string()],
+            notification_ids: vec![
+                "notif-1".to_string(),
+                "notif-2".to_string(),
+                "notif-3".to_string(),
+            ],
         };
 
         assert_eq!(request.notification_ids.len(), 3);
@@ -401,11 +377,9 @@ mod tests {
     fn test_stream_notifications_request_construction() {
         // Verify StreamNotificationsRequest can be constructed
         let request = StreamNotificationsRequest {
-            user_id: "user-123".to_string(),
             types: vec![NotificationType::Message as i32],
         };
 
-        assert_eq!(request.user_id, "user-123");
         assert_eq!(request.types.len(), 1);
     }
 
@@ -432,7 +406,6 @@ mod tests {
     fn test_notification_preferences_construction() {
         // Verify NotificationPreferences can be constructed
         let prefs = NotificationPreferences {
-            user_id: "user-123".to_string(),
             enabled: true,
             push_enabled: true,
             email_enabled: false,
@@ -444,7 +417,6 @@ mod tests {
             updated_at: 0,
         };
 
-        assert_eq!(prefs.user_id, "user-123");
         assert!(prefs.enabled);
         assert!(prefs.push_enabled);
         assert!(!prefs.email_enabled);

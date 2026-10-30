@@ -34,6 +34,8 @@ pub enum AnonDmStatus {
     Blocked = 2,
     /// Declined/rejected.
     Declined = 3,
+    /// Ended locally when the peer started a new secret chat. History stays stored.
+    Superseded = 4,
 }
 
 impl AnonDmStatus {
@@ -43,6 +45,7 @@ impl AnonDmStatus {
             1 => Self::Active,
             2 => Self::Blocked,
             3 => Self::Declined,
+            4 => Self::Superseded,
             _ => Self::Pending,
         }
     }
@@ -97,6 +100,38 @@ pub struct AnonDm {
     pub last_message_at: Option<DateTime<Utc>>,
     /// Unread message count.
     pub unread_count: u32,
+    /// The ONE peer device this secret chat is bound to: the device our
+    /// request was sealed to, or the device whose request we received. `None`
+    /// until known. Pairwise encryption targets only this device; if it
+    /// disappears the chat is refused, never moved or fanned out.
+    pub peer_device_id: Option<u32>,
+    /// For a chat we initiated: how far our request got.
+    pub request: RequestState,
+}
+
+/// How far our own secret-chat request got. Stored as an integer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(i32)]
+pub enum RequestState {
+    /// Provably never left this device (failed before the send RPC, or the
+    /// server definitively refused the only attempt): discard and start again.
+    #[default]
+    Unsent = 0,
+    /// May have left (marked right before the send RPC; the outcome is not
+    /// known). Resent under the same request id, never restarted.
+    Uncertain = 1,
+    /// The server queued it for the peer's device.
+    Submitted = 2,
+}
+
+impl RequestState {
+    pub fn from_i32(v: i32) -> Self {
+        match v {
+            0 => Self::Unsent,
+            2 => Self::Submitted,
+            _ => Self::Uncertain,
+        }
+    }
 }
 
 impl AnonDm {
@@ -116,15 +151,13 @@ impl AnonDm {
             updated_at: now,
             last_message_at: None,
             unread_count: 0,
+            peer_device_id: None,
+            request: RequestState::Unsent,
         }
     }
 
     /// Create a conversation from an incoming message request.
-    pub fn from_request(
-        id: AnonDmId,
-        peer_id: UserId,
-        peer_mailbox_pk: [u8; 32],
-    ) -> Self {
+    pub fn from_request(id: AnonDmId, peer_id: UserId, peer_mailbox_pk: [u8; 32]) -> Self {
         let now = Utc::now();
         Self {
             id,
@@ -139,6 +172,8 @@ impl AnonDm {
             updated_at: now,
             last_message_at: None,
             unread_count: 1,
+            peer_device_id: None,
+            request: RequestState::Unsent,
         }
     }
 
@@ -151,7 +186,11 @@ impl AnonDm {
 
     /// Set the peer's avatar.
     pub fn with_avatar(mut self, avatar: Vec<u8>) -> Self {
-        self.peer_avatar = if avatar.is_empty() { None } else { Some(avatar) };
+        self.peer_avatar = if avatar.is_empty() {
+            None
+        } else {
+            Some(avatar)
+        };
         self
     }
 
@@ -169,6 +208,17 @@ impl AnonDm {
     /// Check if this is an incoming request we haven't responded to.
     pub fn is_incoming_request(&self) -> bool {
         !self.initiated_by_us && self.status == AnonDmStatus::Pending
+    }
+
+    /// Our request that provably never left this device. Safe to discard
+    /// and start again.
+    pub fn is_unsent_request(&self) -> bool {
+        self.is_outgoing_request() && self.request == RequestState::Unsent
+    }
+
+    /// Our request whose delivery is not known: resend it as is.
+    pub fn is_uncertain_request(&self) -> bool {
+        self.is_outgoing_request() && self.request == RequestState::Uncertain
     }
 
     /// Check if this is an outgoing request that hasn't been accepted.
@@ -288,7 +338,8 @@ impl AnonDmMessage {
     pub fn attachment_ids(&self) -> Vec<crate::domain::AttachmentId> {
         use crate::storage::serialization::db_deserialize;
 
-        if self.attachments_blob.is_empty() || self.attachments_blob == vec![8, 0, 0, 0, 0, 0, 0, 0] {
+        if self.attachments_blob.is_empty() || self.attachments_blob == vec![8, 0, 0, 0, 0, 0, 0, 0]
+        {
             return Vec::new();
         }
 
@@ -373,12 +424,7 @@ mod tests {
     #[test]
     fn test_anon_dm_message_text() {
         let sent_at = 1704067200_000_000_000u64; // 2024-01-01 00:00:00 UTC
-        let msg = AnonDmMessage::new_text(
-            AnonDmId::new(),
-            UserId::new(),
-            "Hello",
-            sent_at,
-        );
+        let msg = AnonDmMessage::new_text(AnonDmId::new(), UserId::new(), "Hello", sent_at);
         assert_eq!(msg.content_type, 1);
         assert_eq!(msg.as_text(), Some("Hello".to_string()));
         assert_eq!(msg.sent_at, sent_at);

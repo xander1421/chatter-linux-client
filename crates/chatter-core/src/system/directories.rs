@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 
-use crate::error::SystemError;
 use super::platform::APP_ID;
+use crate::error::SystemError;
 
 /// Create a directory with secure permissions (0700).
 ///
@@ -58,8 +58,8 @@ impl Directories {
     /// Returns `SystemError::DirectoryInit` if XDG directories cannot be determined.
     /// Returns `SystemError::DirectoryCreate` if directories cannot be created.
     pub fn new() -> Result<Self, SystemError> {
-        let project_dirs = ProjectDirs::from("com", "chatter", APP_ID)
-            .ok_or(SystemError::DirectoryInit)?;
+        let project_dirs =
+            ProjectDirs::from("com", "chatter", APP_ID).ok_or(SystemError::DirectoryInit)?;
 
         // `directories` only reads XDG_DATA_HOME on its Linux backend — macOS
         // and Windows ignore it and always resolve the platform-native path.

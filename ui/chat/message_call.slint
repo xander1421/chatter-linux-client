@@ -1,0 +1,224 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Elevation } from "../theme/elevation.slint";
+import { Avatar } from "../components/avatar.slint";
+
+export component MessageCall inherits HorizontalLayout {
+    in property <string> call-duration;
+    in property <string> call-type;
+    in property <int> hold-tier;
+    in property <bool> is-anonymous;
+    in property <bool> is-continuation;
+    in property <bool> is-dm;
+    in property <bool> is-own;
+    in property <string> message-id;
+    in property <length> message-width;
+    in property <length> r-outer-bottom;
+    in property <length> r-outer-top;
+    in property <length> r-round;
+    in property <bool> selection-mode;
+    in property <image> sender-avatar-source;
+    in property <string> sender-id;
+    in property <string> sender-initials;
+    in property <string> sender-name;
+    in property <bool> show-sender;
+    in property <string> timestamp;
+    callback selection-toggled(string);
+    callback sender-profile-requested(string);
+    callback request-menu(length, length, length, length, length, length);
+    callback begin-message-press(length, length, length, length, length, length);
+    callback cancel-hold();
+    callback move-message-press(length, length);
+    callback message-clicked(string);
+    callback clear-hold-tier();
+
+    width: 100%;
+    spacing: Spacing.sm;
+    alignment: root.is-own ? end : start;
+
+    // A continuation hides the avatar but keeps its column, so every
+    // bubble of one sender shares a left edge.
+    if !root.is-own && !root.is-dm && root.show-sender && root.is-continuation: Rectangle {
+        width: Spacing.avatar-sm;
+        height: 1px;
+    }
+    if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: Avatar {
+        size: Spacing.avatar-sm;
+        anonymous: root.is-anonymous;
+        source: root.sender-avatar-source;
+        fallback-text: root.sender-initials;
+        accessible-role: button;
+        accessible-label: "View profile of " + root.sender-name;
+        accessible-action-default => {
+            if root.selection-mode { root.selection-toggled(root.message-id); }
+            else { root.sender-profile-requested(root.sender-id); }
+        }
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                if root.selection-mode { root.selection-toggled(root.message-id); }
+                else { root.sender-profile-requested(root.sender-id); }
+            }
+        }
+
+    }
+
+    Rectangle {
+        property <bool> is-missed: root.call-type == "missed";
+        // Direction is who PLACED the call — `is-own` is exactly that
+        // for a call message (converters/message.rs, initiator ==
+        // current user). call-type only says outgoing/incoming for
+        // answered calls, so a caller's "declined" drew ↙ (RC24 D4).
+        property <bool> is-outgoing: root.is-own;
+
+        // call-content carries its own padding; adding more here left
+        // slack that the fixed-size icon did not share.
+        width: min(call-content.preferred-width, root.message-width * 0.7);
+        height: call-content.preferred-height;
+        background: transparent;
+        border-top-left-radius: root.is-own ? root.r-round : root.r-outer-top;
+        border-top-right-radius: root.is-own ? root.r-outer-top : root.r-round;
+        border-bottom-left-radius: root.is-own ? root.r-round : root.r-outer-bottom;
+        border-bottom-right-radius: root.is-own ? root.r-outer-bottom : root.r-round;
+        accessible-role: button;
+        accessible-label: call-status.accessible-label;
+        accessible-action-default => {
+            if root.selection-mode { root.selection-toggled(root.message-id); return; }
+            if root.hold-tier != 0 { root.clear-hold-tier(); return; }
+            root.message-clicked(root.message-id);
+        }
+
+        Rectangle {
+            y: 0;
+            width: parent.width;
+            height: call-content.preferred-height;
+            background: root.is-own ? Colors.bubble-own : Colors.bubble-other;
+            border-top-left-radius: parent.border-top-left-radius;
+            border-top-right-radius: parent.border-top-right-radius;
+            border-bottom-left-radius: parent.border-bottom-left-radius;
+            border-bottom-right-radius: parent.border-bottom-right-radius;
+            border-width: Elevation.rim-width;
+            border-color: Elevation.raised-rim;
+        }
+
+        call-content := VerticalLayout {
+            y: 0;
+            height: self.preferred-height;
+            padding: Spacing.md;
+            spacing: Spacing.xs;
+            alignment: start;
+
+            if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: Text {
+                text: root.sender-name;
+                wrap: word-wrap;
+                color: Colors.sender-name;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.md;
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: Spacing.xxs;
+
+                    HorizontalLayout {
+                        spacing: Spacing.xs;
+                        alignment: start;
+
+                        Text {
+                            property <string> arrow: is-outgoing ? "\u{2197}" : "\u{2199}";
+                            text: arrow;
+                            color: is-missed ? Colors.error : (is-outgoing ? Colors.success : Colors.primary);
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                        }
+
+                        call-status := Text {
+                            text: is-missed ? "Missed call"
+                                : root.call-type == "declined" ? "Declined call"
+                                : root.call-type == "started" ? "Call started"
+                                : root.call-type == "ended" ? "Call ended"
+                                : is-outgoing ? "Outgoing call" : "Incoming call";
+                            // Spoken by the call card, which is the button.
+                            accessible-role: none;
+                            accessible-label: root.call-type == "started" || root.call-type == "ended"
+                                ? (is-outgoing ? "Outgoing call " : "Incoming call ") + root.call-type
+                                : self.text;
+                            color: is-missed ? Colors.error : Colors.text-primary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                        }
+                    }
+
+                    // Duration belongs to the call status, not the footer clock.
+                    if root.call-duration != "": Text {
+                        text: root.call-duration;
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+                }
+
+                // A fixed-size child of a HorizontalLayout sits at the
+                // row's top; centre the icon on the text block's axis.
+                VerticalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        accessible-role: image;
+                        accessible-label: "Call icon";
+                        width: 40px;
+                        height: 40px;
+                        border-radius: 20px;
+                        background: is-missed ? Colors.error.transparentize(0.8) : Colors.primary.transparentize(0.85);
+
+                        Image {
+                            width: 20px;
+                            height: 20px;
+                            source: Icons.phone;
+                            colorize: is-missed ? Colors.error : Colors.primary;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                }
+            }
+
+            // Clock is a separate bottom/right footer, like normal bubbles.
+            HorizontalLayout {
+                alignment: end;
+                Text {
+                    text: root.timestamp;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                }
+            }
+        }
+
+        call-touch := TouchArea {
+            mouse-cursor: pointer;
+            pointer-event(event) => {
+                if event.button == PointerEventButton.right && event.kind == PointerEventKind.up {
+                    root.request-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y,
+                        self.absolute-position.y, self.absolute-position.y + self.height,
+                        self.absolute-position.x, self.absolute-position.x + self.width);
+                }
+                if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                    root.begin-message-press(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y,
+                        self.absolute-position.x, self.absolute-position.y + self.height, self.absolute-position.y,
+                        self.absolute-position.x + self.width);
+                }
+                if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel { root.cancel-hold(); }
+            }
+            moved => { root.move-message-press(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); }
+            clicked => {
+                if root.selection-mode { root.selection-toggled(root.message-id); return; }
+                if root.hold-tier != 0 { root.clear-hold-tier(); return; }
+                root.message-clicked(root.message-id);
+            }
+        }
+    }
+}

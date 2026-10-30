@@ -3,7 +3,7 @@
 //! Covers round-trip, error cases, and backup ID derivation.
 
 use chatter_core::crypto::svr_backup::{
-    decrypt_backup, derive_backup_id, encrypt_backup, KeyBackupPayload,
+    KeyBackupPayload, decrypt_backup, derive_backup_id, encrypt_backup,
 };
 
 /// Helper: create a deterministic test payload.
@@ -22,6 +22,7 @@ fn test_payload() -> KeyBackupPayload {
     KeyBackupPayload {
         identity_keypair,
         profile_key,
+        full_username: "alice_42.1234".to_owned(),
     }
 }
 
@@ -54,6 +55,7 @@ fn round_trip() {
         decrypted.profile_key, payload.profile_key,
         "profile key should survive round-trip"
     );
+    assert_eq!(decrypted.full_username, payload.full_username);
 }
 
 // ============================================================================
@@ -104,7 +106,7 @@ fn malformed_data() {
 #[test]
 fn version_mismatch() {
     let payload = test_payload();
-    let mut serialized = payload.serialize();
+    let mut serialized = payload.serialize().unwrap();
 
     // Change version byte to something invalid
     serialized[0] = 0xFF;
@@ -123,12 +125,62 @@ fn version_mismatch() {
 #[test]
 fn serialize_deserialize_round_trip() {
     let payload = test_payload();
-    let serialized = payload.serialize();
+    let serialized = payload.serialize().unwrap();
     let deserialized =
         KeyBackupPayload::deserialize(&serialized).expect("deserialization should succeed");
 
     assert_eq!(deserialized.identity_keypair, payload.identity_keypair);
     assert_eq!(deserialized.profile_key, payload.profile_key);
+    assert_eq!(deserialized.full_username, payload.full_username);
+}
+
+/// The username is padded to a fixed width, so the ciphertext the server
+/// stores is the same length whatever the handle — it cannot learn the
+/// handle's length from the backup.
+#[test]
+fn payload_size_does_not_depend_on_username() {
+    let mut short = test_payload();
+    short.full_username = "abc.01".to_owned();
+    let mut long = test_payload();
+    long.full_username = format!("{}.123456789", "n".repeat(32));
+    let secret = test_svr_secret();
+    assert_eq!(
+        short.serialize().unwrap().len(),
+        long.serialize().unwrap().len()
+    );
+    assert_eq!(
+        encrypt_backup(&short, &secret).unwrap().len(),
+        encrypt_backup(&long, &secret).unwrap().len(),
+    );
+}
+
+#[test]
+fn username_out_of_range_is_rejected() {
+    let mut empty = test_payload();
+    empty.full_username.clear();
+    assert!(empty.serialize().is_err(), "a backup must carry the handle");
+
+    let mut too_long = test_payload();
+    too_long.full_username = "x".repeat(65);
+    assert!(too_long.serialize().is_err());
+}
+
+#[test]
+fn nonzero_username_padding_is_rejected() {
+    let mut serialized = test_payload().serialize().unwrap();
+    *serialized.last_mut().unwrap() = 1;
+    assert!(KeyBackupPayload::deserialize(&serialized).is_err());
+}
+
+/// Pre-release clean break: a v1 payload (no username) no longer parses.
+#[test]
+fn v1_payload_is_rejected() {
+    let mut v1 = vec![0x01];
+    v1.extend_from_slice(&64u32.to_le_bytes());
+    v1.extend_from_slice(&[0x11; 64]);
+    v1.extend_from_slice(&32u32.to_le_bytes());
+    v1.extend_from_slice(&[0x22; 32]);
+    assert!(KeyBackupPayload::deserialize(&v1).is_err());
 }
 
 // ============================================================================

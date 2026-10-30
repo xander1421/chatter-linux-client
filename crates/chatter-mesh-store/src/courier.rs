@@ -8,37 +8,36 @@
 //! only because per-depositor quotas cannot exist without it. Nothing here should
 //! ever grow a field that would let it learn more.
 //!
-//! # The three properties this module is responsible for
+//! Store and forward here is deposit and take only: an envelope is carried until
+//! its recipient is met on an authenticated link, or until it expires. This store
+//! does not spray copies to other couriers, hand over speculatively to recipients
+//! heard through relays, or park envelopes on Nostr relays.
 //!
-//! **1. Verified-tier couriers can never crowd out favourites.** A mutual favourite
-//! deposits up to [`MAX_PER_FAVORITE_DEPOSITOR`] envelopes; any signature-verified
-//! peer up to [`MAX_PER_VERIFIED_DEPOSITOR`], into a bounded sub-pool of
-//! [`MAX_VERIFIED_ENVELOPES`] within a [`MAX_ENVELOPES`]-slot total. Overflow evicts
-//! the oldest *verified-tier* envelope first, and a verified deposit into a pool
-//! full of favourite mail is refused rather than displacing any of it. Collapsing
-//! the tiers into one quota makes the courier network trivially floodable by
-//! strangers — that is the entire reason two tiers exist.
+//! # The properties this module is responsible for
+//!
+//! **1. The pool is bounded per depositor and in total.** A signature-verified
+//! peer (the caller decides that; unverified peers may not deposit at all) may
+//! have at most [`MAX_PER_DEPOSITOR`] envelopes resting here, in a pool of
+//! [`MAX_ENVELOPES`]. A deposit into a full pool is refused rather than evicting
+//! anyone else's mail.
 //!
 //! **2. Handover requires a Noise-authenticated *ingress link*, not merely a session
 //! for the claimed peer ID.** A peer-level session can outlive the physical link it
 //! was established on, and a replayed announce can rebind an attacker's link to the
 //! victim's ID — so "a session exists for this peer" hands the mail to the attacker.
 //! Only a *direct*, signature-verified announce arriving on a link that is still
-//! Noise-authenticated releases an envelope; see [`AnnounceIngress`]. A *relayed*
-//! verified announce takes [`CourierStore::envelopes_for_remote_handover`], which
-//! emits a speculative copy, **keeps the original**, and throttles to one attempt
-//! per envelope per [`REMOTE_HANDOVER_COOLDOWN_SECS`].
+//! Noise-authenticated releases an envelope; see [`AnnounceIngress`]. A relayed
+//! announce releases nothing.
 //!
-//! **3. Copy budgets are capped.** Envelopes carry a spray budget starting at
-//! [`INITIAL_COPIES`], hard-capped at `MAX_COPIES` (8), halved on each handover to
-//! another eligible courier and never replenished by a replay of the original
-//! deposit. Uncapped budgets turn the courier network into an amplifier.
+//! **3. Copy budgets are capped.** The wire envelope's `copies` field is clamped to
+//! `MAX_COPIES` (8) on deposit and carried unchanged. Nothing here spends or grows
+//! it, so this store cannot be turned into an amplifier.
 //!
 //! # This crate cannot verify anything itself
 //!
 //! No signature check and no Noise state reaches this module, by design. The
 //! authentication facts arrive as an [`AnnounceIngress`] the caller *asserts*, and
-//! the trust tier arrives as a [`CourierTier`] the caller decided. The store's job
+//! whether a depositor is verified at all is the caller's decision. The store's job
 //! is to enforce resource bounds and the release rule on top of those assertions,
 //! not to second-guess them.
 //!
@@ -59,7 +58,7 @@
 //! bound to a pool this process did not build under the current limits — is ported,
 //! as [`CourierStore::restore`]'s bound check.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use chatter_mesh::tlv::courier_envelope::{
     CourierEnvelope, MAX_CIPHERTEXT_BYTES, MAX_COPIES, MAX_LIFETIME_SECONDS, TAG_LEN,
@@ -68,38 +67,21 @@ use chatter_mesh::tlv::courier_envelope::{
 
 use crate::error::StoreError;
 use crate::storage::{Storage, StorageKey};
-use crate::transport::CourierTier;
 
-/// Total envelopes carried at once. Swift: `Limits.maxEnvelopes` (line 102).
-pub const MAX_ENVELOPES: usize = 40;
-/// Verified-tier sub-pool, so open couriering can never consume the whole bag.
-/// Swift: `Limits.maxVerifiedEnvelopes` (line 104).
-pub const MAX_VERIFIED_ENVELOPES: usize = 20;
-/// Envelopes one mutual favourite may have resting here.
-/// Swift: `Limits.maxPerFavoriteDepositor` (line 105).
-pub const MAX_PER_FAVORITE_DEPOSITOR: usize = 5;
-/// Envelopes one merely signature-verified peer may have resting here.
+/// Total envelopes carried at once. Swift: `Limits.maxVerifiedEnvelopes` (line 104).
+pub const MAX_ENVELOPES: usize = 20;
+/// Envelopes one signature-verified peer may have resting here.
 /// Swift: `Limits.maxPerVerifiedDepositor` (line 106).
-pub const MAX_PER_VERIFIED_DEPOSITOR: usize = 2;
+pub const MAX_PER_DEPOSITOR: usize = 2;
 /// Slack allowed on top of the 24 h lifetime for depositor clock skew. An expiry
 /// beyond this is a skew or abuse attempt and the deposit is refused.
 /// Swift: `Limits.maxExpirySlack` (line 108).
 pub const MAX_EXPIRY_SLACK_SECS: u64 = 60 * 60;
 
-/// Spray-and-wait budget a freshly sealed envelope starts with, so a message
-/// diffuses through a moving crowd instead of riding one carrier.
+/// Copy budget a freshly sealed envelope advertises on the wire. This store never
+/// spends it; it is set for peers running implementations that spray.
 /// Swift: `TransportConfig.courierInitialCopies` (TransportConfig.swift line 347).
 pub const INITIAL_COPIES: u8 = 4;
-
-/// Minimum spacing between speculative multi-hop handovers of the *same* envelope
-/// toward a recipient heard only via relayed announces, so repeated announces
-/// cannot re-flood the mesh.
-/// Swift: `TransportConfig.courierRemoteHandoverCooldownSeconds` (line 350).
-pub const REMOTE_HANDOVER_COOLDOWN_SECS: u64 = 10 * 60;
-
-/// Republish spacing for an envelope parked on relays as a bridge courier drop.
-/// Swift: `BridgeCourierService.Limits.heldEnvelopePublishCooldown` (line 45).
-pub const BRIDGE_PUBLISH_COOLDOWN_SECS: u64 = 30 * 60;
 
 const MILLIS_PER_SEC: u64 = 1_000;
 
@@ -112,14 +94,6 @@ const MAX_PEER_KEY_BYTES: usize = 64;
 /// the caller's to establish — this is a shape check, not an authentication one.
 fn is_plausible_peer_key(key: &[u8]) -> bool {
     !key.is_empty() && key.len() <= MAX_PEER_KEY_BYTES
-}
-
-/// Envelopes one depositor of this tier may have resting here at once.
-const fn per_depositor_quota(tier: CourierTier) -> usize {
-    match tier {
-        CourierTier::Favorite => MAX_PER_FAVORITE_DEPOSITOR,
-        CourierTier::Verified => MAX_PER_VERIFIED_DEPOSITOR,
-    }
 }
 
 fn unix_millis(now_unix_secs: u64) -> u64 {
@@ -149,7 +123,10 @@ pub struct AnnounceIngress {
 impl AnnounceIngress {
     /// Both facts stated explicitly. The named constructors below are clearer at a
     /// call site; this exists for callers computing the facts from predicates.
-    pub const fn new(verified_direct_announce: bool, link_is_noise_authenticated_now: bool) -> Self {
+    pub const fn new(
+        verified_direct_announce: bool,
+        link_is_noise_authenticated_now: bool,
+    ) -> Self {
         Self {
             verified_direct_announce,
             link_is_noise_authenticated_now,
@@ -196,8 +173,7 @@ pub enum Handover {
     /// mailbag. A rejected offer stays carried for the next authenticated encounter.
     Released { offered: usize, accepted: usize },
     /// The announce was relayed, or its link is not Noise-authenticated right now.
-    /// Nothing was offered and nothing left the mailbag. The speculative path is
-    /// [`CourierStore::envelopes_for_remote_handover`].
+    /// Nothing was offered and nothing left the mailbag.
     RefusedUnauthenticatedIngress,
 }
 
@@ -223,14 +199,8 @@ struct StoredEnvelope {
     /// Whose quota this envelope occupies. The only identity in the store.
     depositor_noise_key: Vec<u8>,
     stored_at_unix_secs: u64,
-    tier: CourierTier,
-    /// Remaining spray-and-wait budget. 1 means carry-only.
+    /// The wire copy budget, clamped and carried unchanged.
     copies: u8,
-    /// Couriers already given a copy, so a repeat encounter with the same peer
-    /// does not burn budget on a copy they already hold.
-    sprayed_to: BTreeSet<Vec<u8>>,
-    last_remote_handover_at: Option<u64>,
-    last_bridge_publish_at: Option<u64>,
     prekey_id: Option<u32>,
 }
 
@@ -322,32 +292,33 @@ impl<S: Storage> CourierStore<S> {
         self.envelopes.len()
     }
 
-    /// Envelopes currently carried in one tier. The verified count is the one
-    /// bounded independently of favourites.
-    pub fn carried_count_in_tier(&self, tier: CourierTier) -> usize {
-        self.envelopes.iter().filter(|e| e.tier == tier).count()
+    /// Whether any carried envelope is addressed to this Noise static key. Read
+    /// only, so the caller can decide to prove the link before a handover.
+    pub fn carries_for(&self, recipient_noise_static_key: &[u8], now_unix_secs: u64) -> bool {
+        if self.envelopes.is_empty() {
+            return false;
+        }
+        let tags = candidate_tags(recipient_noise_static_key, now_unix_secs);
+        self.envelopes
+            .iter()
+            .any(|stored| tags.contains(&stored.recipient_tag))
     }
 
     // MARK: - Depositing (courier side)
 
     /// Accept an envelope from a depositor.
     ///
-    /// Trust policy — which tier a depositor gets, if any — is the caller's
+    /// Trust policy — whether a depositor may deposit at all — is the caller's
     /// decision; this store only enforces resource bounds on top of it. A refusal
     /// is [`StoreError::DepositRefused`] and is not a failure: the pool is bounded
     /// on purpose and refusing is how the bound is enforced.
     ///
     /// Depositing an envelope whose ciphertext is already carried is idempotent: it
-    /// succeeds without consuming a second slot. Before any spray, a carry-only copy
-    /// may legitimately arrive ahead of the original higher-budget one, so the
-    /// larger initial budget wins; once this branch has sprayed, replaying the
-    /// depositor's original packet must never replenish spent copies (Swift lines
-    /// 198–204).
+    /// succeeds without consuming a second slot, keeping the larger copy budget.
     pub fn deposit(
         &mut self,
         envelope: &CourierEnvelope,
         depositor_noise_key: &[u8],
-        tier: CourierTier,
         now_unix_secs: u64,
     ) -> Result<(), StoreError> {
         // Quotas are keyed on the depositor, so an empty key would let every
@@ -390,9 +361,7 @@ impl<S: Storage> CourierStore<S> {
             .iter()
             .position(|stored| stored.ciphertext == envelope.ciphertext);
         if let Some(index) = duplicate {
-            if let Some(stored) = self.envelopes.get_mut(index)
-                && stored.sprayed_to.is_empty()
-            {
+            if let Some(stored) = self.envelopes.get_mut(index) {
                 stored.copies = stored.copies.max(copies);
             }
             self.persist()?;
@@ -404,34 +373,14 @@ impl<S: Storage> CourierStore<S> {
             .iter()
             .filter(|stored| stored.depositor_noise_key == depositor_noise_key)
             .count();
-        if already_deposited >= per_depositor_quota(tier) {
+        if already_deposited >= MAX_PER_DEPOSITOR {
             return Err(StoreError::DepositRefused("per-depositor quota reached"));
         }
 
-        // The verified sub-pool is bounded independently of the total, which is what
-        // stops a crowd of strangers from occupying every slot a favourite might
-        // have wanted.
-        if tier == CourierTier::Verified
-            && self.carried_count_in_tier(CourierTier::Verified) >= MAX_VERIFIED_ENVELOPES
-        {
-            return Err(StoreError::DepositRefused("verified-tier pool full"));
-        }
-
+        // Refused rather than evicting: a crowd of strangers must not be able to
+        // push out mail already being carried.
         if self.envelopes.len() >= MAX_ENVELOPES {
-            // Oldest-first eviction, shedding verified-tier mail before favourites'.
-            // A verified deposit never displaces a favourite: when only favourite
-            // mail is stored it is refused instead. Swift lines 216–231.
-            let oldest_verified = self
-                .envelopes
-                .iter()
-                .position(|stored| stored.tier == CourierTier::Verified);
-            if let Some(victim) = oldest_verified {
-                self.envelopes.remove(victim);
-            } else if tier == CourierTier::Favorite {
-                self.envelopes.remove(0);
-            } else {
-                return Err(StoreError::DepositRefused("pool full of favourite mail"));
-            }
+            return Err(StoreError::DepositRefused("courier pool full"));
         }
 
         self.envelopes.push(StoredEnvelope {
@@ -440,11 +389,7 @@ impl<S: Storage> CourierStore<S> {
             ciphertext: envelope.ciphertext.clone(),
             depositor_noise_key: depositor_noise_key.to_vec(),
             stored_at_unix_secs: now_unix_secs,
-            tier,
             copies,
-            sprayed_to: BTreeSet::new(),
-            last_remote_handover_at: None,
-            last_bridge_publish_at: None,
             prekey_id: envelope.prekey_id,
         });
         self.persist()
@@ -464,10 +409,15 @@ impl<S: Storage> CourierStore<S> {
         ingress: AnnounceIngress,
     ) -> Result<Vec<CourierEnvelope>, StoreError> {
         let mut taken = Vec::new();
-        self.handover_envelopes(recipient_noise_static_key, now_unix_secs, ingress, |envelope| {
-            taken.push(envelope.clone());
-            true
-        })?;
+        self.handover_envelopes(
+            recipient_noise_static_key,
+            now_unix_secs,
+            ingress,
+            |envelope| {
+                taken.push(envelope.clone());
+                true
+            },
+        )?;
         Ok(taken)
     }
 
@@ -476,9 +426,7 @@ impl<S: Storage> CourierStore<S> {
     /// **This is the destructive path and it is gated.** `ingress` is the caller's
     /// assertion that the announce was signature-verified, *direct*, and arrived on
     /// a link that is still Noise-authenticated for that peer. Anything weaker
-    /// returns [`Handover::RefusedUnauthenticatedIngress`] having touched nothing —
-    /// take [`CourierStore::envelopes_for_remote_handover`] instead, which sends a
-    /// speculative copy and keeps the original.
+    /// returns [`Handover::RefusedUnauthenticatedIngress`] having touched nothing.
     ///
     /// The durable copy is retired only once `accept` confirms the transport put it
     /// on the intended peer's physical link. A failed encode, a stale binding, or
@@ -534,179 +482,6 @@ impl<S: Storage> CourierStore<S> {
         })
     }
 
-    /// Envelopes for a recipient we heard from via a *relayed* announce, or via a
-    /// direct announce whose link has not proved possession.
-    ///
-    /// **Non-destructive.** A multi-hop send is speculative — it may reach nobody —
-    /// so the original stays carried until a genuine direct handover or expiry. The
-    /// per-envelope cooldown (pass [`REMOTE_HANDOVER_COOLDOWN_SECS`]) keeps repeated
-    /// announces from re-flooding the mesh, and starts as soon as a copy is emitted.
-    ///
-    /// The emitted copy carries no spray budget: a speculative flood must not also
-    /// seed new courier branches.
-    pub fn envelopes_for_remote_handover(
-        &mut self,
-        recipient_noise_key: &[u8],
-        cooldown_secs: u64,
-        now_unix_secs: u64,
-    ) -> Result<Vec<CourierEnvelope>, StoreError> {
-        let pruned = self.prune_locked(now_unix_secs);
-
-        let tags = candidate_tags(recipient_noise_key, now_unix_secs);
-        let mut matched = Vec::new();
-        for stored in &mut self.envelopes {
-            if !tags.contains(&stored.recipient_tag) {
-                continue;
-            }
-            if throttled(stored.last_remote_handover_at, cooldown_secs, now_unix_secs) {
-                continue;
-            }
-            stored.last_remote_handover_at = Some(now_unix_secs);
-            matched.push(stored.envelope().with_copies(1));
-        }
-
-        if pruned > 0 || !matched.is_empty() {
-            self.persist()?;
-        }
-        Ok(matched)
-    }
-
-    /// Envelopes eligible to park on relays as bridge courier drops (pass
-    /// [`BRIDGE_PUBLISH_COOLDOWN_SECS`]).
-    ///
-    /// Merely offering one does not start its cooldown — the caller commits that
-    /// with [`CourierStore::mark_bridge_published`] only after a relay explicitly
-    /// accepts the event. The relay copy carries no spray budget.
-    pub fn envelopes_for_bridge_publish(
-        &mut self,
-        cooldown_secs: u64,
-        now_unix_secs: u64,
-    ) -> Result<Vec<CourierEnvelope>, StoreError> {
-        if self.prune_locked(now_unix_secs) > 0 {
-            self.persist()?;
-        }
-        Ok(self
-            .envelopes
-            .iter()
-            .filter(|stored| {
-                !throttled(stored.last_bridge_publish_at, cooldown_secs, now_unix_secs)
-            })
-            .map(|stored| stored.envelope().with_copies(1))
-            .collect())
-    }
-
-    /// Start the bridge-publish cooldown for a relay-confirmed copy. An envelope we
-    /// no longer carry is a no-op.
-    pub fn mark_bridge_published(
-        &mut self,
-        envelope: &CourierEnvelope,
-        now_unix_secs: u64,
-    ) -> Result<(), StoreError> {
-        let Some(index) = self
-            .envelopes
-            .iter()
-            .position(|stored| stored.ciphertext == envelope.ciphertext)
-        else {
-            return Ok(());
-        };
-        if let Some(stored) = self.envelopes.get_mut(index) {
-            stored.last_bridge_publish_at = Some(now_unix_secs);
-        }
-        self.persist()
-    }
-
-    // MARK: - Spray-and-wait (on encountering another courier)
-
-    /// Copies to re-deposit with a courier we just met, accepting every offer.
-    /// Convenience over [`CourierStore::transfer_spray_copies`].
-    pub fn take_spray_copies(
-        &mut self,
-        courier_noise_key: &[u8],
-        now_unix_secs: u64,
-    ) -> Result<Vec<CourierEnvelope>, StoreError> {
-        let mut sprayed = Vec::new();
-        self.transfer_spray_copies(courier_noise_key, now_unix_secs, |envelope| {
-            sprayed.push(envelope.clone());
-            true
-        })?;
-        Ok(sprayed)
-    }
-
-    /// Binary spray: offer another courier half of each envelope's remaining budget.
-    ///
-    /// The local budget is reduced and the courier recorded only after `accept`
-    /// confirms the copy left the device, so a false result is a clean rollback —
-    /// retrying the same courier sees the original budget and eligibility.
-    ///
-    /// Skipped: envelopes this courier deposited, envelopes addressed *to* them
-    /// (those ride the handover path and its authentication rule), carry-only
-    /// envelopes, and couriers already sprayed. Halving bottoms out at a budget of
-    /// 1, at which point the envelope is carry-only forever — nothing here can grow
-    /// a budget, which is what keeps the network from amplifying.
-    pub fn transfer_spray_copies<F>(
-        &mut self,
-        courier_noise_key: &[u8],
-        now_unix_secs: u64,
-        mut accept: F,
-    ) -> Result<usize, StoreError>
-    where
-        F: FnMut(&CourierEnvelope) -> bool,
-    {
-        if self.prune_locked(now_unix_secs) > 0 {
-            self.persist()?;
-        }
-        if !is_plausible_peer_key(courier_noise_key) {
-            return Ok(0);
-        }
-
-        let courier_tags = candidate_tags(courier_noise_key, now_unix_secs);
-        let eligible = |stored: &StoredEnvelope| {
-            stored.copies > 1
-                && stored.depositor_noise_key != courier_noise_key
-                && !stored.sprayed_to.contains(courier_noise_key)
-                && !courier_tags.contains(&stored.recipient_tag)
-        };
-
-        let offered: Vec<CourierEnvelope> = self
-            .envelopes
-            .iter()
-            .filter(|&stored| eligible(stored))
-            .map(|stored| stored.envelope().with_copies(stored.copies / 2))
-            .collect();
-
-        let mut accepted = 0usize;
-        for copy in &offered {
-            if !accept(copy) {
-                continue;
-            }
-            let Some(index) = self
-                .envelopes
-                .iter()
-                .position(|stored| stored.ciphertext == copy.ciphertext)
-            else {
-                continue;
-            };
-            // Revalidate before committing the exact budget that left the device.
-            let Some(stored) = self.envelopes.get_mut(index) else {
-                continue;
-            };
-            if stored.copies <= copy.copies
-                || stored.depositor_noise_key == courier_noise_key
-                || stored.sprayed_to.contains(courier_noise_key)
-                || courier_tags.contains(&stored.recipient_tag)
-            {
-                continue;
-            }
-            stored.copies -= copy.copies;
-            stored.sprayed_to.insert(courier_noise_key.to_vec());
-            accepted += 1;
-        }
-        if accepted > 0 {
-            self.persist()?;
-        }
-        Ok(accepted)
-    }
-
     // MARK: - Maintenance
 
     /// Drop everything past its expiry. Returns how many were dropped.
@@ -743,41 +518,19 @@ impl<S: Storage> CourierStore<S> {
 
         let mut per_depositor: BTreeMap<Vec<u8>, usize> = BTreeMap::new();
         self.envelopes.retain(|stored| {
-            let quota = per_depositor_quota(stored.tier);
             let count = per_depositor
                 .entry(stored.depositor_noise_key.clone())
                 .or_insert(0);
-            if *count >= quota {
+            if *count >= MAX_PER_DEPOSITOR {
                 return false;
             }
             *count += 1;
             true
         });
 
-        loop {
-            if self.carried_count_in_tier(CourierTier::Verified) <= MAX_VERIFIED_ENVELOPES {
-                break;
-            }
-            let victim = self
-                .envelopes
-                .iter()
-                .position(|stored| stored.tier == CourierTier::Verified);
-            match victim {
-                Some(index) => {
-                    self.envelopes.remove(index);
-                }
-                None => break,
-            }
-        }
-
-        while self.envelopes.len() > MAX_ENVELOPES {
-            let victim = self
-                .envelopes
-                .iter()
-                .position(|stored| stored.tier == CourierTier::Verified)
-                .unwrap_or(0);
-            self.envelopes.remove(victim);
-        }
+        // Keep the oldest, matching the deposit path, which refuses rather than
+        // evicts once the pool is full.
+        self.envelopes.truncate(MAX_ENVELOPES);
 
         before - self.envelopes.len()
     }
@@ -791,18 +544,6 @@ impl<S: Storage> CourierStore<S> {
     }
 }
 
-/// Whether a per-envelope cooldown is still running.
-///
-/// A timestamp in the future — a clock that stepped backwards — counts as
-/// throttled rather than as an elapsed eternity, so skew cannot be used to force
-/// re-floods.
-fn throttled(last: Option<u64>, cooldown_secs: u64, now_unix_secs: u64) -> bool {
-    match last {
-        Some(last) => now_unix_secs.saturating_sub(last) < cooldown_secs,
-        None => false,
-    }
-}
-
 // MARK: - Durable encoding
 //
 // Hand-rolled rather than serde: this crate's dependency list is `chatter-mesh`,
@@ -810,9 +551,7 @@ fn throttled(last: Option<u64>, cooldown_secs: u64, now_unix_secs: u64) -> bool 
 // fields. Everything written here is ciphertext or bookkeeping about ciphertext —
 // the `Storage` seam never sees plaintext.
 
-const POOL_MAGIC: &[u8; 4] = b"CRP1";
-const TIER_VERIFIED: u8 = 0;
-const TIER_FAVORITE: u8 = 1;
+const POOL_MAGIC: &[u8; 4] = b"CRP2";
 
 fn malformed() -> StoreError {
     StoreError::Malformed("courier pool")
@@ -834,20 +573,7 @@ fn encode_pool(envelopes: &[StoredEnvelope]) -> Vec<u8> {
         out.extend_from_slice(&stored.depositor_noise_key);
 
         out.extend_from_slice(&stored.stored_at_unix_secs.to_be_bytes());
-        out.push(match stored.tier {
-            CourierTier::Verified => TIER_VERIFIED,
-            CourierTier::Favorite => TIER_FAVORITE,
-        });
         out.push(stored.copies);
-
-        out.extend_from_slice(&(stored.sprayed_to.len() as u16).to_be_bytes());
-        for key in &stored.sprayed_to {
-            out.extend_from_slice(&(key.len() as u16).to_be_bytes());
-            out.extend_from_slice(key);
-        }
-
-        put_optional_u64(&mut out, stored.last_remote_handover_at);
-        put_optional_u64(&mut out, stored.last_bridge_publish_at);
 
         match stored.prekey_id {
             Some(id) => {
@@ -858,16 +584,6 @@ fn encode_pool(envelopes: &[StoredEnvelope]) -> Vec<u8> {
         }
     }
     out
-}
-
-fn put_optional_u64(out: &mut Vec<u8>, value: Option<u64>) {
-    match value {
-        Some(value) => {
-            out.push(1);
-            out.extend_from_slice(&value.to_be_bytes());
-        }
-        None => out.push(0),
-    }
 }
 
 fn decode_pool(bytes: &[u8]) -> Result<Vec<StoredEnvelope>, StoreError> {
@@ -884,7 +600,8 @@ fn decode_pool(bytes: &[u8]) -> Result<Vec<StoredEnvelope>, StoreError> {
 
     let mut envelopes = Vec::with_capacity(count);
     for _ in 0..count {
-        let recipient_tag = <[u8; TAG_LEN]>::try_from(cursor.take(TAG_LEN)?).map_err(|_| malformed())?;
+        let recipient_tag =
+            <[u8; TAG_LEN]>::try_from(cursor.take(TAG_LEN)?).map_err(|_| malformed())?;
         let expiry_ms = cursor.u64()?;
 
         let ciphertext_len = cursor.u32()? as usize;
@@ -900,31 +617,7 @@ fn decode_pool(bytes: &[u8]) -> Result<Vec<StoredEnvelope>, StoreError> {
         let depositor_noise_key = cursor.take(depositor_len)?.to_vec();
 
         let stored_at_unix_secs = cursor.u64()?;
-        let tier = match cursor.u8()? {
-            TIER_VERIFIED => CourierTier::Verified,
-            TIER_FAVORITE => CourierTier::Favorite,
-            _ => return Err(malformed()),
-        };
         let copies = cursor.u8()?.clamp(1, MAX_COPIES);
-
-        let sprayed_count = cursor.u16()? as usize;
-        // Eligibility requires a budget above 1 and the budget only halves, so a
-        // capped envelope can name at most three couriers. A larger claim is a
-        // tampered blob.
-        if sprayed_count > MAX_COPIES as usize {
-            return Err(malformed());
-        }
-        let mut sprayed_to = BTreeSet::new();
-        for _ in 0..sprayed_count {
-            let key_len = cursor.u16()? as usize;
-            if key_len == 0 || key_len > MAX_PEER_KEY_BYTES {
-                return Err(malformed());
-            }
-            sprayed_to.insert(cursor.take(key_len)?.to_vec());
-        }
-
-        let last_remote_handover_at = cursor.optional_u64()?;
-        let last_bridge_publish_at = cursor.optional_u64()?;
         let prekey_id = match cursor.u8()? {
             0 => None,
             _ => Some(cursor.u32()?),
@@ -936,11 +629,7 @@ fn decode_pool(bytes: &[u8]) -> Result<Vec<StoredEnvelope>, StoreError> {
             ciphertext,
             depositor_noise_key,
             stored_at_unix_secs,
-            tier,
             copies,
-            sprayed_to,
-            last_remote_handover_at,
-            last_bridge_publish_at,
             prekey_id,
         });
     }
@@ -991,13 +680,6 @@ impl<'a> Cursor<'a> {
         let raw = <[u8; 8]>::try_from(self.take(8)?).map_err(|_| malformed())?;
         Ok(u64::from_be_bytes(raw))
     }
-
-    fn optional_u64(&mut self) -> Result<Option<u64>, StoreError> {
-        match self.u8()? {
-            0 => Ok(None),
-            _ => Ok(Some(self.u64()?)),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1015,7 +697,13 @@ mod tests {
 
     /// Envelopes are identified by ciphertext, so every fixture needs a distinct
     /// one or the store treats them as the same mail.
-    fn envelope_at(recipient: &[u8], nonce: u32, lifetime_secs: u64, copies: u8, now: u64) -> CourierEnvelope {
+    fn envelope_at(
+        recipient: &[u8],
+        nonce: u32,
+        lifetime_secs: u64,
+        copies: u8,
+        now: u64,
+    ) -> CourierEnvelope {
         let mut ciphertext = vec![0x5A; 96];
         ciphertext[..4].copy_from_slice(&nonce.to_be_bytes());
         CourierEnvelope::new(
@@ -1047,11 +735,11 @@ mod tests {
         let recipient = key(0xB0);
         let mail = envelope(&recipient, 1);
 
-        store
-            .deposit(&mail, &key(0xA1), CourierTier::Favorite, NOW)
-            .expect("deposit");
+        store.deposit(&mail, &key(0xA1), NOW).expect("deposit");
 
-        let taken = store.take_envelopes(&recipient, NOW, direct()).expect("take");
+        let taken = store
+            .take_envelopes(&recipient, NOW, direct())
+            .expect("take");
         assert_eq!(taken, vec![mail]);
         // Delivery removes the envelope.
         assert!(store.is_empty());
@@ -1064,10 +752,22 @@ mod tests {
     }
 
     #[test]
+    fn carries_for_names_only_the_recipient_and_takes_nothing() {
+        let mut store = store();
+        assert!(!store.carries_for(&key(0xB0), NOW));
+        store
+            .deposit(&envelope(&key(0xB0), 1), &key(0xA1), NOW)
+            .expect("deposit");
+        assert!(store.carries_for(&key(0xB0), NOW));
+        assert!(!store.carries_for(&key(0xCC), NOW));
+        assert_eq!(store.carried_count(), 1);
+    }
+
+    #[test]
     fn handover_ignores_other_recipients() {
         let mut store = store();
         store
-            .deposit(&envelope(&key(0xB0), 1), &key(0xA1), CourierTier::Favorite, NOW)
+            .deposit(&envelope(&key(0xB0), 1), &key(0xA1), NOW)
             .expect("deposit");
 
         assert!(
@@ -1077,7 +777,10 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            store.take_envelopes(&key(0xB0), NOW, direct()).expect("take").len(),
+            store
+                .take_envelopes(&key(0xB0), NOW, direct())
+                .expect("take")
+                .len(),
             1
         );
     }
@@ -1087,9 +790,7 @@ mod tests {
         let mut store = store();
         let recipient = key(0xB0);
         let mail = envelope(&recipient, 1);
-        store
-            .deposit(&mail, &key(0xA1), CourierTier::Favorite, NOW)
-            .expect("deposit");
+        store.deposit(&mail, &key(0xA1), NOW).expect("deposit");
 
         let mut offers = Vec::new();
         let outcome = store
@@ -1121,10 +822,10 @@ mod tests {
         let recipient = key(0xB0);
         let mail = envelope(&recipient, 1);
         store
-            .deposit(&mail, &key(0xA1), CourierTier::Favorite, NOW)
+            .deposit(&mail, &key(0xA1), NOW)
             .expect("first deposit");
         store
-            .deposit(&mail, &key(0xA1), CourierTier::Favorite, NOW)
+            .deposit(&mail, &key(0xA1), NOW)
             .expect("second deposit");
         assert_eq!(store.carried_count(), 1);
     }
@@ -1136,7 +837,7 @@ mod tests {
         let mut store = store();
         let recipient = key(0xB0);
         store
-            .deposit(&envelope(&recipient, 1), &key(0xA1), CourierTier::Favorite, NOW)
+            .deposit(&envelope(&recipient, 1), &key(0xA1), NOW)
             .expect("deposit");
 
         // A relayed announce proves nothing about who owns the link.
@@ -1178,7 +879,7 @@ mod tests {
         let mut store = store();
         let recipient = key(0xB0);
         store
-            .deposit(&envelope(&recipient, 1), &key(0xA1), CourierTier::Favorite, NOW)
+            .deposit(&envelope(&recipient, 1), &key(0xA1), NOW)
             .expect("deposit");
 
         assert!(direct().releases_mail());
@@ -1203,155 +904,36 @@ mod tests {
         assert!(AnnounceIngress::verified_direct_on_authenticated_link().releases_mail());
     }
 
-    // MARK: - Non-negotiable 2: the relayed path
+    // MARK: - Non-negotiable 1: quotas
 
     #[test]
-    fn the_relayed_path_keeps_the_original_and_honours_the_ten_minute_throttle() {
-        let mut store = store();
-        let recipient = key(0xB0);
-        store
-            .deposit(
-                &envelope_at(&recipient, 1, 12 * HOUR, 4, NOW),
-                &key(0xA1),
-                CourierTier::Favorite,
-                NOW,
-            )
-            .expect("deposit");
-
-        let first = store
-            .envelopes_for_remote_handover(&recipient, REMOTE_HANDOVER_COOLDOWN_SECS, NOW)
-            .expect("remote handover");
-        assert_eq!(first.len(), 1);
-        // A speculative flood copy must not also seed new courier branches.
-        assert_eq!(first.first().map(|e| e.copies), Some(1));
-        // Non-destructive: the original is still carried, with its budget intact.
-        assert_eq!(store.carried_count(), 1);
-
-        // Inside the cooldown it is not re-flooded, however many announces arrive.
-        for offset in [0, 1, 599] {
-            assert!(
-                store
-                    .envelopes_for_remote_handover(
-                        &recipient,
-                        REMOTE_HANDOVER_COOLDOWN_SECS,
-                        NOW + offset
-                    )
-                    .expect("remote handover")
-                    .is_empty(),
-                "re-flooded {offset}s into a 600s cooldown"
-            );
-        }
-
-        // At exactly ten minutes it is eligible again.
-        assert_eq!(REMOTE_HANDOVER_COOLDOWN_SECS, 600);
-        let second = store
-            .envelopes_for_remote_handover(
-                &recipient,
-                REMOTE_HANDOVER_COOLDOWN_SECS,
-                NOW + REMOTE_HANDOVER_COOLDOWN_SECS,
-            )
-            .expect("remote handover");
-        assert_eq!(second.len(), 1);
-
-        // And a genuine direct encounter still hands the original over.
-        assert_eq!(
-            store
-                .take_envelopes(&recipient, NOW + REMOTE_HANDOVER_COOLDOWN_SECS, direct())
-                .expect("take")
-                .len(),
-            1
-        );
-        assert!(store.is_empty());
-    }
-
-    #[test]
-    fn a_backwards_clock_does_not_reopen_the_remote_handover_throttle() {
-        let mut store = store();
-        let recipient = key(0xB0);
-        store
-            .deposit(&envelope(&recipient, 1), &key(0xA1), CourierTier::Favorite, NOW)
-            .expect("deposit");
-        assert_eq!(
-            store
-                .envelopes_for_remote_handover(&recipient, REMOTE_HANDOVER_COOLDOWN_SECS, NOW)
-                .expect("remote handover")
-                .len(),
-            1
-        );
-        assert!(
-            store
-                .envelopes_for_remote_handover(
-                    &recipient,
-                    REMOTE_HANDOVER_COOLDOWN_SECS,
-                    NOW - 10_000
-                )
-                .expect("remote handover")
-                .is_empty()
-        );
-    }
-
-    // MARK: - Non-negotiable 1: quotas and tiers
-
-    #[test]
-    fn per_favourite_depositor_quota_is_exactly_five() {
+    fn per_depositor_quota_is_exactly_two() {
         let mut store = store();
         let depositor = key(0xA1);
-        for nonce in 0..MAX_PER_FAVORITE_DEPOSITOR as u32 {
+        for nonce in 0..MAX_PER_DEPOSITOR as u32 {
             store
-                .deposit(
-                    &envelope(&key(0xB0), nonce),
-                    &depositor,
-                    CourierTier::Favorite,
-                    NOW,
-                )
+                .deposit(&envelope(&key(0xB0), nonce), &depositor, NOW)
                 .expect("within quota");
         }
-        assert_eq!(MAX_PER_FAVORITE_DEPOSITOR, 5);
+        assert_eq!(MAX_PER_DEPOSITOR, 2);
         assert_eq!(
-            store.deposit(&envelope(&key(0xB0), 99), &depositor, CourierTier::Favorite, NOW),
+            store.deposit(&envelope(&key(0xB0), 99), &depositor, NOW),
             Err(StoreError::DepositRefused("per-depositor quota reached"))
         );
         // A different depositor still has room.
         store
-            .deposit(&envelope(&key(0xB0), 100), &key(0xA2), CourierTier::Favorite, NOW)
+            .deposit(&envelope(&key(0xB0), 100), &key(0xA2), NOW)
             .expect("other depositor");
     }
 
-    #[test]
-    fn per_verified_depositor_quota_is_exactly_two() {
-        let mut store = store();
-        let depositor = key(0xA1);
-        for nonce in 0..MAX_PER_VERIFIED_DEPOSITOR as u32 {
-            store
-                .deposit(
-                    &envelope(&key(0xB0), nonce),
-                    &depositor,
-                    CourierTier::Verified,
-                    NOW,
-                )
-                .expect("within quota");
-        }
-        assert_eq!(MAX_PER_VERIFIED_DEPOSITOR, 2);
-        assert_eq!(
-            store.deposit(&envelope(&key(0xB0), 99), &depositor, CourierTier::Verified, NOW),
-            Err(StoreError::DepositRefused("per-depositor quota reached"))
-        );
-        // The quota counts envelopes, not tiers: the same depositor promoted to
-        // favourite may deposit up to the favourite quota in total.
-        store
-            .deposit(&envelope(&key(0xB0), 100), &depositor, CourierTier::Favorite, NOW)
-            .expect("favourite quota is larger");
-    }
-
-    /// Fill the pool with `count` envelopes of one tier, spreading them over as many
+    /// Fill the pool with `count` envelopes, spreading them over as many
     /// depositors as the per-depositor quota requires. Returns the next free nonce.
-    fn fill(store: &mut CourierStore<MemoryStorage>, count: usize, tier: CourierTier) -> u32 {
-        let quota = per_depositor_quota(tier);
+    fn fill(store: &mut CourierStore<MemoryStorage>, count: usize) -> u32 {
         let mut nonce = 1_000u32;
         for slot in 0..count {
-            let depositor = key(0x10 + (slot / quota) as u8);
+            let depositor = key(0x10 + (slot / MAX_PER_DEPOSITOR) as u8);
             store
-                .deposit(&envelope(&key(0xB0), nonce), &depositor, tier, NOW)
+                .deposit(&envelope(&key(0xB0), nonce), &depositor, NOW)
                 .expect("fill");
             nonce += 1;
         }
@@ -1359,313 +941,71 @@ mod tests {
     }
 
     #[test]
-    fn the_verified_sub_pool_caps_at_twenty_while_favourites_still_fit() {
-        let mut store = store();
-        let nonce = fill(&mut store, MAX_VERIFIED_ENVELOPES, CourierTier::Verified);
-        assert_eq!(MAX_VERIFIED_ENVELOPES, 20);
-        assert_eq!(store.carried_count_in_tier(CourierTier::Verified), 20);
-
-        // The verified sub-pool is full: another verified deposit is refused...
-        assert_eq!(
-            store.deposit(&envelope(&key(0xB0), nonce), &key(0xEE), CourierTier::Verified, NOW),
-            Err(StoreError::DepositRefused("verified-tier pool full"))
-        );
-
-        // ...but favourites still have their whole share of the 40-slot total,
-        // which is the entire point of the sub-pool.
-        for extra in 0..(MAX_ENVELOPES - MAX_VERIFIED_ENVELOPES) {
-            let depositor = key(0x40 + (extra / MAX_PER_FAVORITE_DEPOSITOR) as u8);
-            store
-                .deposit(
-                    &envelope(&key(0xB0), nonce + 1 + extra as u32),
-                    &depositor,
-                    CourierTier::Favorite,
-                    NOW,
-                )
-                .expect("favourites keep their share");
-        }
-        assert_eq!(store.carried_count(), MAX_ENVELOPES);
-        assert_eq!(store.carried_count_in_tier(CourierTier::Favorite), 20);
-    }
-
-    #[test]
-    fn overflow_evicts_verified_before_favourite() {
-        let mut store = store();
-        let favourite_recipient = key(0xD0);
-        let verified_recipient = key(0xD1);
-
-        // The oldest envelope is a favourite deposit; a verified one follows.
-        store
-            .deposit(
-                &envelope(&favourite_recipient, 1),
-                &key(0xA1),
-                CourierTier::Favorite,
-                NOW,
-            )
-            .expect("favourite");
-        store
-            .deposit(
-                &envelope(&verified_recipient, 2),
-                &key(0xA2),
-                CourierTier::Verified,
-                NOW,
-            )
-            .expect("verified");
-
-        let nonce = fill(&mut store, MAX_ENVELOPES - 2, CourierTier::Favorite);
-        assert_eq!(store.carried_count(), MAX_ENVELOPES);
-
-        // The next favourite deposit sheds the verified envelope, not the older
-        // favourite one.
-        store
-            .deposit(&envelope(&key(0xB0), nonce), &key(0xEF), CourierTier::Favorite, NOW)
-            .expect("overflow deposit");
-        assert!(
-            store
-                .take_envelopes(&verified_recipient, NOW, direct())
-                .expect("take")
-                .is_empty(),
-            "verified mail must be evicted first"
-        );
-        assert_eq!(
-            store
-                .take_envelopes(&favourite_recipient, NOW, direct())
-                .expect("take")
-                .len(),
-            1,
-            "an older favourite must outlive a newer verified envelope"
-        );
-    }
-
-    #[test]
-    fn the_total_pool_caps_at_forty() {
+    fn a_full_pool_refuses_rather_than_evicting() {
         let mut store = store();
         let first_recipient = key(0xD0);
         store
-            .deposit(
-                &envelope(&first_recipient, 1),
-                &key(0xA1),
-                CourierTier::Favorite,
-                NOW,
-            )
+            .deposit(&envelope(&first_recipient, 1), &key(0xA1), NOW)
             .expect("first");
-        let nonce = fill(&mut store, MAX_ENVELOPES - 1, CourierTier::Favorite);
-
-        assert_eq!(MAX_ENVELOPES, 40);
-        assert_eq!(store.carried_count(), MAX_ENVELOPES);
-
-        // One more favourite: the pool stays at 40 and the oldest went.
-        store
-            .deposit(&envelope(&key(0xB0), nonce), &key(0xEF), CourierTier::Favorite, NOW)
-            .expect("evicting deposit");
-        assert_eq!(store.carried_count(), MAX_ENVELOPES);
-        assert!(
-            store
-                .take_envelopes(&first_recipient, NOW, direct())
-                .expect("take")
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn a_verified_deposit_never_displaces_favourite_mail() {
-        let mut store = store();
-        let nonce = fill(&mut store, MAX_ENVELOPES, CourierTier::Favorite);
+        let nonce = fill(&mut store, MAX_ENVELOPES - 1);
+        assert_eq!(MAX_ENVELOPES, 20);
         assert_eq!(store.carried_count(), MAX_ENVELOPES);
 
         assert_eq!(
-            store.deposit(&envelope(&key(0xB0), nonce), &key(0xEE), CourierTier::Verified, NOW),
-            Err(StoreError::DepositRefused("pool full of favourite mail"))
+            store.deposit(&envelope(&key(0xB0), nonce), &key(0xEE), NOW),
+            Err(StoreError::DepositRefused("courier pool full"))
         );
         assert_eq!(store.carried_count(), MAX_ENVELOPES);
-
-        // A favourite deposit still can, by oldest-favourite eviction.
-        store
-            .deposit(&envelope(&key(0xB0), nonce + 1), &key(0xEF), CourierTier::Favorite, NOW)
-            .expect("favourite overflow");
+        // The oldest mail is still carried: a stranger cannot push it out.
+        assert_eq!(
+            store
+                .take_envelopes(&first_recipient, NOW, direct())
+                .expect("take")
+                .len(),
+            1
+        );
     }
 
     // MARK: - Non-negotiable 3: copy budgets
 
     #[test]
-    fn spray_halves_the_budget_down_to_one_and_then_stops() {
-        let mut store = store();
-        let recipient = key(0xB0);
-        let depositor = key(0xA1);
-        store
-            .deposit(
-                &envelope_at(&recipient, 1, HOUR, INITIAL_COPIES, NOW),
-                &depositor,
-                CourierTier::Favorite,
-                NOW,
-            )
-            .expect("deposit");
-        assert_eq!(INITIAL_COPIES, 4);
-
-        // The recipient never gets a spray copy — they take the handover path,
-        // which is the one carrying the authentication rule.
-        assert!(store.take_spray_copies(&recipient, NOW).expect("spray").is_empty());
-        // Neither does the depositor: they already hold it.
-        assert!(store.take_spray_copies(&depositor, NOW).expect("spray").is_empty());
-
-        // 4 -> give 2, keep 2.
-        let courier_x = key(0xC1);
-        let to_x = store.take_spray_copies(&courier_x, NOW).expect("spray");
-        assert_eq!(to_x.iter().map(|e| e.copies).collect::<Vec<_>>(), vec![2]);
-        // Same courier again: no double spend.
-        assert!(store.take_spray_copies(&courier_x, NOW).expect("spray").is_empty());
-
-        // 2 -> give 1, keep 1.
-        let to_y = store.take_spray_copies(&key(0xC2), NOW).expect("spray");
-        assert_eq!(to_y.iter().map(|e| e.copies).collect::<Vec<_>>(), vec![1]);
-
-        // 1 is carry-only: the budget bottoms out and never recovers.
-        assert!(store.take_spray_copies(&key(0xC3), NOW).expect("spray").is_empty());
-        assert!(store.take_spray_copies(&key(0xC4), NOW).expect("spray").is_empty());
-
-        // The carried original is still deliverable.
-        assert_eq!(
-            store.take_envelopes(&recipient, NOW, direct()).expect("take").len(),
-            1
-        );
-    }
-
-    #[test]
-    fn a_budget_above_the_hard_cap_of_eight_is_refused() {
+    fn a_budget_above_the_hard_cap_of_eight_is_clamped() {
         let mut store = store();
         let recipient = key(0xB0);
 
         // The wire type clamps, but its fields are public — a budget of 200 can
-        // still reach the store, and the excess must not be honoured.
+        // still reach the store, and the excess must not be carried.
         let mut greedy = envelope_at(&recipient, 1, HOUR, 1, NOW);
         greedy.copies = 200;
-        store
-            .deposit(&greedy, &key(0xA1), CourierTier::Favorite, NOW)
-            .expect("deposit");
+        store.deposit(&greedy, &key(0xA1), NOW).expect("deposit");
 
         assert_eq!(MAX_COPIES, 8);
-        // 8 -> 4 -> 2 -> 1 and stop: four handovers, never more.
-        let mut given = Vec::new();
-        for courier in [0xC1u8, 0xC2, 0xC3, 0xC4, 0xC5] {
-            let copies = store
-                .take_spray_copies(&key(courier), NOW)
-                .expect("spray")
-                .iter()
-                .map(|e| e.copies)
-                .collect::<Vec<_>>();
-            given.extend(copies);
-        }
-        assert_eq!(given, vec![4, 2, 1]);
+        let taken = store
+            .take_envelopes(&recipient, NOW, direct())
+            .expect("take");
+        assert_eq!(
+            taken.iter().map(|e| e.copies).collect::<Vec<_>>(),
+            vec![MAX_COPIES]
+        );
     }
 
     #[test]
-    fn a_replayed_deposit_cannot_replenish_a_spent_budget() {
-        let mut store = store();
-        let recipient = key(0xB0);
-        let depositor = key(0xA1);
-        let original = envelope_at(&recipient, 1, HOUR, MAX_COPIES, NOW);
-        store
-            .deposit(&original, &depositor, CourierTier::Favorite, NOW)
-            .expect("deposit");
-
-        for (courier, expected) in [(0xC1u8, 4u8), (0xC2, 2), (0xC3, 1)] {
-            assert_eq!(
-                store
-                    .take_spray_copies(&key(courier), NOW)
-                    .expect("spray")
-                    .iter()
-                    .map(|e| e.copies)
-                    .collect::<Vec<_>>(),
-                vec![expected]
-            );
-            // Replaying the depositor's original packet is still accepted
-            // idempotently, but must not reset this branch's budget.
-            store
-                .deposit(&original, &depositor, CourierTier::Favorite, NOW)
-                .expect("replay");
-        }
-        assert!(store.take_spray_copies(&key(0xC4), NOW).expect("spray").is_empty());
-    }
-
-    #[test]
-    fn a_duplicate_deposit_before_any_spray_keeps_the_larger_budget() {
+    fn a_duplicate_deposit_keeps_the_larger_budget() {
         let mut store = store();
         let recipient = key(0xB0);
         let carry_only = envelope_at(&recipient, 1, HOUR, 1, NOW);
         store
-            .deposit(&carry_only, &key(0xA1), CourierTier::Favorite, NOW)
+            .deposit(&carry_only, &key(0xA1), NOW)
             .expect("carry-only arrived first");
         store
-            .deposit(
-                &carry_only.with_copies(4),
-                &key(0xA2),
-                CourierTier::Favorite,
-                NOW,
-            )
+            .deposit(&carry_only.with_copies(4), &key(0xA2), NOW)
             .expect("higher-budget original followed");
+        assert_eq!(store.carried_count(), 1);
 
-        assert_eq!(
-            store
-                .take_spray_copies(&key(0xC1), NOW)
-                .expect("spray")
-                .iter()
-                .map(|e| e.copies)
-                .collect::<Vec<_>>(),
-            vec![2]
-        );
-    }
-
-    #[test]
-    fn carry_only_envelopes_are_never_sprayed() {
-        let mut store = store();
-        store
-            .deposit(&envelope(&key(0xB0), 1), &key(0xA1), CourierTier::Favorite, NOW)
-            .expect("deposit");
-        assert!(store.take_spray_copies(&key(0xC1), NOW).expect("spray").is_empty());
-    }
-
-    #[test]
-    fn a_rejected_spray_transfer_rolls_back_budget_and_eligibility() {
-        let mut store = store();
-        let courier = key(0xC1);
-        store
-            .deposit(
-                &envelope_at(&key(0xB0), 1, HOUR, 4, NOW),
-                &key(0xA1),
-                CourierTier::Favorite,
-                NOW,
-            )
-            .expect("deposit");
-
-        let mut offered = Vec::new();
-        let accepted = store
-            .transfer_spray_copies(&courier, NOW, |copy| {
-                offered.push(copy.copies);
-                false
-            })
-            .expect("transfer");
-        assert_eq!(accepted, 0);
-        assert_eq!(offered, vec![2]);
-
-        // The same courier stays eligible and sees the original half budget.
-        assert_eq!(
-            store
-                .take_spray_copies(&courier, NOW)
-                .expect("spray")
-                .iter()
-                .map(|e| e.copies)
-                .collect::<Vec<_>>(),
-            vec![2]
-        );
-        assert_eq!(
-            store
-                .take_spray_copies(&key(0xC2), NOW)
-                .expect("spray")
-                .iter()
-                .map(|e| e.copies)
-                .collect::<Vec<_>>(),
-            vec![1]
-        );
+        let taken = store
+            .take_envelopes(&recipient, NOW, direct())
+            .expect("take");
+        assert_eq!(taken.iter().map(|e| e.copies).collect::<Vec<_>>(), vec![4]);
     }
 
     // MARK: - Validity and expiry
@@ -1678,7 +1018,7 @@ mod tests {
         // Already expired.
         let stale = envelope_at(&recipient, 1, HOUR, 1, NOW - 2 * HOUR);
         assert_eq!(
-            store.deposit(&stale, &key(0xA1), CourierTier::Favorite, NOW),
+            store.deposit(&stale, &key(0xA1), NOW),
             Err(StoreError::DepositRefused("already expired"))
         );
 
@@ -1686,7 +1026,7 @@ mod tests {
         let mut oversized = envelope(&recipient, 2);
         oversized.ciphertext = vec![0u8; MAX_CIPHERTEXT_BYTES + 1];
         assert_eq!(
-            store.deposit(&oversized, &key(0xA1), CourierTier::Favorite, NOW),
+            store.deposit(&oversized, &key(0xA1), NOW),
             Err(StoreError::DepositRefused("ciphertext over 16 KiB"))
         );
 
@@ -1694,13 +1034,13 @@ mod tests {
         let mut empty = envelope(&recipient, 3);
         empty.ciphertext.clear();
         assert_eq!(
-            store.deposit(&empty, &key(0xA1), CourierTier::Favorite, NOW),
+            store.deposit(&empty, &key(0xA1), NOW),
             Err(StoreError::DepositRefused("empty ciphertext"))
         );
 
         // No depositor key: quotas are keyed on it.
         assert_eq!(
-            store.deposit(&envelope(&recipient, 4), &[], CourierTier::Favorite, NOW),
+            store.deposit(&envelope(&recipient, 4), &[], NOW),
             Err(StoreError::DepositRefused("no depositor key"))
         );
 
@@ -1721,7 +1061,7 @@ mod tests {
             NOW,
         );
         store
-            .deposit(&at_limit, &key(0xA1), CourierTier::Favorite, NOW)
+            .deposit(&at_limit, &key(0xA1), NOW)
             .expect("exactly at the limit is fine");
 
         // One second past it is not.
@@ -1733,14 +1073,14 @@ mod tests {
             NOW,
         );
         assert_eq!(
-            store.deposit(&past_limit, &key(0xA1), CourierTier::Favorite, NOW),
+            store.deposit(&past_limit, &key(0xA1), NOW),
             Err(StoreError::DepositRefused("expiry beyond maximum lifetime"))
         );
 
         // A week of pinned storage certainly is not.
         let pinned = envelope_at(&recipient, 3, 7 * 24 * HOUR, 1, NOW);
         assert_eq!(
-            store.deposit(&pinned, &key(0xA1), CourierTier::Favorite, NOW),
+            store.deposit(&pinned, &key(0xA1), NOW),
             Err(StoreError::DepositRefused("expiry beyond maximum lifetime"))
         );
         assert_eq!(store.carried_count(), 1);
@@ -1751,18 +1091,12 @@ mod tests {
         let mut store = store();
         let recipient = key(0xB0);
         store
-            .deposit(
-                &envelope_at(&recipient, 1, HOUR, 1, NOW),
-                &key(0xA1),
-                CourierTier::Favorite,
-                NOW,
-            )
+            .deposit(&envelope_at(&recipient, 1, HOUR, 1, NOW), &key(0xA1), NOW)
             .expect("short-lived");
         store
             .deposit(
                 &envelope_at(&recipient, 2, 12 * HOUR, 1, NOW),
                 &key(0xA1),
-                CourierTier::Favorite,
                 NOW,
             )
             .expect("long-lived");
@@ -1783,102 +1117,79 @@ mod tests {
         assert!(store.is_empty());
     }
 
-    // MARK: - Bridge drops
-
-    #[test]
-    fn bridge_publish_is_offered_without_a_cooldown_until_a_relay_confirms() {
-        let mut store = store();
-        let recipient = key(0xB0);
-        let mail = envelope_at(&recipient, 1, 12 * HOUR, 4, NOW);
-        store
-            .deposit(&mail, &key(0xA1), CourierTier::Favorite, NOW)
-            .expect("deposit");
-
-        let offered = store
-            .envelopes_for_bridge_publish(BRIDGE_PUBLISH_COOLDOWN_SECS, NOW)
-            .expect("bridge publish");
-        assert_eq!(offered.len(), 1);
-        // The relay copy carries no spray budget.
-        assert_eq!(offered.first().map(|e| e.copies), Some(1));
-
-        // Offering does not start the cooldown — an unconfirmed publish must be
-        // retryable immediately.
-        assert_eq!(
-            store
-                .envelopes_for_bridge_publish(BRIDGE_PUBLISH_COOLDOWN_SECS, NOW)
-                .expect("bridge publish")
-                .len(),
-            1
-        );
-
-        // A relay-confirmed publish does.
-        store.mark_bridge_published(&mail, NOW).expect("mark");
-        assert!(
-            store
-                .envelopes_for_bridge_publish(BRIDGE_PUBLISH_COOLDOWN_SECS, NOW + 1)
-                .expect("bridge publish")
-                .is_empty()
-        );
-        assert_eq!(BRIDGE_PUBLISH_COOLDOWN_SECS, 1_800);
-        assert_eq!(
-            store
-                .envelopes_for_bridge_publish(
-                    BRIDGE_PUBLISH_COOLDOWN_SECS,
-                    NOW + BRIDGE_PUBLISH_COOLDOWN_SECS
-                )
-                .expect("bridge publish")
-                .len(),
-            1
-        );
-
-        // Marking mail we no longer carry is a no-op, not an error.
-        store.wipe().expect("wipe");
-        store.mark_bridge_published(&mail, NOW).expect("no-op");
-    }
-
     // MARK: - Persistence and wipe
 
     #[test]
     fn the_pool_round_trips_through_storage() {
         let mut store = store();
-        let recipient = key(0xE0);
-        let mail = envelope_at(&recipient, 1, 12 * HOUR, 4, NOW);
         store
-            .deposit(&mail, &key(0xA1), CourierTier::Favorite, NOW)
+            .deposit(
+                &envelope_at(&key(0xE0), 1, 12 * HOUR, 4, NOW),
+                &key(0xA1),
+                NOW,
+            )
             .expect("deposit");
         store
             .deposit(
                 &envelope_at(&key(0xE1), 2, 12 * HOUR, 1, NOW),
                 &key(0xA2),
-                CourierTier::Verified,
                 NOW,
             )
             .expect("deposit");
-        // Bookkeeping that only exists off the wire must survive too.
-        store.take_spray_copies(&key(0xC1), NOW).expect("spray");
-        store.mark_bridge_published(&mail, NOW).expect("mark");
 
         let before = store.envelopes.clone();
         let mut reloaded = CourierStore::new(store.into_storage());
         assert_eq!(reloaded.restore(NOW).expect("restore"), 2);
         assert_eq!(reloaded.envelopes, before);
+    }
 
-        // And the reloaded store still behaves: budget already halved to 2, the
-        // sprayed courier still excluded.
-        assert!(
-            reloaded
-                .take_spray_copies(&key(0xC1), NOW)
-                .expect("spray")
-                .is_empty()
-        );
+    fn stored(index: u32, depositor: Vec<u8>) -> StoredEnvelope {
+        StoredEnvelope {
+            recipient_tag: [index as u8; TAG_LEN],
+            expiry_ms: (NOW + 12 * HOUR) * 1000,
+            ciphertext: index.to_be_bytes().to_vec(),
+            depositor_noise_key: depositor,
+            stored_at_unix_secs: NOW + u64::from(index),
+            copies: 1,
+            prekey_id: None,
+        }
+    }
+
+    #[test]
+    fn restore_refuses_a_count_past_the_total_cap() {
+        // A blob edited on disk must not smuggle the pool past its cap.
+        let envelopes: Vec<_> = (0..(MAX_ENVELOPES + 1) as u32)
+            .map(|index| stored(index, vec![index as u8; 32]))
+            .collect();
+        // Encoded directly: `deposit` would never have let this pool exist.
+        let storage = MemoryStorage::new();
+        storage
+            .save(StorageKey::CourierPool, &encode_pool(&envelopes))
+            .expect("save");
+
+        let mut store = CourierStore::new(storage);
         assert_eq!(
-            reloaded
-                .take_spray_copies(&key(0xC2), NOW)
-                .expect("spray")
-                .iter()
-                .map(|e| e.copies)
-                .collect::<Vec<_>>(),
-            vec![1]
+            store.restore(NOW),
+            Err(StoreError::Malformed("courier pool")),
+            "a count past the total cap is refused outright"
+        );
+    }
+
+    #[test]
+    fn restore_re_applies_the_per_depositor_quota() {
+        let envelopes: Vec<_> = (0..8u32)
+            .map(|index| stored(index, vec![0xA1; 32]))
+            .collect();
+        let storage = MemoryStorage::new();
+        storage
+            .save(StorageKey::CourierPool, &encode_pool(&envelopes))
+            .expect("save");
+
+        let mut store = CourierStore::new(storage);
+        assert_eq!(
+            store.restore(NOW).expect("restore"),
+            MAX_PER_DEPOSITOR,
+            "one depositor may not hold more than its quota, however the blob looked"
         );
     }
 
@@ -1886,12 +1197,7 @@ mod tests {
     fn restore_drops_expired_mail_and_a_malformed_blob_starts_empty() {
         let mut store = store();
         store
-            .deposit(
-                &envelope_at(&key(0xB0), 1, HOUR, 1, NOW),
-                &key(0xA1),
-                CourierTier::Favorite,
-                NOW,
-            )
+            .deposit(&envelope_at(&key(0xB0), 1, HOUR, 1, NOW), &key(0xA1), NOW)
             .expect("deposit");
 
         let storage = store.into_storage();
@@ -1912,102 +1218,20 @@ mod tests {
     }
 
     #[test]
-    fn restore_re_applies_every_bound() {
-        // A blob that predates a tightened quota, or one edited on disk, must not
-        // smuggle the pool past its caps.
-        let mut envelopes = Vec::new();
-        for index in 0..(MAX_ENVELOPES + 10) as u32 {
-            envelopes.push(StoredEnvelope {
-                recipient_tag: [index as u8; TAG_LEN],
-                expiry_ms: (NOW + 12 * HOUR) * 1000,
-                ciphertext: index.to_be_bytes().to_vec(),
-                // One depositor per envelope, so only the total and tier caps bite.
-                depositor_noise_key: vec![index as u8; 32],
-                stored_at_unix_secs: NOW + u64::from(index),
-                tier: if index < 30 {
-                    CourierTier::Verified
-                } else {
-                    CourierTier::Favorite
-                },
-                copies: 1,
-                sprayed_to: BTreeSet::new(),
-                last_remote_handover_at: None,
-                last_bridge_publish_at: None,
-                prekey_id: None,
-            });
-        }
-        // Encoded directly: `deposit` would never have let this pool exist.
-        let storage = MemoryStorage::new();
-        storage
-            .save(StorageKey::CourierPool, &encode_pool(&envelopes))
-            .expect("save");
-
-        let mut store = CourierStore::new(storage);
-        assert_eq!(
-            store.restore(NOW),
-            Err(StoreError::Malformed("courier pool")),
-            "a count past the total cap is refused outright"
-        );
-
-        // Within the count cap but past the verified sub-pool cap: shed to fit,
-        // oldest verified first.
-        envelopes.truncate(MAX_ENVELOPES);
-        let storage = MemoryStorage::new();
-        storage
-            .save(StorageKey::CourierPool, &encode_pool(&envelopes))
-            .expect("save");
-        let mut store = CourierStore::new(storage);
-        store.restore(NOW).expect("restore");
-        assert_eq!(
-            store.carried_count_in_tier(CourierTier::Verified),
-            MAX_VERIFIED_ENVELOPES
-        );
-        assert_eq!(store.carried_count_in_tier(CourierTier::Favorite), 10);
-    }
-
-    #[test]
-    fn restore_re_applies_the_per_depositor_quota() {
-        let mut envelopes = Vec::new();
-        for index in 0..8u32 {
-            envelopes.push(StoredEnvelope {
-                recipient_tag: [index as u8; TAG_LEN],
-                expiry_ms: (NOW + 12 * HOUR) * 1000,
-                ciphertext: index.to_be_bytes().to_vec(),
-                depositor_noise_key: vec![0xA1; 32],
-                stored_at_unix_secs: NOW + u64::from(index),
-                tier: CourierTier::Favorite,
-                copies: 1,
-                sprayed_to: BTreeSet::new(),
-                last_remote_handover_at: None,
-                last_bridge_publish_at: None,
-                prekey_id: None,
-            });
-        }
-        let storage = MemoryStorage::new();
-        storage
-            .save(StorageKey::CourierPool, &encode_pool(&envelopes))
-            .expect("save");
-
-        let mut store = CourierStore::new(storage);
-        assert_eq!(
-            store.restore(NOW).expect("restore"),
-            MAX_PER_FAVORITE_DEPOSITOR,
-            "one depositor may not hold more than its quota, however the blob looked"
-        );
-    }
-
-    #[test]
     fn wipe_drops_everything_in_memory_and_on_disk() {
         let mut store = store();
         let recipient = key(0xB0);
         store
-            .deposit(&envelope(&recipient, 1), &key(0xA1), CourierTier::Favorite, NOW)
+            .deposit(&envelope(&recipient, 1), &key(0xA1), NOW)
             .expect("deposit");
         assert!(!store.storage().is_empty());
 
         store.wipe().expect("wipe");
         assert!(store.is_empty());
-        assert!(store.storage().is_empty(), "panic wipe leaves nothing behind");
+        assert!(
+            store.storage().is_empty(),
+            "panic wipe leaves nothing behind"
+        );
         assert!(
             store
                 .take_envelopes(&recipient, NOW, direct())
@@ -2021,11 +1245,13 @@ mod tests {
         let mut store = store();
         let recipient = key(0xB0);
         store
-            .deposit(&envelope(&recipient, 1), &key(0xA1), CourierTier::Favorite, NOW)
+            .deposit(&envelope(&recipient, 1), &key(0xA1), NOW)
             .expect("deposit");
         assert!(!store.storage().is_empty());
 
-        store.take_envelopes(&recipient, NOW, direct()).expect("take");
+        store
+            .take_envelopes(&recipient, NOW, direct())
+            .expect("take");
         assert!(
             store.storage().is_empty(),
             "the last envelope leaving must not leave a stale blob behind"
@@ -2042,11 +1268,7 @@ mod tests {
             ciphertext: vec![7; 40],
             depositor_noise_key: key(0xA1),
             stored_at_unix_secs: NOW,
-            tier: CourierTier::Verified,
             copies: 4,
-            sprayed_to: BTreeSet::from([key(0xC1), key(0xC2)]),
-            last_remote_handover_at: Some(NOW - 5),
-            last_bridge_publish_at: None,
             prekey_id: Some(0xDEAD_BEEF),
         };
         let encoded = encode_pool(core::slice::from_ref(&stored));

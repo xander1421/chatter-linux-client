@@ -4,21 +4,25 @@
 //   - Create: empty name + default emoji, "Create" button
 //   - Rename: pre-filled name + emoji, "Save" button
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 
-// Common section emoji icons (~50 items)
+// Common section emoji icons (~50 items). Only emoji that are colour by
+// default (Emoji_Presentation=Yes): a symbol that needs U+FE0F to turn colour
+// (⚙️ 🛡️ 🏗️ 🏷️ ☁️ ❤️) drew as a NO GLYPH box or a grey glyph on Android 10.
 global SectionEmojis {
     out property <[string]> icons: [
         "📁", "📂", "⭐", "🏠", "💼", "🎯", "🔥", "💡", "🎨", "🎮",
-        "🎵", "📚", "🔧", "⚙️", "🛡️", "🔒", "💬", "📢", "🌍", "🚀",
-        "💰", "📊", "📈", "🧪", "🔬", "🏗️", "🎓", "📝", "✅", "❤️",
-        "💎", "🌟", "🏆", "👥", "🤝", "📌", "🔖", "🏷️", "📎", "✨",
-        "🌈", "☁️", "⚡", "🎲", "🧩", "🎪", "🌱", "🍀", "🔔", "🎁",
+        "🎵", "📚", "🔧", "🔩", "🔐", "🔒", "💬", "📢", "🌍", "🚀",
+        "💰", "📊", "📈", "🧪", "🔬", "🧱", "🎓", "📝", "✅", "💖",
+        "💎", "🌟", "🏆", "👥", "🤝", "📌", "🔖", "📛", "📎", "✨",
+        "🌈", "🌙", "⚡", "🎲", "🧩", "🎪", "🌱", "🍀", "🔔", "🎁",
     ];
 }
 
@@ -41,6 +45,16 @@ export component CreateSectionModal inherits Rectangle {
     // Track whether emoji picker is expanded
     property <bool> picker-open: false;
 
+    function submit(name: string) {
+        if name != "" && !root.loading {
+            if root.rename-mode {
+                root.rename-section(root.section-id, name, root.selected-emoji);
+            } else {
+                root.create-section(name, root.selected-emoji);
+            }
+        }
+    }
+
     // Reset state when modal closes
     changed show-modal => {
         if !show-modal {
@@ -52,7 +66,7 @@ export component CreateSectionModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: root.rename-mode ? "Rename Section" : "New Section";
+        title: root.rename-mode ? "Rename section" : "New section";
         modal-width: 400px;
 
         close => {
@@ -71,11 +85,21 @@ export component CreateSectionModal inherits Rectangle {
                     width: 44px;
                     height: 44px;
                     border-radius: Spacing.radius-md;
-                    border-width: 1px;
-                    border-color: root.picker-open ? Colors.primary : Colors.text-muted.with-alpha(0.3);
-                    background: emoji-touch.has-hover ? Colors.surface-hover : Colors.surface;
+                    border-width: root.picker-open ? Spacing.stroke : 0px;
+                    border-color: Colors.primary;
+                    background: emoji-touch.pressed ? Materials.pressed : emoji-touch.has-hover ? Colors.surface-hover : Colors.surface;
+                    transform-scale-x: emoji-touch.pressed ? 0.90 : 1;
+                    transform-scale-y: emoji-touch.pressed ? 0.90 : 1;
+                    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                    accessible-role: button;
+                    accessible-label: "Section icon " + root.selected-emoji;
+                    accessible-action-default => { root.picker-open = !root.picker-open; }
+                    KeyFocus { border-radius: parent.border-radius; activate => { root.picker-open = !root.picker-open; } }
 
                     Text {
+                        accessible-role: none;
                         text: root.selected-emoji;
                         font-family: Typography.font-family-emoji;
                         font-size: Typography.xl;
@@ -92,29 +116,35 @@ export component CreateSectionModal inherits Rectangle {
                 }
 
                 // Name input
-                Input {
+                name-input := Input {
                     horizontal-stretch: 1;
                     placeholder: "Section name";
                     text <=> root.section-name;
+                    // Created on open: the name is the only thing to type. A
+                    // rename starts selected, so typing replaces the old name.
+                    init => { self.focus(); self.select-all(); }
+                    accepted => { root.submit(self.composed-text); }
                 }
             }
 
             // ── Inline emoji grid (shown when picker-open) ────────
-            if root.picker-open: grid-box := Rectangle {
-                height: 200px;
-                background: Colors.background;
+            grid-box := Rectangle {
+                height: root.picker-open ? 200px : 0px;
+                background: Colors.inset;
                 border-radius: Spacing.radius-md;
-                border-width: 1px;
-                border-color: Colors.text-muted.with-alpha(0.2);
+                clip: true;
+                opacity: root.picker-open ? 1 : 0;
+                animate height { duration: Materials.motion-standard; easing: Materials.spring; }
+                animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
 
                 // Columns are derived, not fixed at seven. Seven columns is a
                 // 324px row: fine inside the 400px card on a desktop, off the
                 // right edge of a 360dp phone, where ModalContainer caps the
                 // card at `viewport - 32px` and the last column was clipped.
-                property <int> grid-cols: max(4, Math.floor((self.width - Spacing.sm * 2) / 44px));
+                property <int> grid-cols: max(4, Math.floor((self.width - Spacing.sm * 2) / Spacing.button-height));
 
                 Flickable {
-                    viewport-height: Math.ceil(SectionEmojis.icons.length / grid-box.grid-cols) * 40px + Spacing.sm * 2;
+                    viewport-height: Math.ceil(SectionEmojis.icons.length / grid-box.grid-cols) * Spacing.button-height + Spacing.sm * 2;
                     viewport-width: parent.width;
 
                     Rectangle {
@@ -125,16 +155,37 @@ export component CreateSectionModal inherits Rectangle {
                             property <int> grid-row: Math.floor(index / grid-box.grid-cols);
                             property <int> grid-col: mod(index, grid-box.grid-cols);
 
-                            x: Spacing.sm + self.grid-col * 44px;
-                            y: Spacing.sm + self.grid-row * 40px;
-                            width: 40px;
-                            height: 36px;
+                            x: Spacing.sm + self.grid-col * Spacing.button-height;
+                            y: Spacing.sm + self.grid-row * Spacing.button-height;
+                            width: Spacing.button-height;
+                            height: Spacing.button-height;
                             border-radius: Spacing.radius-sm;
                             background: icon == root.selected-emoji
-                                ? Colors.primary.with-alpha(0.25)
-                                : (icon-touch.has-hover ? Colors.surface-hover : transparent);
+                                ? Colors.tint-strong
+                                : (icon-touch.pressed ? Materials.pressed : icon-touch.has-hover ? Materials.hover : transparent);
+                            transform-scale-x: icon-touch.pressed ? 0.82 : 1;
+                            accessible-role: button;
+                            accessible-label: "Choose icon " + icon;
+                            accessible-checkable: true;
+                            accessible-checked: icon == root.selected-emoji;
+                            accessible-action-default => {
+                                root.selected-emoji = icon;
+                                root.picker-open = false;
+                            }
+                            KeyFocus {
+                                border-radius: parent.border-radius;
+                                activate => {
+                                    root.selected-emoji = icon;
+                                    root.picker-open = false;
+                                }
+                            }
+                            transform-scale-y: icon-touch.pressed ? 0.82 : 1;
+                            animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                             Text {
+                                accessible-role: none;
                                 text: icon;
                                 font-size: Typography.lg;
                                 horizontal-alignment: center;
@@ -175,18 +226,10 @@ export component CreateSectionModal inherits Rectangle {
                     text: root.loading ? "" :
                         (root.rename-mode ? "Save" : "Create");
                     variant: "primary";
-                    disabled: root.section-name == "" || root.loading;
+                    disabled: name-input.composed-text == "" || root.loading;
                     loading: root.loading;
 
-                    clicked => {
-                        if root.section-name != "" && !root.loading {
-                            if root.rename-mode {
-                                root.rename-section(root.section-id, root.section-name, root.selected-emoji);
-                            } else {
-                                root.create-section(root.section-name, root.selected-emoji);
-                            }
-                        }
-                    }
+                    clicked => { root.submit(name-input.composed-text); }
                 }
             }
         }

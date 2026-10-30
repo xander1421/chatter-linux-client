@@ -4,21 +4,25 @@
 //! group channel encryption using Signal's Sender Keys protocol.
 //! All operations are delegated to the SignalActor for thread-safety.
 
-use libsignal_protocol::{ProtocolAddress, DeviceId};
-use crate::domain::ids::{ChannelId, UserId};
-use crate::proto::content_v1::{GroupEncrypted, SenderKeyDistribution};
-use crate::error::ServiceError;
-use crate::util::time::TimestampNanos;
 use super::SignalService;
+use crate::domain::ids::{ChannelId, UserId};
+use crate::error::ServiceError;
+use crate::proto::content_v1::{GroupEncrypted, SenderKeyDistribution};
+use crate::util::time::TimestampNanos;
+use libsignal_protocol::{DeviceId, ProtocolAddress};
 
 impl SignalService {
     /// Get the current user's protocol address.
     pub(crate) fn get_our_address(&self) -> Result<ProtocolAddress, ServiceError> {
-        let user_id = self.settings_repo.get_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID)
+        let user_id = self
+            .settings_repo
+            .get_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID)
             .map_err(ServiceError::Storage)?
             .ok_or(ServiceError::NotLoggedIn)?;
 
-        let device_id = self.settings_repo.get::<u32>(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)
+        let device_id = self
+            .settings_repo
+            .get::<u32>(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)
             .map_err(ServiceError::Storage)?
             .unwrap_or(1);
 
@@ -34,21 +38,42 @@ impl SignalService {
         channel_id: &ChannelId,
     ) -> Result<SenderKeyDistribution, ServiceError> {
         let our_address = self.get_our_address()?;
-        let skdm_bytes = self.actor.create_sender_key(*channel_id, our_address).await?;
+        // libsignal returns the EXISTING key's SKDM when we already have one
+        // (every SenderKeyRequest reply lands here). Only a genuinely new key
+        // restarts the rotation clock — resetting it on every reply meant a
+        // peer's requests kept one key alive past its 24h / 2000-message cap.
+        let is_new = !self
+            .actor
+            .has_sender_key(*channel_id, our_address.clone())
+            .await?;
+        let skdm_bytes = self
+            .actor
+            .create_sender_key(*channel_id, our_address)
+            .await?;
 
-        // Initialize sender key metadata for rotation tracking
-        if let Err(e) = self.key_store.init_sender_key_metadata(&channel_id.to_string()) {
-            tracing::warn!(
-                channel_id = %channel_id,
-                error = %e,
-                "Failed to initialize sender key metadata"
-            );
+        if is_new {
+            if let Err(e) = self
+                .key_store
+                .init_sender_key_metadata(&channel_id.to_string())
+            {
+                tracing::warn!(
+                    channel_id = %channel_id,
+                    error = %e,
+                    "Failed to initialize sender key metadata"
+                );
+            }
         }
 
         Ok(SenderKeyDistribution {
             channel_id: channel_id.to_string(),
             distribution_message: skdm_bytes,
             timestamp: TimestampNanos::now().as_u64(),
+            // Attached per recipient by `MessageService::skdm_plaintext`,
+            // with the verified membership stamp: the SKDM is stamped when it
+            // goes out, against the state it is distributed under.
+            profile_key: None,
+            state_revision: 0,
+            state_hash: Vec::new(),
         })
     }
 
@@ -59,10 +84,20 @@ impl SignalService {
         sender_device_id: u32,
         skdm: &SenderKeyDistribution,
     ) -> Result<(), ServiceError> {
-        let channel_id = skdm.channel_id.parse().map_err(|_| ServiceError::Validation("Invalid channel ID".into()))?;
-        let sender_address = ProtocolAddress::new(sender_id.to_string(), DeviceId::try_from(sender_device_id).map_err(|_| ServiceError::Validation("Invalid ID".into()))?);
-        
-        self.actor.process_sender_key(channel_id, sender_address, skdm.distribution_message.clone()).await
+        // The actor needs no channel (libsignal keys the state by the
+        // distribution id inside the message); a malformed id is still refused.
+        skdm.channel_id
+            .parse::<ChannelId>()
+            .map_err(|_| ServiceError::Validation("Invalid channel ID".into()))?;
+        let sender_address = ProtocolAddress::new(
+            sender_id.to_string(),
+            DeviceId::try_from(sender_device_id)
+                .map_err(|_| ServiceError::Validation("Invalid ID".into()))?,
+        );
+
+        self.actor
+            .process_sender_key(sender_address, skdm.distribution_message.clone())
+            .await
     }
 
     /// Encrypt a message for a group channel using sender keys.
@@ -92,21 +127,31 @@ impl SignalService {
         let channel_id_str = channel_id.to_string();
 
         // Check if rotation was manually requested
-        if self.check_and_clear_rotation_needed(channel_id)? {
+        if self.is_rotation_needed(channel_id)? {
             tracing::info!(channel_id = %channel_id, "Manual sender key rotation requested");
-            self.clear_channel_sender_keys(channel_id).await?;
+            self.drop_own_sender_key(channel_id)?;
+            // Keep the flag until the old record is gone. If deletion fails,
+            // the next attempt must still rotate before encrypting.
+            self.check_and_clear_rotation_needed(channel_id)?;
         }
 
-        // Check for automatic rotation based on age or message count
-        if let Ok((should_rotate, reason)) = self.key_store.should_rotate_sender_key(&channel_id_str) {
-            if should_rotate {
-                tracing::info!(
-                    channel_id = %channel_id,
-                    reason = reason,
-                    "Automatic sender key rotation triggered"
-                );
-                self.clear_channel_sender_keys(channel_id).await?;
+        // A failed metadata read cannot establish that the current key is
+        // within its age/count limits. A fresh key is safe in that case.
+        let (should_rotate, reason) = match self.key_store.should_rotate_sender_key(&channel_id_str)
+        {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::warn!(channel_id = %channel_id, error = %e, "Sender key metadata unavailable; rotating key");
+                (true, "metadata unavailable")
             }
+        };
+        if should_rotate {
+            tracing::info!(
+                channel_id = %channel_id,
+                reason = reason,
+                "Automatic sender key rotation triggered"
+            );
+            self.drop_own_sender_key(channel_id)?;
         }
 
         // Check if we need to create a sender key
@@ -117,15 +162,29 @@ impl SignalService {
             None
         };
 
-        let ciphertext = self.actor.encrypt_for_group(*channel_id, our_address, plaintext.to_vec()).await?;
+        let ciphertext = self
+            .actor
+            .encrypt_for_group(*channel_id, our_address, plaintext.to_vec())
+            .await?;
 
-        // Increment message count for rotation tracking
-        if let Err(e) = self.key_store.increment_sender_key_message_count(&channel_id_str) {
+        // Increment message count for rotation tracking. Encryption has already
+        // advanced the sender chain, so schedule a new key for the next send
+        // instead of retrying this plaintext under the old chain.
+        if let Err(e) = self
+            .key_store
+            .increment_sender_key_message_count(&channel_id_str)
+        {
             tracing::warn!(
                 channel_id = %channel_id,
                 error = %e,
-                "Failed to increment sender key message count"
+                "Failed to increment sender key message count; rotating on next send"
             );
+            if let Err(mark_error) = self.mark_channel_for_rotation(channel_id) {
+                // If the flag cannot be persisted, remove the old key now.
+                // The caller must retry after this encrypted result is lost.
+                self.drop_own_sender_key(channel_id)?;
+                return Err(mark_error);
+            }
         }
 
         let group_encrypted = GroupEncrypted {
@@ -144,10 +203,46 @@ impl SignalService {
         sender_device_id: u32,
         encrypted: &GroupEncrypted,
     ) -> Result<Vec<u8>, ServiceError> {
-        let channel_id = encrypted.channel_id.parse().map_err(|_| ServiceError::Validation("Invalid channel ID".into()))?;
-        let sender_address = ProtocolAddress::new(sender_id.to_string(), DeviceId::try_from(sender_device_id).map_err(|_| ServiceError::Validation("Invalid ID".into()))?);
+        // A malformed channel id is refused, as for distributions above.
+        encrypted
+            .channel_id
+            .parse::<ChannelId>()
+            .map_err(|_| ServiceError::Validation("Invalid channel ID".into()))?;
+        let sender_address = ProtocolAddress::new(
+            sender_id.to_string(),
+            DeviceId::try_from(sender_device_id)
+                .map_err(|_| ServiceError::Validation("Invalid ID".into()))?,
+        );
 
-        self.actor.decrypt_from_group(channel_id, sender_address, encrypted.ciphertext.clone()).await
+        self.actor
+            .decrypt_from_group(sender_address, encrypted.ciphertext.clone())
+            .await
+    }
+
+    /// Serialized `DecryptionErrorMessage` for a group message we could not
+    /// decrypt, addressed to the device that sent it.
+    ///
+    /// A sender-key DEM carries no ratchet key (libsignal `for_original`
+    /// ignores the ciphertext for `SenderKey`), which is how the sender tells
+    /// it apart from a 1:1 desync and resends the content instead of archiving
+    /// a session. `sent_timestamp_ns` is the timestamp the SENDER stamped into
+    /// the `GroupEncrypted` envelope — the value its resend lookup keys on —
+    /// never the server receive time; carried as epoch millis like Signal's
+    /// sent timestamp.
+    pub fn group_decryption_error(
+        ciphertext: &[u8],
+        sent_timestamp_ns: u64,
+        sender_device_id: u32,
+    ) -> Result<Vec<u8>, ServiceError> {
+        use libsignal_protocol::{CiphertextMessageType, DecryptionErrorMessage, Timestamp};
+        DecryptionErrorMessage::for_original(
+            ciphertext,
+            CiphertextMessageType::SenderKey,
+            Timestamp::from_epoch_millis(sent_timestamp_ns / 1_000_000),
+            sender_device_id,
+        )
+        .map(|dem| dem.serialized().to_vec())
+        .map_err(|e| ServiceError::Crypto(crate::error::CryptoError::Protocol(e.to_string())))
     }
 
     /// Check if we have a sender key for a channel.
@@ -161,33 +256,136 @@ impl SignalService {
         &self,
         channel_id: &ChannelId,
     ) -> Result<SenderKeyDistribution, ServiceError> {
-        self.clear_channel_sender_keys(channel_id).await?;
+        self.drop_own_sender_key(channel_id)?;
         self.create_sender_key(channel_id).await
     }
 
-    /// Clear all sender keys for a channel.
-    pub async fn clear_channel_sender_keys(&self, channel_id: &ChannelId) -> Result<(), ServiceError> {
-        self.actor.clear_channel_sender_keys(*channel_id).await
+    /// Delete OUR sending key for a channel so the next send creates a fresh
+    /// one. Only our own record: the keys other members sent us stay, because
+    /// their chains did not rotate — deleting them (what a rotation used to do
+    /// via `clear_channel_sender_keys`) made every peer's next message land on
+    /// "missing sender key", and the SKDM they answer with starts at their
+    /// CURRENT iteration, so everything they sent in between was lost for good.
+    fn drop_own_sender_key(&self, channel_id: &ChannelId) -> Result<(), ServiceError> {
+        let our_address = self.get_our_address()?;
+        self.key_store
+            .delete_sender_key(
+                &format!("{}:{}", our_address.name(), our_address.device_id()),
+                &channel_id.to_string(),
+            )
+            .map_err(ServiceError::Storage)?;
+        self.reset_sender_key_holders(channel_id)
+    }
+
+    /// Clear all sender keys for a channel — ours and every member's. Only for
+    /// leaving the channel; a rotation uses [`Self::rotate_sender_key`].
+    pub async fn clear_channel_sender_keys(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<(), ServiceError> {
+        self.actor.clear_channel_sender_keys(*channel_id).await?;
+        self.reset_sender_key_holders(channel_id)
+    }
+
+    // =========================================================================
+    // Who holds our current sender key (Signal-Desktop `senderKeyInfo.memberDevices`)
+    // =========================================================================
+    //
+    // A sender-key message is decryptable only by a member who processed an
+    // SKDM at or before its iteration: libsignal builds the SKDM from the
+    // CURRENT chain key (`create_sender_key_distribution_message`), so an SKDM
+    // sent after message N can never unlock N. The only way a member reads
+    // everything we send is to get the SKDM BEFORE the first message they are
+    // meant to read — so we record who has it and top up the rest pre-send.
+    //
+    // Tracked per DEVICE, for every member and our own other devices alike,
+    // as `(user, device, registration id)` — Signal-Desktop compares devices
+    // on (serviceId, id, registrationId) (`sendToGroup.preload.ts`
+    // `deviceComparator`), so a re-registered device under a reused id counts
+    // as new. Stored as comma-separated `user.device.registration_id`; an
+    // entry in any other shape is not recognized.
+
+    fn sender_key_holders_key(channel_id: &ChannelId) -> String {
+        format!("sender_key_delivered:{}", channel_id)
+    }
+
+    /// Devices that have received an SKDM for our CURRENT sender key.
+    pub fn sender_key_holders(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<std::collections::HashSet<SenderKeyHolder>, ServiceError> {
+        Ok(self
+            .settings_repo
+            .get_string(&Self::sender_key_holders_key(channel_id))
+            .map_err(ServiceError::Storage)?
+            .map(|v| v.split(',').filter_map(parse_holder).collect())
+            .unwrap_or_default())
+    }
+
+    /// Record that these `(device, registration id)`s of `user_id` now hold
+    /// our current sender key. Replaces any entry for the same device under
+    /// another registration id: that install is gone.
+    pub fn mark_sender_key_held(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &str,
+        devices: &[(u32, u32)],
+    ) -> Result<(), ServiceError> {
+        if devices.is_empty() {
+            return Ok(());
+        }
+        let mut holders = self.sender_key_holders(channel_id)?;
+        holders.retain(|(u, d, _)| u != user_id || !devices.iter().any(|(device, _)| device == d));
+        holders.extend(devices.iter().map(|&(d, r)| (user_id.to_string(), d, r)));
+        let joined = holders
+            .into_iter()
+            .map(|(u, d, r)| format!("{u}.{d}.{r}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        self.settings_repo
+            .set_string(&Self::sender_key_holders_key(channel_id), &joined)
+            .map_err(ServiceError::Storage)
+    }
+
+    fn reset_sender_key_holders(&self, channel_id: &ChannelId) -> Result<(), ServiceError> {
+        self.settings_repo
+            .delete(&Self::sender_key_holders_key(channel_id))
+            .map_err(ServiceError::Storage)?;
+        Ok(())
     }
 
     /// Mark a channel as needing sender key rotation.
     pub fn mark_channel_for_rotation(&self, channel_id: &ChannelId) -> Result<(), ServiceError> {
         let key = format!("sender_key_rotation_needed:{}", channel_id);
-        self.settings_repo.set_string(&key, "1").map_err(ServiceError::Storage)
+        self.settings_repo
+            .set_string(&key, "1")
+            .map_err(ServiceError::Storage)
     }
 
     /// Check if a channel needs sender key rotation and clear the flag.
-    pub(crate) fn check_and_clear_rotation_needed(&self, channel_id: &ChannelId) -> Result<bool, ServiceError> {
+    pub(crate) fn check_and_clear_rotation_needed(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<bool, ServiceError> {
+        let needs_rotation = self.is_rotation_needed(channel_id)?;
+        if needs_rotation {
+            let key = format!("sender_key_rotation_needed:{}", channel_id);
+            self.settings_repo
+                .delete(&key)
+                .map_err(ServiceError::Storage)?;
+        }
+
+        Ok(needs_rotation)
+    }
+
+    fn is_rotation_needed(&self, channel_id: &ChannelId) -> Result<bool, ServiceError> {
         let key = format!("sender_key_rotation_needed:{}", channel_id);
-        let needs_rotation = self.settings_repo.get_string(&key)
+        let needs_rotation = self
+            .settings_repo
+            .get_string(&key)
             .map_err(ServiceError::Storage)?
             .map(|v| v == "1")
             .unwrap_or(false);
-
-        if needs_rotation {
-            self.settings_repo.delete(&key).map_err(ServiceError::Storage)?;
-        }
-
         Ok(needs_rotation)
     }
 
@@ -199,7 +397,9 @@ impl SignalService {
     /// messages encrypted with it would violate forward secrecy.
     pub fn block_channel_send(&self, channel_id: &ChannelId) -> Result<(), ServiceError> {
         let key = format!("sender_key_send_blocked:{}", channel_id);
-        self.settings_repo.set_string(&key, "1").map_err(ServiceError::Storage)
+        self.settings_repo
+            .set_string(&key, "1")
+            .map_err(ServiceError::Storage)
     }
 
     /// Unblock message sending on a channel after rotation + SKDM distribution.
@@ -208,16 +408,31 @@ impl SignalService {
     /// remaining members, ensuring they can decrypt messages with the new key.
     pub fn unblock_channel_send(&self, channel_id: &ChannelId) -> Result<(), ServiceError> {
         let key = format!("sender_key_send_blocked:{}", channel_id);
-        self.settings_repo.delete(&key).map_err(ServiceError::Storage)?;
+        self.settings_repo
+            .delete(&key)
+            .map_err(ServiceError::Storage)?;
         Ok(())
     }
 
     /// Check if message sending is blocked on a channel due to pending rotation.
     pub fn is_channel_send_blocked(&self, channel_id: &ChannelId) -> Result<bool, ServiceError> {
         let key = format!("sender_key_send_blocked:{}", channel_id);
-        Ok(self.settings_repo.get_string(&key)
+        Ok(self
+            .settings_repo
+            .get_string(&key)
             .map_err(ServiceError::Storage)?
             .map(|v| v == "1")
             .unwrap_or(false))
     }
+}
+
+/// One device holding our current sender key: `(user, device, registration id)`.
+pub type SenderKeyHolder = (String, u32, u32);
+
+fn parse_holder(entry: &str) -> Option<SenderKeyHolder> {
+    let mut parts = entry.rsplitn(3, '.');
+    let registration_id = parts.next()?.parse().ok()?;
+    let device = parts.next()?.parse().ok()?;
+    let user = parts.next().filter(|u| !u.is_empty())?;
+    Some((user.to_string(), device, registration_id))
 }

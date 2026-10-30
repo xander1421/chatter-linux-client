@@ -2,13 +2,12 @@
 //!
 //! Tests group creation, member management, messaging, and permissions.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use base64::Engine;
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
 use chatter_core::proto::chat_v1::{
-    message::content::Type as ContentType, message::Content, Channel as ChannelProto, ChannelType,
-    MessageSortDirection,
+    ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };
 use tokio_stream::StreamExt;
 
@@ -16,7 +15,12 @@ use common::*;
 
 // Helper to consume a channel creation stream and get the channel ID
 async fn consume_create_stream_get_id(
-    stream: impl futures::Stream<Item = Result<chatter_core::proto::chat_v1::ChannelEvent, chatter_core::error::NetworkError>>,
+    stream: impl futures::Stream<
+        Item = Result<
+            chatter_core::proto::chat_v1::ChannelEvent,
+            chatter_core::error::NetworkError,
+        >,
+    >,
 ) -> String {
     tokio::pin!(stream);
     let mut channel_id = String::new();
@@ -48,7 +52,7 @@ async fn test_create_private_group() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let group_name = format!("private_group_{}", unique_username());
@@ -58,10 +62,9 @@ async fn test_create_private_group() {
             &group_name,
             ChannelType::ChannelPrivate,
             None,
-            vec![],
-            None,
             Some("A private group for testing"),
             None,
+            Some(membership::genesis(&user, false).1),
         )
         .await
         .expect("Failed to create group");
@@ -79,10 +82,10 @@ async fn test_create_group_with_initial_members() {
 
     // Create additional users
     pool.auth().clear();
-    let user2 = assert_ok(register_test_user(&pool).await);
+    let _user2 = assert_ok(register_test_user(&pool).await);
 
     pool.auth().clear();
-    let user3 = assert_ok(register_test_user(&pool).await);
+    let _user3 = assert_ok(register_test_user(&pool).await);
 
     // Re-auth as user1
     pool.auth().set_basic(
@@ -98,10 +101,9 @@ async fn test_create_group_with_initial_members() {
             &group_name,
             ChannelType::ChannelPrivate,
             None,
-            vec![user2.user_id.clone(), user3.user_id.clone()],
-            None,
             Some("Team group with members"),
             None,
+            Some(membership::genesis(&user1, false).1),
         )
         .await
         .expect("Failed to create group with members");
@@ -116,10 +118,7 @@ async fn test_create_group_with_initial_members() {
     );
 
     // Should have at least the creator
-    assert!(
-        members.members.len() >= 1,
-        "Group should have members"
-    );
+    assert!(members.members.len() >= 1, "Group should have members");
 }
 
 // ============================================================================
@@ -152,19 +151,19 @@ async fn test_invite_user_to_group() {
             &group_name,
             ChannelType::ChannelPrivate,
             None,
-            vec![],
             None,
             None,
-            None,
+            Some(membership::genesis(&user1, false).1),
         )
         .await
         .expect("Failed to create group");
 
     let channel_id = consume_create_stream_get_id(stream).await;
 
-    // Invite user2 (using invite_user, not add_member)
+    // Invite user2 with a signed AddMember{pending}
+    let change = membership::invite(&user1, &mut channel_client, &channel_id, &user2).await;
     let invite_result = channel_client
-        .invite_user(&channel_id, &user2.user_id, Some("Join our group!"))
+        .invite_user(&channel_id, change, Some("Join our group!"))
         .await;
 
     match invite_result {
@@ -202,19 +201,22 @@ async fn test_kick_user_from_group() {
             &group_name,
             ChannelType::ChannelPrivate,
             None,
-            vec![user2.user_id.clone()],
             None,
             None,
-            None,
+            Some(membership::genesis(&user1, false).1),
         )
         .await
         .expect("Failed to create group");
 
     let channel_id = consume_create_stream_get_id(stream).await;
 
-    // Kick user2 (using kick_user, not remove_member)
+    // user2 must be a member first: signed invite, then their signed accept.
+    join_by_invite(&pool, &mut channel_client, &channel_id, &user1, &user2).await;
+
+    // Kick user2 with a signed RemoveMember{KICKED}
+    let change = membership::kick(&user1, &mut channel_client, &channel_id, &user2.user_id).await;
     let kick_result = channel_client
-        .kick_user(&channel_id, &user2.user_id, Some("Testing kick functionality"))
+        .kick_user(&channel_id, change, Some("Testing kick functionality"))
         .await;
 
     match kick_result {
@@ -237,7 +239,7 @@ async fn test_send_message_to_group() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create group
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -248,10 +250,9 @@ async fn test_send_message_to_group() {
             &group_name,
             ChannelType::ChannelPrivate,
             None,
-            vec![],
             None,
             None,
-            None,
+            Some(membership::genesis(&user, false).1),
         )
         .await
         .expect("Failed to create group");
@@ -272,7 +273,6 @@ async fn test_send_message_to_group() {
                 None,
                 false,
                 None,
-                None, // crypto_options
                 vec![],
                 false,
                 vec![],
@@ -289,7 +289,7 @@ async fn test_group_message_thread() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create group
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -300,10 +300,9 @@ async fn test_group_message_thread() {
             &group_name,
             ChannelType::ChannelPrivate,
             None,
-            vec![],
             None,
             None,
-            None,
+            Some(membership::genesis(&user, false).1),
         )
         .await
         .expect("Failed to create group");
@@ -325,7 +324,6 @@ async fn test_group_message_thread() {
                 None,
                 false,
                 None,
-                None,
                 vec![],
                 false,
                 vec![],
@@ -345,7 +343,6 @@ async fn test_group_message_thread() {
                 reply_content,
                 Some(&original.id),
                 false,
-                None,
                 None,
                 vec![],
                 false,
@@ -367,7 +364,7 @@ async fn test_update_group_settings() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let original_name = format!("update_test_{}", unique_username());
@@ -377,10 +374,9 @@ async fn test_update_group_settings() {
             &original_name,
             ChannelType::ChannelPrivate,
             None,
-            vec![],
-            None,
             Some("Original description"),
             None,
+            Some(membership::genesis(&user, false).1),
         )
         .await
         .expect("Failed to create group");
@@ -389,35 +385,133 @@ async fn test_update_group_settings() {
 
     // Update channel using proper ChannelProto structure
     let new_name = format!("renamed_{}", unique_username());
-    let updated_channel = ChannelProto {
-        id: channel_id.clone(),
-        name: new_name.clone(),
-        description: "Updated description".to_string(),
-        r#type: ChannelType::ChannelPrivate as i32,
-        ..Default::default()
+    // UpdateChannelRequest embeds a validated Channel, including its owner.
+    // Fetch the complete value instead of constructing an invalid partial one;
+    // update_mask still decides which fields the server writes.
+    let mut updated_channel = channel_client
+        .get_channel(&channel_id)
+        .await
+        .expect("get complete channel before update");
+    updated_channel.name = new_name.clone();
+    updated_channel.description = "Updated description".to_string();
+
+    // INFRA-30: update_mask is REQUIRED and authoritative. This call used to
+    // pass `None`, which the server now rejects with InvalidArgument
+    // ("update_mask must name at least one field to update",
+    // internal/services/channel/service/channels.go:547-548) — and the match
+    // below used to print the failure to stderr and pass anyway, so the
+    // regression was invisible on top of being behind `skip_if_no_server!()`.
+    let mask = prost_types::FieldMask {
+        paths: vec!["name".to_string(), "description".to_string()],
     };
 
-    let update_result = channel_client
-        .update_channel(&channel_id, updated_channel, None)
-        .await;
+    let stream = channel_client
+        .update_channel(&channel_id, updated_channel, Some(mask))
+        .await
+        .expect("update_channel with a populated update_mask must be accepted");
 
-    match update_result {
+    tokio::pin!(stream);
+    let mut saw_update = false;
+    while let Some(result) = stream.next().await {
+        let event = result.expect("Stream error");
+        if let Some(payload) = event.event {
+            use chatter_core::proto::chat_v1::channel_event::Event;
+            match payload {
+                Event::ChannelUpdated(ch) => {
+                    assert_eq!(ch.name, new_name);
+                    assert_eq!(ch.description, "Updated description");
+                    saw_update = true;
+                }
+                Event::OperationFailed(e) => {
+                    let msg = e.error.map(|err| err.message).unwrap_or_default();
+                    panic!("Channel update failed: {msg}");
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(
+        saw_update,
+        "the update stream closed without a ChannelUpdated event — the rename \
+         never happened and the old test would have passed anyway"
+    );
+}
+
+/// INFRA-30 regression: a nil `update_mask` must be REJECTED, not silently
+/// treated as "update everything".
+///
+/// The mask decides which fields change. Before it was enforced, a client that
+/// sent a whole ChannelProto with an empty mask overwrote every field it
+/// happened to leave at its default — clearing a description, resetting
+/// security-relevant config, during an unrelated rename. The server now returns
+/// InvalidArgument (channels.go:547). This pins that from the client side, so
+/// the client cannot quietly go back to sending `None`.
+#[tokio::test]
+async fn test_update_group_settings_rejects_empty_update_mask() {
+    skip_if_no_server!();
+
+    let pool = assert_ok(create_test_pool().await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
+
+    let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
+    let name = format!("mask_test_{}", unique_username());
+
+    let stream = channel_client
+        .create_channel(
+            &name,
+            ChannelType::ChannelPrivate,
+            None,
+            Some("Original description"),
+            None,
+            Some(membership::genesis(&user, false).1),
+        )
+        .await
+        .expect("Failed to create group");
+    let channel_id = consume_create_stream_get_id(stream).await;
+
+    // Keep the payload valid so rejection proves the missing-mask rule.
+    let mut updated_channel = channel_client
+        .get_channel(&channel_id)
+        .await
+        .expect("get complete channel before update");
+    updated_channel.name = format!("renamed_{}", unique_username());
+
+    // No mask. The failure may surface either at the RPC call or as an
+    // OperationFailed event on the stream; both are a rejection, and neither
+    // may be a success.
+    let mut rejected = false;
+    match channel_client
+        .update_channel(&channel_id, updated_channel, None)
+        .await
+    {
+        Err(_) => rejected = true,
         Ok(stream) => {
             tokio::pin!(stream);
             while let Some(result) = stream.next().await {
-                let event = result.expect("Stream error");
-                if let Some(payload) = event.event {
-                    use chatter_core::proto::chat_v1::channel_event::Event;
-                    if let Event::ChannelUpdated(ch) = payload {
-                        assert_eq!(ch.name, new_name);
+                match result {
+                    Err(_) => rejected = true,
+                    Ok(event) => {
+                        if let Some(payload) = event.event {
+                            use chatter_core::proto::chat_v1::channel_event::Event;
+                            match payload {
+                                Event::OperationFailed(_) => rejected = true,
+                                Event::ChannelUpdated(_) => panic!(
+                                    "the server applied an update with NO update_mask — \
+                                     an unrelated rename can now clear every other field"
+                                ),
+                                _ => {}
+                            }
+                        }
                     }
                 }
             }
         }
-        Err(e) => {
-            eprintln!("Update channel result: {:?}", e);
-        }
     }
+
+    assert!(
+        rejected,
+        "a nil update_mask must be rejected (InvalidArgument), not accepted"
+    );
 }
 
 // ============================================================================
@@ -448,15 +542,15 @@ async fn test_leave_group() {
             &group_name,
             ChannelType::ChannelPrivate,
             None,
-            vec![user2.user_id.clone()],
             None,
             None,
-            None,
+            Some(membership::genesis(&user1, false).1),
         )
         .await
         .expect("Failed to create group");
 
     let channel_id = consume_create_stream_get_id(stream).await;
+    join_by_invite(&pool, &mut channel_client, &channel_id, &user1, &user2).await;
 
     // User2 leaves the group
     pool.auth().set_basic(
@@ -465,7 +559,10 @@ async fn test_leave_group() {
     );
 
     let mut user2_channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
-    let leave_result = user2_channel_client.leave_channel(&channel_id).await;
+    let change = membership::leave(&user2, &mut user2_channel_client, &channel_id).await;
+    let leave_result = user2_channel_client
+        .leave_channel(&channel_id, change)
+        .await;
 
     match leave_result {
         Ok(stream) => {
@@ -487,7 +584,7 @@ async fn test_group_message_pagination() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let group_name = format!("pagination_test_{}", unique_username());
@@ -497,10 +594,9 @@ async fn test_group_message_pagination() {
             &group_name,
             ChannelType::ChannelPrivate,
             None,
-            vec![],
             None,
             None,
-            None,
+            Some(membership::genesis(&user, false).1),
         )
         .await
         .expect("Failed to create group");
@@ -520,7 +616,6 @@ async fn test_group_message_pagination() {
                 content,
                 None,
                 false,
-                None,
                 None,
                 vec![],
                 false,
@@ -544,7 +639,10 @@ async fn test_group_message_pagination() {
             .await,
     );
 
-    assert!(page1.messages.len() <= 5, "First page should have at most 5 messages");
+    assert!(
+        page1.messages.len() <= 5,
+        "First page should have at most 5 messages"
+    );
 
     // Get second page using next_page_token. `reference_message_id` is a
     // "messages around this ID" cursor (returns both newer and older
@@ -568,8 +666,7 @@ async fn test_group_message_pagination() {
         // Second page should have different messages
         if !page2.messages.is_empty() {
             assert_ne!(
-                page2.messages[0].id,
-                page1.messages[0].id,
+                page2.messages[0].id, page1.messages[0].id,
                 "Pages should have different messages"
             );
         }
@@ -585,7 +682,7 @@ async fn test_non_member_cannot_send_to_private_group() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user1 = assert_ok(setup_authenticated_test(&pool).await);
+    let user1 = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create private group
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -596,10 +693,9 @@ async fn test_non_member_cannot_send_to_private_group() {
             &group_name,
             ChannelType::ChannelPrivate,
             None,
-            vec![],
             None,
             None,
-            None,
+            Some(membership::genesis(&user1, false).1),
         )
         .await
         .expect("Failed to create group");
@@ -628,7 +724,6 @@ async fn test_non_member_cannot_send_to_private_group() {
             None,
             false,
             None,
-            None,
             vec![],
             false,
             vec![],
@@ -640,4 +735,43 @@ async fn test_non_member_cannot_send_to_private_group() {
         result.is_err(),
         "Non-member should not be able to send to private group"
     );
+}
+
+/// `invitee` joins `channel_id` the only way into a private channel: the
+/// owner's signed invite, then the invitee's own signed accept. Leaves the
+/// pool authenticated as `owner`.
+async fn join_by_invite(
+    pool: &chatter_core::network::grpc::GrpcClientPool,
+    owner_client: &mut ChannelClient,
+    channel_id: &str,
+    owner: &TestUser,
+    invitee: &TestUser,
+) {
+    let change = membership::invite(owner, owner_client, channel_id, invitee).await;
+    let stream = owner_client
+        .invite_user(channel_id, change, None)
+        .await
+        .expect("invite");
+    tokio::pin!(stream);
+    while let Some(ev) = stream.next().await {
+        ev.expect("invite stream");
+    }
+    let as_ = |u: &TestUser| {
+        pool.auth().set_basic(
+            format!("{}.{}", u.user_id, u.device_id),
+            base64::engine::general_purpose::STANDARD.encode(&u.device_auth_token),
+        )
+    };
+    as_(invitee);
+    let mut client = ChannelClient::new(pool.channel(), pool.auth_clone());
+    let change = membership::accept(invitee, &mut client, channel_id).await;
+    let stream = client
+        .respond_to_invite(channel_id, change)
+        .await
+        .expect("accept");
+    tokio::pin!(stream);
+    while let Some(ev) = stream.next().await {
+        ev.expect("accept stream");
+    }
+    as_(owner);
 }

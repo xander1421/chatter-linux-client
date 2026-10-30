@@ -1,7 +1,6 @@
 //! Framework tests - verifies the testing framework compiles and works.
 
-mod common;
-mod framework;
+use crate::framework;
 
 use framework::prelude::*;
 
@@ -93,9 +92,7 @@ fn test_crypto_builder() {
 
 #[test]
 fn test_session_builder() {
-    let session = SessionBuilder::new("user-1", 1)
-        .established()
-        .build();
+    let session = SessionBuilder::new("user-1", 1).established().build();
 
     assert_eq!(session.user_id, "user-1");
     assert_eq!(session.device_id, 1);
@@ -114,9 +111,7 @@ fn test_in_memory_storage() {
     let storage = InMemoryStorage::new();
 
     // Test message storage
-    let msg = MessageBuilder::text("Test")
-        .in_channel("channel-1")
-        .build();
+    let msg = MessageBuilder::text("Test").in_channel("channel-1").build();
     let msg_id = msg.id.clone();
 
     storage.save_message(msg);
@@ -300,30 +295,6 @@ async fn test_harness_builder() {
 }
 
 // ============================================================================
-// Macro Tests
-// ============================================================================
-
-#[test]
-fn test_assert_ok_macro() {
-    let result: Result<i32, &str> = Ok(42);
-    let value = assert_ok!(result);
-    assert_eq!(value, 42);
-}
-
-#[test]
-fn test_assert_some_macro() {
-    let option: Option<i32> = Some(42);
-    let value = assert_some!(option);
-    assert_eq!(value, 42);
-}
-
-#[test]
-fn test_assert_none_macro() {
-    let option: Option<i32> = None;
-    assert_none!(option);
-}
-
-// ============================================================================
 // Fixtures Tests
 // ============================================================================
 
@@ -332,9 +303,8 @@ fn test_fixtures() {
     let username = unique_username();
     assert!(username.starts_with("test_user_"));
 
-    let (password, hash) = random_password();
+    let password = random_password();
     assert!(password.starts_with("TestPass_"));
-    assert_eq!(hash.len(), 32);
 
     let uak = random_uak();
     assert_eq!(uak.len(), 16);

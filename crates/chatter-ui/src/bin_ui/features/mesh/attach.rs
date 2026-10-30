@@ -34,13 +34,19 @@ use crate::{MainWindow, MeshGlobal, run_ui};
 pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainWindow>) -> bool {
     use chatter_core::services::mesh::MeshConversation;
 
-    let Some(conversation) = super::active() else {
+    let Some((Some(conversation), generation)) = super::active_session() else {
         return false;
     };
 
-    if matches!(conversation, MeshConversation::Dm(_)) {
+    if matches!(
+        conversation,
+        MeshConversation::Dm(_) | MeshConversation::PrivateChannel(_)
+    ) {
+        if let Some(w) = weak.upgrade() {
+            w.invoke_finish_attachment_picker(true);
+        }
         run_ui!(weak, |w| w.global::<MeshGlobal>().set_notice(
-            "Files are not sent in a mesh direct message — the file packet is not encrypted."
+            "Files are not sent in private mesh conversations — the file packet is not encrypted."
                 .into()
         ));
         return true;
@@ -52,6 +58,16 @@ pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainW
         // on a link measured in single-digit kB/s, so a multi-select would
         // silently queue minutes of airtime behind one tap.
         let picked: Vec<PathBuf> = pick_one().await;
+        let finish = weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = finish.upgrade() {
+                let restore =
+                    super::active_session().is_some_and(|(active, current_generation)| {
+                        active.as_ref() == Some(&conversation) && current_generation == generation
+                    });
+                w.invoke_finish_attachment_picker(restore);
+            }
+        });
         let Some(path) = picked.into_iter().next() else {
             return;
         };
@@ -71,7 +87,7 @@ pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainW
                 // Same reasoning as a failed text send: over the radio there is
                 // no server to blame and no retry queue to hide it in, so a
                 // refusal has to be said out loud.
-                tracing::warn!(%error, path = %path.display(), "mesh: file not sent");
+                tracing::warn!(%error, "mesh: file not sent");
                 let notice = format!("Not sent: {error}");
                 run_ui!(weak, |w| w
                     .global::<MeshGlobal>()

@@ -17,6 +17,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::crypto::os_rng;
 use chatter_mesh::ids::PeerId;
 use chatter_mesh::packet::{MessageType, NoisePayloadType, decode_noise_payload};
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
@@ -26,7 +27,6 @@ use chatter_mesh_nostr::types::{EventKind, NostrEvent};
 use chatter_mesh_nostr::{NostrError, builders, embed, geohash, wrap};
 use chatter_mesh_store::bridge_drop::DropOperationId;
 use chatter_mesh_store::outbox::AckKind;
-use rand_core_06::OsRng;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::config::MeshConfig;
@@ -179,7 +179,10 @@ impl NostrRuntime {
                 message_id,
                 content,
                 nickname,
-            } => self.publish_geohash(&cell, &message_id, &content, &nickname).await,
+            } => {
+                self.publish_geohash(&cell, &message_id, &content, &nickname)
+                    .await
+            }
             NostrCommand::Dm {
                 peer,
                 message_id,
@@ -197,8 +200,14 @@ impl NostrRuntime {
                 expires_at_unix_secs,
                 publisher_secret,
             } => {
-                self.publish_drop(operation, &tag, &sealed, expires_at_unix_secs, publisher_secret)
-                    .await;
+                self.publish_drop(
+                    operation,
+                    &tag,
+                    &sealed,
+                    expires_at_unix_secs,
+                    publisher_secret,
+                )
+                .await;
             }
             NostrCommand::WatchTags(tags) => self.watch_tags(&tags).await,
             NostrCommand::CloseWatch => {
@@ -215,7 +224,10 @@ impl NostrRuntime {
             self.degraded(format!("not a geohash: {cell}"));
             return;
         }
-        if self.state.with(|state| !state.joined.insert(cell.to_string())) {
+        if self
+            .state
+            .with(|state| !state.joined.insert(cell.to_string()))
+        {
             return;
         }
 
@@ -265,9 +277,7 @@ impl NostrRuntime {
         // should stop being derivable from live state.
         self.identities.forget(cell);
         self.state.with(|state| {
-            state
-                .dm_origin
-                .retain(|_, origin| origin.as_str() != cell);
+            state.dm_origin.retain(|_, origin| origin.as_str() != cell);
         });
         self.events.send(MeshEvent::GeohashLeft(cell.to_string()));
     }
@@ -360,7 +370,7 @@ impl NostrRuntime {
             &recipient,
             &identity,
             now_secs() as i64,
-            &mut OsRng,
+            &mut os_rng(),
         );
         match wrapped {
             Ok(event) => {
@@ -401,7 +411,7 @@ impl NostrRuntime {
             &recipient,
             &identity,
             now_secs() as i64,
-            &mut OsRng,
+            &mut os_rng(),
         ) {
             let _ = self.pool.publish(&event, &self.relays).await;
         }
@@ -481,9 +491,7 @@ impl NostrRuntime {
     async fn on_relay_event(&mut self, event: RelayEvent) {
         match event {
             RelayEvent::Connected { url } => {
-                let changed = self
-                    .state
-                    .with(|state| state.connected_relays.insert(url));
+                let changed = self.state.with(|state| state.connected_relays.insert(url));
                 if changed {
                     self.emit_status();
                 }
@@ -704,7 +712,7 @@ impl NostrRuntime {
             message,
             conversation,
             sender: sender.clone(),
-            nickname: self.config.nickname.clone(),
+            nickname: self.config.nickname(),
             is_local: true,
             sender_verified: true,
         })));
@@ -836,9 +844,9 @@ mod tests {
 
     #[test]
     fn a_gift_wrap_survives_the_round_trip_between_two_cell_identities() {
-        let mesh = MeshIdentity::generate(&mut OsRng);
+        let mesh = MeshIdentity::generate(&mut os_rng());
         let mut alice = NostrIdentities::from_mesh(&mesh);
-        let other = MeshIdentity::generate(&mut OsRng);
+        let other = MeshIdentity::generate(&mut os_rng());
         let mut bob = NostrIdentities::from_mesh(&other);
 
         let alice_id = alice.for_geohash("u4pruy").expect("alice identity");
@@ -856,7 +864,7 @@ mod tests {
             1_700_000_000_000,
         )
         .expect("embedded");
-        let wrapped = wrap::gift_wrap(&rumor, &bob_pubkey, alice_id, 1_700_000_000, &mut OsRng)
+        let wrapped = wrap::gift_wrap(&rumor, &bob_pubkey, alice_id, 1_700_000_000, &mut os_rng())
             .expect("wrapped");
 
         let bob_id = bob.for_geohash("u4pruy").expect("bob identity");

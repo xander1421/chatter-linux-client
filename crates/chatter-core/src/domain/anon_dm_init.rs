@@ -15,22 +15,22 @@
 //! # Wire Format
 //!
 //! ```text
-//! | version (1) | conversation_id (16) | sender_id (16) | mailbox_pk (32) |
+//! | version (1) | conversation_id (16) | sender_id (16) | sender_device_id (4) | mailbox_pk (32) |
 //! | identity_key (33) | delivery_token (12) | name_len (1) | sender_display_name (variable, max 64) |
-//! | intro_len (2) | intro_message (variable) | avatar_len (4) | sender_avatar (variable, max 1000000) |
+//! | intro_len (2) | intro_message (variable) | avatar_len (4) | sender_avatar (variable, max 1000000) | disappearing_seconds (4) |
 //! ```
 //!
-//! Total fixed size: 1 + 16 + 16 + 32 + 33 + 12 + 1 + 2 + 4 = 117 bytes + display_name + intro + avatar
+//! Total fixed size: 125 bytes + display_name + intro + avatar.
 
-use super::anon_dm::AnonDmId;
 use super::UserId;
+use super::anon_dm::AnonDmId;
 
 /// Current version of the init message format.
-pub const INIT_MESSAGE_VERSION: u8 = 5;
+pub const INIT_MESSAGE_VERSION: u8 = 7;
 
 /// Minimum size of init message (without display_name, intro, or avatar).
 /// avatar_len is u32 (4 bytes) to support up to 1MB avatars.
-pub const MIN_INIT_SIZE: usize = 1 + 16 + 16 + 32 + 33 + 12 + 1 + 2 + 4; // 117 bytes
+pub const MIN_INIT_SIZE: usize = 1 + 16 + 16 + 4 + 32 + 33 + 12 + 1 + 2 + 4 + 4;
 
 /// Maximum intro message length.
 pub const MAX_INTRO_LENGTH: usize = 500;
@@ -53,6 +53,9 @@ pub struct AnonDmInitMessage {
     pub conversation_id: AnonDmId,
     /// Initiator's user ID (revealed after decryption per NDSS'21).
     pub sender_id: UserId,
+    /// Initiator's device (the one that owns `mailbox_pk`): the secret chat is
+    /// bound to it, so the acceptance is sealed to this device only.
+    pub sender_device_id: u32,
     /// Initiator's ephemeral mailbox public key (32 bytes Ed25519).
     /// Recipient sends acceptance to this mailbox.
     pub mailbox_pk: [u8; 32],
@@ -69,6 +72,8 @@ pub struct AnonDmInitMessage {
     pub intro_message: String,
     /// Optional sender avatar (max 1MB).
     pub sender_avatar: Option<Vec<u8>>,
+    /// Initiator's proposed disappearing timer; fixed to one day for a new chat.
+    pub disappearing_seconds: u32,
 }
 
 /// Error parsing an init message.
@@ -110,6 +115,7 @@ impl AnonDmInitMessage {
     pub fn new(
         conversation_id: AnonDmId,
         sender_id: UserId,
+        sender_device_id: u32,
         mailbox_pk: [u8; 32],
         identity_key: [u8; 33],
         delivery_token: [u8; 12],
@@ -120,12 +126,20 @@ impl AnonDmInitMessage {
         Self {
             conversation_id,
             sender_id,
+            sender_device_id,
             mailbox_pk,
             identity_key,
             delivery_token,
-            sender_display_name: sender_display_name.into(),
+            sender_display_name: {
+                // A profile name may be 257 bytes; the wire field holds 64.
+                // Clamp it rather than fail the whole request.
+                let mut name: String = sender_display_name.into();
+                name.truncate(name.floor_char_boundary(MAX_DISPLAY_NAME_LENGTH));
+                name
+            },
             intro_message: intro_message.into(),
             sender_avatar,
+            disappearing_seconds: crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS,
         }
     }
 
@@ -133,17 +147,26 @@ impl AnonDmInitMessage {
     pub fn to_bytes(&self) -> Result<Vec<u8>, InitMessageError> {
         let name_bytes = self.sender_display_name.as_bytes();
         if name_bytes.len() > MAX_DISPLAY_NAME_LENGTH {
-            return Err(InitMessageError::DisplayNameTooLong(name_bytes.len(), MAX_DISPLAY_NAME_LENGTH));
+            return Err(InitMessageError::DisplayNameTooLong(
+                name_bytes.len(),
+                MAX_DISPLAY_NAME_LENGTH,
+            ));
         }
 
         let intro_bytes = self.intro_message.as_bytes();
         if intro_bytes.len() > MAX_INTRO_LENGTH {
-            return Err(InitMessageError::IntroTooLong(intro_bytes.len(), MAX_INTRO_LENGTH));
+            return Err(InitMessageError::IntroTooLong(
+                intro_bytes.len(),
+                MAX_INTRO_LENGTH,
+            ));
         }
 
         let avatar_bytes = self.sender_avatar.as_deref().unwrap_or(&[]);
         if avatar_bytes.len() > MAX_AVATAR_SIZE {
-            return Err(InitMessageError::AvatarTooLarge(avatar_bytes.len(), MAX_AVATAR_SIZE));
+            return Err(InitMessageError::AvatarTooLarge(
+                avatar_bytes.len(),
+                MAX_AVATAR_SIZE,
+            ));
         }
 
         let total_size = MIN_INIT_SIZE + name_bytes.len() + intro_bytes.len() + avatar_bytes.len();
@@ -152,6 +175,7 @@ impl AnonDmInitMessage {
         bytes.push(INIT_MESSAGE_VERSION);
         bytes.extend_from_slice(self.conversation_id.as_bytes());
         bytes.extend_from_slice(self.sender_id.as_bytes());
+        bytes.extend_from_slice(&self.sender_device_id.to_be_bytes());
         bytes.extend_from_slice(&self.mailbox_pk);
         bytes.extend_from_slice(&self.identity_key);
         bytes.extend_from_slice(&self.delivery_token);
@@ -163,11 +187,13 @@ impl AnonDmInitMessage {
         bytes.extend_from_slice(&intro_len.to_be_bytes());
         bytes.extend_from_slice(intro_bytes);
 
-        let avatar_len: u32 = avatar_bytes.len().try_into().map_err(|_| {
-            InitMessageError::AvatarTooLarge(avatar_bytes.len(), MAX_AVATAR_SIZE)
-        })?;
+        let avatar_len: u32 = avatar_bytes
+            .len()
+            .try_into()
+            .map_err(|_| InitMessageError::AvatarTooLarge(avatar_bytes.len(), MAX_AVATAR_SIZE))?;
         bytes.extend_from_slice(&avatar_len.to_be_bytes());
         bytes.extend_from_slice(avatar_bytes);
+        bytes.extend_from_slice(&self.disappearing_seconds.to_be_bytes());
 
         Ok(bytes)
     }
@@ -198,6 +224,14 @@ impl AnonDmInitMessage {
             .ok_or_else(|| InitMessageError::InvalidData("invalid sender_id".into()))?;
         offset += 16;
 
+        let sender_device_id = u32::from_be_bytes([
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ]);
+        offset += 4;
+
         let mut mailbox_pk = [0u8; 32];
         mailbox_pk.copy_from_slice(&bytes[offset..offset + 32]);
         offset += 32;
@@ -221,7 +255,10 @@ impl AnonDmInitMessage {
         offset += 1;
 
         if name_len > MAX_DISPLAY_NAME_LENGTH {
-            return Err(InitMessageError::DisplayNameTooLong(name_len, MAX_DISPLAY_NAME_LENGTH));
+            return Err(InitMessageError::DisplayNameTooLong(
+                name_len,
+                MAX_DISPLAY_NAME_LENGTH,
+            ));
         }
         if bytes.len() < offset + name_len {
             return Err(InitMessageError::TooShort(bytes.len(), offset + name_len));
@@ -250,12 +287,26 @@ impl AnonDmInitMessage {
         if bytes.len() < offset + 4 {
             return Err(InitMessageError::TooShort(bytes.len(), offset + 4));
         }
-        let avatar_len = u32::from_be_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]]) as usize;
+        let avatar_len = u32::from_be_bytes([
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ]) as usize;
         offset += 4;
 
+        if bytes.len() < offset + avatar_len + 4 {
+            return Err(InitMessageError::TooShort(
+                bytes.len(),
+                offset + avatar_len + 4,
+            ));
+        }
         let sender_avatar = if avatar_len > 0 {
             if avatar_len > MAX_AVATAR_SIZE {
-                return Err(InitMessageError::AvatarTooLarge(avatar_len, MAX_AVATAR_SIZE));
+                return Err(InitMessageError::AvatarTooLarge(
+                    avatar_len,
+                    MAX_AVATAR_SIZE,
+                ));
             }
             if bytes.len() < offset + avatar_len {
                 return Err(InitMessageError::TooShort(bytes.len(), offset + avatar_len));
@@ -264,16 +315,26 @@ impl AnonDmInitMessage {
         } else {
             None
         };
+        offset += avatar_len;
+        let disappearing_seconds =
+            u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap());
+        if disappearing_seconds != crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS {
+            return Err(InitMessageError::InvalidData(
+                "unsupported secret-chat timer proposal".into(),
+            ));
+        }
 
         Ok(Self {
             conversation_id,
             sender_id,
+            sender_device_id,
             mailbox_pk,
             identity_key,
             delivery_token,
             sender_display_name,
             intro_message,
             sender_avatar,
+            disappearing_seconds,
         })
     }
 
@@ -295,14 +356,30 @@ mod tests {
         let mut identity_key = [0u8; 33];
         let mut delivery_token = [0u8; 12];
 
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut mailbox_pk).expect("OS CSPRNG must not fail");}
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut identity_key[1..]).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut mailbox_pk)
+                .expect("OS CSPRNG must not fail");
+        }
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut identity_key[1..])
+                .expect("OS CSPRNG must not fail");
+        }
         identity_key[0] = 0x05;
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut delivery_token).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut delivery_token)
+                .expect("OS CSPRNG must not fail");
+        }
 
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),
             UserId::new(),
+            2,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -316,6 +393,7 @@ mod tests {
 
         assert_eq!(msg.conversation_id, parsed.conversation_id);
         assert_eq!(msg.sender_id, parsed.sender_id);
+        assert_eq!(msg.sender_device_id, parsed.sender_device_id);
         assert_eq!(msg.mailbox_pk, parsed.mailbox_pk);
         assert_eq!(msg.identity_key, parsed.identity_key);
         assert_eq!(msg.delivery_token, parsed.delivery_token);
@@ -333,6 +411,7 @@ mod tests {
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),
             UserId::new(),
+            2,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -360,6 +439,7 @@ mod tests {
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),
             UserId::new(),
+            2,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -385,6 +465,7 @@ mod tests {
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),
             UserId::new(),
+            2,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -407,6 +488,7 @@ mod tests {
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),
             UserId::new(),
+            2,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -431,6 +513,7 @@ mod tests {
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),
             UserId::new(),
+            2,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -453,6 +536,7 @@ mod tests {
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),
             UserId::new(),
+            2,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -467,9 +551,12 @@ mod tests {
     #[test]
     fn test_avatar_max_fits_in_u32() {
         // Wire format uses u32 (4 bytes big-endian) for avatar length
-        assert!(MAX_AVATAR_SIZE <= u32::MAX as usize,
+        assert!(
+            MAX_AVATAR_SIZE <= u32::MAX as usize,
             "MAX_AVATAR_SIZE ({}) must fit in u32 wire format (max {})",
-            MAX_AVATAR_SIZE, u32::MAX);
+            MAX_AVATAR_SIZE,
+            u32::MAX
+        );
     }
 
     #[test]

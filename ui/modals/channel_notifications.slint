@@ -1,0 +1,273 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { ToggleRow } from "../components/toggle_row.slint";
+
+export component ChannelNotificationsSection inherits VerticalLayout {
+    in-out property <bool> ai-enabled;
+    in-out property <bool> is-muted;
+    in property <bool> is-private-group;
+    in-out property <string> notification-preference;
+    callback change-notification(string);
+    callback toggle-ai(bool);
+    callback toggle-mute(bool);
+
+    spacing: Spacing.md;
+    alignment: start;
+
+    Text {
+        width: parent.width;
+        text: "Notifications";
+        color: Colors.text-primary;
+        font-size: Typography.lg;
+        font-weight: Typography.semibold;
+        wrap: word-wrap;
+    }
+
+    // Mute toggle
+    mute-row := ToggleRow {
+        checked <=> root.is-muted;
+        accessible-text: root.is-private-group ? "Mute group" : "Mute channel";
+        toggled(value) => {
+            root.toggle-mute(value);
+        }
+
+        Text {
+            width: mute-row.label-width;
+            text: root.is-private-group ? "Mute group" : "Mute channel";
+            color: Colors.text-primary;
+            font-size: Typography.sm;
+            wrap: word-wrap;
+        }
+        Text {
+            width: mute-row.label-width;
+            text: root.is-private-group ? "You won't receive any notifications from this group" : "You won't receive any notifications from this channel";
+            color: Colors.text-muted;
+            font-size: Typography.xs;
+            wrap: word-wrap;
+        }
+    }
+
+    Rectangle {
+        height: 1px;
+        background: Colors.divider;
+    }
+
+    Text {
+        width: parent.width;
+        text: "When not muted, notify me for:";
+        color: Colors.text-secondary;
+        font-size: Typography.sm;
+        wrap: word-wrap;
+    }
+
+    // All messages — Neo selection card
+    Rectangle {
+        min-height: Spacing.touch-target-min;
+        background: root.notification-preference == "all" ? Colors.inset : all-touch.pressed ? Materials.pressed : transparent;
+        transform-scale-x: all-touch.pressed ? 0.98 : 1;
+        transform-scale-y: all-touch.pressed ? 0.94 : 1;
+        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+        accessible-role: button;
+        accessible-label: "All messages";
+        accessible-description: root.notification-preference == "all" ? "Selected" : "";
+        accessible-action-default => { root.change-notification("all"); }
+        KeyFocus { border-radius: parent.border-radius; activate => { root.change-notification("all"); } }
+        border-radius: Spacing.radius-sm;
+
+        HorizontalLayout {
+            padding: Spacing.sm;
+            spacing: Spacing.sm;
+
+            Rectangle {
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                border-width: Spacing.stroke;
+                border-color: root.notification-preference == "all" ? Colors.primary : Colors.text-muted;
+
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: root.notification-preference == "all" ? Colors.primary : transparent;
+                }
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                min-width: 0px;
+
+                Text {
+                    text: "All messages";
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "Get notified for every message";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        all-touch := TouchArea {
+            clicked => { root.change-notification("all"); }
+        }
+    }
+
+    // Mentions only — Neo selection card
+    Rectangle {
+        min-height: Spacing.touch-target-min;
+        background: root.notification-preference == "mentions" ? Colors.inset : mentions-touch.pressed ? Materials.pressed : transparent;
+        transform-scale-x: mentions-touch.pressed ? 0.98 : 1;
+        transform-scale-y: mentions-touch.pressed ? 0.94 : 1;
+        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+        accessible-role: button;
+        accessible-label: "Mentions only";
+        accessible-description: root.notification-preference == "mentions" ? "Selected" : "";
+        accessible-action-default => { root.change-notification("mentions"); }
+        KeyFocus { border-radius: parent.border-radius; activate => { root.change-notification("mentions"); } }
+        border-radius: Spacing.radius-sm;
+
+        HorizontalLayout {
+            padding: Spacing.sm;
+            spacing: Spacing.sm;
+
+            Rectangle {
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                border-width: Spacing.stroke;
+                border-color: root.notification-preference == "mentions" ? Colors.primary : Colors.text-muted;
+
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: root.notification-preference == "mentions" ? Colors.primary : transparent;
+                }
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                min-width: 0px;
+
+                Text {
+                    text: "Mentions only";
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "When someone mentions you or everyone";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        mentions-touch := TouchArea {
+            clicked => { root.change-notification("mentions"); }
+        }
+    }
+
+    // None — Neo selection card
+    Rectangle {
+        min-height: Spacing.touch-target-min;
+        background: root.notification-preference == "none" ? Colors.inset : none-touch.pressed ? Materials.pressed : transparent;
+        transform-scale-x: none-touch.pressed ? 0.98 : 1;
+        transform-scale-y: none-touch.pressed ? 0.94 : 1;
+        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+        accessible-role: button;
+        accessible-label: "Nothing";
+        accessible-description: root.notification-preference == "none" ? "Selected" : "";
+        accessible-action-default => { root.change-notification("none"); }
+        KeyFocus { border-radius: parent.border-radius; activate => { root.change-notification("none"); } }
+        border-radius: Spacing.radius-sm;
+
+        HorizontalLayout {
+            padding: Spacing.sm;
+            spacing: Spacing.sm;
+
+            Rectangle {
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                border-width: Spacing.stroke;
+                border-color: root.notification-preference == "none" ? Colors.primary : Colors.text-muted;
+
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: root.notification-preference == "none" ? Colors.primary : transparent;
+                }
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                min-width: 0px;
+
+                Text {
+                    text: "Nothing";
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "Never notify (still shows unread badge)";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        none-touch := TouchArea {
+            clicked => { root.change-notification("none"); }
+        }
+    }
+
+    Rectangle {
+        height: 1px;
+        background: Colors.divider;
+    }
+
+    // Anonymous groups are local-only in core's AI policy.
+    ai-row := ToggleRow {
+        checked <=> root.ai-enabled;
+        accessible-text: "AI assistant";
+        toggled(value) => {
+            root.toggle-ai(value);
+        }
+
+        Text {
+            width: ai-row.label-width;
+            text: "AI assistant";
+            color: Colors.text-primary;
+            font-size: Typography.sm;
+            wrap: word-wrap;
+        }
+        Text {
+            width: ai-row.label-width;
+            text: root.is-private-group
+                ? "Let local AI read this group when you ask it something here. Cloud AI cannot access this group. Off by default."
+                : "Let the AI read this channel when you ask it something here. Off by default.";
+            color: Colors.text-muted;
+            font-size: Typography.xs;
+            wrap: word-wrap;
+        }
+    }
+}

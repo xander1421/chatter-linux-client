@@ -4,7 +4,7 @@
 //! Sender keys allow a sender to encrypt once for a group, rather than
 //! encrypting separately for each recipient (as in pairwise sessions).
 //!
-//! # Rotation cadence (handled by libsignal)
+//! # Rotation cadence
 //!
 //! Per the Signal whitepaper section on group encryption, sender keys must be
 //! rotated periodically to bound forward-secrecy windows. The cadence is:
@@ -12,12 +12,10 @@
 //! - **Time-based**: every 24 hours
 //! - **Message-count-based**: every 2000 messages
 //!
-//! These rotation triggers are enforced **internally by libsignal** within
-//! `create_sender_key_distribution_message`, `process_sender_key_distribution_message`,
-//! `group_encrypt`, and `group_decrypt`. The wrapper functions in this module
-//! are intentionally thin: **they never enforce, override, or short-circuit
-//! libsignal's rotation logic**. Callers must not assume rotation is the
-//! responsibility of this layer, and changes here must preserve that contract.
+//! The `SignalService` sender-key send path enforces this cadence using
+//! persisted age and message-count metadata. Libsignal advances the sender
+//! chain during encryption but does not rotate it at these thresholds. The
+//! wrapper functions in this module only perform the libsignal operations.
 //!
 //! # Distribution transport invariant
 //!
@@ -33,16 +31,16 @@
 //! - libsignal-protocol crate: `group_cipher` and `sender_keys` modules
 
 use libsignal_protocol::{
+    ProtocolAddress, SenderKeyDistributionMessage, SenderKeyMessage, SenderKeyStore,
     create_sender_key_distribution_message, group_decrypt, group_encrypt,
-    process_sender_key_distribution_message, ProtocolAddress, SenderKeyDistributionMessage,
-    SenderKeyMessage, SenderKeyStore,
+    process_sender_key_distribution_message,
 };
 // SECURITY: each sender-key draw must hit the OS directly so a process
 // memory disclosure cannot rewind the RNG. See the long comment in
 // `sealed_sender.rs` for why we use `OsRng.unwrap_err()` rather than
 // `StdRng::from_os_rng()`.
-use rand::rngs::OsRng;
 use rand::TryRngCore;
+use rand::rngs::OsRng;
 use uuid::Uuid;
 
 use crate::error::CryptoError;
@@ -88,14 +86,14 @@ impl SenderKeyManager {
     /// This is a thin wrapper over libsignal's
     /// `create_sender_key_distribution_message`. On our behalf, libsignal:
     ///
-    /// - Generates (or rotates) the sender key chain key and signing keypair
-    ///   for `(sender, distribution_id)`.
-    /// - Persists the new sender key state into `sender_key_store`.
+    /// - Generates a sender key chain key and signing keypair if no record
+    ///   exists for `(sender, distribution_id)`; otherwise uses that record.
+    /// - Persists the sender key state into `sender_key_store`.
     /// - Returns an SKDM containing the chain key, iteration, and signing
     ///   public key for recipients to install.
     ///
-    /// Rotation cadence (24h / 2000 messages, see module docs) is enforced by
-    /// libsignal; this wrapper does not gate or override it.
+    /// The service drops the old record before requesting a rotation. This
+    /// wrapper does not enforce the 24h / 2000-message cadence.
     ///
     /// # Arguments
     ///
@@ -117,17 +115,22 @@ impl SenderKeyManager {
             "[SENDER_KEY] Creating distribution message"
         );
         let mut rng = OsRng.unwrap_err();
-        let result = create_sender_key_distribution_message(sender, distribution_id, sender_key_store, &mut rng)
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    sender = %sender,
-                    distribution_id = %distribution_id,
-                    error = %e,
-                    "[SENDER_KEY] Failed to create distribution message"
-                );
-                CryptoError::Protocol(e.to_string())
-            })?;
+        let result = create_sender_key_distribution_message(
+            sender,
+            distribution_id,
+            sender_key_store,
+            &mut rng,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                sender = %sender,
+                distribution_id = %distribution_id,
+                error = %e,
+                "[SENDER_KEY] Failed to create distribution message"
+            );
+            CryptoError::Protocol(e.to_string())
+        })?;
         tracing::info!(
             sender = %sender,
             distribution_id = %distribution_id,
@@ -162,8 +165,8 @@ impl SenderKeyManager {
     /// - Verifies the SKDM signature against the embedded signing public key.
     /// - Installs the chain key, iteration, and signing public key into
     ///   `sender_key_store` under `(sender, distribution_id)`.
-    /// - Replaces any prior sender key state for that pair (which is how a
-    ///   peer's 24h / 2000-message rotation is adopted on the receiver side).
+    /// - Installs the state carried by the peer's distribution message,
+    ///   including a new key when the peer rotates it.
     ///
     /// This wrapper does not enforce or short-circuit any rotation policy.
     ///
@@ -215,12 +218,10 @@ impl SenderKeyManager {
     /// - Derives the next message key from the chain key, advances the chain,
     ///   and persists the updated state.
     /// - Signs the ciphertext with the per-distribution signing key.
-    /// - Internally tracks message count and chain age, and triggers sender
-    ///   key rotation when libsignal's policy thresholds (24h / 2000 messages,
-    ///   see module docs) are crossed. When that happens, the next
-    ///   `create_distribution_message` call will produce a fresh chain.
+    /// - Does not track the service's age/count rotation thresholds; the
+    ///   service checks those before calling this method.
     ///
-    /// This wrapper never inspects or overrides those rotation triggers.
+    /// This wrapper does not inspect the service's rotation metadata.
     ///
     /// # Arguments
     ///
@@ -245,17 +246,23 @@ impl SenderKeyManager {
             "[SENDER_KEY] Encrypting message for group"
         );
         let mut rng = OsRng.unwrap_err();
-        let result = group_encrypt(sender_key_store, sender, distribution_id, plaintext, &mut rng)
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    sender = %sender,
-                    distribution_id = %distribution_id,
-                    error = %e,
-                    "[SENDER_KEY] Group encryption failed"
-                );
-                CryptoError::EncryptionFailed(e.to_string())
-            })?;
+        let result = group_encrypt(
+            sender_key_store,
+            sender,
+            distribution_id,
+            plaintext,
+            &mut rng,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                sender = %sender,
+                distribution_id = %distribution_id,
+                error = %e,
+                "[SENDER_KEY] Group encryption failed"
+            );
+            CryptoError::EncryptionFailed(e.to_string())
+        })?;
         tracing::debug!(
             sender = %sender,
             distribution_id = %distribution_id,
@@ -310,6 +317,28 @@ impl SenderKeyManager {
         let result = group_decrypt(ciphertext, sender_key_store, sender)
             .await
             .map_err(|e| {
+                // `DuplicatedMessage` ("message with old counter") returns
+                // before `store_sender_key`. The persisted chain is unchanged.
+                // A missing SKDM and a ciphertext that might still open stay
+                // on the failure path below.
+                if matches!(
+                    e,
+                    libsignal_protocol::SignalProtocolError::DuplicatedMessage(_, _)
+                ) {
+                    tracing::debug!(
+                        sender = %sender,
+                        ciphertext_len = ciphertext.len(),
+                        error = %e,
+                        "[SENDER_KEY] Duplicate sender-key ciphertext; sender-key record not written"
+                    );
+                    tracing::debug!(
+                        target: "chatter::crypto::decrypt_failure",
+                        kind = "group_duplicate",
+                        error = %e,
+                        "consumed sender-key counter"
+                    );
+                    return CryptoError::DecryptionFailed(e.to_string());
+                }
                 tracing::error!(
                     sender = %sender,
                     ciphertext_len = ciphertext.len(),

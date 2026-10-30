@@ -6,7 +6,7 @@
 export { CreateChannelModal, AIProviderOption, AIModelOption } from "create_channel.slint";
 
 // Channel discovery and join
-export { JoinChannelModal, SearchResultChannel } from "join_channel.slint";
+export { SearchResultChannel } from "join_channel.slint";
 
 // Message forwarding
 export { ForwardMessageModal, ForwardTarget } from "forward_message.slint";
@@ -16,19 +16,19 @@ export { InviteMemberModal, InviteUser } from "invite_member.slint";
 export { InvitePrivateGroupModal } from "invite_private_group.slint";
 
 // User profile
-export { UserProfileModal, SharedContentItem, SharedTab } from "user_profile.slint";
+export { UserProfileModal } from "user_profile.slint";
+export { SharedContentItem, SharedTab } from "profile_shared_types.slint";
 export { EditProfileModal } from "edit_profile.slint";
 
-// Friend requests (legacy)
-
-// Friends management (comprehensive)
-export { FriendsModal, FriendData, UserSearchResult, FriendRequestData, BlockedUserData } from "friends.slint";
+// Friends management
+export { FriendsModal, FriendData, FriendRequestData, BlockedUserData } from "friends.slint";
 
 // Session management
 export { SessionsModal, SessionInfo } from "sessions.slint";
 
 // Channel settings
-export { ChannelSettingsModal, ChannelMemberData } from "channel_settings.slint";
+export { ChannelSettingsModal } from "channel_settings.slint";
+export { ChannelMemberData, BannedMemberData } from "channel_member_types.slint";
 
 // Recovery codes
 export { RecoveryCodesModal } from "recovery_codes.slint";

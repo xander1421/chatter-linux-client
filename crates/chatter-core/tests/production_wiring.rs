@@ -35,8 +35,9 @@
 //!   cannot drift back out of step with the code. A green `DEAD` entry is not an
 //!   endorsement — it is an open bug with a test holding its place.
 //!
-//! Runs with no server, no `INTEGRATION_TESTS`, and no feature flags, unlike the
-//! V-series, which skips silently when the stack is absent.
+//! Runs with no server and no `INTEGRATION_TESTS`, unlike the V-series, which
+//! skips silently when the stack is absent. The mesh entries (`MESH_TABLE`) are
+//! checked only with `--features mesh`, the one build where their callers exist.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -68,18 +69,6 @@ struct Entry {
 }
 
 const TABLE: &[Entry] = &[
-    // ---- Signal: sealed sender ------------------------------------------
-    Entry {
-        symbol: "unratcheted_plaintext_rejected",
-        defined_in: "chatter-core/src/services/gateway/decryption.rs",
-        expect: Expect::Wired,
-        why: "A `CiphertextMessageType::Plaintext` sealed-sender message skipped the \
-              Double Ratchet: no is_trusted_identity, no replay protection, no forward \
-              secrecy. If no path outside decryption.rs refuses it, unratcheted \
-              attacker-chosen bytes reach `Content::decode` looking exactly like \
-              ratchet-authenticated plaintext. This is the leak ab0a1242 fixed on four \
-              paths at once.",
-    },
     // ---- Signal: key transparency ---------------------------------------
     Entry {
         symbol: "verify_kt_proof",
@@ -100,6 +89,42 @@ const TABLE: &[Entry] = &[
               supplied in the same response — each one valid, all of them possibly from \
               different trees — so a fork, a rollback and a per-user split view all become \
               undetectable again. Dead until 2026-08-03; that is why this file exists.",
+    },
+    Entry {
+        symbol: "hold_head_locked",
+        defined_in: "chatter-core/src/services/signal/kt_anchor.rs",
+        expect: Expect::Wired,
+        why: "Holds a served tree head to the device's pinned head under the pin lock \
+              (classify -> consistency proof -> accept). Called from session.rs for the \
+              identified AND anonymous KT paths (the anon gate is session.rs-internal, so its \
+              wiring is pinned by anon_kt_gate_is_anchored_to_the_device_pin) and from mailbox/blind_signature.rs for \
+              blind-key manifests. Lose it and inclusion proofs verify against whatever \
+              head the server sent, so a forked log goes undetected; before 2026-10-03 the \
+              anonymous path never anchored at all.",
+    },
+    Entry {
+        symbol: "ensure_session_with_bundle",
+        defined_in: "chatter-core/src/services/signal/session.rs",
+        expect: Expect::Wired,
+        why: "The anonymous-path session establishment (services/pairwise.rs), and the \
+              only entry to its KT gate: verify_peer_key_transparency_anon -> judge_kt_proof \
+              -> check_tree_head_consistency -> hold_head_locked. That chain is \
+              session.rs-internal, so `anon_kt_gate_is_anchored_to_the_device_pin` pins it; \
+              this entry pins that the chain is reachable at all. Lose it and pairwise \
+              sessions either stop working or establish over an ungated bundle path.",
+    },
+    // ---- Reactions -------------------------------------------------------
+    Entry {
+        symbol: "record_reaction",
+        defined_in: "chatter-core/src/services/message/mod.rs",
+        expect: Expect::Wired,
+        why: "It is the only writer of `unified_reactions` and the per-user \
+              `current_user_reactions_blob` for DMs and channels. The send path used to \
+              call `update_reaction_by_sender`, which bumped the aggregate count only, so \
+              `user_has_reacted` always returned false, `toggle_reaction` could never \
+              REMOVE, and tapping your own reaction incremented it (observed 1 -> 2 on a \
+              Galaxy S9). Lose this caller and un-reacting silently breaks again while \
+              every reaction unit test stays green.",
     },
     // ---- Signal: identity change ----------------------------------------
     Entry {
@@ -162,51 +187,6 @@ const TABLE: &[Entry] = &[
               defect. Losing this caller means invalidation stops happening at all: \
               the next send never re-fetches the peer's bundle, and a peer's revoked \
               device keeps a live session.",
-    },
-    // ---- Mesh: peer authentication --------------------------------------
-    Entry {
-        symbol: "evaluate_announce",
-        defined_in: "chatter-mesh-link/src/announce.rs",
-        expect: Expect::Wired,
-        why: "The whole inbound announce trust policy, including the load-bearing check \
-              that the sender ID equals SHA256(announced noise key)[..8]. This function \
-              HAD zero production callers — mesh peers were unauthenticated on the live \
-              path while announce.rs's unit tests passed. It is wired now \
-              (services/mesh/ble.rs); this entry stops it regressing. Note that \
-              CLAUDE.md still describes it as dead.",
-    },
-    Entry {
-        symbol: "verify_packet",
-        defined_in: "chatter-mesh-noise/src/sign.rs",
-        expect: Expect::Wired,
-        why: "The Ed25519 check actually used on the live mesh path. Without it an \
-              announce is an unauthenticated stranger claiming a nickname and two keys.",
-    },
-    Entry {
-        symbol: "upsert_verified_announce",
-        defined_in: "chatter-mesh-link/src/registry.rs",
-        expect: Expect::Wired,
-        why: "Records a peer only AFTER verification. bitchat drops an unverified \
-              announce outright; recording one would be identity poisoning.",
-    },
-    Entry {
-        symbol: "verify_announce",
-        defined_in: "chatter-mesh-noise/src/sign.rs",
-        expect: Expect::Dead,
-        why: "KNOWN DEAD, and a trap for a reader. `sign_announce`/`verify_announce`/\
-              `canonical_announce_bytes` are a complete, tested, and entirely unused \
-              announce-specific signature scheme. Production authenticates announces \
-              with the PACKET-level `verify_packet` instead. Anyone citing the \
-              announce preimage as what protects the mesh is reading dead code.",
-    },
-    Entry {
-        symbol: "plan_announce_response",
-        defined_in: "chatter-mesh-link/src/announce.rs",
-        expect: Expect::Dead,
-        why: "KNOWN DEAD. The second half of the ported bitchat announce handler \
-              (notify-connected, initial sync, announce-back, afterglow). None of that \
-              follow-up behaviour happens in production even though evaluate_announce \
-              is live.",
     },
     // ---- Blocking: enforced only on the receiving client ------------------
     Entry {
@@ -280,7 +260,163 @@ const TABLE: &[Entry] = &[
               did not propagate. This entry pins the top of the chain; between the \
               two, both edges that matter have a tripwire.",
     },
+    Entry {
+        symbol: "start_channel_message_stream",
+        defined_in: "chatter-core/src/services/channel_stream.rs",
+        expect: Expect::Wired,
+        why: "The ONLY subscriber of server-managed channel messages, called from \
+              ChatterClient::start. Before it existed, delivery hung off per-channel \
+              subscriptions started from create_channel and join_channel alone, with \
+              no re-subscription at login and no reconnect loop — so after any \
+              restart a user got zero live messages in every channel joined in a \
+              previous session, and opening the channel read local SQLite only \
+              (INFRA-1). If this loses its caller, that returns, and nothing else in \
+              the client notices.",
+    },
+    Entry {
+        symbol: "solve_async",
+        defined_in: "chatter-core/src/crypto/pow.rs",
+        expect: Expect::Wired,
+        why: "The one proof-of-work solver (server OPEN-ITEMS §130, §133, §134), \
+              called from AuthService::register and from \
+              auth_service::login_start_paying_pow, which AuthService::login runs \
+              for every LoginStart. The server refuses an onion Register without a \
+              solution and answers a priced LoginStart with a challenge and no KE2, \
+              so if this loses its callers every sign-up over the onion service \
+              fails, and any account with three recent failed attempts (anyone's \
+              guesses) cannot log in a new device, while clearnet sign-up \
+              (difficulty 0) keeps passing every test.",
+    },
+    Entry {
+        symbol: "trusted_device_token_key",
+        defined_in: "chatter-core/src/storage/repositories/settings_repo.rs",
+        expect: Expect::Wired,
+        why: "The trusted-device token's storage key (server OPEN-ITEMS §134), used by \
+              AuthService::login to load the token it presents to LoginStart and to \
+              store the fresh one LoginFinish returns, and by AuthService::register. \
+              Lose the callers and no device ever presents a token: anyone who pays \
+              ~20 puzzles a day keeps the owner out of password login on every \
+              device, which is exactly the lockout lever tokens exist to remove, and \
+              every unit test still passes.",
+    },
+    // ---- Anonymous groups: removal -------------------------------------
+    Entry {
+        symbol: "verify_kick_signature_with_key",
+        defined_in: "chatter-core/src/services/anon_group/removal.rs",
+        expect: Expect::Wired,
+        why: "Receive-side kick authentication (services/anon_group/handlers.rs). Lose \
+              this caller and any member who knows a group id can remove anyone by \
+              sending an unsigned AnonGroupKick.",
+    },
+    Entry {
+        symbol: "kick_member",
+        defined_in: "chatter-core/src/services/anon_group/removal.rs",
+        expect: Expect::Wired,
+        why: "Send-side, signed private-group kick (services/conversation.rs \
+              `remove_member`, from Settings › Members › Remove). Dead until \
+              2026-10-04: the button sent the group id to the server's channel kick.",
+    },
+    Entry {
+        symbol: "leave_group",
+        defined_in: "chatter-core/src/services/anon_group/removal.rs",
+        expect: Expect::Wired,
+        why: "Private-group leave (services/conversation.rs `leave`, from Settings and \
+              the sidebar row menu). Dead until 2026-10-04: a group could not be left.",
+    },
 ];
+
+/// Mesh entries. Their callers live in `services/mesh`, which only exists in a
+/// `mesh` build, so they are checked only there: `cargo test -p chatter-core
+/// --features mesh,testing --test it production_wiring`. Gated, not deleted — a mesh build
+/// that loses one of these callers still goes red.
+#[cfg(feature = "mesh")]
+const MESH_TABLE: &[Entry] = &[
+    // ---- Mesh: peer authentication --------------------------------------
+    Entry {
+        symbol: "evaluate_announce",
+        defined_in: "chatter-mesh-link/src/announce.rs",
+        expect: Expect::Wired,
+        why: "The whole inbound announce trust policy, including the load-bearing check \
+              that the sender ID equals SHA256(announced noise key)[..8]. This function \
+              HAD zero production callers — mesh peers were unauthenticated on the live \
+              path while announce.rs's unit tests passed. It is wired now \
+              (services/mesh/ble.rs); this entry stops it regressing.",
+    },
+    Entry {
+        symbol: "verify_packet",
+        defined_in: "chatter-mesh-noise/src/sign.rs",
+        expect: Expect::Wired,
+        why: "The Ed25519 check actually used on the live mesh path. Without it an \
+              announce is an unauthenticated stranger claiming a nickname and two keys.",
+    },
+    Entry {
+        symbol: "upsert_verified_announce",
+        defined_in: "chatter-mesh-link/src/registry.rs",
+        expect: Expect::Wired,
+        why: "Records a peer only AFTER verification. bitchat drops an unverified \
+              announce outright; recording one would be identity poisoning.",
+    },
+    Entry {
+        symbol: "is_noise_authenticated",
+        defined_in: "chatter-mesh-link/src/registry.rs",
+        expect: Expect::Wired,
+        why: "Gates destructive courier handover on a per-link Noise proof \
+              (services/mesh/ble.rs on_announce). It used to be a peer-level \
+              has_session check, which a replayed announce rebinding an attacker's \
+              link satisfies, handing the victim's carried mail to the attacker.",
+    },
+    Entry {
+        symbol: "needs_rekey",
+        defined_in: "chatter-core/src/services/mesh/session.rs",
+        expect: Expect::Wired,
+        why: "Renegotiates a Noise session at 90% of its nonce budget \
+              (services/mesh/ble.rs rekey_if_due). Without a caller the session \
+              hard-fails at the limit and DMs to that peer stall.",
+    },
+    Entry {
+        symbol: "seal_prekey",
+        defined_in: "chatter-mesh-noise/src/seal.rs",
+        expect: Expect::Wired,
+        why: "Forward-secret offline mail (services/mesh/prekeys.rs seal_offline, from \
+              the BLE courier and relay-drop sealers). Lose it and every courier \
+              envelope is sealed to the recipient's long-lived static key, readable \
+              by whoever later takes that key.",
+    },
+    Entry {
+        symbol: "open_prekey",
+        defined_in: "chatter-mesh-noise/src/seal.rs",
+        expect: Expect::Wired,
+        why: "Opens mail sealed to our one-time prekeys (services/mesh/prekeys.rs). \
+              Without it every peer that holds our bundle sends mail we cannot read.",
+    },
+    // ---- Mesh: inbound memory -------------------------------------------
+    Entry {
+        symbol: "reap_stalled",
+        defined_in: "chatter-mesh-link/src/backpressure.rs",
+        expect: Expect::Wired,
+        why: "The only way a partial inbound BLE frame is reclaimed from a peer that \
+              stays connected and stops writing: InboundAssembler::append discards a \
+              stalled frame only when the same link writes again. Called from the BLE \
+              tick (services/mesh/ble.rs reap_stalled_partials). Dead until \
+              2026-10-04; without this caller one byte per link pins memory until \
+              disconnect.",
+    },
+];
+
+/// Every entry this build can check.
+fn table() -> impl Iterator<Item = &'static Entry> {
+    let mesh: &[Entry] = {
+        #[cfg(feature = "mesh")]
+        {
+            MESH_TABLE
+        }
+        #[cfg(not(feature = "mesh"))]
+        {
+            &[]
+        }
+    };
+    TABLE.iter().chain(mesh.iter())
+}
 
 // ============================================================================
 // Source scanning
@@ -467,7 +603,7 @@ fn production_callers(symbol: &str, defined_in: &str) -> Vec<String> {
 fn security_controls_have_at_least_one_production_caller() {
     let mut unwired: Vec<String> = Vec::new();
 
-    for entry in TABLE.iter().filter(|e| e.expect == Expect::Wired) {
+    for entry in table().filter(|e| e.expect == Expect::Wired) {
         let callers = production_callers(entry.symbol, entry.defined_in);
         if callers.is_empty() {
             unwired.push(format!(
@@ -497,7 +633,7 @@ fn security_controls_have_at_least_one_production_caller() {
 fn recorded_dead_wires_have_not_silently_come_alive() {
     let mut revived: Vec<String> = Vec::new();
 
-    for entry in TABLE.iter().filter(|e| e.expect == Expect::Dead) {
+    for entry in table().filter(|e| e.expect == Expect::Dead) {
         let callers = production_callers(entry.symbol, entry.defined_in);
         if !callers.is_empty() {
             revived.push(format!(
@@ -534,8 +670,8 @@ fn recorded_dead_wires_have_not_silently_come_alive() {
 /// expected-set assertion is the other half — a NEW consumer file must justify
 /// itself rather than inherit the carve-out by default.
 ///
-/// MUTATION: delete the `if msg_type == CiphertextMessageType::Plaintext` guard
-/// from `services/pairwise.rs`. This test goes red; no other test in the crate
+/// MUTATION: delete the `CiphertextMessageType::Plaintext` refusals from
+/// `services/gateway/decryption.rs`. This test goes red; no other test in the crate
 /// notices, because the only existing coverage
 /// (`sealed_sender_decrypt_labels_unratcheted_plaintext`) asserts the LABEL is
 /// produced, never that a caller acts on it.
@@ -546,8 +682,9 @@ fn every_sealed_sender_decrypt_consumer_refuses_unratcheted_plaintext() {
     /// fix.
     const EXPECTED_CONSUMERS: &[&str] = &[
         "chatter-core/src/services/gateway/decryption.rs",
-        "chatter-core/src/services/pairwise.rs",
-        "chatter-core/src/inbox/processor.rs",
+        // Durable receive: `decrypt_durable_inner` returns None for Plaintext
+        // before reading the bytes, surfaced as PlaintextRejected.
+        "chatter-core/src/crypto/signal/receive_store.rs",
         // Plumbing: forwards the (result, type) tuple to the consumers above and
         // never interprets the bytes itself.
         "chatter-core/src/services/signal/actor.rs",
@@ -625,6 +762,85 @@ fn every_sealed_sender_decrypt_consumer_refuses_unratcheted_plaintext() {
     }
 }
 
+/// Production body of `fn name` in `lines` (already `#[cfg(test)]`-stripped),
+/// comments removed, brace-matched from the signature.
+fn fn_body(lines: &[String], name: &str) -> Option<String> {
+    let start = lines.iter().position(|l| {
+        let code = strip_comments(l);
+        code.contains(&format!("fn {name}(")) || code.contains(&format!("fn {name}<"))
+    })?;
+    let mut body = String::new();
+    let mut depth = 0;
+    let mut started = false;
+    for line in &lines[start..] {
+        let (opens, net) = braces(line);
+        if opens > 0 {
+            started = true;
+        }
+        depth += net;
+        body.push_str(&strip_comments(line));
+        body.push('\n');
+        if started && depth <= 0 {
+            return Some(body);
+        }
+    }
+    None
+}
+
+/// The anonymous KT gate is held to the device's pinned tree head.
+///
+/// Every link of this chain lives in `services/signal/session.rs`, so the table
+/// (which ignores the defining file) cannot see it; `ensure_session_with_bundle`
+/// in the table pins only the outside entry. Before client 4ce51ad3 the anon gate
+/// verified inclusion against whatever head the server sent with the proof.
+///
+/// MUTATION: delete the `verify_peer_key_transparency_anon(` call from
+/// `ensure_session_with_bundle`, or replace its `judge_kt_proof(` with an
+/// unanchored check. This test goes red naming the broken link.
+#[test]
+fn anon_kt_gate_is_anchored_to_the_device_pin() {
+    const SESSION: &str = "chatter-core/src/services/signal/session.rs";
+    // (caller, callee): each caller's production body must call the callee.
+    const CHAIN: &[(&str, &str)] = &[
+        (
+            "ensure_session_with_bundle",
+            "verify_peer_key_transparency_anon",
+        ),
+        ("verify_peer_key_transparency_anon", "lock_pin"),
+        ("verify_peer_key_transparency_anon", "judge_kt_proof"),
+        ("judge_kt_proof", "check_tree_head_consistency"),
+        ("check_tree_head_consistency", "hold_head_locked"),
+    ];
+
+    let path = rust_sources()
+        .into_iter()
+        .find(|p| p.to_string_lossy().replace('\\', "/").ends_with(SESSION))
+        .expect("session.rs not found — update SESSION");
+    let lines = strip_cfg_test(&std::fs::read_to_string(&path).expect("read session.rs"));
+
+    let mut broken = Vec::new();
+    for (caller, callee) in CHAIN {
+        match fn_body(&lines, caller) {
+            None => broken.push(format!("\n  fn {caller} not found in {SESSION}")),
+            Some(body) if !body.lines().any(|l| is_call_site(l, callee)) => {
+                broken.push(format!("\n  {caller} no longer calls {callee}"))
+            }
+            Some(_) => {}
+        }
+    }
+
+    assert!(
+        broken.is_empty(),
+        "The anonymous KT gate (pairwise.rs -> ensure_session_with_bundle) is no longer \
+         provably held to this device's pinned tree head:{}\n\nWithout the anchor, an \
+         anonymous lookup verifies inclusion against whatever head the server sent, so a \
+         log forked for anonymous lookups alone goes undetected. If the chain was \
+         refactored, update CHAIN — after confirming the anon path still reaches \
+         hold_head_locked.",
+        broken.join("")
+    );
+}
+
 /// The scanner itself must be able to fail.
 ///
 /// A source-grep test that silently matches nothing is worse than no test: it is
@@ -633,12 +849,15 @@ fn every_sealed_sender_decrypt_consumer_refuses_unratcheted_plaintext() {
 /// invent one that is not.
 #[test]
 fn scanner_self_check() {
-    let real = production_callers("evaluate_announce", "chatter-mesh-link/src/announce.rs");
+    let real = production_callers(
+        "sender_is_blocked",
+        "chatter-core/src/services/gateway/block_filter.rs",
+    );
     assert!(
         !real.is_empty(),
-        "positive control failed: evaluate_announce IS called from services/mesh/ble.rs, \
-         so a scanner that reports zero here is broken, and every Dead verdict in this \
-         file is meaningless"
+        "positive control failed: sender_is_blocked IS called from \
+         services/gateway/decryption.rs, so a scanner that reports zero here is broken, \
+         and every Dead verdict in this file is meaningless"
     );
 
     let fictional = production_callers("no_such_function_exists_anywhere", "NONE");
@@ -667,7 +886,10 @@ mod tests {
 
     // A name in a comment is not a call.
     assert!(
-        !is_call_site(&strip_comments("// see evaluate_announce() for the policy"), "evaluate_announce"),
+        !is_call_site(
+            &strip_comments("// see evaluate_announce() for the policy"),
+            "evaluate_announce"
+        ),
         "a function named in a comment counted as a caller"
     );
     assert!(

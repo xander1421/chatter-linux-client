@@ -1,0 +1,246 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { Materials } from "../theme/materials.slint";
+import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component RequestTabs inherits Flickable {
+    in-out property <string> requests-sub-tab;
+    in property <int> received-requests-count;
+    in property <int> sent-requests-count;
+    in property <int> private-requests-count;
+    in property <int> group-invites-count;
+    in property <int> channel-invites-count;
+    z: 1;
+    height: max(Spacing.touch-target-min, 36px * Appearance.text-grow);
+    viewport-width: request-tabs.preferred-width;
+    viewport-height: self.height;
+    // A partial trailing tab hints that this row scrolls horizontally.
+
+    // Keep the selected tab on screen: on a phone "Channels" sits past the
+    // right edge, so opening an invite left the visible tabs all unselected.
+    function reveal-active() {
+        let tab-x = root.requests-sub-tab == "sent" ? sent-tab.x
+            : root.requests-sub-tab == "private" ? priv-tab.x
+            : root.requests-sub-tab == "groups" ? grp-tab.x
+            : root.requests-sub-tab == "channels" ? chan-tab.x : recv-tab.x;
+        self.viewport-x = -max(0px, min(tab-x - (self.width - 104px * Appearance.text-grow) / 2, self.viewport-width - self.width));
+    }
+    init => { self.reveal-active(); }
+    changed requests-sub-tab => { self.reveal-active(); }
+
+    request-tabs := HorizontalLayout {
+        spacing: Spacing.xs;
+
+        recv-tab := Rectangle {
+
+            accessible-role: tab;
+
+            accessible-label: "Received (" + root.received-requests-count + ")";
+
+            accessible-item-selected: root.requests-sub-tab == "received";
+
+            accessible-action-default => { root.requests-sub-tab = "received"; }
+            KeyFocus { activate => { root.requests-sub-tab = "received"; } }
+            width: 104px * Appearance.text-grow;
+            background: recv-tab-touch.has-hover ? Materials.hover : transparent;
+
+            VerticalLayout {
+                HorizontalLayout {
+                    alignment: center;
+                    vertical-stretch: 1;
+
+                    Text {
+                        text: "Received (" + root.received-requests-count + ")";
+                        color: root.requests-sub-tab == "received" ? Colors.text-primary : Colors.text-secondary;
+                        font-size: Typography.xs;
+                        font-weight: root.requests-sub-tab == "received" ? Typography.semibold : Typography.normal;
+                    }
+                }
+
+                Rectangle {
+                    height: 2px;
+                    background: root.requests-sub-tab == "received" ? Colors.primary : transparent;
+                }
+            }
+
+            recv-tab-touch := TouchArea {
+                width: 100%;
+                height: 100%;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.requests-sub-tab = "received";
+                }
+            }
+        }
+
+        sent-tab := Rectangle {
+
+            accessible-role: tab;
+
+            accessible-label: "Sent (" + root.sent-requests-count + ")";
+
+            accessible-item-selected: root.requests-sub-tab == "sent";
+
+            accessible-action-default => { root.requests-sub-tab = "sent"; }
+            KeyFocus { activate => { root.requests-sub-tab = "sent"; } }
+            width: 88px * Appearance.text-grow;
+            background: sent-tab-touch.has-hover ? Materials.hover : transparent;
+
+            VerticalLayout {
+                HorizontalLayout {
+                    alignment: center;
+                    vertical-stretch: 1;
+
+                    Text {
+                        text: "Sent (" + root.sent-requests-count + ")";
+                        color: root.requests-sub-tab == "sent" ? Colors.text-primary : Colors.text-secondary;
+                        font-size: Typography.xs;
+                        font-weight: root.requests-sub-tab == "sent" ? Typography.semibold : Typography.normal;
+                    }
+                }
+
+                Rectangle {
+                    height: 2px;
+                    background: root.requests-sub-tab == "sent" ? Colors.primary : transparent;
+                }
+            }
+
+            sent-tab-touch := TouchArea {
+                width: 100%;
+                height: 100%;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.requests-sub-tab = "sent";
+                }
+            }
+        }
+
+        priv-tab := Rectangle {
+
+            accessible-role: tab;
+
+            accessible-label: "Private (" + root.private-requests-count + ")";
+
+            accessible-item-selected: root.requests-sub-tab == "private";
+
+            accessible-action-default => { root.requests-sub-tab = "private"; }
+            KeyFocus { activate => { root.requests-sub-tab = "private"; } }
+            width: 96px * Appearance.text-grow;
+            background: priv-tab-touch.has-hover ? Materials.hover : transparent;
+
+            VerticalLayout {
+                HorizontalLayout {
+                    alignment: center;
+                    vertical-stretch: 1;
+
+                    Text {
+                        text: "Private (" + root.private-requests-count + ")";
+                        color: root.requests-sub-tab == "private" ? Colors.text-primary : Colors.text-secondary;
+                        font-size: Typography.xs;
+                        font-weight: root.requests-sub-tab == "private" ? Typography.semibold : Typography.normal;
+                    }
+                }
+
+                Rectangle {
+                    height: 2px;
+                    background: root.requests-sub-tab == "private" ? Colors.primary : transparent;
+                }
+            }
+
+            priv-tab-touch := TouchArea {
+                width: 100%;
+                height: 100%;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.requests-sub-tab = "private";
+                }
+            }
+        }
+
+        grp-tab := Rectangle {
+
+            accessible-role: tab;
+
+            accessible-label: "Groups (" + root.group-invites-count + ")";
+
+            accessible-item-selected: root.requests-sub-tab == "groups";
+
+            accessible-action-default => { root.requests-sub-tab = "groups"; }
+            KeyFocus { activate => { root.requests-sub-tab = "groups"; } }
+            width: 96px * Appearance.text-grow;
+            background: groups-tab-touch.has-hover ? Materials.hover : transparent;
+
+            VerticalLayout {
+                HorizontalLayout {
+                    alignment: center;
+                    vertical-stretch: 1;
+
+                    Text {
+                        text: "Groups (" + root.group-invites-count + ")";
+                        color: root.requests-sub-tab == "groups" ? Colors.text-primary : Colors.text-secondary;
+                        font-size: Typography.xs;
+                        font-weight: root.requests-sub-tab == "groups" ? Typography.semibold : Typography.normal;
+                    }
+                }
+
+                Rectangle {
+                    height: 2px;
+                    background: root.requests-sub-tab == "groups" ? Colors.primary : transparent;
+                }
+            }
+
+            groups-tab-touch := TouchArea {
+                width: 100%;
+                height: 100%;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.requests-sub-tab = "groups";
+                }
+            }
+        }
+
+        chan-tab := Rectangle {
+
+            accessible-role: tab;
+
+            accessible-label: "Channels (" + root.channel-invites-count + ")";
+
+            accessible-item-selected: root.requests-sub-tab == "channels";
+
+            accessible-action-default => { root.requests-sub-tab = "channels"; }
+            KeyFocus { activate => { root.requests-sub-tab = "channels"; } }
+            width: 112px * Appearance.text-grow;
+            background: channels-tab-touch.has-hover ? Materials.hover : transparent;
+
+            VerticalLayout {
+                HorizontalLayout {
+                    alignment: center;
+                    vertical-stretch: 1;
+
+                    Text {
+                        text: "Channels (" + root.channel-invites-count + ")";
+                        color: root.requests-sub-tab == "channels" ? Colors.text-primary : Colors.text-secondary;
+                        font-size: Typography.xs;
+                        font-weight: root.requests-sub-tab == "channels" ? Typography.semibold : Typography.normal;
+                    }
+                }
+
+                Rectangle {
+                    height: 2px;
+                    background: root.requests-sub-tab == "channels" ? Colors.primary : transparent;
+                }
+            }
+
+            channels-tab-touch := TouchArea {
+                width: 100%;
+                height: 100%;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.requests-sub-tab = "channels";
+                }
+            }
+        }
+    }
+}

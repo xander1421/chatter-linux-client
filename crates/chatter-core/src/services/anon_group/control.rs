@@ -1,11 +1,22 @@
 //! Blocking, muting, and rate limiting for anonymous groups.
 
-use crate::domain::anon_group::{AnonGroupId, AnonGroupStatus};
 use crate::domain::UserId;
+use crate::domain::anon_group::{AnonGroupId, AnonGroupStatus};
 
 use super::{AnonGroupError, AnonGroupService};
 
 impl AnonGroupService {
+    fn check_group_not_removed(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
+        let group = self
+            .anon_group_repo
+            .get_group(group_id)?
+            .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
+        if group.status == AnonGroupStatus::Removed {
+            return Err(AnonGroupError::GroupBlocked(*group_id));
+        }
+        Ok(())
+    }
+
     /// Default rate limit: 60 messages per minute per group.
     const RATE_LIMIT_MESSAGES: u32 = 60;
     /// Default rate limit window: 1 minute.
@@ -13,33 +24,38 @@ impl AnonGroupService {
 
     /// Block a group (ignore all messages, stop polling mailbox).
     pub fn block_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
+        self.check_group_not_removed(group_id)?;
         self.anon_group_repo
             .update_status(group_id, AnonGroupStatus::Blocked)?;
-        tracing::info!("Blocked group {}", group_id);
+        self.held_posts.forget(group_id);
+        tracing::info!("Blocked group");
         Ok(())
     }
 
     /// Unblock a group (resume normal operation).
     pub fn unblock_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
+        self.check_group_not_removed(group_id)?;
         self.anon_group_repo
             .update_status(group_id, AnonGroupStatus::Active)?;
-        tracing::info!("Unblocked group {}", group_id);
+        tracing::info!("Unblocked group");
         Ok(())
     }
 
     /// Mute a group (receive messages but no notifications).
     pub fn mute_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
+        self.check_group_not_removed(group_id)?;
         self.anon_group_repo
             .update_status(group_id, AnonGroupStatus::Muted)?;
-        tracing::info!("Muted group {}", group_id);
+        tracing::info!("Muted group");
         Ok(())
     }
 
     /// Unmute a group (resume notifications).
     pub fn unmute_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
+        self.check_group_not_removed(group_id)?;
         self.anon_group_repo
             .update_status(group_id, AnonGroupStatus::Active)?;
-        tracing::info!("Unmuted group {}", group_id);
+        tracing::info!("Unmuted group");
         Ok(())
     }
 
@@ -65,7 +81,7 @@ impl AnonGroupService {
             .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
 
         self.anon_group_repo.block_user(group_id, user_id, reason)?;
-        tracing::info!("Blocked user {} in group {}", user_id, group_id);
+        tracing::info!("Blocked user in group");
         Ok(())
     }
 
@@ -76,7 +92,7 @@ impl AnonGroupService {
         user_id: &UserId,
     ) -> Result<(), AnonGroupError> {
         self.anon_group_repo.unblock_user(group_id, user_id)?;
-        tracing::info!("Unblocked user {} in group {}", user_id, group_id);
+        tracing::info!("Unblocked user in group");
         Ok(())
     }
 
@@ -104,8 +120,7 @@ impl AnonGroupService {
 
         if count > Self::RATE_LIMIT_MESSAGES {
             tracing::warn!(
-                "Rate limit exceeded for group {}: {} messages in window",
-                group_id,
+                "Rate limit exceeded for group: {} messages in window",
                 count
             );
             return Err(AnonGroupError::RateLimitExceeded(Self::RATE_LIMIT_MESSAGES));
@@ -121,7 +136,7 @@ impl AnonGroupService {
             .get_group(group_id)?
             .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
 
-        if group.is_blocked() {
+        if !group.status.can_send() {
             return Err(AnonGroupError::GroupBlocked(*group_id));
         }
 

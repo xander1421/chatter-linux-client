@@ -1,0 +1,21 @@
+[package]
+name = "h3-quinn-cancellation-regression"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Isolate certificate-generation dependencies from the production workspace.
+[workspace]
+
+[dependencies]
+bytes = "1"
+h3-quinn = { path = ".." }
+h3 = "=0.0.8"
+futures = "0.3"
+h3-util = "=0.0.6"
+http = "1"
+hyper = { version = "1", default-features = false }
+quinn = { version = "=0.11.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rcgen = "=0.13.2"
+rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std"] }
+tokio = { version = "1", features = ["macros", "rt", "time", "sync"] }

@@ -11,8 +11,8 @@
 //! - A's second message should be queued (bootstrap already in progress)
 //! - After bootstrap completes, queued messages should be deliverable
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use chatter_core::domain::UserId;
@@ -41,10 +41,16 @@ fn test_sesame_initiator_determination() {
     let b_initiates_to_a = user_b.as_uuid() < user_a.as_uuid();
 
     assert!(a_initiates_to_b, "User A (lower UUID) should initiate to B");
-    assert!(!b_initiates_to_a, "User B (higher UUID) should NOT initiate to A");
+    assert!(
+        !b_initiates_to_a,
+        "User B (higher UUID) should NOT initiate to A"
+    );
 
     // They can't both be initiators - exactly one must be
-    assert!(a_initiates_to_b != b_initiates_to_a, "Exactly one should be initiator");
+    assert!(
+        a_initiates_to_b != b_initiates_to_a,
+        "Exactly one should be initiator"
+    );
 }
 
 /// Test: A starts bootstrap to B, B tries to send while bootstrap in progress.
@@ -160,7 +166,10 @@ async fn test_b_sends_while_a_bootstrap_in_progress() {
     assert_eq!(a_bootstraps, 1, "A should initiate exactly 1 bootstrap");
 
     // B should NOT initiate any bootstrap (B is higher UUID)
-    assert_eq!(b_bootstraps, 0, "B should NOT initiate bootstrap (higher UUID)");
+    assert_eq!(
+        b_bootstraps, 0,
+        "B should NOT initiate bootstrap (higher UUID)"
+    );
 
     // B should queue their message
     assert_eq!(b_queued, 1, "B should queue their message");
@@ -373,7 +382,10 @@ async fn test_full_race_scenario_a_bootstrap_b_sends_a_sends() {
 
     // Assertions
     assert_eq!(a_bootstraps, 1, "A should initiate exactly 1 bootstrap");
-    assert_eq!(b_bootstraps, 0, "B should NOT initiate bootstrap (higher UUID)");
+    assert_eq!(
+        b_bootstraps, 0,
+        "B should NOT initiate bootstrap (higher UUID)"
+    );
     assert_eq!(a_total_messages, 2, "A sent 2 messages");
     assert_eq!(b_total_messages, 1, "B sent 1 message");
     assert_eq!(a_queued_count, 1, "A's second message should be queued");

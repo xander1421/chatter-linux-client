@@ -53,7 +53,11 @@ fn split_system(messages: &[ChatMessage]) -> (Option<String>, Vec<ChatTurn>) {
         }
     }
 
-    let system = if system.is_empty() { None } else { Some(system.join("\n\n")) };
+    let system = if system.is_empty() {
+        None
+    } else {
+        Some(system.join("\n\n"))
+    };
     (system, turns)
 }
 
@@ -90,7 +94,8 @@ impl LocalAIBackend for BrokerBackend {
                 // outage — surface it so the UI can say "top up" rather than
                 // "something went wrong".
                 let msg = e.to_string();
-                if msg.contains("resource_exhausted") || msg.contains("insufficient token balance") {
+                if msg.contains("resource_exhausted") || msg.contains("insufficient token balance")
+                {
                     BackendError::Unavailable(format!("out of tokens: {msg}"))
                 } else {
                     BackendError::InferenceFailed(msg)
@@ -98,7 +103,9 @@ impl LocalAIBackend for BrokerBackend {
             })?;
 
         if resp.content.is_empty() {
-            return Err(BackendError::InvalidResponse("broker returned no content".into()));
+            return Err(BackendError::InvalidResponse(
+                "broker returned no content".into(),
+            ));
         }
 
         Ok(ChatResponse {
@@ -153,7 +160,10 @@ mod tests {
     use super::*;
 
     fn msg(role: ChatRole, content: &str) -> ChatMessage {
-        ChatMessage { role, content: content.to_string() }
+        ChatMessage {
+            role,
+            content: content.to_string(),
+        }
     }
 
     #[test]
@@ -191,7 +201,11 @@ mod tests {
         ];
         let (_, turns) = split_system(&messages);
         for t in &turns {
-            assert!(t.role == "user" || t.role == "assistant", "bad role {:?}", t.role);
+            assert!(
+                t.role == "user" || t.role == "assistant",
+                "bad role {:?}",
+                t.role
+            );
         }
     }
 }

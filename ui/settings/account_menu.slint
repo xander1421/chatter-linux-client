@@ -1,0 +1,276 @@
+import { ScrollView } from "std-widgets.slint";
+// AccountMenu — the Profile tab (owner decision 2026-09-26).
+//
+// The Profile tab groups account destinations below the signed-in identity.
+// Settings is reached from here, not from the tab bar. On a two-pane layout
+// the sidebar's avatar and gear open the compact version as a card.
+//
+// Presentation only: every row fires a callback and app.slint routes it.
+
+import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Modal } from "../components/modal.slint";
+import { Avatar } from "../components/avatar.slint";
+import { Toggle } from "../components/toggle.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+import { Materials } from "../theme/materials.slint";
+import { Elevation } from "../theme/elevation.slint";
+
+export component MenuRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> destructive: false;
+    callback clicked();
+
+    height: Spacing.list-row-height-touch;
+    background: touch.pressed ? Materials.pressed
+        : touch.has-hover ? Colors.surface-hover : transparent;
+    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    row-content := HorizontalLayout {
+        y: touch.pressed ? Spacing.xxs : 0px;
+        animate y { duration: Materials.motion-quick; easing: Materials.spring; }
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.lg;
+        VerticalLayout { alignment: center; horizontal-stretch: 0;
+            Image { source: root.icon; width: 24px; height: 24px; colorize: root.destructive ? Colors.danger : Colors.text-secondary; }
+        }
+        Text {
+            text: root.label;
+            color: root.destructive ? Colors.danger : Colors.text-primary;
+            font-size: Typography.base;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        @children
+    }
+
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    if keys.has-focus: Rectangle {
+        border-width: Spacing.stroke;
+        border-color: Colors.focus-ring;
+        border-radius: Spacing.radius-md;
+    }
+}
+
+component MenuDivider inherits Rectangle {
+    height: 1px;
+    Rectangle {
+        x: Spacing.md + 24px + Spacing.lg;
+        width: parent.width - self.x - Spacing.md;
+        height: 1px;
+        background: Colors.divider;
+    }
+}
+
+export component AccountMenu inherits Rectangle {
+    in property <bool> show-modal: false;
+    in property <bool> mobile-mode: false;
+    in property <bool> root-screen: false;
+    in property <length> bottom-inset: 0px;
+    in property <string> display-name: "";
+    in property <string> username: "";
+    in property <image> avatar;
+    in property <string> initials: "";
+
+    callback close();
+    callback my-profile();
+    callback saved-messages();
+    callback new-channel();
+    callback settings();
+    callback notifications();
+
+    function toggle-night() {
+        Appearance.theme = Appearance.dark ? "light" : "dark";
+        Appearance.theme-changed(Appearance.theme);
+    }
+
+    account-modal := Modal {
+        floating-content: root.mobile-mode;
+        show: root.show-modal;
+        title: "Profile";
+        modal-width: 360px;
+        max-modal-height: 640px;
+        full-screen: root.mobile-mode;
+        root-screen: root.root-screen;
+        bottom-inset: root.bottom-inset;
+        fill-height: root.mobile-mode;
+
+        close => { root.close(); }
+
+        menu-body := Rectangle {
+            preferred-height: menu.preferred-height;
+            property <length> chrome-inset: account-modal.content-top-inset;
+            ScrollView {
+                x: 0;
+                y: root.mobile-mode ? -menu-body.chrome-inset : 0px;
+                width: parent.width;
+                height: root.mobile-mode ? root.height : parent.height;
+                mouse-drag-pan-enabled: true;
+                viewport-width: self.width;
+                viewport-height: menu.preferred-height;
+
+                menu := VerticalLayout {
+                    width: parent.width;
+                    padding-top: root.mobile-mode ? menu-body.chrome-inset : Spacing.none;
+                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
+                    padding-left: root.mobile-mode ? Spacing.md : Spacing.none;
+                    padding-right: root.mobile-mode ? Spacing.md : Spacing.none;
+                    spacing: root.mobile-mode ? Spacing.lg : Spacing.sm;
+                    alignment: start;
+
+                    if root.mobile-mode: VerticalLayout {
+                        spacing: Spacing.sm;
+                        padding-top: Spacing.lg;
+                        padding-bottom: Spacing.md;
+                        HorizontalLayout {
+                            alignment: center;
+                            Avatar { size: 88px; source: root.avatar; fallback-text: root.initials; name: root.display-name; }
+                        }
+                        Text {
+                            width: max(0px, root.width - 2 * Spacing.lg - 2 * Spacing.md);
+                            text: root.display-name;
+                            color: Colors.text-primary;
+                            font-size: Typography.xl;
+                            font-weight: Typography.semibold;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                        if root.username != "": Text {
+                            width: max(0px, root.width - 2 * Spacing.lg - 2 * Spacing.md);
+                            text: "@" + root.username;
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                    if !root.mobile-mode: VerticalLayout {
+                        padding-left: Spacing.md;
+                        padding-right: Spacing.md;
+                        padding-bottom: Spacing.md;
+                        spacing: Spacing.sm;
+                        Avatar { size: 64px; source: root.avatar; fallback-text: root.initials; name: root.display-name; }
+                        Text {
+                            text: root.display-name;
+                            color: Colors.text-primary;
+                            font-size: Typography.lg;
+                            font-weight: Typography.semibold;
+                            overflow: elide;
+                        }
+                        if root.username != "": Text {
+                            text: "@" + root.username;
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            overflow: elide;
+                        }
+                    }
+                    Rectangle {
+                        height: profile-group.preferred-height;
+                        background: root.mobile-mode ? Colors.surface-section : transparent;
+                        border-radius: root.mobile-mode ? Spacing.radius-lg : 0px;
+                        drop-shadow-blur: root.mobile-mode ? Elevation.card-blur : 0px;
+                        drop-shadow-offset-y: root.mobile-mode ? Elevation.card-offset : 0px;
+                        drop-shadow-color: Elevation.card-shadow;
+                        border-width: root.mobile-mode ? Elevation.rim-width : 0px;
+                        border-color: Elevation.card-rim;
+                        profile-group := VerticalLayout {
+                            MenuRow { icon: Icons.user; label: "My profile"; clicked => { root.my-profile(); } }
+                            // Shield mode has no Saved Messages or channels.
+                            if !AnonMode.enabled: MenuDivider { }
+                            if !AnonMode.enabled: MenuRow { icon: Icons.bookmark; label: "Saved messages"; clicked => { root.saved-messages(); } }
+                        }
+                    }
+                    Rectangle {
+                        height: activity-group.preferred-height;
+                        background: root.mobile-mode ? Colors.surface-section : transparent;
+                        border-radius: root.mobile-mode ? Spacing.radius-lg : 0px;
+                        drop-shadow-blur: root.mobile-mode ? Elevation.card-blur : 0px;
+                        drop-shadow-offset-y: root.mobile-mode ? Elevation.card-offset : 0px;
+                        drop-shadow-color: Elevation.card-shadow;
+                        border-width: root.mobile-mode ? Elevation.rim-width : 0px;
+                        border-color: Elevation.card-rim;
+                        activity-group := VerticalLayout {
+                            if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: "New channel"; clicked => { root.new-channel(); } }
+                            if !AnonMode.enabled: MenuDivider { }
+                            MenuRow { icon: Icons.bell; label: "Notification inbox"; clicked => { root.notifications(); } }
+                        }
+                    }
+                    Rectangle {
+                        height: settings-group.preferred-height;
+                        background: root.mobile-mode ? Colors.surface-section : transparent;
+                        border-radius: root.mobile-mode ? Spacing.radius-lg : 0px;
+                        drop-shadow-blur: root.mobile-mode ? Elevation.card-blur : 0px;
+                        drop-shadow-offset-y: root.mobile-mode ? Elevation.card-offset : 0px;
+                        drop-shadow-color: Elevation.card-shadow;
+                        border-width: root.mobile-mode ? Elevation.rim-width : 0px;
+                        border-color: Elevation.card-rim;
+                        settings-group := VerticalLayout {
+                            MenuRow { icon: Icons.settings; label: "Settings"; clicked => { root.settings(); } }
+                            MenuDivider { }
+                            // The switch reflects the active palette; the row handles taps
+                            // so the Toggle's checked binding stays attached to it.
+                            Rectangle {
+                                height: Spacing.list-row-height-touch;
+                                accessible-role: switch;
+                                accessible-label: "Night mode";
+                                accessible-checkable: true;
+                                accessible-checked: Appearance.dark;
+                                accessible-action-default => { root.toggle-night(); }
+                                background: night-touch.pressed ? Materials.pressed
+                                    : night-touch.has-hover ? Colors.surface-hover : transparent;
+                                animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                                HorizontalLayout {
+                                    padding-left: Spacing.md;
+                                    padding-right: Spacing.md;
+                                    spacing: Spacing.lg;
+                                    VerticalLayout { alignment: center; horizontal-stretch: 0;
+                                        Image { source: Icons.moon; width: 24px; height: 24px; colorize: Colors.text-secondary; }
+                                    }
+                                    Text {
+                                        text: "Night mode";
+                                        // The row's own label says it.
+                                        accessible-role: none;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.base;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                    VerticalLayout { alignment: center; horizontal-stretch: 0;
+                                        // The row is the switch; a second, unnamed one
+                                        // sat inside it for TalkBack.
+                                        Toggle { checked: Appearance.dark; accessible-role: none; }
+                                    }
+                                }
+                                night-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.toggle-night(); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

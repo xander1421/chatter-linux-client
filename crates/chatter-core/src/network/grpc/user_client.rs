@@ -1,27 +1,25 @@
 //! User gRPC client.
 //!
 //! Client for user service operations including profile management,
-//! presence, friends, blocking, and channel navigation.
+//! presence, friends, and blocking.
 
+use crate::network::grpc::transport::GrpcTransport;
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    friend_requests_filter, user_service_client::UserServiceClient, BlockUserRequest,
-    ClearNavigationHistoryRequest, FriendRequest, FriendRequestsFilter, FriendResponse,
-    FriendStatus, GetNavigationHistoryRequest, GetNavigationHistoryResponse,
-    DeleteUsernameLinkRequest, GetUserProfileRequest, GetUsernameLinkRequest,
-    GetUsernameLinkResponse, ListBlockedUsersRequest, ListBlockedUsersResponse,
-    ListFriendRequestsRequest, ListFriendRequestsResponse, ListFriendsRequest, ListFriendsResponse,
-    LookupUsernameRequest, LookupUsernameResponse, PinChannelRequest, PinChannelResponse,
-    RemoveFriendRequest, ReorderPinnedChannelsRequest, SetUsernameLinkRequest,
-    SetUsernameLinkResponse,
-    TrackChannelVisitRequest, UnblockUserRequest, UnpinChannelRequest, UnpinChannelResponse,
-    UpdatePresenceRequest, UpdateUserProfileRequest, UserEvent, UserEventRequest, UserPresence,
-    UserProfile,
+    BlockUserRequest, DeleteUsernameLinkRequest, FriendRequest, FriendRequestsFilter,
+    FriendResponse, FriendStatus, GetUserProfileRequest, GetUsernameDiscoverabilityRequest,
+    GetUsernameDiscoverabilityResponse, GetUsernameLinkRequest, GetUsernameLinkResponse,
+    ListBlockedUsersRequest, ListBlockedUsersResponse, ListFriendRequestsRequest,
+    ListFriendRequestsResponse, ListFriendsRequest, ListFriendsResponse, LookupUsernameRequest,
+    LookupUsernameResponse, RemoveFriendRequest, SetUsernameDiscoverabilityRequest,
+    SetUsernameDiscoverabilityResponse, SetUsernameLinkRequest, SetUsernameLinkResponse,
+    UnblockUserRequest, UpdatePresenceRequest, UpdateUserProfileRequest, UserEvent,
+    UserEventRequest, UserPresence, UserProfile, friend_requests_filter,
+    user_service_client::UserServiceClient,
 };
 
 /// User service client wrapper.
@@ -67,15 +65,16 @@ impl UserClient {
     /// Update current user's profile (streaming response).
     ///
     /// Returns stream of UserEvent with update progress.
-    /// Uses FieldMask to specify which fields to update.
+    /// Only the fields in `update_mask` are written; there is deliberately no
+    /// maskless (whole-profile) form.
     pub async fn update_user_profile(
         &mut self,
         profile: UserProfile,
-        update_mask: Option<prost_types::FieldMask>,
+        update_mask: prost_types::FieldMask,
     ) -> Result<impl Stream<Item = Result<UserEvent, NetworkError>>, NetworkError> {
         let request = UpdateUserProfileRequest {
             profile: Some(profile),
-            update_mask,
+            update_mask: Some(update_mask),
             request_id: uuid::Uuid::new_v4().to_string(),
         };
 
@@ -112,6 +111,35 @@ impl UserClient {
         }
     }
 
+    /// Read the caller's "Who can find me by my username" setting from the
+    /// server (user_profiles.username_discoverable). `true` = Everyone,
+    /// `false` = Nobody.
+    pub async fn get_username_discoverability(&mut self) -> Result<bool, NetworkError> {
+        let GetUsernameDiscoverabilityResponse { discoverable } = self
+            .inner
+            .get_username_discoverability(GetUsernameDiscoverabilityRequest {})
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))?;
+        Ok(discoverable)
+    }
+
+    /// Set the caller's "Who can find me by my username" setting on the
+    /// server. With `false` the server's LookupUsername answers "no match"
+    /// for this account to everyone else. Returns the persisted value.
+    pub async fn set_username_discoverability(
+        &mut self,
+        discoverable: bool,
+    ) -> Result<bool, NetworkError> {
+        let SetUsernameDiscoverabilityResponse { discoverable } = self
+            .inner
+            .set_username_discoverability(SetUsernameDiscoverabilityRequest { discoverable })
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))?;
+        Ok(discoverable)
+    }
+
     // ==================== Username-link RPCs ====================
 
     /// Upload (or rotate) the caller's username-link ciphertext blob. Returns
@@ -131,19 +159,23 @@ impl UserClient {
         Ok(link_id)
     }
 
-    /// Fetch the ciphertext blob stored under a link id. `Ok(None)` when the
-    /// link doesn't exist (deleted or rotated away).
+    /// Fetch the ciphertext blob stored under a link id, with the link
+    /// owner's user id. `Ok(None)` when the link doesn't exist (deleted or
+    /// rotated away).
     pub async fn get_username_link(
         &mut self,
         link_id: &str,
-    ) -> Result<Option<Vec<u8>>, NetworkError> {
+    ) -> Result<Option<(String, Vec<u8>)>, NetworkError> {
         let request = GetUsernameLinkRequest {
             link_id: link_id.to_string(),
         };
         match self.inner.get_username_link(request).await {
             Ok(r) => {
-                let GetUsernameLinkResponse { encrypted_username } = r.into_inner();
-                Ok(Some(encrypted_username))
+                let GetUsernameLinkResponse {
+                    encrypted_username,
+                    user_id,
+                } = r.into_inner();
+                Ok(Some((user_id, encrypted_username)))
             }
             Err(s) if s.code() == tonic::Code::NotFound => Ok(None),
             Err(s) => Err(NetworkError::from_status(&s)),
@@ -276,11 +308,16 @@ impl UserClient {
             }),
         };
 
-        self.inner
+        let mut response = self.inner
             .list_friend_requests(request)
             .await
             .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
+            .map_err(|s| NetworkError::from_status(&s))?;
+        // Keep existing rows in place when a newer request arrives.
+        response.requests.sort_by(|a, b| {
+            a.added_at.cmp(&b.added_at).then_with(|| a.user_id.cmp(&b.user_id))
+        });
+        Ok(response)
     }
 
     // ==================== Blocking RPCs ====================
@@ -369,128 +406,6 @@ impl UserClient {
             .into_inner()
             .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
     }
-
-    // ==================== Channel Navigation History ====================
-
-    /// Track a channel visit for navigation history.
-    pub async fn track_channel_visit(&mut self, channel_id: &str) -> Result<(), NetworkError> {
-        let request = TrackChannelVisitRequest {
-            channel_id: channel_id.to_string(),
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
-
-        self.inner
-            .track_channel_visit(request)
-            .await
-            .map(|_| ())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Get recent channel navigation history.
-    ///
-    /// # Arguments
-    ///
-    /// * `limit` - Max channels to return (default: 50)
-    /// * `include_pinned` - Include pinned channels (default: true)
-    /// * `only_pinned` - Only return pinned channels
-    pub async fn get_navigation_history(
-        &mut self,
-        limit: i32,
-        include_pinned: bool,
-        only_pinned: bool,
-    ) -> Result<GetNavigationHistoryResponse, NetworkError> {
-        let request = GetNavigationHistoryRequest {
-            limit,
-            include_pinned,
-            only_pinned,
-        };
-
-        self.inner
-            .get_navigation_history(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Clear navigation history.
-    ///
-    /// # Arguments
-    ///
-    /// * `keep_pinned` - Keep pinned channels (default: true)
-    pub async fn clear_navigation_history(&mut self, keep_pinned: bool) -> Result<(), NetworkError> {
-        let request = ClearNavigationHistoryRequest {
-            keep_pinned,
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
-
-        self.inner
-            .clear_navigation_history(request)
-            .await
-            .map(|_| ())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Pin a channel.
-    ///
-    /// # Arguments
-    ///
-    /// * `channel_id` - Channel to pin
-    /// * `position` - Optional position (0-based), defaults to end
-    pub async fn pin_channel(
-        &mut self,
-        channel_id: &str,
-        position: i32,
-    ) -> Result<PinChannelResponse, NetworkError> {
-        let request = PinChannelRequest {
-            channel_id: channel_id.to_string(),
-            position,
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
-
-        self.inner
-            .pin_channel(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Unpin a channel.
-    pub async fn unpin_channel(
-        &mut self,
-        channel_id: &str,
-    ) -> Result<UnpinChannelResponse, NetworkError> {
-        let request = UnpinChannelRequest {
-            channel_id: channel_id.to_string(),
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
-
-        self.inner
-            .unpin_channel(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Reorder pinned channels.
-    ///
-    /// # Arguments
-    ///
-    /// * `channel_ids` - Channel IDs in desired order
-    pub async fn reorder_pinned_channels(
-        &mut self,
-        channel_ids: Vec<String>,
-    ) -> Result<(), NetworkError> {
-        let request = ReorderPinnedChannelsRequest {
-            channel_ids,
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
-
-        self.inner
-            .reorder_pinned_channels(request)
-            .await
-            .map(|_| ())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
 }
 
 #[cfg(test)]
@@ -553,7 +468,6 @@ mod tests {
             encrypted_name: Vec::new(),
             encrypted_about: Vec::new(),
             encrypted_avatar: Vec::new(),
-            profile_key_version: String::new(),
         };
 
         assert_eq!(profile.user_id, "user-123");

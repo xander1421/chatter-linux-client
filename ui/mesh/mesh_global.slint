@@ -8,65 +8,114 @@
 // `chatter-core` produced. No mesh surface derives state of its own: the view
 // picks wording, never facts.
 
-// One row in the mesh section of the sidebar.
+// One row in the Mesh destination.
 //
 // Mirrors the Rust `MeshRow` in `bin_ui/features/mesh/core_api.rs`.
 export struct MeshConversationData {
     // Stable conversation id (the `ChannelId` core derived for this scope).
     // This is the key handed back on selection.
     id: string,
-    // "room" | "geohash" | "dm". Decides the glyph and the wording; the UI
+    // "room" | "geohash" | "channel" | "private-channel" | "dm".
     // never sniffs the id to work this out.
     kind: string,
     // Display title: "Mesh room", "#u4pruy", or a peer's nickname.
     title: string,
-    // The scope published alongside every message: the geohash cell for
-    // "geohash", the peer id for "dm", empty for the room. Shown verbatim so
-    // the user always knows what they are speaking into.
+    // Core's local scope identifier; private channel ids are never broadcast.
     scope: string,
     timestamp: string,
     unread-count: int,
     // DM rows only: a transport can carry to this peer right now. False does
     // not mean the message is lost — it means it waits for a carrier.
     reachable: bool,
-    // DM rows only: the peer's announce signature verified. Nicknames on
-    // public traffic are unauthenticated and never set this.
+    // Reserved for a future private account-binding proof.
     verified: bool,
+    muted: bool,
+    blocked: bool,
+    // Account verification is separate from a signed mesh nickname.
+    binding-label: string,
     is-selected: bool,
+}
+
+export struct MeshPeerData {
+    id: string,
+    name: string,
+    reachable: bool,
+    binding-label: string,
+    member: bool,
+}
+
+export struct PrivateChannelMemberData {
+    peer-id: string,
+    display-name: string,
+    status-label: string,
+}
+
+export struct PrivateChannelInviteData {
+    id: string,
+    name: string,
 }
 
 export global MeshGlobal {
     // The `mesh` Cargo feature is built in. Everything mesh hangs off this.
     in-out property <bool> enabled: false;
+    in-out property <int> unread-count: 0;
 
     // The user's own switch, distinct from `enabled` above and from `running`
     // below. `enabled` is what was compiled; this is what was asked for.
     //
-    // Turning it off stops the radio and leaves everything else alone: past mesh
-    // conversations stay listed and readable, because they are messages the user
-    // received and switching a transport off is not a reason to hide them. The
-    // context bar already has wording for a mesh with no radio, so the off state
-    // needs no new surface — it says "Bluetooth off", which is now true because
-    // the user turned it off.
-    in-out property <bool> mesh-on: true;
+    // Turning it off stops the radio but keeps past conversations readable.
+    in-out property <bool> mesh-on: false;
+    in-out property <string> nickname: "anon";
+    callback set-nickname(string);
+    in-out property <[string]> nearby-channels: [];
+    in-out property <[MeshPeerData]> nearby-peers: [];
+    callback open-peer(string);
+    callback open-setup();
+    // Present a mesh sheet ("mesh-compose", "mesh-info") from surfaces that
+    // cannot import ModalHostState without an import cycle.
+    callback open-sheet(string);
+    callback open-peer-dm(string);
+    in-out property <string> sheet-peer-id: "";
+    in-out property <string> sheet-peer-name: "";
+    in-out property <string> sheet-binding-label: "";
+    in-out property <string> sheet-fingerprint: "";
+    in-out property <string> sheet-comparison-code: "";
+    in-out property <bool> sheet-peer-blocked: false;
+    in-out property <bool> sheet-peer-muted: false;
+    callback toggle-peer-mute(string);
+    callback join-channel(string) -> bool;
+    callback leave-channel(string);
+    callback toggle-channel-mute(string);
+    callback toggle-peer-block(string);
+    callback create-private-channel(string) -> bool;
+    callback join-private-channel(string) -> bool;
+    callback open-private-scanner();
+    callback invite-private-channel(string, string);
+    callback invite-private-channel-direct(string, string);
+    callback decide-private-invitation(string, bool);
+    in-out property <string> pending-private-id: "";
+    in-out property <string> pending-private-name: "";
+    in-out property <string> pending-private-peer: "";
+    callback remove-private-member(string, string);
+    callback leave-private-channel(string);
+    in-out property <image> private-invite-image;
+    in-out property <bool> private-invite-visible: false;
+    in-out property <[PrivateChannelMemberData]> private-removable-members: [];
+    in-out property <[PrivateChannelInviteData]> private-invitable-channels: [];
+    in-out property <string> private-remove-pending: "";
+    in-out property <bool> private-leave-pending: false;
+    in-out property <bool> private-can-manage: false;
 
     // Set the switch. Persists the preference and starts or stops the radio.
     callback set-mesh-on(bool);
 
-    // Whether the context strip below the header is worth any vertical space.
-    //
-    // Derived here rather than inside the strip because the layout has to decide
-    // whether to create it at all, and Slint cannot ask an element that does not
-    // exist yet. The strip earns its room when what the user is about to do could
-    // surprise them — nothing in range, no route to the peer, the radio down, the
-    // mesh switched off, or a send that failed. A working mesh with peers in range
-    // needs no standing caveat: the header already says how many are there.
+    // Show the capsule only for a state the reader can act on or needs to see.
     out property <bool> context-strip-needed:
         MeshGlobal.notice != ""
         || !MeshGlobal.mesh-on
-        || !MeshGlobal.radio-running
+        || MeshGlobal.radio-down == "bluetooth-off"
         || (MeshGlobal.active-kind == "dm" && !MeshGlobal.active-reachable)
-        || (MeshGlobal.active-kind != "dm" && MeshGlobal.peer-count == 0);
+        || (MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-rekey-pending);
 
     // ── Transport, as reported by MeshService ──
     // The mesh service itself came up, so mesh conversations exist and can be
@@ -75,13 +124,16 @@ export global MeshGlobal {
     // the two transports it can go there over, and a mesh with neither still
     // keeps what you write for a carrier that has not arrived yet.
     //
-    // It is emphatically not a promise of delivery. What reaches anyone depends
-    // on who is in range, and the context bar above an open conversation is
-    // where that gets said.
+    // It is not a promise of delivery; reachability comes from the live rows.
     in-out property <bool> running: false;
     // The BLE radio is started. False on platforms with no radio, where the
     // mesh still runs over Nostr relays.
     in-out property <bool> radio-running: false;
+    // Why the radio is down, from core (`MeshStatus::radio_down`): "" while it
+    // runs, "bluetooth-off" when the adapter is unpowered, "unavailable" for
+    // anything else — the reason itself arrives in `notice`. Only
+    // "bluetooth-off" may be worded as Bluetooth being off.
+    in-out property <string> radio-down: "";
     // Peers the mesh can see right now. THE connectivity signal for this
     // feature — there is no connection dot, because there is no connection.
     in-out property <int> peer-count: 0;
@@ -93,17 +145,41 @@ export global MeshGlobal {
 
     // ── Sidebar ──
     in-out property <[MeshConversationData]> conversations: [];
+    // The same rows split by `kind` for the grouped Mesh home sections
+    // (Slint cannot filter a model). Written together with `conversations`.
+    in-out property <[MeshConversationData]> group-conversations: [];
+    in-out property <[MeshConversationData]> channel-conversations: [];
+    in-out property <[MeshConversationData]> dm-conversations: [];
 
     // ── The mesh conversation currently open (empty id = none) ──
     in-out property <string> active-id: "";
     in-out property <string> active-kind: "";
     in-out property <string> active-title: "";
     in-out property <string> active-scope: "";
+    in-out property <bool> private-rekey-pending: false;
+    in-out property <string> active-binding-label: "Mesh peer · self-asserted name";
+    // Kept for the Rust reset path while verification lives in the peer sheet.
+    in-out property <bool> identity-panel-open: false;
+    in-out property <string> active-protection-label: "Noise (bitchat)";
+    in-out property <bool> active-signal-enabled: false;
+    callback toggle-signal-mesh(string);
+    in-out property <string> active-comparison-code: "";
+    in-out property <image> binding-qr-image;
+    in-out property <bool> binding-qr-visible: false;
+    in-out property <bool> binding-scan-visible: false;
+    callback share-identity(string);
+    callback show-binding-qr(string);
+    callback scan-binding-qr(string, string);
+    callback verify-known-contact(string);
+    callback open-binding-scanner(string);
     in-out property <bool> active-reachable: false;
     in-out property <bool> active-verified: false;
 
     // ── Actions, handled in Rust ──
     callback conversation-selected(/* conversation id */ string);
-    callback join-geohash(/* cell */ string);
+    callback join-geohash(/* cell */ string) -> bool;
     callback leave-geohash(/* cell */ string);
+    // Destroy everything this device holds about the mesh (identity, mail,
+    // history). Not the chatter account — see `ChatterClient::mesh_panic_wipe`.
+    callback panic-wipe();
 }

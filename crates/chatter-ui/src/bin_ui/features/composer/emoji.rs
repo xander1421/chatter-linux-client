@@ -2,29 +2,40 @@
 //!
 //! Category changes, search, and selection are handled by `chat::emoji_loader`.
 
+use std::sync::Arc;
+
 use slint::ComponentHandle;
 
-use crate::bin_ui::features::chat::emoji_loader;
+use chatter_core::client::ChatterClient;
+
 use crate::MainWindow;
+use crate::bin_ui::features::chat::emoji_loader;
 
-pub(crate) fn wire_emoji_clicked(window: &MainWindow) {
+pub(crate) fn wire_emoji_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
 
-    window.on_emoji_clicked(move || {
-        let weak = weak_window.clone();
-        tracing::debug!("Emoji picker clicked");
+    // Only the composer's smiley button comes through here: it opens the
+    // drawer from closed (fresh picker state, both queries cleared) or closes
+    // it. The drawer's own Emoji/GIF tabs switch mode without touching this.
+    window
+        .global::<crate::ChatPane>()
+        .on_emoji_clicked(move || {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx.clone();
+            tracing::debug!("Emoji picker clicked");
 
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                // Visibility is handled by Slint ChatLayout.
-                // Load initial emoji list if opening
-                if w.get_composer_emoji_picker_visible() {
-                    let emojis = emoji_loader::get_emoji_list(0); // Category 0 = Smileys
-                    w.set_composer_emoji_list(slint::ModelRc::new(slint::VecModel::from(emojis)));
-                    w.set_composer_emoji_category(0);
-                    w.set_composer_emoji_search("".into());
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    // Visibility is handled by Slint ChatLayout.
+                    if w.global::<crate::ChatPane>()
+                        .get_composer_emoji_picker_visible()
+                    {
+                        emoji_loader::show_composer_picker_start(&w, &ui_ctx);
+                        w.global::<crate::ChatPane>()
+                            .set_composer_gif_picker_search("".into());
+                    }
                 }
-            }
+            });
         });
-    });
 }

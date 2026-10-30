@@ -3,8 +3,8 @@
 //! Events emitted by the inbox system for monitoring message flow
 //! and coordinating UI updates.
 
-use crate::domain::ids::ChannelId;
 use crate::domain::UserId;
+use crate::domain::ids::ChannelId;
 use crate::proto::content_v1::AttachmentPointer;
 use crate::proto::mailbox_v1::EnvelopeType;
 
@@ -53,8 +53,6 @@ pub enum InboxEvent {
     DmReceived {
         /// Peer user ID.
         peer_id: UserId,
-        /// DM channel ID (for reliable active-conversation matching).
-        channel_id: ChannelId,
         /// Decrypted message text.
         text: String,
         /// Server timestamp.
@@ -70,8 +68,8 @@ pub enum InboxEvent {
         peer_id: UserId,
         /// Error description.
         error: String,
-        /// Whether all sessions were tried (Sesame convergence failed).
-        convergence_failed: bool,
+        /// The session with this peer is desynced: reset it (archive, rebuild).
+        session_desync: bool,
     },
     /// A 1:1 inner decrypt failed (desynced session) and a
     /// `DecryptionErrorMessage` must be shipped back to the sender so their
@@ -86,19 +84,32 @@ pub enum InboxEvent {
         /// Serialized libsignal `DecryptionErrorMessage`.
         dem_serialized: Vec<u8>,
     },
+    /// A member could not decrypt a sender-key message WE sent and asked for
+    /// it again (`DecryptionErrorMessage` without a ratchet key). Handled by
+    /// `InboxEventProcessor` → `MessageService::resend_on_decryption_error`.
+    GroupResendRequested {
+        /// Authenticated member that failed to decrypt.
+        peer_id: UserId,
+        /// Their device that failed.
+        peer_device_id: u32,
+        /// Server timestamp of the failed message, epoch millis.
+        timestamp_ms: u64,
+    },
+    /// A friend's device could not decrypt a DM WE sent and asked for it again
+    /// (`DecryptionErrorMessage` with a ratchet key). Handled by
+    /// `InboxEventProcessor` → `MessageService::resend_dm_on_decryption_error`.
+    DmResendRequested {
+        /// Authenticated peer that failed to decrypt.
+        peer_id: UserId,
+        /// Their device that failed.
+        peer_device_id: u32,
+        /// Server timestamp of the failed envelope, epoch millis.
+        timestamp_ms: u64,
+    },
     /// DM mailbox poll completed.
     DmPollCompleted {
         /// Total messages received across all mailboxes.
         total_messages: u32,
-    },
-    /// DM unread count was updated.
-    DmUnreadCountUpdated {
-        /// DM channel ID.
-        channel_id: ChannelId,
-        /// Peer user ID.
-        peer_id: UserId,
-        /// New unread count.
-        unread_count: u32,
     },
     /// Typing indicator received.
     DmTyping {
@@ -106,6 +117,8 @@ pub enum InboxEvent {
         peer_id: UserId,
         /// Typing action: 1=Started, 2=Stopped.
         action: i32,
+        /// Sender's TypingMessage.timestamp (ns).
+        timestamp: u64,
     },
     /// Read/delivery receipt received.
     DmReceipt {
@@ -115,9 +128,16 @@ pub enum InboxEvent {
         receipt_type: i32,
         /// Message timestamps being acknowledged.
         timestamps: Vec<u64>,
+        /// Authenticated sender device, never a device claimed inside the receipt.
+        sender_device_id: u32,
     },
     /// Reaction received.
     DmReaction {
+        /// Transport conversation peer when the delivery path names one (DM
+        /// mailbox polling). `None` from `dispatch_control_content`, whose
+        /// envelope carries no peer; admission then takes the peer from the
+        /// target's encoded destination (own-device reactions) or the reactor.
+        conversation_peer_id: Option<UserId>,
         /// Peer user ID (who reacted).
         peer_id: UserId,
         /// Emoji.
@@ -128,6 +148,9 @@ pub enum InboxEvent {
         target_author_aci: String,
         /// Target message timestamp.
         target_sent_timestamp: u64,
+        /// When the action was made (its own `timestamp`, else the server's;
+        /// epoch nanos): orders actions held for a message not here yet.
+        timestamp: u64,
     },
     /// Pin/unpin received.
     DmPin {
@@ -139,6 +162,9 @@ pub enum InboxEvent {
         target_sent_timestamp: u64,
         /// True if unpinning.
         unpin: bool,
+        /// When the action was made (its own `timestamp`, else the server's;
+        /// epoch nanos): orders actions held for a message not here yet.
+        timestamp: u64,
     },
     /// Message edit received.
     DmEdit {
@@ -148,29 +174,33 @@ pub enum InboxEvent {
         target_sent_timestamp: u64,
         /// New message body.
         new_body: String,
+        /// The edit's own time (`EditMessage.data_message.timestamp`, epoch
+        /// nanos): orders edits and dates the bubble.
+        edit_timestamp: u64,
+        /// When the server received the edit (epoch nanos; 0 if unknown):
+        /// the 48h edit window is measured on it, as Signal does.
+        server_timestamp: u64,
     },
-    /// Delete for me sync received.
-    DmDeleteForMe {
-        /// Conversation ID.
-        conversation_id: String,
-        /// Target message author.
-        target_author_aci: String,
-        /// Target message timestamp.
-        target_sent_timestamp: u64,
-    },
-    /// Saved message synced from another device (Note to Self).
+    /// Snapshot of one Saved record (Note to Self) from another of our
+    /// devices: creation, edit or pin. `sender_id` is the sealed-sender
+    /// identity; only our own is accepted.
     SavedMessageSync {
-        /// Message ID (UUID, same across all devices).
-        message_id: String,
-        /// Message text.
-        text: String,
-        /// When the message was sent (nanoseconds since epoch).
-        sent_at: u64,
-        /// Attachment IDs.
-        attachment_ids: Vec<String>,
+        /// Sender (must be our own user).
+        sender_id: UserId,
+        /// The snapshot, applied whole by `MessageService::apply_saved_message_sync`.
+        sync: crate::proto::content_v1::SavedMessageSync,
+    },
+    /// Snapshot already durably applied before acknowledging its envelope.
+    SavedSnapshotApplied {
+        sender_id: UserId,
+        outcome: crate::services::message::SavedSyncOutcome,
     },
     /// Delete for everyone received (peer wants us to delete).
     DmDeleteForEveryone {
+        target_author_aci: Option<String>,
+        /// Encrypted self-device destination; accepted only when peer_id is us.
+        destination_user_id: Option<String>,
+        target_call_id: Option<String>,
         /// Peer user ID (who sent the delete request).
         peer_id: UserId,
         /// Target message timestamp.
@@ -202,6 +232,8 @@ pub enum InboxEvent {
         sender_id: UserId,
         /// Typing action: 1=Started, 2=Stopped.
         action: i32,
+        /// Sender's TypingMessage.timestamp (ns).
+        timestamp: u64,
     },
     /// Reaction received from channel member.
     ChannelReaction {
@@ -217,6 +249,9 @@ pub enum InboxEvent {
         target_author_aci: String,
         /// Target message timestamp.
         target_sent_timestamp: u64,
+        /// When the action was made (its own `timestamp`, else the server's;
+        /// epoch nanos): orders actions held for a message not here yet.
+        timestamp: u64,
     },
     /// Pin/unpin received from channel member.
     ChannelPin {
@@ -230,6 +265,24 @@ pub enum InboxEvent {
         target_sent_timestamp: u64,
         /// True if unpinning.
         unpin: bool,
+        /// When the action was made (its own `timestamp`, else the server's;
+        /// epoch nanos): orders actions held for a message not here yet.
+        timestamp: u64,
+    },
+    /// A channel call started or ended (`content_v1::CallEvent`).
+    ChannelCallEvent {
+        /// Channel ID.
+        channel_id: ChannelId,
+        /// Member who posted it (not yet checked against the roster).
+        sender_id: UserId,
+        /// The call's id as sent.
+        call_id: String,
+        /// Started or ended.
+        phase: crate::services::message::ChannelCallPhase,
+        /// Ended only: seconds the call ran.
+        duration_secs: u32,
+        /// Sender's timestamp, else the server's (epoch nanos).
+        timestamp: u64,
     },
     /// Message edit received from channel member.
     ChannelEdit {
@@ -241,6 +294,10 @@ pub enum InboxEvent {
         target_sent_timestamp: u64,
         /// New message body.
         new_body: String,
+        /// The edit's own time; see [`InboxEvent::DmEdit`].
+        edit_timestamp: u64,
+        /// When the server received the edit; see [`InboxEvent::DmEdit`].
+        server_timestamp: u64,
     },
     /// Delete for everyone received from channel member.
     ChannelDeleteForEveryone {
@@ -251,14 +308,36 @@ pub enum InboxEvent {
         /// Target message timestamp.
         target_sent_timestamp: u64,
     },
-    /// Delete for me sync received in channel context.
+    /// Messages read on another device (`ReadSync`). `sender_id` is the
+    /// sealed sender: only our own user may mark our messages read.
+    ReadSync {
+        sender_id: UserId,
+        sync: crate::proto::content_v1::ReadSync,
+    },
+    /// Our profile key and its visibility from another of our devices
+    /// (`ProfileKeySync`). Only our own user may send one.
+    ProfileKeySync {
+        sender_id: UserId,
+        sync: crate::proto::content_v1::ProfileKeySync,
+    },
+    /// Our privacy settings from another of our devices
+    /// (`ConfigurationSync`). Only our own user may send one.
+    ConfigurationSync {
+        sender_id: UserId,
+        sync: crate::proto::content_v1::ConfigurationSync,
+    },
+    /// Delete-for-me from another of our devices (DM or channel).
+    /// `sender_id` is the sealed sender: only our own user may send one.
     ChannelDeleteForMe {
+        sender_id: UserId,
         /// Conversation/channel ID.
         conversation_id: String,
         /// Target message author.
         target_author_aci: String,
         /// Target message timestamp.
         target_sent_timestamp: u64,
+        saved_message_id: String,
+        saved_messages_scope: bool,
     },
     /// Read/delivery receipt received from channel member.
     ChannelReceipt {
@@ -270,6 +349,14 @@ pub enum InboxEvent {
         receipt_type: i32,
         /// Message timestamps being acknowledged.
         timestamps: Vec<u64>,
+        /// Authenticated sender device, never a device claimed inside the receipt.
+        sender_device_id: u32,
+    },
+    /// A linked device received the original channel receipt targets; any
+    /// earlier peer receipt may have just changed the outgoing aggregate.
+    ChannelReceiptTargetsSynced {
+        channel_id: ChannelId,
+        timestamp: u64,
     },
     /// Channel unread count was updated.
     ChannelUnreadCountUpdated {
@@ -287,17 +374,6 @@ pub enum InboxEvent {
         total_groups: u32,
         /// Total messages received across all group mailboxes.
         total_messages: u32,
-    },
-    /// Group mailbox announcement received from another member.
-    GroupMailboxAnnouncement {
-        /// Channel ID.
-        channel_id: ChannelId,
-        /// Sender/member who announced their mailbox.
-        member_id: UserId,
-        /// Member's mailbox public key (32 bytes Ed25519).
-        mailbox_pk: Vec<u8>,
-        /// When the mailbox announcement was sent (ms since epoch).
-        timestamp: u64,
     },
     /// Missing sender's key - need to request their SKDM.
     SenderKeyNeeded {
@@ -374,9 +450,9 @@ pub enum InboxEvent {
         ephemeral_public_key: [u8; 32],
         /// Call type: "Voice Call", "Video Call", etc.
         call_type: String,
-        /// Channel/DM ID for context.
-        channel_id: String,
-        /// Timestamp when offer was sent.
+        /// When the server received the offer (ns) — what the ring timeout
+        /// ages it by, as Signal does. The caller's own stamp only when the
+        /// server gave none.
         timestamp: u64,
     },
     /// Call key answer received (response to our offer).
@@ -402,29 +478,25 @@ pub enum InboxEvent {
         /// Call ID.
         call_id: String,
         /// Hangup reason.
-        reason: String,
+        reason: crate::services::gateway::CallHangupReason,
         /// Timestamp when hangup was sent.
         timestamp: u64,
     },
     // =========================================================================
     // Group Call Events (pairwise key distribution)
     // =========================================================================
-    /// Group call key received via pairwise sealed sender.
-    ///
-    /// Each group member receives an independent copy of the symmetric call key.
-    /// Per NDSS '21: Distribution is via client-side fanout to preserve privacy.
-    GroupCallKeyReceived {
-        /// Sender user ID (call initiator or key rotator).
+    /// Channel group-call signal received via pairwise sealed sender: a
+    /// ring (no key), the key authority's rotation, or a key request.
+    /// Per NDSS '21: distribution is client-side fanout, to preserve privacy.
+    GroupCallSignalReceived {
+        /// Authenticated sender.
         sender_id: UserId,
         /// Call ID.
         call_id: String,
-        /// AES-256 encryption key (32 bytes) for LiveKit E2EE.
-        key_material: [u8; 32],
-        /// Key epoch (increments on rotation).
-        key_epoch: u32,
         /// Channel ID (group channel).
         channel_id: ChannelId,
-        /// Timestamp when key was sent.
+        signal: crate::domain::call::GroupCallSignal,
+        /// Timestamp when the signal was sent.
         timestamp: u64,
     },
     // =========================================================================
@@ -434,6 +506,9 @@ pub enum InboxEvent {
     AnonGroupInvite {
         /// Peer user ID (inviter).
         peer_id: UserId,
+        /// The sealed-sender-authenticated device it came from: the one
+        /// device this secret chat is bound to.
+        sender_device_id: u32,
         /// Group ID (16 bytes UUID).
         group_id: Vec<u8>,
         /// Human-readable group name.
@@ -446,13 +521,16 @@ pub enum InboxEvent {
         profile_key: Option<Vec<u8>>,
         /// Inviter's encrypted display name.
         encrypted_display_name: Option<Vec<u8>>,
-        /// Inviter's encrypted avatar.
-        encrypted_avatar: Option<Vec<u8>>,
+        /// Pointer to the inviter's avatar upload.
+        avatar: Option<crate::proto::content_v1::AttachmentPointer>,
     },
     /// Anonymous group join acknowledgment received.
     AnonGroupJoinAck {
         /// Peer user ID (joiner).
         peer_id: UserId,
+        /// The sealed-sender-authenticated device it came from: the one
+        /// device this secret chat is bound to.
+        sender_device_id: u32,
         /// Group ID.
         group_id: Vec<u8>,
         /// Joiner's mailbox public key.
@@ -463,8 +541,8 @@ pub enum InboxEvent {
         profile_key: Option<Vec<u8>>,
         /// Joiner's encrypted display name.
         encrypted_display_name: Option<Vec<u8>>,
-        /// Joiner's encrypted avatar.
-        encrypted_avatar: Option<Vec<u8>>,
+        /// Pointer to the joiner's avatar upload.
+        avatar: Option<crate::proto::content_v1::AttachmentPointer>,
     },
     /// Anonymous group member list received.
     AnonGroupMemberList {
@@ -526,6 +604,9 @@ pub enum InboxEvent {
     AnonDmRequest {
         /// Peer user ID (initiator).
         peer_id: UserId,
+        /// The sealed-sender-authenticated device it came from: the one
+        /// device this secret chat is bound to.
+        sender_device_id: u32,
         /// Conversation ID (16 bytes UUID).
         conversation_id: Vec<u8>,
         /// Initiator's mailbox public key.
@@ -536,8 +617,8 @@ pub enum InboxEvent {
         profile_key: Option<Vec<u8>>,
         /// Encrypted display name (AES-256-GCM with profile_key).
         encrypted_display_name: Option<Vec<u8>>,
-        /// Encrypted avatar (AES-256-GCM with profile_key).
-        encrypted_avatar: Option<Vec<u8>>,
+        /// Pointer to the peer's avatar upload (fetched over Tor).
+        avatar: Option<crate::proto::content_v1::AttachmentPointer>,
         /// Timestamp.
         timestamp: u64,
     },
@@ -545,18 +626,19 @@ pub enum InboxEvent {
     AnonDmAccept {
         /// Peer user ID (responder).
         peer_id: UserId,
+        /// The sealed-sender-authenticated device it came from: the one
+        /// device this secret chat is bound to.
+        sender_device_id: u32,
         /// Conversation ID.
         conversation_id: Vec<u8>,
         /// Responder's mailbox public key.
         responder_mailbox_pk: Vec<u8>,
         /// Optional profile key for decrypting their profile.
         profile_key: Option<Vec<u8>>,
-        /// Responder's display name (plaintext, revealed upon acceptance).
-        responder_display_name: Option<String>,
         /// Encrypted display name (AES-256-GCM with profile_key).
         encrypted_display_name: Option<Vec<u8>>,
-        /// Encrypted avatar (AES-256-GCM with profile_key).
-        encrypted_avatar: Option<Vec<u8>>,
+        /// Pointer to the peer's avatar upload (fetched over Tor).
+        avatar: Option<crate::proto::content_v1::AttachmentPointer>,
         /// Timestamp.
         timestamp: u64,
     },
@@ -585,6 +667,8 @@ pub struct FriendRequestInfo {
     /// `ChatterClient::decrypt_friend_request_note` (needs our identity key,
     /// unavailable in the inbox emit paths). Empty = no note.
     pub encrypted_intro: Vec<u8>,
+    /// Server creation time in nanoseconds; zero when unavailable.
+    pub created_at_ns: u64,
 }
 
 #[cfg(test)]

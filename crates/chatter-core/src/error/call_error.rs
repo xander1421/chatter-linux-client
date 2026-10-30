@@ -39,9 +39,16 @@ pub enum CallError {
     #[error("Track publish failed: {0}")]
     TrackPublishFailed(String),
 
+    #[error("Camera unavailable")]
+    CameraUnavailable,
+
     #[error("Device error: {0}")]
     DeviceError(String),
 
     #[error("Call worker shut down")]
     WorkerShutdown,
+
+    /// A group-call joiner publishes nothing until it holds the call's key.
+    #[error("Waiting for the call's key")]
+    AwaitingKey,
 }

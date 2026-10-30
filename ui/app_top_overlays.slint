@@ -1,0 +1,510 @@
+import { SidebarPane } from "app_sidebar_pane.slint";
+import { Spacing } from "theme/spacing.slint";
+import { ModalHostState } from "app_modal_host_state.slint";
+import { ChatPane } from "app_chat_pane.slint";
+import { CallView } from "app_call_view.slint";
+import { MessageInfo, MessageInfoModal } from "modals/message_info.slint";
+import { ChatLayout, MessageItemData } from "chat/chat_layout.slint";
+import { MeshGlobal } from "mesh/mesh_global.slint";
+import { ConversationKind } from "chat/conversation_kind.slint";
+import { ReactionPicker } from "chat/reaction_picker.slint";
+import { MessageContextMenu, MessageMenuActions } from "chat/message_context_menu.slint";
+import { SelectionChrome } from "chat/selection_bar.slint";
+import { DeleteConfirm } from "chat/delete_confirm.slint";
+import { LinkConfirm } from "chat/link_confirm.slint";
+import { CallConfirm } from "chat/call_confirm.slint";
+import { EmojiData } from "components/emoji_picker.slint";
+import { MentionAutocomplete, MentionSuggestion } from "components/mention_autocomplete.slint";
+import { ImageViewer, EmojiData } from "components/mod.slint";
+import { CodePreviewOverlay, PdfPreviewOverlay } from "components/file_previews.slint";
+import { VideoPlayer } from "components/mod.slint";
+import { IncomingCallModal, DevicePicker, IncomingCallData, AudioDeviceData, ScreenSourceData } from "calls/mod.slint";
+import { SectionContextMenu, SectionHeaderContextMenu } from "sidebar/section_context_menu.slint";
+
+// Call, media and message-action surfaces above the modal stack.
+export component AppTopOverlays inherits Rectangle {
+    property <length> popup-bottom-limit: (ChatPane.thread-panel-visible
+        ? min(ChatPane.thread-composer-top, ChatPane.mention-composer-top)
+        : ChatPane.mention-composer-top) - root.safe-area-top;
+    in property <string> active-modal;
+    in property <length> context-menu-anchor-bottom;
+    in property <length> context-menu-anchor-left;
+    in property <length> context-menu-anchor-right;
+    in property <length> context-menu-anchor-top;
+    in property <bool> context-menu-preview-from-thread;
+    in property <MessageItemData> context-menu-preview-message;
+    in property <bool> context-menu-preview-mobile;
+    in property <length> context-menu-preview-row-width;
+    in property <length> context-menu-preview-row-x;
+    in property <length> context-menu-preview-row-y;
+    in property <bool> device-picker-presented;
+    in property <string> exiting-modal;
+    in property <bool> incoming-presented;
+    in property <bool> incoming-shown;
+    in property <bool> is-mobile-platform;
+    in property <string> presented-modal;
+    in-out property <int> reply-focus-serial;
+    // A closing dialog takes keyboard focus with it, leaving shortcuts and
+    // typing dead until a click. Hand it back to the composer on desktop
+    // (on a phone that would raise the keyboard).
+    function refocus-composer() {
+        if !root.is-mobile-platform { root.reply-focus-serial += 1; }
+    }
+    // Every dialog, not only the ones wired above: when the last one closes
+    // (Esc, X, backdrop) focus goes back to the composer. Closing Contacts
+    // with Esc left Ctrl+K and typing dead until a click (desktop).
+    property <int> open-modals: ModalHostState.modal-stack.length;
+    changed open-modals => {
+        if self.open-modals == 0 { root.refocus-composer(); }
+    }
+    in property <length> safe-area-top;
+    in property <bool> sidebar-menu-collapsed;
+    in property <length> sidebar-menu-width;
+    in property <length> sidebar-menu-bottom-inset;
+    in property <length> viewer-origin-height;
+    in property <length> viewer-origin-width;
+    in property <length> viewer-origin-x;
+    in property <length> viewer-origin-y;
+    function is-presented(name: string) -> bool {
+        return root.presented-modal == name || root.exiting-modal == name;
+    }
+    callback focus-back-scope();
+
+    background: transparent;
+
+    // ========== Call overlays (rendered above modals) ==========
+    // Incoming call modal
+    if root.incoming-presented: IncomingCallModal {
+        show: root.incoming-shown;
+        call-data: CallView.incoming-call-data;
+        replaces-active: CallView.incoming-call-replaces-active;
+
+        accept-call => {
+            CallView.accept-incoming-call(CallView.incoming-call-data.call-id);
+        }
+        decline-call => {
+            CallView.decline-incoming-call(CallView.incoming-call-data.call-id);
+        }
+    }
+
+    // (Active call view is now docked above ChatLayout — see chat column block.)
+
+    // Device picker modal (for audio devices and screen sources)
+    if root.device-picker-presented: DevicePicker {
+        show: CallView.device-picker-visible;
+        title: CallView.device-picker-type == "audio" ? "Select microphone" :
+               CallView.device-picker-type == "audio_output" ? "Select speaker" : "Select screen to share";
+        picker-type: CallView.device-picker-type;
+        audio-devices: CallView.audio-devices;
+        selected-audio-id: CallView.selected-audio-device-id;
+        audio-output-devices: CallView.audio-output-devices;
+        selected-audio-output-id: CallView.selected-audio-output-id;
+        screen-monitors: CallView.screen-monitors;
+        screen-windows: CallView.screen-windows;
+        selected-screen-id: CallView.selected-screen-source-id;
+
+        audio-selected(id) => {
+            CallView.device-picker-visible = false;
+            CallView.audio-device-selected(id);
+        }
+        audio-output-selected(id) => {
+            CallView.selected-audio-output-id = id;
+            CallView.device-picker-visible = false;
+            CallView.audio-output-selected(id);
+        }
+        screen-selected(id) => {
+            CallView.selected-screen-source-id = id;
+            CallView.device-picker-visible = false;
+            CallView.screen-source-selected(id);
+        }
+        closed => {
+            CallView.device-picker-visible = false;
+        }
+    }
+
+    // Image viewer overlay (rendered above modals)
+    if ChatPane.image-viewer-visible: ImageViewer {
+        show: true;
+        touch: root.is-mobile-platform;
+        source: ChatPane.image-viewer-source;
+        filename: ChatPane.image-viewer-filename;
+        size-display: ChatPane.image-viewer-size;
+        sender: ChatPane.image-viewer-sender;
+        datetime: ChatPane.image-viewer-datetime;
+        caption: ChatPane.image-viewer-caption;
+        thumbnail-x: root.viewer-origin-x;
+        thumbnail-y: root.viewer-origin-y;
+        thumbnail-width: root.viewer-origin-width;
+        thumbnail-height: root.viewer-origin-height;
+        position-label: ChatPane.media-viewer-position;
+        has-previous: ChatPane.media-viewer-has-previous;
+        has-next: ChatPane.media-viewer-has-next;
+        previous-thumbnail: ChatPane.media-viewer-previous-thumbnail;
+        next-thumbnail: ChatPane.media-viewer-next-thumbnail;
+        previous => { ChatPane.media-viewer-navigate(-1); }
+        next => { ChatPane.media-viewer-navigate(1); }
+        download => { ChatPane.media-viewer-export(false); }
+        copy-image => { ChatPane.media-viewer-export(true); }
+        open-downloads => { ChatPane.media-viewer-open-downloads(); }
+
+
+        close => {
+            ChatPane.image-viewer-visible = false;
+            ChatPane.close-image-viewer();
+            root.focus-back-scope();
+        }
+    }
+
+    // Video player overlay (rendered above modals)
+    if ChatPane.video-player-visible: VideoPlayer {
+        show: true;
+        touch: root.is-mobile-platform;
+        frame: ChatPane.video-player-frame;
+        filename: ChatPane.video-player-filename;
+        position-label: ChatPane.media-viewer-position;
+        has-previous: ChatPane.media-viewer-has-previous;
+        has-next: ChatPane.media-viewer-has-next;
+        previous => { ChatPane.media-viewer-navigate(-1); }
+        next => { ChatPane.media-viewer-navigate(1); }
+        download => { ChatPane.media-viewer-export(false); }
+        open-downloads => { ChatPane.media-viewer-open-downloads(); }
+
+        progress: ChatPane.video-player-progress;
+        elapsed: ChatPane.video-player-elapsed;
+        duration: ChatPane.video-player-duration;
+        is-playing: ChatPane.video-player-is-playing;
+        volume: ChatPane.video-player-volume;
+
+        close => {
+            ChatPane.video-player-visible = false;
+            ChatPane.close-video-player();
+        }
+        toggle-play-pause => {
+            ChatPane.video-player-toggle-play-pause();
+        }
+        seek(pos) => {
+            ChatPane.video-player-seek(pos);
+        }
+        set-volume(vol) => {
+            ChatPane.video-player-volume = vol;
+            ChatPane.video-player-set-volume(vol);
+        }
+    }
+
+    // File previews stay above the modal stack.
+    if ChatPane.code-preview-visible: CodePreviewOverlay {
+        width: 100%;
+        height: 100%;
+        file-name: ChatPane.code-preview-filename;
+        language: ChatPane.code-preview-language;
+        line-count: ChatPane.code-preview-line-count;
+        plain-text: ChatPane.code-preview-plain-text;
+        close => { ChatPane.code-preview-visible = false; ChatPane.close-code-preview(); }
+        copy => { ChatPane.copy-code(); }
+        open-external => { ChatPane.open-code-external(); }
+    }
+
+    if ChatPane.pdf-preview-visible: PdfPreviewOverlay {
+        width: 100%;
+        height: 100%;
+        file-name: ChatPane.pdf-preview-filename;
+        page-count: ChatPane.pdf-preview-page-count;
+        current-page: ChatPane.pdf-preview-current-page;
+        error-message: ChatPane.pdf-preview-error;
+        external-only: ChatPane.pdf-preview-external-only;
+        page-image: ChatPane.pdf-preview-image;
+        close => { ChatPane.pdf-preview-visible = false; ChatPane.close-pdf-preview(); }
+        open-external => { ChatPane.open-pdf-external(); }
+        page-prev => { ChatPane.pdf-page-prev(); }
+        page-next => { ChatPane.pdf-page-next(); }
+    }
+
+    // Closing the picker leaves focus in its hidden search field.
+    property <bool> reaction-picker-open: ChatPane.reaction-picker-visible;
+    changed reaction-picker-open => { if !self.reaction-picker-open { root.refocus-composer(); } }
+
+    // Reaction picker overlay
+    ReactionPicker {
+        show: ChatPane.reaction-picker-visible;
+        touch: root.is-mobile-platform;
+        message-id: ChatPane.reaction-picker-message-id;
+        sender-id: ChatPane.reaction-picker-sender-id;
+        timestamp-ns: ChatPane.reaction-picker-timestamp-ns;
+        emoji-list: ChatPane.reaction-picker-emojis;
+        selected-category <=> ChatPane.reaction-picker-selected-category;
+        search-query <=> ChatPane.reaction-picker-search-query;
+        bottom-limit: max(0px, root.popup-bottom-limit);
+        // Anchor near button. Flip above if no space below. Clamp horizontally.
+        position-x: max(8px, min(ChatPane.reaction-picker-anchor-x, root.width - 288px));
+        position-y: ChatPane.reaction-picker-anchor-y - root.safe-area-top + 360px > root.popup-bottom-limit
+            ? max(8px, ChatPane.reaction-picker-anchor-y - root.safe-area-top - 360px)
+            : ChatPane.reaction-picker-anchor-y - root.safe-area-top + 4px;
+
+        reaction-selected(sender-id, timestamp-ns, msg-id, emoji) => {
+            ChatPane.reaction-picker-visible = false;
+            ChatPane.reaction-selected(sender-id, timestamp-ns, msg-id, emoji);
+        }
+
+        category-changed(category) => {
+            ChatPane.reaction-picker-category-changed(category);
+        }
+
+        search-changed(query) => {
+            ChatPane.reaction-picker-search-changed(query);
+        }
+
+        close => {
+            ChatPane.reaction-picker-visible = false;
+        }
+    }
+
+    // Mention autocomplete overlay (positioned above composer cursor)
+    MentionAutocomplete {
+        // On a phone the list belongs to the open chat: Back to the chat
+        // list left it floating over the conversations (S9).
+        show: ChatPane.mention-autocomplete-visible
+            && (!self.phone || (SidebarPane.mobile-show-chat && SidebarPane.active-tab == "chats"));
+        suggestions: ChatPane.mention-suggestions;
+        selected-index: ChatPane.mention-selected-index;
+        // A phone's chat is the whole width: the list sits above the
+        // composer edge to edge, not 280px in where a sidebar would be
+        // (it floated over the messages at the right, S9).
+        property <bool> phone: root.is-mobile-platform && root.width < 600px;
+        max-popup-width: self.phone ? root.width - 2 * Spacing.sm : min(240px, root.width - 32px);
+        max-popup-height: max(0px, ChatPane.mention-composer-top - root.safe-area-top - 2 * Spacing.sm);
+        // The composer edge is measured in window coordinates; this overlay
+        // starts below the status bar and shrinks with the keyboard.
+        x: self.phone ? Spacing.sm : max(Spacing.sm, min(SidebarPane.sidebar-hidden ? 16px
+            : (SidebarPane.sidebar-collapsed ? 80px : 280px), root.width - self.width - Spacing.sm));
+        y: max(Spacing.sm, ChatPane.mention-composer-top - root.safe-area-top - self.height - Spacing.sm);
+
+        suggestion-selected(id, display) => {
+            ChatPane.mention-autocomplete-visible = false;
+            ChatPane.mention-suggestion-selected(id, display);
+        }
+
+        close => {
+            ChatPane.mention-autocomplete-visible = false;
+            ChatPane.mention-triggered("");
+        }
+    }
+
+    if root.is-presented("message-info"): MessageInfoModal {
+        show: root.active-modal == "message-info";
+        close => { ModalHostState.nav-close("message-info"); }
+    }
+
+    MessageContextMenu {
+        show: ChatPane.context-menu-visible;
+        // Desktop menus may cover the composer; touch menus stay above it.
+        content-bottom: root.is-mobile-platform ? max(0px, root.popup-bottom-limit) : root.height;
+        sender-id: ChatPane.context-menu-sender-id;
+        timestamp-ns: ChatPane.context-menu-timestamp-ns;
+        message-id: ChatPane.context-menu-message-id;
+        position-x: ChatPane.context-menu-x;
+        // This overlay lives in the same inset content rectangle as the
+        // composer. Its height already excludes the IME and system bars.
+        position-y: ChatPane.context-menu-y - root.safe-area-top;
+        content-top: ChatPane.context-menu-content-top - root.safe-area-top;
+        anchor-top: root.context-menu-anchor-top > 0px
+            ? root.context-menu-anchor-top - root.safe-area-top : 0px;
+        anchor-bottom: root.context-menu-anchor-bottom > 0px
+            ? root.context-menu-anchor-bottom - root.safe-area-top : 0px;
+        anchor-left: root.context-menu-anchor-left;
+        anchor-right: root.context-menu-anchor-right;
+        preview-message: root.context-menu-preview-message;
+        preview-row-x: root.context-menu-preview-row-x;
+        preview-row-y: root.context-menu-preview-row-y - root.safe-area-top;
+        preview-row-width: root.context-menu-preview-row-width;
+        preview-mobile: root.context-menu-preview-mobile;
+        preview-from-thread: root.context-menu-preview-from-thread;
+        preview-is-dm: ChatPane.is-dm;
+        preview-is-anonymous: ChatPane.conversation-kind == ConversationKind.anon-dm || ChatPane.conversation-kind == ConversationKind.anon-group;
+        preview-is-mesh: MeshGlobal.active-id != "";
+        preview-playing-attachment-id: ChatPane.current-playing-attachment-id;
+        preview-media-playing: ChatPane.is-media-playing;
+        preview-audio-progress: ChatPane.audio-progress;
+        preview-audio-elapsed: ChatPane.audio-elapsed;
+        retry-clicked(id) => { ChatPane.message-clicked(id); }
+        info-clicked(id) => { MessageInfo.open(id); }
+        can-thread: ChatPane.conversation-kind == ConversationKind.channel && !root.context-menu-preview-from-thread;
+
+        close => {
+            ChatPane.context-menu-visible = false;
+        }
+        quick-react(sender-id, timestamp-ns, emoji) => {
+            ChatPane.context-menu-visible = false;
+            ChatPane.reaction-selected(sender-id, timestamp-ns, ChatPane.context-menu-message-id, emoji);
+        }
+        more-reactions-clicked(sender-id, timestamp-ns) => {
+            ChatPane.context-menu-visible = false;
+            ChatPane.reaction-picker-sender-id = sender-id;
+            ChatPane.reaction-picker-timestamp-ns = timestamp-ns;
+            ChatPane.reaction-picker-message-id = ChatPane.context-menu-message-id;
+            ChatPane.reaction-picker-anchor-x = ChatPane.context-menu-x;
+            ChatPane.reaction-picker-anchor-y = ChatPane.context-menu-y;
+            ChatPane.reaction-picker-visible = true;
+            ChatPane.react-clicked(sender-id, timestamp-ns, ChatPane.context-menu-x, ChatPane.context-menu-y);
+        }
+        thread-clicked(id) => {
+            ChatPane.context-menu-visible = false;
+            ChatPane.thread-clicked(id);
+        }
+        select-clicked(id) => {
+            ChatPane.context-menu-visible = false;
+            ChatPane.selection-mode = true;
+            ChatPane.message-selection-toggled(id);
+        }
+        reply-clicked(sender-id, timestamp-ns) => {
+            ChatPane.context-menu-visible = false;
+            ChatPane.reply-message(sender-id, timestamp-ns);
+            root.reply-focus-serial += 1;
+        }
+        edit-clicked(sender-id, timestamp-ns) => {
+            ChatPane.context-menu-visible = false;
+            ChatPane.edit-message(sender-id, timestamp-ns);
+        }
+        delete-clicked(sender-id, timestamp-ns) => {
+            ChatPane.context-menu-visible = false;
+            ChatPane.delete-choosing = true;
+            ChatPane.delete-choice-everyone = MessageMenuActions.delete-for-everyone;
+            ChatPane.delete-choice-me = MessageMenuActions.delete-for-me;
+            ChatPane.delete-confirm-sender = sender-id;
+            ChatPane.delete-confirm-timestamp = timestamp-ns;
+            ChatPane.delete-confirm-everyone = false;
+            ChatPane.delete-confirm-count = 1;
+        }
+        pin-clicked(sender-id, timestamp-ns) => {
+            ChatPane.context-menu-visible = false;
+            ChatPane.pin-message(sender-id, timestamp-ns);
+        }
+        forward-clicked(sender-id, timestamp-ns) => {
+            ChatPane.context-menu-visible = false;
+            ChatPane.forward-message-action(sender-id, timestamp-ns);
+        }
+        copy-clicked(sender-id, timestamp-ns) => {
+            ChatPane.context-menu-visible = false;
+            ChatPane.copy-message(sender-id, timestamp-ns);
+        }
+        download-clicked(sender-id, timestamp-ns) => {
+            ChatPane.context-menu-visible = false;
+            ChatPane.download-message(sender-id, timestamp-ns);
+        }
+    }
+
+    // A single delete names its message; a multi-select leaves the sender
+    // empty and deletes the selection with its confirmed scope.
+    if ChatPane.link-confirm-url != "": LinkConfirm {
+        url: ChatPane.link-confirm-url;
+        cancelled => { ChatPane.link-confirm-url = ""; root.refocus-composer(); }
+        confirmed => { ChatPane.confirm-open-message-link(); root.refocus-composer(); }
+    }
+
+    if ChatPane.call-confirm-open: CallConfirm {
+        channel-name: ChatPane.channel-name;
+        video: ChatPane.call-confirm-video;
+        cancelled => { ChatPane.call-confirm-open = false; root.refocus-composer(); }
+        confirmed => {
+            ChatPane.call-confirm-open = false;
+            if ChatPane.call-confirm-video { ChatPane.start-video-call(); } else { ChatPane.start-voice-call(); }
+        }
+    }
+
+    if ChatPane.delete-confirm-count > 0: DeleteConfirm {
+        count: ChatPane.delete-confirm-count;
+        is-dm: ChatPane.conversation-kind == ConversationKind.server-dm || ChatPane.conversation-kind == ConversationKind.anon-dm;
+        for-everyone: ChatPane.delete-confirm-everyone;
+        choosing-in: ChatPane.delete-choosing;
+        can-delete-everyone: ChatPane.delete-choice-everyone;
+        can-delete-me: ChatPane.delete-choice-me;
+        scope-chosen(everyone) => {
+            ChatPane.delete-confirm-everyone = everyone;
+            ChatPane.delete-choosing = false;
+        }
+        cancelled => { ChatPane.delete-confirm-count = 0; root.refocus-composer(); }
+        confirmed => {
+            ChatPane.delete-confirm-count = 0;
+            root.refocus-composer();
+            if ChatPane.delete-confirm-everyone {
+                if ChatPane.delete-confirm-sender == "" {
+                    SelectionChrome.delete-everyone();
+                } else {
+                    ChatPane.delete-everyone-message(ChatPane.delete-confirm-sender, ChatPane.delete-confirm-timestamp);
+                }
+            } else if ChatPane.delete-confirm-sender != "" {
+                ChatPane.delete-message(ChatPane.delete-confirm-sender, ChatPane.delete-confirm-timestamp);
+            } else {
+                ChatPane.selection-delete-clicked();
+            }
+        }
+    }
+
+    // Sidebar menu anchors come from window positions; this overlay starts
+    // below the safe area. The selected row is measured from the sidebar top.
+    SectionContextMenu {
+        show: SidebarPane.row-context-menu-open;
+        position-x: SidebarPane.ctx-menu-x;
+        position-y: SidebarPane.ctx-menu-y - root.safe-area-top;
+        target-row-x: 0px;
+        target-row-y: SidebarPane.ctx-menu-row-y;
+        target-row-width: root.sidebar-menu-width;
+        target-row: SidebarPane.ctx-menu-row;
+        collapsed: root.sidebar-menu-collapsed;
+        mobile-mode: root.is-mobile-platform;
+        bottom-inset: root.sidebar-menu-bottom-inset;
+        conversation-id: SidebarPane.ctx-menu-conv-id;
+        conversation-type: SidebarPane.ctx-menu-conv-type;
+        current-section-id: SidebarPane.ctx-menu-current-section-id;
+        is-pinned: SidebarPane.ctx-menu-is-pinned;
+        is-archived: SidebarPane.ctx-menu-is-archived;
+        is-muted: SidebarPane.row-context-menu-muted;
+        can-leave: SidebarPane.ctx-menu-can-leave;
+        can-delete-channel: SidebarPane.ctx-menu-can-delete-channel;
+        sections: SidebarPane.custom-sections;
+
+        // An action that opens a dialog (new section, delete) keeps it focused.
+        close => {
+            SidebarPane.row-context-menu-open = false;
+            if ModalHostState.modal-stack.length == 0 { root.refocus-composer(); }
+        }
+        move-to-section(conv-id, conv-type, section-id) => {
+            SidebarPane.move-to-section(conv-id, conv-type, section-id);
+        }
+        remove-from-section(conv-id) => { SidebarPane.remove-from-section(conv-id); }
+        create-section-clicked(conv-id, conv-type) => {
+            ModalHostState.start-create-section-for-conversation(conv-id, conv-type);
+        }
+        set-pinned(conv-id, pinned) => { SidebarPane.set-conversation-pinned(conv-id, pinned); }
+        set-archived(conv-id, archived) => { SidebarPane.set-conversation-archived(conv-id, archived); }
+        set-muted(conv-id, kind, muted) => { SidebarPane.set-conversation-muted(conv-id, kind, muted); }
+        set-muted-for(conv-id, kind, seconds) => { SidebarPane.set-conversation-muted-for(conv-id, kind, seconds); }
+        mark-read(conv-id, kind) => { SidebarPane.mark-conversation-read(conv-id, kind); }
+        mark-unread(conv-id, kind) => { SidebarPane.mark-conversation-unread(conv-id, kind); }
+        delete-chat(conv-id, conv-type) => { SidebarPane.delete-conversation(conv-id, conv-type); }
+        leave-conversation(conv-id, kind) => { SidebarPane.leave-conversation(conv-id, kind); }
+    }
+
+    SectionHeaderContextMenu {
+        show: SidebarPane.section-context-menu-open;
+        position-x: SidebarPane.section-header-ctx-menu-x;
+        position-y: SidebarPane.section-header-ctx-menu-y - root.safe-area-top;
+        section-id: SidebarPane.section-header-ctx-menu-section-id;
+        section-sort-mode: SidebarPane.section-header-ctx-menu-sort-mode;
+        mobile-mode: root.is-mobile-platform;
+        bottom-inset: root.sidebar-menu-bottom-inset;
+
+        close => {
+            SidebarPane.section-context-menu-open = false;
+            if ModalHostState.modal-stack.length == 0 { root.refocus-composer(); }
+        }
+        remove-section(section-id) => { SidebarPane.delete-section-clicked(section-id); }
+        rename-section(section-id) => {
+            ModalHostState.create-section-rename-mode = true;
+            ModalHostState.create-section-id = section-id;
+            SidebarPane.rename-section-clicked(section-id);
+            ModalHostState.nav-push("create-section");
+        }
+        move-section(section-id, delta) => { SidebarPane.move-section(section-id, delta); }
+        set-sort-mode(section-id, mode) => { SidebarPane.set-section-sort-mode(section-id, mode); }
+    }
+}

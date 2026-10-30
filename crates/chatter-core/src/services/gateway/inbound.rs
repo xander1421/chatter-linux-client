@@ -17,7 +17,7 @@ use super::CallHangupReason;
 /// Populate a domain `Message`'s reply fields from an inbound DataMessage quote.
 ///
 /// Shared by the non-anon inbound paths (`store_data_message` for ServerDm,
-/// `dispatch_dm_content` for MailboxDm) so the quote is parsed in one place.
+/// `dispatch_dm_content` for the mailbox transport) so the quote is parsed in one place.
 /// Resolves the parent's real stored id by (author, sent_at) — so
 /// `reply_parent_missing` resolves correctly — and only falls back to a
 /// synthetic timestamp id when the parent isn't stored locally (then the UI
@@ -39,8 +39,7 @@ pub fn apply_inbound_quote(
     message.reply_to_author_id = author;
     message.reply_to_text = (!q.text.is_empty()).then(|| q.text.clone());
     if let Some(qa) = q.attachments.first() {
-        message.reply_to_thumbnail =
-            (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone());
+        message.reply_to_thumbnail = (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone());
         message.reply_to_thumbnail_mime =
             (!qa.content_type.is_empty()).then(|| qa.content_type.clone());
     }
@@ -70,9 +69,10 @@ pub fn content_type_name(content: &Option<content::Content>) -> &'static str {
         Some(content::Content::CallKey(_)) => "CallKey",
         Some(content::Content::CallHangup(_)) => "CallHangup",
         Some(content::Content::DeleteForMeSync(_)) => "DeleteForMeSync",
-        Some(content::Content::GroupCallKey(_)) => "GroupCallKey",
+        Some(content::Content::GroupCallSignal(_)) => "GroupCallSignal",
         Some(content::Content::AnonGroupInvite(_)) => "AnonGroupInvite",
         Some(content::Content::AnonGroupJoinAck(_)) => "AnonGroupJoinAck",
+        Some(content::Content::AnonGroupDecline(_)) => "AnonGroupDecline",
         Some(content::Content::AnonGroupMemberList(_)) => "AnonGroupMemberList",
         Some(content::Content::AnonGroupLeave(_)) => "AnonGroupLeave",
         Some(content::Content::AnonGroupKick(_)) => "AnonGroupKick",
@@ -82,14 +82,17 @@ pub fn content_type_name(content: &Option<content::Content>) -> &'static str {
         Some(content::Content::AnonDmAccept(_)) => "AnonDmAccept",
         Some(content::Content::AnonDmMessage(_)) => "AnonDmMessage",
         Some(content::Content::AnonGroupProfileShare(_)) => "AnonGroupProfileShare",
-        Some(content::Content::AnonCallOffer(_)) => "AnonCallOffer",
-        Some(content::Content::AnonCallAnswer(_)) => "AnonCallAnswer",
-        Some(content::Content::AnonCallHangup(_)) => "AnonCallHangup",
         Some(content::Content::AnonDmPresence(_)) => "AnonDmPresence",
         Some(content::Content::AnonDmProfileUpdate(_)) => "AnonDmProfileUpdate",
+        Some(content::Content::AnonDmEnd(_)) => "AnonDmEnd",
         Some(content::Content::SavedMessageSync(_)) => "SavedMessageSync",
         Some(content::Content::DmMailboxRotation(_)) => "DmMailboxRotation",
         Some(content::Content::SyncSent(_)) => "SyncSent",
+        Some(content::Content::ReadSync(_)) => "ReadSync",
+        Some(content::Content::ProfileKeySync(_)) => "ProfileKeySync",
+        Some(content::Content::ConfigurationSync(_)) => "ConfigurationSync",
+        Some(content::Content::NullMessage(_)) => "NullMessage",
+        Some(content::Content::CallEvent(_)) => "CallEvent",
         None => "None",
     }
 }
@@ -118,10 +121,19 @@ pub enum DmContent {
         /// bubble (author + preview + thumbnail). `None` for non-replies.
         quote: Option<Quote>,
         /// Thread root this message replies into (DataMessage.thread_id on
-        /// the wire), so a MailboxDm reply lands in the thread panel instead
+        /// the wire), so a mailbox-delivered reply lands in the thread panel instead
         /// of the main channel — mirrors the ServerDm inbound path in
         /// `gateway/mod.rs`, which already carries this through.
         thread_id: Option<String>,
+        /// The ttl this message was sent under (`DataMessage
+        /// .ephemeral_ttl_seconds`, `0` = off).
+        expire_timer: u32,
+        /// Conversation configuration, including its version and absolute
+        /// activation window. Independent of this message's actual TTL.
+        stated_timer: Option<crate::services::disappearing::DmTimer>,
+        /// A timer-update announcement (Signal's `EXPIRATION_TIMER_UPDATE`):
+        /// nothing to show but the timer change.
+        timer_update: bool,
     },
     /// Typing indicator
     Typing {
@@ -139,30 +151,35 @@ pub enum DmContent {
         remove: bool,
         target_author_aci: String,
         target_sent_timestamp: u64,
+        /// When the reaction was made (`Reaction.timestamp`, epoch nanos).
+        timestamp: u64,
     },
     /// Pin/unpin message
     Pin {
         target_author_aci: String,
         target_sent_timestamp: u64,
         unpin: bool,
+        /// When the pin was made (`PinMessage.timestamp`, epoch nanos).
+        timestamp: u64,
     },
     /// Edit message
     Edit {
         target_sent_timestamp: u64,
         new_body: String,
-    },
-    /// Delete for me (multi-device sync)
-    DeleteForMe {
-        conversation_id: String,
-        target_author_aci: String,
-        target_sent_timestamp: u64,
+        /// `EditMessage.data_message.timestamp` (epoch nanos).
+        edit_timestamp: u64,
     },
     /// Delete for everyone (peer notification)
     DeleteForEveryone {
+        target_author_aci: Option<String>,
+        destination_user_id: Option<String>,
+        target_call_id: Option<String>,
         target_sent_timestamp: u64,
     },
     /// Key exchange for DM bootstrap (response from peer).
     KeyExchange {
+        /// The sending device — the address a bootstrap reply is encrypted to.
+        sender_device_id: u32,
         conversation_id: String,
         ephemeral_pk: Vec<u8>,
         timestamp: u64,
@@ -173,7 +190,6 @@ pub enum DmContent {
         ephemeral_public_key: [u8; 32],
         timestamp: u64,
         call_type: String,
-        channel_id: String,
     },
     /// Call key answer (response to ephemeral key offer).
     CallKeyAnswer {
@@ -181,12 +197,11 @@ pub enum DmContent {
         ephemeral_public_key: [u8; 32],
         timestamp: u64,
     },
-    /// Group call key received (pairwise distribution).
-    GroupCallKey {
+    /// Channel group-call signal (pairwise): ring, key rotation, key request.
+    GroupCallSignal {
         call_id: String,
-        key_material: [u8; 32],
-        key_epoch: u32,
         channel_id: String,
+        signal: crate::domain::call::GroupCallSignal,
         timestamp: u64,
     },
     /// Call hangup notification.
@@ -194,13 +209,6 @@ pub enum DmContent {
         call_id: String,
         reason: CallHangupReason,
         timestamp: u64,
-    },
-    /// Saved message sync from another device (Note to Self).
-    SavedMessageSync {
-        message_id: String,
-        text: String,
-        sent_at: u64,
-        attachment_ids: Vec<String>,
     },
     /// Mailbox rotation announce (L4): the peer minted a new mailbox and wants
     /// us to send future messages to it. We update the stored peer mailbox.
@@ -211,23 +219,6 @@ pub enum DmContent {
     // ========================================================================
     // Anonymous Group Messages (NDSS'21 style)
     // ========================================================================
-    AnonGroupInvite {
-        group_id: Vec<u8>,
-        group_name: String,
-        inviter_mailbox_pk: Vec<u8>,
-        timestamp: u64,
-        profile_key: Option<Vec<u8>>,
-        encrypted_display_name: Option<Vec<u8>>,
-        encrypted_avatar: Option<Vec<u8>>,
-    },
-    AnonGroupJoinAck {
-        group_id: Vec<u8>,
-        joiner_mailbox_pk: Vec<u8>,
-        timestamp: u64,
-        profile_key: Option<Vec<u8>>,
-        encrypted_display_name: Option<Vec<u8>>,
-        encrypted_avatar: Option<Vec<u8>>,
-    },
     AnonGroupMemberList {
         group_id: Vec<u8>,
         members: Vec<crate::proto::content_v1::AnonGroupMemberInfo>,
@@ -252,30 +243,17 @@ pub enum DmContent {
         group_id: Vec<u8>,
         inner_content: Box<crate::proto::content_v1::Content>,
     },
-    // ========================================================================
-    // Anonymous DM Messages (NDSS'21 style stranger messaging)
-    // ========================================================================
-    AnonDmRequest {
-        conversation_id: Vec<u8>,
-        initiator_mailbox_pk: Vec<u8>,
-        intro_message: Option<String>,
-        profile_key: Option<Vec<u8>>,
-        encrypted_display_name: Option<Vec<u8>>,
-        encrypted_avatar: Option<Vec<u8>>,
-        timestamp: u64,
-    },
-    AnonDmAccept {
-        conversation_id: Vec<u8>,
-        responder_mailbox_pk: Vec<u8>,
-        profile_key: Option<Vec<u8>>,
-        encrypted_display_name: Option<Vec<u8>>,
-        encrypted_avatar: Option<Vec<u8>>,
-        timestamp: u64,
-    },
-    AnonDmMessage {
-        conversation_id: Vec<u8>,
-        inner_content: Box<crate::proto::content_v1::Content>,
-    },
+    /// Secret-chat content that arrived in an account DM mailbox. A secret
+    /// chat speaks only through its own anonymous mailbox, from the one peer
+    /// device it is bound to (v103); this path carries neither guarantee, so
+    /// the content is refused unparsed. Dispatching it does nothing; the
+    /// caller acks.
+    SecretChatOffMailbox,
+    /// Session-switch carrier with nothing to show (Signal's `NullMessage`):
+    /// the peer reset its sessions with us and sent this so the new session
+    /// takes over now. Decrypting it already did that; dispatching it must do
+    /// nothing, and the caller acks.
+    NullMessage,
     /// Not content at all: the authenticated sender is blocked, so the
     /// envelope was never parsed. The DM-mailbox twin of
     /// [`SealedSenderResult::DroppedBlockedSender`] — same decision, same
@@ -316,12 +294,6 @@ pub enum RouteResult {
         channel_id: ChannelId,
         sender_id: UserId,
     },
-    /// Received a sender key request — need to respond with our SKDM.
-    RespondWithSkdm {
-        channel_id: ChannelId,
-        requester_id: UserId,
-        skdm: crate::proto::content_v1::SenderKeyDistribution,
-    },
     /// Group mailbox announcement (NDSS '21 paper).
     MailboxAnnouncement {
         channel_id: ChannelId,
@@ -334,6 +306,12 @@ pub enum RouteResult {
 pub enum SealedSenderResult {
     /// Regular message stored successfully (no details needed for UI).
     MessageStored,
+    /// An own-device channel target transcript may have applied receipts that
+    /// arrived before it. Refresh the outgoing bubble from the stored aggregate.
+    ChannelReceiptTargetsSynced {
+        channel_id: ChannelId,
+        timestamp: u64,
+    },
     /// Data message received and stored — includes details for UI notification.
     DataMessageReceived {
         sender_id: UserId,
@@ -342,6 +320,10 @@ pub enum SealedSenderResult {
         body: String,
         timestamp: u64,
         attachments: Vec<AttachmentPointer>,
+        /// The message carried a profile key that is new or changed for this
+        /// sender (now stored). Caller emits `InboxEvent::ProfileKeyReceived`
+        /// so the sender's profile is re-fetched, as for the pure handshake.
+        profile_key_changed: bool,
     },
     /// Pure profile-key handshake received: an empty-body, no-attachment
     /// DataMessage sent at friend-accept time (see
@@ -349,12 +331,12 @@ pub enum SealedSenderResult {
     /// carry the sender's profile key. The gateway already persisted the
     /// key (`store_data_message`) — no message row was created. Caller
     /// should trigger a profile refresh (fetch + decrypt) for `sender_id`.
-    ProfileKeyReceived {
-        sender_id: UserId,
-    },
+    ProfileKeyReceived { sender_id: UserId },
     /// Key exchange message received — needs bootstrap handling.
     KeyExchange {
         sender_id: UserId,
+        /// The sending device — the address a bootstrap reply is encrypted to.
+        sender_device_id: u32,
         conversation_id: String,
         ephemeral_public_key: Vec<u8>,
         timestamp: u64,
@@ -376,6 +358,10 @@ pub enum SealedSenderResult {
         channel_id: ChannelId,
         distribution_message: Vec<u8>,
         timestamp: u64,
+        /// The SKDM carried the sender's profile key and it was new or
+        /// rotated. Caller emits `InboxEvent::ProfileKeyReceived` so the
+        /// member's name and avatar are fetched and decrypted.
+        profile_key_changed: bool,
     },
     /// Group mailbox announcement received (NDSS '21 paper bootstrap).
     MailboxAnnouncement {
@@ -392,17 +378,28 @@ pub enum SealedSenderResult {
     /// Anonymous group join acknowledgment received.
     AnonGroupJoinAckReceived {
         sender_id: UserId,
+        /// The sealed-sender-authenticated joiner device (owns its mailbox).
+        sender_device_id: u32,
         group_id: Vec<u8>,
         joiner_mailbox_pk: Vec<u8>,
         timestamp: u64,
         profile_key: Option<Vec<u8>>,
         encrypted_display_name: Option<Vec<u8>>,
-        encrypted_avatar: Option<Vec<u8>>,
+        avatar: Option<crate::proto::content_v1::AttachmentPointer>,
     },
     /// Channel control content (reaction, pin, edit, typing, delete) received
     /// via per-device sealed sender — caller dispatches to the right event.
     ControlContent {
         sender_id: UserId,
+        sender_device_id: u32,
+        content: Box<crate::proto::content_v1::Content>,
+    },
+    /// A secret-chat bootstrap (anon DM request or anon-group invite) sealed
+    /// to this device's inbox. `sender_device_id` is the device the chat binds
+    /// to.
+    SecretChatBootstrap {
+        sender_id: UserId,
+        sender_device_id: u32,
         content: Box<crate::proto::content_v1::Content>,
     },
     /// RECEIVER half of the 1:1 session self-heal: an inner Whisper/PreKey
@@ -415,15 +412,32 @@ pub enum SealedSenderResult {
         sender_id: UserId,
         sender_device_id: u32,
         dem_serialized: Vec<u8>,
+        /// The channel the lost message belonged to, from the sealed-sender
+        /// group id (pairwise channel controls set it); `None` for a DM.
+        channel_id: Option<crate::domain::ChannelId>,
     },
     /// SENDER half of the 1:1 session self-heal: a peer's
     /// `DecryptionErrorMessage` about a message we sent was processed.
     /// `archived` is true when our session with `(peer_id, peer_device_id)`
     /// was archived — the next send re-establishes via PreKeySignalMessage.
+    /// Archived or not, the caller sends the message the report names again
+    /// (`MessageService::resend_dm_on_decryption_error`); `timestamp_ms` is
+    /// the failed envelope's server timestamp in epoch millis.
     SessionHealed {
         peer_id: UserId,
         peer_device_id: u32,
         archived: bool,
+        timestamp_ms: u64,
+    },
+    /// SENDER half of the sender-key retry: a peer's `DecryptionErrorMessage`
+    /// named a group message we sent (no ratchet key). The caller resends that
+    /// content pairwise to `(peer_id, peer_device_id)`
+    /// (`MessageService::resend_on_decryption_error`). `timestamp_ms` is the
+    /// failed message's server timestamp in epoch millis.
+    ResendRequested {
+        peer_id: UserId,
+        peer_device_id: u32,
+        timestamp_ms: u64,
     },
     /// The sender is blocked. The envelope decrypted and the sender was
     /// authenticated — by the sealed sender certificate, or by holding the
@@ -445,7 +459,5 @@ pub enum SealedSenderResult {
     /// [`crate::inbox::ack_policy::drop_and_ack`]. Leaving it queued means
     /// re-fetching and re-decrypting it on every poll for as long as the block
     /// stands.
-    DroppedBlockedSender {
-        sender_id: UserId,
-    },
+    DroppedBlockedSender { sender_id: UserId },
 }

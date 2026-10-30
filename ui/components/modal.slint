@@ -1,4 +1,5 @@
-// Modal component with header, close button, and content slots — Neo 2.0 styled
+import { GlassSurface } from "glass_surface.slint";
+// Modal shell with one glass surface and shared header controls.
 // Uses ModalContainer to ensure proper sizing and centering (not full-screen)
 
 import { Colors } from "../theme/colors.slint";
@@ -6,6 +7,61 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { ModalContainer } from "modal_container.slint";
 import { DismissButton } from "dismiss_button.slint";
+import { HeaderButton } from "header_button.slint";
+import { Icons } from "../theme/icons.slint";
+
+// Modal accepts children and is inlined at every use. Its header does not:
+// share the title and conditional controls across all modal bodies.
+component ModalHeader inherits GlassSurface {
+    in property <bool> full-screen;
+    in property <bool> plain-header: false;
+    in property <bool> root-screen;
+    in property <bool> show-more;
+    in property <bool> show-close;
+    in property <string> title;
+    callback close();
+    callback more-clicked();
+
+    z: 1;
+    material-enabled: root.full-screen && !root.plain-header;
+    border-radius: root.full-screen && !root.plain-header ? self.height / 2 : 0px;
+    height: root.full-screen ? Spacing.header-action-box-touch : Spacing.header-action-box;
+    HorizontalLayout {
+        spacing: Spacing.header-action-gap;
+        padding-left: root.full-screen && root.root-screen ? Spacing.lg : Spacing.none;
+        // The row is as tall as its one control, so title and glyph
+        // share a vertical centre at both densities.
+
+        if root.full-screen && !root.root-screen: DismissButton {
+            back: true;
+            plain: root.plain-header;
+            clicked => { root.close(); }
+        }
+
+        // Title
+        Text {
+            text: root.title;
+            color: Colors.text-primary;
+            font-size: Typography.lg;
+            font-weight: Typography.semibold;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        if root.show-more: HeaderButton {
+            touch: root.full-screen;
+            icon: Icons.more-vertical;
+            label: "More options";
+            clicked => { root.more-clicked(); }
+        }
+
+        if !root.full-screen && root.show-close: DismissButton {
+            back: false;
+            clicked => { root.close(); }
+        }
+    }
+}
 
 export component Modal inherits Rectangle {
     in property <bool> show: false;
@@ -14,9 +70,27 @@ export component Modal inherits Rectangle {
     in property <length> max-modal-height: 600px;
     in property <bool> fill-height: false;
     in property <bool> full-screen: false;
+    in property <bool> plain-header: false;
+    // Full-screen lists extend behind the header and dock, with scroll insets.
+    in property <bool> floating-content: false;
     in property <length> bottom-inset: 0px;
+    // A confirm dialog with its own Cancel needs no second way out in the header.
+    in property <bool> show-close: true;
+    // A tab's root screen (Contacts, Calls, Profile) is where you ARE, not
+    // somewhere you were pushed to, so it has nothing to pop back out of: the
+    // tab bar is its navigation. Hides the leading chevron; pushed screens
+    // keep it.
+    in property <bool> root-screen: false;
+    // A trailing ⋮ in the header for the screen's overflow actions.
+    in property <bool> show-more: false;
+    // Full-screen content starts below this fixed header geometry. Consumers
+    // must not measure a layout child's position to size that same layout.
+    out property <length> content-top-inset: Spacing.lg
+        + (root.full-screen ? Spacing.header-action-box-touch : Spacing.header-action-box)
+        + Spacing.md;
 
     callback close();
+    callback more-clicked();
 
     // The backdrop always covers the whole window, so root.height is the
     // viewport height. Safe-area insets are not plumbed down to modals, so a
@@ -24,17 +98,26 @@ export component Modal inherits Rectangle {
     // (~24dp + ~48dp) so the card can never run off-screen in landscape.
     property <length> viewport-height-cap: max(240px, root.height - 96px);
 
-    ModalContainer {
+    // See ModalContainer.release-focus.
+    public function release-focus() {
+        container.release-focus();
+    }
+
+    container := ModalContainer {
         show: root.show;
+        accessibility-modal: !root.root-screen;
+        accessible-title: root.title == "" ? "Dialog" : root.title + " dialog";
         modal-width: root.modal-width;
         max-modal-height: min(root.max-modal-height, root.viewport-height-cap);
         fill-height: root.fill-height;
         full-screen: root.full-screen;
-        bottom-inset: root.bottom-inset;
+        allow-back-swipe: !root.root-screen;
+        bottom-inset: root.floating-content ? 0px : root.bottom-inset;
         close => { root.close(); }
 
         modal-layout := VerticalLayout {
             padding: Spacing.lg;
+            padding-bottom: Spacing.lg + (root.floating-content ? root.bottom-inset : Spacing.none);
             spacing: Spacing.md;
 
             // Header row.
@@ -47,32 +130,18 @@ export component Modal inherits Rectangle {
             // LEADING edge, matching chat_header.slint); otherwise it is a
             // floating dialog they close (X, TRAILING edge). Exactly one of
             // the two exists at a time — never both.
-            HorizontalLayout {
-                spacing: Spacing.md;
-                // The row is as tall as its one control, so title and glyph
-                // share a vertical centre at both densities.
-                height: root.full-screen ? Spacing.header-action-box-touch : Spacing.header-action-box;
-
-                if root.full-screen: DismissButton {
-                    back: true;
-                    clicked => { root.close(); }
-                }
-
-                // Title
-                Text {
-                    text: root.title;
-                    color: Colors.text-primary;
-                    font-size: Typography.lg;
-                    font-weight: Typography.semibold;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                    overflow: elide;
-                }
-
-                if !root.full-screen: DismissButton {
-                    back: false;
-                    clicked => { root.close(); }
-                }
+            ModalHeader {
+                // Sort this shared instance above bodies whose lists extend
+                // behind the header. A z on its definition cannot order siblings.
+                z: 1;
+                full-screen: root.full-screen;
+                plain-header: root.plain-header;
+                root-screen: root.root-screen;
+                show-more: root.show-more;
+                show-close: root.show-close;
+                title: root.title;
+                close => { root.close(); }
+                more-clicked => { root.more-clicked(); }
             }
 
             // Content area - wrapped in a Rectangle to allow @children

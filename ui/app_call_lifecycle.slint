@@ -1,0 +1,28 @@
+import { CallView } from "app_call_view.slint";
+import { VoiceRecording } from "chat/voice_recording.slint";
+
+// Keep call UI state and audio session notifications synchronized.
+export component AppCallLifecycle inherits Rectangle {
+    width: 0px;
+    height: 0px;
+    private property <bool> observed-active-call-visible: CallView.active-call-visible;
+    changed observed-active-call-visible => {
+        if CallView.active-call-visible { VoiceRecording.cancel(); }
+        CallView.call-audio-session(CallView.active-call-visible, CallView.call-is-video-enabled);
+        // Fullscreen hides the sidebar and chat; left set after the call it
+        // would hide them with nothing in their place.
+        if !CallView.active-call-visible {
+            CallView.active-call-fullscreen = false;
+            // Every end path restores the route Accept covered, unless the
+            // user already restored it by minimizing the call.
+            CallView.restore-call-route();
+        }
+    }
+    private property <bool> observed-call-is-video-enabled: CallView.call-is-video-enabled;
+    changed observed-call-is-video-enabled => {
+        if CallView.active-call-visible {
+            CallView.call-audio-video(CallView.call-is-video-enabled);
+        }
+    }
+
+}

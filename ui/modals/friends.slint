@@ -1,66 +1,37 @@
+import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // FriendsModal - Comprehensive friends management
 // Tabs: Add Friend, Friends, Requests, Blocked
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
-import { Icons } from "../theme/icons.slint";
 import { Modal } from "../components/modal.slint";
-import { Button } from "../components/button.slint";
-import { Input } from "../components/input.slint";
-import { Avatar } from "../components/avatar.slint";
+import { KeyFocus } from "../components/key_focus.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
-
-// Friend data structure
-export struct FriendData {
-    user-id: string,
-    display-name: string,
-    username: string,
-    presence-status: string,  // "online", "away", "dnd", "offline"
-    custom-status: string,
-    // Anonymous contact flag. When true, `user-id` is the anon_dm_id and
-    // selecting the row opens the anon-DM conversation instead of the
-    // user profile. Anon rows carry avatars as bytes (no URL), so the
-    // Avatar component falls back to `avatar-source` when `has-avatar`
-    // is true.
-    is-anon: bool,
-    avatar-source: image,
-    has-avatar: bool,
-    // Rendered inside the avatar circle when there is no image. Derived in
-    // Rust (`get_initials`) exactly like DMListItemData's, rather than passing
-    // the display name and letting it clip.
-    initials: string,
-}
-
-// Search result for finding users
-export struct UserSearchResult {
-    user-id: string,
-    display-name: string,
-    username: string,
-    is-friend: bool,
-    request-pending: bool,  // true if we already sent a request
-}
-
-// Friend request data
-export struct FriendRequestData {
-    user-id: string,
-    display-name: string,
-    username: string,
-    avatar-source: image,   // For avatar bytes converted to image
-    has-avatar: bool,       // Whether avatar-source is valid
-    sent-at: string,
-    note: string,           // Decrypted intro note (received requests only; empty otherwise)
-}
-
-// Blocked user data
-export struct BlockedUserData {
-    user-id: string,
-    display-name: string,
-    username: string,
-    blocked-at: string,
-}
+import { FriendsTab } from "friends_friends_tab.slint";
+import { FindTab } from "friends_find_tab.slint";
+import { RequestsTab } from "friends_requests_tab.slint";
+import { BlockedTab } from "friends_blocked_tab.slint";
+import { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } from "friends_data.slint";
+export { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } from "friends_data.slint";
 
 export component FriendsModal inherits Rectangle {
+    // A tab chosen by click or by a screen reader. Requests opens on the
+    // first sub-tab that has anything in it.
+    function open-tab(id: string) {
+        if id == "requests" {
+            root.requests-sub-tab = root.received-requests.length > 0 ? "received"
+                : root.sent-requests.length > 0 ? "sent"
+                : root.private-requests.length > 0 ? "private"
+                : root.group-invites.length > 0 ? "groups"
+                : root.channel-invites.length > 0 ? "channels"
+                : "received";
+        }
+        root.active-tab = id;
+        root.switch-tab(id);
+    }
     in property <bool> show-modal: false;
     // "Touch input", same meaning as the sidebar's. On a phone this modal is
     // effectively a full-screen contacts page, so its rows get the same
@@ -68,8 +39,12 @@ export component FriendsModal inherits Rectangle {
     // 56px mouse density that leaves a whole screen looking like a dense
     // desktop table.
     in property <bool> mobile-mode: false;
+    // A tab's root screen (see Modal): no back chevron, the tab bar navigates.
+    in property <bool> root-screen: false;
+    // In-app camera scanner exists (Android).
+    in property <bool> can-scan: false;
     in property <length> bottom-inset: 0px;
-    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px;
+    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px * Appearance.text-grow;
     property <length> row-avatar: root.mobile-mode ? Spacing.row-avatar-touch : 40px;
     property <length> row-name-size: root.mobile-mode ? Typography.base : Typography.sm;
     property <length> row-sub-size: root.mobile-mode ? Typography.sm : Typography.xs;
@@ -78,38 +53,40 @@ export component FriendsModal inherits Rectangle {
     // Friends tab data
     in property <[FriendData]> friends: [];
 
-    // Legacy search properties (unused — friend code is the discovery method)
-    in-out property <string> search-query: "";
-    in property <[UserSearchResult]> search-results: [];
-    in property <bool> search-loading: false;
-
     // Requests tab data
     in-out property <string> requests-sub-tab: "received";  // "received", "sent", "private", "groups", or "channels"
     in property <[FriendRequestData]> received-requests: [];
     in property <[FriendRequestData]> sent-requests: [];
     in property <[FriendRequestData]> private-requests: [];  // Anonymous DM requests
     in property <[FriendRequestData]> group-invites: [];     // Pending anonymous group invites
-    in property <[FriendRequestData]> channel-invites: [];   // Pending channel invitations
+    in property <[ChannelInviteData]> channel-invites: [];   // Pending channel invitations
+    in property <bool> requests-error: false;
+    callback requests-retry();
 
     // Blocked tab data
     in property <[BlockedUserData]> blocked-users: [];
 
     // Loading states
     in property <bool> loading: false;
+    in property <string> private-request-decision: "";
+    in property <string> group-invite-decision: "";
+    in property <string> group-invite-error-id: "";
+    in property <string> group-invite-error: "";
 
     // Friend code (privacy-first discovery)
     in-out property <string> my-code: "";
     in-out property <string> code-input: "";
+    in property <int> code-caret-end-seq;
     in-out property <string> code-status: "";
     in-out property <string> request-note: "";  // Optional intro note sent with a friend request
     in-out property <image> qr-code-image;
     in-out property <bool> show-qr: false;
-    // Connection mode is IMPLIED by shield state, not a user toggle: shield on =
-    // private/anon (no server), shield off = normal server friend request. A
-    // server-managed request while in shield mode would leak identity, so there
-    // is deliberately no way to pick it there. (Core `RequiresAnonMode` guard is
-    // the real boundary; this just keeps the UI honest.)
+    // Shield decides which code this account generates. Redeeming a code is
+    // routed by its format in core; private codes work with Shield off too.
     property <bool> effective-private-mode: AnonMode.enabled;
+    changed effective-private-mode => {
+        if (root.active-tab == "find") { root.switch-tab("find"); }
+    }
 
     // Callbacks
     callback close();
@@ -117,18 +94,13 @@ export component FriendsModal inherits Rectangle {
     callback generate-qr(bool);    // bool = private mode
     callback copy-code();
     callback paste-code();                   // System clipboard → code-input
-    callback connect-via-code(string);       // Server-managed friend request
-    callback connect-private(string);        // Private anon DM (no server involvement)
+    callback scan-code();                    // Camera QR → code-input
+    callback connect-via-code(string);       // Core routes private and server-managed codes
     callback switch-tab(string);
 
     // Friends actions
     callback view-profile(string);    // user_id
     callback start-dm(string);        // user_id
-    callback remove-friend(string);   // user_id
-
-    // Find users actions
-    callback search-users(string);    // query
-    callback send-friend-request(string);  // user_id
 
     // Request actions
     callback accept-request(string);  // user_id
@@ -148,18 +120,26 @@ export component FriendsModal inherits Rectangle {
     callback accept-channel-invite(string);    // channel_id
     callback decline-channel-invite(string);   // channel_id
 
-    // Blocked actions
+    // Blocked actions. Unblock restores the friend and their DM with its
+    // history (blocking never removed them); Remove, after a confirm, ends the
+    // friendship and lifts the block, leaving them a stranger. On an anon-DM
+    // peer the same callback is "Delete chat": the chat goes, the block stays.
     callback unblock-user(string);    // user_id
+    callback remove-blocked-user(string);  // user_id
+    // Row whose Remove is awaiting confirmation ("" = none).
+    property <string> confirm-remove-id: "";
 
     Modal {
+        floating-content: root.mobile-mode;
         show: root.show-modal;
-        title: "Friends";
+        title: "Contacts";
         modal-width: 680px;
-        max-modal-height: 800px;
+        max-modal-height: max(240px, root.height - 96px);
         // On a phone this is the Contacts screen, not a dialog over the chat
         // list — the bottom tab bar navigates to it the same way Telegram's
         // does, so it gets the whole viewport.
         full-screen: root.mobile-mode;
+        root-screen: root.root-screen;
         bottom-inset: root.bottom-inset;
         fill-height: root.mobile-mode;
 
@@ -174,48 +154,62 @@ export component FriendsModal inherits Rectangle {
             // Main tab bar — Neo. Same box height as the dismissal control in
             // the header row above it, so the two rows share one baseline
             // instead of the tabs sitting 4px short of the touch floor.
-            HorizontalLayout {
+            GlassSurface {
+                material-enabled: root.mobile-mode;
+                elevation: 0;
+                z: 1;
                 height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
 
-                for tab in [
-                    { id: "find", label: "Add Friend" },
-                    { id: "friends", label: "Friends" },
-                    { id: "requests", label: "Requests" },
-                    { id: "blocked", label: "Blocked" }
-                ]: Rectangle {
-                    horizontal-stretch: 1;
-                    background: root.active-tab == tab.id ? Colors.neo-inset-bg : (tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent);
+                // Segmented control, concentric with its shell (the same
+                // rule as the Calls tabs): the tabs sit `chrome-inset` inside
+                // the glass pill and the selected one is filled at
+                // `radius-chrome-inner`, so its fill follows the shell's
+                // curve instead of sticking square out past the rounded ends.
+                HorizontalLayout {
+                    padding: Spacing.chrome-inset;
 
-                    VerticalLayout {
-                        HorizontalLayout {
-                            alignment: center;
-                            vertical-stretch: 1;
+                    for tab in [
+                        { id: "find", label: "Add friend" },
+                        { id: "friends", label: "Friends" },
+                        { id: "requests", label: "Requests" },
+                        { id: "blocked", label: "Blocked" }
+                    ]: Rectangle {
+                        horizontal-stretch: 1;
+                        border-radius: Spacing.radius-chrome-inner;
+                        background: root.active-tab == tab.id ? Colors.tint-strong : (tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent);
+                        transform-origin: { x: self.width / 2, y: self.height / 2 };
+                        transform-scale-x: tab-touch.pressed ? 96% : 100%;
+                        transform-scale-y: tab-touch.pressed ? 92% : 100%;
+                        animate background { duration: Materials.motion-standard; easing: Materials.glide; }
+                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                        accessible-role: AccessibleRole.tab;
+                        accessible-label: tab.label + (tab.id == "requests" && (root.received-requests.length > 0) ?
+                            " (" + root.received-requests.length + ")" : "");
+                        accessible-item-selected: root.active-tab == tab.id;
+                        accessible-action-default => { root.open-tab(tab.id); }
+                        KeyFocus { border-radius: parent.border-radius; activate => { root.open-tab(tab.id); } }
 
-                            Text {
-                                text: tab.label + (tab.id == "requests" && (root.received-requests.length > 0) ?
-                                    " (" + root.received-requests.length + ")" : "");
-                                color: root.active-tab == tab.id ? Colors.text-primary : Colors.text-secondary;
-                                font-size: Typography.sm;
-                                font-weight: root.active-tab == tab.id ? Typography.semibold : Typography.normal;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
+                        Text {
+                            accessible-role: none;
+                            width: 100%;
+                            height: 100%;
+                            text: tab.label + (tab.id == "requests" && (root.received-requests.length > 0) ?
+                                " (" + root.received-requests.length + ")" : "");
+                            color: root.active-tab == tab.id ? Colors.text-primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: root.active-tab == tab.id ? Typography.semibold : Typography.normal;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            overflow: elide;
                         }
 
-                        Rectangle {
-                            height: 2px;
-                            background: root.active-tab == tab.id ? Colors.glow-cyan : transparent;
-                        }
-                    }
-
-                    // TouchArea on top to capture clicks (fills parent)
-                    tab-touch := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.active-tab = tab.id;
-                            root.switch-tab(tab.id);
+                        // TouchArea on top to capture clicks (fills parent)
+                        tab-touch := TouchArea {
+                            width: 100%;
+                            height: 100%;
+                            mouse-cursor: pointer;
+                            clicked => { root.open-tab(tab.id); }
                         }
                     }
                 }
@@ -223,1344 +217,111 @@ export component FriendsModal inherits Rectangle {
 
             Rectangle {
                 height: 1px;
-                background: Colors.text-muted.with-alpha(0.2);
+                background: Colors.divider;
             }
 
             // Content area
             Rectangle {
-                min-height: 400px;
+                // On a floating card, let Add Friend's full content determine
+                // the card height. The shared Modal caps it at the viewport and
+                // scrolls its body when that content is taller than the cap.
+                min-height: !root.mobile-mode && root.active-tab == "find"
+                    ? max(400px, find-content.preferred-height)
+                    : 400px;
                 vertical-stretch: 1;
 
                 // ===== Friends Tab =====
-                if root.active-tab == "friends": VerticalLayout {
-                    vertical-stretch: 1;
-                    spacing: Spacing.sm;
-
-                    // Friends count header
-                    Text {
-                        text: root.friends.length + " Friends";
-                        color: Colors.text-secondary;
-                        font-size: Typography.xs;
-                        font-weight: Typography.medium;
-                    }
-
-                    if root.friends.length == 0: Rectangle {
-                        vertical-stretch: 1;
-
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: Spacing.sm;
-
-                            Text {
-                                text: "\u{1F465}\u{FE0F}";
-                                font-size: Typography.huge;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "No friends yet";
-                                color: Colors.text-muted;
-                                font-size: Typography.base;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "Use the Add Friend tab to connect";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                                horizontal-alignment: center;
-                            }
-                        }
-                    }
-
-                    if root.friends.length > 0: Flickable {
-                        vertical-stretch: 1;
-                        viewport-height: friends-list.preferred-height;
-
-                        friends-list := VerticalLayout {
-                            // Rows stack from the TOP. A VerticalLayout with no
-                            // alignment distributes its leftover space around
-                            // fixed-height children, so one friend in a
-                            // full-screen list sank to the bottom of the
-                            // viewport with the gap above it.
-                            alignment: start;
-                            spacing: Spacing.xs;
-
-                            for friend in root.friends: Rectangle {
-                                height: root.row-height;
-                                background: friend-touch.has-hover ? Colors.surface-hover : transparent;
-                                border-radius: Spacing.radius-md;
-                                border-width: friend-touch.has-hover ? 1px : 0px;
-                                border-color: Colors.neo-highlight;
-
-                                HorizontalLayout {
-                                    padding: Spacing.sm;
-                                    spacing: Spacing.sm;
-
-                                    Avatar {
-                                        size: root.row-avatar;
-                                        // `source` was never bound, so every
-                                        // contact fell back to text even when
-                                        // FriendData carried a decoded avatar.
-                                        source: friend.avatar-source;
-                                        // Initials, not the whole name: Avatar
-                                        // renders this INSIDE the circle, so a
-                                        // display name clipped to "xande".
-                                        fallback-text: friend.initials;
-                                        show-presence: true;
-                                        presence-color: friend.presence-status == "online" ? Colors.online
-                                                     : friend.presence-status == "away" ? Colors.away
-                                                     : friend.presence-status == "dnd" ? Colors.dnd
-                                                     : Colors.offline;
-                                    }
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        alignment: center;
-                                        spacing: root.mobile-mode ? 3px : 2px;
-
-                                        Text {
-                                            text: friend.display-name;
-                                            color: Colors.text-primary;
-                                            font-size: root.row-name-size;
-                                            font-weight: Typography.medium;
-                                            overflow: elide;
-                                        }
-
-                                        if friend.custom-status != "": Text {
-                                            text: friend.custom-status;
-                                            color: Colors.text-muted;
-                                            font-size: root.row-sub-size;
-                                            overflow: elide;
-                                        }
-                                    }
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.xs;
-                                        alignment: center;
-
-                                        // Message button
-                                        Rectangle {
-                                            width: 44px;
-                                            height: 44px;
-                                            border-radius: Spacing.radius-sm;
-                                            background: msg-touch.has-hover ? Colors.surface : transparent;
-
-                                            Text {
-                                                text: "\u{1F4AC}\u{FE0F}";  // Speech bubble (with emoji variant selector)
-                                                font-family: Typography.font-family-emoji;
-                                                font-size: Typography.lg;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                                width: 100%;
-                                                height: 100%;
-                                            }
-
-                                            msg-touch := TouchArea {
-                                                mouse-cursor: pointer;
-                                                clicked => {
-                                                    root.start-dm(friend.user-id);
-                                                }
-                                            }
-                                        }
-
-                                        // More options (remove friend)
-                                        Rectangle {
-                                            width: 44px;
-                                            height: 44px;
-                                            border-radius: Spacing.radius-sm;
-                                            background: more-touch.has-hover ? Colors.surface : transparent;
-
-                                            // Icons.more-vertical, not U+22EE:
-                                            // Inter has no vertical-ellipsis glyph
-                                            // and the fallback drew a notdef box.
-                                            Image {
-                                                source: Icons.more-vertical;
-                                                colorize: Colors.text-secondary;
-                                                width: 16px;
-                                                height: 16px;
-                                                x: (parent.width - self.width) / 2;
-                                                y: (parent.height - self.height) / 2;
-                                            }
-
-                                            more-touch := TouchArea {
-                                                mouse-cursor: pointer;
-                                                clicked => {
-                                                    root.remove-friend(friend.user-id);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                friend-touch := TouchArea {
-                                    clicked => {
-                                        root.view-profile(friend.user-id);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if root.active-tab == "friends": FriendsTab {
+                    mobile-mode: root.mobile-mode;
+                    private-mode: root.effective-private-mode;
+                    bottom-inset: root.bottom-inset;
+                    row-height: root.row-height;
+                    row-avatar: root.row-avatar;
+                    row-name-size: root.row-name-size;
+                    row-sub-size: root.row-sub-size;
+                    friends: root.friends;
+                    view-profile(value) => { root.view-profile(value); }
+                    start-dm(value) => { root.start-dm(value); }
                 }
 
                 // ===== Find Users Tab =====
-                if root.active-tab == "find": VerticalLayout {
-                    vertical-stretch: 1;
-                    spacing: Spacing.md;
+                // The full-screen Contacts page shrinks when the IME opens.
+                // Keep the lower note field reachable when the form exceeds
+                // that viewport (especially with the QR card expanded).
+                find-scroll := Flickable {
+                    visible: root.active-tab == "find";
+                    width: parent.width;
+                    height: parent.height;
+                    viewport-width: self.width;
+                    viewport-height: max(self.height, find-content.preferred-height);
+                    interactive: root.mobile-mode && self.viewport-height > self.height;
+                    immediate-child-press: true;
 
-                    // ===== Friend Code Section ===== — Neo raised card
-                    Rectangle {
-                        background: Colors.surface;
-                        border-radius: Spacing.radius-md;
-                        border-width: 1px;
-                        border-color: Colors.neo-highlight;
-                        drop-shadow-blur: Spacing.neo-blur-sm;
-                        drop-shadow-offset-x: Spacing.neo-offset-sm;
-                        drop-shadow-offset-y: Spacing.neo-offset-sm;
-                        drop-shadow-color: Colors.neo-shadow;
-
-                        VerticalLayout {
-                            padding: Spacing.md;
-                            spacing: Spacing.sm;
-
-                            Text {
-                                text: "Add Friend via Code";
-                                color: Colors.text-primary;
-                                font-size: Typography.sm;
-                                font-weight: Typography.semibold;
-                            }
-
-                            // Your friend code — stacked vertically for narrow screens
-                            VerticalLayout {
-                                spacing: Spacing.xs;
-
-                                Text {
-                                    text: "Your code:";
-                                    color: Colors.text-secondary;
-                                    font-size: Typography.xs;
-                                }
-
-                                Rectangle {
-                                    height: 36px;
-                                    background: Colors.neo-inset-bg;
-                                    border-radius: Spacing.radius-sm;
-                                    border-width: 1px;
-                                    border-color: Colors.neo-inset-shadow;
-
-                                    HorizontalLayout {
-                                        padding-left: Spacing.sm;
-                                        padding-right: Spacing.sm;
-
-                                        Text {
-                                            text: root.my-code != "" ? root.my-code : "Click Generate";
-                                            color: root.my-code != "" ? Colors.text-primary : Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            font-family: Typography.font-family-mono;
-                                            vertical-alignment: center;
-                                            overflow: elide;
-                                            horizontal-stretch: 1;
-                                        }
-                                    }
-                                }
-
-                                // Action buttons row (wraps within available width)
-                                HorizontalLayout {
-                                    spacing: Spacing.xs;
-
-                                    Button {
-                                        text: root.my-code == "" ? "Generate" : "Regenerate";
-                                        variant: "ghost";
-                                        horizontal-stretch: 1;
-
-                                        clicked => {
-                                            root.generate-code(root.effective-private-mode);
-                                        }
-                                    }
-
-                                    if root.my-code != "": Button {
-                                        text: "Copy";
-                                        variant: "ghost";
-                                        horizontal-stretch: 1;
-
-                                        clicked => {
-                                            root.copy-code();
-                                        }
-                                    }
-
-                                    if root.my-code != "": Button {
-                                        text: root.show-qr ? "Hide QR" : "Show QR";
-                                        variant: "ghost";
-                                        horizontal-stretch: 1;
-
-                                        clicked => {
-                                            if (!root.show-qr) {
-                                                root.generate-qr(root.effective-private-mode);
-                                            }
-                                            root.show-qr = !root.show-qr;
-                                        }
-                                    }
-                                }
-                            }
-
-                            // QR Code Display — theme-aware card with a small
-                            // white quiet-zone around the QR itself so camera
-                            // scanners still get the required light background.
-                            if root.show-qr && root.my-code != "": Rectangle {
-                                background: Colors.neo-inset-bg;
-                                border-radius: Spacing.radius-md;
-                                border-width: 1px;
-                                border-color: Colors.neo-inset-shadow;
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    padding: Spacing.md;
-                                    spacing: Spacing.sm;
-
-                                    // Centered white tile — wide enough for the
-                                    // QR plus ~8px quiet-zone padding each side.
-                                    HorizontalLayout {
-                                        alignment: center;
-
-                                        Rectangle {
-                                            width: 168px;
-                                            height: 168px;
-                                            background: white;
-                                            border-radius: Spacing.radius-sm;
-
-                                            Image {
-                                                source: root.qr-code-image;
-                                                width: 150px;
-                                                height: 150px;
-                                                image-fit: contain;
-                                            }
-                                        }
-                                    }
-
-                                    Text {
-                                        text: "Scan to add as friend";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                        horizontal-alignment: center;
-                                    }
-                                }
-                            }
-
-                            // Enter friend's code
-                            HorizontalLayout {
-                                spacing: Spacing.sm;
-
-                                Input {
-                                    horizontal-stretch: 1;
-                                    placeholder: root.effective-private-mode ? "Enter private friend code..." : "Enter friend's code or ID...";
-                                    text <=> root.code-input;
-
-                                    accepted(code) => {
-                                        if (root.effective-private-mode) {
-                                            root.connect-private(code);
-                                        } else {
-                                            root.connect-via-code(code);
-                                        }
-                                    }
-                                }
-
-                                // Paste from clipboard — Slint's Ctrl+V on Wayland
-                                // can't see clipboards written via wl-copy /
-                                // wayland-data-control (different protocol),
-                                // so this button routes through arboard in
-                                // chatter-ui and writes straight into
-                                // `code-input`.
-                                Button {
-                                    text: "Paste";
-                                    variant: "ghost";
-                                    clicked => {
-                                        root.paste-code();
-                                    }
-                                }
-
-                                Button {
-                                    text: "Connect";
-                                    variant: "primary";
-                                    loading: root.loading;
-
-                                    clicked => {
-                                        if (root.effective-private-mode) {
-                                            root.connect-private(root.code-input);
-                                        } else {
-                                            root.connect-via-code(root.code-input);
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Optional intro note — sent E2E-encrypted with the
-                            // friend request. Below the code entry: enter code →
-                            // add note → Connect.
-                            Input {
-                                placeholder: "Add a note (optional)";
-                                text <=> root.request-note;
-                            }
-
-                            // Read-only mode indicator — implied by shield state,
-                            // not toggleable (see effective-private-mode note).
-                            HorizontalLayout {
-                                spacing: Spacing.sm;
-                                alignment: start;
-
-                                Rectangle {
-                                    width: 8px;
-                                    height: 8px;
-                                    border-radius: 4px;
-                                    y: 3px;
-                                    background: root.effective-private-mode ? Colors.success : Colors.text-muted;
-                                }
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    spacing: 2px;
-
-                                    Text {
-                                        text: root.effective-private-mode ? "Private mode (Shield)" : "Server-managed";
-                                        color: root.effective-private-mode ? Colors.text-primary : Colors.text-secondary;
-                                        font-size: Typography.xs;
-                                        font-weight: Typography.medium;
-                                    }
-
-                                    Text {
-                                        text: root.effective-private-mode ? "(No server involvement)" : "(Enable Shield for a private, anonymous contact)";
-                                        color: Colors.text-muted.with-alpha(0.7);
-                                        font-size: Typography.xs;
-                                        wrap: word-wrap;
-                                    }
-                                }
-                            }
-
-                            // Status message
-                            if root.code-status != "": Text {
-                                text: root.code-status;
-                                color: (root.code-status == "Friend request sent!" || root.code-status == "Private conversation started!") ? Colors.success : 
-                                       root.code-status == "Copied to clipboard!" ? Colors.accent-purple : Colors.error;
-                                font-size: Typography.xs;
-                            }
-                        }
-                    }
-
-                    // Privacy info section
-                    Rectangle {
-                        vertical-stretch: 1;
-
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: Spacing.sm;
-
-                            Text {
-                                text: "\u{1F517}";  // Link emoji
-                                font-family: Typography.font-family-emoji;
-                                font-size: Typography.huge;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "Share your friend code";
-                                color: Colors.text-muted;
-                                font-size: Typography.base;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "Generate your code above and share it with friends";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                                horizontal-alignment: center;
-                            }
-
-                            // Connection mode explanation
-                            HorizontalLayout {
-                                alignment: center;
-
-                                Rectangle {
-                                    height: 1px;
-                                    width: 80%;
-                                    background: Colors.text-muted.with-alpha(0.2);
-                                }
-                            }
-
-                            Text {
-                                text: root.effective-private-mode
-                                    ? "\u{1F510} Private mode uses end-to-end encryption with no server involvement"
-                                    : "\u{1F517} Standard mode sends a friend request through the server";
-                                color: Colors.text-muted.with-alpha(0.7);
-                                font-size: Typography.xs;
-                                horizontal-alignment: center;
-                                wrap: word-wrap;
-                            }
-                        }
+                    find-content := FindTab {
+                        width: find-scroll.width;
+                        active-tab: root.active-tab;
+                        mobile-mode: root.mobile-mode;
+                        can-scan: root.can-scan;
+                        loading: root.loading;
+                        code-input <=> root.code-input;
+                        code-caret-end-seq: root.code-caret-end-seq;
+                        code-status: root.code-status;
+                        my-code: root.my-code;
+                        request-note <=> root.request-note;
+                        qr-code-image: root.qr-code-image;
+                        show-qr <=> root.show-qr;
+                        effective-private-mode: root.effective-private-mode;
+                        generate-code(value) => { root.generate-code(value); }
+                        generate-qr(value) => { root.generate-qr(value); }
+                        copy-code => { root.copy-code(); }
+                        paste-code => { root.paste-code(); }
+                        scan-code => { root.scan-code(); }
+                        connect-via-code(value) => { root.connect-via-code(value); }
+                        code-edited => { root.code-status = ""; }
                     }
                 }
 
                 // ===== Requests Tab =====
-                if root.active-tab == "requests": VerticalLayout {
-                    vertical-stretch: 1;
-                    spacing: Spacing.sm;
-
-                    // Sub-tab bar
-                    HorizontalLayout {
-                        height: 36px;
-
-                        Rectangle {
-                            horizontal-stretch: 1;
-                            background: recv-tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent;
-
-                            VerticalLayout {
-                                HorizontalLayout {
-                                    alignment: center;
-                                    vertical-stretch: 1;
-
-                                    Text {
-                                        text: "Received (" + root.received-requests.length + ")";
-                                        color: root.requests-sub-tab == "received" ? Colors.text-primary : Colors.text-secondary;
-                                        font-size: Typography.xs;
-                                        font-weight: root.requests-sub-tab == "received" ? Typography.semibold : Typography.normal;
-                                    }
-                                }
-
-                                Rectangle {
-                                    height: 2px;
-                                    background: root.requests-sub-tab == "received" ? Colors.primary : transparent;
-                                }
-                            }
-
-                            recv-tab-touch := TouchArea {
-                                width: 100%;
-                                height: 100%;
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.requests-sub-tab = "received";
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            horizontal-stretch: 1;
-                            background: sent-tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent;
-
-                            VerticalLayout {
-                                HorizontalLayout {
-                                    alignment: center;
-                                    vertical-stretch: 1;
-
-                                    Text {
-                                        text: "Sent (" + root.sent-requests.length + ")";
-                                        color: root.requests-sub-tab == "sent" ? Colors.text-primary : Colors.text-secondary;
-                                        font-size: Typography.xs;
-                                        font-weight: root.requests-sub-tab == "sent" ? Typography.semibold : Typography.normal;
-                                    }
-                                }
-
-                                Rectangle {
-                                    height: 2px;
-                                    background: root.requests-sub-tab == "sent" ? Colors.primary : transparent;
-                                }
-                            }
-
-                            sent-tab-touch := TouchArea {
-                                width: 100%;
-                                height: 100%;
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.requests-sub-tab = "sent";
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            horizontal-stretch: 1;
-                            background: priv-tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent;
-
-                            VerticalLayout {
-                                HorizontalLayout {
-                                    alignment: center;
-                                    vertical-stretch: 1;
-
-                                    Text {
-                                        text: "Private (" + root.private-requests.length + ")";
-                                        color: root.requests-sub-tab == "private" ? Colors.text-primary : Colors.text-secondary;
-                                        font-size: Typography.xs;
-                                        font-weight: root.requests-sub-tab == "private" ? Typography.semibold : Typography.normal;
-                                    }
-                                }
-
-                                Rectangle {
-                                    height: 2px;
-                                    background: root.requests-sub-tab == "private" ? Colors.primary : transparent;
-                                }
-                            }
-
-                            priv-tab-touch := TouchArea {
-                                width: 100%;
-                                height: 100%;
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.requests-sub-tab = "private";
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            horizontal-stretch: 1;
-                            background: groups-tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent;
-
-                            VerticalLayout {
-                                HorizontalLayout {
-                                    alignment: center;
-                                    vertical-stretch: 1;
-
-                                    Text {
-                                        text: "Groups (" + root.group-invites.length + ")";
-                                        color: root.requests-sub-tab == "groups" ? Colors.text-primary : Colors.text-secondary;
-                                        font-size: Typography.xs;
-                                        font-weight: root.requests-sub-tab == "groups" ? Typography.semibold : Typography.normal;
-                                    }
-                                }
-
-                                Rectangle {
-                                    height: 2px;
-                                    background: root.requests-sub-tab == "groups" ? Colors.primary : transparent;
-                                }
-                            }
-
-                            groups-tab-touch := TouchArea {
-                                width: 100%;
-                                height: 100%;
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.requests-sub-tab = "groups";
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            horizontal-stretch: 1;
-                            background: channels-tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent;
-
-                            VerticalLayout {
-                                HorizontalLayout {
-                                    alignment: center;
-                                    vertical-stretch: 1;
-
-                                    Text {
-                                        text: "Channels (" + root.channel-invites.length + ")";
-                                        color: root.requests-sub-tab == "channels" ? Colors.text-primary : Colors.text-secondary;
-                                        font-size: Typography.xs;
-                                        font-weight: root.requests-sub-tab == "channels" ? Typography.semibold : Typography.normal;
-                                    }
-                                }
-
-                                Rectangle {
-                                    height: 2px;
-                                    background: root.requests-sub-tab == "channels" ? Colors.primary : transparent;
-                                }
-                            }
-
-                            channels-tab-touch := TouchArea {
-                                width: 100%;
-                                height: 100%;
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.requests-sub-tab = "channels";
-                                }
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        height: 1px;
-                        background: Colors.text-muted.with-alpha(0.15);
-                    }
-
-                    // Received requests
-                    if root.requests-sub-tab == "received": VerticalLayout {
-                        vertical-stretch: 1;
-
-                        if root.received-requests.length == 0: VerticalLayout {
-                            alignment: center;
-
-                            Text {
-                                text: "No pending requests";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                                horizontal-alignment: center;
-                            }
-                        }
-
-                        if root.received-requests.length > 0: Flickable {
-                            viewport-height: received-list.preferred-height;
-
-                            received-list := VerticalLayout {
-                                spacing: Spacing.xs;
-
-                                for request in root.received-requests: Rectangle {
-                                    min-height: 64px;
-                                    background: recv-touch.has-hover ? Colors.surface-hover : transparent;
-                                    border-radius: Spacing.radius-md;
-                                    border-width: recv-touch.has-hover ? 1px : 0px;
-                                    border-color: Colors.neo-highlight;
-
-                                    // TouchArea first (behind) for hover detection
-                                    recv-touch := TouchArea {}
-
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
-
-                                        Avatar {
-                                            size: 40px;
-                                            source: request.avatar-source;
-                                            fallback-text: request.display-name;
-                                        }
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            spacing: 2px;
-
-                                            Text {
-                                                text: request.display-name;
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                                overflow: elide;
-                                            }
-
-                                            if request.note != "": Text {
-                                                text: request.note;
-                                                color: Colors.text-secondary;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
-
-                                            if request.sent-at != "": Text {
-                                                text: request.sent-at;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
-                                        }
-
-                                        HorizontalLayout {
-                                            spacing: Spacing.xs;
-                                            alignment: center;
-
-                                            Button {
-                                                text: "Accept";
-                                                variant: "primary";
-
-                                                clicked => {
-                                                    root.accept-request(request.user-id);
-                                                }
-                                            }
-
-                                            Button {
-                                                text: "Decline";
-                                                variant: "ghost";
-
-                                                clicked => {
-                                                    root.decline-request(request.user-id);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Sent requests
-                    if root.requests-sub-tab == "sent": VerticalLayout {
-                        vertical-stretch: 1;
-
-                        if root.sent-requests.length == 0: VerticalLayout {
-                            alignment: center;
-
-                            Text {
-                                text: "No outgoing requests";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                                horizontal-alignment: center;
-                            }
-                        }
-
-                        if root.sent-requests.length > 0: Flickable {
-                            viewport-height: sent-list.preferred-height;
-
-                            sent-list := VerticalLayout {
-                                spacing: Spacing.xs;
-
-                                for request in root.sent-requests: Rectangle {
-                                    height: 56px;
-                                    background: sent-touch.has-hover ? Colors.surface-hover : transparent;
-                                    border-radius: Spacing.radius-md;
-                                    border-width: sent-touch.has-hover ? 1px : 0px;
-                                    border-color: Colors.neo-highlight;
-
-                                    // TouchArea first (behind) for hover detection
-                                    sent-touch := TouchArea {}
-
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
-
-                                        Avatar {
-                                            size: 40px;
-                                            fallback-text: request.display-name;
-                                        }
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            spacing: 2px;
-
-                                            Text {
-                                                text: request.display-name;
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                                overflow: elide;
-                                            }
-
-                                        }
-
-                                        HorizontalLayout {
-                                            alignment: center;
-
-                                            Button {
-                                                text: "Cancel";
-                                                variant: "ghost";
-
-                                                clicked => {
-                                                    root.cancel-request(request.user-id);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Private requests (anonymous DMs)
-                    if root.requests-sub-tab == "private": VerticalLayout {
-                        vertical-stretch: 1;
-
-                        if root.private-requests.length == 0: VerticalLayout {
-                            alignment: center;
-                            spacing: Spacing.sm;
-
-                            Text {
-                                text: "\u{1F510}";  // Lock emoji
-                                font-family: Typography.font-family-emoji;
-                                font-size: Typography.huge;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "No private message requests";
-                                color: Colors.text-muted;
-                                font-size: Typography.base;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "Private requests use end-to-end encryption\nwith no server involvement";
-                                color: Colors.text-muted.with-alpha(0.7);
-                                font-size: Typography.sm;
-                                horizontal-alignment: center;
-                            }
-                        }
-
-                        if root.private-requests.length > 0: Flickable {
-                            viewport-height: private-list.preferred-height;
-
-                            private-list := VerticalLayout {
-                                spacing: Spacing.xs;
-
-                                for request in root.private-requests: Rectangle {
-                                    height: 72px;
-                                    background: priv-touch.has-hover ? Colors.surface-hover : transparent;
-                                    border-radius: Spacing.radius-md;
-                                    border-width: priv-touch.has-hover ? 1px : 0px;
-                                    border-color: Colors.neo-highlight;
-
-                                    // TouchArea first (behind) for hover detection
-                                    priv-touch := TouchArea {}
-
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
-
-                                        // Lock icon instead of avatar for privacy
-                                        Rectangle {
-                                            width: 40px;
-                                            height: 40px;
-                                            border-radius: 20px;
-                                            background: Colors.surface;
-
-                                            Text {
-                                                text: "\u{1F510}";  // Lock
-                                                font-size: Typography.xl;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                                width: 100%;
-                                                height: 100%;
-                                            }
-                                        }
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            spacing: 2px;
-
-                                            HorizontalLayout {
-                                                spacing: Spacing.xs;
-
-                                                Text {
-                                                    text: request.display-name;
-                                                    color: Colors.text-primary;
-                                                    font-size: Typography.sm;
-                                                    font-weight: Typography.medium;
-                                                    overflow: elide;
-                                                }
-
-                                                Rectangle {
-                                                    width: 16px;
-                                                    height: 16px;
-                                                    border-radius: 8px;
-                                                    background: Colors.primary.with-alpha(0.2);
-
-                                                    Text {
-                                                        text: "\u{1F512}";  // Private badge
-                                                        font-size: Typography.xxs;
-                                                        horizontal-alignment: center;
-                                                        vertical-alignment: center;
-                                                        width: 100%;
-                                                        height: 100%;
-                                                    }
-                                                }
-                                            }
-
-                                            if request.sent-at != "": Text {
-                                                text: request.sent-at;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
-                                        }
-
-                                        HorizontalLayout {
-                                            spacing: Spacing.xs;
-                                            alignment: center;
-
-                                            Button {
-                                                text: "Accept";
-                                                variant: "primary";
-
-                                                clicked => {
-                                                    root.accept-private-request(request.user-id);
-                                                }
-                                            }
-
-                                            Button {
-                                                text: "Decline";
-                                                variant: "ghost";
-
-                                                clicked => {
-                                                    root.decline-private-request(request.user-id);
-                                                }
-                                            }
-
-                                            Button {
-                                                text: "Block";
-                                                variant: "destructive";
-
-                                                clicked => {
-                                                    root.block-private-request(request.user-id);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Group invites (anonymous group invitations)
-                    if root.requests-sub-tab == "groups": VerticalLayout {
-                        vertical-stretch: 1;
-
-                        if root.group-invites.length == 0: VerticalLayout {
-                            alignment: center;
-                            spacing: Spacing.sm;
-
-                            Text {
-                                text: "\u{1F6E1}";  // Shield emoji
-                                font-family: Typography.font-family-emoji;
-                                font-size: Typography.huge;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "No pending group invites";
-                                color: Colors.text-muted;
-                                font-size: Typography.base;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "Group invites use end-to-end encryption\nwith anonymous mailboxes";
-                                color: Colors.text-muted.with-alpha(0.7);
-                                font-size: Typography.sm;
-                                horizontal-alignment: center;
-                            }
-                        }
-
-                        if root.group-invites.length > 0: Flickable {
-                            viewport-height: group-invite-list.preferred-height;
-
-                            group-invite-list := VerticalLayout {
-                                spacing: Spacing.xs;
-
-                                for invite in root.group-invites: Rectangle {
-                                    height: 72px;
-                                    background: gi-touch.has-hover ? Colors.surface-hover : transparent;
-                                    border-radius: Spacing.radius-md;
-                                    border-width: gi-touch.has-hover ? 1px : 0px;
-                                    border-color: Colors.neo-highlight;
-
-                                    gi-touch := TouchArea {}
-
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
-
-                                        // Shield icon for group
-                                        Rectangle {
-                                            width: 40px;
-                                            height: 40px;
-                                            border-radius: 20px;
-                                            background: Colors.group-accent.with-alpha(0.2);
-
-                                            Text {
-                                                text: "\u{1F6E1}";  // Shield
-                                                font-size: Typography.xl;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                                width: 100%;
-                                                height: 100%;
-                                            }
-                                        }
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            spacing: 2px;
-
-                                            HorizontalLayout {
-                                                spacing: Spacing.xs;
-
-                                                Text {
-                                                    text: invite.display-name;
-                                                    color: Colors.text-primary;
-                                                    font-size: Typography.sm;
-                                                    font-weight: Typography.medium;
-                                                    overflow: elide;
-                                                }
-
-                                                Rectangle {
-                                                    width: 16px;
-                                                    height: 16px;
-                                                    border-radius: 8px;
-                                                    background: Colors.group-accent.with-alpha(0.2);
-
-                                                    Text {
-                                                        text: "\u{1F6E1}";
-                                                        font-size: Typography.xxs;
-                                                        horizontal-alignment: center;
-                                                        vertical-alignment: center;
-                                                        width: 100%;
-                                                        height: 100%;
-                                                    }
-                                                }
-                                            }
-
-                                            // Inviter info (stored in username field)
-                                            if invite.username != "": Text {
-                                                text: "Invited by " + invite.username;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
-                                        }
-
-                                        HorizontalLayout {
-                                            spacing: Spacing.xs;
-                                            alignment: center;
-
-                                            Button {
-                                                text: "Join";
-                                                variant: "primary";
-
-                                                clicked => {
-                                                    root.accept-group-invite(invite.user-id);
-                                                }
-                                            }
-
-                                            Button {
-                                                text: "Decline";
-                                                variant: "ghost";
-
-                                                clicked => {
-                                                    root.decline-group-invite(invite.user-id);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Channel invites (pending channel invitations)
-                    if root.requests-sub-tab == "channels": VerticalLayout {
-                        vertical-stretch: 1;
-
-                        if root.channel-invites.length == 0: VerticalLayout {
-                            alignment: center;
-                            spacing: Spacing.sm;
-
-                            Text {
-                                text: "\u{0023}";  // Hash
-                                font-size: Typography.huge;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "No pending channel invites";
-                                color: Colors.text-muted;
-                                font-size: Typography.base;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "Accept an invite to join the channel";
-                                color: Colors.text-muted.with-alpha(0.7);
-                                font-size: Typography.sm;
-                                horizontal-alignment: center;
-                            }
-                        }
-
-                        if root.channel-invites.length > 0: Flickable {
-                            viewport-height: channel-invite-list.preferred-height;
-
-                            channel-invite-list := VerticalLayout {
-                                spacing: Spacing.xs;
-
-                                for invite in root.channel-invites: Rectangle {
-                                    height: 72px;
-                                    background: ci-touch.has-hover ? Colors.surface-hover : transparent;
-                                    border-radius: Spacing.radius-md;
-                                    border-width: ci-touch.has-hover ? 1px : 0px;
-                                    border-color: Colors.neo-highlight;
-
-                                    ci-touch := TouchArea {}
-
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
-
-                                        // Hash icon for channel
-                                        Rectangle {
-                                            width: 40px;
-                                            height: 40px;
-                                            border-radius: 20px;
-                                            background: Colors.primary.with-alpha(0.2);
-
-                                            Text {
-                                                text: "\u{0023}";  // Hash
-                                                font-size: Typography.xl;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                                width: 100%;
-                                                height: 100%;
-                                            }
-                                        }
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            spacing: 2px;
-
-                                            HorizontalLayout {
-                                                spacing: Spacing.xs;
-
-                                                Text {
-                                                    text: invite.display-name;
-                                                    color: Colors.text-primary;
-                                                    font-size: Typography.sm;
-                                                    font-weight: Typography.medium;
-                                                    overflow: elide;
-                                                }
-
-                                                Rectangle {
-                                                    width: 16px;
-                                                    height: 16px;
-                                                    border-radius: 8px;
-                                                    background: Colors.primary.with-alpha(0.2);
-
-                                                    Text {
-                                                        text: "\u{0023}";
-                                                        font-size: Typography.xxs;
-                                                        horizontal-alignment: center;
-                                                        vertical-alignment: center;
-                                                        width: 100%;
-                                                        height: 100%;
-                                                    }
-                                                }
-                                            }
-
-                                            // Invitation message (stored in note field)
-                                            if invite.note != "": Text {
-                                                text: invite.note;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                overflow: elide;
-                                            }
-                                        }
-
-                                        HorizontalLayout {
-                                            spacing: Spacing.xs;
-                                            alignment: center;
-
-                                            Button {
-                                                text: "Join";
-                                                variant: "primary";
-
-                                                clicked => {
-                                                    root.accept-channel-invite(invite.user-id);
-                                                }
-                                            }
-
-                                            Button {
-                                                text: "Decline";
-                                                variant: "ghost";
-
-                                                clicked => {
-                                                    root.decline-channel-invite(invite.user-id);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if root.active-tab == "requests": RequestsTab {
+                    mobile-mode: root.mobile-mode;
+                    bottom-inset: root.bottom-inset;
+                    loading: root.loading;
+                    requests-sub-tab <=> root.requests-sub-tab;
+                    received-requests: root.received-requests;
+                    sent-requests: root.sent-requests;
+                    private-requests: root.private-requests;
+                    group-invites: root.group-invites;
+                    channel-invites: root.channel-invites;
+                    read-error: root.requests-error;
+                    retry => { root.requests-retry(); }
+                    private-request-decision: root.private-request-decision;
+                    group-invite-decision: root.group-invite-decision;
+                    group-invite-error-id: root.group-invite-error-id;
+                    group-invite-error: root.group-invite-error;
+                    accept-request(value) => { root.accept-request(value); }
+                    decline-request(value) => { root.decline-request(value); }
+                    cancel-request(value) => { root.cancel-request(value); }
+                    accept-private-request(value) => { root.accept-private-request(value); }
+                    decline-private-request(value) => { root.decline-private-request(value); }
+                    block-private-request(value) => { root.block-private-request(value); }
+                    accept-group-invite(value) => { root.accept-group-invite(value); }
+                    decline-group-invite(value) => { root.decline-group-invite(value); }
+                    accept-channel-invite(value) => { root.accept-channel-invite(value); }
+                    decline-channel-invite(value) => { root.decline-channel-invite(value); }
                 }
 
                 // ===== Blocked Tab =====
-                if root.active-tab == "blocked": VerticalLayout {
-                    vertical-stretch: 1;
-                    spacing: Spacing.sm;
-
-                    Text {
-                        text: root.blocked-users.length + " Blocked Users";
-                        color: Colors.text-secondary;
-                        font-size: Typography.xs;
-                        font-weight: Typography.medium;
-                    }
-
-                    if root.blocked-users.length == 0: VerticalLayout {
-                        vertical-stretch: 1;
-                        alignment: center;
-                        spacing: Spacing.sm;
-
-                        Text {
-                                text: "\u{1F6AB}\u{FE0F}";
-                                font-size: Typography.huge;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "No blocked users";
-                                color: Colors.text-muted;
-                                font-size: Typography.base;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "Users you block won't be able to message you";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                                horizontal-alignment: center;
-                            }
-                        }
-
-                    if root.blocked-users.length > 0: Flickable {
-                        vertical-stretch: 1;
-                        viewport-height: blocked-list.preferred-height;
-
-                        blocked-list := VerticalLayout {
-                            spacing: Spacing.xs;
-
-                            for user in root.blocked-users: Rectangle {
-                                height: 56px;
-                                background: blocked-touch.has-hover ? Colors.surface-hover : transparent;
-                                border-radius: Spacing.radius-md;
-                                border-width: blocked-touch.has-hover ? 1px : 0px;
-                                border-color: Colors.neo-highlight;
-
-                                // TouchArea first (behind) for hover detection
-                                blocked-touch := TouchArea {}
-
-                                HorizontalLayout {
-                                    padding: Spacing.sm;
-                                    spacing: Spacing.sm;
-
-                                    Avatar {
-                                        size: 40px;
-                                        fallback-text: user.display-name;
-                                    }
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        alignment: center;
-                                        spacing: 2px;
-
-                                        Text {
-                                            text: user.display-name;
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                            overflow: elide;
-                                        }
-
-                                        if user.blocked-at != "": Text {
-                                            text: "Blocked " + user.blocked-at;
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
-                                    }
-
-                                    HorizontalLayout {
-                                        alignment: center;
-
-                                        Button {
-                                            text: "Unblock";
-                                            variant: "ghost";
-
-                                            clicked => {
-                                                root.unblock-user(user.user-id);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if root.active-tab == "blocked": BlockedTab {
+                    mobile-mode: root.mobile-mode;
+                    bottom-inset: root.bottom-inset;
+                    loading: root.loading;
+                    row-height: root.row-height;
+                    row-avatar: root.row-avatar;
+                    row-name-size: root.row-name-size;
+                    blocked-users: root.blocked-users;
+                    confirm-remove-id <=> root.confirm-remove-id;
+                    unblock-user(value) => { root.unblock-user(value); }
+                    remove-blocked-user(value) => { root.remove-blocked-user(value); }
                 }
             }
         }

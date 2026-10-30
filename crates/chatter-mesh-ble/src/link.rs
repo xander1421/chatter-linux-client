@@ -88,14 +88,17 @@ const PENDING_PACKETS_PER_PEER: usize = 16;
 /// rather than unwrapped, because a radio that cannot advertise should report
 /// that rather than take the process down.
 pub(crate) fn service_uuid() -> Result<Uuid, LinkError> {
-    Uuid::parse_str(SERVICE_UUID)
-        .map_err(|err| LinkError::Backend(format!("service UUID {SERVICE_UUID} is not a UUID: {err}")))
+    Uuid::parse_str(SERVICE_UUID).map_err(|err| {
+        LinkError::Backend(format!("service UUID {SERVICE_UUID} is not a UUID: {err}"))
+    })
 }
 
 /// The mesh characteristic UUID, parsed. See [`service_uuid`].
 pub(crate) fn characteristic_uuid() -> Result<Uuid, LinkError> {
     Uuid::parse_str(CHARACTERISTIC_UUID).map_err(|err| {
-        LinkError::Backend(format!("characteristic UUID {CHARACTERISTIC_UUID} is not a UUID: {err}"))
+        LinkError::Backend(format!(
+            "characteristic UUID {CHARACTERISTIC_UUID} is not a UUID: {err}"
+        ))
     })
 }
 
@@ -105,7 +108,11 @@ pub(crate) fn characteristic_uuid() -> Result<Uuid, LinkError> {
 /// Reconstructed rather than read back from `bluer`, which keeps its path
 /// builders private. The format is part of BlueZ's stable D-Bus API.
 fn device_path(adapter_name: &str, address: &str) -> String {
-    format!("/org/bluez/{}/dev_{}", adapter_name, address.replace(':', "_"))
+    format!(
+        "/org/bluez/{}/dev_{}",
+        adapter_name,
+        address.replace(':', "_")
+    )
 }
 
 /// Short, stable text for a role, used in link ids.
@@ -164,7 +171,11 @@ impl Connections {
     /// and had been announced, the id it displaced — BlueZ re-acquiring a channel
     /// without closing the old one means the old socket is dead.
     fn open(
-        &mut self, role: LinkRole, adapter_name: &str, address: &str, max_write: usize,
+        &mut self,
+        role: LinkRole,
+        adapter_name: &str,
+        address: &str,
+        max_write: usize,
         writer: Option<Arc<CharacteristicWriter>>,
     ) -> (LinkId, Option<LinkId>) {
         let mut displaced = None;
@@ -177,11 +188,21 @@ impl Connections {
         }
 
         self.next_seq += 1;
-        let id =
-            LinkId::new(format!("{}:{}#{}", role_tag(role), device_path(adapter_name, address), self.next_seq));
+        let id = LinkId::new(format!(
+            "{}:{}#{}",
+            role_tag(role),
+            device_path(adapter_name, address),
+            self.next_seq
+        ));
         self.by_id.insert(
             id.clone(),
-            Conn { role, address: address.to_string(), max_write, writer, announced: false },
+            Conn {
+                role,
+                address: address.to_string(),
+                max_write,
+                writer,
+                announced: false,
+            },
         );
         (id, displaced)
     }
@@ -212,14 +233,22 @@ impl Connections {
     ///
     /// Returns the link to emit it on, or buffers it when the link is not
     /// announced yet.
-    fn accept_inbound(&mut self, role: LinkRole, address: &str, bytes: Vec<u8>) -> Option<(LinkId, Vec<u8>)> {
+    fn accept_inbound(
+        &mut self,
+        role: LinkRole,
+        address: &str,
+        bytes: Vec<u8>,
+    ) -> Option<(LinkId, Vec<u8>)> {
         if let Some(id) = self.find(role, address) {
             if self.by_id.get(&id).is_some_and(|conn| conn.announced) {
                 return Some((id, bytes));
             }
         }
 
-        let queue = self.pending.entry((role_tag(role), address.to_string())).or_default();
+        let queue = self
+            .pending
+            .entry((role_tag(role), address.to_string()))
+            .or_default();
         if queue.len() >= PENDING_PACKETS_PER_PEER {
             queue.pop_front();
         }
@@ -249,7 +278,11 @@ impl Connections {
     /// Remove every link, returning the announced ones.
     fn drain(&mut self) -> Vec<LinkId> {
         self.pending.clear();
-        self.by_id.drain().filter(|(_, conn)| conn.announced).map(|(id, _)| id).collect()
+        self.by_id
+            .drain()
+            .filter(|(_, conn)| conn.announced)
+            .map(|(id, _)| id)
+            .collect()
     }
 
     fn max_write(&self, id: &LinkId) -> Option<usize> {
@@ -258,7 +291,9 @@ impl Connections {
 
     /// Everything `send` needs, taken under one lock.
     fn target(&self, id: &LinkId) -> Option<(Option<Arc<CharacteristicWriter>>, usize)> {
-        self.by_id.get(id).map(|conn| (conn.writer.clone(), conn.max_write))
+        self.by_id
+            .get(id)
+            .map(|conn| (conn.writer.clone(), conn.max_write))
     }
 
     fn len(&self) -> usize {
@@ -327,15 +362,26 @@ impl Shared {
     /// every fragment for the life of the link; adding anything would produce
     /// packets the controller drops without an error.
     pub(crate) fn open_link(
-        &self, role: LinkRole, adapter_name: &str, address: &str, max_write: usize,
+        &self,
+        role: LinkRole,
+        adapter_name: &str,
+        address: &str,
+        max_write: usize,
         writer: Option<Arc<CharacteristicWriter>>,
     ) -> LinkId {
-        let (id, displaced) = { self.conns().open(role, adapter_name, address, max_write, writer) };
+        let (id, displaced) = {
+            self.conns()
+                .open(role, adapter_name, address, max_write, writer)
+        };
         if let Some(old) = displaced {
             self.emit(LinkEvent::Disconnected { link: old });
         }
 
-        self.emit(LinkEvent::Connected { link: id.clone(), role, max_write });
+        self.emit(LinkEvent::Connected {
+            link: id.clone(),
+            role,
+            max_write,
+        });
 
         // Only now can inbound data be released: announcing sets the flag that
         // stops `accept_inbound` buffering, and drains what it already buffered.
@@ -343,7 +389,10 @@ impl Shared {
         // `Connected` for a link.
         let buffered = { self.conns().announce(&id) };
         for bytes in buffered {
-            self.emit(LinkEvent::Data { link: id.clone(), bytes });
+            self.emit(LinkEvent::Data {
+                link: id.clone(),
+                bytes,
+            });
         }
         id
     }
@@ -391,7 +440,10 @@ impl Shared {
     }
 
     fn adapter_handle(&self) -> Option<Adapter> {
-        self.adapter.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        self.adapter
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -421,11 +473,6 @@ impl BlueZLink {
         Self::for_adapter(None)
     }
 
-    /// Use a named adapter, e.g. `hci1`.
-    pub fn with_adapter(name: impl Into<String>) -> Self {
-        Self::for_adapter(Some(name.into()))
-    }
-
     fn for_adapter(adapter_name: Option<String>) -> Self {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -434,7 +481,10 @@ impl BlueZLink {
                 adapter: Mutex::new(None),
                 conns: Mutex::new(Connections::default()),
                 events_tx,
-                queue: AsyncMutex::new(EventQueue { rx: events_rx, shutdown: shutdown_rx }),
+                queue: AsyncMutex::new(EventQueue {
+                    rx: events_rx,
+                    shutdown: shutdown_rx,
+                }),
                 shutdown_tx,
             }),
             adapter_name,
@@ -469,7 +519,8 @@ impl MeshLink for BlueZLink {
             let stopped = { *self.inner.shutdown_tx.borrow() };
             if stopped {
                 return Err(LinkError::Backend(
-                    "this link layer has been stopped; construct a new BlueZLink to restart".to_string(),
+                    "this link layer has been stopped; construct a new BlueZLink to restart"
+                        .to_string(),
                 ));
             }
 
@@ -493,21 +544,29 @@ impl MeshLink for BlueZLink {
             central::configure_discovery(ble.adapter(), service).await?;
 
             let peripheral =
-                PeripheralRole::start(ble.adapter(), service, characteristic, self.inner.clone()).await?;
+                PeripheralRole::start(ble.adapter(), service, characteristic, self.inner.clone())
+                    .await?;
 
             let watcher = self.inner.clone();
-            let power = tokio::spawn(adapter::watch_power(ble.adapter().clone(), move |powered| {
-                watcher.emit(LinkEvent::AdapterPowerChanged { powered });
-                if !powered {
-                    // Every ACL died with the controller. Say so once per link
-                    // rather than leaving the layer above to discover it one
-                    // failed write at a time.
-                    watcher.drop_all();
-                }
-            }));
+            let power = tokio::spawn(adapter::watch_power(
+                ble.adapter().clone(),
+                move |powered| {
+                    watcher.emit(LinkEvent::AdapterPowerChanged { powered });
+                    if !powered {
+                        // Every ACL died with the controller. Say so once per link
+                        // rather than leaving the layer above to discover it one
+                        // failed write at a time.
+                        watcher.drop_all();
+                    }
+                },
+            ));
 
             {
-                let mut handle = self.inner.adapter.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut handle = self
+                    .inner
+                    .adapter
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
                 *handle = Some(ble.adapter().clone());
             }
             roles.adapter = Some(ble);
@@ -531,7 +590,11 @@ impl MeshLink for BlueZLink {
                 roles.adapter = None;
             }
             {
-                let mut handle = self.inner.adapter.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut handle = self
+                    .inner
+                    .adapter
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
                 *handle = None;
             }
 
@@ -548,9 +611,30 @@ impl MeshLink for BlueZLink {
             let mut roles = self.roles.lock().await;
 
             if !on {
-                // Dropping the handle aborts the scan task, which drops the
-                // discovery session, which calls StopDiscovery.
-                roles.scan = None;
+                // Dropping the handle starts BlueZ's asynchronous StopDiscovery.
+                // A connect may follow this call immediately; wait for our
+                // discovery session to actually end before returning.
+                let was_scanning = roles.scan.take().is_some();
+                let adapter = roles.adapter.as_ref().map(|ble| ble.adapter().clone());
+                drop(roles);
+                if was_scanning && let Some(adapter) = adapter {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        async {
+                            loop {
+                                match adapter.is_discovering().await {
+                                    Ok(false) => return true,
+                                    Err(_) => return false,
+                                    Ok(true) => tokio::time::sleep(
+                                        std::time::Duration::from_millis(50),
+                                    )
+                                    .await,
+                                }
+                            }
+                        },
+                    )
+                    .await;
+                }
                 return Ok(());
             }
             if roles.scan.is_some() {
@@ -560,7 +644,9 @@ impl MeshLink for BlueZLink {
             let adapter = roles
                 .adapter
                 .as_ref()
-                .ok_or_else(|| LinkError::AdapterUnavailable("link layer has not been started".to_string()))?
+                .ok_or_else(|| {
+                    LinkError::AdapterUnavailable("link layer has not been started".to_string())
+                })?
                 .adapter()
                 .clone();
             roles.scan = Some(central::start_scan(adapter, service, self.inner.clone()).await?);
@@ -571,12 +657,15 @@ impl MeshLink for BlueZLink {
     fn connect(&self, address: &str) -> BoxFuture<'_, Result<LinkId, LinkError>> {
         let address = address.to_string();
         Box::pin(async move {
+            // The mesh runs a continuous scan while sparse. BlueZ can keep an
+            // outbound LE connect pending for that whole discovery session, so
+            // settle StopDiscovery before opening the ACL.
+            self.set_scanning(false).await?;
             let service = service_uuid()?;
             let characteristic = characteristic_uuid()?;
-            let adapter = self
-                .inner
-                .adapter_handle()
-                .ok_or_else(|| LinkError::AdapterUnavailable("link layer has not been started".to_string()))?;
+            let adapter = self.inner.adapter_handle().ok_or_else(|| {
+                LinkError::AdapterUnavailable("link layer has not been started".to_string())
+            })?;
             central::connect(&adapter, &self.inner, &address, service, characteristic).await
         })
     }
@@ -620,7 +709,10 @@ impl MeshLink for BlueZLink {
             };
 
             if bytes.len() > max_write {
-                return Err(LinkError::PayloadTooLarge { actual: bytes.len(), max: max_write });
+                return Err(LinkError::PayloadTooLarge {
+                    actual: bytes.len(),
+                    max: max_write,
+                });
             }
 
             // Unreachable in a running link layer — every entry in the table has
@@ -696,15 +788,24 @@ mod tests {
         let service = service_uuid().expect("service uuid");
         let characteristic = characteristic_uuid().expect("characteristic uuid");
         assert_eq!(service.to_string().to_uppercase(), SERVICE_UUID);
-        assert_eq!(characteristic.to_string().to_uppercase(), CHARACTERISTIC_UUID);
+        assert_eq!(
+            characteristic.to_string().to_uppercase(),
+            CHARACTERISTIC_UUID
+        );
         // Mainnet, not bitchat's debug UUID, which differs only in the last char.
         assert!(!service.to_string().to_uppercase().ends_with("4B5A"));
     }
 
     #[test]
     fn device_paths_follow_bluez() {
-        assert_eq!(device_path("hci0", PEER), "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF");
-        assert_eq!(device_path("hci1", OTHER), "/org/bluez/hci1/dev_11_22_33_44_55_66");
+        assert_eq!(
+            device_path("hci0", PEER),
+            "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"
+        );
+        assert_eq!(
+            device_path("hci1", OTHER),
+            "/org/bluez/hci1/dev_11_22_33_44_55_66"
+        );
     }
 
     #[test]
@@ -712,7 +813,10 @@ mod tests {
         let mut conns = table();
         let (id, displaced) = conns.open(LinkRole::Central, ADAPTER, PEER, 244, None);
         assert!(displaced.is_none());
-        assert_eq!(id.as_str(), "central:/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF#1");
+        assert_eq!(
+            id.as_str(),
+            "central:/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF#1"
+        );
     }
 
     #[test]
@@ -722,7 +826,10 @@ mod tests {
         let mut conns = table();
         let (central, _) = conns.open(LinkRole::Central, ADAPTER, PEER, 244, None);
         let (peripheral, displaced) = conns.open(LinkRole::Peripheral, ADAPTER, PEER, 244, None);
-        assert!(displaced.is_none(), "the peripheral link must not displace the central one");
+        assert!(
+            displaced.is_none(),
+            "the peripheral link must not displace the central one"
+        );
         assert_ne!(central, peripheral);
         assert_eq!(conns.len(), 2);
     }
@@ -772,14 +879,24 @@ mod tests {
         // A central may write on its ATT channel before it subscribes. Nothing
         // below us retransmits, so those bytes have to survive the gap.
         let mut conns = table();
-        assert_eq!(conns.accept_inbound(LinkRole::Peripheral, PEER, b"early".to_vec()), None);
+        assert_eq!(
+            conns.accept_inbound(LinkRole::Peripheral, PEER, b"early".to_vec()),
+            None
+        );
 
         let (id, _) = conns.open(LinkRole::Peripheral, ADAPTER, PEER, 244, None);
         // Still buffered: inserting a link is not announcing it.
-        assert_eq!(conns.accept_inbound(LinkRole::Peripheral, PEER, b"later".to_vec()), None);
+        assert_eq!(
+            conns.accept_inbound(LinkRole::Peripheral, PEER, b"later".to_vec()),
+            None
+        );
 
         let flushed = conns.announce(&id);
-        assert_eq!(flushed, vec![b"early".to_vec(), b"later".to_vec()], "order must be preserved");
+        assert_eq!(
+            flushed,
+            vec![b"early".to_vec(), b"later".to_vec()],
+            "order must be preserved"
+        );
 
         // From here it flows straight through.
         assert_eq!(
@@ -800,7 +917,10 @@ mod tests {
         let flushed = conns.announce(&id);
         assert_eq!(flushed.len(), PENDING_PACKETS_PER_PEER);
         // The oldest were dropped, so the newest survive.
-        assert_eq!(flushed.last(), Some(&vec![(PENDING_PACKETS_PER_PEER + 4) as u8]));
+        assert_eq!(
+            flushed.last(),
+            Some(&vec![(PENDING_PACKETS_PER_PEER + 4) as u8])
+        );
     }
 
     #[test]
@@ -874,55 +994,97 @@ mod tests {
     #[tokio::test]
     async fn events_come_back_in_order() {
         let link = BlueZLink::new();
-        link.inner.emit(LinkEvent::Discovered { address: PEER.to_string(), rssi: -70, peer: None });
-        link.inner.emit(LinkEvent::AdapterPowerChanged { powered: true });
+        link.inner.emit(LinkEvent::Discovered {
+            address: PEER.to_string(),
+            rssi: -70,
+            peer: None,
+        });
+        link.inner
+            .emit(LinkEvent::AdapterPowerChanged { powered: true });
 
         assert_eq!(
             link.next_event().await,
-            Some(LinkEvent::Discovered { address: PEER.to_string(), rssi: -70, peer: None })
+            Some(LinkEvent::Discovered {
+                address: PEER.to_string(),
+                rssi: -70,
+                peer: None
+            })
         );
-        assert_eq!(link.next_event().await, Some(LinkEvent::AdapterPowerChanged { powered: true }));
+        assert_eq!(
+            link.next_event().await,
+            Some(LinkEvent::AdapterPowerChanged { powered: true })
+        );
     }
 
     #[tokio::test]
     async fn opening_a_link_announces_it_with_the_negotiated_size() {
         let link = BlueZLink::new();
-        let id = link.inner.open_link(LinkRole::Peripheral, ADAPTER, PEER, 185, None);
+        let id = link
+            .inner
+            .open_link(LinkRole::Peripheral, ADAPTER, PEER, 185, None);
         assert_eq!(
             link.next_event().await,
-            Some(LinkEvent::Connected { link: id.clone(), role: LinkRole::Peripheral, max_write: 185 })
+            Some(LinkEvent::Connected {
+                link: id.clone(),
+                role: LinkRole::Peripheral,
+                max_write: 185
+            })
         );
         assert_eq!(link.max_write(&id), Some(185));
 
         link.inner.close_link(LinkRole::Peripheral, PEER);
-        assert_eq!(link.next_event().await, Some(LinkEvent::Disconnected { link: id }));
+        assert_eq!(
+            link.next_event().await,
+            Some(LinkEvent::Disconnected { link: id })
+        );
     }
 
     #[tokio::test]
     async fn data_never_arrives_before_the_link_it_belongs_to() {
         // The ordering the Connected contract exists to guarantee.
         let link = BlueZLink::new();
-        link.inner.inbound(LinkRole::Peripheral, PEER, b"early".to_vec());
+        link.inner
+            .inbound(LinkRole::Peripheral, PEER, b"early".to_vec());
 
-        let id = link.inner.open_link(LinkRole::Peripheral, ADAPTER, PEER, 185, None);
+        let id = link
+            .inner
+            .open_link(LinkRole::Peripheral, ADAPTER, PEER, 185, None);
         assert_eq!(
             link.next_event().await,
-            Some(LinkEvent::Connected { link: id.clone(), role: LinkRole::Peripheral, max_write: 185 })
+            Some(LinkEvent::Connected {
+                link: id.clone(),
+                role: LinkRole::Peripheral,
+                max_write: 185
+            })
         );
         assert_eq!(
             link.next_event().await,
-            Some(LinkEvent::Data { link: id.clone(), bytes: b"early".to_vec() })
+            Some(LinkEvent::Data {
+                link: id.clone(),
+                bytes: b"early".to_vec()
+            })
         );
 
-        link.inner.inbound(LinkRole::Peripheral, PEER, b"live".to_vec());
-        assert_eq!(link.next_event().await, Some(LinkEvent::Data { link: id, bytes: b"live".to_vec() }));
+        link.inner
+            .inbound(LinkRole::Peripheral, PEER, b"live".to_vec());
+        assert_eq!(
+            link.next_event().await,
+            Some(LinkEvent::Data {
+                link: id,
+                bytes: b"live".to_vec()
+            })
+        );
     }
 
     #[tokio::test]
     async fn losing_the_adapter_disconnects_every_link() {
         let link = BlueZLink::new();
-        let a = link.inner.open_link(LinkRole::Central, ADAPTER, PEER, 244, None);
-        let b = link.inner.open_link(LinkRole::Peripheral, ADAPTER, OTHER, 244, None);
+        let a = link
+            .inner
+            .open_link(LinkRole::Central, ADAPTER, PEER, 244, None);
+        let b = link
+            .inner
+            .open_link(LinkRole::Peripheral, ADAPTER, OTHER, 244, None);
 
         // Drain the two Connected events.
         link.next_event().await;
@@ -946,10 +1108,14 @@ mod tests {
     #[tokio::test]
     async fn stop_drains_the_queue_and_then_ends_it() {
         let link = BlueZLink::new();
-        link.inner.emit(LinkEvent::AdapterPowerChanged { powered: false });
+        link.inner
+            .emit(LinkEvent::AdapterPowerChanged { powered: false });
         link.stop().await.expect("stop");
 
-        assert_eq!(link.next_event().await, Some(LinkEvent::AdapterPowerChanged { powered: false }));
+        assert_eq!(
+            link.next_event().await,
+            Some(LinkEvent::AdapterPowerChanged { powered: false })
+        );
         assert_eq!(link.next_event().await, None);
         assert_eq!(link.next_event().await, None, "the end is permanent");
     }
@@ -983,8 +1149,14 @@ mod tests {
     #[tokio::test]
     async fn operations_before_start_report_the_missing_adapter() {
         let link = BlueZLink::new();
-        assert!(matches!(link.connect(PEER).await, Err(LinkError::AdapterUnavailable(_))));
-        assert!(matches!(link.set_scanning(true).await, Err(LinkError::AdapterUnavailable(_))));
+        assert!(matches!(
+            link.connect(PEER).await,
+            Err(LinkError::AdapterUnavailable(_))
+        ));
+        assert!(matches!(
+            link.set_scanning(true).await,
+            Err(LinkError::AdapterUnavailable(_))
+        ));
         // Turning scanning off with nothing running is a no-op, not an error:
         // the duty cycle calls it unconditionally.
         assert!(link.set_scanning(false).await.is_ok());
@@ -994,8 +1166,14 @@ mod tests {
     async fn sending_on_an_unknown_link_says_the_link_is_gone() {
         let link = BlueZLink::new();
         let unknown = LinkId::new("central:/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF#99");
-        assert_eq!(link.send(&unknown, b"hello").await, Err(LinkError::LinkGone(unknown.to_string())));
-        assert_eq!(link.disconnect(&unknown).await, Err(LinkError::LinkGone(unknown.to_string())));
+        assert_eq!(
+            link.send(&unknown, b"hello").await,
+            Err(LinkError::LinkGone(unknown.to_string()))
+        );
+        assert_eq!(
+            link.disconnect(&unknown).await,
+            Err(LinkError::LinkGone(unknown.to_string()))
+        );
         assert_eq!(link.max_write(&unknown), None);
     }
 
@@ -1004,22 +1182,38 @@ mod tests {
         // Oversized writes are dropped silently by the controller, so this has to
         // be caught here or the packet vanishes with no error anywhere.
         let link = BlueZLink::new();
-        let id = link.inner.open_link(LinkRole::Peripheral, ADAPTER, PEER, 20, None);
-        assert_eq!(link.send(&id, &[0u8; 21]).await, Err(LinkError::PayloadTooLarge { actual: 21, max: 20 }));
+        let id = link
+            .inner
+            .open_link(LinkRole::Peripheral, ADAPTER, PEER, 20, None);
+        assert_eq!(
+            link.send(&id, &[0u8; 21]).await,
+            Err(LinkError::PayloadTooLarge {
+                actual: 21,
+                max: 20
+            })
+        );
         // Exactly at the limit gets past the size check.
-        assert!(!matches!(link.send(&id, &[0u8; 20]).await, Err(LinkError::PayloadTooLarge { .. })));
+        assert!(!matches!(
+            link.send(&id, &[0u8; 20]).await,
+            Err(LinkError::PayloadTooLarge { .. })
+        ));
     }
 
     #[tokio::test]
     async fn disconnect_announces_the_link_and_forgets_it() {
         let link = BlueZLink::new();
-        let id = link.inner.open_link(LinkRole::Central, ADAPTER, PEER, 244, None);
+        let id = link
+            .inner
+            .open_link(LinkRole::Central, ADAPTER, PEER, 244, None);
         link.next_event().await; // Connected
 
         // With no adapter acquired this takes the "nothing to tear down" path,
         // so it needs no radio.
         link.disconnect(&id).await.expect("disconnect");
-        assert_eq!(link.next_event().await, Some(LinkEvent::Disconnected { link: id.clone() }));
+        assert_eq!(
+            link.next_event().await,
+            Some(LinkEvent::Disconnected { link: id.clone() })
+        );
         assert_eq!(link.max_write(&id), None);
     }
 

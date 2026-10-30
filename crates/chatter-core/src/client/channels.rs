@@ -1,384 +1,159 @@
 //! Channel CRUD and membership operations.
 
-#![allow(unused_imports)]
-
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use parking_lot::Mutex;
-use tokio::task::JoinHandle;
-
-use crate::app::context::{AppContext, ContextError};
-use crate::app::core_services::CoreServices;
-use crate::domain::attachment::Attachment;
+use super::ChatterClient;
 use crate::domain::channel::{Channel, ChannelType};
-use crate::domain::message::{ConversationType, Message};
-use crate::error::NetworkError;
-use crate::events::{DomainEvent, EventBus};
-use crate::services::auth_service::{AuthError, LoginResult};
-use crate::inbox::DeviceInboxProvider;
-use crate::mailbox::group::GroupFanout;
-use crate::proto::content_v1::AttachmentPointer;
-use crate::services::ai_service::AIService;
-use crate::services::anon_dm::AnonDmService;
-use crate::services::anon_group::AnonGroupService;
-use crate::services::attachment::AttachmentService;
-use crate::services::auth_service::AuthService;
-#[cfg(feature = "media")]
-use crate::services::call_worker::CallWorkerHandle;
-use crate::services::channel::ChannelService;
-use crate::services::dm_bootstrap_service::DmBootstrapService;
-use crate::services::gateway::outgoing::{
-    OwnedOutgoingServices, OutgoingIntent, QuoteIntent, SendError, SendResult,
-    route_outgoing_owned,
-};
-use crate::services::ai::LocalAIService;
-use crate::services::mailbox_manager::MailboxManager;
-use crate::services::message::MessageService;
-use crate::services::pin_service::PinService;
-use crate::services::session_service::{SessionError, SessionService};
-use crate::services::signal_service::SignalService;
-use crate::services::section_service::SectionService;
-use crate::services::user::UserService;
-use crate::services::conversation::ConversationHandle;
-use crate::state::{
-    ActiveConversation, AuthState, ChatState, MessageState, OfflineState,
-    PrivacyState, UserState,
-};
-use crate::state::chat_state::PendingAttachment;
-use crate::storage::settings_keys;
-use crate::system::Directories;
-use super::{ChatterClient, ClientError};
+
+/// Complete or partial channel roster returned by the core paging policy.
+#[derive(Debug)]
+pub struct ChannelMemberLists {
+    pub members: Vec<crate::domain::channel::MemberWithProfile>,
+    pub bans: Option<Vec<crate::domain::channel::BannedMember>>,
+    pub complete: bool,
+    pub failure_stage: Option<ChannelMemberFailure>,
+}
+
+#[derive(Debug)]
+pub enum ChannelMemberFailure {
+    Members(String),
+    MembersPartial(String),
+    MembersLimit,
+    Bans(String),
+}
+
+fn sort_channel_member_roster(members: &mut [crate::domain::channel::MemberWithProfile]) {
+    use crate::domain::channel::MemberRole;
+    let rank = |role| match role {
+        MemberRole::Owner => 0,
+        MemberRole::Admin => 1,
+        MemberRole::Moderator => 2,
+        MemberRole::Member => 3,
+    };
+    members.sort_by(|a, b| {
+        rank(a.membership.role)
+            .cmp(&rank(b.membership.role))
+            .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
+            .then_with(|| a.membership.user_id.to_string().cmp(&b.membership.user_id.to_string()))
+    });
+}
+
+/// User-facing wording for a channel lifecycle event.
+pub enum ChannelEventNotice<'a> {
+    Moderation { action: &'a str, reason: Option<&'a str> },
+    OperationFailed { code: &'a str, message: &'a str },
+}
 
 impl ChatterClient {
+    pub fn channel_event_notice(event: ChannelEventNotice<'_>) -> String {
+        match event {
+            ChannelEventNotice::Moderation { action, reason } => match (action, reason) {
+                ("BAN", Some(r)) => format!("You were banned from this channel: {r}"),
+                ("BAN", None) => "You were banned from this channel.".into(),
+                ("KICK", Some(r)) => format!("You were removed from this channel: {r}"),
+                ("KICK", None) => "You were removed from this channel.".into(),
+                ("MUTE", _) => "You were muted in this channel.".into(),
+                ("UNMUTE", _) => "You were unmuted in this channel.".into(),
+                ("UNBAN", _) => "Your ban was lifted.".into(),
+                _ => "A moderation action was applied to your account.".into(),
+            },
+            ChannelEventNotice::OperationFailed { code, message } => {
+                if message.is_empty() { format!("Channel operation failed ({code}).") }
+                else { format!("Channel operation failed: {message}") }
+            }
+        }
+    }
+
+    /// Fetch all roster pages, preserving a partial roster when a later page fails.
+    /// Bans are fetched after members because the member fetch refreshes our role.
+    pub async fn channel_member_lists(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> ChannelMemberLists {
+        const PAGE: u32 = 100;
+        const MAX_PAGES: u32 = 100;
+        let mut members = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut page = 0;
+        loop {
+            let rows = match self
+                .list_members_with_profiles(channel_id, PAGE, page * PAGE)
+                .await
+            {
+                Ok(rows) => rows,
+                Err(error) => {
+                    tracing::warn!(%error, page, "Failed to list channel members");
+                    sort_channel_member_roster(&mut members);
+                    let failure_stage = if members.is_empty() {
+                        ChannelMemberFailure::Members(error.to_string())
+                    } else {
+                        ChannelMemberFailure::MembersPartial(error.to_string())
+                    };
+                    return ChannelMemberLists {
+                        members,
+                        bans: None,
+                        complete: false,
+                        failure_stage: Some(failure_stage),
+                    };
+                }
+            };
+            let last = (rows.len() as u32) < PAGE;
+            members.extend(
+                rows.into_iter()
+                    .filter(|member| seen.insert(member.membership.user_id)),
+            );
+            page += 1;
+            if last {
+                break;
+            }
+            if page == MAX_PAGES {
+                sort_channel_member_roster(&mut members);
+                return ChannelMemberLists {
+                    members,
+                    bans: None,
+                    complete: false,
+                    failure_stage: Some(ChannelMemberFailure::MembersLimit),
+                };
+            }
+        }
+        sort_channel_member_roster(&mut members);
+        match self.list_banned_members(channel_id).await {
+            Ok(bans) => ChannelMemberLists {
+                members,
+                bans,
+                complete: true,
+                failure_stage: None,
+            },
+            Err(error) => {
+                tracing::warn!(%error, "Failed to list channel bans");
+                ChannelMemberLists {
+                    members,
+                    bans: None,
+                    complete: true,
+                    failure_stage: Some(ChannelMemberFailure::Bans(error.to_string())),
+                }
+            }
+        }
+    }
+
     // ── Conversation listing ────────────────────────────────────────
 
     // ── Channel operations ────────────────────────────────────────
 
-    /// Subscribe to real-time message events for a specific channel.
+    /// Tell the live channel-message stream that this device's channel
+    /// membership changed, so it reconnects and the server re-runs its
+    /// membership-based auto-subscribe.
     ///
-    /// Starts a background task that streams message events from the server
-    /// and emits `DomainEvent::MessageReceived` for each new message.
-    /// This is called automatically by `create_channel` and `join_channel`,
-    /// but can also be called explicitly for channels discovered via other
-    /// means (e.g. DM channels created by friend accept).
-    pub fn subscribe_channel_messages(self: &Arc<Self>, channel_id: &crate::domain::ids::ChannelId) {
-        use tokio_stream::StreamExt;
-        use prost::Message as _;
-        use crate::proto::chat_v1::{self, message_event::Event as MsgEventType};
-        use crate::proto::content_v1::GroupEncrypted;
-        use crate::services::message::conversion::proto_to_domain_message_with_sender;
-
-        let mut msg_client = self.services.grpc_pool.message_client();
-        let event_bus = self.services.event_bus.clone();
-        let channel_id_owned = *channel_id;
-        let channel_id_str = channel_id.to_string();
-        // Capture current user ID to filter out own messages from the stream.
-        // Own messages are already displayed optimistically at send time.
-        let current_user_id = self.services.auth_state.get().current_user_id.clone();
-        let signal = self.signal().clone();
-        let messages = self.messages().clone();
-        let attachment_service = self.attachments().clone();
-        // Clone channel_repo so the spawned stream task can resolve
-        // ConversationType per incoming message without borrowing self.
-        let channel_repo_for_stream = self.services.channel_repo.clone();
-        // Same, for resolving a reply quote's parent id on inbound messages.
-        let message_repo_for_stream = messages.message_repo.clone();
-
-        let handle = tokio::spawn(async move {
-            let stream = match msg_client.stream_message_events(&channel_id_str, None).await {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!(
-                        channel_id = %channel_id_str,
-                        error = %e,
-                        "Failed to start channel message stream"
-                    );
-                    return;
-                }
-            };
-
-            tokio::pin!(stream);
-
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(event) => {
-                        if let Some(MsgEventType::MessageSent(ref proto_msg_ref)) = event.event {
-                            let proto_msg = proto_msg_ref.clone();
-                            let sender_id = if proto_msg.author_id.is_empty() {
-                                None
-                            } else {
-                                proto_msg.author_id.parse::<uuid::Uuid>().ok()
-                                    .map(crate::domain::ids::UserId::from)
-                            };
-
-                            // Skip own messages — already displayed optimistically at send time.
-                            // Without this, the sender sees a duplicate (often as "[Encrypted message]"
-                            // because we can't decrypt our own sender-key ciphertext).
-                            if let (Some(sid), Some(cur)) = (&sender_id, &current_user_id) {
-                                if sid == cur {
-                                    tracing::debug!(
-                                        channel_id = %channel_id_str,
-                                        "Skipping own message from channel stream (already shown optimistically)"
-                                    );
-                                    continue;
-                                }
-                            }
-
-                            // Server-managed group channel: Content::Encrypted wraps a
-                            // GroupEncrypted proto inside `EncryptedData.ciphertext`. Decrypt
-                            // via SenderKeyManager before converting — otherwise
-                            // `proto_content_to_domain` would dump the literal
-                            // "[Encrypted message]" placeholder into the UI.
-                            // The sender-key DataMessage carries the reply quote,
-                            // but the proto rebuilt below (`patched`) only keeps
-                            // text/files — capture the quote here so it isn't lost.
-                            let mut inbound_quote: Option<crate::proto::content_v1::Quote> = None;
-                            let decrypted_proto = if let Some(chat_v1::message::content::Type::Encrypted(enc)) =
-                                proto_msg.content.as_ref().and_then(|c| c.r#type.as_ref())
-                            {
-                                let sid = match sender_id {
-                                    Some(id) => id,
-                                    None => {
-                                        tracing::debug!(
-                                            channel_id = %channel_id_str,
-                                            "Encrypted stream message missing sender_id; skipping"
-                                        );
-                                        continue;
-                                    }
-                                };
-                                let group_encrypted = match GroupEncrypted::decode(enc.ciphertext.as_slice()) {
-                                    Ok(ge) => ge,
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            channel_id = %channel_id_str,
-                                            error = %e,
-                                            "Failed to decode GroupEncrypted from stream message"
-                                        );
-                                        continue;
-                                    }
-                                };
-                                // Signal-style: proto must carry sender's source_device
-                                // (`author_device_id`). Sender-keys are per (uuid, device).
-                                let device_id = proto_msg.author_device_id;
-                                if device_id == 0 {
-                                    tracing::warn!(
-                                        channel_id = %channel_id_str,
-                                        sender_id = %sid,
-                                        message_id = %proto_msg.id,
-                                        "Encrypted stream message missing author_device_id; dropping"
-                                    );
-                                    continue;
-                                }
-                                match signal.decrypt_from_group(&sid, device_id, &group_encrypted).await {
-                                    Ok(plaintext) => {
-                                        use prost::Message as _;
-                                        // Sender ships a serialized
-                                        // `content_v1::Content::DataMessage`
-                                        // as the sender-key plaintext so
-                                        // attachment pointers (CDN key + AES
-                                        // key) travel with the message.
-                                        let dm = match crate::proto::content_v1::Content::decode(plaintext.as_slice())
-                                            .ok()
-                                            .and_then(|c| c.content)
-                                        {
-                                            Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => dm,
-                                            _ => {
-                                                tracing::warn!(
-                                                    channel_id = %channel_id_str,
-                                                    sender_id = %sid,
-                                                    "Decrypted stream plaintext is not a valid DataMessage; dropping"
-                                                );
-                                                continue;
-                                            }
-                                        };
-
-                                        // Carry the reply quote out of the
-                                        // decrypted DataMessage (dropped by the
-                                        // patched proto below) — MISSING-FEATURES #9.
-                                        inbound_quote = dm.quote.clone();
-
-                                        // Persist incoming attachment pointers
-                                        // so the receiver can download + decrypt.
-                                        if !dm.attachments.is_empty() {
-                                            attachment_service.create_from_pointers(&dm.attachments);
-                                        }
-
-                                        // Rebuild the wire proto with the
-                                        // decrypted text + attachment ids so
-                                        // `proto_to_domain_message_with_sender`
-                                        // picks them up through the Mixed path.
-                                        let files: Vec<chat_v1::FileMetadata> = dm
-                                            .attachments
-                                            .iter()
-                                            .filter(|p| !p.cdn_key.is_empty())
-                                            .map(|p| chat_v1::FileMetadata {
-                                                id: crate::domain::AttachmentId::from_cdn_key(&p.cdn_key).to_string(),
-                                                name: p.file_name.clone(),
-                                                mime_type: p.content_type.clone(),
-                                                size: p.plaintext_size,
-                                                ..Default::default()
-                                            })
-                                            .collect();
-                                        let new_type = if files.is_empty() {
-                                            chat_v1::message::content::Type::Text(dm.body.clone())
-                                        } else {
-                                            chat_v1::message::content::Type::Mixed(
-                                                chat_v1::message::MixedContent {
-                                                    text: dm.body.clone(),
-                                                    files,
-                                                },
-                                            )
-                                        };
-                                        let mut patched = proto_msg.clone();
-                                        patched.content = Some(chat_v1::message::Content {
-                                            r#type: Some(new_type),
-                                        });
-                                        patched
-                                    }
-                                    Err(e) => {
-                                        let es = e.to_string();
-                                        if es.contains("no sender key")
-                                            || es.contains("missing sender key")
-                                            || es.contains("SenderKeyRecord")
-                                            || es.contains("not found")
-                                        {
-                                            tracing::warn!(
-                                                channel_id = %channel_id_str,
-                                                sender_id = %sid,
-                                                device_id,
-                                                "Missing sender key; deferring message and requesting SKDM"
-                                            );
-                                            // Enqueue so we can retry once the SKDM lands.
-                                            messages.defer_pending_group_decrypt(
-                                                channel_id_owned,
-                                                sid,
-                                                device_id,
-                                                proto_msg.clone(),
-                                            );
-                                            let msg_svc = messages.clone();
-                                            let cid = channel_id_owned;
-                                            tokio::spawn(async move {
-                                                if let Err(e) = msg_svc.send_sender_key_request(&cid, &sid).await {
-                                                    tracing::warn!(
-                                                        channel_id = %cid,
-                                                        sender_id = %sid,
-                                                        error = %e,
-                                                        "Failed to send SenderKeyRequest"
-                                                    );
-                                                }
-                                            });
-                                        } else {
-                                            tracing::warn!(
-                                                channel_id = %channel_id_str,
-                                                sender_id = %sid,
-                                                error = %es,
-                                                "Failed to decrypt stream message"
-                                            );
-                                        }
-                                        continue;
-                                    }
-                                }
-                            } else {
-                                proto_msg
-                            };
-
-                            // Streaming decrypt path — derive
-                            // ConversationType from the channel the
-                            // subscription is bound to.
-                            let conv_type = crate::services::message::conversion::conversation_type_for_channel(
-                                &channel_repo_for_stream,
-                                &channel_id_owned,
-                            );
-                            match proto_to_domain_message_with_sender(&decrypted_proto, sender_id, conv_type) {
-                                Ok(mut message) => {
-                                    // Populate reply_to_* from the wire quote so
-                                    // the recipient's reply bubble renders
-                                    // (MISSING-FEATURES #9). Shared with the DM
-                                    // inbound paths.
-                                    crate::services::gateway::inbound::apply_inbound_quote(
-                                        &mut message,
-                                        inbound_quote.as_ref(),
-                                        &message_repo_for_stream,
-                                    );
-                                    // Persist to DB so the message survives a
-                                    // channel switch (`load_channel_into_ui`
-                                    // reads from `messages` table). Without
-                                    // this the bubble only lives in the
-                                    // in-memory state and disappears on nav.
-                                    match messages.get_message_local(&message.id) {
-                                        Ok(Some(existing)) => {
-                                            // Preserve attachments + reactions
-                                            // already stored for this message.
-                                            if message.attachments.is_empty() {
-                                                message.attachments = existing.attachments;
-                                            }
-                                            if message.reaction_counts.is_empty() {
-                                                message.reaction_counts = existing.reaction_counts;
-                                            }
-                                            if let Err(e) = messages.update_message(&message) {
-                                                tracing::warn!(
-                                                    channel_id = %channel_id_str,
-                                                    message_id = %message.id,
-                                                    error = %e,
-                                                    "Failed to update stream message"
-                                                );
-                                            }
-                                        }
-                                        Ok(None) => {
-                                            if let Err(e) = messages.store_message_local(&message) {
-                                                tracing::warn!(
-                                                    channel_id = %channel_id_str,
-                                                    message_id = %message.id,
-                                                    error = %e,
-                                                    "Failed to insert stream message"
-                                                );
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                channel_id = %channel_id_str,
-                                                message_id = %message.id,
-                                                error = %e,
-                                                "Failed to read existing message before upsert"
-                                            );
-                                        }
-                                    }
-
-                                    let _ = event_bus.domain_sender().send(
-                                        DomainEvent::MessageReceived { message },
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        channel_id = %channel_id_str,
-                                        error = %e,
-                                        "Failed to convert stream message to domain"
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            channel_id = %channel_id_str,
-                            error = %e,
-                            "Channel message stream error"
-                        );
-                        break;
-                    }
-                }
-            }
-        });
-
-        self.tasks.lock().push(handle);
+    /// Replaces the old per-channel `subscribe_channel_messages`, which
+    /// spawned one `StreamMessageEvents` task per channel from exactly two
+    /// call sites, never re-subscribed at login, and returned for good on the
+    /// first stream error (INFRA-1). Delivery now lives in
+    /// `services::channel_stream::ChannelStreamService`.
+    pub fn resubscribe_channel_messages(self: &Arc<Self>) {
+        self.services.channel_stream_service.request_resubscribe();
     }
 
-    /// Create a channel and set up group encryption (mailbox + sender keys).
-    ///
-    /// Handles the full protocol: create on server, announce mailbox,
-    /// distribute SKDM to members. The caller doesn't need to know about
-    /// mailbox setup or sender key distribution.
+    /// Create a channel and subscribe to its message stream.
     pub async fn create_channel(
         self: &Arc<Self>,
         name: &str,
@@ -389,47 +164,24 @@ impl ChatterClient {
         password: Option<&str>,
         initial_members: Vec<crate::domain::ids::UserId>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
-        let (channel, _mailbox_setup) = self.channels()
-            .create_channel(name, channel_type, config, description, icon, password, initial_members, true)
+        let channel = self
+            .channels()
+            .create_channel(
+                name,
+                channel_type,
+                config,
+                description,
+                icon,
+                password,
+                initial_members,
+            )
             .await?;
-        // Stream subscription owns tasks + the pending-decrypt queue held by
-        // this client, so it stays here rather than inside the service.
-        self.subscribe_channel_messages(&channel.id);
+        self.services.channel_event_service.record_own_create(&channel.id);
+        // The global message stream subscribes from the server's membership
+        // list; nudge it so the channel we just created is picked up now
+        // rather than at the next reconnect.
+        self.resubscribe_channel_messages();
         Ok(channel)
-    }
-
-    /// Builder entry-point for creating a channel.
-    ///
-    /// Replaces the 7-positional-arg `create_channel` /
-    /// `create_channel_with_icon` calls with a fluent builder so callers
-    /// don't have to remember the order or pass `None`/`vec![]` placeholders
-    /// for fields they don't care about.
-    ///
-    /// ```ignore
-    /// client
-    ///     .new_channel("general", ChannelType::Public)
-    ///     .description("welcome")
-    ///     .members(vec![alice, bob])
-    ///     .icon_path(Path::new("logo.png"))
-    ///     .create()
-    ///     .await?;
-    /// ```
-    pub fn new_channel(
-        self: &Arc<Self>,
-        name: impl Into<String>,
-        channel_type: ChannelType,
-    ) -> ChannelBuilder {
-        ChannelBuilder {
-            client: self.clone(),
-            name: name.into(),
-            channel_type,
-            config: None,
-            description: None,
-            icon: None,
-            icon_path: None,
-            password: None,
-            initial_members: Vec::new(),
-        }
     }
 
     /// Create a channel, reading the icon file from disk if one is
@@ -453,10 +205,9 @@ impl ChatterClient {
             Some(path) => match tokio::fs::read(path).await {
                 Ok(bytes) => Some(Self::fit_icon_bytes(&bytes)?),
                 Err(e) => {
-                    return Err(crate::services::channel::ChannelError::InvalidInput(format!(
-                        "icon read failed: {}",
-                        e
-                    )));
+                    return Err(crate::services::channel::ChannelError::InvalidInput(
+                        format!("icon read failed: {}", e),
+                    ));
                 }
             },
             None => None,
@@ -473,24 +224,23 @@ impl ChatterClient {
         .await
     }
 
-    /// Join a channel and set up group encryption.
-    ///
-    /// Handles mailbox announcement, SKDM distribution, and requesting
-    /// existing members' SKDMs automatically. Without receiving existing
-    /// members' SKDMs, the new member cannot decrypt their messages.
+    /// Join a channel and request sender keys from its existing members.
     pub async fn join_channel(
         self: &Arc<Self>,
         channel_id: &crate::domain::ids::ChannelId,
         password: Option<&str>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
-        let (channel, _mailbox_setup) = self.channels()
-            .join_channel(channel_id, password, true)
-            .await?;
-        self.subscribe_channel_messages(&channel.id);
+        let channel = self.channels().join_channel(channel_id, password).await?;
+        self.services.channel_event_service.record_own_join(channel_id);
+        self.resubscribe_channel_messages();
 
         // Pull SKDMs from existing members so we can decrypt their next
         // messages without the no-sender-key defer/retry round-trip.
-        if let Err(e) = self.messages().request_skdms_from_channel_members(channel_id).await {
+        if let Err(e) = self
+            .messages()
+            .request_skdms_from_channel_members(channel_id)
+            .await
+        {
             tracing::warn!(
                 channel_id = %channel_id,
                 error = %e,
@@ -512,21 +262,24 @@ impl ChatterClient {
         user_id: &crate::domain::ids::UserId,
         reason: Option<&str>,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().kick_user_complete(channel_id, user_id, reason).await
+        self.channels()
+            .kick_user_complete(channel_id, user_id, reason)
+            .await
     }
 
     /// Ban a user from a channel (server-side) and re-distribute sender keys.
     ///
     /// Like kick, ban removes local membership and rotates the sender key.
-    /// `duration` is the ban length — `None` means permanent.
+    /// Permanent until [`Self::unban_user`] (no UI offers a timed ban).
     pub async fn ban_user(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
         user_id: &crate::domain::ids::UserId,
-        duration: Option<std::time::Duration>,
         reason: Option<&str>,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().ban_user_complete(channel_id, user_id, duration, reason).await
+        self.channels()
+            .ban_user_complete(channel_id, user_id, reason)
+            .await
     }
 
     /// Unban a user — clears the server-side ban. The user can rejoin via
@@ -539,25 +292,199 @@ impl ChatterClient {
         self.channels().unban_user(channel_id, user_id).await
     }
 
-    /// Mute a user in a channel (local-only enforcement — flips the
-    /// membership's `is_muted` flag and sets `muted_until`). Server sends
-    /// channel-moderation events for peer coordination.
-    pub fn mute_user(
+    /// Make `new_owner` the channel's owner; we become an admin and may then
+    /// leave. Only the owner may (the server checks it too).
+    pub async fn transfer_channel_ownership(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
-        user_id: &crate::domain::ids::UserId,
-        duration: std::time::Duration,
+        new_owner: &crate::domain::ids::UserId,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().mute_user(channel_id, user_id, duration)
+        self.channels()
+            .transfer_ownership(channel_id, new_owner)
+            .await
     }
 
-    /// Unmute a user — clears the local mute flag.
-    pub fn unmute_user(
+    /// Mute a member for `duration`, or until unmuted when `None`.
+    /// Server-enforced: their sends are refused until it is lifted or lapses.
+    pub async fn mute_user(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        user_id: &crate::domain::ids::UserId,
+        duration: Option<std::time::Duration>,
+    ) -> Result<(), crate::services::channel::ChannelError> {
+        self.channels()
+            .mute_user(channel_id, user_id, duration)
+            .await
+    }
+
+    /// Lift a mute.
+    pub async fn unmute_user(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
         user_id: &crate::domain::ids::UserId,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().unmute_user(channel_id, user_id)
+        self.channels().unmute_user(channel_id, user_id).await
+    }
+
+    /// The notice that replaces the composer when we may not post in this
+    /// channel, or "" when we may. Read from our stored membership, which a
+    /// removal event deletes and a member fetch refreshes.
+    pub fn channel_send_notice(&self, channel_id: &crate::domain::ids::ChannelId) -> String {
+        if let Some(gate) = self.secret_chat_gate(&crate::domain::anon_dm::AnonDmId::from_uuid(
+            *channel_id.as_uuid(),
+        )) {
+            return gate.notice().to_string();
+        }
+        if !self.is_moderated_channel(channel_id) {
+            return String::new();
+        }
+        let Some(me) = self.session_current_user_id() else {
+            return String::new();
+        };
+        let members = self.list_channel_members_local(channel_id);
+        let own = members.iter().find(|m| m.user_id == me);
+        crate::domain::channel::SendBlock::for_viewer(
+            own,
+            !members.is_empty(),
+            self.former_channel_state(channel_id),
+        )
+        .map(|b| b.notice())
+        .unwrap_or_default()
+    }
+
+    /// `Some(deleted)` for a channel we are no longer in (left, removed,
+    /// banned, deleted), which stays listed read-only; `None` otherwise.
+    fn former_channel_state(&self, channel_id: &crate::domain::ids::ChannelId) -> Option<bool> {
+        self.channels()
+            .channel_repo
+            .former_state(channel_id)
+            .ok()
+            .flatten()
+    }
+
+    /// A channel we are no longer in, listed read-only: its row offers
+    /// "Delete chat" (a live channel is left, not deleted — a membership
+    /// outlives a local delete, the next sync brings it back) and it is no
+    /// forward destination.
+    /// Whether a channel we are no longer in may be joined again from its
+    /// chat: a public channel that still exists (Telegram's "Join" bar). The
+    /// server still decides — a ban refuses the join.
+    pub fn can_rejoin_channel(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
+        self.is_former_channel(channel_id)
+            && self.former_channel_state(channel_id) == Some(false)
+            && self.get_channel_local(channel_id).is_some_and(|c| {
+                c.channel_type == crate::domain::channel::ChannelType::Public
+            })
+    }
+
+    /// Whether this device holds our membership of the channel: a search hit
+    /// for it opens the chat instead of joining again.
+    pub fn is_channel_member(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
+        let Some(me) = self.session_current_user_id() else {
+            return false;
+        };
+        self.channels()
+            .channel_repo
+            .get_membership(channel_id, &me)
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    pub fn is_former_channel(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
+        let Some(me) = self.session_current_user_id() else {
+            return false;
+        };
+        self.former_channel_state(channel_id).is_some()
+            && self
+                .channels()
+                .channel_repo
+                .get_membership(channel_id, &me)
+                .ok()
+                .flatten()
+                .is_none()
+    }
+
+    /// Whether to offer "Leave channel": we are still a member and not the
+    /// owner (see [`crate::domain::channel::Channel::can_user_leave`]). An
+    /// unsynced roster counts as membership, as in [`Self::channel_send_notice`].
+    pub fn can_leave_channel(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
+        let (Some(channel), Some(me)) = (
+            self.get_channel_local(channel_id),
+            self.session_current_user_id(),
+        ) else {
+            return false;
+        };
+        let members = self.list_channel_members_local(channel_id);
+        let own = members.iter().find(|m| m.user_id == me);
+        let still_member = !matches!(
+            crate::domain::channel::SendBlock::for_viewer(
+                own,
+                !members.is_empty(),
+                self.former_channel_state(channel_id)
+            ),
+            Some(
+                crate::domain::channel::SendBlock::Removed
+                    | crate::domain::channel::SendBlock::Deleted
+            )
+        );
+        channel.can_user_leave(&me, still_member)
+    }
+
+    /// [`Self::channel_send_notice`] after re-reading the roster from the
+    /// server: on channel open and after a refused send, in case a live
+    /// `MemberUpdated` was missed. A failed fetch keeps the local
+    /// answer.
+    // refetches the full roster; a "my membership" RPC if that
+    // shows up in large channels.
+    pub async fn refresh_channel_send_notice(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> String {
+        // A secret chat's notice is local state, and a channel we left has no
+        // roster we may read (the server refuses it): nothing to refresh.
+        if !self.is_moderated_channel(channel_id) || self.is_former_channel(channel_id) {
+            return self.channel_send_notice(channel_id);
+        }
+        if let Err(e) = self.channels().get_all_channel_members(channel_id).await {
+            tracing::debug!(%channel_id, error = %e, "Roster refresh for send notice failed");
+        }
+        self.channel_send_notice(channel_id)
+    }
+
+    /// Saved Messages has no moderation (the server refuses it).
+    fn is_moderated_channel(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
+        self.get_channel_local(channel_id)
+            .is_some_and(|c| !matches!(c.channel_type, ChannelType::SavedMessages))
+    }
+
+    /// A channel's active bans shaped for display, or `None` when our role
+    /// may not see them (only owner/admin can unban). Call after a member
+    /// fetch so our local role is current.
+    pub async fn list_banned_members(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Result<
+        Option<Vec<crate::domain::channel::BannedMember>>,
+        crate::services::channel::ChannelError,
+    > {
+        let Some(bans) = self.channels().list_banned_users(channel_id).await? else {
+            return Ok(None);
+        };
+        let names = self.users().get_display_names(
+            &bans.iter().map(|ban| ban.user_id).collect::<Vec<_>>(),
+        );
+        Ok(Some(
+            bans.into_iter()
+                .map(|b| crate::domain::channel::BannedMember {
+                    display_name: names.get(&b.user_id).cloned().unwrap_or_default(),
+                    avatar_bytes: self
+                        .get_profile_local(&b.user_id)
+                        .and_then(|p| p.avatar_bytes),
+                    ..b
+                })
+                .collect(),
+        ))
     }
 
     /// Update a channel's name, description and/or icon.
@@ -573,9 +500,35 @@ impl ChatterClient {
         icon: Option<&[u8]>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
         let fitted = icon.map(Self::fit_icon_bytes).transpose()?;
-        self.channels()
+        let old = self.get_channel_local(channel_id);
+        let old_name = old.as_ref().map(|c| c.name.clone());
+        let old_icon = old.and_then(|c| c.icon).unwrap_or_default();
+        let updated = self
+            .channels()
             .update_channel(channel_id, name, description, fitted.as_deref(), None)
-            .await
+            .await?;
+        // Our own rename or photo: the stream echo may find them already merged
+        // and file nothing, so file the notices here too (keyed, so an echo
+        // that lands first is not doubled).
+        if let (Some(icon), Some(me)) = (fitted.as_deref(), self.session_current_user_id()) {
+            if !icon.is_empty() && icon != old_icon.as_slice() {
+                self.services
+                    .channel_event_service
+                    .record_channel_photo_changed(channel_id, me, icon, 0);
+            }
+        }
+        if let (Some(old_name), Some(me)) = (old_name, self.session_current_user_id()) {
+            if !old_name.is_empty() && old_name != updated.name {
+                self.services.channel_event_service.record_channel_renamed(
+                    channel_id,
+                    me,
+                    old_name,
+                    updated.name.clone(),
+                    0,
+                );
+            }
+        }
+        Ok(updated)
     }
 
     /// Archive or unarchive a channel.
@@ -600,7 +553,11 @@ impl ChatterClient {
         &self,
         channel_id: &crate::domain::ids::ChannelId,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().leave_channel_complete(channel_id).await
+        self.channels().leave_channel_complete(channel_id).await?;
+        self.services
+            .channel_event_service
+            .record_own_leave(channel_id);
+        Ok(())
     }
 
     /// Search public channels.
@@ -609,7 +566,9 @@ impl ChatterClient {
         query: &str,
         limit: u32,
     ) -> Result<Vec<Channel>, crate::services::channel::ChannelError> {
-        self.channels().search_channels(query, limit, 0, vec![ChannelType::Public]).await
+        self.channels()
+            .search_channels(query, limit, 0, vec![ChannelType::Public])
+            .await
     }
 
     const MAX_ICON_BYTES: usize = 65_536;
@@ -620,9 +579,7 @@ impl ChatterClient {
         }
 
         let img = image::load_from_memory(raw).map_err(|e| {
-            crate::services::channel::ChannelError::InvalidInput(format!(
-                "icon decode failed: {e}"
-            ))
+            crate::services::channel::ChannelError::InvalidInput(format!("icon decode failed: {e}"))
         })?;
 
         let mut img = img;
@@ -631,11 +588,12 @@ impl ChatterClient {
                 img = img.resize(max_dim, max_dim, image::imageops::FilterType::Lanczos3);
             }
             let mut buf = std::io::Cursor::new(Vec::new());
-            img.write_to(&mut buf, image::ImageFormat::WebP).map_err(|e| {
-                crate::services::channel::ChannelError::InvalidInput(format!(
-                    "icon encode failed: {e}"
-                ))
-            })?;
+            img.write_to(&mut buf, image::ImageFormat::WebP)
+                .map_err(|e| {
+                    crate::services::channel::ChannelError::InvalidInput(format!(
+                        "icon encode failed: {e}"
+                    ))
+                })?;
             let encoded = buf.into_inner();
             if encoded.len() <= Self::MAX_ICON_BYTES {
                 tracing::info!(
@@ -651,106 +609,5 @@ impl ChatterClient {
         Err(crate::services::channel::ChannelError::InvalidInput(
             "icon still too large after conversion to 64×64 WebP".into(),
         ))
-    }
-}
-
-/// Fluent builder for `ChatterClient::new_channel(...)`.
-///
-/// All fields default to "unset" — only `name` and `channel_type` are
-/// required (passed at construction). Call `.create()` to send the
-/// CreateChannel RPC and run the post-create wiring (mailbox announce,
-/// SKDM distribution, stream subscription).
-pub struct ChannelBuilder {
-    client: Arc<crate::client::ChatterClient>,
-    name: String,
-    channel_type: ChannelType,
-    config: Option<crate::domain::channel::ChannelConfig>,
-    description: Option<String>,
-    icon: Option<Vec<u8>>,
-    icon_path: Option<std::path::PathBuf>,
-    password: Option<String>,
-    initial_members: Vec<crate::domain::ids::UserId>,
-}
-
-impl ChannelBuilder {
-    /// Override the default `ChannelConfig` (encryption, persistence, …).
-    pub fn config(mut self, config: crate::domain::channel::ChannelConfig) -> Self {
-        self.config = Some(config);
-        self
-    }
-
-    /// Set the channel topic / description.
-    pub fn description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
-    /// Set the channel icon as raw image bytes (PNG/JPEG/WebP, ≤64KB).
-    /// Mutually exclusive with `icon_path`; the last setter wins.
-    pub fn icon(mut self, bytes: impl Into<Vec<u8>>) -> Self {
-        self.icon = Some(bytes.into());
-        self.icon_path = None;
-        self
-    }
-
-    /// Read the icon from a local file before creating the channel.
-    /// Mutually exclusive with `icon`.
-    pub fn icon_path(mut self, icon_path: impl Into<std::path::PathBuf>) -> Self {
-        self.icon_path = Some(icon_path.into());
-        self.icon = None;
-        self
-    }
-
-    /// Set a join password (private channels).
-    pub fn password(mut self, password: impl Into<String>) -> Self {
-        self.password = Some(password.into());
-        self
-    }
-
-    /// Members to invite at creation time.
-    pub fn members(mut self, members: Vec<crate::domain::ids::UserId>) -> Self {
-        self.initial_members = members;
-        self
-    }
-
-    /// Add a single member.
-    pub fn add_member(mut self, member: crate::domain::ids::UserId) -> Self {
-        self.initial_members.push(member);
-        self
-    }
-
-    /// Execute the create. Reads the icon from disk if `icon_path` is set.
-    pub async fn create(
-        self,
-    ) -> Result<Channel, crate::services::channel::ChannelError> {
-        if let Some(path) = self.icon_path {
-            self.client
-                .create_channel_with_icon(
-                    &self.name,
-                    self.channel_type,
-                    self.config,
-                    self.description.as_deref(),
-                    Some(path.as_path()),
-                    self.password.as_deref(),
-                    self.initial_members,
-                )
-                .await
-        } else {
-            let fitted = self.icon
-                .as_deref()
-                .map(ChatterClient::fit_icon_bytes)
-                .transpose()?;
-            self.client
-                .create_channel(
-                    &self.name,
-                    self.channel_type,
-                    self.config,
-                    self.description.as_deref(),
-                    fitted.as_deref(),
-                    self.password.as_deref(),
-                    self.initial_members,
-                )
-                .await
-        }
     }
 }

@@ -99,7 +99,9 @@ impl ChannelBuilder {
             name: self.name.unwrap_or_else(unique_channel_name),
             channel_type: self.channel_type,
             description: self.description,
-            creator_id: self.creator_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            creator_id: self
+                .creator_id
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             member_ids: self.member_ids,
             created_at: chrono::Utc::now().timestamp_millis(),
         }
@@ -107,9 +109,6 @@ impl ChannelBuilder {
 
     /// Build a DM channel between two users.
     pub fn build_dm_between(user1: impl Into<String>, user2: impl Into<String>) -> TestChannel {
-        Self::dm()
-            .with_member(user1)
-            .with_member(user2)
-            .build()
+        Self::dm().with_member(user1).with_member(user2).build()
     }
 }

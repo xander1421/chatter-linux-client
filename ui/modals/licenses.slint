@@ -1,0 +1,39 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+
+// Lazy rows: the compiler virtualizes a `for` under an element named
+// `ListView` with these properties (see ui/calls/call_history_screen.slint).
+component ListView inherits Flickable {
+    out property <length> visible-height: self.height;
+    out property <length> visible-width: self.width;
+    @children
+}
+
+export component LicensesModal inherits Rectangle {
+    in property <bool> show-modal: false;
+    in property <[string]> notices: [];
+    callback close();
+
+    Modal {
+        show: root.show-modal;
+        title: "Open-source licenses";
+        full-screen: true;
+        close => { root.close(); }
+
+        lv := ListView {
+            vertical-stretch: 1;
+            for block in root.notices: VerticalLayout {
+                width: lv.visible-width;
+                padding-bottom: Spacing.md;
+                Text {
+                    text: block;
+                    wrap: word-wrap;
+                    color: Colors.text-primary;
+                    font-size: Typography.xs;
+                }
+            }
+        }
+    }
+}

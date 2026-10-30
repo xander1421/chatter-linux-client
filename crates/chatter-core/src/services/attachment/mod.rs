@@ -9,9 +9,12 @@ mod range_decrypt;
 mod sanitize;
 mod upload;
 
-pub use media::{GifDecodeResult, GifFullDecodeResult, ImageDecodeResult};
-pub use sanitize::{sanitize_media, sanitize_media_file, validate_media, SanitizeOutcome};
+pub use media::{
+    GifDecodeResult, GifFullDecodeResult, ImageDecodeResult, ThumbnailOwner,
+    register_video_thumbnail_extractor,
+};
 pub use range_decrypt::{CbcRangeDecryptor, CbcRangeReader};
+pub use sanitize::{SanitizeOutcome, sanitize_media, sanitize_media_file, validate_media};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,49 +24,25 @@ use thiserror::Error;
 use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
 use crate::domain::attachment::{Attachment, ContentLocation};
 use crate::domain::ids::AttachmentId;
-use crate::proto::content_v1::AttachmentPointer;
 use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::proto::content_v1::AttachmentPointer;
 use crate::storage::repositories::AttachmentRepository;
 
 // Submodules add impl blocks to AttachmentService
 // No re-exports needed - methods are on the struct
 
-/// The shared HTTP client for presigned CDN transfers.
-///
-/// Every direct CDN request used to build its own `reqwest::Client::new()`, with
-/// no deadline of any kind. Against an unreachable or black-holing storage host
-/// that hung forever, and one of those hangs was permanent from the user's side:
-/// `handle_download_attachment` persists `AttachmentStatus::Downloading` before
-/// spawning, and the click handler refuses to start a download that is already
-/// "in progress" — so a single tap while the server was gone left that
-/// attachment un-openable and un-retryable across restarts. A request that can
-/// fail is what lets that state clear.
-///
-/// The bounds are deliberately not an overall request timeout: attachments are
-/// large, a slow link is not a broken one, and a whole-request deadline would
-/// cancel honest transfers. Instead:
-///
-/// * `connect_timeout` bounds finding the host at all — the offline case.
-/// * `read_timeout` bounds the gap *between* bytes, so a transfer that is
-///   progressing is never interrupted but a stalled one is.
-///
-/// One shared client, also because `reqwest::Client::new()` per request threw
-/// away the connection pool and TLS session cache on every call.
-fn cdn_client() -> &'static reqwest::Client {
-    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(15))
-            .read_timeout(std::time::Duration::from_secs(60))
-            .build()
-            // A builder failure here is a TLS/config problem, not a network one,
-            // and there is no meaningful degraded mode — fall back to the
-            // unbounded default rather than take the process down over it.
-            .unwrap_or_else(|error| {
-                tracing::error!(%error, "could not build the CDN HTTP client; using defaults");
-                reqwest::Client::new()
-            })
-    })
+/// The transfer needs Tor and this build has none (`cdn_over_tor` only says
+/// so for a secret chat, which it already refuses without a Tor route).
+#[cfg(not(feature = "onion"))]
+fn no_tor() -> AttachmentError {
+    AttachmentError::NetworkError(
+        crate::error::NetworkError::SecretChatNeedsTor("this build has none").to_string(),
+    )
+}
+
+/// Use the common pinned storage policy for every direct CDN transfer.
+fn cdn_client() -> Result<reqwest::Client, AttachmentError> {
+    crate::network::storage_http::storage_client().map_err(AttachmentError::NetworkError)
 }
 
 /// Attachment service errors.
@@ -93,7 +72,6 @@ pub enum AttachmentError {
     #[error("decryption error: {0}")]
     DecryptionError(String),
 }
-
 
 /// Result of encrypted CDN upload for E2E attachments.
 ///
@@ -134,10 +112,6 @@ pub struct CdnUploadResult {
     /// Original image/video dimensions.
     pub width: u32,
     pub height: u32,
-    /// Concatenated per-chunk HMAC-SHA256 digests for incremental verification.
-    pub incremental_mac: Vec<u8>,
-    /// Chunk size for incremental MAC (64KB). 0 if not applicable.
-    pub chunk_size: u32,
     /// Total ciphertext size in bytes.
     pub ciphertext_size: u64,
 }
@@ -145,18 +119,6 @@ pub struct CdnUploadResult {
 impl CdnUploadResult {
     /// Convert to AttachmentPointer proto.
     pub fn to_attachment_pointer(&self) -> AttachmentPointer {
-        tracing::debug!(
-            "Creating AttachmentPointer: cdn_key={}, content_type={}, \
-             thumbnail_bytes={}, thumbnail_size={}x{}, width={}, height={}, waveform_len={}",
-            self.cdn_key,
-            self.content_type,
-            self.thumbnail.len(),
-            self.thumbnail_width,
-            self.thumbnail_height,
-            self.width,
-            self.height,
-            self.waveform.len()
-        );
         AttachmentPointer {
             cdn_key: self.cdn_key.clone(),
             encryption_key: self.encryption_key.to_vec(),
@@ -185,12 +147,18 @@ impl CdnUploadResult {
 // ============================================================================
 
 /// Override for the attachments base directory.
-/// Set during init on Android where `dirs::data_local_dir()` is read-only.
+/// Set during init on Android where the platform data-local dir is read-only.
 static ATTACHMENTS_BASE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// Set the base directory for attachment storage.
 /// Call once during app init with the writable data directory.
 pub fn set_attachments_base_dir(dir: PathBuf) {
+    // Unit tests share one process-lifetime directory (`attachments_dir`): the
+    // first test client to get here would otherwise pin the base to its own
+    // temp data dir, deleted under every later test when that one ends.
+    if cfg!(test) {
+        return;
+    }
     let _ = ATTACHMENTS_BASE.set(dir);
 }
 
@@ -199,10 +167,19 @@ pub fn set_attachments_base_dir(dir: PathBuf) {
 /// Uses the override set by `set_attachments_base_dir()` if available,
 /// otherwise falls back to `~/.local/share/chatter/attachments/` on desktop.
 pub fn attachments_dir() -> PathBuf {
+    // Never the user's own ~/.local/share/chatter from a unit test.
+    #[cfg(test)]
+    ATTACHMENTS_BASE.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().to_path_buf();
+        std::mem::forget(dir);
+        path
+    });
     if let Some(base) = ATTACHMENTS_BASE.get() {
         base.join("attachments")
     } else {
-        dirs::data_local_dir()
+        directories::BaseDirs::new()
+            .map(|d| d.data_local_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."))
             .join("chatter")
             .join("attachments")
@@ -251,9 +228,13 @@ pub struct DecodedImagePixels {
     pub rgba: Vec<u8>,
 }
 
+#[derive(Clone)]
 pub struct AttachmentService {
     pub(crate) attachment_repo: Arc<AttachmentRepository>,
     pub(crate) grpc_pool: Option<Arc<GrpcClientPool>>,
+    /// Serving a secret chat (anonymous DM / group): every URL mint and CDN
+    /// transfer goes over Tor, whatever the pool's transport, or fails.
+    pub(crate) secret_chat: bool,
 }
 
 impl AttachmentService {
@@ -265,82 +246,239 @@ impl AttachmentService {
     /// Get the gRPC pool, returns error if not configured.
     pub(crate) fn grpc_pool(&self) -> Result<&GrpcClientPool, AttachmentError> {
         self.grpc_pool.as_ref().map(|p| p.as_ref()).ok_or_else(|| {
-            AttachmentError::NetworkError("gRPC pool not configured — cannot perform network operations".into())
+            AttachmentError::NetworkError(
+                "gRPC pool not configured — cannot perform network operations".into(),
+            )
         })
     }
 
-    /// True when the pool is routing over Tor (anon mode). CDN HTTP must then be
-    /// tunnelled, never sent direct — a direct request would leak the real IP.
-    #[cfg(feature = "onion")]
-    pub(crate) fn transport_is_onion(&self) -> bool {
-        self.grpc_pool
-            .as_ref()
-            .map(|p| p.transport_mode() == crate::network::grpc::client_pool::TransportMode::Onion)
-            .unwrap_or(false)
+    /// This service, routed for a secret chat: URL mints over the pool's
+    /// secret channel and CDN transfers over Tor, failing closed when there is
+    /// no Tor route.
+    pub fn for_secret_chat(&self) -> Self {
+        Self {
+            secret_chat: true,
+            ..self.clone()
+        }
     }
 
-    /// GET a presigned/CDN URL, over Tor in anon mode and direct otherwise.
+    /// This service routed for `conversation`: [`Self::for_secret_chat`] for
+    /// an anonymous DM or group, unchanged otherwise.
+    pub fn for_conversation(
+        &self,
+        conversation: &crate::state::chat_state::ActiveConversation,
+    ) -> Self {
+        if conversation.is_anon() {
+            self.for_secret_chat()
+        } else {
+            self.clone()
+        }
+    }
+
+    /// The service to download `attachment_id` with: routed for a secret chat
+    /// when the row's [`Attachment::secret_chat`] marker says it was created
+    /// for one.
+    ///
+    /// [`Attachment::secret_chat`]: crate::domain::attachment::Attachment::secret_chat
+    fn for_download(&self, attachment_id: &AttachmentId) -> Result<Self, AttachmentError> {
+        if self.secret_chat {
+            return Ok(self.clone());
+        }
+        let storage = |e: crate::error::StorageError| AttachmentError::StorageError(e.to_string());
+        let secret = match self.attachment_repo.get(attachment_id).map_err(storage)? {
+            Some(attachment) => attachment.secret_chat,
+            // No row: the transfer fails on its own lookup before any request.
+            None => false,
+        };
+        Ok(if secret {
+            self.for_secret_chat()
+        } else {
+            self.clone()
+        })
+    }
+
+    /// File client for URL mints: the secret-chat client (no auth header,
+    /// Tor) for a secret chat, else the pool's transport-following one.
+    pub(crate) fn file_client(&self) -> Result<crate::network::grpc::FileClient, AttachmentError> {
+        let pool = self.grpc_pool()?;
+        if self.secret_chat {
+            return pool
+                .secret_file_client()
+                .map_err(|e| AttachmentError::NetworkError(e.to_string()));
+        }
+        Ok(pool.file_client())
+    }
+
+    /// Whether CDN HTTP must be tunnelled over Tor, never sent direct (a direct
+    /// request would leak the real IP): always for a secret chat, else when
+    /// the pool is routing over Tor (anon mode). A secret chat with no Tor
+    /// route is an error, never a direct request.
+    pub(crate) fn cdn_over_tor(&self) -> Result<bool, AttachmentError> {
+        if self.secret_chat {
+            let pool = self.grpc_pool()?;
+            if !pool.secret_route_available() {
+                return Err(AttachmentError::NetworkError(
+                    pool.secret_channel()
+                        .err()
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "secret chats need Tor (onion)".into()),
+                ));
+            }
+            return Ok(true);
+        }
+        Ok(self.grpc_pool.as_ref().is_some_and(|p| {
+            p.transport_mode() == crate::network::grpc::client_pool::TransportMode::Onion
+        }))
+    }
+
+    #[cfg(feature = "onion")]
+    async fn storage_tor(
+        &self,
+    ) -> Result<crate::network::grpc::onion_transport::SharedTorClient, AttachmentError> {
+        let pool = self.grpc_pool()?;
+        if self.secret_chat {
+            pool.secret_storage_tor()
+                .await
+                .map_err(|e| AttachmentError::NetworkError(e.to_string()))
+        } else {
+            Ok(pool.onion_tor())
+        }
+    }
+
+    /// GET a presigned/CDN URL, over Tor when [`Self::cdn_over_tor`] and
+    /// direct otherwise.
     ///
     /// Returns the full body on 2xx, else a `NetworkError` carrying the status —
-    /// same fail-on-non-2xx semantics the direct path had. In anon mode this
+    /// same fail-on-non-2xx semantics the direct path had. Over Tor this
     /// tunnels through the pool's Tor client (real IP hidden); it never falls
     /// back to a direct request, so the leak stays closed.
     pub(crate) async fn cdn_http_get(&self, url: &str) -> Result<Vec<u8>, AttachmentError> {
-        #[cfg(feature = "onion")]
-        if self.transport_is_onion() {
-            let tor = self.grpc_pool()?.onion_tor();
-            return crate::network::anon_http::get(&tor, url)
-                .await
-                .map_err(AttachmentError::NetworkError);
+        if self.cdn_over_tor()? {
+            #[cfg(feature = "onion")]
+            {
+                let tor = self.storage_tor().await?;
+                return crate::network::anon_http::get(&tor, url)
+                    .await
+                    .map_err(AttachmentError::NetworkError);
+            }
+            #[cfg(not(feature = "onion"))]
+            return Err(no_tor());
         }
 
-        let response = cdn_client()
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| AttachmentError::NetworkError(format!("HTTP download failed: {}", e)))?;
+        let mut response = cdn_client()?.get(url).send().await.map_err(|e| {
+            AttachmentError::NetworkError(format!("HTTP download failed: {}", e.without_url()))
+        })?;
         if !response.status().is_success() {
             return Err(AttachmentError::NetworkError(format!(
                 "CDN download failed with status: {}",
                 response.status()
             )));
         }
-        response
-            .bytes()
-            .await
-            .map(|b| b.to_vec())
-            .map_err(|e| AttachmentError::NetworkError(format!("Failed to read response: {}", e)))
+        let limit = crate::network::anon_http::storage_response_limit();
+        if response
+            .content_length()
+            .is_some_and(|len| len > limit as u64)
+        {
+            return Err(AttachmentError::NetworkError(
+                "storage response exceeds attachment size limit".into(),
+            ));
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|e| {
+            AttachmentError::NetworkError(format!("Failed to read response: {}", e.without_url()))
+        })? {
+            crate::network::anon_http::append_storage_chunk(&mut body, &chunk, limit)
+                .map_err(AttachmentError::NetworkError)?;
+        }
+        Ok(body)
     }
 
-    /// PUT `body` to a presigned URL, over Tor in anon mode and direct otherwise.
+    /// Stream ciphertext into a private staging file without retaining the
+    /// entire object in RAM, refusing a body over `limit` bytes. Routing and
+    /// trust match the in-memory CDN path.
+    pub(crate) async fn cdn_http_get_to_file(
+        &self,
+        url: &str,
+        file: &mut tokio::fs::File,
+        limit: u64,
+    ) -> Result<u64, AttachmentError> {
+        if self.cdn_over_tor()? {
+            #[cfg(feature = "onion")]
+            {
+                let tor = self.storage_tor().await?;
+                return crate::network::anon_http::get_to_file(&tor, url, file, limit)
+                    .await
+                    .map_err(AttachmentError::NetworkError);
+            }
+            #[cfg(not(feature = "onion"))]
+            return Err(no_tor());
+        }
+
+        let mut response = cdn_client()?
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| AttachmentError::NetworkError("storage download failed".into()))?;
+        if !response.status().is_success() {
+            return Err(AttachmentError::NetworkError(format!(
+                "storage GET returned status {}",
+                response.status()
+            )));
+        }
+        if response.content_length().is_some_and(|len| len > limit) {
+            return Err(AttachmentError::NetworkError(
+                "storage response exceeds attachment size limit".into(),
+            ));
+        }
+        let mut total = 0;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| AttachmentError::NetworkError("storage response read failed".into()))?
+        {
+            total = crate::network::anon_http::write_storage_chunk(file, total, &chunk, limit)
+                .await
+                .map_err(AttachmentError::NetworkError)?;
+        }
+        Ok(total)
+    }
+
+    /// PUT `body` to a presigned URL, over Tor when [`Self::cdn_over_tor`] and
+    /// direct otherwise.
     ///
     /// Returns `(status, etag)`; the caller decides how to treat the status
     /// (single PUTs error on non-2xx, multipart parts retry). Never falls back to
-    /// a direct request in anon mode.
+    /// a direct request when Tor is required.
     pub(crate) async fn cdn_http_put(
         &self,
         url: &str,
         body: Vec<u8>,
         content_type: &str,
     ) -> Result<(u16, Option<String>), AttachmentError> {
-        #[cfg(feature = "onion")]
-        if self.transport_is_onion() {
-            let tor = self.grpc_pool()?.onion_tor();
-            let resp = crate::network::anon_http::put(&tor, url, body, content_type)
-                .await
-                .map_err(AttachmentError::NetworkError)?;
-            return Ok((resp.status, resp.etag));
+        if self.cdn_over_tor()? {
+            #[cfg(feature = "onion")]
+            {
+                let tor = self.storage_tor().await?;
+                let resp = crate::network::anon_http::put(&tor, url, body, content_type)
+                    .await
+                    .map_err(AttachmentError::NetworkError)?;
+                return Ok((resp.status, resp.etag));
+            }
+            #[cfg(not(feature = "onion"))]
+            return Err(no_tor());
         }
 
         let content_length = body.len();
-        let response = cdn_client()
+        let response = cdn_client()?
             .put(url)
             .header("Content-Type", content_type)
             .header("Content-Length", content_length)
             .body(body)
             .send()
             .await
-            .map_err(|e| AttachmentError::NetworkError(format!("HTTP upload failed: {}", e)))?;
+            .map_err(|e| {
+                AttachmentError::NetworkError(format!("HTTP upload failed: {}", e.without_url()))
+            })?;
         let status = response.status().as_u16();
         let etag = response
             .headers()
@@ -356,6 +494,7 @@ impl AttachmentService {
         Self {
             attachment_repo,
             grpc_pool: Some(grpc_pool),
+            secret_chat: false,
         }
     }
 
@@ -366,6 +505,7 @@ impl AttachmentService {
         Self {
             attachment_repo,
             grpc_pool: None,
+            secret_chat: false,
         }
     }
 
@@ -388,8 +528,20 @@ impl AttachmentService {
     /// This is the single entry point for creating attachment records from
     /// received messages. Called by inbox handlers after message decryption.
     ///
-    /// Returns the list of attachment IDs that were created or already existed.
-    pub fn create_from_pointers(&self, pointers: &[AttachmentPointer]) -> Vec<AttachmentId> {
+    /// Returns the IDs of every pointer's row — created now or already
+    /// held. A row already held (the same CDN key from another conversation,
+    /// or a concurrent receipt that won the insert) keeps its data, and a
+    /// secret chat's receipt raises its mark so its transfers go over Tor
+    /// (see [`AttachmentRepository::insert_or_raise_secret`]). Any storage
+    /// failure is an error and no ID is returned: a pointer whose origin was
+    /// not persisted must not be published as stored, or a later download
+    /// could trust a stale ordinary origin.
+    ///
+    /// [`AttachmentRepository::insert_or_raise_secret`]: crate::storage::repositories::attachment_repo::AttachmentRepository::insert_or_raise_secret
+    pub fn create_from_pointers(
+        &self,
+        pointers: &[AttachmentPointer],
+    ) -> Result<Vec<AttachmentId>, crate::error::StorageError> {
         use crate::domain::attachment::{Attachment, AttachmentStatus, FileMetadata};
 
         let mut ids = Vec::with_capacity(pointers.len());
@@ -400,19 +552,7 @@ impl AttachmentService {
             }
 
             let att_id = AttachmentId::from_cdn_key(&pointer.cdn_key);
-            ids.push(att_id);
 
-            // Check if already exists (idempotent)
-            if let Ok(Some(_)) = self.attachment_repo.get(&att_id) {
-                tracing::debug!(
-                    attachment_id = %att_id,
-                    cdn_key = %pointer.cdn_key,
-                    "Attachment record already exists"
-                );
-                continue;
-            }
-
-            // Create new Attachment record from pointer
             let attachment = Attachment {
                 id: att_id,
                 metadata: FileMetadata {
@@ -421,8 +561,16 @@ impl AttachmentService {
                     size: pointer.plaintext_size,
                     sha256: pointer.digest.clone(),
                     chunk_size: 0,
-                    width: if pointer.width > 0 { Some(pointer.width) } else { None },
-                    height: if pointer.height > 0 { Some(pointer.height) } else { None },
+                    width: if pointer.width > 0 {
+                        Some(pointer.width)
+                    } else {
+                        None
+                    },
+                    height: if pointer.height > 0 {
+                        Some(pointer.height)
+                    } else {
+                        None
+                    },
                     duration_seconds: if pointer.duration_ms > 0 {
                         Some(pointer.duration_ms as f64 / 1000.0)
                     } else {
@@ -469,44 +617,28 @@ impl AttachmentService {
                 },
                 status: AttachmentStatus::Pending,
                 content_location: ContentLocation::NotDownloaded,
-                local_path: None,
                 remote_url: Some(pointer.cdn_key.clone()),
                 encryption_key: Some(pointer.encryption_key.clone()),
                 encryption_iv: Some(pointer.digest.clone()),
                 created_at: chrono::Utc::now(),
+                secret_chat: self.secret_chat,
             };
 
-            // Insert (ignore errors - may be race condition)
-            if let Err(e) = self.attachment_repo.insert(&attachment) {
-                tracing::debug!(
-                    attachment_id = %att_id,
-                    cdn_key = %pointer.cdn_key,
-                    error = %e,
-                    "Attachment insert failed (race condition), continuing"
-                );
+            let inserted = self.attachment_repo.insert_or_raise_secret(&attachment)?;
+            ids.push(att_id);
+            if self.secret_chat {
+                // Nothing about a secret chat's file reaches the log.
+                tracing::debug!(inserted, "Stored secret-chat attachment record");
             } else {
                 tracing::info!(
-                    attachment_id = %att_id,
-                    cdn_key = %pointer.cdn_key,
-                    filename = %pointer.file_name,
+                    inserted,
                     content_type = %pointer.content_type,
-                    thumbnail_cdn_key = %pointer.thumbnail_cdn_key,
-                    waveform_samples = pointer.waveform.len(),
-                    "Created attachment record from pointer"
+                    "Stored attachment record from pointer"
                 );
             }
         }
 
-        ids
-    }
-
-    /// Check if attachment content is available locally (in database or filesystem).
-    pub fn has_local_content(&self, attachment_id: &AttachmentId) -> bool {
-        self.attachment_repo
-            .get(attachment_id)
-            .ok()
-            .flatten()
-            .is_some_and(|a| a.content_location == ContentLocation::OnFilesystem)
+        Ok(ids)
     }
 
     /// Get preview image data (decoded RGBA) from stored thumbnail.
@@ -525,7 +657,6 @@ impl AttachmentService {
         // Reject malformed WebP before the image parser sees it.
         if let Err(e) = sanitize::validate_media(thumbnail_bytes) {
             tracing::warn!(
-                attachment_id = %attachment_id,
                 error = %e,
                 "Rejected malformed thumbnail"
             );
@@ -538,7 +669,6 @@ impl AttachmentService {
                 let rgba = img.to_rgba8();
                 let (width, height) = rgba.dimensions();
                 tracing::debug!(
-                    attachment_id = %attachment_id,
                     width = width,
                     height = height,
                     "Decoded preview image from thumbnail"
@@ -547,7 +677,6 @@ impl AttachmentService {
             }
             Err(e) => {
                 tracing::warn!(
-                    attachment_id = %attachment_id,
                     error = ?e,
                     "Failed to decode thumbnail for preview"
                 );
@@ -564,6 +693,13 @@ impl AttachmentService {
     /// Returns the decoded thumbnail bytes (JPEG/WebP), or `None` when the
     /// attachment has no thumbnail sidecar or the fetch/decrypt fails.
     pub async fn ensure_thumbnail(&self, attachment_id: &AttachmentId) -> Option<Vec<u8>> {
+        self.for_download(attachment_id)
+            .ok()?
+            .ensure_thumbnail_routed(attachment_id)
+            .await
+    }
+
+    async fn ensure_thumbnail_routed(&self, attachment_id: &AttachmentId) -> Option<Vec<u8>> {
         let mut attachment = self.attachment_repo.get(attachment_id).ok()??;
 
         // Already have the decoded bytes locally (sender's own upload, or a
@@ -579,18 +715,21 @@ impl AttachmentService {
         let digest_vec = attachment.metadata.thumbnail_digest.clone()?;
         let plaintext_size = attachment.metadata.thumbnail_plaintext_size? as usize;
         if key_vec.len() != KEY_SET_LENGTH || digest_vec.len() != 32 {
-            tracing::warn!(attachment_id = %attachment_id, "Thumbnail sidecar refs malformed");
+            tracing::warn!("Thumbnail sidecar refs malformed");
             return None;
         }
 
         // Download the small encrypted thumbnail blob.
-        let mut file_client = self.grpc_pool().ok()?.file_client();
-        let dl = file_client.get_attachment_download_url(&cdn_key).await.ok()?;
+        let mut file_client = self.file_client().ok()?;
+        let dl = file_client
+            .get_attachment_download_url(&cdn_key)
+            .await
+            .ok()?;
         // Over Tor in anon mode; cdn_http_get already fails on non-2xx.
         let ciphertext = match self.cdn_http_get(&dl.download_url).await {
             Ok(bytes) => bytes,
             Err(e) => {
-                tracing::warn!(cdn_key = %cdn_key, error = %e, "Thumbnail sidecar GET failed");
+                tracing::warn!(error = %e, "Thumbnail sidecar GET failed");
                 return None;
             }
         };
@@ -601,11 +740,14 @@ impl AttachmentService {
         let mut digest = [0u8; 32];
         digest.copy_from_slice(&digest_vec);
         let plaintext = match crate::crypto::attachment_crypto::AttachmentCrypto::decrypt(
-            &ciphertext, &key, &digest, plaintext_size,
+            &ciphertext,
+            &key,
+            &digest,
+            plaintext_size,
         ) {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!(attachment_id = %attachment_id, error = %e, "Thumbnail sidecar decrypt failed");
+                tracing::warn!(error = %e, "Thumbnail sidecar decrypt failed");
                 return None;
             }
         };
@@ -615,104 +757,8 @@ impl AttachmentService {
         if let Err(e) = self.attachment_repo.update(&attachment) {
             tracing::debug!(error = %e, "Failed to persist fetched thumbnail (continuing)");
         }
-        tracing::debug!(attachment_id = %attachment_id, bytes = plaintext.len(), "Fetched thumbnail sidecar");
+        tracing::debug!(bytes = plaintext.len(), "Fetched thumbnail sidecar");
         Some(plaintext)
-    }
-
-    /// Clean up orphaned attachment files (files with no DB record).
-    ///
-    /// Scans the attachments directory and removes any `.enc` files that
-    /// don't have a corresponding record in the database.
-    ///
-    /// Returns the number of files cleaned up.
-    pub fn cleanup_orphaned_files(&self) -> Result<usize, AttachmentError> {
-        let dir = attachments_dir();
-        if !dir.exists() {
-            return Ok(0);
-        }
-
-        let mut cleaned = 0;
-
-        let entries = std::fs::read_dir(&dir)
-            .map_err(|e| AttachmentError::FileError(format!("Failed to read attachments dir: {}", e)))?;
-
-        for entry in entries {
-            let entry = entry
-                .map_err(|e| AttachmentError::FileError(format!("Failed to read dir entry: {}", e)))?;
-            let path = entry.path();
-
-            // Only process .enc files
-            if path.extension().is_some_and(|ext| ext == "enc") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    // Try to parse as AttachmentId
-                    if let Ok(id) = stem.parse::<AttachmentId>() {
-                        // Check if attachment exists in database
-                        match self.attachment_repo.get(&id) {
-                            Ok(None) => {
-                                // No DB record - orphaned file
-                                if let Err(e) = std::fs::remove_file(&path) {
-                                    tracing::warn!(
-                                        "Failed to remove orphaned attachment file {}: {}",
-                                        path.display(),
-                                        e
-                                    );
-                                } else {
-                                    tracing::debug!(
-                                        "Removed orphaned attachment file: {}",
-                                        path.display()
-                                    );
-                                    cleaned += 1;
-                                }
-                            }
-                            Ok(Some(_)) => {
-                                // Attachment exists - keep file
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to check attachment {}: {}",
-                                    id,
-                                    e
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if cleaned > 0 {
-            tracing::info!("Cleaned up {} orphaned attachment files", cleaned);
-        }
-
-        Ok(cleaned)
-    }
-
-    /// Delete an attachment and its associated file (if filesystem-stored).
-    pub fn delete_attachment(&self, attachment_id: &AttachmentId) -> Result<(), AttachmentError> {
-        // Get attachment to check storage location
-        if let Ok(Some(attachment)) = self.attachment_repo.get(attachment_id) {
-            // If stored on filesystem, delete the file
-            if attachment.content_location == ContentLocation::OnFilesystem {
-                let file_path = attachment_file_path(attachment_id);
-                if file_path.exists() {
-                    std::fs::remove_file(&file_path).map_err(|e| {
-                        AttachmentError::FileError(format!(
-                            "Failed to delete attachment file: {}",
-                            e
-                        ))
-                    })?;
-                    tracing::debug!(
-                        "Deleted attachment file: {}",
-                        file_path.display()
-                    );
-                }
-            }
-        }
-
-        // Delete from database
-        self.attachment_repo
-            .delete(attachment_id)
-            .map_err(|e| AttachmentError::StorageError(e.to_string()))
     }
 
     /// Get attachment metadata without loading content.
@@ -723,5 +769,219 @@ impl AttachmentService {
         self.attachment_repo
             .get(attachment_id)
             .map_err(|e| AttachmentError::StorageError(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod waveform_tests {
+    use super::*;
+
+    #[test]
+    fn incoming_voice_pointer_preserves_waveform_in_storage() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            crate::storage::database::Database::open(&dir.path().join("waveform.db"), "testpass")
+                .unwrap(),
+        );
+        db.run_migrations().unwrap();
+        let service = AttachmentService::new_local(Arc::new(AttachmentRepository::new(db)));
+        let pointer = AttachmentPointer {
+            cdn_key: "voice-waveform-test".into(),
+            content_type: "audio/wav".into(),
+            file_name: "Voice message.wav".into(),
+            voice_note: true,
+            waveform: vec![0, 13, 128, 255],
+            duration_ms: 1250,
+            ..Default::default()
+        };
+        let ids = service
+            .create_from_pointers(std::slice::from_ref(&pointer))
+            .unwrap();
+        let stored = service.get(&ids[0]).unwrap().unwrap();
+        assert_eq!(
+            stored.metadata.waveform_samples,
+            Some(pointer.waveform.clone())
+        );
+        assert_eq!(stored.metadata.duration_seconds, Some(1.25));
+        assert_eq!(service.create_from_pointers(&[pointer]).unwrap(), ids);
+        assert_eq!(
+            service
+                .get(&ids[0])
+                .unwrap()
+                .unwrap()
+                .metadata
+                .waveform_samples,
+            stored.metadata.waveform_samples
+        );
+    }
+
+    #[test]
+    fn stored_voice_note_pointer_carries_its_waveform() {
+        let mut meta = crate::domain::attachment::FileMetadata::new(
+            "Voice message.wav".into(),
+            "audio/wav".into(),
+            4,
+        );
+        meta.waveform_samples = Some(vec![13, 128, 255]);
+        let mut att = crate::domain::attachment::Attachment::new(AttachmentId::new(), meta);
+        att.remote_url = Some("cdn".into());
+        att.encryption_key = Some(vec![1; 64]);
+        att.encryption_iv = Some(vec![2; 32]);
+        let pointer = att.to_pointer().unwrap();
+        assert_eq!(pointer.waveform, vec![13, 128, 255]);
+        assert!(pointer.voice_note);
+    }
+}
+
+#[cfg(test)]
+mod secret_chat_origin_tests {
+    use super::*;
+
+    fn service() -> (
+        AttachmentService,
+        Arc<crate::storage::Database>,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            crate::storage::database::Database::open(&dir.path().join("origin.db"), "testpass")
+                .unwrap(),
+        );
+        db.run_migrations().unwrap();
+        let service = AttachmentService::new_local(Arc::new(AttachmentRepository::new(db.clone())));
+        (service, db, dir)
+    }
+
+    fn pointer(cdn_key: &str) -> AttachmentPointer {
+        AttachmentPointer {
+            cdn_key: cdn_key.into(),
+            content_type: "image/jpeg".into(),
+            file_name: "photo.jpg".into(),
+            ..Default::default()
+        }
+    }
+
+    fn routed_secret(service: &AttachmentService, id: &AttachmentId) -> bool {
+        service.for_download(id).unwrap().secret_chat
+    }
+
+    /// The receive path marks the row for the conversation it was created
+    /// in, and downloads route by that marker — not by whether the
+    /// shared-content index happened to record the message.
+    #[test]
+    fn received_rows_carry_their_origin_and_route_by_it() {
+        let (service, _db, _dir) = service();
+        let secret = service
+            .for_secret_chat()
+            .create_from_pointers(&[pointer("secret-key")])
+            .unwrap()[0];
+        let plain = service
+            .create_from_pointers(&[pointer("plain-key")])
+            .unwrap()[0];
+
+        assert_eq!(
+            service.get(&secret).unwrap().unwrap().secret_chat,
+            true
+        );
+        assert_eq!(
+            service.get(&plain).unwrap().unwrap().secret_chat,
+            false
+        );
+        assert!(routed_secret(&service, &secret), "secret-chat row left Tor");
+        assert!(!routed_secret(&service, &plain));
+    }
+
+    /// A CDN key already stored for an ordinary conversation and then received
+    /// in a secret chat goes over Tor from then on; an ordinary receive of a
+    /// secret row never clears the mark.
+    #[test]
+    fn the_secret_mark_is_one_way() {
+        let (service, _db, _dir) = service();
+        let id = service
+            .create_from_pointers(&[pointer("shared-key")])
+            .unwrap()[0];
+        service
+            .for_secret_chat()
+            .create_from_pointers(&[pointer("shared-key")])
+            .unwrap();
+        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, true);
+        service
+            .create_from_pointers(&[pointer("shared-key")])
+            .unwrap();
+        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, true);
+        assert!(routed_secret(&service, &id));
+    }
+
+
+    /// Normal and secret receipts of the same unknown CDN key racing: the
+    /// row ends secret whichever wins the insert.
+    #[test]
+    fn concurrent_normal_and_secret_receipts_end_secret() {
+        let (service, _db, _dir) = service();
+        for round in 0..50 {
+            let key = format!("race-{round}");
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let handles: Vec<_> = [service.clone(), service.for_secret_chat()]
+                .into_iter()
+                .map(|svc| {
+                    let (barrier, key) = (barrier.clone(), key.clone());
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        svc.create_from_pointers(&[pointer(&key)]).unwrap()[0]
+                    })
+                })
+                .collect();
+            let ids: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+            assert_eq!(ids[0], ids[1]);
+            assert_eq!(
+                service.get(&ids[0]).unwrap().unwrap().secret_chat,
+                true,
+                "round {round}"
+            );
+            assert!(routed_secret(&service, &ids[0]));
+        }
+    }
+
+    /// A secret receipt whose mark cannot be written is an error, and no
+    /// pointer ID is handed back as stored — likewise a failed insert.
+    #[test]
+    fn a_failed_origin_write_publishes_no_pointer() {
+        let (service, db, _dir) = service();
+        let id = service
+            .create_from_pointers(&[pointer("held-key")])
+            .unwrap()[0];
+        db.connection()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER fail_mark BEFORE UPDATE OF secret_chat ON attachments
+                 BEGIN SELECT RAISE(ABORT, 'injected'); END;
+                 CREATE TRIGGER fail_insert BEFORE INSERT ON attachments
+                 BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+            )
+            .unwrap();
+        let secret = service.for_secret_chat();
+        assert!(secret.create_from_pointers(&[pointer("held-key")]).is_err());
+        assert!(
+            secret
+                .create_from_pointers(&[pointer("new-key"), pointer("held-key")])
+                .is_err()
+        );
+        // The ordinary origin stands, but nothing claimed the secret copy
+        // was stored, so no secret message references it.
+        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, false);
+    }
+}
+
+#[cfg(test)]
+mod cdn_security_tests {
+    #[tokio::test]
+    async fn direct_cdn_rejects_cleartext_before_connecting() {
+        let error = super::cdn_client()
+            .unwrap()
+            .get("http://127.0.0.1:1/object?secret=capability")
+            .send()
+            .await
+            .unwrap_err();
+        assert!(error.is_builder());
     }
 }

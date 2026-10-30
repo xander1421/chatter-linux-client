@@ -62,7 +62,7 @@ impl SearchIndex {
                 "SELECT message_id, conversation_id, bm25(messages_fts) as score
                  FROM messages_fts
                  WHERE messages_fts MATCH ?1 AND conversation_id = ?2
-                 ORDER BY score
+                 ORDER BY score, rowid DESC
                  LIMIT ?3",
             )?;
             let mut rows = stmt.query(params![escaped_query, cid.to_string(), limit])?;
@@ -72,7 +72,7 @@ impl SearchIndex {
                 "SELECT message_id, conversation_id, bm25(messages_fts) as score
                  FROM messages_fts
                  WHERE messages_fts MATCH ?1
-                 ORDER BY score
+                 ORDER BY score, rowid DESC
                  LIMIT ?2",
             )?;
             let mut rows = stmt.query(params![escaped_query, limit])?;
@@ -82,40 +82,59 @@ impl SearchIndex {
         Ok(results)
     }
 
-    /// Reindex all existing messages (for migration or repair).
-    ///
-    /// Clears the FTS table and reinserts from the messages table.
-    /// Returns the number of messages indexed.
-    pub fn reindex_all(&self) -> Result<u64, StorageError> {
-        let conn = self.db.connection()?;
-
-        // Clear existing FTS data
-        conn.execute("DELETE FROM messages_fts", [])?;
-
-        // Reindex all searchable messages (content_type 0, 5, 6)
-        let count = conn.execute(
-            "INSERT INTO messages_fts(message_id, conversation_id, content)
-             SELECT
-                 id,
-                 conversation_id,
-                 CASE content_type
-                     WHEN 0 THEN json_extract(content_json, '$.Text')
-                     WHEN 5 THEN json_extract(content_json, '$.AI.text')
-                     WHEN 6 THEN json_extract(content_json, '$.Mixed.text')
-                 END
-             FROM messages
-             WHERE content_type IN (0, 5, 6)
-               AND COALESCE(
-                   CASE content_type
-                       WHEN 0 THEN json_extract(content_json, '$.Text')
-                       WHEN 5 THEN json_extract(content_json, '$.AI.text')
-                       WHEN 6 THEN json_extract(content_json, '$.Mixed.text')
-                   END, ''
-               ) != ''",
-            [],
+    /// Page FTS hits after applying message metadata filters in SQLite.
+    pub fn search_scoped(
+        &self,
+        query: &str,
+        sender: Option<&str>,
+        conversation: Option<&str>,
+        since: Option<i64>,
+        until: Option<i64>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<SearchResult>, StorageError> {
+        let escaped_query = escape_fts5_query(query);
+        if escaped_query.is_empty() {
+            // No text but a sender or chat filter: that person's / chat's
+            // messages, newest first, as Telegram's "From: …" lists them.
+            if sender.is_none() && conversation.is_none() {
+                return Ok(Vec::new());
+            }
+            let conn = self.db.read_connection()?;
+            let mut stmt = conn.prepare(
+                "SELECT m.id, m.conversation_id, 0.0 FROM messages m
+                 WHERE m.is_deleted = 0
+                   AND m.id IN (SELECT message_id FROM messages_fts)
+                   AND (?1 IS NULL OR m.sender_id = ?1)
+                   AND (?2 IS NULL OR m.conversation_id = ?2)
+                   AND (?3 IS NULL OR m.sent_at >= ?3)
+                   AND (?4 IS NULL OR m.sent_at < ?4)
+                 ORDER BY m.sent_at DESC LIMIT ?5 OFFSET ?6",
+            )?;
+            let mut rows = stmt.query(params![sender, conversation, since, until, limit, offset])?;
+            return collect_results(&mut rows);
+        }
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT messages_fts.message_id, messages_fts.conversation_id, bm25(messages_fts) AS score
+             FROM messages_fts JOIN messages m ON m.id = messages_fts.message_id
+             WHERE messages_fts MATCH ?1 AND m.is_deleted = 0
+               AND (?2 IS NULL OR m.sender_id = ?2)
+               AND (?3 IS NULL OR m.conversation_id = ?3)
+               AND (?4 IS NULL OR m.sent_at >= ?4)
+               AND (?5 IS NULL OR m.sent_at < ?5)
+             ORDER BY score, m.sent_at DESC, messages_fts.rowid DESC LIMIT ?6 OFFSET ?7",
         )?;
-
-        Ok(count as u64)
+        let mut rows = stmt.query(params![
+            escaped_query,
+            sender,
+            conversation,
+            since,
+            until,
+            limit,
+            offset
+        ])?;
+        collect_results(&mut rows)
     }
 }
 
@@ -131,7 +150,11 @@ fn escape_fts5_query(query: &str) -> String {
     // Quote the entire query to treat as literal phrase
     // Double any existing quotes to escape them
     let escaped = trimmed.replace('"', "\"\"");
-    format!("\"{}\"", escaped)
+    // Trailing `*` makes the LAST token a prefix match. FTS5 is whole-token by
+    // default, so searching "fix" found nothing in a conversation full of
+    // "fixcheck-alpha" — which reads as search being broken. Prefix matching is
+    // what every messenger's search does as you type.
+    format!("\"{}\"*", escaped)
 }
 
 /// Collect search results from a Rows iterator.
@@ -158,9 +181,9 @@ fn collect_results(rows: &mut rusqlite::Rows<'_>) -> Result<Vec<SearchResult>, S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::Database;
     use crate::domain::ids::UserId;
-    use crate::domain::message::{Message, ConversationType};
+    use crate::domain::message::{ConversationType, Message};
+    use crate::storage::Database;
     use crate::storage::repositories::MessageRepository;
 
     fn setup_db() -> Arc<Database> {
@@ -168,11 +191,10 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
         let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
         db.run_migrations().unwrap();
-        
-        // Keep temp_dir alive by leaking it for simplicity in this test helper
-        // (Not ideal but fine for unit tests)
-        Box::leak(Box::new(temp_dir));
-        
+
+        // Keep temp_dir alive until the test ends.
+        crate::test_tempdir::hold(temp_dir);
+
         db
     }
 
@@ -186,7 +208,11 @@ mod tests {
             |row| row.get(0),
         );
         assert!(res.is_ok(), "Query failed: {:?}", res.err());
-        assert_eq!(res.unwrap(), 1, "messages_fts table not found in sqlite_master");
+        assert_eq!(
+            res.unwrap(),
+            1,
+            "messages_fts table not found in sqlite_master"
+        );
     }
 
     #[test]
@@ -217,9 +243,6 @@ mod tests {
         );
         repo.insert(&msg2).unwrap();
 
-        // Reindex just in case triggers didn't fire (though they should)
-        index.reindex_all().unwrap();
-
         // Search for "hello"
         let results = index.search("hello", None, 10).unwrap();
         assert_eq!(results.len(), 1);
@@ -233,6 +256,11 @@ mod tests {
         // Search for something that doesn't exist
         let results = index.search("nomatch", None, 10).unwrap();
         assert_eq!(results.len(), 0);
+
+        // Prefix match: typing the start of a word finds it (§112q).
+        let results = index.search("wor", None, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].message_id, msg1.id);
     }
 
     #[test]
@@ -250,9 +278,8 @@ mod tests {
             Some(user_id.clone()),
             "the quick brown fox".to_string(),
             0,
-        )).unwrap();
-
-        index.reindex_all().unwrap();
+        ))
+        .unwrap();
 
         // Search for "quick brown"
         let results = index.search("quick brown", None, 10).unwrap();

@@ -2,17 +2,48 @@
 //!
 //! Tests the Signal-style presigned attachment upload flow.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use std::sync::Arc;
 
 use chatter_core::network::grpc::FileClient;
 use chatter_core::proto::chat_v1::CompletedPart;
-use chatter_core::services::attachment::set_attachments_base_dir;
 use chatter_core::services::AttachmentService;
+use chatter_core::services::attachment::set_attachments_base_dir;
 use chatter_core::storage::{AttachmentRepository, Database};
 
 use common::*;
+
+// The storage edge uses the same private PKI as the application transport.
+// Exercise signed multipart HTTP directly without trusting public CA roots.
+fn storage_http_client() -> reqwest::Client {
+    let pem = chatter_core::config::TLS_ROOT_CA_PEM.expect("test storage CA must be pinned");
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    let mut roots = rustls::RootCertStore::empty();
+    for certificate in CertificateDer::pem_slice_iter(pem.as_bytes()) {
+        roots
+            .add(certificate.expect("valid test storage CA PEM"))
+            .expect("valid test storage CA");
+    }
+    assert!(
+        !roots.is_empty(),
+        "test storage CA must contain certificates"
+    );
+    let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("ring default protocols")
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    reqwest::Client::builder()
+        .tls_backend_preconfigured(tls)
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("pinned storage HTTP client")
+}
 
 // ============================================================================
 // Attachment URL Tests
@@ -67,7 +98,7 @@ async fn test_rustfs_supports_presigned_multipart() {
         "server returned zero presigned part URLs"
     );
 
-    let http = reqwest::Client::new();
+    let http = storage_http_client();
     let body = vec![7u8; size];
     let resp = http
         .put(&create.part_urls[0])
@@ -75,6 +106,7 @@ async fn test_rustfs_supports_presigned_multipart() {
         .body(body)
         .send()
         .await
+        .map_err(reqwest::Error::without_url)
         .expect("presigned part PUT request should reach RustFS");
 
     assert!(
@@ -117,7 +149,11 @@ async fn test_rustfs_presigned_multipart_minimal() {
     let mut file_client = FileClient::new(pool.channel(), pool.auth_clone());
 
     let size = 5 * 1024 * 1024 + 1; // one part (< 16 MiB)
-    let create = assert_ok(file_client.create_attachment_multipart_upload(size as u64).await);
+    let create = assert_ok(
+        file_client
+            .create_attachment_multipart_upload(size as u64)
+            .await,
+    );
     eprintln!(
         "CREATE ok: cdn_key={} upload_id={} part_urls={} part_size={}",
         create.cdn_key,
@@ -125,19 +161,26 @@ async fn test_rustfs_presigned_multipart_minimal() {
         create.part_urls.len(),
         create.part_size
     );
-    assert!(!create.part_urls.is_empty(), "server returned zero part URLs");
-    eprintln!("part_url[0]={}", create.part_urls[0]);
+    assert!(
+        !create.part_urls.is_empty(),
+        "server returned zero part URLs"
+    );
 
-    let http = reqwest::Client::new();
+    let http = storage_http_client();
     let resp = http
         .put(&create.part_urls[0])
         .header("Content-Length", size as u64)
         .body(vec![7u8; size])
         .send()
         .await
+        .map_err(reqwest::Error::without_url)
         .expect("presigned part PUT should reach RustFS");
 
-    eprintln!("PART PUT status={} etag={:?}", resp.status(), resp.headers().get(reqwest::header::ETAG));
+    eprintln!(
+        "PART PUT status={} etag={:?}",
+        resp.status(),
+        resp.headers().get(reqwest::header::ETAG)
+    );
     assert!(
         resp.status().is_success(),
         "CRITICAL: RustFS rejected presigned UploadPart with status {}",
@@ -196,7 +239,11 @@ async fn test_multipart_upload_round_trip_over_100mb() {
     let source_path = temp_dir.path().join("source_150mb.bin");
     assert_ok(tokio::fs::write(&source_path, &original).await);
 
-    let upload_result = assert_ok(attachment_service.upload_to_cdn_encrypted(&source_path).await);
+    let upload_result = assert_ok(
+        attachment_service
+            .upload_to_cdn_encrypted(&source_path)
+            .await,
+    );
     assert_eq!(
         upload_result.plaintext_size, size as u64,
         "uploaded plaintext size should match the source file"

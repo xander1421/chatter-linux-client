@@ -1,10 +1,8 @@
-// Neo Action Toggle — AI feature toggle with cyan/violet glow
-//
-// Enhanced toggle for AI features. When checked, emits a colored glow
-// ring around the track. Supports two glow modes: "cyan" and "violet".
+import { Spacing } from "../theme/spacing.slint";
+// AI feature toggle. State uses a tinted track; the surrounding chrome owns depth.
 
 import { Colors } from "../theme/colors.slint";
-import { Spacing } from "../theme/spacing.slint";
+import { Materials } from "../theme/materials.slint";
 
 export component NeoActionToggle inherits Rectangle {
     in-out property <bool> checked: false;
@@ -18,12 +16,16 @@ export component NeoActionToggle inherits Rectangle {
     accessible-enabled: !root.disabled;
     accessible-checkable: true;
     accessible-checked: root.checked;
+    accessible-action-default => {
+        if !root.disabled { root.checked = !root.checked; root.toggled(root.checked); }
+    }
 
     callback toggled(bool);
 
     // Resolved glow colors based on mode
-    property <color> glow-color: glow-mode == "violet" ? Colors.glow-violet : Colors.glow-cyan;
-    property <color> glow-soft: glow-mode == "violet" ? Colors.glow-violet-soft : Colors.glow-cyan-soft;
+    property <color> glow-color: glow-mode == "violet" ? Colors.accent-purple : Colors.primary;
+    property <float> travel: checked ? 1 : 0;
+    animate travel { duration: Materials.motion-standard; easing: Materials.spring; }
 
     // Track color: when checked, glow color replaces primary
     property <color> track-color: {
@@ -42,61 +44,48 @@ export component NeoActionToggle inherits Rectangle {
         }
     };
 
-    // Dimensions: same as Toggle (44x24) for drop-in replacement
-    width: 44px;
-    height: 24px;
+    // Match Toggle: a centred 44x24 track inside a 48px hit target.
+    width: Spacing.touch-target-min;
+    height: Spacing.touch-target-min;
     opacity: disabled ? 0.5 : 1.0;
 
-    // Outer glow ring (only when checked)
-    Rectangle {
-        width: parent.width + 4px;
-        height: parent.height + 4px;
-        x: -2px;
-        y: -2px;
-        border-radius: 14px;
-        background: transparent;
-        border-width: root.checked ? 1px : 0px;
-        border-color: root.checked ? root.glow-soft : transparent;
-        drop-shadow-blur: root.checked ? Spacing.neo-blur-sm : 0px;
-        drop-shadow-color: root.checked ? root.glow-soft : transparent;
-
-        animate border-width, border-color, drop-shadow-blur, drop-shadow-color {
-            duration: 250ms;
-            easing: ease-in-out;
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: !root.disabled;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.checked = !root.checked;
+                root.toggled(root.checked);
+                return accept;
+            }
+            return reject;
         }
     }
 
     // Track
     Rectangle {
-        width: 100%;
-        height: 100%;
-        border-radius: 12px;
+        width: Spacing.switch-width;
+        height: Spacing.switch-track-height;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        border-radius: self.height / 2;
         background: root.track-color;
+        border-width: keys.has-focus ? Spacing.stroke : 0px;
+        border-color: Colors.focus-ring;
 
-        animate background {
-            duration: 200ms;
-            easing: ease-in-out;
-        }
+        animate background { duration: Materials.motion-standard; easing: Materials.glide; }
 
-        // Thumb — slides with glow when active
+        // Thumb — short state transition, respecting reduced motion.
         Rectangle {
-            width: 20px;
-            height: 20px;
-            border-radius: 10px;
-            background: Colors.text-primary;
-            y: 2px;
-            x: root.checked ? 22px : 2px;
-            drop-shadow-blur: root.checked ? 4px : 0px;
-            drop-shadow-color: root.checked ? root.glow-color.with-alpha(0.5) : transparent;
-
-            animate x {
-                duration: 200ms;
-                easing: cubic-bezier(0.34, 1.56, 0.64, 1);  // Snappy overshoot
-            }
-            animate drop-shadow-blur, drop-shadow-color {
-                duration: 250ms;
-                easing: ease-in-out;
-            }
+            width: Spacing.switch-thumb + 8px * (root.travel < 0.5 ? root.travel * 2 : (1 - root.travel) * 2);
+            height: touch.pressed ? Spacing.switch-thumb - Spacing.xxs : Spacing.switch-thumb;
+            border-radius: self.height / 2;
+            background: Colors.on-action;
+            y: (parent.height - self.height) / 2;
+            x: Spacing.xxs + (parent.width - Spacing.switch-thumb - Spacing.xxs * 2) * root.travel
+                - (self.width - Spacing.switch-thumb) / 2;
+            animate height { duration: Materials.motion-quick; easing: Materials.spring; }
         }
     }
 

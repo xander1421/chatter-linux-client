@@ -2,14 +2,15 @@
 //!
 //! Data access for attachment entities.
 
-use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata, Thumbnail};
+use crate::domain::attachment::{
+    Attachment, AttachmentStatus, ContentLocation, FileMetadata, Thumbnail,
+};
 use crate::domain::ids::AttachmentId;
 use crate::error::StorageError;
-use crate::storage::blob_stream::BlobInfo;
-use crate::storage::serialization::{db_deserialize, db_serialize};
 use crate::storage::Database;
+use crate::storage::serialization::{db_deserialize, db_serialize};
 use chrono::{DateTime, Utc};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use std::sync::Arc;
 
 /// Let the shared-content index know an attachment's metadata now exists, so
@@ -18,11 +19,9 @@ use std::sync::Arc;
 /// Best-effort — losing a tile in a media drawer must not fail the insert that
 /// makes the attachment itself usable.
 fn resolve_shared_content(conn: &rusqlite::Connection, attachment: &Attachment) {
-    if let Err(e) = super::shared_content_repo::resolve_attachment(
-        conn,
-        &attachment.id,
-        &attachment.metadata,
-    ) {
+    if let Err(e) =
+        super::shared_content_repo::resolve_attachment(conn, &attachment.id, &attachment.metadata)
+    {
         tracing::warn!(attachment_id = %attachment.id, error = %e, "shared-content resolve failed");
     }
 }
@@ -33,6 +32,19 @@ pub struct AttachmentRepository {
 }
 
 impl AttachmentRepository {
+    /// Cache a derived preview without modifying status, paths or encryption material.
+    pub fn cache_video_thumbnail(
+        &self,
+        source: &Attachment,
+        bytes: &[u8],
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        Ok(conn.execute(
+            "UPDATE attachments SET thumbnail_bytes = ?1 WHERE id = ?2 AND encryption_key = ?3 AND encryption_iv = ?4",
+            params![bytes, source.id.to_string(), source.encryption_key, source.encryption_iv],
+        )? == 1)
+    }
+
     /// Create a new AttachmentRepository.
     pub fn new(db: Arc<Database>) -> Self {
         Self { db }
@@ -53,60 +65,21 @@ impl AttachmentRepository {
 
         conn.execute(
             "INSERT INTO attachments (
-                id, metadata_blob, status, local_path, remote_url,
-                encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
+                id, metadata_blob, status, remote_url,
+                encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at,
+                secret_chat
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 attachment.id.to_string(),
                 metadata_blob,
                 status_to_int(attachment.status),
-                attachment.local_path,
                 attachment.remote_url,
                 attachment.encryption_key,
                 attachment.encryption_iv,
                 thumbnail_bytes,
                 content_location_to_int(attachment.content_location),
                 attachment.created_at.to_rfc3339(),
-            ],
-        )?;
-        resolve_shared_content(&conn, attachment);
-
-        Ok(())
-    }
-
-    /// Insert an attachment with encrypted content stored in database.
-    ///
-    /// This stores the encrypted ciphertext directly in the database for
-    /// secure in-memory-only decryption during playback.
-    pub fn insert_with_content(
-        &self,
-        attachment: &Attachment,
-        encrypted_content: &[u8],
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        // Use bincode for efficient BLOB storage
-        let metadata_blob = db_serialize(&attachment.metadata)?;
-
-        let thumbnail_bytes = attachment.metadata.thumbnail.as_deref();
-
-        conn.execute(
-            "INSERT INTO attachments (
-                id, metadata_blob, status, local_path, remote_url,
-                encryption_key, encryption_iv, thumbnail_bytes,
-                encrypted_content, content_location, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                attachment.id.to_string(),
-                metadata_blob,
-                status_to_int(attachment.status),
-                attachment.local_path,
-                attachment.remote_url,
-                attachment.encryption_key,
-                attachment.encryption_iv,
-                thumbnail_bytes,
-                encrypted_content,
-                content_location_to_int(ContentLocation::InDatabase),
-                attachment.created_at.to_rfc3339(),
+                attachment.secret_chat,
             ],
         )?;
         resolve_shared_content(&conn, attachment);
@@ -118,8 +91,9 @@ impl AttachmentRepository {
     pub fn get(&self, id: &AttachmentId) -> Result<Option<Attachment>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, metadata_blob, status, local_path, remote_url,
-                    encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
+            "SELECT id, metadata_blob, status, remote_url,
+                    encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at,
+                    secret_chat
              FROM attachments WHERE id = ?1",
         )?;
 
@@ -136,10 +110,10 @@ impl AttachmentRepository {
     ///
     /// Returns the encrypted ciphertext blob for decryption in memory.
     /// Returns None if content is not stored in database (needs CDN download).
-    ///
-    /// **Note**: For large attachments (>1MB), prefer `get_encrypted_content_blob_info`
-    /// with streaming access to avoid loading the entire blob into memory.
-    pub fn get_encrypted_content(&self, id: &AttachmentId) -> Result<Option<Vec<u8>>, StorageError> {
+    pub fn get_encrypted_content(
+        &self,
+        id: &AttachmentId,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT encrypted_content FROM attachments WHERE id = ?1 AND content_location = 1",
@@ -155,90 +129,6 @@ impl AttachmentRepository {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Database(e)),
         }
-    }
-
-    /// Get blob info for streaming access to encrypted content.
-    ///
-    /// Returns the SQLite rowid and size needed to open a streaming blob reader.
-    /// Use this instead of `get_encrypted_content` for large attachments to avoid
-    /// loading the entire blob into memory.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let info = repo.get_encrypted_content_blob_info(&id)?;
-    /// let stream = BlobStream::open(&conn, "attachments", "encrypted_content", info.rowid)?;
-    /// // Read in chunks...
-    /// ```
-    pub fn get_encrypted_content_blob_info(
-        &self,
-        id: &AttachmentId,
-    ) -> Result<Option<BlobInfo>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT rowid, length(encrypted_content)
-             FROM attachments
-             WHERE id = ?1 AND content_location = 1 AND encrypted_content IS NOT NULL",
-        )?;
-
-        let result = stmt.query_row(params![id.to_string()], |row| {
-            let rowid: i64 = row.get(0)?;
-            let size: i64 = row.get(1)?;
-            Ok(BlobInfo {
-                rowid,
-                size: size as usize,
-            })
-        });
-
-        match result {
-            Ok(info) => Ok(Some(info)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
-        }
-    }
-
-    /// Get a reference to the underlying database for blob streaming.
-    ///
-    /// Used to open blob streams with `BlobStream::open()`.
-    pub fn database(&self) -> &Arc<Database> {
-        &self.db
-    }
-
-    /// Store encrypted content for an existing attachment.
-    ///
-    /// Updates the attachment with downloaded encrypted ciphertext and
-    /// marks content_location as InDatabase.
-    pub fn store_encrypted_content(
-        &self,
-        id: &AttachmentId,
-        encrypted_content: &[u8],
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-
-        // Set content_location AND status atomically to avoid race condition
-        // where user clicks attachment between content stored and status update
-        let rows = conn.execute(
-            "UPDATE attachments SET
-                encrypted_content = ?1,
-                content_location = ?2,
-                status = ?3
-             WHERE id = ?4",
-            params![
-                encrypted_content,
-                content_location_to_int(ContentLocation::InDatabase),
-                status_to_int(AttachmentStatus::Ready),
-                id.to_string(),
-            ],
-        )?;
-
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!(
-                "Attachment {} not found",
-                id
-            )));
-        }
-
-        Ok(())
     }
 
     // ========================================================================
@@ -261,15 +151,14 @@ impl AttachmentRepository {
 
         conn.execute(
             "INSERT INTO attachments (
-                id, metadata_blob, status, local_path, remote_url,
+                id, metadata_blob, status, remote_url,
                 encryption_key, encryption_iv, thumbnail_bytes,
-                file_path, content_location, created_at
+                file_path, content_location, created_at, secret_chat
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 attachment.id.to_string(),
                 metadata_blob,
                 status_to_int(attachment.status),
-                attachment.local_path,
                 attachment.remote_url,
                 attachment.encryption_key,
                 attachment.encryption_iv,
@@ -277,6 +166,7 @@ impl AttachmentRepository {
                 file_path.to_string_lossy().to_string(),
                 content_location_to_int(ContentLocation::OnFilesystem),
                 attachment.created_at.to_rfc3339(),
+                attachment.secret_chat,
             ],
         )?;
         resolve_shared_content(&conn, attachment);
@@ -289,9 +179,8 @@ impl AttachmentRepository {
     /// Returns None if the attachment doesn't exist or isn't stored on filesystem.
     pub fn get_file_path(&self, id: &AttachmentId) -> Result<Option<String>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT file_path FROM attachments WHERE id = ?1 AND content_location = 2",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT file_path FROM attachments WHERE id = ?1 AND content_location = 2")?;
 
         let result = stmt.query_row(params![id.to_string()], |row| {
             let path: Option<String> = row.get(0)?;
@@ -341,54 +230,69 @@ impl AttachmentRepository {
         Ok(())
     }
 
-    /// Update content location for an attachment.
-    ///
-    /// Used when migrating attachments between storage backends.
-    pub fn set_content_location(
-        &self,
-        id: &AttachmentId,
-        location: ContentLocation,
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-
-        let rows = conn.execute(
-            "UPDATE attachments SET content_location = ?1 WHERE id = ?2",
-            params![content_location_to_int(location), id.to_string()],
+    /// Whether any stored message still carries this attachment. A forward
+    /// reuses the original's attachment id, so deleting one conversation's
+    /// messages does not make its attachments unreferenced. Answered from
+    /// `shared_content`, which indexes every message attachment on insert and
+    /// loses its rows with the message (FK cascade).
+    pub fn is_referenced_by_message(&self, id: &AttachmentId) -> Result<bool, StorageError> {
+        let conn = self.db.read_connection()?;
+        let found = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM shared_content WHERE attachment_id = ?1)",
+            params![id.to_string()],
+            |row| row.get::<_, bool>(0),
         )?;
-
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!(
-                "Attachment {} not found",
-                id
-            )));
-        }
-
-        Ok(())
+        Ok(found)
     }
 
-    /// List all attachments stored on filesystem.
-    ///
-    /// Returns attachment IDs and their file paths for cleanup operations.
-    pub fn list_filesystem_attachments(&self) -> Result<Vec<(AttachmentId, String)>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, file_path FROM attachments
-             WHERE content_location = 2 AND file_path IS NOT NULL",
-        )?;
-
-        let mut rows = stmt.query([])?;
-        let mut results = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            let id_str: String = row.get(0)?;
-            let file_path: String = row.get(1)?;
-
-            if let Ok(id) = id_str.parse() {
-                results.push((id, file_path));
+    /// Store a row built from a received pointer, or — when the row already
+    /// exists (the CDN key was seen before, or a concurrent receipt won the
+    /// insert) — raise its secret-chat mark to `MAX(existing, new)`, in one
+    /// transaction. The mark is monotonic: an ordinary receipt never clears
+    /// a secret one, and a secret receipt that loses the insert race still
+    /// marks the winner's row. Returns whether this call inserted the row.
+    pub fn insert_or_raise_secret(&self, attachment: &Attachment) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let tx = conn.unchecked_transaction()?;
+        let metadata_blob = db_serialize(&attachment.metadata)?;
+        let secret = attachment.secret_chat;
+        let inserted = tx.execute(
+            "INSERT INTO attachments (
+                id, metadata_blob, status, remote_url,
+                encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at,
+                secret_chat
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ON CONFLICT(id) DO NOTHING",
+            params![
+                attachment.id.to_string(),
+                metadata_blob,
+                status_to_int(attachment.status),
+                attachment.remote_url,
+                attachment.encryption_key,
+                attachment.encryption_iv,
+                attachment.metadata.thumbnail.as_deref(),
+                content_location_to_int(attachment.content_location),
+                attachment.created_at.to_rfc3339(),
+                secret,
+            ],
+        )? == 1;
+        if inserted {
+            resolve_shared_content(&tx, attachment);
+        } else {
+            let rows = tx.execute(
+                "UPDATE attachments SET secret_chat = MAX(secret_chat, ?2)
+                 WHERE id = ?1",
+                params![attachment.id.to_string(), secret],
+            )?;
+            if rows != 1 {
+                return Err(StorageError::NotFound(format!(
+                    "Attachment {}",
+                    attachment.id
+                )));
             }
         }
-
-        Ok(results)
+        tx.commit()?;
+        Ok(inserted)
     }
 
     /// Update an existing attachment.
@@ -402,14 +306,13 @@ impl AttachmentRepository {
 
         let rows = conn.execute(
             "UPDATE attachments SET
-                metadata_blob = ?1, status = ?2, local_path = ?3, remote_url = ?4,
-                encryption_key = ?5, encryption_iv = ?6, thumbnail_bytes = ?7,
-                content_location = ?8
-             WHERE id = ?9",
+                metadata_blob = ?1, status = ?2, remote_url = ?3,
+                encryption_key = ?4, encryption_iv = ?5, thumbnail_bytes = ?6,
+                content_location = ?7
+             WHERE id = ?8",
             params![
                 metadata_blob,
                 status_to_int(attachment.status),
-                attachment.local_path,
                 attachment.remote_url,
                 attachment.encryption_key,
                 attachment.encryption_iv,
@@ -447,69 +350,99 @@ impl AttachmentRepository {
         Ok(())
     }
 
+    /// After a conversation's messages are deleted: remove each of `ids` that
+    /// no remaining message carries (a forward shares the id), row and
+    /// encrypted file both.
+    pub fn delete_unreferenced(&self, ids: &[AttachmentId]) -> Result<(), StorageError> {
+        {
+            let conn = self.db.connection()?;
+            for id in ids {
+                conn.execute(
+                    "INSERT OR IGNORE INTO attachment_cleanup_queue (attachment_id) VALUES (?1)",
+                    params![id.to_string()],
+                )?;
+            }
+        }
+        Self::retry_pending_cleanup(&self.db)
+    }
+
+    /// Retry work retained before a message row was removed. A failed file
+    /// removal leaves both the attachment row and its queue entry intact.
+    pub(crate) fn retry_pending_cleanup(db: &Database) -> Result<(), StorageError> {
+        let ids: Vec<String> = {
+            let conn = db.connection()?;
+            let mut stmt = conn.prepare("SELECT attachment_id FROM attachment_cleanup_queue")?;
+            let rows = stmt.query_map([], |row| row.get(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        let mut first_error = None;
+        for id in ids {
+            if let Err(error) = Self::cleanup_queued(db, &id) {
+                tracing::warn!(attachment_id = %id, %error, "attachment cleanup deferred");
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn cleanup_queued(db: &Database, id: &str) -> Result<(), StorageError> {
+        let (referenced, file_path, thumbnail_path): (bool, Option<String>, Option<String>) = {
+            let conn = db.connection()?;
+            let referenced = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM shared_content WHERE attachment_id = ?1)",
+                [id], |row| row.get(0),
+            )?;
+            let file_path = conn.query_row(
+                "SELECT file_path FROM attachments WHERE id = ?1", [id], |row| row.get(0),
+            ).optional()?;
+            let thumbnail_path = conn.query_row(
+                "SELECT local_path FROM thumbnails WHERE attachment_id = ?1", [id], |row| row.get(0),
+            ).optional()?;
+            (referenced, file_path.flatten(), thumbnail_path)
+        };
+        if referenced {
+            // A forwarded message still owns the bytes; its eventual delete
+            // will put this id back in the queue.
+            db.connection()?.execute(
+                "DELETE FROM attachment_cleanup_queue WHERE attachment_id = ?1", [id],
+            )?;
+            return Ok(());
+        }
+        for path in [file_path, thumbnail_path].into_iter().flatten() {
+            if let Err(error) = std::fs::remove_file(&path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    return Err(StorageError::InvalidData(format!(
+                        "Attachment file cleanup failed: {error}"
+                    )));
+                }
+            }
+        }
+        let conn = db.connection()?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM attachments WHERE id = ?1 AND NOT EXISTS
+             (SELECT 1 FROM shared_content WHERE attachment_id = ?1)", [id],
+        )?;
+        tx.execute("DELETE FROM attachment_cleanup_queue WHERE attachment_id = ?1", [id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     // ========================================================================
     // Queries
     // ========================================================================
-
-    /// List attachments by status.
-    pub fn list_by_status(&self, status: AttachmentStatus) -> Result<Vec<Attachment>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, metadata_blob, status, local_path, remote_url,
-                    encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
-             FROM attachments WHERE status = ?1
-             ORDER BY created_at DESC",
-        )?;
-
-        let mut rows = stmt.query(params![status_to_int(status)])?;
-        collect_attachments(&mut rows)
-    }
-
-    /// List attachments pending upload (Pending or Uploading status).
-    ///
-    /// Note: Excludes thumbnail_bytes for memory efficiency. Use get() for full data.
-    pub fn list_pending_uploads(&self) -> Result<Vec<Attachment>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, metadata_blob, status, local_path, remote_url,
-                    encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
-             FROM attachments WHERE status IN (?1, ?2)
-             ORDER BY created_at ASC",
-        )?;
-
-        let pending = status_to_int(AttachmentStatus::Pending);
-        let uploading = status_to_int(AttachmentStatus::Uploading);
-        let mut rows = stmt.query(params![pending, uploading])?;
-        collect_attachments(&mut rows)
-    }
-
-    /// List attachments that need content downloaded from CDN.
-    ///
-    /// Note: Uses read connection for concurrent access.
-    pub fn list_pending_downloads(&self) -> Result<Vec<Attachment>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, metadata_blob, status, local_path, remote_url,
-                    encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
-             FROM attachments
-             WHERE content_location = 0
-               AND remote_url IS NOT NULL
-               AND encryption_key IS NOT NULL
-               AND status != ?1
-             ORDER BY created_at ASC",
-        )?;
-
-        let failed = status_to_int(AttachmentStatus::Failed);
-        let mut rows = stmt.query(params![failed])?;
-        collect_attachments(&mut rows)
-    }
 
     // ========================================================================
     // Thumbnail operations
     // ========================================================================
 
     /// Get thumbnail for an attachment.
-    pub fn get_thumbnail(&self, attachment_id: &AttachmentId) -> Result<Option<Thumbnail>, StorageError> {
+    pub fn get_thumbnail(
+        &self,
+        attachment_id: &AttachmentId,
+    ) -> Result<Option<Thumbnail>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT attachment_id, local_path, width, height, created_at
@@ -596,7 +529,6 @@ fn int_to_status(value: i32) -> AttachmentStatus {
 fn content_location_to_int(location: ContentLocation) -> i32 {
     match location {
         ContentLocation::NotDownloaded => 0,
-        ContentLocation::InDatabase => 1,
         ContentLocation::OnFilesystem => 2,
     }
 }
@@ -604,7 +536,6 @@ fn content_location_to_int(location: ContentLocation) -> i32 {
 /// Convert integer to ContentLocation.
 fn int_to_content_location(value: i32) -> ContentLocation {
     match value {
-        1 => ContentLocation::InDatabase,
         2 => ContentLocation::OnFilesystem,
         _ => ContentLocation::NotDownloaded,
     }
@@ -618,22 +549,29 @@ fn parse_datetime(s: &str) -> DateTime<Utc> {
 }
 
 /// Convert a database row to Attachment.
-fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Attachment, StorageError>> {
+fn row_to_attachment(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<Result<Attachment, StorageError>> {
     let id_str: String = row.get(0)?;
     // Read from BLOB column (bincode serialized)
     let metadata_blob: Vec<u8> = row.get(1)?;
     let status_int: i32 = row.get(2)?;
-    let local_path: Option<String> = row.get(3)?;
-    let remote_url: Option<String> = row.get(4)?;
-    let encryption_key: Option<Vec<u8>> = row.get(5)?;
-    let encryption_iv: Option<Vec<u8>> = row.get(6)?;
-    let thumbnail_bytes: Option<Vec<u8>> = row.get(7)?;
-    let content_location_int: i32 = row.get(8).unwrap_or(0); // Default to NotDownloaded for old rows
-    let created_at_str: String = row.get(9)?;
+    let remote_url: Option<String> = row.get(3)?;
+    let encryption_key: Option<Vec<u8>> = row.get(4)?;
+    let encryption_iv: Option<Vec<u8>> = row.get(5)?;
+    let thumbnail_bytes: Option<Vec<u8>> = row.get(6)?;
+    let content_location_int: i32 = row.get(7).unwrap_or(0); // Default to NotDownloaded for old rows
+    let created_at_str: String = row.get(8)?;
+    let secret_chat: bool = row.get(9)?;
 
     let id: AttachmentId = match id_str.parse() {
         Ok(id) => id,
-        Err(e) => return Ok(Err(StorageError::InvalidData(format!("Invalid attachment ID: {}", e)))),
+        Err(e) => {
+            return Ok(Err(StorageError::InvalidData(format!(
+                "Invalid attachment ID: {}",
+                e
+            ))));
+        }
     };
 
     // Deserialize BLOB field from bincode
@@ -650,11 +588,11 @@ fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Attachm
         metadata,
         status: int_to_status(status_int),
         content_location: int_to_content_location(content_location_int),
-        local_path,
         remote_url,
         encryption_key,
         encryption_iv,
         created_at: parse_datetime(&created_at_str),
+        secret_chat,
     }))
 }
 
@@ -668,7 +606,12 @@ fn row_to_thumbnail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Thumbnai
 
     let attachment_id: AttachmentId = match attachment_id_str.parse() {
         Ok(id) => id,
-        Err(e) => return Ok(Err(StorageError::InvalidData(format!("Invalid attachment ID: {}", e)))),
+        Err(e) => {
+            return Ok(Err(StorageError::InvalidData(format!(
+                "Invalid attachment ID: {}",
+                e
+            ))));
+        }
     };
 
     Ok(Ok(Thumbnail {
@@ -678,16 +621,6 @@ fn row_to_thumbnail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Thumbnai
         height,
         created_at: parse_datetime(&created_at_str),
     }))
-}
-
-/// Collect attachments from a Rows iterator.
-fn collect_attachments(rows: &mut rusqlite::Rows<'_>) -> Result<Vec<Attachment>, StorageError> {
-    let mut attachments = Vec::new();
-    while let Some(row) = rows.next()? {
-        let attachment_result = row_to_attachment(row)?;
-        attachments.push(attachment_result?);
-    }
-    Ok(attachments)
 }
 
 #[cfg(test)]
@@ -843,7 +776,10 @@ mod tests {
         let bincode_size = db_serialize(&metadata).unwrap().len();
         let json_size = serde_json::to_vec(&metadata).unwrap().len();
 
-        assert!(bincode_size < json_size, "Bincode should be smaller than JSON");
+        assert!(
+            bincode_size < json_size,
+            "Bincode should be smaller than JSON"
+        );
     }
 
     // ========================================================================

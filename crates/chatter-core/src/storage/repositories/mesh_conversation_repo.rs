@@ -65,9 +65,8 @@ impl MeshConversationRepository {
     /// Every remembered conversation.
     pub fn list(&self) -> Result<Vec<StoredMeshConversation>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT conversation_id, kind, wire_id, label FROM mesh_conversations",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT conversation_id, kind, wire_id, label FROM mesh_conversations")?;
         let rows = stmt.query_map([], |row| {
             Ok(StoredMeshConversation {
                 conversation_id: row.get(0)?,
@@ -95,10 +94,78 @@ impl MeshConversationRepository {
         Ok(())
     }
 
-    /// Panic-wipe support: forget every mesh conversation.
+    /// Remember the peer ID and its last nickname so history can still name a
+    /// sender after the peer has gone out of range.
+    pub fn remember_sender(
+        &self,
+        sender_id: &str,
+        peer_id: &str,
+        nickname: &str,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            r#"
+            INSERT INTO mesh_sender_names (sender_id, peer_id, nickname, updated_at)
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(sender_id) DO UPDATE SET
+                peer_id = excluded.peer_id,
+                nickname = CASE WHEN excluded.nickname = '' THEN mesh_sender_names.nickname
+                                ELSE excluded.nickname END,
+                updated_at = excluded.updated_at
+            "#,
+            params![sender_id, peer_id, nickname, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    /// The remembered nickname for a sender, with bitchat's `#abcd` peer-ID
+    /// suffix when another remembered sender uses the same one. Self-declared:
+    /// a display string, never an identity.
+    pub fn sender_name(&self, sender_id: &str) -> Result<Option<String>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let row = conn.query_row(
+            r#"
+            SELECT s.nickname, s.peer_id,
+                   (SELECT COUNT(*) FROM mesh_sender_names o WHERE o.nickname = s.nickname)
+            FROM mesh_sender_names s WHERE s.sender_id = ?1
+            "#,
+            params![sender_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        );
+        let (nickname, peer_id, sharing) = match row {
+            Ok(found) => found,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        if nickname.trim().is_empty() {
+            return Ok(Some(format!(
+                "Peer {}",
+                peer_id.chars().take(8).collect::<String>()
+            )));
+        }
+        if sharing > 1 {
+            let suffix: String = peer_id
+                .chars()
+                .filter(char::is_ascii_hexdigit)
+                .take(4)
+                .collect::<String>()
+                .to_lowercase();
+            return Ok(Some(format!("{nickname}#{suffix}")));
+        }
+        Ok(Some(nickname))
+    }
+
+    /// Panic-wipe support: forget every mesh conversation and every sender name.
     pub fn wipe(&self) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute("DELETE FROM mesh_conversations", [])?;
+        conn.execute("DELETE FROM mesh_sender_names", [])?;
         Ok(())
     }
 }
@@ -107,11 +174,42 @@ impl MeshConversationRepository {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_sender_name_survives_and_is_suffixed_only_on_collision() {
+        let (repo, _dir) = repo();
+        assert_eq!(repo.sender_name("u1").expect("read"), None);
+        repo.remember_sender("u1", "4f74eb3eb7441921", "anon7431")
+            .expect("save");
+        assert_eq!(
+            repo.sender_name("u1").expect("read").as_deref(),
+            Some("anon7431")
+        );
+
+        repo.remember_sender("u2", "a1b2c3d4e5f60718", "anon7431")
+            .expect("save");
+        assert_eq!(
+            repo.sender_name("u1").expect("read").as_deref(),
+            Some("anon7431#4f74")
+        );
+        assert_eq!(
+            repo.sender_name("u2").expect("read").as_deref(),
+            Some("anon7431#a1b2")
+        );
+
+        repo.remember_sender("u2", "a1b2c3d4e5f60718", "")
+            .expect("empty is ignored");
+        assert_eq!(
+            repo.sender_name("u2").expect("read").as_deref(),
+            Some("anon7431#a1b2")
+        );
+
+        repo.wipe().expect("wipe");
+        assert_eq!(repo.sender_name("u1").expect("read"), None);
+    }
+
     fn repo() -> (MeshConversationRepository, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let db = Arc::new(
-            Database::open(&dir.path().join("test.db"), "testpass").expect("open"),
-        );
+        let db = Arc::new(Database::open(&dir.path().join("test.db"), "testpass").expect("open"));
         db.run_migrations().expect("migrate");
         (MeshConversationRepository::new(db), dir)
     }

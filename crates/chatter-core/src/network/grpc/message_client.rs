@@ -3,22 +3,20 @@
 //! Client for message service operations including messaging, reactions,
 //! read receipts, typing indicators, pins, search, and streaming.
 
+use crate::network::grpc::transport::GrpcTransport;
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    message_service_client::MessageServiceClient, AcknowledgeMessagesRequest,
-    AcknowledgeMessagesResponse, DeleteMessageRequest, EditMessageRequest, GetDeviceMessagesRequest,
-    GetDeviceMessagesResponse,
-    GetMessagesRequest, GetMessagesResponse,
-    ListPinnedMessagesResponse, Message, MessageEvent, MessageSearchRequest, MessageSearchResponse,
-    MessageSortDirection, MessageUpdate, SealedSenderMessage,
-    SendMessageRequest, SendSealedMessageRequest, SendSealedMessageResponse,
-    StreamGlobalEventsRequest, StreamMessageEventsRequest,
-    StreamMessagesRequest,
+    AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, DeleteMessageRequest,
+    DeleteMessagesRequest, GetDeviceMessagesRequest, GetDeviceMessagesResponse,
+    GetMessagesRequest, GetMessagesResponse, ListPinnedMessagesResponse, Message, MessageEvent,
+    MessageSearchRequest, MessageSearchResponse, MessageSortDirection, MessageUpdate,
+    SealedDelivery, SealedDeviceMessage, SendMessageRequest, SendSealedMessageRequest,
+    SendSealedMessageResponse, StreamGlobalEventsRequest, StreamMessageEventsRequest,
+    StreamMessagesRequest, StreamMessagesResponse, message_service_client::MessageServiceClient,
 };
 
 /// Message service client wrapper.
@@ -32,7 +30,7 @@ use crate::proto::chat_v1::{
 /// pool.connect().await?;
 ///
 /// let mut client = MessageClient::new(pool.channel(), pool.auth_clone());
-/// let message = client.send_message("channel-123", content, None, false, None, false, None, vec![], false, vec![]).await?;
+/// let message = client.send_message("channel-123", content, None, false, None, vec![], false, vec![]).await?;
 /// ```
 pub struct MessageClient {
     inner: MessageServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
@@ -57,7 +55,6 @@ impl MessageClient {
     /// * `parent_id` - Optional parent message ID for threading
     /// * `ephemeral` - Whether message is ephemeral
     /// * `ephemeral_ttl` - TTL for ephemeral messages
-    /// * `crypto_options` - Optional encryption preferences
     /// * `mentioned_integrations` - Integration IDs mentioned in message
     /// * `targets_ai_bot` - Whether message targets AI bot
     /// * `mentioned_file_ids` - File IDs mentioned in message
@@ -69,7 +66,6 @@ impl MessageClient {
         parent_id: Option<&str>,
         ephemeral: bool,
         ephemeral_ttl: Option<prost_types::Duration>,
-        crypto_options: Option<crate::proto::chat_v1::CryptoOptions>,
         mentioned_integrations: Vec<String>,
         targets_ai_bot: bool,
         mentioned_file_ids: Vec<String>,
@@ -81,41 +77,22 @@ impl MessageClient {
             ephemeral,
             ephemeral_ttl,
             client_request_id: uuid::Uuid::new_v4().to_string(),
-            crypto_options,
             mentioned_integrations,
             targets_ai_bot,
             mentioned_file_ids,
         };
 
-        self.inner
-            .send_message(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
+        self.send_prepared_message(request).await
     }
 
-    /// Edit an existing message.
-    ///
-    /// # Arguments
-    ///
-    /// * `message_id` - ID of message to edit
-    /// * `channel_id` - Channel containing the message
-    /// * `new_content` - Updated message content
-    pub async fn edit_message(
+    /// Submit a previously persisted channel request without changing its
+    /// request identity, ciphertext or timestamp.
+    pub async fn send_prepared_message(
         &mut self,
-        message_id: &str,
-        channel_id: &str,
-        new_content: crate::proto::chat_v1::message::Content,
+        request: SendMessageRequest,
     ) -> Result<Message, NetworkError> {
-        let request = EditMessageRequest {
-            message_id: message_id.to_string(),
-            channel_id: channel_id.to_string(),
-            new_content: Some(new_content),
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
-
         self.inner
-            .edit_message(request)
+            .send_message(request)
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
@@ -140,6 +117,29 @@ impl MessageClient {
 
         self.inner
             .delete_message(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Atomically delete selected server copies. Never fall back to a loop:
+    /// older servers return Unimplemented and leave the batch intact.
+    pub async fn delete_messages(
+        &mut self,
+        targets: Vec<(String, String)>,
+    ) -> Result<(), NetworkError> {
+        let messages = targets
+            .into_iter()
+            .map(
+                |(message_id, channel_id)| DeleteMessageRequest {
+                    message_id,
+                    channel_id,
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                },
+            )
+            .collect();
+        self.inner
+            .delete_messages(DeleteMessagesRequest { messages })
             .await
             .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))
@@ -182,10 +182,32 @@ impl MessageClient {
             page_token: page_token.unwrap_or("").to_string(),
             sort_direction: sort_direction.into(),
             reference_point,
+            updated_since: None,
         };
 
         self.inner
             .get_messages(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Recover current message state, tombstones and reactions from the
+    /// server's retained change window. The page token freezes its boundaries.
+    pub async fn get_message_changes(
+        &mut self,
+        channel_id: &str,
+        page_token: Option<&str>,
+    ) -> Result<GetMessagesResponse, NetworkError> {
+        self.inner
+            .get_messages(GetMessagesRequest {
+                channel_id: channel_id.to_string(),
+                limit: 50,
+                sort_direction: MessageSortDirection::SortOldestFirst.into(),
+                page_token: page_token.unwrap_or("").to_string(),
+                updated_since: Some(0),
+                ..Default::default()
+            })
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
@@ -199,11 +221,16 @@ impl MessageClient {
     ///
     /// * `channel_id` - Channel to stream from
     /// * `resume_from` - Optional message ID to resume from
+    ///
+    /// Items are messages or the server's `StreamHeartbeat` keepalive (the
+    /// first item, then about one a minute); see
+    /// `network::streaming::heartbeat`.
     pub async fn stream_messages(
         &mut self,
         channel_id: &str,
         resume_from: Option<&str>,
-    ) -> Result<impl Stream<Item = Result<Message, NetworkError>>, NetworkError> {
+    ) -> Result<impl Stream<Item = Result<StreamMessagesResponse, NetworkError>>, NetworkError>
+    {
         let request = StreamMessagesRequest {
             channel_id: channel_id.to_string(),
             resume_from_message_id: resume_from.unwrap_or("").to_string(),
@@ -222,241 +249,36 @@ impl MessageClient {
 
     // ==================== Sealed Sender RPCs ====================
 
-    /// Send a sealed sender message (anonymous to server).
+    /// One sealed send to `destination_user_id`, IDENTIFIED (Basic auth):
+    /// every device's envelope in one request, queued all together or not at
+    /// all. For a sender that holds no Unidentified-Access-Key for the
+    /// recipient, and for sends to our own user — the UAK path is
+    /// `AnonymousMessageClient::send_sealed_messages_with_uak`.
     ///
-    /// This endpoint uses UAK (Unidentified Access Key) authentication
-    /// instead of regular auth, hiding sender identity from the server.
-    ///
-    /// # Arguments
-    ///
-    /// * `destination_user_id` - Recipient user ID
-    /// * `destination_device_id` - Recipient device ID (0 for all devices)
-    /// * `sealed_message` - The sealed sender envelope
-    ///
-    /// # Note
-    ///
-    /// This method does NOT include UAK headers. For proper anonymous sending,
-    /// use `send_sealed_message_anonymous` which includes the recipient's UAK.
-    pub async fn send_sealed_message(
+    /// A device-set difference the server reports for `delivery` comes back
+    /// as [`NetworkError::MismatchedDevices`], with nothing queued.
+    /// `client_request_id` is the message GUID every device's copy is stored
+    /// under: a repeated send under the same id is not queued twice.
+    pub async fn send_sealed_messages(
         &mut self,
         destination_user_id: &str,
-        destination_device_id: u32,
-        sealed_message: SealedSenderMessage,
+        messages: Vec<SealedDeviceMessage>,
+        delivery: SealedDelivery,
+        client_request_id: &str,
     ) -> Result<SendSealedMessageResponse, NetworkError> {
         let request = SendSealedMessageRequest {
             destination_user_id: destination_user_id.to_string(),
-            destination_device_id,
-            sealed_message: Some(sealed_message),
-            client_request_id: uuid::Uuid::new_v4().to_string(),
+            messages,
+            client_request_id: client_request_id.to_string(),
             envelope_type: 0, // Default: server determines from content
+            delivery: delivery as i32,
         };
 
         self.inner
             .send_sealed_message(request)
             .await
-            .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Send a sealed sender message with UAK for anonymous delivery.
-    ///
-    /// This is the proper Signal-style sealed sender flow where the server
-    /// cannot identify the sender. The UAK (Unidentified Access Key) is
-    /// derived from the recipient's profile key.
-    ///
-    /// # Arguments
-    ///
-    /// * `destination_user_id` - Recipient user ID
-    /// * `destination_device_id` - Recipient device ID (0 for all devices)
-    /// * `sealed_message` - The sealed sender envelope
-    /// * `recipient_uak` - Recipient's 16-byte Unidentified Access Key
-    pub async fn send_sealed_message_anonymous(
-        &mut self,
-        destination_user_id: &str,
-        destination_device_id: u32,
-        sealed_message: SealedSenderMessage,
-        recipient_uak: &[u8],
-    ) -> Result<SendSealedMessageResponse, NetworkError> {
-        self.send_sealed_message_with_uak(
-            destination_user_id,
-            destination_device_id,
-            sealed_message,
-            recipient_uak,
-        )
-        .await
-    }
-
-    /// Send a sealed sender message to a group of recipients.
-    ///
-    /// For group messaging, the server validates that the sender knows all
-    /// recipients' UAKs by verifying a combined (XORed) UAK. This proves the
-    /// sender has legitimate access to send to all recipients.
-    ///
-    /// # Arguments
-    ///
-    /// * `recipient_user_ids` - List of recipient user IDs
-    /// * `sealed_messages` - Per-recipient sealed sender envelopes (same index as user IDs)
-    /// * `recipient_uaks` - Per-recipient 16-byte UAKs (same index as user IDs)
-    ///
-    /// # Returns
-    ///
-    /// Results for each recipient (success or failure).
-    ///
-    /// # Note
-    ///
-    /// This sends to all devices of each recipient (destination_device_id = 0).
-    /// The server handles fan-out to individual devices.
-    pub async fn send_sealed_message_to_group(
-        &mut self,
-        recipient_user_ids: &[&str],
-        sealed_messages: Vec<SealedSenderMessage>,
-        recipient_uaks: &[[u8; 16]],
-    ) -> Result<Vec<Result<SendSealedMessageResponse, NetworkError>>, NetworkError> {
-        use crate::crypto::signal::sealed_sender::combine_uaks_for_group;
-
-        if recipient_user_ids.len() != sealed_messages.len()
-            || recipient_user_ids.len() != recipient_uaks.len()
-        {
-            return Err(NetworkError::InvalidRequest(
-                "recipient_user_ids, sealed_messages, and recipient_uaks must have same length"
-                    .into(),
-            ));
-        }
-
-        if recipient_user_ids.is_empty() {
-            return Ok(vec![]);
-        }
-
-        // Combine all UAKs using XOR (Signal's group send validation)
-        let combined_uak = combine_uaks_for_group(recipient_uaks);
-
-        let mut results = Vec::with_capacity(recipient_user_ids.len());
-
-        // Send to each recipient with the combined UAK
-        for (i, (user_id, sealed_message)) in recipient_user_ids
-            .iter()
-            .zip(sealed_messages.into_iter())
-            .enumerate()
-        {
-            // For group sends, we use the combined UAK for all recipients
-            // The server validates XOR(all_recipient_uaks) == combined_uak
-            let result = self
-                .send_sealed_message_with_uak_and_group(
-                    user_id,
-                    0, // All devices
-                    sealed_message,
-                    &combined_uak,
-                    recipient_user_ids,
-                    i,
-                )
-                .await;
-
-            results.push(result);
-        }
-
-        Ok(results)
-    }
-
-    /// Internal helper to send sealed message with UAK header.
-    async fn send_sealed_message_with_uak(
-        &mut self,
-        destination_user_id: &str,
-        destination_device_id: u32,
-        sealed_message: SealedSenderMessage,
-        uak: &[u8],
-    ) -> Result<SendSealedMessageResponse, NetworkError> {
-        use base64::Engine;
-        use tonic::Request;
-
-        let proto_request = SendSealedMessageRequest {
-            destination_user_id: destination_user_id.to_string(),
-            destination_device_id,
-            sealed_message: Some(sealed_message),
-            client_request_id: uuid::Uuid::new_v4().to_string(),
-            envelope_type: 0, // Default: server determines from content
-        };
-
-        // Create request with UAK headers for anonymous delivery
-        let mut request = Request::new(proto_request);
-
-        // Add Unidentified-Access-Key header (base64 encoded)
-        let uak_b64 = base64::engine::general_purpose::STANDARD.encode(uak);
-        request.metadata_mut().insert(
-            "unidentified-access-key",
-            uak_b64
-                .parse()
-                .map_err(|_| NetworkError::InvalidRequest("invalid UAK encoding".into()))?,
-        );
-
-        // Add destination user header
-        request.metadata_mut().insert(
-            "x-destination-user-id",
-            destination_user_id
-                .parse()
-                .map_err(|_| NetworkError::InvalidRequest("invalid user ID".into()))?,
-        );
-
-        self.inner
-            .send_sealed_message(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Internal helper for group sealed sender with combined UAK.
-    #[allow(clippy::too_many_arguments)]
-    async fn send_sealed_message_with_uak_and_group(
-        &mut self,
-        destination_user_id: &str,
-        destination_device_id: u32,
-        sealed_message: SealedSenderMessage,
-        combined_uak: &[u8],
-        all_recipients: &[&str],
-        _recipient_index: usize,
-    ) -> Result<SendSealedMessageResponse, NetworkError> {
-        use base64::Engine;
-        use tonic::Request;
-
-        let proto_request = SendSealedMessageRequest {
-            destination_user_id: destination_user_id.to_string(),
-            destination_device_id,
-            sealed_message: Some(sealed_message),
-            client_request_id: uuid::Uuid::new_v4().to_string(),
-            envelope_type: 0, // Default: server determines from content
-        };
-
-        let mut request = Request::new(proto_request);
-
-        // Add combined UAK for group validation
-        let uak_b64 = base64::engine::general_purpose::STANDARD.encode(combined_uak);
-        request.metadata_mut().insert(
-            "unidentified-access-key",
-            uak_b64
-                .parse()
-                .map_err(|_| NetworkError::InvalidRequest("invalid UAK encoding".into()))?,
-        );
-
-        // Add destination user header
-        request.metadata_mut().insert(
-            "x-destination-user-id",
-            destination_user_id
-                .parse()
-                .map_err(|_| NetworkError::InvalidRequest("invalid user ID".into()))?,
-        );
-
-        // Add group recipients header for server-side XOR validation
-        let recipients_json = serde_json::to_string(all_recipients).unwrap_or_default();
-        if let Ok(header_value) = recipients_json.parse() {
-            request
-                .metadata_mut()
-                .insert("x-group-recipients", header_value);
-        }
-
-        self.inner
-            .send_sealed_message(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
+            .and_then(|r| sealed_send_result(r.into_inner()))
     }
 
     // ==================== Device Message Queue RPCs ====================
@@ -569,6 +391,7 @@ impl MessageClient {
             page_token: String::new(),
             sort_direction: MessageSortDirection::SortUnspecified.into(),
             reference_point: None,
+            updated_since: None,
         };
 
         self.inner
@@ -656,6 +479,8 @@ impl MessageClient {
     ///
     /// * `channel_ids` - Channels to stream from (empty for all user's channels)
     /// * `resume_from` - Optional event ID to resume from
+    /// Global resume is a bounded v1 channel-position checkpoint. The
+    /// per-channel stream's scalar Redis cursor remains a separate protocol.
     pub async fn stream_global_events(
         &mut self,
         channel_ids: Vec<String>,
@@ -726,7 +551,7 @@ mod tests {
             edited_at: 0,
             mentioned_integrations: vec![],
             targets_ai_bot: false,
-            channel_type: 0,
+            ..Default::default()
         };
 
         assert_eq!(message.id, "msg-123");
@@ -812,7 +637,7 @@ mod tests {
             edited_at: 0,
             mentioned_integrations: vec![],
             targets_ai_bot: false,
-            channel_type: 0,
+            ..Default::default()
         };
 
         let event = MessageEvent {
@@ -826,40 +651,19 @@ mod tests {
         assert_eq!(event.channel_id, "channel-456");
         assert!(matches!(event.event, Some(Event::MessageSent(_))));
     }
+}
 
-    #[test]
-    fn test_sealed_sender_message_construction() {
-        // Verify SealedSenderMessage can be constructed
-        let sealed_msg = SealedSenderMessage {
-            sealed_body: vec![0u8; 128], // Encrypted envelope
-            server_key_id: 1,
-            timestamp: 1234567890000,
-        };
-
-        assert_eq!(sealed_msg.server_key_id, 1);
-        assert_eq!(sealed_msg.sealed_body.len(), 128);
-    }
-
-    #[test]
-    fn test_uak_for_sealed_sender() {
-        use crate::crypto::derive_uak;
-        use crate::crypto::signal::sealed_sender::{combine_uaks_for_group, UAK_LENGTH};
-
-        let profile_key_1 = [0x11u8; 32];
-        let profile_key_2 = [0x22u8; 32];
-
-        let uak1 = derive_uak(&profile_key_1);
-        let uak2 = derive_uak(&profile_key_2);
-
-        assert_eq!(uak1.len(), UAK_LENGTH);
-        assert_eq!(uak2.len(), UAK_LENGTH);
-        assert_ne!(uak1, uak2);
-
-        let combined = combine_uaks_for_group(&[uak1, uak2]);
-        assert_eq!(combined.len(), UAK_LENGTH);
-
-        // XOR is reversible: combined XOR uak1 == uak2
-        let reversed: [u8; 16] = std::array::from_fn(|i| combined[i] ^ uak1[i]);
-        assert_eq!(reversed, uak2);
+/// A `SendSealedMessage` answer that reports a device-set mismatch is a send
+/// that did not happen: make it an error no caller can read as delivered.
+pub(crate) fn sealed_send_result(
+    response: SendSealedMessageResponse,
+) -> Result<SendSealedMessageResponse, NetworkError> {
+    match response.mismatched_devices {
+        Some(m) => Err(NetworkError::MismatchedDevices {
+            missing: m.missing_devices,
+            extra: m.extra_devices,
+            stale: m.stale_devices,
+        }),
+        None => Ok(response),
     }
 }

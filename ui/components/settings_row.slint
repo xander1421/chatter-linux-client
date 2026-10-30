@@ -1,0 +1,129 @@
+// A row inside a grouped Settings section. The section owns the card and
+// dividers; the row owns alignment, focus, and its complete touch target.
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Button } from "button.slint";
+import { Materials } from "../theme/materials.slint";
+
+export component SettingsRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> detail: "";
+    in property <color> detail-color: Colors.text-secondary;
+    in property <string> action-label: "";
+    in property <bool> show-chevron: true;
+    in property <bool> clickable: true;
+    in property <bool> destructive: false;
+    in property <bool> touch: false;
+    callback clicked();
+
+    min-height: root.touch ? Spacing.list-row-height-touch : Spacing.button-height;
+    preferred-height: max(self.min-height, row-content.preferred-height);
+    border-radius: Spacing.radius-md;
+    background: row-touch.pressed ? Colors.surface-control-hover
+        : row-touch.has-hover && root.clickable ? Colors.row-hover : transparent;
+    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+    accessible-role: button;
+    accessible-label: root.title;
+    accessible-description: root.detail;
+    accessible-enabled: root.clickable || root.action-label != "";
+    accessible-action-default => { if root.clickable || root.action-label != "" { root.clicked(); } }
+
+    keys := FocusScope {
+        width: 0px; height: 0px;
+        enabled: root.clickable;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    row-content := HorizontalLayout {
+        y: row-touch.pressed ? Spacing.xxs : 0px;
+        animate y { duration: Materials.motion-quick; easing: Materials.spring; }
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        padding-top: Spacing.xs;
+        padding-bottom: Spacing.xs;
+        spacing: Spacing.md;
+        alignment: stretch;
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Image {
+                source: root.icon;
+                width: Spacing.button-icon;
+                height: Spacing.button-icon;
+                colorize: root.destructive ? Colors.danger : Colors.text-secondary;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Spacing.xxs;
+            Text {
+                text: root.title;
+                color: root.destructive ? Colors.danger : Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if root.detail != "": Text {
+                width: max(0px, root.width - Spacing.md * 2 - Spacing.button-icon
+                    - (root.show-chevron || root.action-label != "" ? Spacing.md * 2 : Spacing.md)
+                    - (root.action-label != "" ? max(Spacing.button-min-width, action-measure.preferred-width + Spacing.md * 2)
+                        : root.show-chevron ? Spacing.button-icon : 0px));
+                text: root.detail;
+                color: root.detail-color;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+        }
+        if root.action-label != "": Button {
+            text: root.action-label;
+            variant: root.destructive ? "danger" : "secondary";
+            size: "small";
+            touch: root.touch;
+            clicked => { root.clicked(); }
+        }
+        if root.show-chevron && root.action-label == "": VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Image {
+                source: Icons.chevron-right;
+                width: Spacing.button-icon;
+                height: Spacing.button-icon;
+                colorize: Colors.text-secondary;
+            }
+        }
+    }
+
+    // Measures the action button's label so the detail text leaves the
+    // button its full width (Button: sm text, md padding each side).
+    action-measure := Text {
+        x: 0;
+        y: 0;
+        visible: false;
+        text: root.action-label;
+        font-size: Typography.sm;
+        font-weight: Typography.medium;
+    }
+
+    if keys.has-focus: Rectangle {
+        border-width: 2px;
+        border-color: Colors.focus-ring;
+        border-radius: root.border-radius;
+    }
+    row-touch := TouchArea {
+        enabled: root.clickable;
+        mouse-cursor: root.clickable ? pointer : default;
+        clicked => { if root.clickable { root.clicked(); } }
+    }
+}

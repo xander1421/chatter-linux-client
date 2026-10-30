@@ -1,0 +1,32 @@
+# Standalone host harness for the app's demo; avoids compiling chatter-core/media.
+[package]
+name = "chatter-backdrop-demo-check"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[features]
+# Select the demo's software-renderer test using the app's existing feature name.
+default = ["windows-cross"]
+windows-cross = []
+
+[dependencies]
+slint = { version = "=1.17.1", default-features = false, features = ["compat-1-2", "std", "renderer-software"] }
+
+[patch.crates-io]
+i-slint-compiler = { path = "../../../i-slint-compiler" }
+i-slint-core = { path = "../.." }
+
+[[test]]
+name = "backdrop_demo"
+path = "../../../../crates/chatter-ui/examples/backdrop_demo.rs"
+
+[profile.dev]
+debug = 0
+codegen-units = 256
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false

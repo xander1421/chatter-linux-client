@@ -6,7 +6,7 @@ authors = ["xander1421"]
 description = "Android (JNI) implementation of MeshLink for the bitchat mesh"
 license = "GPL-3.0"
 repository = "https://github.com/xander1421/chatter"
-rust-version = "1.85"
+rust-version = "1.99"
 
 [lib]
 name = "chatter_mesh_android"
@@ -22,7 +22,7 @@ chatter-mesh-link = { path = "../chatter-mesh-link" }
 # cross-compiles without a C toolchain — unlike chatter-mesh-nostr, which pulls
 # secp256k1-sys.
 [target.'cfg(target_os = "android")'.dependencies]
-jni = "0.21"
+jni = "0.22.4"
 ndk-context = "0.1"
 # Channels only. Bluetooth callbacks arrive on binder threads and must hand off
 # without blocking: a blocked binder callback stalls the whole Bluetooth stack.
@@ -36,6 +36,6 @@ tokio = { version = "1", features = ["rt", "sync"] }
 # only in principle. These stay dev-only rather than being un-gated above, so a
 # normal desktop build still pulls none of them.
 [dev-dependencies]
-jni = "0.21"
+jni = "0.22.4"
 ndk-context = "0.1"
 tokio = { version = "1", features = ["rt", "sync"] }

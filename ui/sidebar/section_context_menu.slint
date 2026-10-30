@@ -1,3 +1,5 @@
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // Section context menu for sidebar conversations — Neo 2.0
 //
 // Opened by right-click on desktop and by press-and-hold on touch (HoldArea
@@ -9,6 +11,8 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { CustomSectionData } from "custom_section_list.slint";
+import { ConversationKind } from "../chat/conversation_kind.slint";
+import { ChatRow, ChatRowData } from "chat_list.slint";
 
 // Reusable menu item — Neo 2.0 (icon + label, neo hover highlight)
 component MenuItem inherits Rectangle {
@@ -18,15 +22,53 @@ component MenuItem inherits Rectangle {
     in property <bool> destructive: false;
     in property <bool> selected: false;
     in property <bool> mobile-mode: false;
+    in property <bool> initial-focus: false;
+    in property <int> nav-index: 0;
+    in property <int> focused-index: 0;
+    in property <bool> keyboard-active: false;
     // The icon set has no up/down chevron; the right-facing one is rotated.
     in property <angle> icon-rotation: 0deg;
     callback clicked();
+    callback escape();
+    callback navigate(int, int);
+    callback focused(int, length, length);
 
-    height: root.mobile-mode ? Spacing.touch-target-min : 36px;
+    height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
     background: touch.has-hover ? Colors.surface-hover : transparent;
     border-radius: Spacing.radius-sm;
-    border-width: touch.has-hover ? 1px : 0px;
-    border-color: Colors.neo-highlight;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+    border-width: menu-keys.has-focus ? 2px : 0px;
+    border-color: Colors.focus-ring;
+
+    changed initial-focus => {
+        if root.initial-focus { menu-keys.focus(); }
+    }
+    changed focused-index => {
+        if root.keyboard-active && root.focused-index == root.nav-index { menu-keys.focus(); }
+    }
+
+    menu-keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        changed has-focus => { if self.has-focus { root.focused(root.nav-index, root.y, root.height); } }
+        key-pressed(event) => {
+            if event.text == Key.UpArrow { root.navigate(root.nav-index, -1); return accept; }
+            if event.text == Key.DownArrow { root.navigate(root.nav-index, 1); return accept; }
+            if event.text == Key.Home { root.navigate(root.nav-index, -2); return accept; }
+            if event.text == Key.End { root.navigate(root.nav-index, 2); return accept; }
+            if event.text == Key.Escape {
+                root.escape();
+                return accept;
+            }
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
 
     HorizontalLayout {
         padding-left: Spacing.md;
@@ -91,52 +133,96 @@ export component SectionHeaderContextMenu inherits Rectangle {
     in property <string> section-id: "";
     in property <string> section-sort-mode: "recent";
     in property <bool> mobile-mode: false;
+    in property <length> bottom-inset: 0px;
 
     callback rename-section(/* section-id */ string);
     callback remove-section(/* section-id */ string);
     callback move-section(/* section-id */ string, /* delta */ int);
     callback set-sort-mode(/* section-id */ string, /* mode */ string);
     callback close();
+    private property <int> focus-index: -1;
+    function move-focus(from: int, direction: int) {
+        root.focus-index = direction == -2 ? 0 : direction == 2 ? 6
+            : max(0, min(6, from + direction));
+    }
+    function keep-visible(top: length, item-height: length) {
+        if (top + header-scroll.viewport-y < 0px) { header-scroll.viewport-y = -top; }
+        else if (top + item-height + header-scroll.viewport-y > header-scroll.height) {
+            header-scroll.viewport-y = header-scroll.height - top - item-height;
+        }
+    }
+    // The menu stays mounted: open it at the top, not where it was last
+    // scrolled to.
+    // -1 on close so a reopen is a real focus-index change (0 is the default
+    // after one open), which fires the first item's focus on the next open.
+    changed show => { root.focus-index = root.show ? 0 : -1; if root.show { header-scroll.viewport-y = 0; } }
 
     visible: root.show;
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     width: 100%;
     height: 100%;
-    background: transparent;
+    // Dimmed like the message context menu, so the menu reads as a modal
+    // choice over the list rather than a stray card on top of it.
+    background: Materials.scrim;
 
-    // Backdrop — click anywhere outside to close
+    // Backdrop — dismiss on press, including a touch that later drags away.
+    // A wheel over it closes the menu too and stops there: scrolling the list
+    // underneath left the lifted row floating away from its real position.
     TouchArea {
         width: 100%;
         height: 100%;
-        clicked => { root.close(); }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down { root.close(); }
+        }
+        scroll-event(event) => {
+            root.close();
+            accept
+        }
     }
 
     // Menu card
-    Rectangle {
-        x: min(root.position-x, parent.width - self.width - Spacing.md);
-        y: min(root.position-y, parent.height - self.height - Spacing.md);
+    GlassSurface {
+        enter-distance: 6px;
+        shown: root.show;
+
+        material-level: 3;
+        elevation: 4;
+
+        x: max(Spacing.md, min(root.position-x, parent.width - self.width - Spacing.md));
+        y: max(Spacing.md, min(root.position-y + self.entrance-offset,
+            parent.height - root.bottom-inset - self.height - Spacing.md));
         width: 220px;
-        height: header-menu-layout.preferred-height + Spacing.sm * 2;
-        background: Colors.surface;
-        border-radius: Spacing.radius-md;
-        border-width: 1px;
-        border-color: Colors.neo-highlight-strong;
-        drop-shadow-blur: Spacing.neo-blur-lg;
-        drop-shadow-offset-x: Spacing.neo-offset-lg;
-        drop-shadow-offset-y: Spacing.neo-offset-lg;
-        drop-shadow-color: Colors.neo-shadow-strong;
+        height: max(0px, min(header-menu-layout.preferred-height + Spacing.sm * 2,
+            parent.height - root.bottom-inset - 2 * Spacing.md));
+        border-radius: Spacing.radius-xl;
 
         // Block backdrop clicks on menu area
         TouchArea { }
 
-        header-menu-layout := VerticalLayout {
-            padding: Spacing.sm;
-            spacing: 2px;
+        header-scroll := Flickable {
+            width: 100%;
+            height: 100%;
+            immediate-child-press: true;
+            viewport-width: self.width;
+            viewport-height: header-menu-layout.preferred-height;
+            header-menu-layout := VerticalLayout {
+                width: parent.width;
+                padding: Spacing.sm;
+                spacing: Spacing.xxs;
 
             MenuItem {
+                nav-index: 0;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
                 icon: Icons.chevron-right;
                 icon-rotation: -90deg;
                 label: "Move up";
                 mobile-mode: root.mobile-mode;
+                initial-focus: root.show && !root.mobile-mode;
                 clicked => {
                     root.move-section(root.section-id, -1);
                     root.close();
@@ -144,6 +230,12 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                nav-index: 1;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
                 icon: Icons.chevron-right;
                 icon-rotation: 90deg;
                 label: "Move down";
@@ -156,7 +248,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
 
             Rectangle {
                 height: 1px;
-                background: Colors.text-muted.with-alpha(0.15);
+                background: Colors.divider;
             }
 
             Rectangle {
@@ -175,6 +267,12 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                nav-index: 2;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
                 icon: Icons.clock;
                 label: "Recent";
                 mobile-mode: root.mobile-mode;
@@ -186,6 +284,12 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                nav-index: 3;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
                 icon: Icons.message-circle;
                 label: "Unread first";
                 mobile-mode: root.mobile-mode;
@@ -197,6 +301,12 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                nav-index: 4;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
                 icon: Icons.menu;
                 label: "Name (A–Z)";
                 mobile-mode: root.mobile-mode;
@@ -209,14 +319,20 @@ export component SectionHeaderContextMenu inherits Rectangle {
 
             Rectangle {
                 height: 1px;
-                background: Colors.text-muted.with-alpha(0.15);
+                background: Colors.divider;
             }
 
             // Rename is only otherwise reachable through a hover button, which
             // does not exist on touch.
             MenuItem {
+                nav-index: 5;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
                 icon: Icons.edit;
-                label: "Rename folder";
+                label: "Rename section";
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.rename-section(root.section-id);
@@ -225,6 +341,12 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                nav-index: 6;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
                 icon: Icons.trash;
                 label: "Remove section";
                 destructive: true;
@@ -233,6 +355,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
                     root.remove-section(root.section-id);
                     root.close();
                 }
+            }
             }
         }
     }
@@ -243,76 +366,323 @@ export component SectionContextMenu inherits Rectangle {
     in property <bool> show: false;
     in property <length> position-x: 0;
     in property <length> position-y: 0;
+    in property <length> target-row-y: 0;
+    in property <length> target-row-x: 0;
+    in property <length> target-row-width: 0;
+    in property <ChatRowData> target-row;
+    in property <bool> collapsed: false;
     in property <bool> mobile-mode: false;
+    in property <length> bottom-inset: 0px;
 
     // Conversation being acted on
     in property <string> conversation-id: "";
-    in property <string> conversation-type: "";   // ConversationType::as_str
+    in property <ConversationKind> conversation-type;
     in property <string> current-section-id: "";   // non-empty => already in a section
     in property <bool> is-pinned: false;
-    // Pinning reorders the list core builds. Private groups are built without
-    // a core ordering pass, so the entry is hidden there rather than shipping a
-    // control that toggles a flag nothing reads.
-    in property <bool> can-pin: true;
+    in property <bool> is-archived: false;
+    in property <bool> is-muted: false;
+    // Channel rows: core's `can_leave_channel` (a member, not the owner).
+    // Private-group rows: always (any member may leave).
+    in property <bool> can-leave: false;
+    // Channel rows: core's `is_former_channel` (we are no longer in it).
+    in property <bool> can-delete-channel: false;
 
     // Available sections
     in property <[CustomSectionData]> sections: [];
 
     // Callbacks
-    callback move-to-section(/* conv-id */ string, /* conv-type */ string, /* section-id */ string);
+    callback move-to-section(/* conv-id */ string, /* conv-type */ ConversationKind, /* section-id */ string);
     callback remove-from-section(/* conv-id */ string);
     callback set-pinned(/* conv-id */ string, /* pinned */ bool);
-    callback create-section-clicked();
+    callback set-archived(/* conv-id */ string, /* archived */ bool);
+    callback set-muted(/* conv-id */ string, /* kind */ ConversationKind, /* muted */ bool);
+    // Mute for `seconds` (0 = always), as Signal's 1 hour / 8 hours / 1 day / Always.
+    callback set-muted-for(/* conv-id */ string, /* kind */ ConversationKind, /* seconds */ int);
+    callback mark-read(/* conv-id */ string, /* kind */ ConversationKind);
+    callback mark-unread(/* conv-id */ string, /* kind */ ConversationKind);
+    callback create-section-clicked(/* conv-id */ string, /* conv-type */ ConversationKind);
+    // DM rows, and channels we are no longer in: deletes the chat on this
+    // device (core `delete_conversation`).
+    callback delete-chat(/* conv-id */ string, /* conv-type */ ConversationKind);
+    // Channel and group rows: same leave as Settings' Danger Zone.
+    callback leave-conversation(/* conv-id */ string, /* conv-type */ ConversationKind);
     callback close();
 
+    property <bool> can-delete: root.conversation-type == ConversationKind.server-dm
+        || root.conversation-type == ConversationKind.anon-dm
+        || root.can-delete-channel;
+    property <bool> is-group: root.conversation-type == ConversationKind.anon-group;
+    // Delete asks once, inside the menu; reset whenever the menu closes.
+    property <bool> confirm-delete: false;
+    property <bool> confirm-leave: false;
+    // The leave confirm is the menu's last block: show it whole, warning
+    // and Cancel included, not only the focused Leave row (desktop row menus
+    // opened near the top were clipped at the window's bottom edge).
+    changed confirm-leave => { if (self.confirm-leave) { leave-reveal.start(); leave-reveal.restart(); } }
+    private property <int> focus-index: -1;
+    private property <bool> has-mute: root.conversation-type == ConversationKind.server-dm
+        || root.conversation-type == ConversationKind.anon-dm
+        || root.conversation-type == ConversationKind.anon-group
+        || root.conversation-type == ConversationKind.channel;
+    private property <bool> has-unread: root.target-row.unread-count > 0;
+    // Mute opens its durations in place (anon groups mute by status, no timer).
+    property <bool> choose-mute: false;
+    private property <bool> timed-mute: root.has-mute && root.conversation-type != ConversationKind.anon-group;
+    private property <int> mute-choices: root.choose-mute ? 4 : 0;
+    private property <int> read-index: 2 + (root.has-mute ? 1 : 0) + root.mute-choices;
+    private property <int> section-start: root.read-index + 1;
+    private property <int> new-index: root.section-start + root.sections.length;
+    private property <int> remove-index: root.new-index + 1;
+    private property <int> delete-index: root.remove-index + (root.current-section-id != "" ? 1 : 0);
+    private property <int> leave-index: root.delete-index + (root.can-delete ? (root.confirm-delete ? 2 : 1) : 0);
+    private property <int> focus-count: root.leave-index + (root.can-leave ? (root.confirm-leave ? 2 : 1) : 0);
+    function move-focus(from: int, direction: int) {
+        root.focus-index = direction == -2 ? 0 : direction == 2 ? root.focus-count - 1
+            : max(0, min(root.focus-count - 1, from + direction));
+    }
+    // The focused item's place in the list. Slint drops focus on the next
+    // key press when the focused item is clipped out of view
+    // (vendor/i-slint-core/window.rs:1080), so a wheel scroll that moved it
+    // away left Escape and the arrows dead until a click.
+    private property <length> focused-top: 0px;
+    private property <length> focused-height: 0px;
+    function keep-visible(top: length, item-height: length) {
+        root.focused-top = top;
+        root.focused-height = item-height;
+        if (top + menu-scroll.viewport-y < 0px) { menu-scroll.viewport-y = -top; }
+        else if (top + item-height + menu-scroll.viewport-y > menu-scroll.height) {
+            menu-scroll.viewport-y = menu-scroll.height - top - item-height;
+        }
+    }
+    property <length> target-row-height: root.collapsed ? 48px : root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop;
+    property <length> menu-space-below: max(0px, root.height - root.bottom-inset - root.target-row-y - root.target-row-height - Spacing.sm - Spacing.md);
+    property <length> menu-space-above: max(0px, root.target-row-y - Spacing.sm - Spacing.md);
+    property <bool> menu-below: root.menu-space-below >= root.menu-space-above;
+    changed show => {
+        root.choose-mute = false;
+        root.confirm-delete = false;
+        root.confirm-leave = false;
+        // -1 on close so a reopen is a real focus-index change (0 is the
+        // default after one open), which fires the first item's focus.
+        root.focus-index = root.show ? 0 : -1;
+        // The menu stays mounted: a reopened menu kept its last scroll, with
+        // "Pin to top" cut off above the card. Focus starts on that top item,
+        // so the stale focused place must not hand focus to the fallback.
+        root.focused-top = 0px;
+        root.focused-height = 1px;
+        menu-scroll.viewport-y = 0;
+    }
+
     visible: root.show;
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     width: 100%;
     height: 100%;
-    background: transparent;
+    // Dimmed like the message context menu, so the menu reads as a modal
+    // choice over the list rather than a stray card on top of it.
+    background: Materials.scrim;
 
-    // Backdrop — click anywhere outside to close
+    // Backdrop — dismiss on press, including a touch that later drags away.
+    // A wheel over it closes the menu too and stops there: scrolling the list
+    // underneath left the lifted row floating away from its real position.
     TouchArea {
         width: 100%;
         height: 100%;
-        clicked => { root.close(); }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down { root.close(); }
+        }
+        scroll-event(event) => {
+            root.close();
+            accept
+        }
+    }
+
+    // Keep the pressed conversation readable over the scrim. The menu stays
+    // on whichever side has more room so its card cannot cover this row.
+    Rectangle {
+        x: root.target-row-x + Spacing.xs;
+        y: root.target-row-y;
+        width: root.target-row-width - 2 * Spacing.xs;
+        height: root.target-row-height;
+        background: Colors.row-selected;
+        border-radius: Spacing.radius-md;
+        border-width: 1px;
+        border-color: Colors.selected-indicator;
+        ChatRow {
+            width: parent.width;
+            data: root.target-row;
+            collapsed: root.collapsed;
+            mobile-mode: root.mobile-mode;
+        }
+        TouchArea { clicked => { root.close(); } }
     }
 
     // Menu card — Neo 2.0 strong popup surface
-    menu-container := Rectangle {
-        x: min(root.position-x, parent.width - self.width - Spacing.md);
-        y: min(root.position-y, parent.height - self.height - Spacing.md);
+    menu-container := GlassSurface {
+        enter-distance: 6px;
+        shown: root.show;
+
+        material-level: 3;
+        elevation: 4;
+
+        x: max(Spacing.md, min(root.position-x, parent.width - self.width - Spacing.md));
+        y: root.menu-below ? root.target-row-y + root.target-row-height + Spacing.sm + self.entrance-offset
+            : root.target-row-y - self.height - Spacing.sm + self.entrance-offset;
         width: 220px;
-        height: menu-layout.preferred-height + Spacing.sm * 2;
-        background: Colors.surface;
-        border-radius: Spacing.radius-md;
-        border-width: 1px;
-        border-color: Colors.neo-highlight-strong;
-        drop-shadow-blur: Spacing.neo-blur-lg;
-        drop-shadow-offset-x: Spacing.neo-offset-lg;
-        drop-shadow-offset-y: Spacing.neo-offset-lg;
-        drop-shadow-color: Colors.neo-shadow-strong;
+        height: max(0px, min(menu-layout.preferred-height + Spacing.sm * 2,
+            root.menu-below ? root.menu-space-below : root.menu-space-above));
+        border-radius: Spacing.radius-xl;
 
         // Block backdrop clicks on menu area
         TouchArea { }
 
-        menu-layout := VerticalLayout {
-            padding: Spacing.sm;
-            spacing: 2px;
+        leave-reveal := Timer {
+            interval: 1ms;
+            running: false;
+            triggered => {
+                self.running = false;
+                menu-scroll.viewport-y = Math.min(0px, menu-scroll.height - menu-scroll.viewport-height);
+            }
+        }
+
+        // Holds focus while the focused item is scrolled away; the arrows
+        // move to the next item, which scrolls back into view.
+        menu-fallback-keys := FocusScope {
+            x: 0px;
+            y: 0px;
+            width: 0px;
+            height: 0px;
+            // Not a Tab stop: it read as an unnamed panel between items.
+            focus-on-tab-navigation: false;
+            key-pressed(event) => {
+                if event.text == Key.Escape { root.close(); return accept; }
+                if event.text == Key.UpArrow { root.move-focus(root.focus-index, -1); return accept; }
+                if event.text == Key.DownArrow { root.move-focus(root.focus-index, 1); return accept; }
+                if event.text == Key.Home { root.move-focus(root.focus-index, -2); return accept; }
+                if event.text == Key.End { root.move-focus(root.focus-index, 2); return accept; }
+                reject
+            }
+        }
+
+        menu-scroll := Flickable {
+            changed viewport-y => {
+                if !root.mobile-mode && root.focused-height > 0px
+                    && (root.focused-top + self.viewport-y < 0px
+                        || root.focused-top + root.focused-height + self.viewport-y > self.height) {
+                    menu-fallback-keys.focus();
+                }
+            }
+            width: 100%;
+            height: 100%;
+            immediate-child-press: true;
+            viewport-width: self.width;
+            viewport-height: menu-layout.preferred-height;
+            menu-layout := VerticalLayout {
+                width: parent.width;
+                padding: Spacing.sm;
+                spacing: Spacing.xxs;
 
             // Pin / Unpin — local-only, never synced to the server.
-            if root.can-pin: MenuItem {
+            MenuItem {
+                nav-index: 0;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
                 icon: Icons.pin;
                 label: root.is-pinned ? "Unpin" : "Pin to top";
                 mobile-mode: root.mobile-mode;
+                initial-focus: root.show && !root.mobile-mode;
                 clicked => {
                     root.set-pinned(root.conversation-id, !root.is-pinned);
                     root.close();
                 }
             }
 
-            if root.can-pin: Rectangle {
+            MenuItem {
+                nav-index: 1;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
+                icon: Icons.folder;
+                label: root.is-archived ? "Unarchive" : "Archive";
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    root.set-archived(root.conversation-id, !root.is-archived);
+                    root.close();
+                }
+            }
+
+            if root.has-mute: MenuItem {
+                nav-index: 2;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
+                icon: root.is-muted ? Icons.bell-off : Icons.bell;
+                label: root.is-muted ? "Unmute" : root.timed-mute ? "Mute…" : "Mute";
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    if !root.is-muted && root.timed-mute {
+                        root.choose-mute = !root.choose-mute;
+                        return;
+                    }
+                    root.set-muted(root.conversation-id, root.conversation-type, !root.is-muted);
+                    root.close();
+                }
+            }
+
+            if root.choose-mute: VerticalLayout {
+              for choice[i] in [
+                { label: "For 1 hour", seconds: 3600 },
+                { label: "For 8 hours", seconds: 28800 },
+                { label: "For 1 day", seconds: 86400 },
+                { label: "Always", seconds: 0 },
+              ]: MenuItem {
+                nav-index: 3 + i;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
+                icon: Icons.bell-off;
+                label: choice.label;
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    root.set-muted-for(root.conversation-id, root.conversation-type, choice.seconds);
+                    root.close();
+                }
+              }
+            }
+
+            // Read ↔ unread, as Telegram's row menu.
+            MenuItem {
+                nav-index: root.read-index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
+                icon: root.has-unread ? Icons.check : Icons.message-circle;
+                label: root.has-unread ? "Mark as read" : "Mark as unread";
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    if root.has-unread {
+                        root.mark-read(root.conversation-id, root.conversation-type);
+                    } else {
+                        root.mark-unread(root.conversation-id, root.conversation-type);
+                    }
+                    root.close();
+                }
+            }
+
+            Rectangle {
                 height: 1px;
-                background: Colors.text-muted.with-alpha(0.15);
+                background: Colors.divider;
             }
 
             // Header label
@@ -332,10 +702,18 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             // Section items
-            for section in root.sections: MenuItem {
+            for section[index] in root.sections: MenuItem {
+                nav-index: root.section-start + index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
                 emoji: section.icon-emoji;
                 icon: Icons.folder;
                 label: section.name;
+                // ✓ on the section the chat is already in.
+                selected: section.section-id == root.current-section-id;
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.move-to-section(root.conversation-id, root.conversation-type, section.section-id);
@@ -346,30 +724,169 @@ export component SectionContextMenu inherits Rectangle {
             // Separator
             Rectangle {
                 height: 1px;
-                background: Colors.text-muted.with-alpha(0.15);
+                background: Colors.divider;
             }
 
             // New section
             MenuItem {
+                nav-index: root.new-index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
                 icon: Icons.plus;
-                label: "New section...";
+                label: "New section…";
                 mobile-mode: root.mobile-mode;
                 clicked => {
-                    root.create-section-clicked();
+                    root.create-section-clicked(root.conversation-id, root.conversation-type);
                     root.close();
                 }
             }
 
             // Remove from section (only if already in one)
             if root.current-section-id != "": MenuItem {
+                nav-index: root.remove-index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
                 icon: Icons.x;
+                // Not destructive: the chat goes back to the main list.
                 label: "Remove from section";
-                destructive: true;
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.remove-from-section(root.conversation-id);
                     root.close();
                 }
+            }
+
+            if root.can-delete: Rectangle {
+                height: 1px;
+                background: Colors.divider;
+            }
+
+            if root.can-delete && !root.confirm-delete: MenuItem {
+                nav-index: root.delete-index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
+                icon: Icons.trash;
+                label: "Delete chat";
+                destructive: true;
+                mobile-mode: root.mobile-mode;
+                clicked => { root.confirm-delete = true; }
+            }
+
+            if root.can-delete && root.confirm-delete: MenuItem {
+                initial-focus: root.show && !root.mobile-mode;
+                nav-index: root.delete-index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
+                icon: Icons.trash;
+                // Short enough for the phone menu's width: "Delete all
+                // messages here?" was clipped to "Delete all messages ...".
+                // A secret chat ends for both sides (Telegram-style).
+                label: root.conversation-type == ConversationKind.anon-dm
+                    ? "Yes, delete for both" : "Yes, delete chat";
+                destructive: true;
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    root.delete-chat(root.conversation-id, root.conversation-type);
+                    root.close();
+                }
+            }
+
+            if root.can-delete && root.confirm-delete: MenuItem {
+                nav-index: root.delete-index + 1;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
+                icon: Icons.x;
+                label: "Cancel";
+                mobile-mode: root.mobile-mode;
+                // Cancel ends the whole menu, not just the confirm step.
+                clicked => {
+                    root.confirm-delete = false;
+                    root.close();
+                }
+            }
+
+            if root.can-leave: Rectangle {
+                height: 1px;
+                background: Colors.divider;
+            }
+
+            if root.can-leave && !root.confirm-leave: MenuItem {
+                nav-index: root.leave-index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
+                icon: Icons.x;
+                label: root.is-group ? "Leave group" : "Leave channel";
+                destructive: true;
+                mobile-mode: root.mobile-mode;
+                clicked => { root.confirm-leave = true; }
+            }
+
+            // Asks once, inside the menu, like Delete chat above.
+            if root.can-leave && root.confirm-leave: HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                Text {
+                    text: root.is-group
+                        ? "Leave this group? It is removed from this device."
+                        : "Leave this channel? You won't get new messages.";
+                    color: Colors.error;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+
+            if root.can-leave && root.confirm-leave: MenuItem {
+                initial-focus: root.show && !root.mobile-mode;
+                nav-index: root.leave-index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
+                icon: Icons.x;
+                label: "Leave";
+                destructive: true;
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    root.leave-conversation(root.conversation-id, root.conversation-type);
+                    root.close();
+                }
+            }
+
+            if root.can-leave && root.confirm-leave: MenuItem {
+                nav-index: root.leave-index + 1;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
+                icon: Icons.x;
+                label: "Cancel";
+                mobile-mode: root.mobile-mode;
+                // Cancel ends the whole menu, not just the confirm step.
+                clicked => {
+                    root.confirm-leave = false;
+                    root.close();
+                }
+            }
             }
         }
     }

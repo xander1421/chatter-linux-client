@@ -1,9 +1,7 @@
 //! Crypto builders for Signal protocol test data.
 
-use crate::framework::fixtures::{TestAttachment, TestSession, random_bytes, random_profile_key};
+use crate::framework::fixtures::{TestAttachment, TestSession, random_bytes};
 use rand::RngCore;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
 
 /// Builder for cryptographic test data.
 pub struct CryptoBuilder;
@@ -74,56 +72,6 @@ impl CryptoBuilder {
     /// Generate random distribution ID.
     pub fn distribution_id() -> Vec<u8> {
         uuid::Uuid::new_v4().as_bytes().to_vec()
-    }
-
-    /// Generate a random 32-byte profile key.
-    pub fn profile_key() -> [u8; 32] {
-        random_profile_key()
-    }
-
-    /// Encrypt a display name using the profile key.
-    ///
-    /// Returns encrypted bytes (nonce || ciphertext || auth_tag).
-    pub fn encrypt_display_name(profile_key: &[u8; 32], display_name: &str) -> Vec<u8> {
-        chatter_core::crypto::profile_crypto::encrypt_display_name(profile_key, display_name)
-            .expect("Display name encryption should succeed")
-    }
-
-    /// Encrypt a display name and return as base64 string (for API calls).
-    pub fn encrypt_display_name_base64(profile_key: &[u8; 32], display_name: &str) -> String {
-        let encrypted = Self::encrypt_display_name(profile_key, display_name);
-        BASE64.encode(&encrypted)
-    }
-
-    /// Decrypt a display name using the profile key.
-    ///
-    /// Returns the plaintext display name.
-    pub fn decrypt_display_name(profile_key: &[u8; 32], encrypted: &[u8]) -> Option<String> {
-        chatter_core::crypto::profile_crypto::decrypt_display_name(profile_key, encrypted).ok()
-    }
-
-    /// Decrypt a base64-encoded display name.
-    pub fn decrypt_display_name_base64(profile_key: &[u8; 32], encrypted_base64: &str) -> Option<String> {
-        let encrypted = BASE64.decode(encrypted_base64).ok()?;
-        Self::decrypt_display_name(profile_key, &encrypted)
-    }
-
-    /// Generate a fake encrypted display name (valid format, random content).
-    ///
-    /// Useful for tests that don't need real encryption.
-    /// Returns raw bytes (156 bytes = 12 nonce + 128 padded + 16 tag).
-    pub fn fake_encrypted_display_name() -> Vec<u8> {
-        random_bytes(156)
-    }
-
-    /// Generate a fake encrypted display name as base64.
-    pub fn fake_encrypted_display_name_base64() -> String {
-        BASE64.encode(&Self::fake_encrypted_display_name())
-    }
-
-    /// Derive Unidentified Access Key from profile key.
-    pub fn derive_uak(profile_key: &[u8; 32]) -> [u8; 16] {
-        chatter_core::crypto::derive_uak(profile_key)
     }
 }
 

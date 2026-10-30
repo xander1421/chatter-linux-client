@@ -2,13 +2,13 @@
 //!
 //! Tests device management, session synchronization, and multi-device messaging.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use chatter_core::network::grpc::{AuthClient, ChannelClient, MessageClient};
 use chatter_core::proto::chat_v1::{
-    message::content::Type as ContentType, message::Content, ChannelType, MessageSortDirection,
+    ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };
-use libsignal_protocol::{kem, IdentityKeyPair, KeyPair};
+use libsignal_protocol::{IdentityKeyPair, KeyPair, kem};
 use tokio_stream::StreamExt;
 
 use common::*;
@@ -31,17 +31,16 @@ async fn test_register_second_device() {
     let identity_key_pair = IdentityKeyPair::generate(&mut rand::rng());
     let identity_public_key = identity_key_pair.identity_key().serialize();
 
-    let response = auth_client
-        .login(
-            &user.username,
-            &user.password_hash,
-            "second-test-device",
-            identity_public_key.as_ref(),
-            &random_device_auth_token(),
-            &random_uak(),
-            None, // New device ID
-        )
-        .await;
+    let response = opaque_login(
+        &mut auth_client,
+        &user.username,
+        &user.password,
+        "second-test-device",
+        identity_public_key.as_ref(),
+        &random_device_auth_token(),
+        None, // New device ID
+    )
+    .await;
 
     match response {
         Ok(resp) => {
@@ -152,10 +151,10 @@ async fn test_upload_prekeys_for_device() {
     // server enforces "all devices for a user share the same identity key"
     // (signal_protocol.go::StoreSignalPreKeyBundle), so a fresh keypair
     // would be rejected with an identity-key-mismatch error.
+    use chatter_core::proto::chat_v1::SignalPreKeyBundle;
     use chatter_core::proto::chat_v1::signal_pre_key_bundle::{
         KyberPreKeyRecord, PreKeyRecord, SignedPreKeyRecord,
     };
-    use chatter_core::proto::chat_v1::SignalPreKeyBundle;
 
     let identity_key_pair = IdentityKeyPair::try_from(user.identity_key_pair_bytes.as_slice())
         .expect("registered identity key pair should deserialize");
@@ -206,14 +205,17 @@ async fn test_upload_prekeys_for_device() {
                 .unwrap()
                 .as_nanos() as u64,
         }),
-        unidentified_access_key: Some(random_uak().to_vec()),
         unrestricted_unidentified_access: Some(false),
     };
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
     let result = auth_client.upload_pre_key_bundle(bundle).await;
 
-    assert!(result.is_ok(), "Should be able to upload prekey bundle: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Should be able to upload prekey bundle: {:?}",
+        result.err()
+    );
 }
 
 #[tokio::test]
@@ -251,10 +253,9 @@ async fn test_messages_visible_across_devices() {
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
-            None,
             Some("Multi-device sync test"),
             None,
+            Some(membership::genesis(&user, true).1),
         )
         .await
         .expect("Failed to create channel");
@@ -286,7 +287,6 @@ async fn test_messages_visible_across_devices() {
                 None,
                 false,
                 None,
-                None,
                 vec![],
                 false,
                 vec![],
@@ -311,7 +311,10 @@ async fn test_messages_visible_across_devices() {
     );
 
     let found = messages.messages.iter().any(|m| m.id == message.id);
-    assert!(found, "Message should be retrievable (simulating second device)");
+    assert!(
+        found,
+        "Message should be retrievable (simulating second device)"
+    );
 }
 
 // ============================================================================
@@ -330,11 +333,7 @@ async fn test_sender_certificate_per_device() {
     // Request sender certificate for this device. Server reads device_id
     // from the authenticated session, so we don't pass it explicitly.
     let _ = user.device_id;
-    let response = assert_ok(
-        auth_client
-            .request_sender_certificate(None)
-            .await,
-    );
+    let response = assert_ok(auth_client.request_sender_certificate().await);
 
     assert!(
         response.certificate.is_some(),
@@ -342,7 +341,10 @@ async fn test_sender_certificate_per_device() {
     );
 
     let cert = response.certificate.unwrap();
-    assert!(!cert.certificate.is_empty(), "Certificate data should not be empty");
+    assert!(
+        !cert.certificate.is_empty(),
+        "Certificate data should not be empty"
+    );
 }
 
 // ============================================================================
@@ -390,10 +392,9 @@ async fn test_concurrent_device_operations() {
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
             None,
             None,
-            None,
+            Some(membership::genesis(&user, true).1),
         )
         .await
         .expect("Failed to create channel");
@@ -429,7 +430,6 @@ async fn test_concurrent_device_operations() {
                     content,
                     None,
                     false,
-                    None,
                     None,
                     vec![],
                     false,
@@ -484,7 +484,7 @@ async fn test_fetch_prekeys_all_devices() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let _user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create a second test user (target)
     let pool2 = assert_ok(create_test_pool().await);
@@ -546,9 +546,7 @@ async fn test_prekey_bundles_have_required_fields() {
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
     // Fetch single device prekey
-    let response = auth_client
-        .get_pre_key_bundle(&target.user_id, "1")
-        .await;
+    let response = auth_client.get_pre_key_bundle(&target.user_id, "1").await;
 
     if let Ok(resp) = response {
         if let Some(chatter_core::proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(
@@ -558,7 +556,10 @@ async fn test_prekey_bundles_have_required_fields() {
             // Verify bundle has required fields for PQXDH
             assert!(!bundle.identity_key.is_empty(), "Should have identity key");
             assert!(bundle.signed_prekey.is_some(), "Should have signed prekey");
-            assert!(bundle.kyber_prekey.is_some(), "Should have Kyber prekey (PQXDH)");
+            assert!(
+                bundle.kyber_prekey.is_some(),
+                "Should have Kyber prekey (PQXDH)"
+            );
             assert!(bundle.registration_id > 0, "Should have registration ID");
         }
     }

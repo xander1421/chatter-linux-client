@@ -27,8 +27,7 @@
 //! - Full pipeline: ~1 GB/s
 
 use aes::cipher::block_padding::NoPadding;
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
 use sha2::{Digest, Sha256};
 
 use crate::crypto::hmac_compat::Sha256Stream;
@@ -115,20 +114,7 @@ pub struct StreamingEncryptResult {
     /// Original plaintext size in bytes.
     #[zeroize(skip)]
     pub plaintext_size: u64,
-    /// Concatenated per-chunk HMAC-SHA256 digests (32 bytes each) for incremental verification.
-    /// Empty if plaintext <= INCREMENTAL_MAC_THRESHOLD.
-    #[zeroize(skip)]
-    pub incremental_mac: Vec<u8>,
-    /// Chunk size used for incremental MAC (64KB per Signal spec). 0 if no incremental MAC.
-    #[zeroize(skip)]
-    pub incremental_chunk_size: u32,
 }
-
-/// Chunk size for incremental MAC computation (64KB per Signal spec).
-pub const INCREMENTAL_MAC_CHUNK_SIZE: usize = 64 * 1024;
-
-/// Plaintext size threshold for incremental MAC (50KB per Signal spec).
-const INCREMENTAL_MAC_THRESHOLD: u64 = 50 * 1024;
 
 /// Attachment encryption service.
 ///
@@ -167,7 +153,12 @@ impl AttachmentCrypto {
         // before any unwinding; the returned `EncryptedAttachment` carries its
         // own `ZeroizeOnDrop` via `EncryptedAttachment`'s derive.
         let mut key: Zeroizing<[u8; KEY_SET_LENGTH]> = Zeroizing::new([0u8; KEY_SET_LENGTH]);
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut *key).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut *key)
+                .expect("OS CSPRNG must not fail");
+        }
 
         // Split key into AES and MAC portions
         let aes_key = &key[..AES_KEY_LENGTH];
@@ -175,7 +166,12 @@ impl AttachmentCrypto {
 
         // Generate random IV (16 bytes)
         let mut iv = [0u8; IV_LENGTH];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut iv).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut iv)
+                .expect("OS CSPRNG must not fail");
+        }
 
         // Pad plaintext using log-bucketing
         let padded_size = Self::padded_size(plaintext.len());
@@ -213,14 +209,18 @@ impl AttachmentCrypto {
     /// Hardware-accelerated AES-256-CBC encryption using OpenSSL.
     ///
     /// Uses AES-NI instructions on x86_64 for ~100x faster encryption.
-    fn encrypt_aes_cbc_openssl(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    fn encrypt_aes_cbc_openssl(
+        key: &[u8],
+        iv: &[u8],
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, CryptoError> {
         // Raw AES-256-CBC, no block padding (caller zero-pads to the block size).
         // Input is block-aligned → encrypt in place.
         let mut buf = plaintext.to_vec();
         let len = buf.len();
         Aes256CbcEnc::new_from_slices(key, iv)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("AES init: {e}")))?
-            .encrypt_padded_mut::<NoPadding>(&mut buf, len)
+            .encrypt_padded::<NoPadding>(&mut buf, len)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("AES encrypt: {e}")))?;
         Ok(buf)
     }
@@ -228,21 +228,22 @@ impl AttachmentCrypto {
     /// Hardware-accelerated AES-256-CBC decryption using OpenSSL.
     ///
     /// Uses AES-NI instructions on x86_64 for ~100x faster decryption.
-    fn decrypt_aes_cbc_openssl(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        // Raw AES-256-CBC, no block padding. Block-aligned input → decrypt in place.
-        let mut buf = ciphertext.to_vec();
+    fn decrypt_aes_cbc_openssl(
+        key: &[u8],
+        iv: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, CryptoError> {
+        // Cipher 0.5 decrypts directly from authenticated ciphertext into the output.
         Aes256CbcDec::new_from_slices(key, iv)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES init: {e}")))?
-            .decrypt_padded_mut::<NoPadding>(&mut buf)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES decrypt: {e}")))?;
-        Ok(buf)
+            .decrypt_padded_vec::<NoPadding>(ciphertext)
+            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES decrypt: {e}")))
     }
 
     /// Compute HMAC-SHA256 over data using OpenSSL (hardware accelerated).
     #[inline]
     pub(crate) fn compute_hmac(mac_key: &[u8], data: &[u8]) -> [u8; 32] {
-        let mut signer = crate::crypto::hmac_compat::hmac_init(mac_key)
-            .expect("HMAC init failed");
+        let mut signer = crate::crypto::hmac_compat::hmac_init(mac_key).expect("HMAC init failed");
         signer.update(data).expect("HMAC update failed");
         let result = signer.finalize().expect("HMAC finalize failed");
         let mut arr = [0u8; 32];
@@ -279,9 +280,7 @@ impl AttachmentCrypto {
     ) -> Result<Vec<u8>, CryptoError> {
         // Verify minimum length
         if ciphertext.len() < MIN_CIPHERTEXT_LENGTH {
-            let err = CryptoError::AttachmentDecryptionFailed(
-                "ciphertext too short".to_string(),
-            );
+            let err = CryptoError::AttachmentDecryptionFailed("ciphertext too short".to_string());
             tracing::warn!(
                 target: "chatter::crypto::decrypt_failure",
                 kind = "attachment",
@@ -316,12 +315,15 @@ impl AttachmentCrypto {
         // Verify HMAC (constant-time comparison) using BoringSSL (hardware accelerated)
         let mut signer = crate::crypto::hmac_compat::hmac_init(mac_key)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
-        signer.update(iv)
+        signer
+            .update(iv)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC update: {}", e)))?;
-        signer.update(encrypted)
+        signer
+            .update(encrypted)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC update: {}", e)))?;
-        let computed_hmac = signer.finalize()
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
+        let computed_hmac = signer.finalize().map_err(|e| {
+            CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e))
+        })?;
 
         if computed_hmac.ct_eq(expected_hmac).unwrap_u8() != 1 {
             let err = CryptoError::AttachmentMacMismatch;
@@ -335,16 +337,15 @@ impl AttachmentCrypto {
         }
 
         // Decrypt with hardware-accelerated AES-256-CBC via OpenSSL
-        let mut decrypted = Self::decrypt_aes_cbc_openssl(aes_key, iv, encrypted)
-            .map_err(|e| {
-                tracing::warn!(
-                    target: "chatter::crypto::decrypt_failure",
-                    kind = "attachment",
-                    error = %e,
-                    "decryption failure"
-                );
-                e
-            })?;
+        let mut decrypted = Self::decrypt_aes_cbc_openssl(aes_key, iv, encrypted).map_err(|e| {
+            tracing::warn!(
+                target: "chatter::crypto::decrypt_failure",
+                kind = "attachment",
+                error = %e,
+                "decryption failure"
+            );
+            e
+        })?;
 
         // Truncate to original plaintext size (remove zero padding)
         if plaintext_size > decrypted.len() {
@@ -447,13 +448,14 @@ impl AttachmentCrypto {
         input_path: &std::path::Path,
         output_path: &std::path::Path,
     ) -> Result<StreamingEncryptResult, CryptoError> {
-        use std::io::{Read, Write, BufWriter};
+        use std::io::{BufWriter, Read, Write};
 
         const CHUNK_SIZE: usize = 256 * 1024;
 
         // Get file size for padding calculation and size limit check
-        let input_metadata = std::fs::metadata(input_path)
-            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("read metadata: {}", e)))?;
+        let input_metadata = std::fs::metadata(input_path).map_err(|e| {
+            CryptoError::AttachmentEncryptionFailed(format!("read metadata: {}", e))
+        })?;
         let plaintext_size = input_metadata.len() as usize;
         let padded_size = Self::padded_size(plaintext_size);
 
@@ -473,22 +475,31 @@ impl AttachmentCrypto {
         // the local `Zeroizing` wrapper is dropped (zeroizing its copy) at
         // function exit.
         let mut key: Zeroizing<[u8; KEY_SET_LENGTH]> = Zeroizing::new([0u8; KEY_SET_LENGTH]);
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(key.as_mut_slice()).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(key.as_mut_slice())
+                .expect("OS CSPRNG must not fail");
+        }
         let aes_key = &key[..AES_KEY_LENGTH];
         let mac_key = &key[AES_KEY_LENGTH..];
 
         let mut iv = [0u8; IV_LENGTH];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut iv).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut iv)
+                .expect("OS CSPRNG must not fail");
+        }
 
         // Open files
-        let mut input = std::io::BufReader::new(
-            std::fs::File::open(input_path)
-                .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("open input: {}", e)))?,
-        );
-        let mut output = BufWriter::new(
-            std::fs::File::create(output_path)
-                .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("create output: {}", e)))?,
-        );
+        let mut input =
+            std::io::BufReader::new(std::fs::File::open(input_path).map_err(|e| {
+                CryptoError::AttachmentEncryptionFailed(format!("open input: {}", e))
+            })?);
+        let mut output = BufWriter::new(std::fs::File::create(output_path).map_err(|e| {
+            CryptoError::AttachmentEncryptionFailed(format!("create output: {}", e))
+        })?);
 
         // Init crypto processors
         let mut encryptor = Aes256CbcEnc::new_from_slices(aes_key, &iv)
@@ -502,23 +513,16 @@ impl AttachmentCrypto {
         let mut digest_hasher = Sha256Stream::new()
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("init digest: {}", e)))?;
 
-        // Incremental MAC state: compute per-chunk HMAC-SHA256 for files > threshold
-        let use_incremental_mac = (plaintext_size as u64) > INCREMENTAL_MAC_THRESHOLD;
-        let mut incremental_mac_digests: Vec<u8> = Vec::new();
-        let mut inc_mac_accumulator: Vec<u8> = Vec::new();
-
         // Write IV
-        output.write_all(&iv)
+        output
+            .write_all(&iv)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("write iv: {}", e)))?;
-        hmac_signer.update(&iv)
+        hmac_signer
+            .update(&iv)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac iv: {}", e)))?;
-        digest_hasher.update(&iv)
+        digest_hasher
+            .update(&iv)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest iv: {}", e)))?;
-
-        // IV is part of the ciphertext, so include it in incremental MAC accumulation
-        if use_incremental_mac {
-            inc_mac_accumulator.extend_from_slice(&iv);
-        }
 
         let mut read_buf = vec![0u8; CHUNK_SIZE];
         let mut bytes_fed: usize = 0; // total plaintext bytes fed (including padding)
@@ -531,20 +535,17 @@ impl AttachmentCrypto {
                 let full = carry.len() - (carry.len() % AES_BLOCK_SIZE);
                 if full > 0 {
                     for blk in carry[..full].chunks_exact_mut(AES_BLOCK_SIZE) {
-                        encryptor.encrypt_block_mut(GenericArray::from_mut_slice(blk));
+                        encryptor.encrypt_block(blk.try_into().expect("AES block length"));
                     }
-                    output.write_all(&carry[..full])
-                        .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("write: {}", e)))?;
-                    hmac_signer.update(&carry[..full])
-                        .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac: {}", e)))?;
-                    digest_hasher.update(&carry[..full])
-                        .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest: {}", e)))?;
-                    if use_incremental_mac {
-                        Self::accumulate_incremental_mac(
-                            mac_key, &carry[..full],
-                            &mut inc_mac_accumulator, &mut incremental_mac_digests,
-                        );
-                    }
+                    output.write_all(&carry[..full]).map_err(|e| {
+                        CryptoError::AttachmentEncryptionFailed(format!("write: {}", e))
+                    })?;
+                    hmac_signer.update(&carry[..full]).map_err(|e| {
+                        CryptoError::AttachmentEncryptionFailed(format!("hmac: {}", e))
+                    })?;
+                    digest_hasher.update(&carry[..full]).map_err(|e| {
+                        CryptoError::AttachmentEncryptionFailed(format!("digest: {}", e))
+                    })?;
                     carry.drain(..full);
                 }
             }};
@@ -552,7 +553,8 @@ impl AttachmentCrypto {
 
         // Read and encrypt file content in chunks
         loop {
-            let n = input.read(&mut read_buf)
+            let n = input
+                .read(&mut read_buf)
                 .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("read: {}", e)))?;
             if n == 0 {
                 break;
@@ -576,36 +578,36 @@ impl AttachmentCrypto {
         // Raw CBC, no padding: total input is block-aligned, nothing buffered.
         debug_assert!(carry.is_empty(), "CBC carry not block-aligned");
 
-        // Flush any remaining partial chunk for incremental MAC
-        if use_incremental_mac && !inc_mac_accumulator.is_empty() {
-            let hmac = Self::compute_hmac(mac_key, &inc_mac_accumulator);
-            incremental_mac_digests.extend_from_slice(&hmac);
-            inc_mac_accumulator.clear();
-        }
-
         // Finalize HMAC and write it
-        let hmac_result = hmac_signer.finalize()
-            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac finalize: {}", e)))?;
-        output.write_all(&hmac_result)
+        let hmac_result = hmac_signer.finalize().map_err(|e| {
+            CryptoError::AttachmentEncryptionFailed(format!("hmac finalize: {}", e))
+        })?;
+        output
+            .write_all(&hmac_result)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("write hmac: {}", e)))?;
 
         // Feed HMAC bytes into digest (digest covers IV + encrypted + HMAC)
-        digest_hasher.update(&hmac_result)
+        digest_hasher
+            .update(&hmac_result)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest hmac: {}", e)))?;
 
         // Finalize digest
-        let digest_result = digest_hasher.finish()
-            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest finalize: {}", e)))?;
+        let digest_result = digest_hasher.finish().map_err(|e| {
+            CryptoError::AttachmentEncryptionFailed(format!("digest finalize: {}", e))
+        })?;
         let mut digest = [0u8; 32];
         digest.copy_from_slice(&digest_result);
 
         // Flush output
-        output.flush()
+        output
+            .flush()
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("flush: {}", e)))?;
 
         // Compute ciphertext size: IV + padded_encrypted + HMAC
         let ciphertext_size = std::fs::metadata(output_path)
-            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("output metadata: {}", e)))?
+            .map_err(|e| {
+                CryptoError::AttachmentEncryptionFailed(format!("output metadata: {}", e))
+            })?
             .len();
 
         Ok(StreamingEncryptResult {
@@ -613,27 +615,7 @@ impl AttachmentCrypto {
             digest,
             ciphertext_size,
             plaintext_size: plaintext_size as u64,
-            incremental_mac: incremental_mac_digests,
-            incremental_chunk_size: if use_incremental_mac { INCREMENTAL_MAC_CHUNK_SIZE as u32 } else { 0 },
         })
-    }
-
-    /// Accumulate ciphertext bytes and compute incremental MAC for complete 64KB chunks.
-    ///
-    /// Appends data to the accumulator. When the accumulator reaches INCREMENTAL_MAC_CHUNK_SIZE,
-    /// computes HMAC-SHA256 of the chunk and appends the 32-byte digest to `digests`.
-    fn accumulate_incremental_mac(
-        mac_key: &[u8],
-        data: &[u8],
-        accumulator: &mut Vec<u8>,
-        digests: &mut Vec<u8>,
-    ) {
-        accumulator.extend_from_slice(data);
-        while accumulator.len() >= INCREMENTAL_MAC_CHUNK_SIZE {
-            let hmac = Self::compute_hmac(mac_key, &accumulator[..INCREMENTAL_MAC_CHUNK_SIZE]);
-            digests.extend_from_slice(&hmac);
-            accumulator.drain(..INCREMENTAL_MAC_CHUNK_SIZE);
-        }
     }
 
     /// Round up to the next multiple of 16 (AES block size).
@@ -650,35 +632,16 @@ impl AttachmentCrypto {
 /// putter) so the whole file never has to fit in RAM. Cap raised from
 /// 100 MiB after users hit the limit on video files, then to 2 GiB once
 /// the client gained a true multipart CDN upload path.
-///
-/// Override at startup via [`set_max_attachment_size`].
-const DEFAULT_MAX_ATTACHMENT_SIZE: u64 = 2 * 1024 * 1024 * 1024;
-
-static MAX_ATTACHMENT_SIZE: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(DEFAULT_MAX_ATTACHMENT_SIZE);
+const MAX_ATTACHMENT_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 
 #[cfg(test)]
 thread_local! {
     /// Test-only override of the cap, scoped to the thread that set it.
     ///
-    /// The cap has to be a process global in production — it is read from deep inside
-    /// the encryptor, configured once at startup. But a test that lowers it to prove
-    /// the too-large path is *also* lowering it for every test running beside it, and
-    /// libtest runs tests in parallel by default.
-    ///
-    /// This was previously handled with a mutex that every cap-touching test was
-    /// expected to take. That only works while every such test remembers to, and the
-    /// set of tests that read the cap is not the set that mentions it: the P9 mesh
-    /// transfer tests read it indirectly, through `store_file_streamed`, several
-    /// layers down. They did not take the lock, so a cap of 100 bytes reached them
-    /// and `store_file_streamed` refused a 4 kB fixture — surfacing as an unrelated
-    /// mesh test failing roughly 3 times in 10, with no mention of attachments
-    /// anywhere in the panic.
-    ///
-    /// A thread-local needs nothing remembered. libtest gives each test its own
-    /// thread, so an override is visible exactly where it was set and nowhere else,
-    /// and a test added tomorrow inherits that for free. Production reads the atomic
-    /// as before — this path does not exist outside `cfg(test)`.
+    /// Lowering a process-wide cap would leak into every test running beside
+    /// it (libtest runs them in parallel); a thread-local is seen only by the
+    /// test that set it. Production reads the constant; this path does not
+    /// exist outside `cfg(test)`.
     static MAX_ATTACHMENT_SIZE_OVERRIDE: std::cell::Cell<Option<u64>> =
         const { std::cell::Cell::new(None) };
 }
@@ -688,12 +651,7 @@ pub fn max_attachment_size() -> u64 {
     if let Some(size) = MAX_ATTACHMENT_SIZE_OVERRIDE.with(std::cell::Cell::get) {
         return size;
     }
-    MAX_ATTACHMENT_SIZE.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Override the attachment size cap. Intended for startup config.
-pub fn set_max_attachment_size(size: u64) {
-    MAX_ATTACHMENT_SIZE.store(size, std::sync::atomic::Ordering::Relaxed);
+    MAX_ATTACHMENT_SIZE
 }
 
 /// Lower (or raise) the cap for the current test only.
@@ -729,8 +687,7 @@ mod tests {
         let plaintext = b"Hello, Signal-compatible encryption!";
 
         // Encrypt
-        let encrypted = AttachmentCrypto::encrypt(plaintext)
-            .expect("encryption should succeed");
+        let encrypted = AttachmentCrypto::encrypt(plaintext).expect("encryption should succeed");
 
         // Verify ciphertext structure: IV (16) + encrypted + HMAC (32)
         assert!(encrypted.ciphertext.len() >= MIN_CIPHERTEXT_LENGTH);
@@ -742,7 +699,8 @@ mod tests {
             &encrypted.key,
             &encrypted.digest,
             encrypted.plaintext_size,
-        ).expect("decryption should succeed");
+        )
+        .expect("decryption should succeed");
 
         assert_eq!(decrypted.as_slice(), plaintext);
     }
@@ -751,15 +709,15 @@ mod tests {
     fn test_encrypt_decrypt_empty() {
         let plaintext = b"";
 
-        let encrypted = AttachmentCrypto::encrypt(plaintext)
-            .expect("encryption should succeed");
+        let encrypted = AttachmentCrypto::encrypt(plaintext).expect("encryption should succeed");
 
         let decrypted = AttachmentCrypto::decrypt(
             &encrypted.ciphertext,
             &encrypted.key,
             &encrypted.digest,
             encrypted.plaintext_size,
-        ).expect("decryption should succeed");
+        )
+        .expect("decryption should succeed");
 
         assert_eq!(decrypted.as_slice(), plaintext);
     }
@@ -769,15 +727,15 @@ mod tests {
         // Test with 1MB of data
         let plaintext: Vec<u8> = (0..1024 * 1024).map(|i| (i % 256) as u8).collect();
 
-        let encrypted = AttachmentCrypto::encrypt(&plaintext)
-            .expect("encryption should succeed");
+        let encrypted = AttachmentCrypto::encrypt(&plaintext).expect("encryption should succeed");
 
         let decrypted = AttachmentCrypto::decrypt(
             &encrypted.ciphertext,
             &encrypted.key,
             &encrypted.digest,
             encrypted.plaintext_size,
-        ).expect("decryption should succeed");
+        )
+        .expect("decryption should succeed");
 
         assert_eq!(decrypted, plaintext);
     }
@@ -785,8 +743,7 @@ mod tests {
     #[test]
     fn test_digest_mismatch() {
         let plaintext = b"test data";
-        let encrypted = AttachmentCrypto::encrypt(plaintext)
-            .expect("encryption should succeed");
+        let encrypted = AttachmentCrypto::encrypt(plaintext).expect("encryption should succeed");
 
         // Tamper with digest
         let mut bad_digest = encrypted.digest;
@@ -805,8 +762,7 @@ mod tests {
     #[test]
     fn test_mac_mismatch() {
         let plaintext = b"test data";
-        let encrypted = AttachmentCrypto::encrypt(plaintext)
-            .expect("encryption should succeed");
+        let encrypted = AttachmentCrypto::encrypt(plaintext).expect("encryption should succeed");
 
         // Tamper with ciphertext (the encrypted portion, not the HMAC)
         // This will cause HMAC verification to fail
@@ -834,7 +790,10 @@ mod tests {
 
         let result = AttachmentCrypto::decrypt(&short_ciphertext, &key, &digest, 0);
 
-        assert!(matches!(result, Err(CryptoError::AttachmentDecryptionFailed(_))));
+        assert!(matches!(
+            result,
+            Err(CryptoError::AttachmentDecryptionFailed(_))
+        ));
     }
 
     #[test]
@@ -862,17 +821,24 @@ mod tests {
     fn test_padded_size_always_larger() {
         for size in [1, 100, 1000, 10_000, 100_000, 1_000_000] {
             let padded = AttachmentCrypto::padded_size(size);
-            assert!(padded >= size, "padded size should be >= original for size {}", size);
-            assert_eq!(padded % 16, 0, "padded size should be multiple of 16 for size {}", size);
+            assert!(
+                padded >= size,
+                "padded size should be >= original for size {}",
+                size
+            );
+            assert_eq!(
+                padded % 16,
+                0,
+                "padded size should be multiple of 16 for size {}",
+                size
+            );
         }
     }
 
     #[test]
     fn test_different_plaintexts_different_ciphertexts() {
-        let encrypted1 = AttachmentCrypto::encrypt(b"hello")
-            .expect("encryption should succeed");
-        let encrypted2 = AttachmentCrypto::encrypt(b"hello")
-            .expect("encryption should succeed");
+        let encrypted1 = AttachmentCrypto::encrypt(b"hello").expect("encryption should succeed");
+        let encrypted2 = AttachmentCrypto::encrypt(b"hello").expect("encryption should succeed");
 
         // Same plaintext should produce different ciphertext (random IV and key)
         assert_ne!(encrypted1.ciphertext, encrypted2.ciphertext);
@@ -882,8 +848,7 @@ mod tests {
 
     #[test]
     fn test_key_length() {
-        let encrypted = AttachmentCrypto::encrypt(b"test")
-            .expect("encryption should succeed");
+        let encrypted = AttachmentCrypto::encrypt(b"test").expect("encryption should succeed");
 
         assert_eq!(encrypted.key.len(), KEY_SET_LENGTH);
         assert_eq!(KEY_SET_LENGTH, 64);
@@ -892,8 +857,7 @@ mod tests {
     #[test]
     fn test_ciphertext_format() {
         let plaintext = b"test message";
-        let encrypted = AttachmentCrypto::encrypt(plaintext)
-            .expect("encryption should succeed");
+        let encrypted = AttachmentCrypto::encrypt(plaintext).expect("encryption should succeed");
 
         // Format: IV (16) + encrypted (padded, multiple of 16) + HMAC (32)
         let expected_padded = AttachmentCrypto::padded_size(plaintext.len());
@@ -917,10 +881,8 @@ mod tests {
         let output_file = tempfile::NamedTempFile::new().unwrap();
 
         // Encrypt via streaming
-        let result = AttachmentCrypto::encrypt_file_to_file(
-            input_file.path(),
-            output_file.path(),
-        ).expect("streaming encryption should succeed");
+        let result = AttachmentCrypto::encrypt_file_to_file(input_file.path(), output_file.path())
+            .expect("streaming encryption should succeed");
 
         assert_eq!(result.plaintext_size, plaintext.len() as u64);
 
@@ -928,12 +890,9 @@ mod tests {
         let ciphertext = std::fs::read(output_file.path()).unwrap();
         assert_eq!(ciphertext.len() as u64, result.ciphertext_size);
 
-        let decrypted = AttachmentCrypto::decrypt(
-            &ciphertext,
-            &result.key,
-            &result.digest,
-            plaintext.len(),
-        ).expect("decryption should succeed");
+        let decrypted =
+            AttachmentCrypto::decrypt(&ciphertext, &result.key, &result.digest, plaintext.len())
+                .expect("decryption should succeed");
 
         assert_eq!(decrypted.as_slice(), plaintext);
     }
@@ -948,19 +907,14 @@ mod tests {
 
         let output_file = tempfile::NamedTempFile::new().unwrap();
 
-        let result = AttachmentCrypto::encrypt_file_to_file(
-            input_file.path(),
-            output_file.path(),
-        ).expect("streaming encryption should succeed");
+        let result = AttachmentCrypto::encrypt_file_to_file(input_file.path(), output_file.path())
+            .expect("streaming encryption should succeed");
 
         let ciphertext = std::fs::read(output_file.path()).unwrap();
 
-        let decrypted = AttachmentCrypto::decrypt(
-            &ciphertext,
-            &result.key,
-            &result.digest,
-            plaintext.len(),
-        ).expect("decryption should succeed");
+        let decrypted =
+            AttachmentCrypto::decrypt(&ciphertext, &result.key, &result.digest, plaintext.len())
+                .expect("decryption should succeed");
 
         assert_eq!(decrypted, plaintext);
     }
@@ -976,10 +930,8 @@ mod tests {
 
         let output_file = tempfile::NamedTempFile::new().unwrap();
 
-        let result = AttachmentCrypto::encrypt_file_to_file(
-            input_file.path(),
-            output_file.path(),
-        ).expect("streaming encryption should succeed");
+        let result = AttachmentCrypto::encrypt_file_to_file(input_file.path(), output_file.path())
+            .expect("streaming encryption should succeed");
 
         let ciphertext = std::fs::read(output_file.path()).unwrap();
 
@@ -1000,20 +952,14 @@ mod tests {
 
         let output_file = tempfile::NamedTempFile::new().unwrap();
 
-        let result = AttachmentCrypto::encrypt_file_to_file(
-            input_file.path(),
-            output_file.path(),
-        ).expect("streaming encryption of empty file should succeed");
+        let result = AttachmentCrypto::encrypt_file_to_file(input_file.path(), output_file.path())
+            .expect("streaming encryption of empty file should succeed");
 
         assert_eq!(result.plaintext_size, 0);
 
         let ciphertext = std::fs::read(output_file.path()).unwrap();
-        let decrypted = AttachmentCrypto::decrypt(
-            &ciphertext,
-            &result.key,
-            &result.digest,
-            0,
-        ).expect("decryption of empty should succeed");
+        let decrypted = AttachmentCrypto::decrypt(&ciphertext, &result.key, &result.digest, 0)
+            .expect("decryption of empty should succeed");
 
         assert!(decrypted.is_empty());
     }
@@ -1025,95 +971,11 @@ mod tests {
 
         let output_file = tempfile::NamedTempFile::new().unwrap();
 
-        let result = AttachmentCrypto::encrypt_file_to_file(
-            input_file.path(),
-            output_file.path(),
-        ).expect("streaming encryption should succeed");
+        let result = AttachmentCrypto::encrypt_file_to_file(input_file.path(), output_file.path())
+            .expect("streaming encryption should succeed");
 
         assert_eq!(result.key.len(), KEY_SET_LENGTH);
     }
-
-    // =========================================================================
-    // Incremental MAC tests
-    // =========================================================================
-
-    #[test]
-    fn test_streaming_encrypt_small_file_no_incremental_mac() {
-        // Files <= 50KB should NOT have incremental MAC
-        let plaintext = vec![42u8; 1024]; // 1KB
-
-        let input_file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(input_file.path(), &plaintext).unwrap();
-
-        let output_file = tempfile::NamedTempFile::new().unwrap();
-
-        let result = AttachmentCrypto::encrypt_file_to_file(
-            input_file.path(),
-            output_file.path(),
-        ).unwrap();
-
-        assert!(result.incremental_mac.is_empty());
-        assert_eq!(result.incremental_chunk_size, 0);
-    }
-
-    #[test]
-    fn test_streaming_encrypt_large_file_has_incremental_mac() {
-        // Files > 50KB should have incremental MAC
-        let plaintext: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect(); // 100KB
-
-        let input_file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(input_file.path(), &plaintext).unwrap();
-
-        let output_file = tempfile::NamedTempFile::new().unwrap();
-
-        let result = AttachmentCrypto::encrypt_file_to_file(
-            input_file.path(),
-            output_file.path(),
-        ).unwrap();
-
-        assert!(!result.incremental_mac.is_empty());
-        assert_eq!(result.incremental_chunk_size, INCREMENTAL_MAC_CHUNK_SIZE as u32);
-        // incremental_mac is a concatenation of 32-byte digests
-        assert_eq!(result.incremental_mac.len() % 32, 0);
-
-        // Number of chunks should match ciphertext size divided by chunk size
-        let ciphertext = std::fs::read(output_file.path()).unwrap();
-        let ciphertext_without_hmac = ciphertext.len() - 32; // exclude trailing HMAC
-        let expected_chunks = (ciphertext_without_hmac + INCREMENTAL_MAC_CHUNK_SIZE - 1) / INCREMENTAL_MAC_CHUNK_SIZE;
-        assert_eq!(result.incremental_mac.len() / 32, expected_chunks);
-    }
-
-    #[test]
-    fn test_streaming_encrypt_incremental_mac_deterministic() {
-        // Same plaintext, same key → different ciphertext (random IV/key)
-        // But the relationship between ciphertext and incremental MAC should be consistent
-        let plaintext: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect();
-
-        let input_file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(input_file.path(), &plaintext).unwrap();
-
-        let output_file = tempfile::NamedTempFile::new().unwrap();
-
-        let result = AttachmentCrypto::encrypt_file_to_file(
-            input_file.path(),
-            output_file.path(),
-        ).unwrap();
-
-        // Verify incremental MAC is consistent with the ciphertext by recomputing
-        let ciphertext = std::fs::read(output_file.path()).unwrap();
-        let mac_key = &result.key[32..];
-        let ciphertext_without_hmac = &ciphertext[..ciphertext.len() - 32];
-
-        // Recompute incremental MAC from the ciphertext
-        let mut recomputed_mac = Vec::new();
-        for chunk in ciphertext_without_hmac.chunks(INCREMENTAL_MAC_CHUNK_SIZE) {
-            let hmac = AttachmentCrypto::compute_hmac(mac_key, chunk);
-            recomputed_mac.extend_from_slice(&hmac);
-        }
-
-        assert_eq!(result.incremental_mac, recomputed_mac);
-    }
-
 
     #[test]
     fn test_max_attachment_size_enforcement() {
@@ -1126,13 +988,12 @@ mod tests {
 
         let output_file = tempfile::NamedTempFile::new().unwrap();
 
-        let result = AttachmentCrypto::encrypt_file_to_file(
-            input_file.path(),
-            output_file.path(),
-        );
+        let result = AttachmentCrypto::encrypt_file_to_file(input_file.path(), output_file.path());
 
-
-        assert!(matches!(result, Err(CryptoError::AttachmentTooLarge { .. })));
+        assert!(matches!(
+            result,
+            Err(CryptoError::AttachmentTooLarge { .. })
+        ));
     }
 
     /// Verify decryption-failure metric events fire on the attachment path.

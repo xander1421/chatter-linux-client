@@ -60,11 +60,7 @@ where
         match f().await {
             Ok(val) => {
                 if attempt > 1 {
-                    tracing::info!(
-                        operation,
-                        attempt,
-                        "RPC succeeded after retry"
-                    );
+                    tracing::info!(operation, attempt, "RPC succeeded after retry");
                 }
                 return Ok(val);
             }
@@ -115,15 +111,10 @@ mod tests {
     #[tokio::test]
     async fn test_succeeds_first_try() {
         let calls = AtomicU32::new(0);
-        let result = retry_unary(
-            &RetryConfig::default(),
-            "test_op",
-            None::<fn()>,
-            || {
-                calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok::<_, NetworkError>(42) }
-            },
-        )
+        let result = retry_unary(&RetryConfig::default(), "test_op", None::<fn()>, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async { Ok::<_, NetworkError>(42) }
+        })
         .await;
 
         assert_eq!(result.unwrap(), 42);
@@ -139,21 +130,16 @@ mod tests {
             max_delay: Duration::from_millis(10),
         };
 
-        let result = retry_unary(
-            &config,
-            "test_op",
-            None::<fn()>,
-            || {
-                let n = calls.fetch_add(1, Ordering::SeqCst);
-                async move {
-                    if n < 2 {
-                        Err(NetworkError::Unavailable)
-                    } else {
-                        Ok(99)
-                    }
+        let result = retry_unary(&config, "test_op", None::<fn()>, || {
+            let n = calls.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n < 2 {
+                    Err(NetworkError::Unavailable)
+                } else {
+                    Ok(99)
                 }
-            },
-        )
+            }
+        })
         .await;
 
         assert_eq!(result.unwrap(), 99);
@@ -163,15 +149,10 @@ mod tests {
     #[tokio::test]
     async fn test_no_retry_on_non_retryable() {
         let calls = AtomicU32::new(0);
-        let result = retry_unary(
-            &RetryConfig::default(),
-            "test_op",
-            None::<fn()>,
-            || {
-                calls.fetch_add(1, Ordering::SeqCst);
-                async { Err::<i32, _>(NetworkError::NotFound("x".into())) }
-            },
-        )
+        let result = retry_unary(&RetryConfig::default(), "test_op", None::<fn()>, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async { Err::<i32, _>(NetworkError::NotFound("x".into())) }
+        })
         .await;
 
         assert!(matches!(result, Err(NetworkError::NotFound(_))));
@@ -187,15 +168,10 @@ mod tests {
             max_delay: Duration::from_millis(10),
         };
 
-        let result = retry_unary(
-            &config,
-            "test_op",
-            None::<fn()>,
-            || {
-                calls.fetch_add(1, Ordering::SeqCst);
-                async { Err::<i32, _>(NetworkError::Unavailable) }
-            },
-        )
+        let result = retry_unary(&config, "test_op", None::<fn()>, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async { Err::<i32, _>(NetworkError::Unavailable) }
+        })
         .await;
 
         assert!(matches!(result, Err(NetworkError::Unavailable)));

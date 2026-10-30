@@ -1,0 +1,266 @@
+import { SidebarPane } from "app_sidebar_pane.slint";
+import { AnonMode } from "anon_mode/anon_mode_global.slint";
+import { SearchPane } from "app_search_pane.slint";
+import { ModalHostState } from "app_modal_host_state.slint";
+import { CallView } from "app_call_view.slint";
+import { AuthFlow } from "app_auth_flow.slint";
+import { Sidebar } from "sidebar/sidebar.slint";
+import { Spacing } from "theme/spacing.slint";
+import { ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
+import { ConversationKind } from "chat/conversation_kind.slint";
+import { ChatPane } from "app_chat_pane.slint";
+import { FriendRequestData } from "modals/friends.slint";
+
+// Sidebar wiring and list navigation for the main conversation shell.
+export component AppSidebarHost inherits Rectangle {
+    in property <float> chat-push-progress;
+    in property <bool> bottom-nav-visible;
+    in property <bool> compact-layout;
+    in property <bool> is-mobile-platform;
+    in property <length> macos-titlebar-height;
+    in property <length> macos-traffic-lights-width;
+    in property <length> return-to-call-height;
+    in property <length> safe-area-bottom;
+    in property <bool> server-unreachable;
+    in property <string> connection-status;
+    in property <bool> sidebar-is-rail;
+    in-out property <bool> sidebar-user-collapsed;
+    in property <length> window-width;
+    callback toggle-anon-mode();
+    callback focus-composer();
+
+        background: transparent;
+    Sidebar {
+        height: parent.height;
+    x: root.compact-layout ? -self.width * 0.28 * root.chat-push-progress : 0px;
+        // Keep the list mounted for the reverse push, but do not
+        // paint its rows after the chat fully covers it. Show it
+        // immediately when an edge swipe starts, before progress
+        // has moved off 1 in the first gesture frame.
+        // A phone's Profile / Calls / Contacts tab screens cover the list
+        // opaquely; unpainted, its rows also leave the accessibility tree
+        // (TalkBack read hidden chats under Profile).
+        visible: !root.compact-layout
+            || ((root.chat-push-progress < 1 || SidebarPane.chat-edge-swiping)
+                && SidebarPane.active-tab != "profile" && SidebarPane.active-tab != "calls"
+                && SidebarPane.active-tab != "contacts");
+        y: 0px;
+        bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
+            + (CallView.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px) : 0px;
+        // Keep the settled reachability fact available to the Activity bell
+        // and to the compact rail, which has no header.
+        server-unreachable: root.server-unreachable;
+        connection-status: root.connection-status;
+        // `mobile-mode` means "touch input" — it sizes the panel's
+        // targets. On desktop the panel also keeps its Discord-style
+        // layout role: an icon rail by default, expanded to the full
+        // list by the toggle in its footer.
+        //
+        // On mobile it no longer does. The rail was kept because it was
+        // the only always-available navigation, and swapping the whole
+        // screen "costs a tap for every glance at the conversation
+        // list" — but the bottom tab bar now pays that cost instead
+        // (Chats is one tap from anywhere), and the rail was spending
+        // 16% of the width of every conversation to avoid it. So on a
+        // phone this is a full-width list that the chat replaces, never
+        // a rail beside it. A tablet is wide enough for the desktop
+        // two-pane role, so only its target sizes follow touch.
+        mobile-mode: root.compact-layout;
+        touch: root.is-mobile-platform;
+        mobile-width: root.window-width;
+        // The panel is the top-left thing on screen, so it is the one
+        // that has to keep the macOS traffic lights clear.
+        traffic-lights-width: root.macos-traffic-lights-width;
+        titlebar-height: root.macos-titlebar-height;
+        search-overlay-open: SearchPane.unified-search-open;
+        active-tab: SidebarPane.active-tab;
+        chat-rows: SidebarPane.chat-rows;
+        archived-rows: SidebarPane.archived-rows;
+        archive-open: SidebarPane.archive-open;
+        saved-open: ChatPane.conversation-kind == ConversationKind.saved-messages;
+        chat-rows-loading: AuthFlow.is-signed-in && SidebarPane.chat-rows-loading;
+        custom-sections: SidebarPane.custom-sections;
+        flat-rows: SidebarPane.flat-rows;
+        focus-index <=> SidebarPane.sidebar-focus-index;
+        focus-target(current, move-by, mobile, shield, requests) => {
+            return SidebarPane.sidebar-focus-target(current, move-by, mobile, shield, requests);
+        }
+        focus-composer => { root.focus-composer(); }
+        user-display-name: SidebarPane.user-display-name;
+        user-avatar-source: SidebarPane.user-avatar-source;
+        user-initials: SidebarPane.user-initials;
+        user-presence-status: SidebarPane.user-presence-status;
+        // Narrow screens start on the rail and expand on demand. The
+        // user drives this — `sidebar-user-collapsed` keeps their choice
+        // from being undone by a resize.
+        // Never a rail on mobile — when this panel is on screen at all
+        // it is the whole screen.
+        collapsed: root.compact-layout ? false : root.sidebar-is-rail;
+        hidden: root.compact-layout ? false : SidebarPane.sidebar-hidden;
+        pending-friend-requests: ModalHostState.friends-received-requests.length;
+        pending-message-requests: ModalHostState.pending-message-requests;
+        pending-group-invites: ModalHostState.pending-group-invites;
+        pending-channel-invites: ModalHostState.pending-channel-invites;
+        missed-call-count: CallView.missed-call-count;
+
+        channel-selected(id) => {
+            SidebarPane.mobile-show-chat = true;
+            SidebarPane.channel-selected(id);
+        }
+        dm-selected(id) => {
+            SidebarPane.mobile-show-chat = true;
+            SidebarPane.dm-selected(id);
+        }
+        private-group-selected(id) => {
+            SidebarPane.mobile-show-chat = true;
+            SidebarPane.private-group-selected(id);
+        }
+        search-clicked => {
+            SearchPane.unified-search-selected-index = 0;
+            SearchPane.unified-search-open = true;
+            SearchPane.unified-search-opened();
+        }
+        saved-messages-clicked => {
+            // Saved Messages IS a conversation, so it routes like one —
+            // without this the chat loads behind the list and the tap
+            // reads as doing nothing.
+            SidebarPane.mobile-show-chat = true;
+            SidebarPane.saved-messages-clicked();
+        }
+        friends-clicked => {
+            // The row says "Friends" (the list) or, in Shield, "Add Contact".
+            ModalHostState.friends-modal-tab = AnonMode.enabled ? "find" : "friends";
+            SidebarPane.active-tab = "contacts";
+        }
+        add-friend-clicked => {
+            ModalHostState.friends-modal-tab = "find";
+            SidebarPane.active-tab = "contacts";
+        }
+        // Wide-layout entry to the Calls screen — the same modal and
+        // the same load the phone tab bar's Calls tab raises.
+        calls-clicked => {
+            SidebarPane.active-tab = "calls";
+            CallView.calls-tab-clicked();
+        }
+        // The sidebar's one Requests row fires all four below on every
+        // tap: the other three refresh their lists, and this one opens
+        // Contacts › Requests on the first sub-tab that has something
+        // in it (Received when none).
+        friend-requests-clicked => {
+            ModalHostState.friends-modal-tab = "requests";
+            ModalHostState.friends-requests-sub-tab =
+                ModalHostState.friends-received-requests.length > 0 ? "received"
+                : ModalHostState.pending-message-requests > 0 ? "private"
+                : ModalHostState.pending-group-invites > 0 ? "groups"
+                : ModalHostState.pending-channel-invites > 0 ? "channels"
+                : "received";
+            SidebarPane.active-tab = "contacts";
+        }
+        message-requests-clicked => {
+            ModalHostState.message-requests-clicked();
+        }
+        group-invites-clicked => {
+            ModalHostState.group-invites-clicked();
+        }
+        channel-invites-clicked => {
+            ModalHostState.channel-invites-clicked();
+        }
+        // The avatar and the gear both open the account menu, which
+        // is where Settings lives now.
+        profile-clicked => {
+            SidebarPane.active-tab = "profile";
+        }
+        create-channel-clicked => {
+            ModalHostState.start-create-channel();
+        }
+        create-clicked => {
+            ModalHostState.nav-push("create-menu");
+        }
+        join-channel-clicked => {
+            ModalHostState.create-channel-initial-tab = 1;
+            ModalHostState.nav-push("create-channel");
+        }
+        toggle-collapsed => {
+            // Track user's explicit collapse choice for smart auto-expand
+            // The state lives in SidebarPane: the chat pane, the rail and the
+            // persisted choice all read it. Before, only the sidebar's own copy
+            // flipped, so the chat stayed at the expanded width beside a rail
+            // and the choice saved was the old one.
+            let expand = root.sidebar-is-rail;
+            root.sidebar-user-collapsed = !expand;
+            SidebarPane.small-screen-expanded = expand;
+            SidebarPane.sidebar-collapsed = !expand;
+            SidebarPane.toggle-sidebar();
+        }
+        create-section-clicked => {
+            ModalHostState.start-create-section();
+        }
+        section-toggle-expanded(id) => {
+            SidebarPane.section-toggle-expanded(id);
+        }
+        section-conversation-selected(conv-id, conv-type) => {
+            SidebarPane.mobile-show-chat = true;
+            SidebarPane.section-conversation-selected(conv-id, conv-type);
+        }
+        delete-section-clicked(id) => {
+            SidebarPane.delete-section-clicked(id);
+        }
+        rename-section-clicked(id) => {
+            ModalHostState.create-section-rename-mode = true;
+            ModalHostState.create-section-id = id;
+            // Rust side should set name/emoji before opening
+            SidebarPane.rename-section-clicked(id);
+            ModalHostState.nav-push("create-section");
+        }
+        move-to-section(conv-id, conv-type, section-id) => {
+            SidebarPane.move-to-section(conv-id, conv-type, section-id);
+        }
+        set-conversation-pinned(conv-id, pinned) => {
+            SidebarPane.set-conversation-pinned(conv-id, pinned);
+        }
+        set-conversation-archived(conv-id, archived) => {
+            SidebarPane.set-conversation-archived(conv-id, archived);
+        }
+        row-context-menu-opened(conv-id, kind) => {
+            SidebarPane.row-context-menu-opened(conv-id, kind);
+        }
+        set-conversation-muted(conv-id, kind, muted) => {
+            SidebarPane.set-conversation-muted(conv-id, kind, muted);
+        }
+        archive-view-changed(open) => {
+            SidebarPane.archive-open = open;
+            SidebarPane.archive-view-changed();
+        }
+        delete-conversation(conv-id, kind) => {
+            SidebarPane.delete-conversation(conv-id, kind);
+        }
+        leave-conversation(conv-id, kind) => {
+            SidebarPane.leave-conversation(conv-id, kind);
+        }
+        move-section(section-id, delta) => {
+            SidebarPane.move-section(section-id, delta);
+        }
+        set-section-sort-mode(section-id, mode) => {
+            SidebarPane.set-section-sort-mode(section-id, mode);
+        }
+        remove-from-section(conv-id) => {
+            SidebarPane.remove-from-section(conv-id);
+        }
+        // The gear is labelled Settings and opens it, as Ctrl+, does; the
+        // avatar beside it opens the account menu.
+        settings-clicked => {
+            ModalHostState.nav-push("settings");
+            SidebarPane.settings-clicked();
+        }
+        mesh-setup-clicked => {
+            ModalHostState.nav-push("mesh-setup");
+        }
+        tab-selected(tab) => {
+            SidebarPane.active-tab = tab;
+            SidebarPane.mobile-show-chat = false;
+        }
+        anon-mode-clicked => {
+            root.toggle-anon-mode();
+        }
+    }
+}

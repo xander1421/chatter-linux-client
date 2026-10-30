@@ -29,9 +29,9 @@
 
 use std::sync::Arc;
 
+use crate::crypto::os_rng;
 use chatter_mesh_noise::MeshIdentity;
 use chrono::Utc;
-use rand_core_06::OsRng;
 use rusqlite::{Connection, params};
 use zeroize::Zeroize;
 
@@ -84,7 +84,7 @@ impl MeshIdentityStore {
 
         // Fresh key material straight from the OS CSPRNG. NOT derived from, and
         // NOT shared with, the Signal identity key — see the module docs.
-        let identity = MeshIdentity::generate(&mut OsRng);
+        let identity = MeshIdentity::generate(&mut os_rng());
         let now = Utc::now().to_rfc3339();
 
         conn.execute(
@@ -180,13 +180,13 @@ mod tests {
     /// Temp-file SQLCipher database, following the `call_repo` test pattern:
     /// SQLCipher's `:memory:` handling needs a passphrase after attach and
     /// `Database::open` assumes a real path, so a temp file is the closest we
-    /// get to in-memory. The temp dir is leaked for the test's lifetime.
+    /// get to in-memory. The temp dir lives until the test ends.
     fn setup_db() -> Arc<Database> {
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("mesh_identity_test.db");
         let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
         db.run_migrations().unwrap();
-        Box::leak(Box::new(temp_dir));
+        crate::test_tempdir::hold(temp_dir);
         db
     }
 

@@ -1,201 +1,4 @@
-//! Mock Signal Protocol services.
-//!
-//! Provides mockable traits for Signal Protocol operations.
-//! Note: Uses owned types instead of references for mockall compatibility.
-
-use mockall::automock;
-use crate::framework::fixtures::TestSession;
-use super::services::{MockError, MockResult};
-
-// ============================================================================
-// Signal Service Trait
-// ============================================================================
-
-/// Mockable Signal service trait.
-#[automock]
-pub trait SignalServiceTrait: Send + Sync {
-    /// Encrypt a message for a recipient.
-    fn encrypt(
-        &self,
-        recipient_id: String,
-        device_id: u32,
-        plaintext: Vec<u8>,
-    ) -> impl std::future::Future<Output = MockResult<Vec<u8>>> + Send;
-
-    /// Decrypt a message.
-    fn decrypt(
-        &self,
-        sender_id: String,
-        device_id: u32,
-        ciphertext: Vec<u8>,
-    ) -> impl std::future::Future<Output = MockResult<Vec<u8>>> + Send;
-
-    /// Check if session exists with recipient.
-    fn has_session(
-        &self,
-        recipient_id: String,
-        device_id: u32,
-    ) -> impl std::future::Future<Output = MockResult<bool>> + Send;
-
-    /// Establish session using prekey bundle.
-    fn establish_session(
-        &self,
-        recipient_id: String,
-        device_id: u32,
-        prekey_bundle: Vec<u8>,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-
-    /// Get local identity key.
-    fn get_identity_key(
-        &self,
-    ) -> impl std::future::Future<Output = MockResult<Vec<u8>>> + Send;
-
-    /// Get local registration ID.
-    fn get_registration_id(
-        &self,
-    ) -> impl std::future::Future<Output = MockResult<u32>> + Send;
-}
-
-// ============================================================================
-// Signal Store Traits
-// ============================================================================
-
-/// Mockable identity key store.
-#[automock]
-pub trait IdentityKeyStoreTrait: Send + Sync {
-    /// Get identity key pair.
-    fn get_identity_key_pair(
-        &self,
-    ) -> impl std::future::Future<Output = MockResult<(Vec<u8>, Vec<u8>)>> + Send;
-
-    /// Get local registration ID.
-    fn get_local_registration_id(
-        &self,
-    ) -> impl std::future::Future<Output = MockResult<u32>> + Send;
-
-    /// Save identity.
-    fn save_identity(
-        &mut self,
-        address: String,
-        identity: Vec<u8>,
-    ) -> impl std::future::Future<Output = MockResult<bool>> + Send;
-
-    /// Check if identity is trusted.
-    fn is_trusted_identity(
-        &self,
-        address: String,
-        identity: Vec<u8>,
-    ) -> impl std::future::Future<Output = MockResult<bool>> + Send;
-
-    /// Get identity.
-    fn get_identity(
-        &self,
-        address: String,
-    ) -> impl std::future::Future<Output = MockResult<Option<Vec<u8>>>> + Send;
-}
-
-/// Mockable session store.
-#[automock]
-pub trait SessionStoreTrait: Send + Sync {
-    /// Load session.
-    fn load_session(
-        &self,
-        address: String,
-    ) -> impl std::future::Future<Output = MockResult<Option<Vec<u8>>>> + Send;
-
-    /// Store session.
-    fn store_session(
-        &mut self,
-        address: String,
-        record: Vec<u8>,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-}
-
-/// Mockable prekey store.
-#[automock]
-pub trait PreKeyStoreTrait: Send + Sync {
-    /// Get prekey.
-    fn get_pre_key(
-        &self,
-        prekey_id: u32,
-    ) -> impl std::future::Future<Output = MockResult<Vec<u8>>> + Send;
-
-    /// Save prekey.
-    fn save_pre_key(
-        &mut self,
-        prekey_id: u32,
-        record: Vec<u8>,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-
-    /// Remove prekey.
-    fn remove_pre_key(
-        &mut self,
-        prekey_id: u32,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-}
-
-/// Mockable signed prekey store.
-#[automock]
-pub trait SignedPreKeyStoreTrait: Send + Sync {
-    /// Get signed prekey.
-    fn get_signed_pre_key(
-        &self,
-        signed_prekey_id: u32,
-    ) -> impl std::future::Future<Output = MockResult<Vec<u8>>> + Send;
-
-    /// Save signed prekey.
-    fn save_signed_pre_key(
-        &mut self,
-        signed_prekey_id: u32,
-        record: Vec<u8>,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-}
-
-/// Mockable sender key store.
-#[automock]
-pub trait SenderKeyStoreTrait: Send + Sync {
-    /// Store sender key.
-    fn store_sender_key(
-        &mut self,
-        sender: String,
-        distribution_id: Vec<u8>,
-        record: Vec<u8>,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-
-    /// Load sender key.
-    fn load_sender_key(
-        &self,
-        sender: String,
-        distribution_id: Vec<u8>,
-    ) -> impl std::future::Future<Output = MockResult<Option<Vec<u8>>>> + Send;
-}
-
-// ============================================================================
-// Sealed Sender Trait
-// ============================================================================
-
-/// Mockable sealed sender service.
-#[automock]
-pub trait SealedSenderServiceTrait: Send + Sync {
-    /// Create sealed sender message.
-    fn seal_message(
-        &self,
-        recipient_id: String,
-        device_id: u32,
-        plaintext: Vec<u8>,
-    ) -> impl std::future::Future<Output = MockResult<Vec<u8>>> + Send;
-
-    /// Open sealed sender message.
-    fn unseal_message(
-        &self,
-        ciphertext: Vec<u8>,
-    ) -> impl std::future::Future<Output = MockResult<(String, u32, Vec<u8>)>> + Send; // (sender_id, device_id, plaintext)
-
-}
-
-// ============================================================================
-// In-Memory Signal Stores for Testing
-// ============================================================================
+//! In-memory Signal Protocol stores.
 
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -206,9 +9,6 @@ pub struct InMemorySignalStores {
     registration_id: u32,
     identities: RwLock<HashMap<String, Vec<u8>>>,
     sessions: RwLock<HashMap<String, Vec<u8>>>,
-    prekeys: RwLock<HashMap<u32, Vec<u8>>>,
-    signed_prekeys: RwLock<HashMap<u32, Vec<u8>>>,
-    sender_keys: RwLock<HashMap<(String, Vec<u8>), Vec<u8>>>,
 }
 
 impl InMemorySignalStores {
@@ -225,9 +25,6 @@ impl InMemorySignalStores {
             registration_id: rand::random::<u32>() % 16380 + 1,
             identities: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
-            prekeys: RwLock::new(HashMap::new()),
-            signed_prekeys: RwLock::new(HashMap::new()),
-            sender_keys: RwLock::new(HashMap::new()),
         }
     }
 
@@ -247,9 +44,6 @@ impl InMemorySignalStores {
             registration_id: (seed % 16380 + 1) as u32,
             identities: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
-            prekeys: RwLock::new(HashMap::new()),
-            signed_prekeys: RwLock::new(HashMap::new()),
-            sender_keys: RwLock::new(HashMap::new()),
         }
     }
 
@@ -265,7 +59,10 @@ impl InMemorySignalStores {
 
     /// Store a session.
     pub fn store_session(&self, address: &str, record: Vec<u8>) {
-        self.sessions.write().unwrap().insert(address.to_string(), record);
+        self.sessions
+            .write()
+            .unwrap()
+            .insert(address.to_string(), record);
     }
 
     /// Load a session.
@@ -285,7 +82,10 @@ impl InMemorySignalStores {
 
     /// Store identity.
     pub fn store_identity(&self, address: &str, identity: Vec<u8>) {
-        self.identities.write().unwrap().insert(address.to_string(), identity);
+        self.identities
+            .write()
+            .unwrap()
+            .insert(address.to_string(), identity);
     }
 
     /// Load identity.

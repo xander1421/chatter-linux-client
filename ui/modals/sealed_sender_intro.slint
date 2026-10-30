@@ -1,3 +1,6 @@
+import { Checkbox } from "../components/checkbox.slint";
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // SealedSenderIntroModal — honest one-screen explainer shown after registration.
 //
 // It states the sealed-sender property WITHOUT overclaiming: the server
@@ -11,7 +14,18 @@ import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 
 export component SealedSenderIntroModal inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show-modal ? "modal-overlay" : "";
     in property <bool> show-modal: false;
+    property <bool> entered: false;
+    changed show-modal => { if !root.show-modal { root.entered = false; } }
+    Timer {
+        interval: 16ms;
+        running: root.show-modal && !root.entered;
+        triggered => { root.entered = true; }
+    }
 
     // Whether "allow sealed messages from anyone" is enabled. Off (default) =
     // contacts-only. Two-way bound so the choice made here is the initial
@@ -19,12 +33,12 @@ export component SealedSenderIntroModal inherits Rectangle {
     in-out property <bool> allow-from-anyone: false;
 
     callback confirmed();
-    callback allow-from-anyone-changed(bool);
 
     opacity: root.show-modal ? 1 : 0;
-    visible: root.show-modal;
+    animate opacity { duration: Materials.sheet-duration; easing: Materials.glide; }
+    visible: root.show-modal || self.opacity > 0;
 
-    background: Colors.overlay;
+    background: Materials.scrim;
 
     // Block backdrop clicks (no dismiss allowed — must acknowledge).
     TouchArea {
@@ -32,122 +46,128 @@ export component SealedSenderIntroModal inherits Rectangle {
         height: 100%;
     }
 
-    Rectangle {
+    GlassSurface {
+        material-level: 3;
+        elevation: 5;
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale-x: root.show-modal && root.entered ? 100% : 94%;
+        transform-scale-y: root.show-modal && root.entered ? 100% : 91%;
+        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+
         width: min(480px, parent.width - 32px);
         height: max(200px, min(content-layout.preferred-height, min(640px, parent.height - 48px)));
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        background: Colors.surface;
-        border-radius: Spacing.radius-lg;
-        clip: true;
-        drop-shadow-blur: 16px;
-        drop-shadow-color: Colors.shadow;
+        border-radius: Spacing.radius-sheet;
 
         TouchArea {
             width: 100%;
             height: 100%;
         }
 
-        content-layout := VerticalLayout {
-            padding: Spacing.lg;
-            spacing: Spacing.md;
+        // Hidden the moment the dialog is logically closed (see
+        // recovery_codes.slint): the shell and scrim finish their fade with
+        // nothing inside them focusable, actionable or announced.
+        Rectangle {
+            visible: root.show-modal;
+            content-layout := VerticalLayout {
+                padding: Spacing.lg;
+                spacing: Spacing.md;
 
-            Text {
-                text: "Sealed sender: private by default";
-                color: Colors.text-primary;
-                font-size: Typography.xl;
-                font-weight: Typography.semibold;
-                horizontal-alignment: center;
-            }
+                Text {
+                    width: max(0px, parent.width - parent.padding * 2);
+                    text: "Sealed sender: private by default";
+                    color: Colors.text-primary;
+                    font-size: Typography.xl;
+                    font-weight: Typography.semibold;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
 
-            Text {
-                text: "Chatter delivers your messages without the server learning who you are talking to. Your messages are always sent this way — nothing to turn on.";
-                color: Colors.text-secondary;
-                font-size: Typography.sm;
-                horizontal-alignment: center;
-                wrap: word-wrap;
-            }
+                Text {
+                    width: max(0px, parent.width - parent.padding * 2);
+                    text: "Chatter delivers your messages without the server learning who you are talking to. Your messages are always sent this way — nothing to turn on.";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
 
-            Text {
-                text: "This is privacy from the server. It is not anonymity from the person you message — they still see who you are.";
-                color: Colors.text-muted;
-                font-size: Typography.xs;
-                horizontal-alignment: center;
-                wrap: word-wrap;
-            }
+                Text {
+                    width: max(0px, parent.width - parent.padding * 2);
+                    text: "This is privacy from the server. It is not anonymity from the person you message — they still see who you are.";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
 
-            Rectangle { height: Spacing.sm; }
+                Rectangle { height: Spacing.sm; }
 
-            // The one choice: who may reach you sealed.
-            Text {
-                text: "Who can message you this way?";
-                color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
-                horizontal-alignment: center;
-            }
-
-            HorizontalLayout {
-                alignment: center;
-                spacing: Spacing.sm;
+                // The one choice: who may reach you sealed.
+                Text {
+                    text: "Who can message you this way?";
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    font-weight: Typography.medium;
+                    horizontal-alignment: center;
+                }
 
                 Rectangle {
-                    width: 20px;
-                    height: 20px;
-                    border-radius: Spacing.radius-sm;
-                    border-width: 2px;
-                    border-color: root.allow-from-anyone ? Colors.primary : Colors.text-muted;
-                    background: root.allow-from-anyone ? Colors.primary : transparent;
-
-                    if root.allow-from-anyone: Text {
-                        text: "\u{2713}";
-                        color: Colors.text-primary;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
-                    }
-
+                    min-height: Spacing.button-height;
                     TouchArea {
+                        enabled: root.show-modal;
                         mouse-cursor: pointer;
-                        clicked => {
-                            root.allow-from-anyone = !root.allow-from-anyone;
-                            root.allow-from-anyone-changed(root.allow-from-anyone);
+                        clicked => { root.allow-from-anyone = !root.allow-from-anyone; }
+                    }
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            Checkbox {
+                                enabled: root.show-modal;
+                                checked <=> root.allow-from-anyone;
+                                label: "Allow sealed messages from anyone";
+                            }
+                        }
+                        Text {
+                            text: "Allow sealed messages from anyone";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            min-width: 0px;
+                            wrap: word-wrap;
                         }
                     }
                 }
 
                 Text {
-                    text: "Allow sealed messages from anyone";
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
+                    width: max(0px, parent.width - parent.padding * 2);
+                    text: "Off (recommended): only your contacts can reach you this way. On: anyone can. You can change this later in Settings.";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
                 }
 
-                TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.allow-from-anyone = !root.allow-from-anyone;
-                        root.allow-from-anyone-changed(root.allow-from-anyone);
-                    }
+                Rectangle { height: Spacing.sm; }
+
+                Button {
+                    text: "Got it";
+                    variant: "primary";
+                    disabled: !root.show-modal;
+                    clicked => { root.confirmed(); }
                 }
-            }
-
-            Text {
-                text: "Off (recommended): only your contacts can reach you this way. On: anyone can. You can change this later in Settings.";
-                color: Colors.text-muted;
-                font-size: Typography.xs;
-                horizontal-alignment: center;
-                wrap: word-wrap;
-            }
-
-            Rectangle { height: Spacing.sm; }
-
-            Button {
-                text: "Got it";
-                variant: "primary";
-                clicked => { root.confirmed(); }
             }
         }
+    }
+
+    // The fade-out is presentation only: nothing in it is a live target.
+    if !root.show-modal: TouchArea {
+        width: 100%;
+        height: 100%;
     }
 }

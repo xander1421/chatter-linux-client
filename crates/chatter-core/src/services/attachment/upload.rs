@@ -2,12 +2,15 @@
 
 use std::path::Path;
 
-use crate::crypto::attachment_crypto::{max_attachment_size, AttachmentCrypto};
-use crate::error::CryptoError;
+use crate::crypto::attachment_crypto::{AttachmentCrypto, max_attachment_size};
 use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
 use crate::domain::ids::AttachmentId;
+use crate::error::CryptoError;
 
-use super::{attachment_file_path, attachments_dir, ensure_attachments_dir, AttachmentError, AttachmentService, CdnUploadResult};
+use super::{
+    AttachmentError, AttachmentService, CdnUploadResult, attachment_file_path, attachments_dir,
+    ensure_attachments_dir,
+};
 
 /// Ciphertext > this uses multipart; ≤ uses single-PUT.
 const MULTIPART_THRESHOLD: u64 = 100 * 1024 * 1024;
@@ -57,7 +60,10 @@ impl AttachmentService {
                 .await
                 .map_err(|e| AttachmentError::FileError(format!("read part: {}", e)))?;
 
-            match self.cdn_http_put(url, buf, "application/octet-stream").await {
+            match self
+                .cdn_http_put(url, buf, "application/octet-stream")
+                .await
+            {
                 Ok((status, etag)) if (200..300).contains(&status) => match etag {
                     Some(e) => return Ok(e),
                     None => last_err = "part PUT succeeded but no ETag header".to_string(),
@@ -83,9 +89,47 @@ impl AttachmentService {
         &self,
         file_path: &Path,
     ) -> Result<CdnUploadResult, AttachmentError> {
+        self.upload_to_cdn_encrypted_with_media(file_path, None, None)
+            .await
+    }
+
+    /// Recorded voice notes already have these values from the capture worker.
+    /// Re-probing the audio starts a decoder and scans it a second time.
+    pub async fn upload_recorded_voice_note(
+        &self,
+        file_path: &Path,
+        waveform: &[u8],
+        duration_ms: u64,
+    ) -> Result<CdnUploadResult, AttachmentError> {
+        let media = MediaMetadata {
+            waveform: Some(waveform.to_vec()),
+            duration_ms,
+            ..MediaMetadata::default()
+        };
+        self.upload_to_cdn_encrypted_with_media(
+            file_path,
+            Some(media),
+            Some(if cfg!(target_os = "android") {
+                "audio/mp4"
+            } else {
+                "audio/wav"
+            }),
+        )
+        .await
+    }
+
+    async fn upload_to_cdn_encrypted_with_media(
+        &self,
+        file_path: &Path,
+        known_media: Option<MediaMetadata>,
+        known_mime: Option<&str>,
+    ) -> Result<CdnUploadResult, AttachmentError> {
+        let started = std::time::Instant::now();
         let plaintext_size = tokio::fs::metadata(file_path)
             .await
-            .map_err(|e| AttachmentError::FileError(format!("Failed to read file metadata: {}", e)))?
+            .map_err(|e| {
+                AttachmentError::FileError(format!("Failed to read file metadata: {}", e))
+            })?
             .len();
 
         // Enforce attachment size cap at the service boundary. The same check
@@ -94,7 +138,11 @@ impl AttachmentService {
         let max_size = max_attachment_size();
         if plaintext_size > max_size {
             return Err(AttachmentError::EncryptionError(
-                CryptoError::AttachmentTooLarge { size: plaintext_size, max: max_size }.to_string(),
+                CryptoError::AttachmentTooLarge {
+                    size: plaintext_size,
+                    max: max_size,
+                }
+                .to_string(),
             ));
         }
 
@@ -127,24 +175,39 @@ impl AttachmentService {
             .unwrap_or("attachment")
             .to_string();
 
-        let mime_type = detect_mime_type(file_path).await;
+        let mime_type = match known_mime {
+            Some(mime) => mime.to_string(),
+            None => detect_mime_type(file_path).await,
+        };
 
+        // No filename, object key or plaintext size in upload logs: the same
+        // path uploads secret-chat files.
         tracing::debug!(
-            filename = %filename,
-            plaintext_size = plaintext_size,
             mime_type = %mime_type,
             "Encrypting attachment for CDN upload (streaming)"
         );
 
         // Extract media metadata from the original file before encryption
-        let media_meta = self.extract_media_metadata(file_path, &mime_type).await;
+        let media_start = std::time::Instant::now();
+        let media_meta = match known_media {
+            Some(media) => media,
+            None => self.extract_media_metadata(file_path, &mime_type).await,
+        };
+        if self.secret_chat {
+            tracing::info!(
+                elapsed_ms = media_start.elapsed().as_millis(),
+                "secret attachment upload: media metadata ready"
+            );
+        }
 
         // Streaming encryption to temp file (O(CHUNK_SIZE) memory)
-        ensure_attachments_dir()
-            .map_err(|e| AttachmentError::FileError(format!("Failed to create attachments dir: {}", e)))?;
+        ensure_attachments_dir().map_err(|e| {
+            AttachmentError::FileError(format!("Failed to create attachments dir: {}", e))
+        })?;
 
-        let temp_file = tempfile::NamedTempFile::new_in(attachments_dir())
-            .map_err(|e| AttachmentError::FileError(format!("Failed to create temp file: {}", e)))?;
+        let temp_file = tempfile::NamedTempFile::new_in(attachments_dir()).map_err(|e| {
+            AttachmentError::FileError(format!("Failed to create temp file: {}", e))
+        })?;
 
         let input_path = plaintext_path.to_path_buf();
         let output_path = temp_file.path().to_path_buf();
@@ -167,19 +230,29 @@ impl AttachmentService {
         // RustFS); small ones keep the single-PUT path. Both arms converge on a
         // confirmed `cdn_key`, which feeds the shared persist/build tail below.
         let cdn_key = if encrypt_result.ciphertext_size > MULTIPART_THRESHOLD {
-            self.upload_multipart_to_cdn(temp_file.path(), encrypt_result.ciphertext_size).await?
+            self.upload_multipart_to_cdn(temp_file.path(), encrypt_result.ciphertext_size)
+                .await?
         } else {
             // Get presigned upload URL
-            let mut file_client = self.grpc_pool()?.file_client();
+            let mut file_client = self.file_client()?;
+            let mint_start = std::time::Instant::now();
             let upload_response = file_client
                 .get_attachment_upload_url(encrypt_result.ciphertext_size)
                 .await
-                .map_err(|e| AttachmentError::NetworkError(format!("Failed to get upload URL: {}", e)))?;
+                .map_err(|e| {
+                    AttachmentError::NetworkError(format!("Failed to get upload URL: {}", e))
+                })?;
+            if self.secret_chat {
+                tracing::info!(
+                    elapsed_ms = mint_start.elapsed().as_millis(),
+                    "secret attachment upload: URL minted"
+                );
+            }
 
             let cdn_key = upload_response.cdn_key;
             let upload_url = upload_response.upload_url;
 
-            tracing::debug!(cdn_key = %cdn_key, "Got presigned URL, streaming encrypted content");
+            tracing::debug!("Got presigned URL, streaming encrypted content");
 
             let upload_start = std::time::Instant::now();
 
@@ -187,10 +260,10 @@ impl AttachmentService {
             // in-memory body, so read the ciphertext (bounded by the ≤100 MiB
             // single-PUT threshold) into memory rather than streaming the file.
             #[cfg(feature = "onion")]
-            let sent = if self.transport_is_onion() {
-                let bytes = tokio::fs::read(temp_file.path())
-                    .await
-                    .map_err(|e| AttachmentError::FileError(format!("Failed to read temp file: {}", e)))?;
+            let sent = if self.cdn_over_tor()? {
+                let bytes = tokio::fs::read(temp_file.path()).await.map_err(|e| {
+                    AttachmentError::FileError(format!("Failed to read temp file: {}", e))
+                })?;
                 let (status, _etag) = self
                     .cdn_http_put(&upload_url, bytes, "application/octet-stream")
                     .await?;
@@ -199,25 +272,35 @@ impl AttachmentService {
                 None
             };
             #[cfg(not(feature = "onion"))]
-            let sent: Option<u16> = None;
+            let sent: Option<u16> = if self.cdn_over_tor()? {
+                return Err(super::no_tor());
+            } else {
+                None
+            };
 
             let status = if let Some(status) = sent {
                 status
             } else {
                 // Direct: stream the encrypted temp file to PUT (O(CHUNK_SIZE) memory).
-                let encrypted_file = tokio::fs::File::open(temp_file.path())
-                    .await
-                    .map_err(|e| AttachmentError::FileError(format!("Failed to open temp file: {}", e)))?;
+                let encrypted_file =
+                    tokio::fs::File::open(temp_file.path()).await.map_err(|e| {
+                        AttachmentError::FileError(format!("Failed to open temp file: {}", e))
+                    })?;
                 let stream = tokio_util::io::ReaderStream::new(encrypted_file);
                 let body = reqwest::Body::wrap_stream(stream);
-                let response = super::cdn_client()
+                let response = super::cdn_client()?
                     .put(&upload_url)
                     .header("Content-Type", "application/octet-stream")
                     .header("Content-Length", encrypt_result.ciphertext_size)
                     .body(body)
                     .send()
                     .await
-                    .map_err(|e| AttachmentError::NetworkError(format!("HTTP upload failed: {}", e)))?;
+                    .map_err(|e| {
+                        AttachmentError::NetworkError(format!(
+                            "HTTP upload failed: {}",
+                            e.without_url()
+                        ))
+                    })?;
                 response.status().as_u16()
             };
 
@@ -228,13 +311,22 @@ impl AttachmentService {
                 )));
             }
 
-            tracing::info!(cdn_key = %cdn_key, elapsed = ?upload_start.elapsed(), "CDN upload complete");
+            tracing::info!(elapsed = ?upload_start.elapsed(), "CDN upload complete");
 
             // Confirm upload with server
+            let confirm_start = std::time::Instant::now();
             file_client
                 .confirm_attachment_upload(&cdn_key)
                 .await
-                .map_err(|e| AttachmentError::NetworkError(format!("Failed to confirm upload: {}", e)))?;
+                .map_err(|e| {
+                    AttachmentError::NetworkError(format!("Failed to confirm upload: {}", e))
+                })?;
+            if self.secret_chat {
+                tracing::info!(
+                    elapsed_ms = confirm_start.elapsed().as_millis(),
+                    "secret attachment upload: confirmed"
+                );
+            }
 
             cdn_key
         };
@@ -244,8 +336,9 @@ impl AttachmentService {
 
         // Persist temp file to permanent location (atomic rename on same filesystem)
         let permanent_path = attachment_file_path(&attachment_id);
-        temp_file.persist(&permanent_path)
-            .map_err(|e| AttachmentError::FileError(format!("Failed to persist encrypted file: {}", e)))?;
+        temp_file.persist(&permanent_path).map_err(|e| {
+            AttachmentError::FileError(format!("Failed to persist encrypted file: {}", e))
+        })?;
 
         tracing::debug!(
             "Persisted encrypted content to {}",
@@ -268,7 +361,11 @@ impl AttachmentService {
             chunk_size: 0,
             width: media_meta.width,
             height: media_meta.height,
-            duration_seconds: if media_meta.duration_ms > 0 { Some((media_meta.duration_ms / 1000) as f64) } else { None },
+            duration_seconds: if media_meta.duration_ms > 0 {
+                Some((media_meta.duration_ms / 1000) as f64)
+            } else {
+                None
+            },
             waveform_samples: media_meta.waveform.clone(),
             thumbnail: media_meta.thumbnail.clone(),
             thumbnail_width: media_meta.thumbnail_width,
@@ -285,29 +382,34 @@ impl AttachmentService {
             metadata: domain_metadata,
             status: AttachmentStatus::Ready,
             content_location: ContentLocation::OnFilesystem,
-            local_path: None,
             remote_url: Some(cdn_key.clone()),
             encryption_key: Some(encrypt_result.key.to_vec()),
             encryption_iv: Some(encrypt_result.digest.to_vec()),
             created_at: chrono::Utc::now(),
+            secret_chat: self.secret_chat,
         };
 
         // Save to repository with file path
-        if let Err(e) = self.attachment_repo.insert_with_file_path(&attachment, &permanent_path) {
+        if let Err(e) = self
+            .attachment_repo
+            .insert_with_file_path(&attachment, &permanent_path)
+        {
             let _ = std::fs::remove_file(&permanent_path);
             tracing::warn!("Failed to save CDN attachment: {}", e);
             return Err(AttachmentError::StorageError(e.to_string()));
         }
 
         tracing::info!(
-            cdn_key = %cdn_key,
-            attachment_id = %attachment_id,
-            filename = %filename,
-            plaintext_size = plaintext_size,
             encrypted_size = encrypt_result.ciphertext_size,
             "Encrypted attachment uploaded to CDN (streaming)"
         );
 
+        if self.secret_chat {
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "secret attachment upload: ready"
+            );
+        }
         Ok(CdnUploadResult {
             attachment_id,
             cdn_key,
@@ -327,8 +429,6 @@ impl AttachmentService {
             thumbnail_height: media_meta.thumbnail_height.unwrap_or(0),
             width: media_meta.width.unwrap_or(0),
             height: media_meta.height.unwrap_or(0),
-            incremental_mac: encrypt_result.incremental_mac.clone(),
-            chunk_size: encrypt_result.incremental_chunk_size,
             ciphertext_size: encrypt_result.ciphertext_size,
         })
     }
@@ -356,7 +456,13 @@ impl AttachmentService {
             }
         };
         let encrypted_size = encrypted.ciphertext.len() as u64;
-        let mut file_client = self.grpc_pool().ok()?.file_client();
+        let mut file_client = match self.file_client() {
+            Ok(client) => client,
+            Err(e) => {
+                tracing::warn!(error = %e, "Thumbnail sidecar client unavailable; sending without preview");
+                return None;
+            }
+        };
         let upload_response = match file_client.get_attachment_upload_url(encrypted_size).await {
             Ok(r) => r,
             Err(e) => {
@@ -376,7 +482,10 @@ impl AttachmentService {
         {
             Ok((status, _etag)) if (200..300).contains(&status) => {}
             Ok((status, _etag)) => {
-                tracing::warn!(status, "Thumbnail sidecar PUT failed; sending without preview");
+                tracing::warn!(
+                    status,
+                    "Thumbnail sidecar PUT failed; sending without preview"
+                );
                 return None;
             }
             Err(e) => {
@@ -385,8 +494,13 @@ impl AttachmentService {
             }
         }
         let _ = file_client.confirm_attachment_upload(&cdn_key).await;
-        tracing::debug!(cdn_key = %cdn_key, plaintext_size, "Thumbnail sidecar uploaded");
-        Some((cdn_key, encrypted.key.to_vec(), encrypted.digest.to_vec(), plaintext_size))
+        tracing::debug!("Thumbnail sidecar uploaded");
+        Some((
+            cdn_key,
+            encrypted.key.to_vec(),
+            encrypted.digest.to_vec(),
+            plaintext_size,
+        ))
     }
 
     /// Upload an already-encrypted temp file via multipart, direct to RustFS.
@@ -398,11 +512,13 @@ impl AttachmentService {
     ) -> Result<String, AttachmentError> {
         use futures::stream::StreamExt;
 
-        let mut file_client = self.grpc_pool()?.file_client();
+        let mut file_client = self.file_client()?;
         let create = file_client
             .create_attachment_multipart_upload(ciphertext_size)
             .await
-            .map_err(|e| AttachmentError::NetworkError(format!("create multipart failed: {}", e)))?;
+            .map_err(|e| {
+                AttachmentError::NetworkError(format!("create multipart failed: {}", e))
+            })?;
 
         let cdn_key = create.cdn_key.clone();
         let upload_id = create.upload_id.clone();
@@ -435,7 +551,8 @@ impl AttachmentService {
         if ranges.len() != create.part_urls.len() {
             return Err(AttachmentError::NetworkError(format!(
                 "part count mismatch: {} ranges vs {} urls",
-                ranges.len(), create.part_urls.len()
+                ranges.len(),
+                create.part_urls.len()
             )));
         }
 
@@ -449,13 +566,19 @@ impl AttachmentService {
                 let part_number = (i as u32) + 1;
                 let etag = self.upload_one_part(&url, &temp_path, offset, len).await?;
                 Ok::<crate::proto::chat_v1::CompletedPart, AttachmentError>(
-                    crate::proto::chat_v1::CompletedPart { number: part_number, etag },
+                    crate::proto::chat_v1::CompletedPart {
+                        number: part_number,
+                        etag,
+                    },
                 )
             }
         });
 
         let results: Vec<Result<crate::proto::chat_v1::CompletedPart, AttachmentError>> =
-            futures::stream::iter(uploads).buffer_unordered(4).collect().await;
+            futures::stream::iter(uploads)
+                .buffer_unordered(4)
+                .collect()
+                .await;
 
         let mut parts = Vec::with_capacity(results.len());
         for r in results {
@@ -474,7 +597,9 @@ impl AttachmentService {
         file_client
             .complete_attachment_multipart_upload(&cdn_key, &upload_id, parts)
             .await
-            .map_err(|e| AttachmentError::NetworkError(format!("complete multipart failed: {}", e)))?;
+            .map_err(|e| {
+                AttachmentError::NetworkError(format!("complete multipart failed: {}", e))
+            })?;
 
         Ok(cdn_key)
     }
@@ -488,7 +613,7 @@ impl AttachmentService {
     /// The encrypted content is stored on the local filesystem after upload.
     pub async fn upload_bytes_to_cdn_encrypted(
         &self,
-                content: &[u8],
+        content: &[u8],
         filename: &str,
         mime_type: &str,
     ) -> Result<CdnUploadResult, AttachmentError> {
@@ -501,26 +626,24 @@ impl AttachmentService {
         let max_size = max_attachment_size();
         if plaintext_size > max_size {
             return Err(AttachmentError::EncryptionError(
-                CryptoError::AttachmentTooLarge { size: plaintext_size, max: max_size }.to_string(),
+                CryptoError::AttachmentTooLarge {
+                    size: plaintext_size,
+                    max: max_size,
+                }
+                .to_string(),
             ));
         }
 
         // Sanitize outgoing media (MP4 metadata strip/relocate, WebP validation).
         // Malformed MP4/WebP is rejected; other formats pass through unchanged.
-        let content: std::borrow::Cow<'_, [u8]> =
-            match super::sanitize::sanitize_media(content)? {
-                super::sanitize::SanitizeOutcome::Rewritten(bytes) => bytes.into(),
-                super::sanitize::SanitizeOutcome::Unchanged => content.into(),
-            };
+        let content: std::borrow::Cow<'_, [u8]> = match super::sanitize::sanitize_media(content)? {
+            super::sanitize::SanitizeOutcome::Rewritten(bytes) => bytes.into(),
+            super::sanitize::SanitizeOutcome::Unchanged => content.into(),
+        };
         let content = content.as_ref();
         let plaintext_size = content.len() as u64;
 
-        tracing::debug!(
-            filename = %filename,
-            plaintext_size = plaintext_size,
-            mime_type = %mime_type,
-            "Encrypting bytes for CDN upload"
-        );
+        tracing::debug!(mime_type = %mime_type, "Encrypting bytes for CDN upload");
 
         // Encrypt with Signal-compatible encryption
         let encrypt_start = std::time::Instant::now();
@@ -535,24 +658,27 @@ impl AttachmentService {
         );
 
         // Get presigned upload URL
-        let mut file_client = self.grpc_pool()?.file_client();
+        let mut file_client = self.file_client()?;
         let upload_response = file_client
             .get_attachment_upload_url(encrypted_size)
             .await
-            .map_err(|e| AttachmentError::NetworkError(format!("Failed to get upload URL: {}", e)))?;
+            .map_err(|e| {
+                AttachmentError::NetworkError(format!("Failed to get upload URL: {}", e))
+            })?;
 
         let cdn_key = upload_response.cdn_key;
         let upload_url = upload_response.upload_url;
 
-        tracing::debug!(
-            cdn_key = %cdn_key,
-            "Got presigned URL, uploading encrypted content"
-        );
+        tracing::debug!("Got presigned URL, uploading encrypted content");
 
         // Upload encrypted ciphertext via HTTP PUT (over Tor in anon mode).
         let upload_start = std::time::Instant::now();
         let (status, _etag) = self
-            .cdn_http_put(&upload_url, encrypted.ciphertext.clone(), "application/octet-stream")
+            .cdn_http_put(
+                &upload_url,
+                encrypted.ciphertext.clone(),
+                "application/octet-stream",
+            )
             .await?;
 
         if !(200..300).contains(&status) {
@@ -562,13 +688,15 @@ impl AttachmentService {
             )));
         }
 
-        tracing::info!(cdn_key = %cdn_key, elapsed = ?upload_start.elapsed(), "CDN upload complete");
+        tracing::info!(elapsed = ?upload_start.elapsed(), "CDN upload complete");
 
         // Confirm upload with server
         file_client
             .confirm_attachment_upload(&cdn_key)
             .await
-            .map_err(|e| AttachmentError::NetworkError(format!("Failed to confirm upload: {}", e)))?;
+            .map_err(|e| {
+                AttachmentError::NetworkError(format!("Failed to confirm upload: {}", e))
+            })?;
 
         // Generate deterministic attachment ID from cdn_key
         let attachment_id = AttachmentId::from_cdn_key(&cdn_key);
@@ -591,7 +719,11 @@ impl AttachmentService {
             chunk_size: 0,
             width: media_meta.width,
             height: media_meta.height,
-            duration_seconds: if media_meta.duration_ms > 0 { Some((media_meta.duration_ms / 1000) as f64) } else { None },
+            duration_seconds: if media_meta.duration_ms > 0 {
+                Some((media_meta.duration_ms / 1000) as f64)
+            } else {
+                None
+            },
             waveform_samples: media_meta.waveform.clone(),
             thumbnail: media_meta.thumbnail.clone(),
             thumbnail_width: media_meta.thumbnail_width,
@@ -603,13 +735,15 @@ impl AttachmentService {
         };
 
         // Ensure attachments directory exists
-        ensure_attachments_dir()
-            .map_err(|e| AttachmentError::FileError(format!("Failed to create attachments dir: {}", e)))?;
+        ensure_attachments_dir().map_err(|e| {
+            AttachmentError::FileError(format!("Failed to create attachments dir: {}", e))
+        })?;
 
         // Write encrypted content to filesystem
         let file_path = attachment_file_path(&attachment_id);
-        std::fs::write(&file_path, &encrypted.ciphertext)
-            .map_err(|e| AttachmentError::FileError(format!("Failed to write attachment file: {}", e)))?;
+        std::fs::write(&file_path, &encrypted.ciphertext).map_err(|e| {
+            AttachmentError::FileError(format!("Failed to write attachment file: {}", e))
+        })?;
 
         tracing::debug!(
             "Wrote {} bytes encrypted content to {}",
@@ -623,15 +757,18 @@ impl AttachmentService {
             metadata: domain_metadata,
             status: AttachmentStatus::Ready,
             content_location: ContentLocation::OnFilesystem,
-            local_path: None,
             remote_url: Some(cdn_key.clone()),
             encryption_key: Some(encrypted.key.to_vec()),
             encryption_iv: Some(encrypted.digest.to_vec()),
             created_at: chrono::Utc::now(),
+            secret_chat: self.secret_chat,
         };
 
         // Save to repository with file path
-        if let Err(e) = self.attachment_repo.insert_with_file_path(&attachment, &file_path) {
+        if let Err(e) = self
+            .attachment_repo
+            .insert_with_file_path(&attachment, &file_path)
+        {
             // Clean up file on failure
             let _ = std::fs::remove_file(&file_path);
             tracing::warn!("Failed to save CDN attachment with file path: {}", e);
@@ -639,12 +776,7 @@ impl AttachmentService {
         }
 
         tracing::info!(
-            cdn_key = %cdn_key,
-            attachment_id = %attachment_id,
-            filename = %filename,
-            plaintext_size = plaintext_size,
             encrypted_size = encrypted_size,
-            file_path = %file_path.display(),
             "Encrypted bytes uploaded to CDN and stored on filesystem"
         );
 
@@ -667,39 +799,48 @@ impl AttachmentService {
             thumbnail_height: media_meta.thumbnail_height.unwrap_or(0),
             width: media_meta.width.unwrap_or(0),
             height: media_meta.height.unwrap_or(0),
-            // In-memory encryption path: no incremental MAC (used for small content like GIFs)
-            incremental_mac: vec![],
-            chunk_size: 0,
             ciphertext_size: encrypted.ciphertext.len() as u64,
         })
     }
 
-    /// Download a GIF from a URL and upload it to CDN (encrypted).
+    /// Fetch a GIF via the server's GIF media proxy and upload it to CDN (encrypted).
     ///
-    /// Combines HTTP download + CDN upload into a single operation so the
-    /// UI layer doesn't need raw HTTP clients.
+    /// Combines the fetch + CDN upload into a single operation so the UI layer
+    /// doesn't need raw HTTP clients.
     pub async fn download_and_upload_gif(
         &self,
         url: &str,
         gif_id: &str,
     ) -> Result<CdnUploadResult, AttachmentError> {
-        // Download the GIF bytes (over Tor in anon mode — the source URL is a
-        // third-party/CDN host whose operator must not see the real IP).
-        let bytes = self.cdn_http_get(url).await?;
+        // The media proxy takes account auth only; a secret chat sends no GIFs
+        // (`ConversationType::gif_picker_available`).
+        if self.secret_chat {
+            return Err(AttachmentError::InvalidAttachment(
+                "GIFs are not available in a secret chat".into(),
+            ));
+        }
+        let bytes = self.fetch_gif_media(url).await?;
 
-        let filename = format!("{}.gif", gif_id.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_"));
+        let filename = format!(
+            "{}.gif",
+            gif_id.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
+        );
 
-        self.upload_bytes_to_cdn_encrypted(&bytes, &filename, "image/gif").await
+        self.upload_bytes_to_cdn_encrypted(&bytes, &filename, "image/gif")
+            .await
     }
 
-    /// Download bytes from a URL (for media display, GIF animation, etc).
+    /// Fetch a GifResult media URL through the server's GIF media proxy.
     ///
-    /// Routes over Tor in anon mode so the source host never sees the real IP.
-    pub async fn download_url_bytes(
-        &self,
-        url: &str,
-    ) -> Result<Vec<u8>, AttachmentError> {
-        self.cdn_http_get(url).await
+    /// The provider CDN is a public-PKI host the pinned client cannot (and must
+    /// not) reach directly; the server fetches it so the provider never sees the
+    /// client's IP. In anon mode the RPC itself already rides the onion channel.
+    pub async fn fetch_gif_media(&self, url: &str) -> Result<Vec<u8>, AttachmentError> {
+        self.grpc_pool()?
+            .gif_client()
+            .media(url)
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("GIF media fetch failed: {}", e)))
     }
 
     /// Extract media metadata from bytes (for in-memory content like downloaded GIFs).
@@ -714,7 +855,9 @@ impl AttachmentService {
             }
 
             // Generate thumbnail from bytes
-            if let Ok((thumb_bytes, thumb_w, thumb_h)) = crate::media::ImageProcessor::generate_thumbnail_from_memory(content) {
+            if let Ok((thumb_bytes, thumb_w, thumb_h)) =
+                crate::media::ImageProcessor::generate_thumbnail_from_memory(content)
+            {
                 meta.thumbnail = Some(thumb_bytes);
                 meta.thumbnail_width = Some(thumb_w);
                 meta.thumbnail_height = Some(thumb_h);
@@ -739,7 +882,9 @@ impl AttachmentService {
                 let path_for_waveform = file_path.to_path_buf();
                 meta.waveform = match tokio::task::spawn_blocking(move || {
                     crate::media::extract_waveform(&path_for_waveform)
-                }).await {
+                })
+                .await
+                {
                     Ok(Ok(samples)) => {
                         tracing::debug!("Extracted waveform: {} samples", samples.len());
                         Some(samples)
@@ -760,14 +905,17 @@ impl AttachmentService {
                 crate::media::AudioPlayer::get_duration(&path_for_duration)
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0)
-            }).await.unwrap_or(0);
+            })
+            .await
+            .unwrap_or(0);
         } else if mime_type.starts_with("image/") {
             // Image processing - use spawn_blocking for large images
             let path_for_dims = file_path.to_path_buf();
             let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
-                crate::media::ImageProcessor::get_dimensions(&path_for_dims)
-                    .unwrap_or((0, 0))
-            }).await.unwrap_or((0, 0));
+                crate::media::ImageProcessor::get_dimensions(&path_for_dims).unwrap_or((0, 0))
+            })
+            .await
+            .unwrap_or((0, 0));
             meta.width = if orig_w > 0 { Some(orig_w) } else { None };
             meta.height = if orig_h > 0 { Some(orig_h) } else { None };
 
@@ -775,11 +923,17 @@ impl AttachmentService {
             let path_for_thumb = file_path.to_path_buf();
             match tokio::task::spawn_blocking(move || {
                 crate::media::ImageProcessor::generate_thumbnail_bytes(&path_for_thumb)
-            }).await {
+            })
+            .await
+            {
                 Ok(Ok((bytes, thumb_w, thumb_h))) => {
                     tracing::debug!(
                         "Generated thumbnail for image: {}x{} -> {}x{}, {} bytes",
-                        orig_w, orig_h, thumb_w, thumb_h, bytes.len()
+                        orig_w,
+                        orig_h,
+                        thumb_w,
+                        thumb_h,
+                        bytes.len()
                     );
                     meta.thumbnail = Some(bytes);
                     meta.thumbnail_width = Some(thumb_w);
@@ -793,23 +947,60 @@ impl AttachmentService {
                 }
             }
         } else if mime_type.starts_with("video/") {
-            // Video processing uses GStreamer — only available with desktop-media feature
+            // Desktop uses GStreamer; Android installs its platform metadata
+            // extractor at startup. Both populate the same attachment fields.
+            #[cfg(target_os = "android")]
+            {
+                let path_for_video = file_path.to_path_buf();
+                match tokio::task::spawn_blocking(move || {
+                    crate::media::analyze_video(&path_for_video)
+                })
+                .await
+                {
+                    Ok(Ok(video)) => {
+                        if !video.thumbnail.is_empty() {
+                            meta.thumbnail = Some(video.thumbnail);
+                            meta.thumbnail_width = Some(video.thumbnail_width);
+                            meta.thumbnail_height = Some(video.thumbnail_height);
+                        } else {
+                            tracing::warn!("Android video metadata contained no thumbnail frame");
+                        }
+                        meta.width = Some(video.width);
+                        meta.height = Some(video.height);
+                        meta.duration_ms = video.duration_ms;
+                        tracing::info!(width = video.width, height = video.height,
+                            has_thumbnail = meta.thumbnail.is_some(),
+                            "Android video metadata extracted");
+                    }
+                    Ok(Err(e)) => tracing::warn!("Failed to analyze Android video: {e}"),
+                    Err(e) => tracing::warn!("Android video metadata task panicked: {e}"),
+                }
+            }
             #[cfg(feature = "desktop-gstreamer")]
             {
                 let path_for_thumb = file_path.to_path_buf();
                 match tokio::task::spawn_blocking(move || {
                     crate::media::extract_video_thumbnail(&path_for_thumb)
-                }).await {
+                })
+                .await
+                {
                     Ok(Ok((bytes, thumb_w, thumb_h, vid_duration_ms))) => {
                         let path_for_dims = file_path.to_path_buf();
                         let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
                             crate::media::get_video_dimensions(&path_for_dims)
                                 .unwrap_or((thumb_w, thumb_h))
-                        }).await.unwrap_or((thumb_w, thumb_h));
+                        })
+                        .await
+                        .unwrap_or((thumb_w, thumb_h));
 
                         tracing::debug!(
                             "Generated thumbnail for video: {}x{} -> {}x{}, {} bytes, {}ms",
-                            orig_w, orig_h, thumb_w, thumb_h, bytes.len(), vid_duration_ms
+                            orig_w,
+                            orig_h,
+                            thumb_w,
+                            thumb_h,
+                            bytes.len(),
+                            vid_duration_ms
                         );
 
                         meta.thumbnail = Some(bytes);
@@ -825,14 +1016,18 @@ impl AttachmentService {
                         let path_for_dur = file_path.to_path_buf();
                         let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
                             crate::media::get_video_dimensions(&path_for_dims).unwrap_or((0, 0))
-                        }).await.unwrap_or((0, 0));
+                        })
+                        .await
+                        .unwrap_or((0, 0));
                         let vid_duration = tokio::task::spawn_blocking(move || {
                             crate::media::get_video_duration(&path_for_dur).unwrap_or(0)
-                        }).await.unwrap_or(0);
+                        })
+                        .await
+                        .unwrap_or(0);
                         meta.width = if orig_w > 0 { Some(orig_w) } else { None };
                         meta.height = if orig_h > 0 { Some(orig_h) } else { None };
                         meta.duration_ms = vid_duration;
-                }
+                    }
                     Err(e) => {
                         tracing::warn!("Video thumbnail task panicked: {}", e);
                     }
@@ -868,7 +1063,10 @@ async fn detect_mime_type(file_path: &Path) -> String {
     // Fallback: read first 12 bytes for magic byte detection
     if let Ok(mut f) = tokio::fs::File::open(file_path).await {
         let mut buf = [0u8; 12];
-        if tokio::io::AsyncReadExt::read_exact(&mut f, &mut buf).await.is_ok() {
+        if tokio::io::AsyncReadExt::read_exact(&mut f, &mut buf)
+            .await
+            .is_ok()
+        {
             return detect_mime_from_bytes(&buf);
         }
     }
@@ -926,7 +1124,10 @@ fn detect_mime_from_bytes(data: &[u8]) -> String {
     }
 
     // MP3: FF FB or FF FA or ID3
-    if data.starts_with(&[0xFF, 0xFB]) || data.starts_with(&[0xFF, 0xFA]) || data.starts_with(b"ID3") {
+    if data.starts_with(&[0xFF, 0xFB])
+        || data.starts_with(&[0xFF, 0xFA])
+        || data.starts_with(b"ID3")
+    {
         return "audio/mpeg".to_string();
     }
 
@@ -967,7 +1168,6 @@ mod size_cap_tests {
     use crate::storage::repositories::AttachmentRepository;
     use std::sync::Arc;
 
-
     /// Build a real but offline `AttachmentService`. The size cap check fires
     /// before any gRPC or repository access, so `new_local` (no grpc pool) is
     /// sufficient — the test will never reach those code paths.
@@ -991,10 +1191,13 @@ mod size_cap_tests {
 
         let result = svc.upload_to_cdn_encrypted(input.path()).await;
 
-
         match result {
             Err(AttachmentError::EncryptionError(msg)) => {
-                assert!(msg.contains("attachment too large"), "unexpected msg: {}", msg);
+                assert!(
+                    msg.contains("attachment too large"),
+                    "unexpected msg: {}",
+                    msg
+                );
             }
             other => panic!(
                 "expected EncryptionError(AttachmentTooLarge), got {:?}",
@@ -1014,10 +1217,13 @@ mod size_cap_tests {
             .upload_bytes_to_cdn_encrypted(&payload, "big.bin", "application/octet-stream")
             .await;
 
-
         match result {
             Err(AttachmentError::EncryptionError(msg)) => {
-                assert!(msg.contains("attachment too large"), "unexpected msg: {}", msg);
+                assert!(
+                    msg.contains("attachment too large"),
+                    "unexpected msg: {}",
+                    msg
+                );
             }
             other => panic!(
                 "expected EncryptionError(AttachmentTooLarge), got {:?}",
@@ -1028,7 +1234,6 @@ mod size_cap_tests {
 
     #[tokio::test]
     async fn upload_bytes_under_default_cap_passes_check() {
-
         let (svc, _tmp) = make_service();
         let payload = vec![7u8; 32];
 

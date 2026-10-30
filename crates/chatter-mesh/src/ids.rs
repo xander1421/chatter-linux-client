@@ -26,7 +26,6 @@
 //! calls them equal, which is the more defensible of the two behaviours.
 
 use core::fmt;
-use core::fmt::Write as _;
 
 use sha2::{Digest, Sha256};
 
@@ -211,7 +210,9 @@ impl PeerId {
         if let Some(eight) = hex_decode(self.bare()).as_deref().and_then(to_eight) {
             return Some(eight);
         }
-        hex_decode(self.to_short().as_str()).as_deref().and_then(to_eight)
+        hex_decode(self.to_short().as_str())
+            .as_deref()
+            .and_then(to_eight)
     }
 
     /// Whether the bare part is entirely hex digits.
@@ -275,7 +276,9 @@ impl PeerId {
         // Internal format: alphanumerics plus dash and underscore, under 64.
         !id.is_empty()
             && len < MAX_ID_LEN
-            && id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+            && id
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
     }
 }
 
@@ -304,50 +307,19 @@ fn to_eight(bytes: &[u8]) -> Option<[u8; 8]> {
 
 /// Lowercase hex, no separators — matches `Data.hexEncodedString()`'s `"%02x"`.
 pub(crate) fn hex_encode<'a, I: IntoIterator<Item = &'a u8>>(bytes: I) -> String {
-    let iter = bytes.into_iter();
-    let (lower, _) = iter.size_hint();
-    let mut out = String::with_capacity(lower * 2);
-    for b in iter {
-        // Writing to a String is infallible; the Result exists only to satisfy
-        // the `fmt::Write` signature.
-        let _ = write!(out, "{b:02x}");
-    }
-    out
+    hex::encode(bytes.into_iter().copied().collect::<Vec<u8>>())
 }
 
 /// Mirrors `Data(hexString:)`: trims surrounding whitespace, accepts an optional
 /// `0x`/`0X` prefix, requires an even length, and rejects any non-hex character.
 /// An empty string decodes to an empty vector, exactly as it does there.
-// `usize::is_multiple_of` would read better but landed in 1.87, and this crate
-// declares `rust-version = "1.85"`.
-#[allow(clippy::manual_is_multiple_of)]
 pub(crate) fn hex_decode(s: &str) -> Option<Vec<u8>> {
     let trimmed = s.trim();
     let body = trimmed
         .strip_prefix("0x")
         .or_else(|| trimmed.strip_prefix("0X"))
         .unwrap_or(trimmed);
-
-    let bytes = body.as_bytes();
-    if bytes.len() % 2 != 0 {
-        return None;
-    }
-    if bytes.is_empty() {
-        return Some(Vec::new());
-    }
-
-    let mut out = Vec::with_capacity(bytes.len() / 2);
-    for pair in bytes.chunks_exact(2) {
-        let (Some(hi), Some(lo)) = (pair.first(), pair.get(1)) else {
-            return None;
-        };
-        // Any byte of a multi-byte UTF-8 character is >= 0x80 and fails here, so
-        // operating on bytes cannot split a character into something decodable.
-        let hi = char::from(*hi).to_digit(16)?;
-        let lo = char::from(*lo).to_digit(16)?;
-        out.push(((hi << 4) | lo) as u8);
-    }
-    Some(out)
+    hex::decode(body).ok()
 }
 
 #[cfg(test)]
@@ -412,7 +384,10 @@ mod tests {
     fn construction_lowercases() {
         assert_eq!(PeerId::from_str("AAA"), PeerId::from_str("aaa"));
         assert_eq!(PeerId::from_str("nostr_AABB").bare(), "aabb");
-        assert_eq!(PeerId::from_str("AABBCCDDEEFF0011").as_str(), "aabbccddeeff0011");
+        assert_eq!(
+            PeerId::from_str("AABBCCDDEEFF0011").as_str(),
+            "aabbccddeeff0011"
+        );
     }
 
     #[test]
@@ -431,24 +406,39 @@ mod tests {
     fn from_bytes_hex_encodes() {
         let peer = PeerId::from_bytes(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77]);
         assert_eq!(peer.as_str(), HEX16);
-        assert_eq!(peer.to_routing_bytes(), Some([0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77]));
+        assert_eq!(
+            peer.to_routing_bytes(),
+            Some([0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77])
+        );
     }
 
     #[test]
     fn from_noise_key_is_sha256_not_truncation() {
         // Expected values are SHA-256 of the key, first 8 bytes as hex — the same
         // derivation `PeerIDTests.fileTransfer_*` asserts.
-        assert_eq!(PeerId::from_noise_key(&[0xAB; 32]).as_str(), "9a2db2e23f1504cd");
-        assert_eq!(PeerId::from_noise_key(&[0xCD; 32]).as_str(), "7969ec0fcb8b648d");
+        assert_eq!(
+            PeerId::from_noise_key(&[0xAB; 32]).as_str(),
+            "9a2db2e23f1504cd"
+        );
+        assert_eq!(
+            PeerId::from_noise_key(&[0xCD; 32]).as_str(),
+            "7969ec0fcb8b648d"
+        );
         // The old bug: truncating the raw key instead of hashing it.
-        assert_ne!(PeerId::from_noise_key(&[0xEF; 32]), PeerId::from_bytes(&[0xEF; 8]));
+        assert_ne!(
+            PeerId::from_noise_key(&[0xEF; 32]),
+            PeerId::from_bytes(&[0xEF; 8])
+        );
     }
 
     #[test]
     fn from_noise_key_accepts_arbitrary_length_input() {
         // `PeerIDTests.publicKey_derivesFingerprint` hashes the *UTF-8 of* a
         // 64-character hex string, i.e. 64 bytes, not the 32 bytes it encodes.
-        assert_eq!(PeerId::from_noise_key(HEX64.as_bytes()).as_str(), "2a8abfa8cb990629");
+        assert_eq!(
+            PeerId::from_noise_key(HEX64.as_bytes()).as_str(),
+            "2a8abfa8cb990629"
+        );
     }
 
     #[test]
@@ -533,7 +523,10 @@ mod tests {
         let hex8 = "a".repeat(8);
         for body in [&hex64, &hex63, &hex16, &hex8] {
             for prefix in [PREFIX_NOISE, PREFIX_GEO_CHAT, PREFIX_GEO_DM] {
-                assert!(PeerId::from_str(&format!("{prefix}{body}")).is_valid(), "{prefix}{body}");
+                assert!(
+                    PeerId::from_str(&format!("{prefix}{body}")).is_valid(),
+                    "{prefix}{body}"
+                );
             }
         }
 

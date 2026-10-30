@@ -1,6 +1,6 @@
 //! Shared-content index repository.
 //!
-//! Backs the profile screen's Media / Files / Links / Voice / GIFs / Music
+//! Backs the profile screen's Photos / Videos / Audio / Links / Voice / GIFs / Files
 //! tabs. `shared_content` (migration v064) is a per-conversation index of
 //! every shareable item a message carried, so a tab is one range scan instead
 //! of deserializing every message's bincode attachment list.
@@ -18,14 +18,14 @@
 //! the caller's already-open write connection rather than taking the write
 //! lock twice.
 
-use crate::domain::attachment::{extract_links, FileMetadata, SharedCategory};
+use crate::domain::attachment::{FileMetadata, SharedCategory, extract_links};
 use crate::domain::ids::AttachmentId;
 use crate::domain::message::{ConversationType, Message};
 use crate::error::StorageError;
-use crate::storage::serialization::db_deserialize;
 use crate::storage::Database;
+use crate::storage::serialization::db_deserialize;
 use crate::ui::chat_data::extract_content_text;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::sync::Arc;
 
 /// One row of a shared-content tab, straight off the index.
@@ -62,6 +62,114 @@ impl SharedContentRepository {
         Self { db }
     }
 
+    /// Local, global filename/URL lookup for unified search. The caller
+    /// applies the active mode's conversation visibility before presentation.
+    /// A blank query browses recent shared content within the selected tab.
+    pub fn search_global(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<SharedContentRow>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let pattern = format!(
+            "%{}%",
+            query
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let mut stmt = conn.prepare(
+            "SELECT s.message_id, s.attachment_id, s.category, s.sent_at,
+                    s.title, s.size_bytes, a.thumbnail_bytes
+             FROM shared_content s
+             JOIN messages m ON m.id = s.message_id
+             LEFT JOIN attachments a ON a.id = s.attachment_id
+             WHERE s.category != 'unsorted' AND m.is_deleted = 0
+               AND s.title LIKE ?1 ESCAPE '\\'
+             ORDER BY s.sent_at DESC, s.rowid DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![pattern, limit], |row| {
+            Ok(SharedContentRow {
+                message_id: row.get(0)?,
+                attachment_id: row.get(1)?,
+                category: row.get(2)?,
+                sent_at: row.get(3)?,
+                title: row.get(4)?,
+                size_bytes: row.get(5)?,
+                thumbnail: row.get(6)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Page search metadata after sender, chat, date and type filters.
+    /// Thumbnail blobs are fetched only for the hits the search UI displays.
+    pub fn search_global_scoped(
+        &self,
+        query: &str,
+        sender: Option<&str>,
+        conversation: Option<&str>,
+        since: Option<i64>,
+        until: Option<i64>,
+        category: Option<&str>,
+        sort: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<SharedContentRow>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let pattern = format!(
+            "%{}%",
+            query
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let mut stmt = conn.prepare(
+            "SELECT s.message_id, s.attachment_id, s.category, s.sent_at,
+                    s.title, s.size_bytes, NULL
+             FROM shared_content s JOIN messages m ON m.id = s.message_id
+             WHERE s.category != 'unsorted' AND m.is_deleted = 0
+               AND s.title LIKE ?1 ESCAPE '\\'
+               AND (?2 IS NULL OR m.sender_id = ?2)
+               AND (?3 IS NULL OR s.conversation_id = ?3)
+               AND (?4 IS NULL OR s.sent_at >= ?4)
+               AND (?5 IS NULL OR s.sent_at < ?5)
+               AND (?6 IS NULL OR
+                    CASE WHEN s.category IN ('photo', 'video', 'gif') THEN 'media'
+                         WHEN s.category = 'voice' THEN 'voice'
+                         WHEN s.category = 'link' THEN 'links'
+                         ELSE 'files' END = ?6)
+             ORDER BY CASE WHEN ?9 = 'oldest' THEN s.sent_at END ASC,
+                      CASE WHEN ?9 = 'largest' THEN s.size_bytes END DESC,
+                      s.sent_at DESC, s.rowid DESC LIMIT ?7 OFFSET ?8",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                pattern,
+                sender,
+                conversation,
+                since,
+                until,
+                category,
+                limit,
+                offset,
+                sort
+            ],
+            |row| {
+                Ok(SharedContentRow {
+                    message_id: row.get(0)?,
+                    attachment_id: row.get(1)?,
+                    category: row.get(2)?,
+                    sent_at: row.get(3)?,
+                    title: row.get(4)?,
+                    size_bytes: row.get(5)?,
+                    thumbnail: row.get(6)?,
+                })
+            },
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// One page of a conversation's tab, newest first.
     ///
     /// `offset` pages backwards through the same ordering. Keyset paging
@@ -76,14 +184,36 @@ impl SharedContentRepository {
         limit: u32,
         offset: u32,
     ) -> Result<Vec<SharedContentRow>, StorageError> {
+        self.list_scoped(
+            conversation_type,
+            conversation_id,
+            category,
+            limit,
+            offset,
+            None,
+        )
+    }
+
+    /// Apply the optional author filter in SQL before ordering and pagination.
+    pub fn list_scoped(
+        &self,
+        conversation_type: &ConversationType,
+        conversation_id: &str,
+        category: SharedCategory,
+        limit: u32,
+        offset: u32,
+        sender: Option<&crate::domain::ids::UserId>,
+    ) -> Result<Vec<SharedContentRow>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT s.message_id, s.attachment_id, s.category, s.sent_at,
                     s.title, s.size_bytes, a.thumbnail_bytes
              FROM shared_content s
+             JOIN messages m ON m.id = s.message_id
              LEFT JOIN attachments a ON a.id = s.attachment_id
              WHERE s.conversation_type = ?1 AND s.conversation_id = ?2
                AND s.category = ?3
+               AND (?6 IS NULL OR m.sender_id = ?6)
              ORDER BY s.sent_at DESC, s.rowid DESC
              LIMIT ?4 OFFSET ?5",
         )?;
@@ -94,6 +224,7 @@ impl SharedContentRepository {
                 category.as_str(),
                 limit,
                 offset,
+                sender.map(ToString::to_string),
             ],
             |row| {
                 Ok(SharedContentRow {
@@ -125,7 +256,7 @@ impl SharedContentRepository {
     /// genuinely has nothing to share would otherwise be rescanned on every
     /// open, forever.
     ///
-    /// ponytail: O(messages) once per conversation. If a conversation ever
+    /// O(messages) once per conversation. If a conversation ever
     /// gets big enough for that pause to show, move it to a background pass
     /// over all conversations at first launch after upgrade.
     pub fn backfill(
@@ -167,15 +298,32 @@ impl SharedContentRepository {
         conversation_type: &ConversationType,
         conversation_id: &str,
     ) -> Result<Vec<(String, u32)>, StorageError> {
+        self.counts_scoped(conversation_type, conversation_id, None)
+    }
+
+    /// Count only this author's items within the selected conversation.
+    pub fn counts_scoped(
+        &self,
+        conversation_type: &ConversationType,
+        conversation_id: &str,
+        sender: Option<&crate::domain::ids::UserId>,
+    ) -> Result<Vec<(String, u32)>, StorageError> {
+        resolve_unsorted(&*self.db.connection()?, conversation_type, conversation_id)?;
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT category, COUNT(*) FROM shared_content
-             WHERE conversation_type = ?1 AND conversation_id = ?2
-               AND category != 'unsorted'
-             GROUP BY category",
+            "SELECT s.category, COUNT(*) FROM shared_content s
+             JOIN messages m ON m.id = s.message_id
+             WHERE s.conversation_type = ?1 AND s.conversation_id = ?2
+               AND s.category != 'unsorted'
+               AND (?3 IS NULL OR m.sender_id = ?3)
+             GROUP BY s.category",
         )?;
         let rows = stmt.query_map(
-            params![conversation_type.as_str(), conversation_id],
+            params![
+                conversation_type.as_str(),
+                conversation_id,
+                sender.map(ToString::to_string)
+            ],
             |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u32)),
         )?;
         rows.collect::<Result<Vec<_>, _>>()
@@ -263,6 +411,32 @@ pub(crate) fn resolve_attachment(
     Ok(())
 }
 
+/// Sort this conversation's `'unsorted'` attachment rows whose metadata has
+/// landed — rows parked before their attachment arrived and rows moved out of
+/// the retired media/music tabs by migration v127. A row whose attachment is
+/// still missing stays unsorted.
+fn resolve_unsorted(
+    conn: &Connection,
+    conversation_type: &ConversationType,
+    conversation_id: &str,
+) -> Result<(), StorageError> {
+    let ids: Vec<String> = conn
+        .prepare(
+            "SELECT DISTINCT attachment_id FROM shared_content
+             WHERE conversation_type = ?1 AND conversation_id = ?2
+               AND category = 'unsorted' AND attachment_id != ''",
+        )?
+        .query_map(params![conversation_type.as_str(), conversation_id], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    for id in ids {
+        let Ok(id) = id.parse::<AttachmentId>() else { continue };
+        if let Some(meta) = load_metadata(conn, &id)? {
+            resolve_attachment(conn, &id, &meta)?;
+        }
+    }
+    Ok(())
+}
+
 /// Read one attachment's `FileMetadata`, or `None` when the row is absent.
 fn load_metadata(
     conn: &Connection,
@@ -276,7 +450,13 @@ fn load_metadata(
     };
     // A corrupt blob is not worth failing a message insert over — the item
     // just stays out of the drawer.
-    Ok(blob.and_then(|b| db_deserialize::<FileMetadata>(&b).ok()))
+    Ok(blob.and_then(|b| match db_deserialize::<FileMetadata>(&b) {
+        Ok(metadata) => Some(metadata),
+        Err(_) => {
+            tracing::warn!(entity = "attachment", row_id = %id, error_class = "invalid_data", "Skipping undecodable stored row");
+            None
+        }
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -325,7 +505,7 @@ mod tests {
         let db_path = temp_dir.path().join("shared_content_test.db");
         let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
         db.run_migrations().unwrap();
-        Box::leak(Box::new(temp_dir));
+        crate::test_tempdir::hold(temp_dir);
         db
     }
 
@@ -339,15 +519,20 @@ mod tests {
             metadata: meta,
             status: AttachmentStatus::Ready,
             content_location: ContentLocation::NotDownloaded,
-            local_path: None,
             remote_url: None,
             encryption_key: None,
             encryption_iv: None,
             created_at: chrono::Utc::now(),
+            secret_chat: false,
         }
     }
 
-    fn message(conv: &ChannelId, sent_at: u64, content: MessageContent, atts: Vec<AttachmentId>) -> Message {
+    fn message(
+        conv: &ChannelId,
+        sent_at: u64,
+        content: MessageContent,
+        atts: Vec<AttachmentId>,
+    ) -> Message {
         let mut m = Message::new_text(
             *conv,
             ConversationType::ServerDm,
@@ -361,17 +546,143 @@ mod tests {
         m
     }
 
+    #[test]
+    fn global_search_finds_local_names_and_escapes_like_wildcards() {
+        let db = setup_db();
+        let atts = AttachmentRepository::new(db.clone());
+        let msgs = UnifiedMessageRepository::new(db.clone());
+        let shared = SharedContentRepository::new(db);
+        for (name, timestamp) in [("plan_100%.pdf", 100), ("plan-other.pdf", 200)] {
+            let file = attachment(name, "application/pdf", false);
+            atts.insert(&file).unwrap();
+            msgs.insert(&message(
+                &ChannelId::new(),
+                timestamp,
+                MessageContent::Mixed(MixedContent::attachments_only(vec![file.id])),
+                vec![file.id],
+            ))
+            .unwrap();
+        }
+        let hits = shared.search_global("100%", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "plan_100%.pdf");
+        assert_eq!(shared.search_global("", 10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn sender_scope_filters_before_paging_and_counts_in_channel_and_group() {
+        for kind in [ConversationType::Channel, ConversationType::AnonGroup] {
+            let db = setup_db();
+            let atts = AttachmentRepository::new(db.clone());
+            let msgs = UnifiedMessageRepository::new(db.clone());
+            let shared = SharedContentRepository::new(db);
+            let conv = ChannelId::new();
+            let other_conv = ChannelId::new();
+            let selected = UserId::new();
+            let other = UserId::new();
+            // Interleave another sender; the highest timestamp is in another chat.
+            // All supported attachment tabs must apply the identical scope.
+            for (category_index, (name, mime, waveform, category)) in [
+                ("photo.jpg", "image/jpeg", false, SharedCategory::Photo),
+                ("spec.pdf", "application/pdf", false, SharedCategory::File),
+                ("voice.ogg", "audio/ogg", true, SharedCategory::Voice),
+                ("wave.gif", "image/gif", false, SharedCategory::Gif),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut expected = Vec::new();
+                for (chat, sender, timestamp) in [
+                    (conv, selected, 100),
+                    (conv, other, 200),
+                    (conv, selected, 300),
+                    (conv, other, 400),
+                    (other_conv, selected, 500),
+                ] {
+                    let att = attachment(name, mime, waveform);
+                    atts.insert(&att).unwrap();
+                    let mut msg = message(
+                        &chat,
+                        timestamp + category_index as u64 * 1000,
+                        MessageContent::Mixed(MixedContent::attachments_only(vec![att.id])),
+                        vec![att.id],
+                    );
+                    msg.conversation_type = kind.clone();
+                    msg.sender_id = Some(sender);
+                    msgs.insert(&msg).unwrap();
+                    if chat == conv && sender == selected {
+                        expected.push(msg.id.to_string());
+                    }
+                }
+                let first = shared
+                    .list_scoped(&kind, &conv.to_string(), category, 1, 0, Some(&selected))
+                    .unwrap();
+                let second = shared
+                    .list_scoped(&kind, &conv.to_string(), category, 1, 1, Some(&selected))
+                    .unwrap();
+                assert_eq!(first[0].message_id, expected[1]);
+                assert_eq!(second[0].message_id, expected[0]);
+                assert!(
+                    shared
+                        .list_scoped(&kind, &conv.to_string(), category, 1, 2, Some(&selected))
+                        .unwrap()
+                        .is_empty()
+                );
+                assert_eq!(
+                    shared
+                        .list(&kind, &conv.to_string(), category, 10, 0)
+                        .unwrap()
+                        .len(),
+                    4
+                );
+            }
+            let counts = shared
+                .counts_scoped(&kind, &conv.to_string(), Some(&selected))
+                .unwrap();
+            assert_eq!(counts.len(), 4);
+            assert!(counts.iter().all(|(_, count)| *count == 2));
+            assert!(
+                shared
+                    .counts(&kind, &conv.to_string())
+                    .unwrap()
+                    .iter()
+                    .all(|(_, count)| *count == 4)
+            );
+            assert!(
+                shared
+                    .counts_scoped(&kind, &conv.to_string(), Some(&UserId::new()))
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                shared
+                    .counts_scoped(
+                        &ConversationType::ServerDm,
+                        &conv.to_string(),
+                        Some(&selected)
+                    )
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
     /// The categorisation table itself — the thing the tabs are built on.
     #[test]
     fn categorises_by_mime_waveform_and_extension() {
         let cases: &[(&str, &str, bool, SharedCategory)] = &[
-            ("cat.jpg", "image/jpeg", false, SharedCategory::Media),
-            ("clip.mp4", "video/mp4", false, SharedCategory::Media),
+            ("cat.jpg", "image/jpeg", false, SharedCategory::Photo),
+            ("clip.mp4", "video/mp4", false, SharedCategory::Video),
             ("wave.gif", "image/gif", false, SharedCategory::Gif),
-            // GIF wins over Media even when the MIME lies.
-            ("wave.gif", "application/octet-stream", false, SharedCategory::Gif),
+            // GIF wins over Photo even when the MIME lies.
+            (
+                "wave.gif",
+                "application/octet-stream",
+                false,
+                SharedCategory::Gif,
+            ),
             ("note.ogg", "audio/ogg", true, SharedCategory::Voice),
-            ("song.mp3", "audio/mpeg", false, SharedCategory::Music),
+            ("song.mp3", "audio/mpeg", false, SharedCategory::Audio),
             ("spec.pdf", "application/pdf", false, SharedCategory::File),
             ("main.rs", "text/plain", false, SharedCategory::File),
         ];
@@ -389,7 +700,10 @@ mod tests {
     fn extracts_only_tappable_urls() {
         assert_eq!(
             extract_links("see https://example.com/a. and http://b.dev, not ftp://c or bare.com"),
-            vec!["https://example.com/a".to_string(), "http://b.dev".to_string()],
+            vec![
+                "https://example.com/a".to_string(),
+                "http://b.dev".to_string()
+            ],
         );
         assert!(extract_links("no links here").is_empty());
     }
@@ -451,29 +765,55 @@ mod tests {
         .unwrap();
 
         let page = shared
-            .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Media, 10, 0)
+            .list(
+                &ConversationType::ServerDm,
+                &conv.to_string(),
+                SharedCategory::Photo,
+                10,
+                0,
+            )
             .unwrap();
-        assert_eq!(page.len(), 3, "only this conversation's media");
-        assert_eq!(page[0].title, "c.mp4", "newest first");
-        assert_eq!(page[2].title, "a.jpg");
+        assert_eq!(page.len(), 2, "only this conversation's photos");
+        assert_eq!(page[0].title, "b.png", "newest first");
+        assert_eq!(page[1].title, "a.jpg");
+        let videos = shared.list(
+            &ConversationType::ServerDm, &conv.to_string(), SharedCategory::Video, 10, 0,
+        ).unwrap();
+        assert_eq!(videos.len(), 1);
+        assert_eq!(videos[0].title, "c.mp4");
 
         // Paging.
         let page2 = shared
-            .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Media, 2, 2)
+            .list(
+                &ConversationType::ServerDm,
+                &conv.to_string(),
+                SharedCategory::Photo,
+                1,
+                1,
+            )
             .unwrap();
         assert_eq!(page2.len(), 1);
         assert_eq!(page2[0].title, "a.jpg");
 
         // Files tab sees the doc and nothing else.
         let files = shared
-            .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::File, 10, 0)
+            .list(
+                &ConversationType::ServerDm,
+                &conv.to_string(),
+                SharedCategory::File,
+                10,
+                0,
+            )
             .unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].title, "spec.pdf");
         assert_eq!(files[0].size_bytes, 4096);
 
-        let counts = shared.counts(&ConversationType::ServerDm, &conv.to_string()).unwrap();
-        assert_eq!(counts.iter().find(|(c, _)| c == "media").unwrap().1, 3);
+        let counts = shared
+            .counts(&ConversationType::ServerDm, &conv.to_string())
+            .unwrap();
+        assert_eq!(counts.iter().find(|(c, _)| c == "photo").unwrap().1, 2);
+        assert_eq!(counts.iter().find(|(c, _)| c == "video").unwrap().1, 1);
         assert_eq!(counts.iter().find(|(c, _)| c == "file").unwrap().1, 1);
     }
 
@@ -498,7 +838,13 @@ mod tests {
 
         assert!(
             shared
-                .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Media, 10, 0)
+                .list(
+                    &ConversationType::ServerDm,
+                    &conv.to_string(),
+                    SharedCategory::Photo,
+                    10,
+                    0
+                )
                 .unwrap()
                 .is_empty(),
             "unresolved item must not render"
@@ -507,7 +853,13 @@ mod tests {
         atts.insert(&att).unwrap();
 
         let page = shared
-            .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Media, 10, 0)
+            .list(
+                &ConversationType::ServerDm,
+                &conv.to_string(),
+                SharedCategory::Photo,
+                10,
+                0,
+            )
             .unwrap();
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].title, "late.jpg");
@@ -538,26 +890,50 @@ mod tests {
             .unwrap()
             .execute("DELETE FROM shared_content", [])
             .unwrap();
-        assert!(shared
-            .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Media, 10, 0)
-            .unwrap()
-            .is_empty());
+        assert!(
+            shared
+                .list(
+                    &ConversationType::ServerDm,
+                    &conv.to_string(),
+                    SharedCategory::Photo,
+                    10,
+                    0
+                )
+                .unwrap()
+                .is_empty()
+        );
 
         assert_eq!(
-            shared.backfill(&msgs, &ConversationType::ServerDm, &conv).unwrap(),
+            shared
+                .backfill(&msgs, &ConversationType::ServerDm, &conv)
+                .unwrap(),
             1
         );
         let page = shared
-            .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Media, 10, 0)
+            .list(
+                &ConversationType::ServerDm,
+                &conv.to_string(),
+                SharedCategory::Photo,
+                10,
+                0,
+            )
             .unwrap();
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].title, "old.jpg");
 
         // Idempotent — running it twice must not duplicate tiles.
-        shared.backfill(&msgs, &ConversationType::ServerDm, &conv).unwrap();
+        shared
+            .backfill(&msgs, &ConversationType::ServerDm, &conv)
+            .unwrap();
         assert_eq!(
             shared
-                .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Media, 10, 0)
+                .list(
+                    &ConversationType::ServerDm,
+                    &conv.to_string(),
+                    SharedCategory::Photo,
+                    10,
+                    0
+                )
                 .unwrap()
                 .len(),
             1
@@ -578,11 +954,22 @@ mod tests {
             vec![],
         ))
         .unwrap();
-        msgs.insert(&message(&conv, 101, MessageContent::Text("no link".into()), vec![]))
-            .unwrap();
+        msgs.insert(&message(
+            &conv,
+            101,
+            MessageContent::Text("no link".into()),
+            vec![],
+        ))
+        .unwrap();
 
         let links = shared
-            .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Link, 10, 0)
+            .list(
+                &ConversationType::ServerDm,
+                &conv.to_string(),
+                SharedCategory::Link,
+                10,
+                0,
+            )
             .unwrap();
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].title, "https://rust-lang.org");

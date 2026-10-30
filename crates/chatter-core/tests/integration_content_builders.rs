@@ -10,19 +10,14 @@
 
 use chatter_core::proto::content_v1::{self, content};
 use chatter_core::services::{
-    build_text_content, build_data_message_content, build_reply_content,
-    build_typing_content, build_typing_content_with_channel,
-    build_read_receipt_content, build_read_receipt_content_with_channel,
-    build_delivery_receipt_content,
-    build_reaction_content, build_reaction_content_with_channel,
-    build_pin_content,
-    build_edit_content, build_edit_content_with_channel,
-    build_delete_for_me_content, build_saved_message_sync_content,
-    build_delete_for_everyone_content,
-    build_call_key_offer, build_call_key_answer,
-    build_group_call_key_content, build_call_hangup_content,
-    generate_padding, PADDING_GROUP_CONTROL, PADDING_MESSAGE, PADDING_LARGE,
-    CallHangupReason,
+    CallHangupReason, PADDING_GROUP_CONTROL, PADDING_LARGE, PADDING_MESSAGE,
+    build_call_hangup_content, build_call_key_answer, build_call_key_offer,
+    build_data_message_content, build_delete_for_me_content, build_targeted_delete_content,
+    build_delivery_receipt_content, build_edit_content, build_edit_content_with_channel,
+    build_group_call_signal_content, build_pin_content, build_reaction_content,
+    build_reaction_content_with_channel, build_read_receipt_content,
+    build_read_receipt_content_with_channel, build_reply_content, build_saved_message_sync_content,
+    build_text_content, build_typing_content, build_typing_content_with_channel, generate_padding,
 };
 
 // ---------------------------------------------------------------------------
@@ -38,7 +33,10 @@ use chatter_core::services::{
 #[test]
 fn test_generate_padding_sizes() {
     // Padding constants are defined for traffic analysis protection
-    assert!(PADDING_GROUP_CONTROL > 0, "Group control padding should be non-zero");
+    assert!(
+        PADDING_GROUP_CONTROL > 0,
+        "Group control padding should be non-zero"
+    );
     assert!(PADDING_MESSAGE > 0, "Message padding should be non-zero");
     assert!(PADDING_LARGE > 0, "Large padding should be non-zero");
 
@@ -295,7 +293,8 @@ fn test_build_reaction_remove() {
 /// otherwise check the emoji to verify the reaction was created correctly.
 #[test]
 fn test_build_reaction_with_channel() {
-    let content = build_reaction_content_with_channel("❤️", false, "author-xyz", 99, Some("ch-789"));
+    let content =
+        build_reaction_content_with_channel("❤️", false, "author-xyz", 99, Some("ch-789"));
     match content.content.unwrap() {
         content::Content::Reaction(r) => {
             assert_eq!(r.emoji, "❤️");
@@ -395,13 +394,15 @@ fn test_build_delete_for_me() {
 /// Test building a delete-for-everyone message.
 #[test]
 fn test_build_delete_for_everyone() {
-    let content = build_delete_for_everyone_content(12345);
+    let content = build_targeted_delete_content(12345, Some("author"), None);
     match content.content.unwrap() {
         content::Content::DataMessage(dm) => {
             // Delete-for-everyone is a DataMessage with a delete field
             assert!(dm.delete.is_some());
             let delete = dm.delete.unwrap();
             assert_eq!(delete.target_sent_timestamp, 12345);
+            assert_eq!(delete.target_author_aci.as_deref(), Some("author"));
+            assert!(delete.destination_user_id.is_none());
         }
         other => panic!("Expected DataMessage with delete, got {:?}", other),
     }
@@ -414,15 +415,29 @@ fn test_build_delete_for_everyone() {
 /// Test building a saved message sync content.
 #[test]
 fn test_build_saved_message_sync() {
-    let content = build_saved_message_sync_content(
-        "msg-id-123",
-        "Important note",
-        9999,
-        vec!["att-1".to_string(), "att-2".to_string()],
-    );
+    use chatter_core::proto::content_v1::SavedMessageSync;
+    let content = build_saved_message_sync_content(SavedMessageSync {
+        text: "Important note".into(),
+        message_id: "msg-id-123".into(),
+        sent_at: 9999,
+        attachments: vec![Default::default(), Default::default()],
+        edited_at: 12_000,
+        pinned: true,
+        pin_changed_at: 15_000,
+        ..Default::default()
+    });
 
-    // Saved message sync wraps text and attachment IDs for multi-device sync
-    assert!(content.content.is_some(), "Should have content");
+    // The snapshot travels whole; the envelope clock is its newest part so
+    // an edit or pin of the same record is a distinct transcript.
+    assert_eq!(content.timestamp, 15_000);
+    match content.content {
+        Some(content::Content::SavedMessageSync(sync)) => {
+            assert_eq!(sync.message_id, "msg-id-123");
+            assert_eq!(sync.attachments.len(), 2);
+            assert!(sync.pinned);
+        }
+        other => panic!("expected SavedMessageSync, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -433,18 +448,17 @@ fn test_build_saved_message_sync() {
 ///
 /// Architecture reference:
 ///   Call E2EE key exchange:
-///   CallKeyOffer { call_id, ephemeral_public_key, call_type, channel_id }
+///   CallKeyOffer { call_id, ephemeral_public_key, call_type }
 #[test]
 fn test_build_call_key_offer() {
     let ephemeral_pk = [42u8; 32];
-    let content = build_call_key_offer("call-123", ephemeral_pk, "video", "ch-456");
+    let content = build_call_key_offer("call-123", ephemeral_pk, "video");
 
     match content.content.unwrap() {
         content::Content::CallKey(ck) => {
             assert_eq!(ck.call_id, "call-123");
             assert_eq!(ck.key_material.as_slice(), &ephemeral_pk[..]);
             assert_eq!(ck.call_type, "video");
-            assert_eq!(ck.channel_id, "ch-456");
         }
         other => panic!("Expected CallKey, got {:?}", other),
     }
@@ -466,21 +480,39 @@ fn test_build_call_key_answer() {
     }
 }
 
-/// Test building a group call key distribution.
+/// A group-call key rotation carries its key and epoch; a ring and a key
+/// request carry no key at all (§124 1k).
 #[test]
-fn test_build_group_call_key() {
+fn test_build_group_call_signal() {
+    use chatter_core::domain::call::GroupCallSignal;
+    use chatter_core::proto::content_v1::group_call_signal::Signal;
     let key = [55u8; 32];
-    let content = build_group_call_key_content("group-call-789", key, 3, "ch-999");
-
-    match content.content.unwrap() {
-        content::Content::GroupCallKey(gck) => {
-            assert_eq!(gck.call_id, "group-call-789");
-            assert_eq!(gck.key_material.as_slice(), &key[..]);
-            assert_eq!(gck.key_epoch, 3);
-            assert_eq!(gck.channel_id, "ch-999");
+    let signal_of = |s| match build_group_call_signal_content("group-call-789", "ch-999", s)
+        .content
+        .unwrap()
+    {
+        content::Content::GroupCallSignal(gcs) => {
+            assert_eq!(gcs.call_id, "group-call-789");
+            assert_eq!(gcs.channel_id, "ch-999");
+            gcs.signal.expect("signal set")
         }
-        other => panic!("Expected GroupCallKey, got {:?}", other),
+        other => panic!("Expected GroupCallSignal, got {:?}", other),
+    };
+    match signal_of(GroupCallSignal::Key { key, epoch: 3 }) {
+        Signal::Key(k) => {
+            assert_eq!(k.key_material.as_slice(), &key[..]);
+            assert_eq!(k.key_epoch, 3);
+        }
+        other => panic!("Expected Key, got {:?}", other),
     }
+    assert!(
+        matches!(signal_of(GroupCallSignal::Ring), Signal::Ring(_)),
+        "a ring carries no key"
+    );
+    assert!(matches!(
+        signal_of(GroupCallSignal::KeyRequest),
+        Signal::KeyRequest(_)
+    ));
 }
 
 /// Test building a call hangup notification.
@@ -508,7 +540,11 @@ fn test_call_hangup_reasons() {
 
     for reason in reasons {
         let content = build_call_hangup_content("call-999", reason);
-        assert!(content.content.is_some(), "Hangup with {:?} should produce content", reason);
+        assert!(
+            content.content.is_some(),
+            "Hangup with {:?} should produce content",
+            reason
+        );
     }
 }
 
@@ -532,8 +568,8 @@ fn test_content_proto_roundtrip() {
     assert!(!bytes.is_empty(), "Serialized content should not be empty");
 
     // Deserialize
-    let decoded = content_v1::Content::decode(bytes.as_slice())
-        .expect("Should decode successfully");
+    let decoded =
+        content_v1::Content::decode(bytes.as_slice()).expect("Should decode successfully");
 
     // Verify
     assert_eq!(original, decoded);
@@ -566,4 +602,75 @@ fn test_content_with_attachment_roundtrip() {
         }
         _ => panic!("Expected DataMessage"),
     }
+}
+
+/// Frozen bytes produced by protoc for Delete, independent of the prost codec.
+#[test]
+fn test_exact_delete_wire_matches_protoc_fixture() {
+    use chatter_core::proto::content_v1::Delete;
+    use prost::Message;
+    let delete = Delete {
+        target_sent_timestamp: 12345,
+        target_author_aci: Some("11111111-1111-4111-8111-111111111111".into()),
+        destination_user_id: Some("22222222-2222-4222-8222-222222222222".into()),
+        target_call_id: None,
+    };
+    let expected: &[u8] = &[
+        0x09, 0x39, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xaa, 0x06, 0x24, 0x31, 0x31, 0x31,
+        0x31, 0x31, 0x31, 0x31, 0x31, 0x2d, 0x31, 0x31, 0x31, 0x31, 0x2d, 0x34, 0x31, 0x31, 0x31,
+        0x2d, 0x38, 0x31, 0x31, 0x31, 0x2d, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31,
+        0x31, 0x31, 0x31, 0xb2, 0x06, 0x24, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x2d,
+        0x32, 0x32, 0x32, 0x32, 0x2d, 0x34, 0x32, 0x32, 0x32, 0x2d, 0x38, 0x32, 0x32, 0x32, 0x2d,
+        0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32,
+    ];
+    assert_eq!(delete.encode_to_vec(), expected);
+    assert_eq!(Delete::decode(expected).unwrap(), delete);
+    let legacy = Delete {
+        target_sent_timestamp: 12345,
+        ..Default::default()
+    };
+    assert_eq!(legacy.encode_to_vec(), [0x09, 0x39, 0x30, 0, 0, 0, 0, 0, 0]);
+    let empty = Delete {
+        target_author_aci: Some(String::new()),
+        destination_user_id: Some(String::new()),
+        ..legacy
+    };
+    assert_eq!(
+        empty.encode_to_vec(),
+        [
+            0x09, 0x39, 0x30, 0, 0, 0, 0, 0, 0, 0xaa, 0x06, 0x00, 0xb2, 0x06, 0x00
+        ]
+    );
+}
+
+/// Frozen protoc bytes for the optional call identity, including explicit empty presence.
+#[test]
+fn test_stable_call_delete_wire_matches_protoc_fixture() {
+    use chatter_core::proto::content_v1::Delete;
+    use prost::Message;
+    let delete = Delete {
+        target_sent_timestamp: 12345,
+        target_call_id: Some("33333333-3333-4333-8333-333333333333".into()),
+        ..Default::default()
+    };
+    let expected: &[u8] = &[
+        0x09, 0x39, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xba, 0x06, 0x24, 0x33, 0x33, 0x33,
+        0x33, 0x33, 0x33, 0x33, 0x33, 0x2d, 0x33, 0x33, 0x33, 0x33, 0x2d, 0x34, 0x33, 0x33, 0x33,
+        0x2d, 0x38, 0x33, 0x33, 0x33, 0x2d, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
+        0x33, 0x33, 0x33,
+    ];
+    assert_eq!(delete.encode_to_vec(), expected);
+    assert_eq!(Delete::decode(expected).unwrap(), delete);
+    let empty = Delete {
+        target_call_id: Some(String::new()),
+        ..delete
+    };
+    let expected_empty: &[u8] = &[
+        0x09, 0x39, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xba, 0x06, 0x00,
+    ];
+    assert_eq!(empty.encode_to_vec(), expected_empty);
+    assert_eq!(
+        Delete::decode(expected_empty).unwrap().target_call_id,
+        Some(String::new())
+    );
 }

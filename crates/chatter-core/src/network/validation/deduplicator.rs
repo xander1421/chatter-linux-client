@@ -187,8 +187,8 @@ mod tests {
 
     #[test]
     fn test_concurrent_duplicate_detection() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::thread;
 
         let dedup = Arc::new(MessageDeduplicator::new(100));

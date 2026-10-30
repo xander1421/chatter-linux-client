@@ -6,15 +6,16 @@
 //! by the server, limiting the window during which the server can correlate message
 //! patterns.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
 use crate::domain::{ChannelId, UserId};
 use crate::error::MailboxError;
+use crate::mailbox::TokenManager;
 use crate::mailbox::dm::{DmConversationManager, DmMailbox};
 use crate::mailbox::group::{GroupMailbox, GroupMailboxManager};
-use crate::mailbox::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
 
 /// Default rotation check interval (30 minutes). Must be ≪ threshold so
@@ -38,7 +39,7 @@ pub struct RotationResult {
 }
 
 /// Target of a rotation operation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RotationTarget {
     /// DM conversation with a peer.
     Dm(UserId),
@@ -138,7 +139,6 @@ impl KeyRollingService {
                 token.public_key.clone(),
                 token.signature.clone(),
                 crate::mailbox::dm::bootstrap::DEFAULT_MAILBOX_TTL_SECONDS,
-                token.randomizer.clone().unwrap_or_default(),
             )
             .await
             .map_err(|e| MailboxError::Network(e.to_string()))?;
@@ -148,12 +148,16 @@ impl KeyRollingService {
         let mut private_key = [0u8; 64];
         public_key.copy_from_slice(&token.public_key);
         private_key.copy_from_slice(&token.private_key);
+        // A fresh X25519 encryption key for the new mailbox, never the
+        // signing key's conversion.
+        let (encryption_private_key, _) =
+            crate::crypto::envelope_crypto::generate_mailbox_encryption_key();
         let new_mailbox = DmMailbox {
             id: response.mailbox_id.clone(),
             public_key,
             private_key,
+            encryption_private_key,
             signature: token.signature.clone(),
-            randomizer: token.randomizer.clone(),
             token_id: token.id.clone(),
             created_at: Utc::now(),
             expires_at: Utc::now()
@@ -220,7 +224,6 @@ impl KeyRollingService {
                 token.public_key.clone(),
                 token.signature.clone(),
                 crate::mailbox::dm::bootstrap::DEFAULT_MAILBOX_TTL_SECONDS,
-                token.randomizer.clone().unwrap_or_default(),
             )
             .await
             .map_err(|e| MailboxError::Network(e.to_string()))?;
@@ -236,7 +239,6 @@ impl KeyRollingService {
             public_key,
             private_key,
             signature: token.signature.clone(),
-            randomizer: token.randomizer.clone(),
             token_id: token.id.clone(),
             created_at: Utc::now(),
             expires_at: Utc::now()
@@ -250,11 +252,64 @@ impl KeyRollingService {
         self.group_manager.save_our_mailbox(&new_mailbox)?;
 
         // 6. Return notification; caller re-announces via GroupMailboxAddress.
+        //    This method does not pick recipients. Membership is not consulted
+        //    here, and a departed member's mailbox row is not deleted on leave,
+        //    so the caller must announce only to [`group_rotation_recipients`].
         Ok(RotationNotification {
             target: RotationTarget::Group(*group_id),
             new_mailbox_public_key: public_key,
             old_mailbox_expires_at: old_mailbox.expires_at,
         })
+    }
+
+    /// One scheduler tick: expiring DM mailboxes, then expiring group
+    /// mailboxes. A failure to list one kind does not drop the other.
+    pub fn scheduler_due(&self) -> Vec<RotationTarget> {
+        let dm = match self.get_dm_rotation_candidates() {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!("KeyRolling: failed to list DM rotation candidates: {}", e);
+                Vec::new()
+            }
+        };
+        let groups = match self.get_group_rotation_candidates() {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!(
+                    "KeyRolling: failed to list group rotation candidates: {}",
+                    e
+                );
+                Vec::new()
+            }
+        };
+        schedule_rotation_targets(dm, groups)
+    }
+
+    /// Mailbox public keys we can deposit into anonymously, keyed by member.
+    /// One row per user (the latest announcement). Absent after
+    /// [`GroupMailboxManager::drop_departed_member_mailboxes`].
+    pub fn member_mailbox_keys(
+        &self,
+        group_id: &ChannelId,
+    ) -> Result<HashMap<UserId, [u8; 32]>, MailboxError> {
+        let Some(state) = self.group_manager.load_group_state(group_id)? else {
+            return Ok(HashMap::new());
+        };
+        Ok(state
+            .member_mailboxes
+            .iter()
+            .map(|(id, mailbox)| (*id, mailbox.public_key))
+            .collect())
+    }
+
+    /// See [`crate::mailbox::group::GroupMailboxManager::drop_departed_member_mailboxes`].
+    pub fn drop_departed_member_mailboxes(
+        &self,
+        group_id: &ChannelId,
+        current: &[UserId],
+    ) -> Result<u32, MailboxError> {
+        self.group_manager
+            .drop_departed_member_mailboxes(group_id, current)
     }
 
     // Old mailboxes are not deleted explicitly: after rotation the old row stays
@@ -264,23 +319,94 @@ impl KeyRollingService {
 
     /// Get all rotation candidates (DM + group).
     pub fn get_all_rotation_candidates(&self) -> Result<Vec<RotationTarget>, MailboxError> {
-        let mut candidates = Vec::new();
-
-        for peer_id in self.get_dm_rotation_candidates()? {
-            candidates.push(RotationTarget::Dm(peer_id));
-        }
-
-        for group_id in self.get_group_rotation_candidates()? {
-            candidates.push(RotationTarget::Group(group_id));
-        }
-
-        Ok(candidates)
+        Ok(schedule_rotation_targets(
+            self.get_dm_rotation_candidates()?,
+            self.get_group_rotation_candidates()?,
+        ))
     }
 
     /// Check if any rotations are needed.
     pub fn has_pending_rotations(&self) -> Result<bool, MailboxError> {
         Ok(!self.get_all_rotation_candidates()?.is_empty())
     }
+}
+
+/// DM candidates first, then group candidates. The key-rolling loop rotates
+/// exactly this list, on one interval, so a group mailbox is not a second
+/// schedule.
+pub fn schedule_rotation_targets(dm: Vec<UserId>, groups: Vec<ChannelId>) -> Vec<RotationTarget> {
+    let mut due = Vec::with_capacity(dm.len() + groups.len());
+    due.extend(dm.into_iter().map(RotationTarget::Dm));
+    due.extend(groups.into_iter().map(RotationTarget::Group));
+    due
+}
+
+/// One device that may be told the rotated group mailbox address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupRotationRecipient {
+    pub user_id: UserId,
+    pub device_id: u32,
+}
+
+/// Devices that receive a rotated group mailbox key.
+///
+/// `current_members` is the entitlement (local channel membership). A
+/// departed member is absent from it even when `session_devices` still has
+/// their sessions and their mailbox row has not been deleted. Every session
+/// device of each remaining member is included, so those devices converge on
+/// the new address. `self_id` is excluded, including our other devices: this
+/// device already holds the key, and each of our devices rotates its own
+/// mailbox.
+///
+/// A current member with no entry in `session_devices` is omitted. Learning
+/// their devices would be a prekey-bundle fetch, an identified RPC that names
+/// them on the anonymous rotation path.
+pub fn group_rotation_recipients(
+    self_id: &UserId,
+    current_members: &[UserId],
+    session_devices: &[(UserId, u32)],
+) -> Vec<GroupRotationRecipient> {
+    use std::collections::HashSet;
+    let entitled: HashSet<UserId> = current_members
+        .iter()
+        .copied()
+        .filter(|id| id != self_id)
+        .collect();
+    let mut recipients: Vec<GroupRotationRecipient> = session_devices
+        .iter()
+        .copied()
+        .filter(|(user_id, _)| entitled.contains(user_id))
+        .map(|(user_id, device_id)| GroupRotationRecipient { user_id, device_id })
+        .collect();
+    recipients.sort_by(|a, b| (a.user_id.0, a.device_id).cmp(&(b.user_id.0, b.device_id)));
+    recipients.dedup();
+    recipients
+}
+
+/// Sealed-sender plaintext for a group mailbox rotation: a
+/// `GroupMailboxAddress` padded to a server bucket (256/512/1024/4096).
+pub fn group_mailbox_rotation_plaintext(
+    group_id: &ChannelId,
+    new_mailbox_pk: &[u8; 32],
+) -> Vec<u8> {
+    use prost::Message;
+    let now = crate::util::time::TimestampNanos::now().as_u64();
+    let mut content = crate::proto::content_v1::Content {
+        content: Some(
+            crate::proto::content_v1::content::Content::GroupMailboxAddress(
+                crate::proto::content_v1::GroupMailboxAddress {
+                    channel_id: group_id.to_string(),
+                    mailbox_pk: new_mailbox_pk.to_vec(),
+                    timestamp: now,
+                },
+            ),
+        ),
+        ephemeral_reply_to: None,
+        timestamp: now,
+        padding: vec![],
+    };
+    crate::services::message::MessageService::pad_content_to_bucket(&mut content);
+    content.encode_to_vec()
 }
 
 #[cfg(test)]
@@ -359,7 +485,10 @@ mod tests {
         };
 
         let cloned = notification.clone();
-        assert_eq!(cloned.new_mailbox_public_key, notification.new_mailbox_public_key);
+        assert_eq!(
+            cloned.new_mailbox_public_key,
+            notification.new_mailbox_public_key
+        );
     }
 
     #[test]
@@ -372,5 +501,168 @@ mod tests {
             (RotationTarget::Dm(a), RotationTarget::Dm(b)) => assert_eq!(a, b),
             _ => panic!("Clone mismatch"),
         }
+    }
+
+    #[test]
+    fn scheduler_picks_group_candidates() {
+        let peer = UserId::new();
+        let group = ChannelId::new();
+        let due = schedule_rotation_targets(vec![peer], vec![group]);
+        assert_eq!(
+            due,
+            vec![RotationTarget::Dm(peer), RotationTarget::Group(group)],
+            "a tick rotates due DMs and due groups, groups included"
+        );
+        assert_eq!(
+            schedule_rotation_targets(vec![], vec![group]),
+            vec![RotationTarget::Group(group)],
+            "a tick with no due DM still rotates the group"
+        );
+    }
+
+    /// Departed members stay in the session list (and used to stay in
+    /// `group_member_mailboxes`). They must not be told the new key. Every
+    /// device of a member who stayed is told, so those devices converge.
+    #[test]
+    fn departed_member_devices_are_excluded_and_remaining_devices_converge() {
+        let me = UserId::new();
+        let stayed = UserId::new();
+        let departed = UserId::new();
+        let stranger = UserId::new();
+        let members = vec![me, stayed];
+        let devices = vec![
+            (me, 1),
+            (me, 2),
+            (stayed, 3),
+            (stayed, 1),
+            (stayed, 1),
+            (departed, 1),
+            (departed, 4),
+            (stranger, 2),
+        ];
+
+        let got = group_rotation_recipients(&me, &members, &devices);
+
+        assert_eq!(
+            got,
+            vec![
+                GroupRotationRecipient {
+                    user_id: stayed,
+                    device_id: 1
+                },
+                GroupRotationRecipient {
+                    user_id: stayed,
+                    device_id: 3
+                },
+            ],
+            "only every device of members who stayed"
+        );
+        assert!(
+            got.iter()
+                .all(|r| r.user_id != departed && r.user_id != me && r.user_id != stranger)
+        );
+    }
+
+    #[test]
+    fn rotation_plaintext_names_the_new_key_and_a_server_bucket() {
+        use prost::Message;
+        let group = ChannelId::new();
+        let pk = [9u8; 32];
+        let bytes = group_mailbox_rotation_plaintext(&group, &pk);
+        assert!(
+            matches!(bytes.len(), 256 | 512 | 1024 | 4096),
+            "plaintext length {}, not a sealed-sender bucket",
+            bytes.len()
+        );
+        let content = crate::proto::content_v1::Content::decode(bytes.as_slice()).unwrap();
+        match content.content {
+            Some(crate::proto::content_v1::content::Content::GroupMailboxAddress(ann)) => {
+                assert_eq!(ann.channel_id, group.to_string());
+                assert_eq!(ann.mailbox_pk, pk);
+            }
+            other => panic!("expected GroupMailboxAddress, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scheduler_due_picks_an_expiring_group_mailbox() {
+        let db = setup_db();
+        let peer = UserId::new();
+        let group = ChannelId::new();
+        let now = Utc::now();
+
+        let dm = crate::mailbox::dm::DmConversationManager::new(db.clone());
+        dm.save_our_mailbox(
+            &peer,
+            &crate::mailbox::dm::DmMailbox {
+                id: "dm-old".into(),
+                public_key: [1u8; 32],
+                private_key: [2u8; 64],
+                encryption_private_key: [2u8; 32],
+                signature: vec![1, 2, 3],
+                token_id: TEST_TOKEN_ID.into(),
+                created_at: now - Duration::hours(40),
+                expires_at: now + Duration::hours(6),
+                last_polled_at: None,
+            },
+        )
+        .unwrap();
+
+        let groups = crate::mailbox::group::GroupMailboxManager::new(db.clone());
+        groups
+            .save_our_mailbox(&crate::mailbox::group::GroupMailbox {
+                id: "grp-old".into(),
+                group_id: group,
+                public_key: [3u8; 32],
+                private_key: [4u8; 64],
+                signature: vec![1, 2, 3],
+                token_id: TEST_TOKEN_ID.into(),
+                created_at: now - Duration::hours(40),
+                expires_at: now + Duration::hours(6),
+                last_polled_at: None,
+            })
+            .unwrap();
+
+        let svc = KeyRollingService::new(
+            Arc::new(crate::mailbox::TokenManager::new(db.clone())),
+            Arc::new(dm),
+            Arc::new(groups),
+            Arc::new(
+                crate::network::grpc::client_pool::GrpcClientPool::new("https://127.0.0.1:9")
+                    .unwrap(),
+            ),
+        );
+
+        assert_eq!(
+            svc.scheduler_due(),
+            vec![RotationTarget::Dm(peer), RotationTarget::Group(group)],
+            "the scheduler's candidate list includes the expiring group"
+        );
+    }
+
+    const TEST_TOKEN_ID: &str = "test-token";
+
+    fn setup_db() -> Arc<crate::storage::Database> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("key_rolling_test.db");
+        let db = Arc::new(crate::storage::Database::open(&db_path, "testpass").unwrap());
+        db.run_migrations().unwrap();
+        let conn = db.connection().unwrap();
+        conn.execute(
+            "INSERT INTO mailbox_server_keys (key_id, public_key_der, valid_until, created_at)
+             VALUES ('test-key', X'00', 0, ?1)",
+            rusqlite::params![Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO mailbox_tokens
+             (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at)
+             VALUES (?1, X'01', X'02', X'03', 'test-key', ?2)",
+            rusqlite::params![TEST_TOKEN_ID, Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+        drop(conn);
+        crate::test_tempdir::hold(temp_dir);
+        db
     }
 }

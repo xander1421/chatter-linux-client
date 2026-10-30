@@ -7,12 +7,12 @@ use rand::RngCore;
 use tokio::time::sleep;
 use uuid::Uuid;
 
-use crate::domain::anon_group::{
-    AnonGroup, AnonGroupId, AnonGroupMailbox, AnonGroupMember, AnonGroupPending, AnonGroupRole,
-};
 use crate::domain::UserId;
-use crate::services::current_user::CurrentUserProvider;
+use crate::domain::anon_group::{
+    AnonGroup, AnonGroupId, AnonGroupMailbox, AnonGroupMember, AnonGroupRole,
+};
 use crate::storage::repositories::settings_keys;
+use crate::util::time::TimestampNanos;
 
 use super::{AnonGroupError, AnonGroupService};
 
@@ -38,21 +38,10 @@ impl AnonGroupService {
         Ok(self.settings_repo.current_user_id()?)
     }
 
-    /// Get our profile key if available.
+    /// Our profile key, when the visibility setting shares it with anon
+    /// peers (`profile_visibility::anon_shareable_profile_key`).
     pub(crate) fn get_my_profile_key(&self) -> Option<[u8; 32]> {
-        self.settings_repo
-            .get_bytes(settings_keys::PROFILE_KEY)
-            .ok()
-            .flatten()
-            .and_then(|v| {
-                if v.len() == 32 {
-                    let mut arr = [0u8; 32];
-                    arr.copy_from_slice(&v);
-                    Some(arr)
-                } else {
-                    None
-                }
-            })
+        crate::services::profile_visibility::anon_shareable_profile_key(&self.settings_repo)
     }
 
     /// Get our display name from settings.
@@ -69,6 +58,61 @@ impl AnonGroupService {
             .get_bytes(settings_keys::AVATAR)
             .ok()
             .flatten()
+    }
+
+    /// The secret-chat attachment service: every transfer over Tor.
+    fn secret_attachments(&self) -> crate::services::AttachmentService {
+        crate::services::AttachmentService::new(
+            self.attachment_repo.clone(),
+            self.grpc_pool.clone(),
+        )
+        .for_secret_chat()
+    }
+
+    /// The pointer for `avatar` (ours, or a member's we relay in a roster):
+    /// uploaded once over Tor, then reused (see [`crate::services::secret_avatar`]).
+    pub(crate) async fn avatar_pointer(
+        &self,
+        avatar: &[u8],
+    ) -> Option<crate::proto::content_v1::AttachmentPointer> {
+        crate::services::secret_avatar::pointer_for(
+            &self.settings_repo,
+            &self.secret_attachments(),
+            avatar,
+        )
+        .await
+    }
+
+    /// The avatar a member's pointer names; `current` is what we hold for them.
+    pub(crate) async fn resolve_member_avatar(
+        &self,
+        pointer: Option<&crate::proto::content_v1::AttachmentPointer>,
+        current: Option<Vec<u8>>,
+    ) -> Option<Vec<u8>> {
+        crate::services::secret_avatar::resolve_once(&self.secret_attachments(), pointer, current)
+            .await
+    }
+
+    /// [`Self::resolve_member_avatar`], retrying a failed fetch after each of
+    /// `delays`; `Err` when every fetch failed.
+    pub(crate) async fn fetch_member_avatar(
+        &self,
+        pointer: &crate::proto::content_v1::AttachmentPointer,
+        current: Option<Vec<u8>>,
+        delays: &[std::time::Duration],
+    ) -> Result<Option<Vec<u8>>, crate::services::attachment::AttachmentError> {
+        let attachments = self.secret_attachments();
+        crate::services::secret_avatar::retrying(delays, || {
+            crate::services::secret_avatar::resolve(&attachments, Some(pointer), current.clone())
+        })
+        .await
+    }
+
+    /// Our avatar's pointer.
+    pub(crate) async fn my_avatar_pointer(
+        &self,
+    ) -> Option<crate::proto::content_v1::AttachmentPointer> {
+        self.avatar_pointer(&self.get_my_avatar()?).await
     }
 
     /// Create a new anonymous group.
@@ -108,51 +152,29 @@ impl AnonGroupService {
         for invitee in invitees {
             // Add as pending member
             let member = AnonGroupMember::new(group.id, invitee, AnonGroupRole::Member);
-            self.anon_group_repo.add_member(&member)?;
-
-            // Track pending invite
-            let pending = AnonGroupPending::new_invite(group.id, invitee);
-            self.anon_group_repo.insert_pending(&pending)?;
+            if !self.anon_group_repo.invite_ordered_member(
+                &member,
+                &current_user,
+                TimestampNanos::now().as_u64(),
+            )? {
+                continue;
+            }
 
             // Send invite with small random delay to reduce traffic correlation
             // Keep it short (100-500ms) to maintain good UX
             let delay_ms = 100 + (rand::rng().next_u32() % 400);
             sleep(Duration::from_millis(delay_ms as u64)).await;
 
-            // Check if invitee has an active anon DM conversation with us
-            // If so, send invite via anon DM tunnel; otherwise use regular DM
-            let send_result =
-                if let Ok(Some(anon_dm)) = self.anon_dm_repo.get_conversation_by_peer(&invitee) {
-                    if anon_dm.is_ready() {
-                        // Send via anon DM tunnel
-                        self.send_invite_via_anon_dm(
-                            &anon_dm,
-                            group.id,
-                            &group.name,
-                            &mailbox.public_key,
-                        )
-                        .await
-                    } else {
-                        // Anon DM not ready, try regular DM
-                        self.send_invite_impl(invitee, group.id, &group.name, &mailbox.public_key)
-                            .await
-                    }
-                } else {
-                    // No anon DM, use regular DM (friend)
-                    self.send_invite_impl(invitee, group.id, &group.name, &mailbox.public_key)
-                        .await
-                };
+            let send_result = self
+                .send_invite(invitee, group.id, &group.name, &mailbox.public_key)
+                .await;
 
             if let Err(e) = send_result {
-                tracing::error!("Failed to send invite to {}: {}", invitee, e);
+                tracing::error!("Failed to send invite to: {}", e);
             }
         }
 
-        tracing::info!(
-            "Created anonymous group {} with {} invites",
-            group.id,
-            invitee_count
-        );
+        tracing::info!("Created anonymous group with {} invites", invitee_count);
 
         Ok(group)
     }
@@ -194,44 +216,29 @@ impl AnonGroupService {
         for (invitee, role) in invitees {
             // Add as pending member with specified role
             let member = AnonGroupMember::new(group.id, invitee, role);
-            self.anon_group_repo.add_member(&member)?;
-
-            // Track pending invite
-            let pending = AnonGroupPending::new_invite(group.id, invitee);
-            self.anon_group_repo.insert_pending(&pending)?;
+            if !self.anon_group_repo.invite_ordered_member(
+                &member,
+                &current_user,
+                TimestampNanos::now().as_u64(),
+            )? {
+                continue;
+            }
 
             // Send invite with small random delay to reduce traffic correlation
             let delay_ms = 100 + (rand::rng().next_u32() % 400);
             sleep(Duration::from_millis(delay_ms as u64)).await;
 
-            // Check if invitee has an active anon DM conversation with us
-            let send_result =
-                if let Ok(Some(anon_dm)) = self.anon_dm_repo.get_conversation_by_peer(&invitee) {
-                    if anon_dm.is_ready() {
-                        self.send_invite_via_anon_dm(
-                            &anon_dm,
-                            group.id,
-                            &group.name,
-                            &mailbox.public_key,
-                        )
-                        .await
-                    } else {
-                        self.send_invite_impl(invitee, group.id, &group.name, &mailbox.public_key)
-                            .await
-                    }
-                } else {
-                    self.send_invite_impl(invitee, group.id, &group.name, &mailbox.public_key)
-                        .await
-                };
+            let send_result = self
+                .send_invite(invitee, group.id, &group.name, &mailbox.public_key)
+                .await;
 
             if let Err(e) = send_result {
-                tracing::error!("Failed to send invite to {}: {}", invitee, e);
+                tracing::error!("Failed to send invite to: {}", e);
             }
         }
 
         tracing::info!(
-            "Created anonymous group {} with {} invites (with roles)",
-            group.id,
+            "Created anonymous group with {} invites (with roles)",
             invitee_count
         );
 
@@ -243,36 +250,22 @@ impl AnonGroupService {
         &self,
         group_id: &AnonGroupId,
     ) -> Result<AnonGroupMailbox, AnonGroupError> {
+        // Over Tor or not at all; refuse before the token is spent.
+        self.grpc_pool
+            .secret_channel()
+            .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
         // Atomically claim a blind-signed token (marks used in same SQL stmt)
-        let token = match self.token_manager.claim_available_token() {
-            Ok(Some(token)) => token,
-            Ok(None) => {
-                let mut mailbox_client =
-                    self.grpc_pool.mailbox_client();
-                self.token_manager
-                    .request_tokens(&mut mailbox_client, 5)
-                    .await
-                    .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?;
-
-                self.token_manager
-                    .claim_available_token()
-                    .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?
-                    .ok_or_else(|| AnonGroupError::CryptoError("No tokens available".to_string()))?
-            }
-            Err(e) => return Err(AnonGroupError::CryptoError(e.to_string())),
-        };
+        let token = self.claim_token()?;
 
         // Use the token's Ed25519 keypair for the mailbox
-        let public_key: [u8; 32] = token
-            .public_key
-            .clone()
-            .try_into()
-            .map_err(|_| AnonGroupError::InvalidData("Invalid public key length".to_string()))?;
-        let private_key: [u8; 64] = token
-            .private_key
-            .clone()
-            .try_into()
-            .map_err(|_| AnonGroupError::InvalidData("Invalid private key length".to_string()))?;
+        let public_key: [u8; 32] =
+            token.public_key.clone().try_into().map_err(|_| {
+                AnonGroupError::InvalidData("Invalid public key length".to_string())
+            })?;
+        let private_key: [u8; 64] =
+            token.private_key.clone().try_into().map_err(|_| {
+                AnonGroupError::InvalidData("Invalid private key length".to_string())
+            })?;
 
         // Register the mailbox with the server using the blind signature (ANONYMOUS - no auth headers)
         // Retry on transient transport errors with channel disconnect to avoid stale HTTP/2 connections
@@ -281,16 +274,22 @@ impl AnonGroupService {
         let mut response_result = None;
         for attempt in 0..3u32 {
             if attempt > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(200 * (attempt as u64 + 1))).await;
-                tracing::info!(attempt = attempt + 1, "Retrying create_ephemeral_mailbox for group");
+                tokio::time::sleep(std::time::Duration::from_millis(200 * (attempt as u64 + 1)))
+                    .await;
+                tracing::info!(
+                    attempt = attempt + 1,
+                    "Retrying create_ephemeral_mailbox for group"
+                );
             }
-            let mut mailbox_client = self.grpc_pool.anonymous_mailbox_client();
+            let mut mailbox_client = self
+                .grpc_pool
+                .secret_mailbox_client()
+                .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
             match mailbox_client
                 .create_ephemeral_mailbox(
                     token.public_key.clone(),
                     token.signature.clone(),
                     ttl_seconds,
-                    token.randomizer.clone().unwrap_or_default(),
                 )
                 .await
             {
@@ -300,11 +299,14 @@ impl AnonGroupService {
                 }
                 Err(e) if e.is_retryable() => {
                     tracing::warn!(attempt = attempt + 1, error = %e, "create_ephemeral_mailbox transient error, disconnecting stale channel and retrying");
-                    self.grpc_pool.disconnect();
+                    self.grpc_pool.disconnect_secret();
                     last_err = Some(e);
                 }
                 Err(e) => {
-                    return Err(AnonGroupError::MessageError(format!("Failed to create mailbox on server: {}", e)));
+                    return Err(AnonGroupError::MessageError(format!(
+                        "Failed to create mailbox on server: {}",
+                        e
+                    )));
                 }
             }
         }
@@ -316,7 +318,6 @@ impl AnonGroupService {
         })?;
 
         tracing::info!(
-            group_id = %group_id,
             mailbox_id = %response.mailbox_id,
             expires_at = response.expires_at,
             "Created ephemeral mailbox on server for anonymous group"
@@ -345,12 +346,55 @@ impl AnonGroupService {
         group_name: String,
         owner_id: UserId,
         inviter_id: UserId,
+        // The device the invite was sealed from (sender certificate): it owns
+        // `inviter_mailbox_pk`, so the group binds the inviter to it.
+        inviter_device_id: u32,
         inviter_mailbox_pk: [u8; 32],
         inviter_profile_key: Option<[u8; 32]>,
         inviter_display_name: Option<String>,
         inviter_avatar: Option<Vec<u8>>,
     ) -> Result<AnonGroup, AnonGroupError> {
         let current_user = self.current_user_id()?;
+
+        // A repeated authenticated owner invitation repairs a lost JoinAck using
+        // the existing mailbox. It must never recreate membership or rotate keys.
+        if let Some(existing) = self.anon_group_repo.get_group(&group_id)? {
+            if existing.is_blocked() || existing.owner_id != owner_id || inviter_id != owner_id {
+                return Err(AnonGroupError::InvalidData(
+                    "Invitation does not match existing group owner".into(),
+                ));
+            }
+            let own = self
+                .anon_group_repo
+                .get_member(&group_id, &current_user)?
+                .ok_or(AnonGroupError::MemberNotFound(current_user))?;
+            let owner = self
+                .anon_group_repo
+                .get_member(&group_id, &owner_id)?
+                .ok_or(AnonGroupError::MemberNotFound(owner_id))?;
+            let mailbox = self
+                .anon_group_repo
+                .get_mailbox(&group_id)?
+                .ok_or_else(|| {
+                    AnonGroupError::InvalidData("Existing group mailbox unavailable".into())
+                })?;
+            if mailbox.is_expired()
+                || own.mailbox_pk != Some(mailbox.public_key)
+                || owner.mailbox_pk != Some(inviter_mailbox_pk)
+            {
+                return Err(AnonGroupError::InvalidData(
+                    "Invitation mailbox does not match current membership".into(),
+                ));
+            }
+            self.send_join_ack(
+                &owner_id,
+                group_id,
+                &inviter_mailbox_pk,
+                &mailbox.public_key,
+            )
+            .await?;
+            return Ok(existing);
+        }
 
         // 1. Create group locally as member
         let group = AnonGroup::from_invite(group_id, group_name, owner_id);
@@ -371,7 +415,8 @@ impl AnonGroupService {
             mailbox.public_key,
         )
         .with_profile(profile_key, my_display_name, my_avatar);
-        self.anon_group_repo.add_member(&my_member)?;
+        self.anon_group_repo
+            .accept_ordered_self(&my_member, TimestampNanos::now().as_u64())?;
 
         // 4. Add inviter with their mailbox key and profile.
         //
@@ -384,31 +429,36 @@ impl AnonGroupService {
         // local actions (UI controls, kick/ban prompts) trust the wrong
         // actor. Member is the safe lower bound; the next member-list
         // signal upgrades to Owner / Admin if applicable.
-        let inviter_member = AnonGroupMember::with_mailbox(
-            group_id,
-            inviter_id,
-            AnonGroupRole::Member,
-            inviter_mailbox_pk,
-        )
-        .with_profile(inviter_profile_key, inviter_display_name.clone(), inviter_avatar);
+        let inviter_member = AnonGroupMember {
+            device_id: Some(inviter_device_id),
+            ..AnonGroupMember::with_mailbox(
+                group_id,
+                inviter_id,
+                AnonGroupRole::Member,
+                inviter_mailbox_pk,
+            )
+            .with_profile(inviter_profile_key, inviter_display_name, inviter_avatar)
+        };
         self.anon_group_repo.add_member(&inviter_member)?;
 
-        tracing::debug!(
-            "Stored inviter {} with display_name={:?} in group {}",
-            inviter_id,
-            inviter_display_name,
-            group_id
-        );
+        // 5. Record our join once, even if the acknowledgment needs a retry.
+        self.store_system_message(
+            &group_id,
+            Some(current_user),
+            crate::domain::message::SystemMessage::UserJoined(current_user),
+            TimestampNanos::now().as_u64(),
+        )?;
 
-        // 5. Send JoinAck to inviter's anonymous mailbox
-        self.send_join_ack(&inviter_id, group_id, &inviter_mailbox_pk, &mailbox.public_key)
-            .await?;
-
-        tracing::info!(
-            "Joined anonymous group {} from inviter {}",
+        // 6. Send JoinAck to inviter's anonymous mailbox
+        self.send_join_ack(
+            &inviter_id,
             group_id,
-            inviter_id
-        );
+            &inviter_mailbox_pk,
+            &mailbox.public_key,
+        )
+        .await?;
+
+        tracing::info!("Joined secret group");
         Ok(group)
     }
 
@@ -461,7 +511,7 @@ impl AnonGroupService {
 
         // Refuse to refresh if the group is blocked — no legitimate use case
         // and it would leak a control message to a blocked party.
-        if group.is_blocked() {
+        if !group.status.can_receive() {
             return Err(AnonGroupError::GroupBlocked(*group_id));
         }
 
@@ -486,14 +536,12 @@ impl AnonGroupService {
             // Self-row may not exist if the group is in a weird state; log but
             // keep going — the broadcast below still rotates on the peer side.
             tracing::warn!(
-                group_id = %group_id,
                 error = %e,
                 "Failed to update our own mailbox_pk in member roster during refresh"
             );
         }
 
         tracing::info!(
-            group_id = %group_id,
             mailbox_id = %new_mailbox.id,
             expires_at = %new_mailbox.expires_at.to_rfc3339(),
             old_mailbox_id = ?old_mailbox.as_ref().map(|m| &m.id),
@@ -506,7 +554,6 @@ impl AnonGroupService {
             // our updated mailbox_pk to every confirmed member.
             if let Err(e) = self.broadcast_member_list(group_id).await {
                 tracing::warn!(
-                    group_id = %group_id,
                     error = %e,
                     "Failed to broadcast member list after mailbox refresh"
                 );
@@ -536,19 +583,13 @@ impl AnonGroupService {
                         .await
                     {
                         tracing::warn!(
-                            group_id = %group_id,
-                            owner_id = %group.owner_id,
                             error = %e,
                             "Failed to send refresh JoinAck to owner"
                         );
                     }
                 }
                 None => {
-                    tracing::warn!(
-                        group_id = %group_id,
-                        owner_id = %group.owner_id,
-                        "Cannot announce refreshed mailbox: owner mailbox_pk unknown"
-                    );
+                    tracing::warn!("Cannot announce refreshed mailbox: owner mailbox_pk unknown");
                 }
             }
         }
@@ -566,7 +607,9 @@ impl AnonGroupService {
     /// Errors for individual groups are logged and swallowed so one failing
     /// group does not block refresh of the others. Returns the list of group
     /// IDs that were successfully refreshed.
-    pub async fn refresh_expiring_group_mailboxes(&self) -> Result<Vec<AnonGroupId>, AnonGroupError> {
+    pub async fn refresh_expiring_group_mailboxes(
+        &self,
+    ) -> Result<Vec<AnonGroupId>, AnonGroupError> {
         self.refresh_expiring_group_mailboxes_within(chrono::Duration::days(
             GROUP_MAILBOX_REFRESH_LEAD_DAYS,
         ))
@@ -598,7 +641,7 @@ impl AnonGroupService {
         for group in groups {
             // Skip blocked groups — no refresh necessary and avoids leaking
             // control traffic to blocked peers.
-            if group.is_blocked() {
+            if !group.status.can_receive() {
                 continue;
             }
 
@@ -617,7 +660,6 @@ impl AnonGroupService {
             match self.refresh_group_mailbox(&group.id).await {
                 Ok(new_mailbox) => {
                     tracing::info!(
-                        group_id = %group.id,
                         new_mailbox_id = %new_mailbox.id,
                         old_expires_at = %mailbox.expires_at.to_rfc3339(),
                         new_expires_at = %new_mailbox.expires_at.to_rfc3339(),
@@ -627,7 +669,6 @@ impl AnonGroupService {
                 }
                 Err(e) => {
                     tracing::error!(
-                        group_id = %group.id,
                         error = %e,
                         "[ANON_GROUP_REFRESH] Failed to refresh expiring mailbox; will retry on next cycle"
                     );

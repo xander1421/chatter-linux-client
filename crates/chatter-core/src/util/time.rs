@@ -7,16 +7,33 @@
 //! This module provides newtype wrappers to prevent unit mismatch bugs:
 //!
 //! - [`TimestampNanos`]: Server/proto timestamps (nanoseconds since epoch)
-//! - [`TimestampMillis`]: Signal protocol timestamps (milliseconds since epoch)
-//!
-//! Using different types for different precision levels catches unit
-//! conversion errors at compile time rather than runtime.
 
 use std::fmt;
 use std::ops::{Add, Sub};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Local, TimeZone, Utc};
+
+/// Local clock label shown beside a sent message.
+pub fn format_message_time(sent_at: DateTime<Utc>) -> String {
+    sent_at.with_timezone(&Local).format("%H:%M").to_string()
+}
+
+/// A moment for message details: "Today, 12:16:37", "Yesterday, 09:02:11",
+/// otherwise "21 Oct 2026, 18:40:05" — local time, as Signal's message info.
+pub fn format_detail_time(at: DateTime<Utc>) -> String {
+    let local = at.with_timezone(&Local);
+    let today = Local::now().date_naive();
+    let day = local.date_naive();
+    let date = if day == today {
+        "Today".to_string()
+    } else if today.pred_opt() == Some(day) {
+        "Yesterday".to_string()
+    } else {
+        local.format("%-d %b %Y").to_string()
+    };
+    format!("{date}, {}", local.format("%H:%M:%S"))
+}
 
 #[cfg(test)]
 use chrono::Datelike;
@@ -42,22 +59,6 @@ use chrono::Datelike;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct TimestampNanos(pub u64);
-
-/// Signal protocol timestamps in milliseconds since Unix epoch.
-///
-/// Used for:
-/// - libsignal `Timestamp` values
-/// - Message `created_at` in encrypted payloads
-/// - Cross-platform compatibility with Signal clients
-///
-/// # Example
-///
-/// ```ignore
-/// let msg_time = TimestampMillis::now();
-/// let signal_ts = libsignal_protocol::Timestamp::from_epoch_millis(msg_time.as_u64());
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub struct TimestampMillis(pub u64);
 
 // --- TimestampNanos Implementation ---
 
@@ -85,10 +86,17 @@ impl TimestampNanos {
         self.0
     }
 
-    /// Convert to milliseconds (explicit, lossy conversion).
-    #[inline]
-    pub const fn to_millis(self) -> TimestampMillis {
-        TimestampMillis(self.0 / 1_000_000)
+    /// The current time floored to the whole second, for a timestamp the
+    /// server sees in the clear (`SealedSenderMessage.timestamp`).
+    ///
+    /// The server only checks it for freshness (minutes of tolerance,
+    /// `sealed_sender.go`), but a nanosecond reading of our clock on every
+    /// anonymous send is a per-device fingerprint (clock offset and drift)
+    /// that can link otherwise unlinkable sends. One second keeps freshness
+    /// and drops the fingerprint.
+    pub fn now_anonymized() -> Self {
+        let now = Self::now().0;
+        Self(now - now % 1_000_000_000)
     }
 
     /// Convert to `DateTime<Utc>`.
@@ -167,125 +175,6 @@ impl Sub<TimestampNanos> for TimestampNanos {
     }
 }
 
-// --- TimestampMillis Implementation ---
-
-impl TimestampMillis {
-    /// Create a timestamp representing the current time.
-    #[inline]
-    pub fn now() -> Self {
-        Self(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("system time before Unix epoch")
-                .as_millis() as u64,
-        )
-    }
-
-    /// Create from raw milliseconds value.
-    #[inline]
-    pub const fn from_millis(millis: u64) -> Self {
-        Self(millis)
-    }
-
-    /// Get the raw milliseconds value.
-    #[inline]
-    pub const fn as_u64(self) -> u64 {
-        self.0
-    }
-
-    /// Convert to nanoseconds (explicit, lossless conversion).
-    #[inline]
-    pub const fn to_nanos(self) -> TimestampNanos {
-        TimestampNanos(self.0.saturating_mul(1_000_000))
-    }
-
-    /// Convert to `DateTime<Utc>`.
-    ///
-    /// Returns `None` if timestamp is 0 or conversion fails.
-    pub fn to_datetime(self) -> Option<DateTime<Utc>> {
-        if self.0 == 0 {
-            return None;
-        }
-        let secs = (self.0 / 1_000) as i64;
-        let nsecs = ((self.0 % 1_000) * 1_000_000) as u32;
-        Utc.timestamp_opt(secs, nsecs).single()
-    }
-
-    /// Create an anonymized timestamp for privacy.
-    ///
-    /// Rounds to the nearest 100ms to reduce fingerprinting in message metadata.
-    /// Use this for outgoing message `created_at` fields.
-    #[inline]
-    pub fn now_anonymized() -> Self {
-        let raw = Self::now().0;
-        // Round to nearest 100ms bucket
-        Self((raw / 100) * 100)
-    }
-
-    /// Create an anonymized timestamp with jitter.
-    ///
-    /// Rounds to 100ms bucket and adds random jitter (0-99ms).
-    /// Provides better k-anonymity for traffic analysis resistance.
-    pub fn now_anonymized_with_jitter() -> Self {
-        let raw = Self::now().0;
-        let rounded = (raw / 100) * 100;
-        // Add random jitter 0-99ms
-        let jitter = rand::random::<u64>() % 100;
-        Self(rounded + jitter)
-    }
-}
-
-impl From<u64> for TimestampMillis {
-    #[inline]
-    fn from(millis: u64) -> Self {
-        Self(millis)
-    }
-}
-
-impl From<TimestampMillis> for u64 {
-    #[inline]
-    fn from(ts: TimestampMillis) -> Self {
-        ts.0
-    }
-}
-
-impl fmt::Display for TimestampMillis {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(dt) = self.to_datetime() {
-            write!(f, "{}", dt.format("%Y-%m-%d %H:%M:%S%.3f UTC"))
-        } else {
-            write!(f, "0ms (epoch)")
-        }
-    }
-}
-
-impl Add<Duration> for TimestampMillis {
-    type Output = Self;
-
-    #[inline]
-    fn add(self, rhs: Duration) -> Self::Output {
-        Self(self.0.saturating_add(rhs.as_millis() as u64))
-    }
-}
-
-impl Sub<Duration> for TimestampMillis {
-    type Output = Self;
-
-    #[inline]
-    fn sub(self, rhs: Duration) -> Self::Output {
-        Self(self.0.saturating_sub(rhs.as_millis() as u64))
-    }
-}
-
-impl Sub<TimestampMillis> for TimestampMillis {
-    type Output = Duration;
-
-    #[inline]
-    fn sub(self, rhs: TimestampMillis) -> Self::Output {
-        Duration::from_millis(self.0.saturating_sub(rhs.0))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,13 +193,6 @@ mod tests {
         let timestamps: Vec<TimestampNanos> = (0..1000).map(|_| TimestampNanos::now()).collect();
         let unique: HashSet<_> = timestamps.iter().collect();
         assert_eq!(unique.len(), timestamps.len());
-    }
-
-    #[test]
-    fn test_timestamp_nanos_conversion_to_millis() {
-        let nanos = TimestampNanos::from_nanos(1_234_567_890_123_456_789);
-        let millis = nanos.to_millis();
-        assert_eq!(millis.as_u64(), 1_234_567_890_123);
     }
 
     #[test]
@@ -353,68 +235,18 @@ mod tests {
     }
 
     #[test]
-    fn test_timestamp_millis_now() {
-        let t1 = TimestampMillis::now();
-        let t2 = TimestampMillis::now();
-        assert!(t2 >= t1);
-    }
-
-    #[test]
-    fn test_timestamp_millis_conversion_to_nanos() {
-        let millis = TimestampMillis::from_millis(1_234_567_890_123);
-        let nanos = millis.to_nanos();
-        assert_eq!(nanos.as_u64(), 1_234_567_890_123_000_000);
-    }
-
-    #[test]
-    fn test_timestamp_millis_roundtrip() {
-        let original_nanos = TimestampNanos::from_nanos(1_234_567_890_123_000_000);
-        let millis = original_nanos.to_millis();
-        let back_to_nanos = millis.to_nanos();
-        assert_eq!(back_to_nanos, original_nanos);
-    }
-
-    #[test]
-    fn test_timestamp_millis_anonymized() {
-        let ts = TimestampMillis::now_anonymized();
-        assert_eq!(ts.as_u64() % 100, 0);
-    }
-
-    #[test]
-    fn test_timestamp_millis_anonymized_with_jitter() {
-        let timestamps: Vec<TimestampMillis> = (0..10)
-            .map(|_| TimestampMillis::now_anonymized_with_jitter())
-            .collect();
-        let remainders: Vec<u64> = timestamps.iter().map(|t| t.as_u64() % 100).collect();
-        assert!(remainders.iter().all(|&r| r < 100));
-    }
-
-    #[test]
-    fn test_timestamp_millis_arithmetic() {
-        let t1 = TimestampMillis::from_millis(1000);
-        let t2 = t1 + Duration::from_secs(1);
-        assert_eq!(t2.as_u64(), 2000);
-
-        let t3 = t2 - Duration::from_millis(500);
-        assert_eq!(t3.as_u64(), 1500);
-    }
-
-    #[test]
-    fn test_type_safety_requires_explicit_conversion() {
-        let nanos = TimestampNanos::now();
-        let millis = TimestampMillis::now();
-        // Must explicitly convert - no accidental mixing
-        let _ = nanos.to_millis() > millis;
-        let _ = nanos > millis.to_nanos();
+    fn anonymized_timestamp_is_a_whole_second_and_fresh() {
+        let before = TimestampNanos::now();
+        let ts = TimestampNanos::now_anonymized();
+        assert_eq!(ts.as_u64() % 1_000_000_000, 0);
+        assert!(ts <= TimestampNanos::now());
+        assert!(before.as_u64().saturating_sub(ts.as_u64()) < 1_000_000_000);
     }
 
     #[test]
     fn test_from_trait() {
         let nanos: TimestampNanos = 12345u64.into();
         assert_eq!(nanos.as_u64(), 12345);
-
-        let millis: TimestampMillis = 67890u64.into();
-        assert_eq!(millis.as_u64(), 67890);
 
         let n: u64 = nanos.into();
         assert_eq!(n, 12345);

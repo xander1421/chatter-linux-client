@@ -23,18 +23,17 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
+use chatter_core::domain::UserId;
 use chatter_core::domain::jarvis::JarvisContext;
 use chatter_core::domain::jarvis::SubjectType;
-use chatter_core::domain::UserId;
-use chatter_core::events::EventBus;
-use chatter_core::local_ai::providers::{detect_providers, ProviderKind};
+use chatter_core::local_ai::providers::{ProviderKind, detect_providers};
 use chatter_core::local_ai::settings::LocalAISettings;
 use chatter_core::services::ai::LocalAIActorHandle;
 use chatter_core::services::jarvis::{
     FactExtractor, JarvisEngine, JarvisService, SharedJarvisEngine,
 };
-use chatter_core::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 use chatter_core::storage::Database;
+use chatter_core::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 
 /// One Ollama, one tiny model: concurrent generations starve each other and
 /// flake the suite. Every test serializes on this.
@@ -69,7 +68,7 @@ fn service() -> Harness {
     let (db, _temp) = test_db();
     let memory = Arc::new(JarvisMemoryRepository::new(db.clone()));
     let graph = Arc::new(JarvisGraphRepository::new(db));
-    let svc = JarvisService::new(memory.clone(), graph, engine(), EventBus::new(), None);
+    let svc = JarvisService::new(memory.clone(), graph, engine(), None);
     Harness { svc, memory, _temp }
 }
 
@@ -164,7 +163,11 @@ async fn v_ai_04_multi_turn_coherence() {
     for attempt in 0..2 {
         let r = h
             .svc
-            .ask(&ctx, "Who is the message for? Answer with just the name.", Some(&user))
+            .ask(
+                &ctx,
+                "Who is the message for? Answer with just the name.",
+                Some(&user),
+            )
             .await
             .expect("turn 3");
         println!("turn 3 (attempt {attempt}): {r:?}");
@@ -196,7 +199,11 @@ async fn v_ai_05_llm_write_path_and_consolidation() {
     let mut stored = 0;
     for _ in 0..2 {
         stored = extractor
-            .extract_and_store("My name is Alex and I work on the Chatter app.", &user, &ctx)
+            .extract_and_store(
+                "My name is Alex and I work on the Chatter app.",
+                &user,
+                &ctx,
+            )
             .await
             .expect("extract");
         if stored > 0 {
@@ -218,7 +225,10 @@ async fn v_ai_05_llm_write_path_and_consolidation() {
     let current = memory
         .get_facts_about(SubjectType::User, &user.to_string())
         .expect("facts");
-    let named: Vec<_> = current.iter().filter(|f| f.predicate == "is_named").collect();
+    let named: Vec<_> = current
+        .iter()
+        .filter(|f| f.predicate == "is_named")
+        .collect();
     if named.len() == 1 {
         // Only asserts when extraction produced is_named (model-dependent).
         assert_eq!(named[0].object, "Sasha", "contradiction must supersede");
@@ -226,7 +236,10 @@ async fn v_ai_05_llm_write_path_and_consolidation() {
             .get_fact_history(SubjectType::User, &user.to_string(), "is_named")
             .expect("history");
         assert!(
-            history.len() >= 1 && history.iter().all(|f| f.superseded_by.is_some() || f.valid_until.is_none()),
+            history.len() >= 1
+                && history
+                    .iter()
+                    .all(|f| f.superseded_by.is_some() || f.valid_until.is_none()),
             "temporal chain broken: {history:?}"
         );
     }
@@ -244,17 +257,20 @@ async fn v_ai_07_app_context_grounding() {
     let (db, _temp) = test_db();
     let memory = Arc::new(JarvisMemoryRepository::new(db.clone()));
     let graph = Arc::new(JarvisGraphRepository::new(db));
-    let svc = JarvisService::new(memory, graph, engine(), EventBus::new(), None)
-        .with_app_context(Arc::new(|| {
-            "User's channels: general, dev-team.\nUser's friends: alex_dev, sam42.\n".to_string()
-        }));
+    let svc = JarvisService::new(memory, graph, engine(), None).with_app_context(Arc::new(|| {
+        "User's channels: general, dev-team.\nUser's friends: alex_dev, sam42.\n".to_string()
+    }));
 
     let ctx = JarvisContext::general();
     let user = UserId::new();
     let mut last = String::new();
     for attempt in 0..2 {
         let r = svc
-            .ask(&ctx, "List my friends' usernames, comma separated.", Some(&user))
+            .ask(
+                &ctx,
+                "List my friends' usernames, comma separated.",
+                Some(&user),
+            )
             .await
             .expect("ask");
         println!("grounding (attempt {attempt}): {r:?}");

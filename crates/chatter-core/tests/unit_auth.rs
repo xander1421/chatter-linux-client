@@ -3,8 +3,7 @@
 //! Tests login, registration, logout, and session management
 //! using the testing framework with mocked services.
 
-mod common;
-mod framework;
+use crate::framework;
 
 use framework::prelude::*;
 
@@ -18,8 +17,15 @@ async fn test_registration_generates_valid_keys() {
     let (identity_priv, identity_pub) = CryptoBuilder::identity_key_pair();
 
     assert_eq!(identity_priv.len(), 32, "Private key should be 32 bytes");
-    assert_eq!(identity_pub.len(), 33, "Public key should be 33 bytes (with type prefix)");
-    assert_eq!(identity_pub[0], 0x05, "Public key should have DJB type prefix");
+    assert_eq!(
+        identity_pub.len(),
+        33,
+        "Public key should be 33 bytes (with type prefix)"
+    );
+    assert_eq!(
+        identity_pub[0], 0x05,
+        "Public key should have DJB type prefix"
+    );
 }
 
 #[tokio::test]
@@ -32,8 +38,14 @@ async fn test_registration_generates_prekey_bundle() {
 
     let signed = bundle.signed_prekey.unwrap();
     assert!(signed.id > 0, "Signed prekey ID should be positive");
-    assert!(!signed.public_key.is_empty(), "Signed prekey public key should not be empty");
-    assert!(!signed.signature.is_empty(), "Signed prekey signature should not be empty");
+    assert!(
+        !signed.public_key.is_empty(),
+        "Signed prekey public key should not be empty"
+    );
+    assert!(
+        !signed.signature.is_empty(),
+        "Signed prekey signature should not be empty"
+    );
 }
 
 #[tokio::test]
@@ -42,26 +54,21 @@ async fn test_user_builder_creates_valid_credentials() {
 
     assert!(!user.user_id.is_empty(), "User ID should be generated");
     assert!(!user.username.is_empty(), "Username should be generated");
-    assert!(!user.display_name.is_empty(), "Display name should be generated");
+    assert!(
+        !user.display_name.is_empty(),
+        "Display name should be generated"
+    );
     assert!(user.device_id > 0, "Device ID should be positive");
-    assert!(!user.password_hash.is_empty(), "Password hash should be generated");
+    assert!(!user.password.is_empty(), "Password should be generated");
 }
 
 #[tokio::test]
 async fn test_registration_username_validation() {
     // Test various username formats
-    let valid_usernames = vec![
-        "alice",
-        "alice123",
-        "alice_bob",
-        "Alice",
-        "user_name_123",
-    ];
+    let valid_usernames = vec!["alice", "alice123", "alice_bob", "Alice", "user_name_123"];
 
     for username in valid_usernames {
-        let user = UserBuilder::new()
-            .username(username)
-            .build();
+        let user = UserBuilder::new().username(username).build();
         assert_eq!(user.username, username);
     }
 }
@@ -73,8 +80,14 @@ async fn test_registration_creates_unique_users() {
     let alice = harness.register_user("Alice").await;
     let bob = harness.register_user("Bob").await;
 
-    assert_ne!(alice.user_id, bob.user_id, "Users should have different IDs");
-    assert_ne!(alice.username, bob.username, "Users should have different usernames");
+    assert_ne!(
+        alice.user_id, bob.user_id,
+        "Users should have different IDs"
+    );
+    assert_ne!(
+        alice.username, bob.username,
+        "Users should have different usernames"
+    );
 }
 
 // ============================================================================
@@ -105,15 +118,12 @@ async fn test_login_returns_correct_user_info() {
 }
 
 #[tokio::test]
-async fn test_password_hash_is_deterministic() {
-    // Same password should produce same hash
-    let (password1, hash1) = random_password();
-
-    // Different passwords should produce different hashes
-    let (password2, hash2) = random_password();
-
-    assert_ne!(password1, password2, "Random passwords should differ");
-    assert_ne!(hash1, hash2, "Different passwords should have different hashes");
+async fn test_random_passwords_differ() {
+    assert_ne!(
+        random_password(),
+        random_password(),
+        "Random passwords should differ"
+    );
 }
 
 // ============================================================================
@@ -126,7 +136,9 @@ async fn test_session_creation() {
     let user = harness.register_user("Alice").await;
 
     // Create session token in mock server
-    let token = harness.mock_server().create_session(&user.user_id, user.device_id);
+    let token = harness
+        .mock_server()
+        .create_session(&user.user_id, user.device_id);
 
     assert!(!token.is_empty(), "Session token should be generated");
 

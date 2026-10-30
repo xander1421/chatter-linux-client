@@ -3,8 +3,8 @@
 //! `tests/noise_vectors.rs` proves that our Noise is *the* Noise, against the
 //! canonical specification corpus. It cannot say anything about the layer
 //! bitchat built on top, because that layer has no published vectors — the two
-//! domain-separating prologues, the one-shot `X` seal framing, the canonical
-//! announce preimage, and the packet signing rule are all bitchat's inventions.
+//! domain-separating prologues, the one-shot `X` seal framing, and the packet
+//! signing rule are all bitchat's inventions.
 //!
 //! This file is where those are pinned. Every expected byte string here was
 //! derived by hand from the bitchat source, and the source line is cited at each
@@ -13,7 +13,6 @@
 //! - `Services/NoiseEncryptionService.swift:382` — `courierPrologue`
 //! - `Services/NoiseEncryptionService.swift:427` — `prekeyProloguePrefix`
 //! - `Services/NoiseEncryptionService.swift:429` — `prekeyPrologue(for:)`
-//! - `Services/NoiseEncryptionService.swift:574` — `canonicalAnnounceBytes`
 //! - `BitFoundation/BitchatPacket.swift` — `toBinaryDataForSigning()`
 //!
 //! The hex literals are written out in full rather than recomputed from the
@@ -21,13 +20,13 @@
 //! expected value with the same code path as the implementation proves only that
 //! the code is self-consistent; these prove it is *correct*.
 
-use chatter_mesh::packet::{MessageType, SENDER_ID_LEN};
 use chatter_mesh::BitchatPacket;
-use chatter_mesh_noise::identity::{fingerprint_of, MeshIdentity};
+use chatter_mesh::packet::{MessageType, SENDER_ID_LEN};
+use chatter_mesh_noise::identity::{MeshIdentity, fingerprint_of};
 use chatter_mesh_noise::seal::{
     open_courier, open_prekey, prekey_prologue, seal_courier, seal_prekey,
 };
-use chatter_mesh_noise::sign::{canonical_announce_bytes, sign_packet, verify_packet};
+use chatter_mesh_noise::sign::{sign_packet, verify_packet};
 use chatter_mesh_noise::{ANNOUNCE_CONTEXT, COURIER_PROLOGUE, PREKEY_PROLOGUE_PREFIX};
 
 // ---------------------------------------------------------------------------
@@ -44,7 +43,6 @@ const PREKEY_SECRET: [u8; 32] = [0x77; 32];
 const PREKEY_ID: u32 = 0x0102_0304;
 
 const TIMESTAMP: u64 = 1_700_000_000_123;
-const PEER_ID: [u8; 8] = [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7];
 
 fn sender() -> MeshIdentity {
     MeshIdentity::from_keys(SENDER_STATIC, SENDER_SIGNING)
@@ -62,10 +60,6 @@ fn mallory() -> MeshIdentity {
 /// API: `MeshIdentity` derives exactly the key `snow` would.
 fn public_of(secret: [u8; 32]) -> [u8; 32] {
     MeshIdentity::from_keys(secret, [0u8; 32]).static_public()
-}
-
-fn expect_bytes(hex_str: &str) -> Vec<u8> {
-    hex::decode(hex_str).expect("test literal must be valid hex")
 }
 
 // ---------------------------------------------------------------------------
@@ -305,119 +299,6 @@ fn an_empty_payload_seals_and_opens() {
     let (opened, sender_static) = open_courier(&ciphertext, &bob).expect("empty seal opens");
     assert!(opened.is_empty());
     assert_eq!(sender_static, alice.static_public());
-}
-
-// ---------------------------------------------------------------------------
-// Canonical announce bytes
-// ---------------------------------------------------------------------------
-
-#[test]
-fn canonical_announce_bytes_match_a_hand_built_preimage() {
-    // Built by hand from `canonicalAnnounceBytes`, field by field:
-    //
-    //   13                                   u8(19), the context length
-    //   626974636861742d616e6e6f756e63652d7631   "bitchat-announce-v1"
-    //   a0a1a2a3a4a5a6a7                     peer ID, 8 bytes
-    //   33 * 32                              noise static public key
-    //   44 * 32                              ed25519 public key
-    //   05 616c696365                        u8(5), "alice"
-    //   0000018bcfe5687b                     be_u64(1_700_000_000_123)
-    const EXPECTED: &str = concat!(
-        "13",
-        "626974636861742d616e6e6f756e63652d7631",
-        "a0a1a2a3a4a5a6a7",
-        "3333333333333333333333333333333333333333333333333333333333333333",
-        "4444444444444444444444444444444444444444444444444444444444444444",
-        "05",
-        "616c696365",
-        "0000018bcfe5687b",
-    );
-
-    let produced = canonical_announce_bytes(&PEER_ID, &[0x33; 32], &[0x44; 32], "alice", TIMESTAMP);
-    assert_eq!(
-        hex::encode(&produced),
-        EXPECTED,
-        "announce preimage diverges from the hand-derived layout"
-    );
-    assert_eq!(produced, expect_bytes(EXPECTED));
-    assert_eq!(produced.len(), 1 + 19 + 8 + 32 + 32 + 1 + 5 + 8);
-    assert_eq!(ANNOUNCE_CONTEXT.len(), 19);
-}
-
-#[test]
-fn short_announce_fields_are_zero_padded_on_the_right() {
-    // 3-byte peer ID, 1-byte noise key, empty ed key, empty nickname,
-    // timestamp 1. Every fixed-width field pads with zeros *after* the supplied
-    // bytes; padding on the left would produce a preimage that no peer signs.
-    const EXPECTED: &str = concat!(
-        "13",
-        "626974636861742d616e6e6f756e63652d7631",
-        "0102030000000000",
-        "ff00000000000000000000000000000000000000000000000000000000000000",
-        "0000000000000000000000000000000000000000000000000000000000000000",
-        "00",
-        "0000000000000001",
-    );
-
-    let produced = canonical_announce_bytes(&[0x01, 0x02, 0x03], &[0xFF], &[], "", 1);
-    assert_eq!(hex::encode(&produced), EXPECTED);
-
-    // Padding is a total function, so a peer that sends 3 bytes and a peer that
-    // sends the same bytes already zero-extended sign identical preimages.
-    let pre_padded =
-        canonical_announce_bytes(&[0x01, 0x02, 0x03, 0, 0, 0, 0, 0], &[0xFF], &[], "", 1);
-    assert_eq!(produced, pre_padded);
-}
-
-#[test]
-fn over_long_announce_fields_are_truncated() {
-    // 20-byte peer ID cut to 8, 40-byte noise key cut to 32, 33-byte ed key cut
-    // to 32, and the maximum timestamp.
-    const EXPECTED: &str = concat!(
-        "13",
-        "626974636861742d616e6e6f756e63652d7631",
-        "7777777777777777",
-        "8888888888888888888888888888888888888888888888888888888888888888",
-        "9999999999999999999999999999999999999999999999999999999999999999",
-        "01",
-        "78",
-        "ffffffffffffffff",
-    );
-
-    let produced =
-        canonical_announce_bytes(&[0x77; 20], &[0x88; 40], &[0x99; 33], "x", u64::MAX);
-    assert_eq!(hex::encode(&produced), EXPECTED);
-    assert_eq!(produced.len(), 1 + 19 + 8 + 32 + 32 + 1 + 1 + 8);
-}
-
-#[test]
-fn an_over_long_nickname_is_truncated_to_255_bytes() {
-    // The length prefix is one byte, so 255 is the ceiling. Swift does
-    // `Data(nickname.utf8).prefix(255)`; ASCII here keeps the assertion about
-    // truncation rather than about UTF-8 boundaries.
-    let nickname = "n".repeat(300);
-    let produced =
-        canonical_announce_bytes(&PEER_ID, &[0x00; 32], &[0x00; 32], &nickname, TIMESTAMP);
-
-    let nickname_at = 1 + ANNOUNCE_CONTEXT.len() + 8 + 32 + 32;
-    assert_eq!(produced[nickname_at], 255, "length byte saturates at 255");
-    assert_eq!(&produced[nickname_at + 1..nickname_at + 256], &[b'n'; 255]);
-    assert_eq!(produced.len(), nickname_at + 1 + 255 + 8);
-    assert_eq!(
-        &produced[produced.len() - 8..],
-        &TIMESTAMP.to_be_bytes(),
-        "the timestamp still follows the truncated nickname"
-    );
-}
-
-#[test]
-fn the_nickname_length_prefix_stops_fields_sliding_into_one_another() {
-    // Without it, ("ab", ts) and ("a", "b" ‖ ts) could canonicalise identically
-    // and one peer's announce would verify as another's.
-    let two = canonical_announce_bytes(&PEER_ID, &[0; 32], &[0; 32], "ab", 1);
-    let one = canonical_announce_bytes(&PEER_ID, &[0; 32], &[0; 32], "a", 1);
-    assert_ne!(two, one);
-    assert_eq!(two.len(), one.len() + 1);
 }
 
 // ---------------------------------------------------------------------------

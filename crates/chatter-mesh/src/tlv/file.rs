@@ -88,7 +88,11 @@ impl BitchatFilePacket {
             }
         }
 
-        put_tlv_u16_len(&mut out, TLV_FILE_SIZE, &(resolved_size as u32).to_be_bytes())?;
+        put_tlv_u16_len(
+            &mut out,
+            TLV_FILE_SIZE,
+            &(resolved_size as u32).to_be_bytes(),
+        )?;
 
         if let Some(mime) = &self.mime_type {
             if mime.len() <= u16::MAX as usize {
@@ -209,9 +213,23 @@ mod tests {
         assert_eq!(
             packet.encode().unwrap(),
             vec![
-                TLV_FILE_NAME, 0x00, 0x01, b'a',
-                TLV_FILE_SIZE, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01,
-                TLV_CONTENT, 0x00, 0x00, 0x00, 0x01, 0xFF,
+                TLV_FILE_NAME,
+                0x00,
+                0x01,
+                b'a',
+                TLV_FILE_SIZE,
+                0x00,
+                0x04,
+                0x00,
+                0x00,
+                0x00,
+                0x01,
+                TLV_CONTENT,
+                0x00,
+                0x00,
+                0x00,
+                0x01,
+                0xFF,
             ]
         );
     }

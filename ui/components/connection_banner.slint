@@ -18,7 +18,11 @@
 // "the mesh is running" is never allowed to read as "your message will arrive"
 // — delivery is the context bar's subject, not this one's.
 
+import { KeyFocus } from "./key_focus.slint";
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Materials } from "../theme/materials.slint";
+import { Elevation } from "../theme/elevation.slint";
 import { Icons } from "../theme/icons.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -34,18 +38,17 @@ export component ConnectionBanner inherits Rectangle {
     // end up disagreeing about it.
     in property <bool> server-unreachable: false;
     in property <int> reconnect-attempt: 0;
-    in property <int> queue-count: 0;
 
     // Dismissing hides the banner, not the fact. The caller keeps a red dot on
     // the sidebar's settings button for as long as the server is unreachable,
     // so closing this trades a paragraph for a pixel rather than for silence.
     // The caller also clears the dismissal on reconnect, so a *later* outage
     // gets a fresh banner instead of being swallowed by an old dismissal.
+    in property <bool> suppressed: false;
     callback dismissed();
 
     // Internal: tracks "just reconnected" for the green flash
     property <bool> just-reconnected: false;
-    property <bool> was-disconnected: false;
 
     // Narrow screen. Same idiom as `ui/chat/chat_header.slint` (`tight` /
     // `mesh-tight`): a width test, not a platform test.
@@ -68,14 +71,14 @@ export component ConnectionBanner inherits Rectangle {
 
     // Show banner when not connected (or briefly after reconnect), or while Tor
     // is still establishing / has errored in shield mode.
-    property <bool> should-show:
+    property <bool> should-show: !root.suppressed && (
         connection-state == "connecting"
         || connection-state == "reconnecting"
         || connection-state == "disconnected"
         || connection-state == "failed"
         || root.tor-connecting
         || root.tor-error
-        || root.just-reconnected;
+        || root.just-reconnected);
 
     // The mesh sentence appears only once the server is settled-unreachable:
     // during "connecting" the honest position is that we do not know yet, and
@@ -102,6 +105,8 @@ export component ConnectionBanner inherits Rectangle {
     // case where the answer is "nothing" and saying anything else would be a
     // lie. Then Bluetooth off, which is actionable. Then the ordinary states,
     // where the peer count is the whole signal and zero is normal.
+    property <string> radio-down-clause:
+        MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth is off" : "the Bluetooth radio is unavailable";
     property <string> mesh-line:
         !MeshGlobal.running
             ? "The mesh is not running either, so there is nothing to fall back to."
@@ -110,17 +115,18 @@ export component ConnectionBanner inherits Rectangle {
             // a cell rides Nostr, which is servers over the internet, so this is
             // the one mesh path that is not actually infrastructure-free.
             ? (MeshGlobal.relay-count == 0
-                ? "Mesh is on, but Bluetooth is off and no relay is connected — nothing can carry a message right now."
+                ? "Mesh is on, but " + root.radio-down-clause + " and no relay is connected — nothing can carry a message right now."
               : MeshGlobal.relay-count == 1
-                ? "Mesh is on but Bluetooth is off. Only the 1 connected relay can carry, and relays need internet."
-                : "Mesh is on but Bluetooth is off. Only the " + MeshGlobal.relay-count + " connected relays can carry, and relays need internet.")
+                ? "Mesh is on but " + root.radio-down-clause + ". Only the 1 connected relay can carry, and relays need internet."
+                : "Mesh is on but " + root.radio-down-clause + ". Only the " + MeshGlobal.relay-count + " connected relays can carry, and relays need internet.")
       : MeshGlobal.peer-count == 0
             ? "Mesh is running over Bluetooth. Nobody is in range yet; what you send waits to be carried."
       : MeshGlobal.peer-count == 1
             ? "Mesh is running over Bluetooth — 1 nearby. Mesh conversations do not need the server."
             : "Mesh is running over Bluetooth — " + MeshGlobal.peer-count + " nearby. Mesh conversations do not need the server.";
 
-    visible: root.should-show;
+    visible: root.should-show || self.height > 0px;
+    clip: true;
     // Wide: content-driven, because the mesh sentence wraps and the half of it
     // that would get cut is the half that says the mesh is *not* a substitute
     // for the server.
@@ -129,7 +135,7 @@ export component ConnectionBanner inherits Rectangle {
     height: !root.should-show ? 0px
           : root.tight ? root.compact-height
           : content.preferred-height;
-    animate height { duration: 200ms; easing: ease-out; }
+    animate height { duration: Materials.motion-standard; easing: Materials.spring; }
 
     // Banner color based on state
     property <color> banner-color:
@@ -140,14 +146,18 @@ export component ConnectionBanner inherits Rectangle {
         connection-state == "failed" ? Colors.error :
         Colors.error;  // disconnected
 
-    background: root.banner-color.with-alpha(0.15);
-    border-width: 1px;
-    border-color: root.banner-color.with-alpha(0.2);
+    border-radius: Spacing.radius-chrome;
+    background: Colors.surface;
+
+    Rectangle {
+        border-radius: root.border-radius;
+        background: root.banner-color.with-alpha(0.10);
+    }
     // Neo 2.0: glow bloom on connecting/reconnecting states
     drop-shadow-blur: connection-state == "connecting" || connection-state == "reconnecting"
-        ? Spacing.neo-blur-md : 0px;
+        ? Elevation.halo-blur-strong : 0px;
     drop-shadow-color: connection-state == "connecting" || connection-state == "reconnecting"
-        ? Colors.glow-cyan-soft : transparent;
+        ? Colors.primary.with-alpha(0.2) : transparent;
     drop-shadow-offset-y: connection-state == "connecting" || connection-state == "reconnecting"
         ? 2px : 0px;
 
@@ -168,9 +178,9 @@ export component ConnectionBanner inherits Rectangle {
         // visible overflows — the button is a transparent box — and the target
         // stays the full 44px. Ordinary padding on top of a 44px row is what
         // turned one sentence into a slab in the first place.
-        padding-top: root.tight ? (root.compact-height - 44px) / 2 : 8px;
-        padding-bottom: root.tight ? (root.compact-height - 44px) / 2 : 8px;
-        spacing: 2px;
+        padding-top: root.tight ? (root.compact-height - Spacing.button-height) / 2 : Spacing.sm;
+        padding-bottom: root.tight ? (root.compact-height - Spacing.button-height) / 2 : Spacing.sm;
+        spacing: Spacing.xxs;
 
         HorizontalLayout {
             spacing: root.tight ? Spacing.xs : Spacing.sm;
@@ -190,7 +200,7 @@ export component ConnectionBanner inherits Rectangle {
                         opacity: 0.4;
                     }
                 ]
-                animate opacity { duration: 800ms; easing: ease-in-out; }
+                animate opacity { duration: Appearance.reduce-motion ? 0ms : 800ms / Appearance.animation-speed; easing: ease-in-out; }
             }
 
             // Status text. Two wordings for the same fact: the long one explains
@@ -207,11 +217,8 @@ export component ConnectionBanner inherits Rectangle {
                           ? "Reconnecting…"
                           : "Reconnecting" + (reconnect-attempt > 0 ? " (attempt " + reconnect-attempt + ")…" : "…")) :
                       connection-state == "failed" ? (root.tight ? "Server unreachable" : "Server unreachable — check your network") :
-                      queue-count > 0 ? (root.tight
-                          ? "No server — " + queue-count + " queued"
-                          : "Server unreachable — " + queue-count + " messages queued") :
                       root.tight ? "No server — messages will send later"
-                                 : "Server unreachable — messages to it will be sent when it comes back";
+                                 : "Server unreachable — messages will send later";
                 color: root.banner-color;
                 font-size: Typography.xs;
                 font-weight: Typography.medium;
@@ -234,6 +241,10 @@ export component ConnectionBanner inherits Rectangle {
                 horizontal-stretch: 0;
                 border-radius: 6px;
                 background: close-touch.has-hover ? root.banner-color.with-alpha(0.15) : transparent;
+                transform-scale-x: close-touch.pressed ? 88% : 100%;
+                transform-scale-y: close-touch.pressed ? 88% : 100%;
+                animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                 Image {
                     source: Icons.x;
@@ -249,6 +260,8 @@ export component ConnectionBanner inherits Rectangle {
                 }
                 accessible-role: button;
                 accessible-label: "Dismiss the connection banner";
+                accessible-action-default => { root.dismissed(); }
+                KeyFocus { border-radius: parent.border-radius; activate => { root.dismissed(); } }
             }
         }
 

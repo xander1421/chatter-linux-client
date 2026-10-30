@@ -8,12 +8,12 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 use chatter_core::domain::jarvis::{
-    ContextType, EntityType, JarvisContext, JarvisConversation, JarvisEntity,
-    JarvisFact, JarvisRelationship, Role, SubjectType,
+    EntityType, JarvisContext, JarvisConversation, JarvisEntity, JarvisFact, JarvisRelationship,
+    Role, SubjectType,
 };
 use chatter_core::domain::{ChannelId, UserId};
-use chatter_core::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 use chatter_core::storage::Database;
+use chatter_core::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 
 // ============================================================================
 // Test Helpers
@@ -43,14 +43,19 @@ fn test_jarvis_conversation_crud() {
 
     // Insert a user message
     let user_msg = JarvisConversation::user_message(&context, "Hello Jarvis".to_string());
-    repo.insert_conversation(&user_msg).expect("Failed to insert");
+    repo.insert_conversation(&user_msg)
+        .expect("Failed to insert");
 
     // Insert an assistant message
-    let assistant_msg = JarvisConversation::assistant_message(&context, "Hello! How can I help?".to_string());
-    repo.insert_conversation(&assistant_msg).expect("Failed to insert");
+    let assistant_msg =
+        JarvisConversation::assistant_message(&context, "Hello! How can I help?".to_string());
+    repo.insert_conversation(&assistant_msg)
+        .expect("Failed to insert");
 
     // Retrieve recent conversations
-    let recent = repo.get_recent_conversations(&context, 10).expect("Failed to get");
+    let recent = repo
+        .get_recent_conversations(&context, 10)
+        .expect("Failed to get");
     assert_eq!(recent.len(), 2);
     assert_eq!(recent[0].role, Role::User);
     assert_eq!(recent[0].content, "Hello Jarvis");
@@ -87,7 +92,10 @@ fn test_jarvis_fact_upsert_and_reinforce() {
     assert_eq!(facts.len(), 1);
     assert_eq!(facts[0].object, "Chatter project");
     // Confidence stays at max (1.0) since initial was already 1.0 and SQL clamps to 1.0
-    assert!((facts[0].confidence - 1.0).abs() < f64::EPSILON, "Confidence should remain at 1.0 after reinforce");
+    assert!(
+        (facts[0].confidence - 1.0).abs() < f64::EPSILON,
+        "Confidence should remain at 1.0 after reinforce"
+    );
 }
 
 #[test]
@@ -98,9 +106,20 @@ fn test_jarvis_fact_search() {
     let user_id = UserId::new();
 
     // Insert multiple facts (each with unique predicate to avoid upsert collisions)
-    repo.upsert_fact(&JarvisFact::about_user(&user_id, "interested_in_ml", "machine learning")).unwrap();
-    repo.upsert_fact(&JarvisFact::about_user(&user_id, "uses", "Rust")).unwrap();
-    repo.upsert_fact(&JarvisFact::about_user(&user_id, "interested_in_crypto", "cryptography")).unwrap();
+    repo.upsert_fact(&JarvisFact::about_user(
+        &user_id,
+        "interested_in_ml",
+        "machine learning",
+    ))
+    .unwrap();
+    repo.upsert_fact(&JarvisFact::about_user(&user_id, "uses", "Rust"))
+        .unwrap();
+    repo.upsert_fact(&JarvisFact::about_user(
+        &user_id,
+        "interested_in_crypto",
+        "cryptography",
+    ))
+    .unwrap();
 
     // Search for "machine" — matches object "machine learning"
     let results = repo.search_facts("machine", 10).expect("Failed to search");
@@ -108,7 +127,9 @@ fn test_jarvis_fact_search() {
     assert!(results[0].object.contains("machine learning"));
 
     // Search for "interested" — matches predicates "interested_in_ml" and "interested_in_crypto"
-    let results = repo.search_facts("interested", 10).expect("Failed to search");
+    let results = repo
+        .search_facts("interested", 10)
+        .expect("Failed to search");
     assert_eq!(results.len(), 2);
 }
 
@@ -124,8 +145,16 @@ fn test_jarvis_context_types() {
     let dm_ctx = JarvisContext::dm(dm_channel_id);
 
     // Insert messages in different contexts
-    repo.insert_conversation(&JarvisConversation::user_message(&channel_ctx, "Channel msg".to_string())).unwrap();
-    repo.insert_conversation(&JarvisConversation::user_message(&dm_ctx, "DM msg".to_string())).unwrap();
+    repo.insert_conversation(&JarvisConversation::user_message(
+        &channel_ctx,
+        "Channel msg".to_string(),
+    ))
+    .unwrap();
+    repo.insert_conversation(&JarvisConversation::user_message(
+        &dm_ctx,
+        "DM msg".to_string(),
+    ))
+    .unwrap();
 
     // Each context should only see its own messages
     let channel_msgs = repo.get_recent_conversations(&channel_ctx, 10).unwrap();
@@ -150,7 +179,10 @@ fn test_jarvis_entity_upsert() {
     let id = repo.upsert_entity(&entity).expect("Failed to upsert");
 
     // Verify entity was created
-    let fetched = repo.get_entity(&id).expect("Failed to get").expect("Entity not found");
+    let fetched = repo
+        .get_entity(&id)
+        .expect("Failed to get")
+        .expect("Entity not found");
     assert_eq!(fetched.name, "Alice Smith");
     assert_eq!(fetched.entity_type, EntityType::Person);
     assert_eq!(fetched.mention_count, 1);
@@ -160,7 +192,10 @@ fn test_jarvis_entity_upsert() {
     let id2 = repo.upsert_entity(&entity2).expect("Failed to upsert");
     assert_eq!(id.as_str(), id2.as_str());
 
-    let fetched = repo.get_entity(&id).expect("Failed to get").expect("Entity not found");
+    let fetched = repo
+        .get_entity(&id)
+        .expect("Failed to get")
+        .expect("Entity not found");
     assert_eq!(fetched.mention_count, 2);
 }
 
@@ -170,10 +205,26 @@ fn test_jarvis_entity_search() {
     let repo = JarvisGraphRepository::new(db);
 
     // Create entities
-    repo.upsert_entity(&JarvisEntity::new(EntityType::Technology, "Rust".to_string())).unwrap();
-    repo.upsert_entity(&JarvisEntity::new(EntityType::Technology, "TypeScript".to_string())).unwrap();
-    repo.upsert_entity(&JarvisEntity::new(EntityType::Technology, "RustFFI".to_string())).unwrap();
-    repo.upsert_entity(&JarvisEntity::new(EntityType::Project, "Chatter".to_string())).unwrap();
+    repo.upsert_entity(&JarvisEntity::new(
+        EntityType::Technology,
+        "Rust".to_string(),
+    ))
+    .unwrap();
+    repo.upsert_entity(&JarvisEntity::new(
+        EntityType::Technology,
+        "TypeScript".to_string(),
+    ))
+    .unwrap();
+    repo.upsert_entity(&JarvisEntity::new(
+        EntityType::Technology,
+        "RustFFI".to_string(),
+    ))
+    .unwrap();
+    repo.upsert_entity(&JarvisEntity::new(
+        EntityType::Project,
+        "Chatter".to_string(),
+    ))
+    .unwrap();
 
     // Search for "rust"
     let results = repo.search_entities("rust", 10).expect("Failed to search");
@@ -190,14 +241,24 @@ fn test_jarvis_entity_by_name() {
     let (db, _temp) = create_test_db();
     let repo = JarvisGraphRepository::new(db);
 
-    repo.upsert_entity(&JarvisEntity::new(EntityType::Project, "Rust Compiler".to_string())).unwrap();
+    repo.upsert_entity(&JarvisEntity::new(
+        EntityType::Project,
+        "Rust Compiler".to_string(),
+    ))
+    .unwrap();
 
     // Case-insensitive lookup
-    let fetched = repo.get_entity_by_name("rust compiler").expect("Failed to get").expect("Not found");
+    let fetched = repo
+        .get_entity_by_name("rust compiler")
+        .expect("Failed to get")
+        .expect("Not found");
     assert_eq!(fetched.name, "Rust Compiler");
 
     // With different casing
-    let fetched = repo.get_entity_by_name("RUST COMPILER").expect("Failed to get").expect("Not found");
+    let fetched = repo
+        .get_entity_by_name("RUST COMPILER")
+        .expect("Failed to get")
+        .expect("Not found");
     assert_eq!(fetched.name, "Rust Compiler");
 }
 
@@ -216,20 +277,25 @@ fn test_jarvis_relationships() {
     let rust_id = repo.upsert_entity(&rust).unwrap();
 
     // Create relationships
-    let rel1 = JarvisRelationship::new(alice_id.clone(), chatter_id.clone(), "works_on".to_string());
+    let rel1 =
+        JarvisRelationship::new(alice_id.clone(), chatter_id.clone(), "works_on".to_string());
     let rel2 = JarvisRelationship::new(chatter_id.clone(), rust_id.clone(), "uses".to_string());
 
     repo.upsert_relationship(&rel1).unwrap();
     repo.upsert_relationship(&rel2).unwrap();
 
     // Get relationships from Alice
-    let from_alice = repo.get_relationships_from(&alice_id).expect("Failed to get");
+    let from_alice = repo
+        .get_relationships_from(&alice_id)
+        .expect("Failed to get");
     assert_eq!(from_alice.len(), 1);
     assert_eq!(from_alice[0].0.relationship_type, "works_on");
     assert_eq!(from_alice[0].1.name, "Chatter");
 
     // Get relationships to Chatter
-    let to_chatter = repo.get_relationships_to(&chatter_id).expect("Failed to get");
+    let to_chatter = repo
+        .get_relationships_to(&chatter_id)
+        .expect("Failed to get");
     assert_eq!(to_chatter.len(), 1);
     assert_eq!(to_chatter[0].0.relationship_type, "works_on");
     assert_eq!(to_chatter[0].1.name, "Alice");
@@ -241,17 +307,51 @@ fn test_jarvis_connected_entities() {
     let repo = JarvisGraphRepository::new(db);
 
     // Create a small graph: Alice -> Chatter -> Rust -> WASM
-    let alice_id = repo.upsert_entity(&JarvisEntity::new(EntityType::Person, "Alice".to_string())).unwrap();
-    let chatter_id = repo.upsert_entity(&JarvisEntity::new(EntityType::Project, "Chatter".to_string())).unwrap();
-    let rust_id = repo.upsert_entity(&JarvisEntity::new(EntityType::Technology, "Rust".to_string())).unwrap();
-    let wasm_id = repo.upsert_entity(&JarvisEntity::new(EntityType::Technology, "WASM".to_string())).unwrap();
+    let alice_id = repo
+        .upsert_entity(&JarvisEntity::new(EntityType::Person, "Alice".to_string()))
+        .unwrap();
+    let chatter_id = repo
+        .upsert_entity(&JarvisEntity::new(
+            EntityType::Project,
+            "Chatter".to_string(),
+        ))
+        .unwrap();
+    let rust_id = repo
+        .upsert_entity(&JarvisEntity::new(
+            EntityType::Technology,
+            "Rust".to_string(),
+        ))
+        .unwrap();
+    let wasm_id = repo
+        .upsert_entity(&JarvisEntity::new(
+            EntityType::Technology,
+            "WASM".to_string(),
+        ))
+        .unwrap();
 
-    repo.upsert_relationship(&JarvisRelationship::new(alice_id.clone(), chatter_id.clone(), "works_on".to_string())).unwrap();
-    repo.upsert_relationship(&JarvisRelationship::new(chatter_id.clone(), rust_id.clone(), "uses".to_string())).unwrap();
-    repo.upsert_relationship(&JarvisRelationship::new(rust_id.clone(), wasm_id.clone(), "compiles_to".to_string())).unwrap();
+    repo.upsert_relationship(&JarvisRelationship::new(
+        alice_id.clone(),
+        chatter_id.clone(),
+        "works_on".to_string(),
+    ))
+    .unwrap();
+    repo.upsert_relationship(&JarvisRelationship::new(
+        chatter_id.clone(),
+        rust_id.clone(),
+        "uses".to_string(),
+    ))
+    .unwrap();
+    repo.upsert_relationship(&JarvisRelationship::new(
+        rust_id.clone(),
+        wasm_id.clone(),
+        "compiles_to".to_string(),
+    ))
+    .unwrap();
 
     // Get entities connected to Alice within 2 hops
-    let connected = repo.get_connected_entities(&alice_id, 2).expect("Failed to get");
+    let connected = repo
+        .get_connected_entities(&alice_id, 2)
+        .expect("Failed to get");
 
     // Should find Chatter (depth 1) and Rust (depth 2)
     assert!(connected.len() >= 2);
@@ -266,17 +366,31 @@ fn test_jarvis_entities_by_type() {
     let repo = JarvisGraphRepository::new(db);
 
     // Create entities of different types
-    repo.upsert_entity(&JarvisEntity::new(EntityType::Person, "Alice".to_string())).unwrap();
-    repo.upsert_entity(&JarvisEntity::new(EntityType::Person, "Bob".to_string())).unwrap();
-    repo.upsert_entity(&JarvisEntity::new(EntityType::Technology, "Rust".to_string())).unwrap();
-    repo.upsert_entity(&JarvisEntity::new(EntityType::Project, "Chatter".to_string())).unwrap();
+    repo.upsert_entity(&JarvisEntity::new(EntityType::Person, "Alice".to_string()))
+        .unwrap();
+    repo.upsert_entity(&JarvisEntity::new(EntityType::Person, "Bob".to_string()))
+        .unwrap();
+    repo.upsert_entity(&JarvisEntity::new(
+        EntityType::Technology,
+        "Rust".to_string(),
+    ))
+    .unwrap();
+    repo.upsert_entity(&JarvisEntity::new(
+        EntityType::Project,
+        "Chatter".to_string(),
+    ))
+    .unwrap();
 
     // Get only people
-    let people = repo.get_entities_by_type(EntityType::Person, 10).expect("Failed to get");
+    let people = repo
+        .get_entities_by_type(EntityType::Person, 10)
+        .expect("Failed to get");
     assert_eq!(people.len(), 2);
 
     // Get only technologies
-    let tech = repo.get_entities_by_type(EntityType::Technology, 10).expect("Failed to get");
+    let tech = repo
+        .get_entities_by_type(EntityType::Technology, 10)
+        .expect("Failed to get");
     assert_eq!(tech.len(), 1);
     assert_eq!(tech[0].name, "Rust");
 }
@@ -293,20 +407,39 @@ fn fact_contradiction_supersedes_and_preserves_history() {
     let user = UserId::new();
 
     // ADD
-    repo.upsert_fact(&JarvisFact::about_user(&user, "works_on", "the Chatter app"))
-        .unwrap();
+    repo.upsert_fact(&JarvisFact::about_user(
+        &user,
+        "works_on",
+        "the Chatter app",
+    ))
+    .unwrap();
     // REINFORCE (same object, case-insensitive)
-    repo.upsert_fact(&JarvisFact::about_user(&user, "works_on", "The Chatter App"))
+    repo.upsert_fact(&JarvisFact::about_user(
+        &user,
+        "works_on",
+        "The Chatter App",
+    ))
+    .unwrap();
+    let current = repo
+        .get_facts_about(SubjectType::User, &user.to_string())
         .unwrap();
-    let current = repo.get_facts_about(SubjectType::User, &user.to_string()).unwrap();
     assert_eq!(current.len(), 1, "reinforce must not duplicate");
-    assert!(current[0].confidence > 1.0 - 1e-9, "reinforce must bump confidence");
+    assert!(
+        current[0].confidence > 1.0 - 1e-9,
+        "reinforce must bump confidence"
+    );
 
     // SUPERSEDE (contradiction)
-    repo.upsert_fact(&JarvisFact::about_user(&user, "works_on", "a new game engine"))
-        .unwrap();
+    repo.upsert_fact(&JarvisFact::about_user(
+        &user,
+        "works_on",
+        "a new game engine",
+    ))
+    .unwrap();
 
-    let current = repo.get_facts_about(SubjectType::User, &user.to_string()).unwrap();
+    let current = repo
+        .get_facts_about(SubjectType::User, &user.to_string())
+        .unwrap();
     assert_eq!(current.len(), 1, "only the new fact is current");
     assert_eq!(current[0].object, "a new game engine");
     assert!(current[0].valid_until.is_none());
@@ -315,7 +448,10 @@ fn fact_contradiction_supersedes_and_preserves_history() {
         .get_fact_history(SubjectType::User, &user.to_string(), "works_on")
         .unwrap();
     assert_eq!(history.len(), 2, "superseded fact must keep its row");
-    let old = history.iter().find(|f| f.object == "the Chatter app").unwrap();
+    let old = history
+        .iter()
+        .find(|f| f.object == "the Chatter app")
+        .unwrap();
     assert!(old.valid_until.is_some(), "old fact must carry valid_until");
     assert_eq!(
         old.superseded_by.as_deref(),

@@ -26,10 +26,8 @@
 //! }
 //! ```
 
-pub mod prelude;
-pub mod macros;
-pub mod mocks;
 pub mod builders;
-pub mod harness;
 pub mod fixtures;
-pub mod traits;
+pub mod harness;
+pub mod mocks;
+pub mod prelude;

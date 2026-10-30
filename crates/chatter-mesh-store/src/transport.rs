@@ -36,7 +36,7 @@ pub struct PeerSnapshot {
 ///   heuristic. The mesh keeps a peer "reachable" for up to a minute after its radio
 ///   goes quiet, so a send here can silently go nowhere.
 /// - [`can_deliver_promptly`](RouterTransport::can_deliver_promptly) — the send will
-///   actually leave the device. Nostr claims any favourite with a known npub as
+///   actually leave the device. Nostr claims any peer with a known npub as
 ///   reachable even with no relay connection, where a send only joins a queue
 ///   waiting for internet that may never arrive.
 /// - [`can_deliver_securely`](RouterTransport::can_deliver_securely) — an encrypted
@@ -77,30 +77,9 @@ pub trait RouterTransport {
     ) -> Vec<PeerId>;
 }
 
-/// Trust tier for a peer offering to carry mail.
-///
-/// The tiers exist so that strangers cannot crowd out favourites: they draw from
-/// separate quotas against a shared pool, and overflow evicts the lower tier first.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum CourierTier {
-    /// Signature-verified, but not a mutual favourite. Smaller quota, evicted first.
-    Verified,
-    /// Mutual favourite. Larger quota, never evicted to make room for `Verified`.
-    Favorite,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn favorites_outrank_verified_for_eviction() {
-        // Ord is what the eviction sort relies on: the lowest tier goes first.
-        assert!(CourierTier::Verified < CourierTier::Favorite);
-        let mut tiers = [CourierTier::Favorite, CourierTier::Verified];
-        tiers.sort();
-        assert_eq!(tiers[0], CourierTier::Verified);
-    }
 
     #[test]
     fn a_snapshot_without_a_noise_key_cannot_be_addressed_offline() {

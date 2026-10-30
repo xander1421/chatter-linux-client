@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use parking_lot::RwLock;
-use tokio::sync::{broadcast, watch, Mutex};
+use tokio::sync::{Mutex, broadcast, watch};
 
 use crate::network::grpc::MessageClient;
 use crate::proto::chat_v1::DeviceMessage;
@@ -15,6 +15,23 @@ use super::config::InboxConfig;
 use super::error::InboxError;
 use super::events::InboxEvent;
 use super::state::{InboxState, InboxStats};
+
+/// Queue IDs belong to one authenticated device, not to this process.
+#[derive(Default)]
+struct DeviceQueueCursor {
+    owner: Option<(String, u32, u64)>,
+    after_id: i64,
+}
+
+impl DeviceQueueCursor {
+    fn bind(&mut self, user_id: String, device_id: u32, auth_generation: u64) {
+        let owner = (user_id, device_id, auth_generation);
+        if self.owner.as_ref() != Some(&owner) {
+            self.owner = Some(owner);
+            self.after_id = 0;
+        }
+    }
+}
 
 /// Where the next `GetDeviceMessages` should resume from.
 ///
@@ -61,7 +78,7 @@ pub struct InboxPoller {
     stats: Arc<RwLock<InboxStats>>,
     state: Arc<RwLock<InboxState>>,
     // For device queue, we use queue_id (int64) for pagination, not string
-    last_queue_id: RwLock<i64>,
+    cursor: RwLock<DeviceQueueCursor>,
     last_activity: RwLock<Option<Instant>>,
 }
 
@@ -80,10 +97,7 @@ impl InboxPoller {
     /// re-dials over the pool's current transport (used when anon mode toggles
     /// the transport between direct and onion; the captured client is otherwise
     /// pinned to the transport that was active at construction).
-    pub async fn refresh_message_client(
-        &self,
-        pool: &crate::network::grpc::GrpcClientPool,
-    ) {
+    pub async fn refresh_message_client(&self, pool: &crate::network::grpc::GrpcClientPool) {
         *self.message_client.lock().await = pool.message_client();
     }
 
@@ -104,18 +118,26 @@ impl InboxPoller {
             event_tx,
             stats,
             state,
-            last_queue_id: RwLock::new(0),
+            cursor: RwLock::new(DeviceQueueCursor::default()),
             last_activity: RwLock::new(None),
         }
+    }
+
+    /// Bind while the provider is stopped; transport switches retain the same
+    /// device cursor, while a fresh login starts at the new queue's beginning.
+    pub fn bind_device(&self, user_id: String, device_id: u32, auth_generation: u64) {
+        self.cursor
+            .write()
+            .bind(user_id, device_id, auth_generation);
     }
 
     /// Execute a single poll cycle.
     ///
     /// Returns:
-    /// - `Ok(Some(messages))` - Poll succeeded, messages received
+    /// - `Ok(Some((messages, has_more)))` - Poll succeeded, with page hint
     /// - `Ok(None)` - Shutdown requested, should exit loop
     /// - `Err(e)` - Poll failed, should retry
-    pub async fn run_once(&self) -> Result<Option<Vec<DeviceMessage>>, InboxError> {
+    pub async fn run_once(&self) -> Result<Option<(Vec<DeviceMessage>, bool)>, InboxError> {
         // Check for shutdown
         if *self.shutdown_rx.borrow() {
             return Ok(None);
@@ -142,7 +164,9 @@ impl InboxPoller {
                 }
 
                 // Emit poll completed event
-                let _ = self.event_tx.send(InboxEvent::PollCompleted { count, has_more });
+                let _ = self
+                    .event_tx
+                    .send(InboxEvent::PollCompleted { count, has_more });
 
                 // Update last activity if we got messages
                 if count > 0 {
@@ -155,7 +179,7 @@ impl InboxPoller {
                 }
 
                 self.set_state(InboxState::Idle);
-                Ok(Some(messages))
+                Ok(Some((messages, has_more)))
             }
             Err(e) => {
                 // Emit poll failed event
@@ -176,13 +200,13 @@ impl InboxPoller {
     /// requested again, and a retained message below it is one the server still
     /// holds and we will never ask for. See [`next_after_id`].
     pub fn advance_after_id(&self, batch_max: i64, lowest_retained: Option<i64>) {
-        *self.last_queue_id.write() = next_after_id(batch_max, lowest_retained);
+        self.cursor.write().after_id = next_after_id(batch_max, lowest_retained);
     }
 
     /// Perform a single poll request.
     async fn poll_once(&self) -> Result<(Vec<DeviceMessage>, bool), InboxError> {
         // Poll for messages
-        let after_id = *self.last_queue_id.read();
+        let after_id = self.cursor.read().after_id;
 
         tracing::info!(after_id, "Acquiring message client lock...");
         let response = {
@@ -203,17 +227,14 @@ impl InboxPoller {
             };
             let outcome = tokio::time::timeout(
                 rpc_timeout,
-                client.get_device_messages(
-                    after_id,
-                    self.config.max_batch_size as i32,
-                ),
+                client.get_device_messages(after_id, self.config.max_batch_size as i32),
             )
             .await;
             // Drive the Tor indicator off the real onion RPC outcome (Circuit+RPC
             // signal): a completed round-trip = Connected, a timeout = Error. Only
             // touch it on onion — direct mode owns its own connection state.
             if on_onion {
-                use crate::network::connection::{set_tor_status, TorStatus};
+                use crate::network::connection::{TorStatus, set_tor_status};
                 match &outcome {
                     Ok(Ok(_)) => set_tor_status(TorStatus::Connected),
                     Err(_) => set_tor_status(TorStatus::Error),
@@ -221,7 +242,12 @@ impl InboxPoller {
                 }
             }
             let result = outcome
-                .map_err(|_| InboxError::PollFailed(format!("GetDeviceMessages RPC timed out after {}s", rpc_timeout.as_secs())))?
+                .map_err(|_| {
+                    InboxError::PollFailed(format!(
+                        "GetDeviceMessages RPC timed out after {}s",
+                        rpc_timeout.as_secs()
+                    ))
+                })?
                 .map_err(|e| InboxError::PollFailed(e.to_string()))?;
             tracing::info!(
                 after_id,
@@ -277,9 +303,7 @@ impl InboxPoller {
 
             let result = {
                 let mut client = self.message_client.lock().await;
-                client
-                    .acknowledge_messages(chunk_ids.clone())
-                    .await
+                client.acknowledge_messages(chunk_ids.clone()).await
             };
 
             if let Err(e) = result {
@@ -298,12 +322,28 @@ impl InboxPoller {
     pub fn poll_interval(&self) -> std::time::Duration {
         self.current_interval()
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pagination_follows_device_address_across_relogin_and_transport_switch() {
+        let mut cursor = DeviceQueueCursor::default();
+        cursor.bind("alice".into(), 2, 1);
+        cursor.after_id = 3;
+        cursor.bind("alice".into(), 2, 1); // Shield changes transport only.
+        assert_eq!(cursor.after_id, 3);
+        cursor.bind("alice".into(), 1, 2); // Logout/login replaces the device.
+        assert_eq!(cursor.after_id, 0, "new queue IDs 1..=3 must be fetched");
+        cursor.after_id = 7;
+        cursor.bind("alice".into(), 1, 3); // The server may reuse the same ID.
+        assert_eq!(cursor.after_id, 0, "a new auth session owns a fresh queue");
+        cursor.after_id = 7;
+        cursor.bind("bob".into(), 1, 3);
+        assert_eq!(cursor.after_id, 0, "another account owns another queue");
+    }
 
     /// `AckDecision::Retain` means "leave it queued so it is delivered again",
     /// and the whole transient half of the ack policy rests on that being true:

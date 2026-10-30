@@ -144,12 +144,13 @@ impl ReactionAggregator {
 
     /// Process a reaction added event.
     pub fn process_added(&self, event: ReactionEvent) {
-        self.recent
-            .write()
-            .add(
-                format!("{}:{}", event.update.target_author_aci, event.update.target_sent_timestamp),
-                event.clone(),
-            );
+        self.recent.write().add(
+            format!(
+                "{}:{}",
+                event.update.target_author_aci, event.update.target_sent_timestamp
+            ),
+            event.clone(),
+        );
         let _ = self.added.send(event);
     }
 
@@ -162,11 +163,7 @@ impl ReactionAggregator {
     ///
     /// Use `reaction_cache_key(author_aci, sent_timestamp)` to build the key.
     pub fn get_recent_reactions(&self, key: &str) -> Vec<ReactionEvent> {
-        self.recent
-            .read()
-            .get(key)
-            .cloned()
-            .unwrap_or_default()
+        self.recent.read().get(key).cloned().unwrap_or_default()
     }
 
     /// Get the number of messages with cached reactions.
@@ -193,17 +190,28 @@ mod tests {
     const TEST_AUTHOR: &str = "550e8400-e29b-41d4-a716-446655440000";
     const TEST_TIMESTAMP: u64 = 1704067200_000_000_000;
 
-    fn make_update(target_author_aci: &str, target_sent_timestamp: u64, emoji: &str, add: bool) -> ReactionUpdate {
+    fn make_update(
+        target_author_aci: &str,
+        target_sent_timestamp: u64,
+        emoji: &str,
+        add: bool,
+    ) -> ReactionUpdate {
         ReactionUpdate {
             target_author_aci: target_author_aci.to_string(),
             target_sent_timestamp,
             emoji: emoji.to_string(),
             add,
             proof_of_work: vec![],
+            reactor_id: TEST_AUTHOR.to_string(),
         }
     }
 
-    fn make_event(target_author_aci: &str, target_sent_timestamp: u64, user_id: &str, emoji: &str) -> ReactionEvent {
+    fn make_event(
+        target_author_aci: &str,
+        target_sent_timestamp: u64,
+        user_id: &str,
+        emoji: &str,
+    ) -> ReactionEvent {
         ReactionEvent {
             update: make_update(target_author_aci, target_sent_timestamp, emoji, true),
             user_id: user_id.to_string(),
@@ -215,7 +223,10 @@ mod tests {
         let agg = ReactionAggregator::new();
         let _rx = agg.on_reaction_added();
 
-        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true), "user-1".to_string());
+        agg.process(
+            make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true),
+            "user-1".to_string(),
+        );
 
         let key = reaction_cache_key(TEST_AUTHOR, TEST_TIMESTAMP);
         let reactions = agg.get_recent_reactions(&key);
@@ -229,8 +240,14 @@ mod tests {
         let agg = ReactionAggregator::new();
         let _rx = agg.on_reaction_added();
 
-        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true), "user-1".to_string());
-        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{2764}", true), "user-2".to_string());
+        agg.process(
+            make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true),
+            "user-1".to_string(),
+        );
+        agg.process(
+            make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{2764}", true),
+            "user-2".to_string(),
+        );
 
         let key = reaction_cache_key(TEST_AUTHOR, TEST_TIMESTAMP);
         let reactions = agg.get_recent_reactions(&key);
@@ -242,7 +259,10 @@ mod tests {
         let agg = ReactionAggregator::new();
         let mut rx = agg.on_reaction_added();
 
-        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true), "user-1".to_string());
+        agg.process(
+            make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true),
+            "user-1".to_string(),
+        );
 
         let received = rx.try_recv().unwrap();
         assert_eq!(received.update.target_author_aci, TEST_AUTHOR);
@@ -256,7 +276,10 @@ mod tests {
         let agg = ReactionAggregator::new();
         let mut rx = agg.on_reaction_removed();
 
-        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", false), "user-1".to_string());
+        agg.process(
+            make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", false),
+            "user-1".to_string(),
+        );
 
         let received = rx.try_recv().unwrap();
         assert_eq!(received.update.target_author_aci, TEST_AUTHOR);
@@ -285,7 +308,10 @@ mod tests {
         let agg = ReactionAggregator::new();
         let _rx = agg.on_reaction_added();
 
-        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true), "user-1".to_string());
+        agg.process(
+            make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true),
+            "user-1".to_string(),
+        );
         assert_eq!(agg.cache_size(), 1);
 
         agg.clear();
@@ -299,12 +325,18 @@ mod tests {
         let mut rem_rx = agg.on_reaction_removed();
 
         // Process an add
-        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true), "user-1".to_string());
+        agg.process(
+            make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true),
+            "user-1".to_string(),
+        );
         assert!(add_rx.try_recv().is_ok());
         assert!(rem_rx.try_recv().is_err());
 
         // Process a remove
-        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", false), "user-1".to_string());
+        agg.process(
+            make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", false),
+            "user-1".to_string(),
+        );
         assert!(rem_rx.try_recv().is_ok());
     }
 }

@@ -1,0 +1,131 @@
+import { SidebarPane } from "app_sidebar_pane.slint";
+import { SearchPane } from "app_search_pane.slint";
+import { ModalHostState } from "app_modal_host_state.slint";
+import { ChatPane } from "app_chat_pane.slint";
+import { CallView } from "app_call_view.slint";
+import { JarvisGlobal } from "jarvis/jarvis_global.slint";
+
+// Keyboard commands for the main view. The surrounding Back scope retains
+// focus ownership so closing a picker or dialog still receives Back/Escape.
+export component AppShortcuts inherits FocusScope {
+    in property <string> current-view;
+    in property <string> active-modal;
+    callback back-pressed();
+
+    width: 0;
+    height: 0;
+    enabled: root.current-view == "main";
+    // Keys reach it from the back scope; as a Tab stop it was an unnamed,
+    // invisible stop between the composer and the sidebar.
+    focus-on-tab-navigation: false;
+
+    // The Ctrl commands. Called from the window's back scope, which is an
+    // ancestor of every focused field: this zero-size scope is a sibling of
+    // the content, so its own key-pressed only ran while it held focus and
+    // Ctrl+K/F, Ctrl+, Ctrl+/ and Ctrl+J did nothing from the composer or
+    // after a click in the chat.
+    public function handle-command(event: KeyEvent) -> bool {
+        if (!self.enabled) { return false; }
+        if (root.active-modal == "none" && !SearchPane.unified-search-open
+            && !SidebarPane.row-context-menu-open && !SidebarPane.section-context-menu-open
+            && !ChatPane.context-menu-visible && !ChatPane.reaction-picker-visible
+            && !ChatPane.composer-emoji-picker-visible && !ChatPane.composer-gif-picker-visible
+            && !CallView.calls-more-menu-visible) {
+            if (event.modifiers.control && event.text == "0") {
+                SidebarPane.active-tab = "chats";
+                SidebarPane.mobile-show-chat = true;
+                SidebarPane.saved-messages-clicked();
+                return true;
+            }
+            if ((event.modifiers.alt && event.text == Key.DownArrow)
+                || (event.modifiers.control && event.text == Key.Tab && !event.modifiers.shift)) {
+                SidebarPane.navigate-chat(1);
+                return true;
+            }
+            if ((event.modifiers.alt && event.text == Key.UpArrow)
+                || (event.modifiers.control && event.text == Key.Tab && event.modifiers.shift)) {
+                SidebarPane.navigate-chat(-1);
+                return true;
+            }
+        }
+        if (!event.modifiers.control) { return false; }
+        // Ctrl+J: open the local AI channel
+        if (root.active-modal == "none" && !SearchPane.unified-search-open
+            && JarvisGlobal.enabled && JarvisGlobal.opted-in && event.modifiers.control && event.text == "j") {
+            SidebarPane.active-tab = "chats";
+            SidebarPane.mobile-show-chat = true;
+            SidebarPane.channel-selected("00000000-0000-0000-0000-000000000000");
+            return true;
+        }
+        // Ctrl+Shift+F: search in the open chat (Signal Desktop's binding).
+        if (root.active-modal == "none" && !SearchPane.unified-search-open && ChatPane.channel-name != ""
+            && event.modifiers.control && event.modifiers.shift && (event.text == "F" || event.text == "f")) {
+            ChatPane.search-in-chat-clicked();
+            return true;
+        }
+        // Ctrl+K / Ctrl+F: open unified search (which combo depends on pref)
+        if (root.active-modal == "none" && event.modifiers.control
+            && ((event.text == "k" && SearchPane.search-shortcut-pref != "f")
+             || (event.text == "f" && SearchPane.search-shortcut-pref != "k"))) {
+            SearchPane.unified-search-selected-index = 0;
+            SearchPane.unified-search-open = true;
+            SearchPane.unified-search-opened();
+            return true;
+        }
+        // Ctrl+,: Open settings
+        if (root.active-modal == "none" && !SearchPane.unified-search-open
+            && event.modifiers.control && event.text == ",") {
+            ModalHostState.nav-push("settings");
+            SidebarPane.settings-clicked();
+            return true;
+        }
+        // Ctrl+/: Toggle keyboard shortcuts help
+        if (event.modifiers.control && event.text == "/"
+            && (root.active-modal == "none" || root.active-modal == "keyboard-shortcuts")) {
+            if (root.active-modal == "keyboard-shortcuts") {
+                ModalHostState.nav-close("keyboard-shortcuts");
+            } else {
+                ModalHostState.nav-push("keyboard-shortcuts");
+            }
+            return true;
+        }
+        false
+    }
+
+    key-pressed(event) => {
+        if (root.handle-command(event)) { return accept; }
+        if (event.text == Key.Escape && root.handle-escape()) { return accept; }
+        reject
+    }
+
+    // Escape: close the top modal or overlay, else leave a non-Chats tab.
+    // Also called from the back scope (see handle-command): Settings and
+    // other full pages have no modal scope of their own to catch it.
+    public function handle-escape() -> bool {
+        if (!self.enabled) { return false; }
+        if (ChatPane.link-confirm-url != "" || CallView.calls-more-menu-visible || CallView.call-history-selecting || ChatPane.delete-confirm-count > 0) {
+            root.back-pressed();
+            return true;
+        }
+        if (root.active-modal != "none") {
+            root.back-pressed();
+            return true;
+        }
+        if (SidebarPane.row-context-menu-open || SidebarPane.section-context-menu-open) {
+            SidebarPane.row-context-menu-open = false;
+            SidebarPane.section-context-menu-open = false;
+            return true;
+        }
+        if (SearchPane.unified-search-open || ChatPane.thread-panel-visible
+            || ChatPane.context-menu-visible || ChatPane.reaction-picker-visible
+            || ChatPane.composer-emoji-picker-visible || ChatPane.composer-gif-picker-visible
+            || ChatPane.pdf-preview-visible || ChatPane.code-preview-visible
+            || ChatPane.video-player-visible || ChatPane.image-viewer-visible
+            || ChatPane.selection-mode
+            || SidebarPane.active-tab != "chats") {
+            root.back-pressed();
+            return true;
+        }
+        false
+    }
+}

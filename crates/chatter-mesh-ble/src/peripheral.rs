@@ -39,9 +39,10 @@ use std::sync::Arc;
 
 use bluer::adv::{Advertisement, AdvertisementHandle, Type as AdvertisementType};
 use bluer::gatt::local::{
-    Application, ApplicationHandle, Characteristic, CharacteristicControl, CharacteristicControlEvent,
-    CharacteristicControlHandle, CharacteristicNotify, CharacteristicNotifyMethod, CharacteristicWrite,
-    CharacteristicWriteMethod, Service, characteristic_control,
+    Application, ApplicationHandle, Characteristic, CharacteristicControl,
+    CharacteristicControlEvent, CharacteristicControlHandle, CharacteristicNotify,
+    CharacteristicNotifyMethod, CharacteristicWrite, CharacteristicWriteMethod, Service,
+    characteristic_control,
 };
 use bluer::gatt::{CharacteristicReader, CharacteristicWriter};
 use bluer::{Adapter, Uuid};
@@ -70,7 +71,9 @@ fn mesh_advertisement(service: Uuid) -> Advertisement {
 
 /// Build the GATT application: one primary service, one characteristic.
 fn mesh_application(
-    service: Uuid, characteristic: Uuid, control: CharacteristicControlHandle,
+    service: Uuid,
+    characteristic: Uuid,
+    control: CharacteristicControlHandle,
 ) -> Application {
     Application {
         services: vec![Service {
@@ -121,7 +124,10 @@ pub struct PeripheralRole {
 impl PeripheralRole {
     /// Advertise the service and start serving the GATT application.
     pub(crate) async fn start(
-        adapter: &Adapter, service: Uuid, characteristic: Uuid, shared: Arc<Shared>,
+        adapter: &Adapter,
+        service: Uuid,
+        characteristic: Uuid,
+        shared: Arc<Shared>,
     ) -> Result<Self, LinkError> {
         let (control, control_handle) = characteristic_control();
 
@@ -138,9 +144,17 @@ impl PeripheralRole {
             .await
             .map_err(|err| error::classify_peripheral(&err))?;
 
-        let pump = tokio::spawn(serve_control_events(control, adapter.name().to_string(), shared));
+        let pump = tokio::spawn(serve_control_events(
+            control,
+            adapter.name().to_string(),
+            shared,
+        ));
 
-        Ok(Self { pump, _advertisement: advertisement, _application: application })
+        Ok(Self {
+            pump,
+            _advertisement: advertisement,
+            _application: application,
+        })
     }
 }
 
@@ -162,7 +176,11 @@ impl core::fmt::Debug for PeripheralRole {
 /// depth one from inside its D-Bus method handlers, so anything slow here blocks
 /// `bluetoothd`'s call into us. Every branch therefore does the minimum and hands
 /// the socket to its own task.
-async fn serve_control_events(control: CharacteristicControl, adapter_name: String, shared: Arc<Shared>) {
+async fn serve_control_events(
+    control: CharacteristicControl,
+    adapter_name: String,
+    shared: Arc<Shared>,
+) {
     // `Box::pin` rather than `futures::pin_mut!`: this crate forbids unsafe code
     // and that macro expands to an `unsafe` block. One allocation, once per
     // session, for a stream that lives as long as the role does.
@@ -256,7 +274,10 @@ mod tests {
         // the app and identify the machine rather than the identity.
         let advertisement = mesh_advertisement(service());
         assert_eq!(advertisement.local_name, None);
-        assert!(advertisement.system_includes.is_empty(), "'local-name' must not sneak in via Includes");
+        assert!(
+            advertisement.system_includes.is_empty(),
+            "'local-name' must not sneak in via Includes"
+        );
         assert!(advertisement.manufacturer_data.is_empty());
         assert!(advertisement.advertising_data.is_empty());
         assert_eq!(advertisement.appearance, None);
@@ -282,16 +303,27 @@ mod tests {
                 .sum::<usize>();
         // 31 less the three-byte flags AD that BlueZ prepends for a discoverable
         // peripheral.
-        assert!(used <= 31 - 3, "{used} bytes will not fit a legacy advertisement");
+        assert!(
+            used <= 31 - 3,
+            "{used} bytes will not fit a legacy advertisement"
+        );
     }
 
     #[test]
     fn the_advertisement_is_connectable_and_carries_the_mainnet_service() {
         let advertisement = mesh_advertisement(service());
-        assert_eq!(advertisement.advertisement_type, AdvertisementType::Peripheral);
+        assert_eq!(
+            advertisement.advertisement_type,
+            AdvertisementType::Peripheral
+        );
         assert_eq!(advertisement.discoverable, Some(true));
         assert_eq!(advertisement.service_uuids.len(), 1);
-        let advertised = advertisement.service_uuids.iter().next().expect("one uuid").to_string();
+        let advertised = advertisement
+            .service_uuids
+            .iter()
+            .next()
+            .expect("one uuid")
+            .to_string();
         assert_eq!(advertised.to_uppercase(), SERVICE_UUID);
         // bitchat's debug UUID differs only in the final character; a build on it
         // is invisible to every shipping client while looking perfectly healthy.
@@ -308,19 +340,38 @@ mod tests {
         let gatt_service = &application.services[0];
         assert!(gatt_service.primary);
         assert_eq!(gatt_service.uuid, service());
-        assert_eq!(gatt_service.characteristics.len(), 1, "all mesh traffic uses one characteristic");
+        assert_eq!(
+            gatt_service.characteristics.len(),
+            1,
+            "all mesh traffic uses one characteristic"
+        );
 
         let characteristic = &gatt_service.characteristics[0];
-        assert_eq!(characteristic.uuid.to_string().to_uppercase(), CHARACTERISTIC_UUID);
+        assert_eq!(
+            characteristic.uuid.to_string().to_uppercase(),
+            CHARACTERISTIC_UUID
+        );
 
-        let write = characteristic.write.as_ref().expect("writes must be accepted");
-        assert!(write.write_without_response, "BlueZ needs this flag before it will grant AcquireWrite");
+        let write = characteristic
+            .write
+            .as_ref()
+            .expect("writes must be accepted");
+        assert!(
+            write.write_without_response,
+            "BlueZ needs this flag before it will grant AcquireWrite"
+        );
         assert!(write.write);
         assert!(matches!(write.method, CharacteristicWriteMethod::Io));
 
-        let notify = characteristic.notify.as_ref().expect("notifications must be offered");
+        let notify = characteristic
+            .notify
+            .as_ref()
+            .expect("notifications must be offered");
         assert!(notify.notify);
-        assert!(!notify.indicate, "indications would serialise the outbound path behind a round trip each");
+        assert!(
+            !notify.indicate,
+            "indications would serialise the outbound path behind a round trip each"
+        );
         assert!(matches!(notify.method, CharacteristicNotifyMethod::Io));
     }
 
@@ -329,8 +380,11 @@ mod tests {
         // There is no value to read: the characteristic is a pipe, and offering a
         // read would let any scanner poll whatever was last written to us.
         let (_control, handle) = characteristic_control();
-        let application =
-            mesh_application(service(), crate::link::characteristic_uuid().expect("uuid"), handle);
+        let application = mesh_application(
+            service(),
+            crate::link::characteristic_uuid().expect("uuid"),
+            handle,
+        );
         assert!(application.services[0].characteristics[0].read.is_none());
     }
 }

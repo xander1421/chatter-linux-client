@@ -5,14 +5,11 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
-import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattServer
-import android.bluetooth.BluetoothGattServerCallback
 import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
-import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
@@ -36,8 +33,9 @@ import android.os.SystemClock
 import android.util.Log
 import java.util.Locale
 import java.util.UUID
+import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The Bluetooth LE radio for the mesh transport — both roles, simultaneously.
@@ -89,34 +87,28 @@ import java.util.concurrent.atomic.AtomicBoolean
 @SuppressLint("MissingPermission") // Every radio call is permission-checked in start() and SecurityException-guarded.
 object MeshBleBridge {
 
-    private const val TAG = "MeshBleBridge"
+    internal const val TAG = "MeshBleBridge"
 
     // --- Wire constants. Must match chatter-mesh-link::link. ---------------------
 
     /** bitchat mainnet service UUID. The debug build's ends `4B5A`; ours never does. */
-    private val SERVICE_UUID: UUID = UUID.fromString("F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5C")
+    internal val SERVICE_UUID: UUID = UUID.fromString("F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5C")
 
     /** The single characteristic carrying all mesh traffic, both directions. */
-    private val CHARACTERISTIC_UUID: UUID = UUID.fromString("A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D")
+    internal val CHARACTERISTIC_UUID: UUID = UUID.fromString("A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D")
 
     /** Client Characteristic Configuration Descriptor — the standard 0x2902. */
-    private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")
+    internal val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")
 
     private val SERVICE_PARCEL_UUID = ParcelUuid(SERVICE_UUID)
 
     // --- Tuning ------------------------------------------------------------------
 
     /** Largest MTU the spec allows; the stack negotiates down from here. */
-    private const val REQUESTED_MTU = 517
+    internal const val REQUESTED_MTU = 517
 
     /** ATT opcode + handle. A write carries MTU minus this many bytes. */
-    private const val ATT_HEADER = 3
-
-    /** Default ATT MTU before any negotiation, per the Bluetooth spec. */
-    private const val DEFAULT_MTU = 23
-
-    /** 23 − 3. What a link carries until `onMtuChanged` says otherwise. */
-    private const val DEFAULT_MAX_WRITE = DEFAULT_MTU - ATT_HEADER
+    internal const val ATT_HEADER = 3
 
     /**
      * Frames held per peripheral link while it is connected but not yet writable.
@@ -125,7 +117,16 @@ object MeshBleBridge {
      * CCCD subscribe — so a handful of frames is generous, and a peer that writes
      * without ever subscribing must not be able to grow this without bound.
      */
-    private const val MAX_PENDING_INBOUND = 8
+    internal const val MAX_PENDING_INBOUND = 8
+
+    /**
+     * How long a writing central may stay unsubscribed before we stop waiting for
+     * its CCCD write and adopt the link anyway. See [adoptStaleSubscription].
+     *
+     * A fresh central subscribes well inside this (measured 0.6 s from connect,
+     * bitchat-android 2.0.1 on an S25), so the normal handshake never reaches it.
+     */
+    internal const val SUBSCRIBE_GRACE_MS = 2_000L
 
     /**
      * How long a central link may take to become writable before we give up.
@@ -135,26 +136,19 @@ object MeshBleBridge {
      */
     private const val CONNECT_TIMEOUT_MS = 20_000L
 
-    /**
-     * How long to wait for a write/notify completion callback before letting the
-     * next one through. Only one ATT operation may be outstanding per link; if a
-     * completion is ever lost, this stops the link wedging permanently.
-     */
-    private const val OP_TIMEOUT_MS = 2_000L
-
     // --- State -------------------------------------------------------------------
 
     /** Guards the start/stop/advertise/scan lifecycle. Never taken on a binder thread. */
-    private val lock = Any()
+    internal val lock = Any()
 
     // `also { it.start() }`, not `apply { start() }`: inside apply the innermost
     // receiver would make a bare start() the thread's, one character away from
     // recursing into this object's own start().
     private val worker = HandlerThread("mesh-ble").also { it.start() }
-    private val handler = Handler(worker.looper)
+    internal val handler = Handler(worker.looper)
 
     @Volatile private var appContext: Context? = null
-    @Volatile private var started = false
+    @Volatile internal var started = false
 
     /** Scanning as requested by the policy layer, which survives an adapter power cycle. */
     private var scanRequested = false
@@ -162,17 +156,77 @@ object MeshBleBridge {
     /** Scanning as it actually is right now. */
     private var scanActive = false
     private var advertising = false
+    // Leave one start of headroom below Android's five-in-30s scan throttle.
+    // Keep timestamps across mesh off/on toggles within this process.
+    private val scanStarts = ArrayDeque<Long>()
+    private var scanDeferred = false
+    private val scanResults = AtomicLong(0)
+    private val lastScanResultAt = AtomicLong(0)
+    private const val DISCOVERY_REFRESH_MS = 1_000L
+    private data class RecentDiscovery(val peer: Long?, val sentAt: Long)
+    private val recentDiscoveries = HashMap<String, RecentDiscovery>()
+    private var silentRestartAt = 0L
+    private var watchdogRestartPending = false
+    private var silentWarningLogged = false
+    private var radioUpAt = 0L
+    private var lastSummaryAt = 0L
+    private val scanWindowMs = 30_000L
+    private val scanSilenceMs = 60_000L
+    private val scanRetry = Runnable { synchronized(lock) { scanDeferred = false; applyScanLocked("deferred") } }
+    private val radioHealth = object : Runnable {
+        override fun run() {
+            synchronized(lock) {
+                if (!started) return
+                val now = SystemClock.elapsedRealtime()
+                val recentStarts = scanStarts.count { now - it < scanWindowMs }
+                var recoveredScan = false
+                if (now - lastSummaryAt >= scanSilenceMs) {
+                    lastSummaryAt = now
+                    Log.i(TAG, "radio summary: scanResults=${scanResults.get()} scanStarts30s=$recentStarts scanActive=$scanActive deferred=$scanDeferred centralLinks=${centralLinks.size} peripheralLinks=${peripheralLinks.size} advertising=$advertising")
+                    // A failed asynchronous start can leave a scan request
+                    // with neither a running scan nor a scheduled retry.
+                    if (scanRequested && !scanActive && !scanDeferred) {
+                        val adapter = context()?.let { adapterOf(it) }
+                        val radioUp = adapter?.let { guard("isEnabled", false) { it.isEnabled } } == true
+                        if (radioUp) {
+                            Log.w(TAG, "scan requested but neither active nor deferred; recovering")
+                            applyScanLocked("health recovery")
+                            recoveredScan = true
+                        }
+                    }
+                }
+                val lastResult = lastScanResultAt.get().takeIf { it > 0 } ?: radioUpAt
+                if (lastResult > silentRestartAt && silentRestartAt != 0L) {
+                    silentRestartAt = 0L
+                    silentWarningLogged = false
+                }
+                if (!recoveredScan && scanActive && !scanDeferred && now - lastResult >= scanSilenceMs) {
+                    if (silentRestartAt == 0L) {
+                        watchdogRestartPending = true
+                        Log.w(TAG, "scanner silent for 60s; restarting once, scanResults=${scanResults.get()}")
+                        stopScanLocked("watchdog")
+                        applyScanLocked("watchdog")
+                    } else if (!silentWarningLogged && now - silentRestartAt >= scanSilenceMs) {
+                        silentWarningLogged = true
+                        Log.w(TAG, "scanner still silent after restart: scanResults=${scanResults.get()} scanStarts30s=$recentStarts links=${centralLinks.size + peripheralLinks.size}")
+                    }
+                }
+                handler.postDelayed(this, 5_000L)
+            }
+        }
+    }
+    internal var serviceReady = false
 
     /** Our mesh peer id, advertised in the scan response. Set before [start]. */
     private var localPeer: ByteArray = ByteArray(0)
 
     private var bluetoothManager: BluetoothManager? = null
-    private var gattServer: BluetoothGattServer? = null
+    internal var gattServer: BluetoothGattServer? = null
     private var notifyCharacteristic: BluetoothGattCharacteristic? = null
     private var receiverRegistered = false
 
-    private val centralLinks = ConcurrentHashMap<String, CentralLink>()
-    private val peripheralLinks = ConcurrentHashMap<String, PeripheralLink>()
+    internal val centralLinks = ConcurrentHashMap<String, CentralLink>()
+    internal val peripheralLinks = ConcurrentHashMap<String, PeripheralLink>()
 
     init {
         // The library is normally already loaded by GameActivity (android.app.lib_name)
@@ -185,115 +239,14 @@ object MeshBleBridge {
         }
     }
 
-    // --- Link state ---------------------------------------------------------------
-
-    /**
-     * One ATT operation may be outstanding per link. The stack rejects the second
-     * one, so we gate ourselves and report the rejection up as a retryable failure
-     * rather than letting the packet vanish.
-     */
-    private class OpGate {
-        private val busy = AtomicBoolean(false)
-        @Volatile private var since = 0L
-
-        fun tryAcquire(): Boolean {
-            if (busy.compareAndSet(false, true)) {
-                since = SystemClock.elapsedRealtime()
-                return true
-            }
-            // A completion callback the stack never delivered would wedge this link
-            // forever. Reclaim after the timeout: the worst case is one extra write
-            // the controller rejects, which the layer above already handles.
-            if (SystemClock.elapsedRealtime() - since > OP_TIMEOUT_MS) {
-                since = SystemClock.elapsedRealtime()
-                return true
-            }
-            return false
-        }
-
-        fun release() {
-            busy.set(false)
-        }
-    }
-
-    /** A link where we are the central: we connected outward to them. */
-    private class CentralLink(val id: String, val device: BluetoothDevice) {
-        @Volatile var gatt: BluetoothGatt? = null
-        @Volatile var characteristic: BluetoothGattCharacteristic? = null
-        @Volatile var maxWrite = DEFAULT_MAX_WRITE
-
-        /** True once [nativeOnConnected] has been emitted, i.e. the link is writable. */
-        @Volatile var announced = false
-
-        /** Discovery is kicked off exactly once, whichever path gets there first. */
-        val discoveryStarted = AtomicBoolean(false)
-        val closed = AtomicBoolean(false)
-        val gate = OpGate()
-
-        @Volatile var watchdog: Runnable? = null
-    }
-
-    /** A link where we are the peripheral: a remote central connected inward. */
-    /**
-     * A GATT status as something readable, keeping the number.
-     *
-     * These constants are not public API — `BluetoothGatt` exposes almost none of
-     * them — so they are spelled out here from the stack's own `gatt_api.h`. A
-     * bare `status=8` is not actionable, and working out which of these it was
-     * has cost hours more than once.
-     */
-    private fun gattStatusName(status: Int): String {
-        val name = when (status) {
-            0 -> "success"
-            8 -> "GATT_CONN_TIMEOUT (link supervision timed out — peer out of range or asleep)"
-            19 -> "GATT_CONN_TERMINATE_PEER_USER (the peer hung up)"
-            22 -> "GATT_CONN_TERMINATE_LOCAL_HOST (we hung up)"
-            34 -> "GATT_CONN_LMP_TIMEOUT"
-            62 -> "GATT_CONN_FAIL_ESTABLISH (never finished connecting)"
-            133 -> "GATT_ERROR (the catch-all; usually a stack-level failure)"
-            256 -> "GATT_CONN_CANCEL"
-            else -> "unmapped"
-        }
-        return "status=$status $name"
-    }
-
-    private class PeripheralLink(val id: String, val device: BluetoothDevice) {
-        @Volatile var maxWrite = DEFAULT_MAX_WRITE
-        @Volatile var announced = false
-        @Volatile var cccd: ByteArray = BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
-        val gate = OpGate()
-
-        /**
-         * Frames written to us before Rust had been told this link exists.
-         *
-         * A remote central connects, writes its announce, and only then enables
-         * notifications — and it is that last step which makes the link writable
-         * and so the moment we announce it upward. Dropping the writes in between
-         * discards exactly the packet that would have introduced the peer, which
-         * on a three-device mesh with rotating addresses is most of them.
-         *
-         * bitchat's own Android server delivers an inbound write unconditionally
-         * (`BluetoothGattServerManager.onCharacteristicWriteRequest`). We cannot
-         * quite do that — `MeshLink` promises that a Connected link is writable,
-         * and it is not writable until the subscription lands — so the frames are
-         * held and flushed the instant it becomes announced. Ordering is preserved.
-         *
-         * Bounded, because an unsubscribed peer that only writes is otherwise a
-         * memory leak with a radio attached. Over the cap the oldest frame is
-         * dropped: a mesh recovers from a lost announce on the next cadence, and
-         * a stalled buffer would be a worse failure than a late one.
-         */
-        val pendingInbound = ArrayDeque<ByteArray>()
-    }
-
     /**
      * Link ids carry the role, because two devices can link in *both* directions at
      * once — we connect to them while they connect to us — and those are two
      * distinct links over the same address.
      */
-    private fun centralId(address: String) = "c:" + address.uppercase(Locale.ROOT)
+    internal fun centralId(address: String) = "c:" + address.uppercase(Locale.ROOT)
 
-    private fun peripheralId(address: String) = "p:" + address.uppercase(Locale.ROOT)
+    internal fun peripheralId(address: String) = "p:" + address.uppercase(Locale.ROOT)
 
     // --- Context ------------------------------------------------------------------
 
@@ -374,7 +327,7 @@ object MeshBleBridge {
             context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
         }
 
-    private inline fun <T> guard(what: String, fallback: T, block: () -> T): T =
+    internal inline fun <T> guard(what: String, fallback: T, block: () -> T): T =
         try {
             block()
         } catch (e: SecurityException) {
@@ -402,7 +355,11 @@ object MeshBleBridge {
      */
     @Suppress("unused")
     fun start(): Boolean = synchronized(lock) {
-        if (started) return@synchronized true
+        if (started) {
+            if (serviceReady) beginAdvertisingLocked()
+            applyScanLocked()
+            return@synchronized true
+        }
 
         val context = context() ?: return@synchronized false
 
@@ -417,9 +374,14 @@ object MeshBleBridge {
             Log.w(TAG, "start: no Bluetooth adapter on this device")
             return@synchronized false
         }
+        registerAdapterReceiverLocked(context)
         if (!guard("start/isEnabled", false) { adapter.isEnabled }) {
-            Log.w(TAG, "start: Bluetooth is off")
-            return@synchronized false
+            // Keep the Rust runtime and receiver alive for STATE_ON recovery.
+            started = true
+            MeshService.start(context)
+            emitAdapterPower(false)
+            Log.w(TAG, "start: waiting for Bluetooth to be turned on")
+            return@synchronized true
         }
 
         if (!openGattServerLocked(context)) {
@@ -427,6 +389,15 @@ object MeshBleBridge {
         }
         registerAdapterReceiverLocked(context)
         started = true
+        radioUpAt = SystemClock.elapsedRealtime()
+        lastSummaryAt = radioUpAt
+        scanResults.set(0)
+        lastScanResultAt.set(0)
+        silentRestartAt = 0L
+        watchdogRestartPending = false
+        silentWarningLogged = false
+        handler.removeCallbacks(radioHealth)
+        handler.postDelayed(radioHealth, 5_000L)
 
         // Advertising begins from onServiceAdded: a central that connects before
         // the GATT database is published finds an empty service list.
@@ -456,8 +427,10 @@ object MeshBleBridge {
             return@synchronized false
         }
         scanRequested = on
-        applyScanLocked()
-        scanActive == on
+        if (serviceReady) beginAdvertisingLocked()
+        applyScanLocked(if (on) "policy on" else "policy off")
+        // A deferred start is accepted and will run when the scan budget opens.
+        scanActive == on || (on && scanDeferred)
     }
 
     /**
@@ -624,18 +597,32 @@ object MeshBleBridge {
     private fun emitDiscovered(address: String, rssi: Int, peerHex: String?) =
         emit("onDiscovered") { nativeOnDiscovered(address, rssi, peerHex) }
 
-    /**
-     * The advertised peer id, or null when this sighting did not carry one.
-     *
-     * Null is routine, not an error: the scan response often lands a beat after
-     * the advertisement, so the first sighting of a device frequently has no
-     * service data. The native side treats null as "unknown", never as "not a
-     * peer".
-     */
-    private fun ScanResult.advertisedPeer(): String? {
-        val data = scanRecord?.getServiceData(SERVICE_PARCEL_UUID) ?: return null
-        if (data.size < 8) return null
-        return data.take(8).joinToString("") { "%02x".format(it) }
+    /** Preserve the first sighting and peer-id changes; refresh RSSI once a second. */
+    private fun peerHex(peer: Long): String {
+        val digits = "0123456789abcdef"
+        return CharArray(16) { index ->
+            digits[((peer ushr (60 - index * 4)) and 0xfL).toInt()]
+        }.concatToString()
+    }
+
+    private fun emitScanResult(scan: ScanResult) {
+        val address = scan.device.address
+        val data = scan.scanRecord?.getServiceData(SERVICE_PARCEL_UUID)
+        var peer: Long? = null
+        if (data != null && data.size >= 8) {
+            var value = 0L
+            for (index in 0 until 8) value = (value shl 8) or (data[index].toLong() and 0xffL)
+            peer = value
+        }
+        val now = SystemClock.elapsedRealtime()
+        synchronized(recentDiscoveries) {
+            val previous = recentDiscoveries[address]
+            if (previous != null && previous.peer == peer && now - previous.sentAt < DISCOVERY_REFRESH_MS) return
+            // Bound the cache even if a busy scan sees many rotating addresses.
+            if (recentDiscoveries.size >= 256 && previous == null) recentDiscoveries.clear()
+            recentDiscoveries[address] = RecentDiscovery(peer, now)
+        }
+        emitDiscovered(address, scan.rssi, peer?.let(::peerHex))
     }
 
     /** Sixteen hex characters to eight bytes; empty on anything else. */
@@ -648,13 +635,13 @@ object MeshBleBridge {
         }
     }
 
-    private fun emitConnected(link: String, peripheral: Boolean, maxWrite: Int) =
+    internal fun emitConnected(link: String, peripheral: Boolean, maxWrite: Int) =
         emit("onConnected") { nativeOnConnected(link, peripheral, maxWrite) }
 
-    private fun emitDisconnected(link: String) =
+    internal fun emitDisconnected(link: String) =
         emit("onDisconnected") { nativeOnDisconnected(link) }
 
-    private fun emitData(link: String, bytes: ByteArray) =
+    internal fun emitData(link: String, bytes: ByteArray) =
         emit("onData") { nativeOnData(link, bytes) }
 
     private fun emitAdapterPower(powered: Boolean) =
@@ -692,17 +679,20 @@ object MeshBleBridge {
         val added = guard("addService", false) { server.addService(service) }
         if (!added) {
             guard("closeGattServer", Unit) { server.close() }
+            Log.i(TAG, "GATT server closed (addService refused)")
             Log.e(TAG, "addService refused")
             return false
         }
 
         gattServer = server
+        Log.i(TAG, "GATT server opened")
         notifyCharacteristic = characteristic
         return true
     }
 
-    private fun beginAdvertisingLocked(): Boolean {
+    internal fun beginAdvertisingLocked(): Boolean {
         if (advertising) return true
+        if (!started || !serviceReady) return false
         val context = context() ?: return false
         val adapter = adapterOf(context) ?: return false
         val advertiser = guard("getBluetoothLeAdvertiser", null as BluetoothLeAdvertiser?) {
@@ -743,11 +733,13 @@ object MeshBleBridge {
             .addServiceData(SERVICE_PARCEL_UUID, localPeer)
             .build()
 
+        Log.i(TAG, "advertising start requested")
         val issued = guard("startAdvertising", false) {
             advertiser.startAdvertising(settings, data, scanResponse, advertiseCallback)
             true
         }
         advertising = issued
+        if (!issued) Log.e(TAG, "advertising start refused")
         return issued
     }
 
@@ -760,17 +752,18 @@ object MeshBleBridge {
             adapter.bluetoothLeAdvertiser
         } ?: return
         guard("stopAdvertising", Unit) { advertiser.stopAdvertising(advertiseCallback) }
+        Log.i(TAG, "advertising stopped")
     }
 
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-            Log.i(TAG, "advertising")
+            Log.i(TAG, "advertising start succeeded")
         }
 
         override fun onStartFailure(errorCode: Int) {
             // Asynchronous, so start() has already returned true. Loud, because a
             // node that only scans is invisible to peers scanning for it.
-            Log.e(TAG, "advertising failed: ${advertiseError(errorCode)}")
+            Log.e(TAG, "advertising start failed: code=$errorCode (${advertiseError(errorCode)})")
             handler.post { synchronized(lock) { advertising = false } }
         }
     }
@@ -784,218 +777,32 @@ object MeshBleBridge {
         else -> "code $code"
     }
 
-    private val gattServerCallback = object : BluetoothGattServerCallback() {
-
-        override fun onServiceAdded(status: Int, service: BluetoothGattService?) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.e(TAG, "onServiceAdded failed: status=$status")
-                return
-            }
-            // Off the binder thread before taking the lifecycle lock.
-            handler.post {
-                synchronized(lock) { if (started) beginAdvertisingLocked() }
-            }
-        }
-
-        override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-            val id = peripheralId(device.address)
-            when (newState) {
-                BluetoothProfile.STATE_CONNECTED -> {
-                    // Connected, but not writable: the link is announced only once
-                    // this central subscribes via its CCCD write.
-                    peripheralLinks.computeIfAbsent(id) { PeripheralLink(id, device) }
-                    Log.d(TAG, "peripheral link $id connected (awaiting subscription)")
-                }
-
-                BluetoothProfile.STATE_DISCONNECTED -> {
-                    val removed = peripheralLinks.remove(id)
-                    if (removed != null && removed.announced) emitDisconnected(id)
-                    // Said out loud, always. This branch was silent, and a link
-                    // dying for no stated reason is the single most expensive
-                    // shape of bug in this codebase: the peer's own log is the
-                    // only place the reason exists, and it was throwing it away.
-                    // Warn when the stack gives a reason, because a clean
-                    // teardown is routine and an aborted one is not.
-                    val detail = "peripheral link $id disconnected, ${gattStatusName(status)}" +
-                        if (removed == null) " (no link was tracked)" else ""
-                    if (status == BluetoothGatt.GATT_SUCCESS) {
-                        Log.d(TAG, detail)
-                    } else {
-                        Log.w(TAG, detail)
-                    }
-                }
-            }
-        }
-
-        override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
-            val link = peripheralLinks[peripheralId(device.address)] ?: return
-            link.maxWrite = (mtu - ATT_HEADER).coerceAtLeast(DEFAULT_MAX_WRITE)
-            Log.d(TAG, "peripheral link ${link.id} mtu=$mtu maxWrite=${link.maxWrite}")
-        }
-
-        override fun onCharacteristicWriteRequest(
-            device: BluetoothDevice,
-            requestId: Int,
-            characteristic: BluetoothGattCharacteristic,
-            preparedWrite: Boolean,
-            responseNeeded: Boolean,
-            offset: Int,
-            value: ByteArray?,
-        ) {
-            val id = peripheralId(device.address)
-            val status = if (characteristic.uuid != CHARACTERISTIC_UUID) {
-                BluetoothGatt.GATT_FAILURE
-            } else if (preparedWrite) {
-                // We publish write-without-response only; queued long writes are
-                // out of contract and must be refused rather than half-handled.
-                BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED
-            } else if (offset != 0) {
-                BluetoothGatt.GATT_INVALID_OFFSET
-            } else {
-                val link = peripheralLinks[id]
-                if (value != null && value.isNotEmpty()) {
-                    if (link != null && link.announced) {
-                        // Copy: the stack owns and reuses this buffer.
-                        emitData(id, value.copyOf())
-                    } else if (link != null) {
-                        // Connected but not yet announced upward: hold it rather
-                        // than lose it. See `PeripheralLink.pendingInbound`.
-                        synchronized(link.pendingInbound) {
-                            while (link.pendingInbound.size >= MAX_PENDING_INBOUND) {
-                                link.pendingInbound.removeFirst()
-                                Log.d(TAG, "pending inbound full for $id, oldest frame dropped")
-                            }
-                            link.pendingInbound.addLast(value.copyOf())
-                        }
-                        Log.d(TAG, "write from $id held until the link is announced")
-                    } else {
-                        // No link object at all: already torn down, nowhere to put it.
-                        Log.d(TAG, "write from $id on an unknown link, dropped")
-                    }
-                }
-                BluetoothGatt.GATT_SUCCESS
-            }
-            if (responseNeeded) {
-                guard("sendResponse", false) {
-                    gattServer?.sendResponse(device, requestId, status, offset, null) ?: false
-                }
-            }
-        }
-
-        override fun onCharacteristicReadRequest(
-            device: BluetoothDevice,
-            requestId: Int,
-            offset: Int,
-            characteristic: BluetoothGattCharacteristic,
-        ) {
-            // The characteristic carries no readable state — traffic arrives by
-            // notification. Refuse explicitly so the peer fails fast.
-            guard("sendResponse", false) {
-                gattServer?.sendResponse(
-                    device,
-                    requestId,
-                    BluetoothGatt.GATT_READ_NOT_PERMITTED,
-                    offset,
-                    null,
-                ) ?: false
-            }
-        }
-
-        override fun onDescriptorWriteRequest(
-            device: BluetoothDevice,
-            requestId: Int,
-            descriptor: BluetoothGattDescriptor,
-            preparedWrite: Boolean,
-            responseNeeded: Boolean,
-            offset: Int,
-            value: ByteArray?,
-        ) {
-            var status = BluetoothGatt.GATT_SUCCESS
-            if (descriptor.uuid == CCCD_UUID && value != null) {
-                val id = peripheralId(device.address)
-                val link = peripheralLinks.computeIfAbsent(id) { PeripheralLink(id, device) }
-                link.cccd = value.copyOf()
-                val subscribed =
-                    value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) ||
-                        value.contentEquals(BluetoothGattDescriptor.ENABLE_INDICATION_VALUE)
-                if (subscribed && !link.announced) {
-                    // This is the moment a peripheral link becomes writable.
-                    link.announced = true
-                    emitConnected(id, true, link.maxWrite)
-                    Log.i(TAG, "peripheral link $id writable, maxWrite=${link.maxWrite}")
-                    // Anything they wrote while we could not yet name this link,
-                    // in the order they wrote it. Emitted after Connected so the
-                    // layer above already has the link when the data arrives.
-                    val held = synchronized(link.pendingInbound) {
-                        val frames = link.pendingInbound.toList()
-                        link.pendingInbound.clear()
-                        frames
-                    }
-                    if (held.isNotEmpty()) {
-                        Log.i(TAG, "flushing ${held.size} held frame(s) for $id")
-                        held.forEach { emitData(id, it) }
-                    }
-                } else if (!subscribed && link.announced) {
-                    // Unsubscribed: still connected, no longer writable, which the
-                    // layer above only understands as gone.
-                    link.announced = false
-                    emitDisconnected(id)
-                }
-            } else if (descriptor.uuid != CCCD_UUID) {
-                status = BluetoothGatt.GATT_FAILURE
-            }
-            if (responseNeeded) {
-                guard("sendResponse", false) {
-                    gattServer?.sendResponse(device, requestId, status, offset, value) ?: false
-                }
-            }
-        }
-
-        override fun onDescriptorReadRequest(
-            device: BluetoothDevice,
-            requestId: Int,
-            offset: Int,
-            descriptor: BluetoothGattDescriptor,
-        ) {
-            val link = peripheralLinks[peripheralId(device.address)]
-            val isCccd = descriptor.uuid == CCCD_UUID
-            val status =
-                if (isCccd) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_READ_NOT_PERMITTED
-            val value = if (isCccd) {
-                link?.cccd ?: BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
-            } else {
-                null
-            }
-            guard("sendResponse", false) {
-                gattServer?.sendResponse(device, requestId, status, offset, value) ?: false
-            }
-        }
-
-        override fun onNotificationSent(device: BluetoothDevice, status: Int) {
-            peripheralLinks[peripheralId(device.address)]?.gate?.release()
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.w(TAG, "notify to ${device.address} failed: status=$status")
-            }
-        }
-
-        override fun onExecuteWrite(device: BluetoothDevice, requestId: Int, execute: Boolean) {
-            // We refuse prepared writes above, so there is never a queue to commit.
-            // Answer anyway: an unanswered request stalls the peer's ATT bearer.
-            guard("sendResponse", false) {
-                gattServer?.sendResponse(
-                    device,
-                    requestId,
-                    BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED,
-                    0,
-                    null,
-                ) ?: false
-            }
-        }
-    }
+    private val gattServerCallback = createGattServerCallback()
 
     // --- Central role: scanner + GATT client ---------------------------------------
 
-    private fun applyScanLocked() {
+    private fun stopScanLocked(reason: String) {
+        if (!scanActive) return
+        val context = context()
+        val scanner = context?.let { ctx ->
+            adapterOf(ctx)?.let { adapter ->
+                guard("getBluetoothLeScanner", null as BluetoothLeScanner?) { adapter.bluetoothLeScanner }
+            }
+        }
+        if (scanner != null) guard("stopScan", Unit) { scanner.stopScan(scanCallback) }
+        scanActive = false
+        synchronized(recentDiscoveries) { recentDiscoveries.clear() }
+        Log.i(TAG, "scan stopped: $reason")
+    }
+
+    private fun applyScanLocked(reason: String = "policy") {
+        if (!scanRequested) {
+            handler.removeCallbacks(scanRetry)
+            scanDeferred = false
+            stopScanLocked(reason)
+            return
+        }
+        if (!started || scanActive) return
         val context = context() ?: return
         val adapter = adapterOf(context) ?: return
         val enabled = guard("isEnabled", false) { adapter.isEnabled }
@@ -1010,6 +817,23 @@ object MeshBleBridge {
         }
 
         if (scanRequested && !scanActive) {
+            val now = SystemClock.elapsedRealtime()
+            while (scanStarts.isNotEmpty() && now - scanStarts.first() >= scanWindowMs) {
+                scanStarts.removeFirst()
+            }
+            if (scanStarts.size >= 4) {
+                val delay = scanWindowMs - (now - scanStarts.first()) + 1
+                handler.removeCallbacks(scanRetry)
+                // The policy re-asks every tick while deferred; log the first ask only.
+                if (!scanDeferred) {
+                    Log.i(TAG, "scan deferred: $reason, starts30s=${scanStarts.size}, delayMs=$delay")
+                }
+                scanDeferred = true
+                handler.postDelayed(scanRetry, delay)
+                return
+            }
+            handler.removeCallbacks(scanRetry)
+            scanDeferred = false
             val filters = listOf(
                 ScanFilter.Builder().setServiceUuid(SERVICE_PARCEL_UUID).build(),
             )
@@ -1020,28 +844,33 @@ object MeshBleBridge {
                 .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
                 .setReportDelay(0)
                 .build()
+            synchronized(recentDiscoveries) { recentDiscoveries.clear() }
+            scanStarts.addLast(now)
             scanActive = guard("startScan", false) {
                 scanner.startScan(filters, settings, scanCallback)
                 true
             }
-        } else if (!scanRequested && scanActive) {
-            guard("stopScan", Unit) { scanner.stopScan(scanCallback) }
-            scanActive = false
+            if (scanActive && watchdogRestartPending) {
+                silentRestartAt = now
+                watchdogRestartPending = false
+            }
+            Log.i(TAG, "scan start: $reason, active=$scanActive, starts30s=${scanStarts.size}")
         }
     }
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
             val scan = result ?: return
-            emitDiscovered(scan.device.address, scan.rssi, scan.advertisedPeer())
+            noteScanResult()
+            emitScanResult(scan)
         }
 
         override fun onBatchScanResults(results: MutableList<ScanResult>?) {
-            results?.forEach { emitDiscovered(it.device.address, it.rssi, it.advertisedPeer()) }
+            results?.forEach { noteScanResult(); emitScanResult(it) }
         }
 
         override fun onScanFailed(errorCode: Int) {
-            Log.e(TAG, "scan failed: ${scanError(errorCode)}")
+            Log.e(TAG, "scan failed: code=$errorCode (${scanError(errorCode)})")
             handler.post {
                 synchronized(lock) {
                     // ALREADY_STARTED means the stack kept the previous scan, so
@@ -1050,6 +879,11 @@ object MeshBleBridge {
                 }
             }
         }
+    }
+
+    private fun noteScanResult() {
+        scanResults.incrementAndGet()
+        lastScanResultAt.set(SystemClock.elapsedRealtime())
     }
 
     private fun scanError(code: Int): String = when (code) {
@@ -1063,162 +897,16 @@ object MeshBleBridge {
         else -> "code $code"
     }
 
-    private val gattClientCallback = object : BluetoothGattCallback() {
+    private val gattClientCallback = createGattClientCallback()
 
-        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            val id = centralId(gatt.device.address)
-            if (newState == BluetoothProfile.STATE_CONNECTED &&
-                status == BluetoothGatt.GATT_SUCCESS
-            ) {
-                val link = centralLinks[id]
-                if (link == null) {
-                    // We already gave up on this one; do not leave a client
-                    // interface allocated, there are only so many.
-                    guard("close", Unit) { gatt.close() }
-                    return
-                }
-                // MTU first, then discovery, then subscribe: max_write must be
-                // correct before the link is announced, because fragment sizing
-                // upstream is derived from it.
-                val requested = guard("requestMtu", false) { gatt.requestMtu(REQUESTED_MTU) }
-                if (!requested) {
-                    Log.w(TAG, "$id: requestMtu refused; continuing at $DEFAULT_MAX_WRITE bytes")
-                    discoverOnce(link, gatt)
-                }
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                // Removal is the guard: whoever removes the link emits the event,
-                // so a teardown started here and one started by disconnect() cannot
-                // both report it.
-                val removed = centralLinks.remove(id)
-                if (removed != null) {
-                    cancelWatchdog(removed)
-                    closeCentral(removed)
-                    emitDisconnected(id)
-                } else {
-                    guard("close", Unit) { gatt.close() }
-                }
-                if (status != BluetoothGatt.GATT_SUCCESS) {
-                    // Warn, not debug. This is the line that says why a link we
-                    // were using went away, and it is the first thing anyone
-                    // looks for when the mesh goes quiet.
-                    Log.w(TAG, "central link $id disconnected, ${gattStatusName(status)}")
-                }
-            }
-        }
-
-        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-            val link = centralLinks[centralId(gatt.device.address)] ?: return
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                link.maxWrite = (mtu - ATT_HEADER).coerceAtLeast(DEFAULT_MAX_WRITE)
-            } else {
-                Log.w(TAG, "${link.id}: MTU negotiation failed, staying at $DEFAULT_MAX_WRITE")
-            }
-            // The peer may renegotiate later; discovery still runs exactly once.
-            discoverOnce(link, gatt)
-        }
-
-        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            val link = centralLinks[centralId(gatt.device.address)] ?: return
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                failCentral(link, "service discovery failed: status=$status")
-                return
-            }
-            val service = gatt.getService(SERVICE_UUID)
-            if (service == null) {
-                failCentral(link, "peer does not expose the mesh service")
-                return
-            }
-            val characteristic = service.getCharacteristic(CHARACTERISTIC_UUID)
-            if (characteristic == null) {
-                failCentral(link, "peer does not expose the mesh characteristic")
-                return
-            }
-            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-            link.characteristic = characteristic
-
-            val enabled = guard("setCharacteristicNotification", false) {
-                gatt.setCharacteristicNotification(characteristic, true)
-            }
-            if (!enabled) {
-                failCentral(link, "could not enable notifications locally")
-                return
-            }
-            val cccd = characteristic.getDescriptor(CCCD_UUID)
-            if (cccd == null) {
-                failCentral(link, "characteristic has no CCCD")
-                return
-            }
-            // Local notification routing is not enough — the peer only starts
-            // sending once this descriptor write lands, so the link is not yet
-            // writable in either direction.
-            if (!writeCccd(gatt, cccd)) {
-                failCentral(link, "CCCD write refused")
-            }
-        }
-
-        override fun onDescriptorWrite(
-            gatt: BluetoothGatt,
-            descriptor: BluetoothGattDescriptor,
-            status: Int,
-        ) {
-            if (descriptor.uuid != CCCD_UUID) return
-            val link = centralLinks[centralId(gatt.device.address)] ?: return
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                failCentral(link, "CCCD write failed: status=$status")
-                return
-            }
-            if (link.announced) return
-            // Discovered, subscribed, MTU known: the link can carry a write now.
-            link.announced = true
-            cancelWatchdog(link)
-            emitConnected(link.id, false, link.maxWrite)
-            Log.i(TAG, "central link ${link.id} writable, maxWrite=${link.maxWrite}")
-        }
-
-        // Pre-33 stacks only ever call this overload; 33+ never do, because the
-        // three-argument one below overrides their delegation.
-        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-        override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-        ) {
-            if (characteristic.uuid != CHARACTERISTIC_UUID) return
-            val value = characteristic.value ?: return
-            emitData(centralId(gatt.device.address), value.copyOf())
-        }
-
-        // API 33+ delivers the value as a parameter and calls only this overload,
-        // so both exist and neither delegates: exactly one delivery per notification.
-        override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            value: ByteArray,
-        ) {
-            if (characteristic.uuid != CHARACTERISTIC_UUID) return
-            emitData(centralId(gatt.device.address), value.copyOf())
-        }
-
-        override fun onCharacteristicWrite(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            status: Int,
-        ) {
-            val link = centralLinks[centralId(gatt.device.address)] ?: return
-            link.gate.release()
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.w(TAG, "${link.id}: write failed status=$status")
-            }
-        }
-    }
-
-    private fun discoverOnce(link: CentralLink, gatt: BluetoothGatt) {
+    internal fun discoverOnce(link: CentralLink, gatt: BluetoothGatt) {
         if (!link.discoveryStarted.compareAndSet(false, true)) return
         val ok = guard("discoverServices", false) { gatt.discoverServices() }
         if (!ok) failCentral(link, "discoverServices refused")
     }
 
     @Suppress("DEPRECATION")
-    private fun writeCccd(gatt: BluetoothGatt, cccd: BluetoothGattDescriptor): Boolean {
+    internal fun writeCccd(gatt: BluetoothGatt, cccd: BluetoothGattDescriptor): Boolean {
         val value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
         return guard("writeDescriptor", false) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -1229,13 +917,13 @@ object MeshBleBridge {
         }
     }
 
-    private fun cancelWatchdog(link: CentralLink) {
+    internal fun cancelWatchdog(link: CentralLink) {
         link.watchdog?.let { handler.removeCallbacks(it) }
         link.watchdog = null
     }
 
     /** Tear a central link down and tell Rust, exactly once. */
-    private fun failCentral(link: CentralLink, reason: String) {
+    internal fun failCentral(link: CentralLink, reason: String) {
         if (centralLinks.remove(link.id) == null) return
         Log.w(TAG, "central link ${link.id}: $reason")
         cancelWatchdog(link)
@@ -1245,7 +933,7 @@ object MeshBleBridge {
         emitDisconnected(link.id)
     }
 
-    private fun closeCentral(link: CentralLink) {
+    internal fun closeCentral(link: CentralLink) {
         if (!link.closed.compareAndSet(false, true)) return
         val gatt = link.gatt ?: return
         guard("disconnect", Unit) { gatt.disconnect() }
@@ -1259,6 +947,68 @@ object MeshBleBridge {
         // the caller emits the event itself.
         val server = gattServer ?: return
         guard("cancelConnection", Unit) { server.cancelConnection(link.device) }
+    }
+
+    /**
+     * Tell Rust a peripheral link is writable, then replay what it wrote while it
+     * was not. Idempotent: the CCCD write and [adoptStaleSubscription] can race.
+     */
+    internal fun announcePeripheral(link: PeripheralLink, why: String) {
+        synchronized(link) {
+            if (link.announced || peripheralLinks[link.id] !== link) return
+            link.announced = true
+        }
+        emitConnected(link.id, true, link.maxWrite)
+        Log.i(TAG, "peripheral link ${link.id} writable ($why), maxWrite=${link.maxWrite}")
+        // Anything they wrote while we could not yet name this link, in the
+        // order they wrote it. Emitted after Connected so the layer above
+        // already has the link when the data arrives.
+        val held = synchronized(link.pendingInbound) {
+            val frames = link.pendingInbound.toList()
+            link.pendingInbound.clear()
+            frames
+        }
+        if (held.isNotEmpty()) {
+            Log.i(TAG, "flushing ${held.size} held frame(s) for ${link.id}")
+            held.forEach { emitData(link.id, it) }
+        }
+    }
+
+    /**
+     * A central that keeps writing but never subscribes subscribed to a
+     * *previous* incarnation of this GATT server.
+     *
+     * The connection belongs to the remote central, not to our process, so it
+     * outlives a Chatter restart: the new server is told about it in
+     * `onConnectionStateChange(STATE_CONNECTED)` straight after `addService`, but
+     * the CCCD write that would announce it was made to the old process and is
+     * never repeated. bitchat-android treats its client connection as healthy
+     * and goes on writing its announces into it every few seconds — measured on
+     * the S9 after a restart: `write from p:58:87:06:F2:2C:BD held until the
+     * link is announced` every 30 s, indefinitely, with Rust never told the link
+     * existed and so nothing ever notified back. Waiting for a CCCD write here
+     * waits forever; with scanning unavailable it was the only link and the
+     * mesh stayed at zero peers.
+     *
+     * The remote's notification registration lives in its own GATT client and
+     * survived with the connection, so a notify reaches it. Its writes are the
+     * evidence the link is live, and the largest of them bounds the MTU from
+     * below (ours was negotiated, and reported, to the dead process).
+     */
+    internal fun adoptStaleSubscription(link: PeripheralLink) {
+        link.adoptionScheduled.set(false)
+        if (link.announced || peripheralLinks[link.id] !== link) return
+        val pending = synchronized(link.pendingInbound) { link.pendingInbound.size }
+        if (pending == 0) return
+        val proven = link.largestInbound
+        if (proven > link.maxWrite) link.maxWrite = proven
+        Log.i(
+            TAG,
+            "peripheral link ${link.id} wrote for " +
+                "${SystemClock.elapsedRealtime() - link.connectedAt} ms without subscribing: " +
+                "adopting a subscription made before this process started",
+        )
+        announcePeripheral(link, "adopted")
     }
 
     // --- Sending -------------------------------------------------------------------
@@ -1383,6 +1133,15 @@ object MeshBleBridge {
     /** The adapter came back: rebuild the peripheral role and resume the duty cycle. */
     private fun onAdapterOn() = synchronized(lock) {
         if (started) {
+            radioUpAt = SystemClock.elapsedRealtime()
+            lastSummaryAt = radioUpAt
+            scanResults.set(0)
+            lastScanResultAt.set(0)
+            silentRestartAt = 0L
+            watchdogRestartPending = false
+            silentWarningLogged = false
+            handler.removeCallbacks(radioHealth)
+            handler.postDelayed(radioHealth, 5_000L)
             val context = context()
             if (context != null && gattServer == null) {
                 if (openGattServerLocked(context)) {
@@ -1399,11 +1158,20 @@ object MeshBleBridge {
 
     /** The adapter went away: every link died with it. */
     private fun onAdapterOff() = synchronized(lock) {
+        handler.removeCallbacks(radioHealth)
+        handler.removeCallbacks(scanRetry)
+        scanDeferred = false
+        watchdogRestartPending = false
         advertising = false
+        if (scanActive) Log.i(TAG, "scan stopped: adapter off")
         scanActive = false
         dropAllLinks()
-        gattServer?.let { server -> guard("closeGattServer", Unit) { server.close() } }
+        gattServer?.let { server ->
+            guard("closeGattServer", Unit) { server.close() }
+            Log.i(TAG, "GATT server closed (adapter off)")
+        }
         gattServer = null
+        serviceReady = false
         notifyCharacteristic = null
         emitAdapterPower(false)
     }
@@ -1419,21 +1187,33 @@ object MeshBleBridge {
         }
         for (id in peripheralLinks.keys.toList()) {
             val link = peripheralLinks.remove(id) ?: continue
+            // Hang up the remote central too. Closing the GATT server alone
+            // left it connected to a server that no longer exists: a Chatter
+            // peer kept its subscription to the old service, our notifications
+            // after a mesh off/on never reached it, and Noise to it could not
+            // re-form (S25 -> S9, ui158).
+            closePeripheral(link)
             if (link.announced) emitDisconnected(id)
         }
     }
 
     private fun teardownLocked() {
+        handler.removeCallbacks(radioHealth)
+        handler.removeCallbacks(scanRetry)
+        scanDeferred = false
+        watchdogRestartPending = false
         scanRequested = false
-        applyScanLocked()
+        applyScanLocked("radio stop")
         scanActive = false
         stopAdvertisingLocked()
         dropAllLinks()
 
         gattServer?.let { server ->
             guard("closeGattServer", Unit) { server.close() }
+            Log.i(TAG, "GATT server closed (radio stop)")
         }
         gattServer = null
+        serviceReady = false
         notifyCharacteristic = null
 
         val context = context()

@@ -10,12 +10,11 @@
 //! - Message delivery to ephemeral mailboxes
 //! - Full two-user flow (invite -> accept -> message)
 
-mod common;
+use crate::{common, skip_if_no_server};
 
-use base64::Engine;
 use chatter_core::network::grpc::MailboxClient;
 use chatter_core::proto::mailbox_v1::EnvelopeType;
-use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand::RngCore;
 
 use common::*;
@@ -33,6 +32,7 @@ async fn test_request_blind_signature_tokens() {
 
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
+    let manifest = assert_ok(mailbox_client.get_blind_signature_public_key().await);
     // Request blind signature tokens
     // The server provides blinded tokens that can be used to register anonymous mailboxes
     // Note: get_mailbox_tokens requires blinded keys to be provided
@@ -43,7 +43,9 @@ async fn test_request_blind_signature_tokens() {
             key
         })
         .collect();
-    let result = mailbox_client.get_mailbox_tokens(5, blinded_keys).await;
+    let result = mailbox_client
+        .get_mailbox_tokens(5, blinded_keys, manifest.key_id.clone())
+        .await;
 
     match result {
         Ok(response) => {
@@ -90,7 +92,6 @@ async fn test_create_ephemeral_mailbox() {
             public_key.clone(),
             fake_signature,
             ttl_seconds,
-            vec![], // No randomizer for fake test
         )
         .await;
 
@@ -147,7 +148,10 @@ async fn test_send_to_ephemeral_mailbox() {
         }
         Err(e) => {
             // Expected to fail if mailbox doesn't exist
-            eprintln!("Send to mailbox error (expected if mailbox not registered): {:?}", e);
+            eprintln!(
+                "Send to mailbox error (expected if mailbox not registered): {:?}",
+                e
+            );
         }
     }
 }
@@ -185,14 +189,14 @@ async fn test_poll_ephemeral_mailbox() {
 
     match result {
         Ok(response) => {
-            eprintln!(
-                "Polled mailbox: {} messages",
-                response.messages.len()
-            );
+            eprintln!("Polled mailbox: {} messages", response.messages.len());
         }
         Err(e) => {
             // Expected to fail if mailbox doesn't exist
-            eprintln!("Poll mailbox error (expected if mailbox not registered): {:?}", e);
+            eprintln!(
+                "Poll mailbox error (expected if mailbox not registered): {:?}",
+                e
+            );
         }
     }
 }
@@ -214,6 +218,7 @@ async fn test_blind_token_full_flow() {
 
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
+    let manifest = assert_ok(mailbox_client.get_blind_signature_public_key().await);
     // Step 1: Request blind tokens
     let blinded_keys: Vec<Vec<u8>> = (0..3)
         .map(|_| {
@@ -222,7 +227,9 @@ async fn test_blind_token_full_flow() {
             key
         })
         .collect();
-    let tokens_result = mailbox_client.get_mailbox_tokens(3, blinded_keys).await;
+    let tokens_result = mailbox_client
+        .get_mailbox_tokens(3, blinded_keys, manifest.key_id.clone())
+        .await;
 
     match tokens_result {
         Ok(response) => {
@@ -236,11 +243,7 @@ async fn test_blind_token_full_flow() {
             // This requires the full blind signature protocol implementation
 
             for (i, sig) in response.blinded_signatures.iter().enumerate() {
-                eprintln!(
-                    "Signature {}: len={}",
-                    i,
-                    sig.len()
-                );
+                eprintln!("Signature {}: len={}", i, sig.len());
             }
         }
         Err(e) => {
@@ -258,8 +261,10 @@ async fn test_anon_group_content_serialization() {
     skip_if_no_server!();
 
     // Test the content proto serialization for anonymous group messages
+    use chatter_core::proto::content_v1::{
+        self, AnonGroupInvite, AnonGroupMessage, Content, DataMessage,
+    };
     use prost::Message;
-    use chatter_core::proto::content_v1::{self, AnonGroupInvite, AnonGroupMessage, Content, DataMessage};
 
     // Create a test group invite
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
@@ -273,7 +278,7 @@ async fn test_anon_group_content_serialization() {
             .as_nanos() as u64,
         profile_key: None,
         encrypted_display_name: None,
-        encrypted_avatar: None,
+        avatar: None,
     };
 
     let content = Content {
@@ -314,7 +319,9 @@ async fn test_anon_group_content_serialization() {
     };
 
     let wrapper = Content {
-        content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(group_msg))),
+        content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(
+            group_msg,
+        ))),
         ephemeral_reply_to: None,
         timestamp: 0,
         padding: vec![0u8; 32],
@@ -338,8 +345,8 @@ async fn test_anon_group_content_serialization() {
 async fn test_anon_group_join_ack_content() {
     skip_if_no_server!();
 
-    use prost::Message;
     use chatter_core::proto::content_v1::{self, AnonGroupJoinAck, Content};
+    use prost::Message;
 
     // Create join ack (sent when accepting an invite)
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
@@ -360,7 +367,7 @@ async fn test_anon_group_join_ack_content() {
             .as_nanos() as u64,
         profile_key: None,
         encrypted_display_name: None,
-        encrypted_avatar: None,
+        avatar: None,
     };
 
     let content = Content {
@@ -392,8 +399,8 @@ async fn test_anon_group_join_ack_content() {
 async fn test_anon_group_kick_content() {
     skip_if_no_server!();
 
-    use prost::Message;
     use chatter_core::proto::content_v1::{self, AnonGroupKick, Content};
+    use prost::Message;
 
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
     let kicked_user_id = uuid::Uuid::new_v4().as_bytes().to_vec();
@@ -436,8 +443,8 @@ async fn test_anon_group_kick_content() {
 async fn test_anon_group_leave_content() {
     skip_if_no_server!();
 
-    use prost::Message;
     use chatter_core::proto::content_v1::{self, AnonGroupLeave, Content};
+    use prost::Message;
 
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -477,8 +484,10 @@ async fn test_anon_group_leave_content() {
 async fn test_anon_group_member_list_content() {
     skip_if_no_server!();
 
+    use chatter_core::proto::content_v1::{
+        self, AnonGroupMemberInfo, AnonGroupMemberList, Content,
+    };
     use prost::Message;
-    use chatter_core::proto::content_v1::{self, AnonGroupMemberInfo, AnonGroupMemberList, Content};
 
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -496,7 +505,9 @@ async fn test_anon_group_member_list_content() {
                 role: if i == 0 { 2 } else { 0 }, // Owner = 2, Member = 0
                 profile_key: None,
                 encrypted_display_name: None,
-                encrypted_avatar: None,
+                avatar: None,
+                admission_timestamp: 0,
+                device_id: 1,
             }
         })
         .collect();
@@ -511,7 +522,9 @@ async fn test_anon_group_member_list_content() {
     };
 
     let content = Content {
-        content: Some(content_v1::content::Content::AnonGroupMemberList(member_list)),
+        content: Some(content_v1::content::Content::AnonGroupMemberList(
+            member_list,
+        )),
         ephemeral_reply_to: None,
         timestamp: 0,
         padding: vec![0u8; 32],
@@ -587,4 +600,141 @@ async fn test_anon_group_id_uniqueness() {
     }
 
     eprintln!("Generated 100 unique group IDs");
+}
+
+/// Real Tor send -> anonymous device inbox -> receiver decrypt/dispatch.
+/// No friend DM or ready secret-DM tunnel exists, so neither can deliver this.
+/// Removing the AnonGroupInvite receive arm makes the event deadline fail.
+#[tokio::test]
+#[ignore = "requires live stack and pinned Tor; set CHATTER_SECRET_GROUP_LIVE=1 and run --ignored"]
+async fn secret_group_invite_arrives_via_anonymous_device_inbox() {
+    assert_eq!(
+        std::env::var("CHATTER_SECRET_GROUP_LIVE").as_deref(),
+        Ok("1"),
+        "explicit live-stack opt-in required"
+    );
+    use chatter_core::client::ChatterClient;
+    use std::time::Duration;
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+    let mut clients = Vec::new();
+    let mut dirs = Vec::new();
+    let mut users = Vec::new();
+    let mut devices = Vec::new();
+    for label in ["inviter", "receiver"] {
+        let dir = tempfile::tempdir().unwrap();
+        common::headless(dir.path());
+        let client = ChatterClient::builder()
+            .server_url(
+                std::env::var("CHATTER_SERVER_URL")
+                    .unwrap_or_else(|_| "https://localhost:50051".into()),
+            )
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        assert!(
+            client.shield_available(),
+            "live proof requires pinned onion transport"
+        );
+        client.connect().await.unwrap();
+        let password = common::random_password();
+        let pin = common::random_password();
+        let result = client
+            .register(
+                &common::unique_username(),
+                &password,
+                label,
+                "secret-group-invite-proof",
+                None,
+                Some(&pin),
+            )
+            .await
+            .unwrap();
+        client
+            .prefetch_tokens(8)
+            .await
+            .expect("preload fixture blind tokens");
+        // start() asynchronously warms the certificate needed for anonymous send.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while client
+                .signal()
+                .get_cached_sender_certificate()
+                .unwrap()
+                .is_none()
+            {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("sender certificate warmup");
+        devices.push(result.device_id);
+        users.push(result.user_id);
+        clients.push(client);
+        dirs.push(dir);
+    }
+    let mut invites = clients[1].subscribe_anon_group_invites();
+    let name = format!("secret-invite-{}", uuid::Uuid::new_v4());
+    let group = tokio::time::timeout(
+        Duration::from_secs(180),
+        clients[0]
+            .anon_groups()
+            .create_group(name.clone(), vec![users[1]]),
+    )
+    .await
+    .expect("Tor group creation deadline")
+    .unwrap();
+    let invite = tokio::time::timeout(Duration::from_secs(90), invites.recv())
+        .await
+        .expect("receiver must dispatch invite")
+        .unwrap();
+    assert_eq!(invite.group_id, group.id);
+    assert_eq!(invite.group_name, name);
+    assert_eq!(invite.inviter_id, users[0]);
+    assert_eq!(invite.inviter_device_id, devices[0]);
+    let owner = clients[0]
+        .anon_groups()
+        .get_member(&group.id, &users[0])
+        .unwrap()
+        .unwrap();
+    assert_eq!(Some(invite.inviter_mailbox_pk), owner.mailbox_pk);
+    let accepted = tokio::time::timeout(
+        Duration::from_secs(180),
+        clients[1].anon_groups().accept_invite(
+            invite.group_id,
+            invite.group_name,
+            invite.inviter_id,
+            invite.inviter_id,
+            invite.inviter_device_id,
+            invite.inviter_mailbox_pk,
+            invite.profile_key,
+            invite.inviter_display_name,
+            invite.inviter_avatar,
+        ),
+    )
+    .await
+    .expect("Tor invite acceptance deadline")
+    .expect("receiver accepts decoded invite");
+    assert_eq!(accepted.id, group.id);
+    // The JoinAck must return through the owner's group mailbox and bind the
+    // receiver's actual device; merely decoding an invite cannot satisfy this.
+    tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            let member = clients[0]
+                .anon_groups()
+                .get_member(&group.id, &users[1])
+                .unwrap()
+                .unwrap();
+            if member.mailbox_pk.is_some() {
+                assert_eq!(member.device_id, Some(devices[1]));
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("owner processes receiver JoinAck");
+    for client in clients {
+        client.shutdown().await;
+    }
 }

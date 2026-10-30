@@ -1,0 +1,261 @@
+import { Colors } from "../theme/colors.slint";
+import { Elevation } from "../theme/elevation.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+import { Icons } from "../theme/icons.slint";
+import { SessionInfo, PendingLinkInfo } from "../modals/sessions.slint";
+
+// Linked devices share the Sessions modal's model and actions. Keep the full
+// modal available for compact screens and its revoke-all action.
+export component DevicesSettings inherits VerticalLayout {
+    in property <bool> compact-mode;
+    in-out property <int> confirm-revoke-id;
+    in property <bool> mobile-platform;
+    in property <[PendingLinkInfo]> pending-links;
+    in property <int> session-count;
+    in property <[SessionInfo]> sessions;
+    in property <string> sessions-error;
+    in property <bool> sessions-loaded;
+    in property <bool> sessions-loading;
+    in property <bool> sessions-revoking;
+    callback cancel-pending-link(string);
+    callback link-new-device();
+    callback revoke-session(int);
+    callback view-sessions-clicked();
+
+
+    spacing: Spacing.lg;
+
+    // Section header
+    Text {
+        text: "Linked devices";
+        color: Colors.text-primary;
+        font-size: Typography.xl;
+        font-weight: Typography.semibold;
+    }
+
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.md;
+
+            HorizontalLayout {
+                spacing: Spacing.md;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Spacing.xs;
+
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+
+                        Text {
+                            text: "Devices";
+                            color: Colors.text-primary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                            vertical-alignment: center;
+                        }
+
+                        // Zero is also the initial value before sessions load.
+                        Rectangle {
+                            width: 24px;
+                            height: 20px;
+                            border-radius: Spacing.radius-sm;
+                            background: Colors.action-fill;
+
+                            Text {
+                                text: root.sessions-loaded ? "\{root.session-count}" : "—";
+                                color: Colors.on-action;
+                                font-size: Typography.xs;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                height: 100%;
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "Phones and computers signed in to your account. Link a new device or sign one out.";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if !root.compact-mode: Button {
+                    touch: root.mobile-platform;
+                    text: "Manage devices";
+                    variant: "secondary";
+                    clicked => { root.view-sessions-clicked(); }
+                }
+            }
+
+            // Compact: full-width button stacked below
+            if root.compact-mode: Button {
+                touch: root.mobile-platform;
+                text: "Manage devices";
+                variant: "secondary";
+                clicked => { root.view-sessions-clicked(); }
+            }
+        }
+    }
+
+    if !root.compact-mode: VerticalLayout {
+        spacing: Spacing.sm;
+
+        if root.sessions-loading: Text {
+            text: "Loading devices…";
+            color: Colors.text-secondary;
+            font-size: Typography.sm;
+        }
+        if root.sessions-error != "": Text {
+            width: parent.width;
+            text: root.sessions-error;
+            color: Colors.error;
+            font-size: Typography.sm;
+            wrap: word-wrap;
+        }
+        if root.sessions-loaded && root.sessions.length == 0 && !root.sessions-loading: Text {
+            text: "No active devices found";
+            color: Colors.text-muted;
+            font-size: Typography.sm;
+        }
+
+        for session in root.sessions: Rectangle {
+            background: Colors.surface-section;
+            border-radius: Spacing.radius-lg;
+            border-width: Elevation.rim-width;
+            border-color: Elevation.card-rim;
+
+            HorizontalLayout {
+                padding: Spacing.md;
+                spacing: Spacing.md;
+
+                VerticalLayout {
+                    alignment: center;
+                    Image {
+                        source: session.is-mobile ? Icons.smartphone : Icons.monitor;
+                        colorize: Colors.text-secondary;
+                        width: Spacing.button-icon;
+                        height: Spacing.button-icon;
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Spacing.xxs;
+
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+                        Text {
+                            text: session.device-info;
+                            color: Colors.text-primary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                        if session.is-current: Text {
+                            text: "This device";
+                            color: Colors.success;
+                            font-size: Typography.xs;
+                        }
+                    }
+                    Text {
+                        text: session.status-text != "" ? session.status-text : (session.is-current ? "Active now" : "Last active: " + session.last-used);
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: "Linked: " + session.created-at;
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+                    if root.confirm-revoke-id == session.device-id: Text {
+                        text: "Revoke this device? It must be linked again.";
+                        color: Colors.error;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if session.can-revoke: VerticalLayout {
+                    alignment: center;
+                    spacing: Spacing.xs;
+                    Button {
+                        touch: root.mobile-platform;
+                        text: root.confirm-revoke-id == session.device-id ? "Confirm" : "Revoke";
+                        variant: root.confirm-revoke-id == session.device-id ? "destructive" : "secondary";
+                        disabled: root.sessions-revoking || root.sessions-loading;
+                        clicked => {
+                            if root.confirm-revoke-id == session.device-id {
+                                root.confirm-revoke-id = 0;
+                                root.revoke-session(session.device-id);
+                            } else {
+                                root.confirm-revoke-id = session.device-id;
+                            }
+                        }
+                    }
+                    if root.confirm-revoke-id == session.device-id: Button {
+                        touch: root.mobile-platform;
+                        text: "Cancel";
+                        variant: "ghost";
+                        clicked => { root.confirm-revoke-id = 0; }
+                    }
+                }
+            }
+        }
+
+        for link in root.pending-links: Rectangle {
+            background: Colors.surface-section;
+            border-radius: Spacing.radius-lg;
+            HorizontalLayout {
+                padding: Spacing.md;
+                spacing: Spacing.md;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Spacing.xxs;
+                    Text {
+                        text: link.device-name != "" ? link.device-name : "New device";
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        font-weight: Typography.medium;
+                    }
+                    Text {
+                        text: "Approved, waiting to finish linking (until " + link.expires + ")";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                    }
+                }
+                Button {
+                    touch: root.mobile-platform;
+                    text: "Cancel";
+                    variant: "ghost";
+                    disabled: root.sessions-revoking || root.sessions-loading;
+                    clicked => { root.cancel-pending-link(link.uuid); }
+                }
+            }
+        }
+
+        Button {
+            touch: root.mobile-platform;
+            text: "Link new device";
+            variant: "primary";
+            disabled: root.sessions-revoking || root.sessions-loading;
+            clicked => { root.link-new-device(); }
+        }
+    }
+}

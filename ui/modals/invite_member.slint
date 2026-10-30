@@ -1,6 +1,9 @@
 // InviteMemberModal - Modal for inviting users to a channel
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
+import { Icons } from "../theme/icons.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
@@ -16,12 +19,14 @@ export struct InviteUser {
     avatar-source: image,
     has-avatar: bool,
     already-member: bool,
+    banned: bool,
     selected: bool,
 }
 
 export component InviteMemberModal inherits Rectangle {
     in property <bool> show-modal: false;
     in property <string> channel-name: "";
+    in property <bool> private-channel: false;
     in-out property <string> search-text: "";
     in-out property <[InviteUser]> users: [];
     in-out property <int> selected-count: 0;
@@ -41,8 +46,10 @@ export component InviteMemberModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: "Invite Members";
+        title: "Invite members";
         modal-width: 480px;
+        max-modal-height: 640px;
+        fill-height: true;
 
         close => {
             root.close();
@@ -52,14 +59,40 @@ export component InviteMemberModal inherits Rectangle {
             spacing: Spacing.md;
 
             // Header text showing channel name
-            Text {
-                text: "Invite to #" + root.channel-name;
-                color: Colors.text-secondary;
-                font-size: Typography.sm;
+            // Only the list takes the sheet's spare height; the header row
+            // stretched and floated in empty bands.
+            HorizontalLayout {
+                height: Spacing.touch-target-min;
+                spacing: Spacing.xs;
+                alignment: start;
+                Text {
+                    text: "Invite to";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    vertical-alignment: center;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Image {
+                        source: root.private-channel ? Icons.lock : Icons.hash;
+                        width: 16px;
+                        height: 16px;
+                        colorize: Colors.text-secondary;
+                        accessible-label: root.private-channel ? "Private channel" : "Public channel";
+                    }
+                }
+                Text {
+                    text: root.channel-name;
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
             }
 
             // Search input
             Input {
+                vertical-stretch: 0;
                 placeholder: "Search by name or username...";
                 text <=> root.search-text;
                 edited(q) => { root.search-changed(q); }
@@ -68,12 +101,13 @@ export component InviteMemberModal inherits Rectangle {
             // User list (scrollable)
             Rectangle {
                 min-height: 200px;
-                max-height: 300px;
+                // Explicit: the implicit maximum merged from the Flickable
+                // stopped the list growing, and the sheet's spare height
+                // went to the rows above it instead.
+                max-height: 100000px;
                 vertical-stretch: 1;
                 background: Colors.surface;
                 border-radius: Spacing.radius-md;
-                border-width: 1px;
-                border-color: Colors.text-muted.with-alpha(0.2);
 
                 Flickable {
                     viewport-height: user-list.preferred-height;
@@ -83,11 +117,26 @@ export component InviteMemberModal inherits Rectangle {
                         padding: Spacing.xs;
 
                         for user[index] in root.users: Rectangle {
-                            height: 52px;
-                            background: user.already-member ? transparent :
-                                (user-touch.has-hover ? Colors.surface-hover : transparent);
+                            // Members and banned users can't be invited.
+                            property <bool> unavailable: user.already-member || user.banned;
+                            height: max(52px, Spacing.touch-target-min);
+                            accessible-role: checkbox;
+                            accessible-label: user.display-name
+                                + (user.banned ? ", banned" : user.already-member ? ", already a member" : "");
+                            accessible-checkable: !unavailable;
+                            accessible-checked: user.selected;
+                            accessible-enabled: !unavailable;
+                            accessible-action-default => { if !unavailable { root.toggle-user(index); } }
+                            KeyFocus { enabled: !parent.unavailable; border-radius: parent.border-radius; activate => { root.toggle-user(index); } }
+                            background: unavailable ? transparent :
+                                (user-touch.pressed ? Materials.pressed : user-touch.has-hover ? Colors.surface-hover : transparent);
                             border-radius: Spacing.radius-md;
-                            opacity: user.already-member ? 0.5 : 1.0;
+                            opacity: unavailable ? 0.5 : 1.0;
+                            transform-scale-x: user-touch.pressed ? 0.97 : 1;
+                            transform-scale-y: user-touch.pressed ? 0.94 : 1;
+                            animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                             HorizontalLayout {
                                 padding-left: Spacing.sm;
@@ -97,15 +146,16 @@ export component InviteMemberModal inherits Rectangle {
                                 // Avatar
                                 Avatar {
                                     size: 36px;
+                                    y: (parent.height - self.height) / 2;
                                     source: user.has-avatar ? user.avatar-source : @image-url("");
-                                    fallback-text: user.display-name;
+                                    name: user.display-name;
                                 }
 
                                 // Name and username
                                 VerticalLayout {
                                     horizontal-stretch: 1;
                                     alignment: center;
-                                    spacing: 2px;
+                                    spacing: Spacing.xxs;
 
                                     Text {
                                         text: user.display-name;
@@ -123,16 +173,17 @@ export component InviteMemberModal inherits Rectangle {
                                     }
                                 }
 
-                                // Already member badge
-                                if user.already-member: Rectangle {
+                                // Member / Banned badge
+                                if unavailable: Rectangle {
                                     width: member-text.width + Spacing.sm * 2;
                                     height: 20px;
+                                    y: (parent.height - self.height) / 2;
                                     background: Colors.text-muted.with-alpha(0.2);
                                     border-radius: Spacing.radius-sm;
 
                                     member-text := Text {
                                         x: Spacing.sm;
-                                        text: "Member";
+                                        text: user.banned ? "Banned" : "Member";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         vertical-alignment: center;
@@ -140,34 +191,35 @@ export component InviteMemberModal inherits Rectangle {
                                     }
                                 }
 
-                                // Checkbox (only for non-members)
-                                if !user.already-member: Rectangle {
+                                // Checkbox (only for invitable users)
+                                if !unavailable: Rectangle {
                                     width: 20px;
                                     height: 20px;
+                                    y: (parent.height - self.height) / 2;
                                     border-radius: Spacing.radius-sm;
-                                    border-width: user.selected ? 0 : 2px;
+                                    border-width: user.selected ? 0px : Spacing.stroke;
                                     border-color: Colors.text-muted;
-                                    background: user.selected ? Colors.primary : transparent;
+                                    background: user.selected ? Colors.action-fill : transparent;
 
-                                    // Checkmark (shown when selected)
-                                    if user.selected: Text {
-                                        text: "\u{2713}";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.xs;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
+                                    // Checkmark (shown when selected) — the bundled SVG, as
+                                    // components/checkbox.slint draws it; ✓ was a tofu risk.
+                                    if user.selected: Image {
+                                        source: Icons.check;
+                                        width: 12px;
+                                        height: 12px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: Colors.on-action;
                                     }
                                 }
                             }
 
                             user-touch := TouchArea {
-                                enabled: !user.already-member;
-                                mouse-cursor: user.already-member ? default : pointer;
+                                enabled: !unavailable;
+                                mouse-cursor: unavailable ? default : pointer;
 
                                 clicked => {
-                                    if !user.already-member {
+                                    if !unavailable {
                                         root.toggle-user(index);
                                     }
                                 }

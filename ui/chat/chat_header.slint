@@ -1,3 +1,5 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // Chat header component
 //
 // Displays channel information, topic, and action buttons.
@@ -6,78 +8,50 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
-import { NeoActionToggle } from "../components/neo_action_toggle.slint";
 import { Avatar } from "../components/avatar.slint";
+import { HeaderButton } from "../components/header_button.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
+import { ConversationKind } from "conversation_kind.slint";
+import { MembershipGlobal } from "membership_global.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 
-// Data struct for chat header (mirrors Rust ChatHeaderData)
-export struct ChatHeaderData {
-    channel-id: string,
-    channel-name: string,
-    channel-type: string,  // "public", "private", "dm", "anon-dm", "private-group", "saved"
-    member-count: int,
-    topic: string,
-    typing-indicator: string,
-    presence-status: string,  // "online", "away", "dnd", "offline" — shown for DMs only
-}
-
-// Reusable icon button component — 44px touch target, the accessibility floor.
-// It was 48px, which is the floor plus margin the header does not have: four of
-// these in a row is a fifth of a 411dp screen, and the extra width read as the
-// icons being loosely spaced rather than as a bigger target.
-component IconButton inherits Rectangle {
-    in property <image> icon;
-    // Vertical centring comes from the box size being identical across every
-    // button in the row: a fixed-size child is centred in a HorizontalLayout's
-    // cross axis, so equal sizes put them all on one line. (A `y:` binding here
-    // cannot work — a component's root cannot see `parent`.)
-    // Touch wants a bigger glyph, not just a bigger box — the box was already
-    // 44px and the chevron inside it still read as tiny next to a 20px title.
-    in property <length> glyph-size: 18px;
-    in property <length> box-size: 44px;
-    in property <color> icon-color: Colors.text-secondary;
-    in property <color> hover-color: Colors.text-primary;
-    callback clicked();
-
-    width: root.box-size;
-    height: root.box-size;
-    background: touch.has-hover ? Colors.surface-hover : transparent;
-    border-radius: Spacing.radius-md;
-    border-width: touch.has-hover ? 1px : 0px;
-    border-color: Colors.neo-highlight;
-    drop-shadow-blur: touch.has-hover ? Spacing.neo-blur-sm : 0px;
-    drop-shadow-offset-x: touch.has-hover ? 1px : 0px;
-    drop-shadow-offset-y: touch.has-hover ? 1px : 0px;
-    drop-shadow-color: touch.has-hover ? Colors.neo-shadow : transparent;
-
-    // 18px glyph in a 44px box. The target is what has to be big; the glyph is
-    // what has to be legible, and at 20px it was neither more legible nor less
-    // shouty than the channel name beside it.
-    Image {
-        source: icon;
-        width: root.glyph-size;
-        height: root.glyph-size;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        colorize: touch.has-hover ? hover-color : icon-color;
+export component ChatHeader inherits GlassSurface {
+    // Match the floating bottom dock; the shared backdrop still blurs text
+    // passing behind this header without an opaque cap over the conversation.
+    material-level: 2;
+    material-tint: Materials.chat-chrome;
+    darkening: Materials.chat-darkening;
+    elevation: 3;
+    border-radius: self.height / 2;
+    property <int> typing-phase: 0;
+    Timer {
+        interval: 180ms / Appearance.animation-speed;
+        running: root.typing-indicator != "" && !Appearance.reduce-motion;
+        triggered => { root.typing-phase = root.typing-phase == 2 ? 0 : root.typing-phase + 1; }
     }
 
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
-}
-
-export component ChatHeader inherits Rectangle {
     // Properties from ChatHeaderData
     in property <string> channel-id: "";
     in property <string> channel-name: "";
-    in property <string> channel-type: "public";  // "public", "private", "dm", "anon-dm", "private-group", "saved"
+    in property <ConversationKind> conversation-kind;
+    // Only meaningful for `ConversationKind.channel`: an invite-only channel.
+    in property <bool> private-channel: false;
     in property <int> member-count: 0;
+    in property <int> invited-count: 0;
+    // A channel we left or were removed from: we no longer see its roster
+    // (Channel Settings lists no one) and, as in Signal, cannot call it.
+    in property <bool> read-only: false;
+    in property <bool> can-call: false;
+    in property <bool> can-invite: false;
+    in property <bool> can-open-settings: false;
+    in property <bool> can-open-pinned-list: false;
     in property <string> topic: "";
     in property <string> typing-indicator: "";
     in property <string> presence-status: "offline";
+    // "online" / "last seen 21:40" under a DM's name, as Telegram's header.
+    in property <string> last-seen: "";
 
     // Optional custom channel/peer avatar — replaces the type glyph (#, @,
     // shield, lock, bookmark) when the owner uploaded an icon.
@@ -89,6 +63,7 @@ export component ChatHeader inherits Rectangle {
 
     // Whether there are pinned messages (even if bar is dismissed)
     in property <bool> has-any-pinned: false;
+    in property <bool> pinned-bar-shown: false;
 
     // Mobile back button (returns to chat list)
     in property <bool> show-back-button: false;
@@ -96,13 +71,13 @@ export component ChatHeader inherits Rectangle {
 
     // Callbacks
     callback settings-clicked();
-    callback pin-clicked();
     callback voice-call-clicked();
-    callback video-call-clicked();
     callback invite-clicked();
+    // The ⋯ button. The menu itself is on the window's modal stack (app.slint,
+    // "chat-menu"); these say which of its rows apply to this conversation.
+    callback more-clicked(/* video-call */ bool, /* settings */ bool);
 
-    // Presence dot colour. Defined once because two things draw it: the `@`
-    // glyph row, and the peer avatar that replaces the glyph.
+    // Presence dot colour, drawn by the DM avatar (picture or initials).
     property <color> presence-dot:
         root.presence-status == "online" ? Colors.online
       : root.presence-status == "away" ? Colors.away
@@ -110,11 +85,13 @@ export component ChatHeader inherits Rectangle {
       : Colors.offline;
 
     // Type detection properties
-    property <bool> is-private: channel-type == "private";
-    property <bool> is-dm: channel-type == "dm";
-    property <bool> is-anon-dm: channel-type == "anon-dm";
-    property <bool> is-private-group: channel-type == "private-group";
-    property <bool> is-saved: channel-type == "saved";
+    property <bool> is-channel: conversation-kind == ConversationKind.channel;
+    property <bool> is-private: is-channel && private-channel;
+    property <bool> is-dm: conversation-kind == ConversationKind.server-dm
+        || conversation-kind == ConversationKind.mesh-dm;
+    property <bool> is-anon-dm: conversation-kind == ConversationKind.anon-dm;
+    property <bool> is-private-group: conversation-kind == ConversationKind.anon-group;
+    property <bool> is-saved: conversation-kind == ConversationKind.saved-messages;
 
     // No conversation open → suppress all conversation-scoped actions.
     // Name is the reliable signal: anon DMs and saved messages can have
@@ -122,62 +99,28 @@ export component ChatHeader inherits Rectangle {
     // while nothing is set on app start before the user picks a chat.
     property <bool> has-channel: channel-name != "";
 
-    // Show member count for channels and private groups (not DMs)
-    property <bool> show-member-count: has-channel && !tight && (channel-type == "public" || channel-type == "private" || is-private-group) && member-count > 0;
-
     // Show settings for regular channels and private groups, not for anon DMs or saved messages
-    property <bool> show-settings: has-channel && ((!is-anon-dm && !is-saved) || is-private-group) && !is-mesh;
+    property <bool> show-settings: root.can-open-settings;
 
     // A mesh conversation is open. Calls, invites and channel settings are all
     // server operations; offering them over a transport that reaches no server
     // would be offering something that cannot happen.
     property <bool> is-mesh: MeshGlobal.active-id != "";
 
-    // Whether the trailing button group will draw anything. Mirrors the three
-    // `if`s on that group exactly; used by the mesh divider above it, which
-    // otherwise hangs off the right edge with nothing to separate.
-    property <bool> has-utility-actions:
-        root.show-invite || (has-channel && root.has-any-pinned) || root.show-settings;
-
-    // Mesh status wording. Kept here rather than in the strip below because this
-    // is where it is now shown; the strip's remaining line is the one that has to
-    // wrap, and these are the ones that must not.
-    // Narrow enough that the header has to give something up.
-    //
-    // What it gives up is the standing claim and the word next to the switch, not
-    // the conversation name: on a phone the mesh line squeezed "#mesh" down to
-    // "#m…" while "No server, no inte…" kept its space, which is backwards. The
-    // peer count stays because it is the connectivity signal, and the switch stays
-    // because it is a control.
-    property <bool> mesh-tight: root.width < 520px;
-    // Narrow header. At 411dp minus the sidebar rail there is room for the
-    // conversation name OR for every secondary action, not both — and the name
-    // is what tells you where you are, so the actions yield. Both of the ones
-    // dropped here stay reachable from channel settings (the kebab).
+    // Narrow header keeps the conversation name ahead of secondary actions.
     property <bool> tight: root.width < 420px;
-    property <bool> mesh-radio-down: !MeshGlobal.radio-running;
-    property <string> mesh-standing:
-        MeshGlobal.active-kind == "geohash"
-            ? (MeshGlobal.relay-count == 0
-                ? "Public cell · no relay"
-              : MeshGlobal.relay-count == 1
-                ? "Public cell · 1 relay"
-                : "Public cell · " + MeshGlobal.relay-count + " relays")
-      : !MeshGlobal.mesh-on
-            ? "Mesh off"
-            : "No server, no internet";
-    property <string> mesh-peers:
-        !MeshGlobal.mesh-on ? "radio stopped"
-      : root.mesh-radio-down ? "Bluetooth off"
-      : MeshGlobal.peer-count == 0 ? "none nearby"
-      : MeshGlobal.peer-count == 1 ? "1 nearby"
-      : MeshGlobal.peer-count + " nearby";
 
     // Show invite button for channels and private groups only (not DMs, anon DMs, or saved)
-    property <bool> show-invite: has-channel && !tight && !is-dm && !is-anon-dm && !is-saved && !is-mesh;
+    property <bool> show-invite: root.can-invite && !tight;
 
-    // Show call buttons for everything except saved messages
-    property <bool> show-calls: has-channel && !is-saved && !is-mesh;
+    // No calls in saved messages, the mesh, or secret chats: LiveKit media
+    // would leave Tor and expose the user's IP.
+    property <bool> show-calls: root.can-call;
+    // ⋯ holds Video call (owner, 2026-10-05: out of the header row, into the
+    // menu) and Conversation settings, so it is there when either is.
+    // Saved always has its pinned list (the only row its menu has), so the
+    // overflow is reachable there before the first pin.
+    property <bool> show-more: root.show-calls || root.show-settings || root.is-anon-dm || root.has-any-pinned || root.can-open-pinned-list;
 
     // "Touch input", plumbed from ChatLayout. The 52px/28px/18px set below is
     // mouse density; on a phone this is the bar you navigate the whole app from
@@ -188,36 +131,23 @@ export component ChatHeader inherits Rectangle {
     // it are the same row across the seam, so they read one number.
     property <length> header-height: root.mobile ? Spacing.header-height-touch : Spacing.header-height;
     property <length> header-avatar: root.mobile ? 40px : 28px;
-    // One glyph size and one box size for EVERY button in this row — back,
-    // call, video, pin, kebab. They were two sets: the back button was given
-    // 24px-in-48px while the rest kept IconButton's 18px-in-44px defaults, so
-    // the row read as one big control and four small ones, sitting on two
-    // different vertical centres.
-    property <length> header-glyph: root.mobile ? Spacing.header-glyph-touch : Spacing.header-glyph;
-    property <length> header-action-box: root.mobile ? Spacing.header-action-box-touch : Spacing.header-action-box;
-    property <length> header-title-size: root.mobile ? Typography.xl : Typography.lg;
+    // Every button in this row is the shared HeaderButton (touch: mobile), so
+    // back, call, pin and ⋯ are one box and one glyph on one axis.
+    // Signal's ~20sp title; xl elided "Carol Sweep" to "Carol …" on a phone.
+    property <length> header-title-size: Typography.lg;
 
     // Leading clearance for the macOS traffic lights, from app.slint. Nonzero
     // only when the sidebar beside this is too narrow to cover them itself
     // (the rail), and 0 on every other platform.
     in property <length> leading-inset: 0px;
 
-    // Layout — Neo glassmorphism: translucent surface with edge definition.
+    // The shared material carries the header above plain conversation content.
     // 52px is a 44px touch row plus 4px of air above and below; the old 56px was
     // that plus a spare row of nothing, repeated at the top of every
     // conversation.
     height: root.header-height;
-    background: Colors.surface.with-alpha(0.85);
-    // No `border-width`: this read as "edge definition" but Slint draws all
-    // four sides, which put a hairline down both edges of the chat column (and
-    // both screen edges on a phone). The explicit bottom-edge Rectangle at the
-    // end of this file is the separation that actually matters, on the one
-    // side that has something to separate from.
-    drop-shadow-blur: root.mobile ? 0px : Spacing.neo-blur-sm;
-    drop-shadow-offset-y: Spacing.neo-offset-sm;
-    drop-shadow-color: Colors.neo-shadow;
-
-    HorizontalLayout {
+    animate height { duration: Materials.motion-standard; easing: Materials.settle; }
+    if !root.is-mesh: HorizontalLayout {
         // Constrain to the header width so the name elides instead of growing
         // the whole chat column past the screen (which clipped the composer's
         // Send button in channels/groups, where the header has more icons).
@@ -236,13 +166,18 @@ export component ChatHeader inherits Rectangle {
         // Left section: Back button + Icon + Name
         HorizontalLayout {
             spacing: Spacing.sm;
-            alignment: start;
+            horizontal-stretch: 1;
+            min-width: 0px;
 
             // Mobile back button (returns to chat list)
-            if root.show-back-button: IconButton {
-                glyph-size: root.header-glyph;
-                box-size: root.header-action-box;
+            if root.show-back-button: HeaderButton {
+                touch: root.mobile;
+                // The header is already one sampled glass pane. Keep its
+                // controls on that pane instead of stacking dark lenses.
+                plain: true;
+                backdrop-paused: root.backdrop-paused;
                 icon: Icons.chevron-left;
+                label: "Back";
                 clicked => { root.back-clicked(); }
             }
 
@@ -253,7 +188,7 @@ export component ChatHeader inherits Rectangle {
             //   has-avatar     → channel icon (overrides the type glyph)
             //   public         → `#`          (muted)
             //   private        → lock         (muted) — invite-only channel
-            //   dm             → `@` + dot    (peer presence)
+            //   dm             → initials avatar + dot (peer presence)
             //   anon-dm        → purple shield
             //   private-group  → purple shield
             //   saved          → bookmark
@@ -266,63 +201,69 @@ export component ChatHeader inherits Rectangle {
             if root.has-avatar: Avatar {
                 size: root.header-avatar;
                 source: root.avatar-source;
+                // TalkBack read a bare "Avatar" in every DM header.
+                alt-name: root.channel-name;
+                anonymous: is-anon-dm || is-private-group;
                 y: (parent.height - self.height) / 2;
                 show-presence: root.is-dm;
                 presence-color: root.presence-dot;
+                // The picture opens the same screen as the name (Telegram);
+                // the name stays the accessible and keyboard target.
+                TouchArea {
+                    enabled: root.show-settings;
+                    mouse-cursor: self.enabled ? pointer : default;
+                    clicked => { root.settings-clicked(); }
+                }
             }
 
-            // Mesh conversations are pushed in as `channel-type == "public"` so
-            // they inherit the public-channel treatment, but their names already
-            // carry the mark: core labels them "#mesh" and "#<geohash>"
-            // (services/mesh/timeline.rs). Drawing the header's own "#" on top of
-            // that produced "# #mesh". The name keeps its hash — it is part of
-            // the name a user would type — so the glyph yields.
-            if has-channel && !root.has-avatar && channel-type == "public" && !root.is-mesh: Text {
+            // Mesh rooms are their own kind, not a channel, and their names
+            // already carry the mark: core labels them "#mesh" and
+            // "#<geohash>" (services/mesh/timeline.rs), so the header draws no
+            // "#" of its own ("# #mesh"). `is-mesh` stays as a second guard.
+            if has-channel && !root.has-avatar && is-channel && !is-private && !root.is-mesh: Text {
                 text: "#";
                 color: Colors.text-muted;
                 font-size: root.header-title-size;
                 vertical-alignment: center;
             }
 
-            // Private channels: purple dot in place of a lock icon.
+            // Private channels: muted lock. A teal dot here read as presence.
             if has-channel && !root.has-avatar && is-private: Rectangle {
-                width: 10px;
-                height: 10px;
-                border-radius: 5px;
-                background: Colors.primary;
-                y: (parent.height - self.height) / 2;
-            }
-
-            if has-channel && !root.has-avatar && is-dm: HorizontalLayout {
-                spacing: 4px;
-                alignment: center;
-                Text {
-                    text: "@";
-                    color: Colors.text-muted;
-                    font-size: root.header-title-size;
-                    vertical-alignment: center;
-                }
-                Rectangle {
-                    width: 8px;
-                    height: 8px;
-                    border-radius: 4px;
-                    y: (parent.height - self.height) / 2;
-                    background: root.presence-dot;
-                }
-            }
-
-            if has-channel && !root.has-avatar && (is-anon-dm || is-private-group): Rectangle {
                 width: 20px;
                 height: 20px;
                 y: (parent.height - self.height) / 2;
                 Image {
-                    source: Icons.shield;
+                    source: Icons.lock;
                     width: 16px;
                     height: 16px;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    colorize: Colors.primary;
+                    colorize: Colors.text-muted;
                 }
+            }
+
+            // No picture: the peer's initials, as the chat list draws them —
+            // a bare `@` read as "unknown account".
+            if has-channel && !root.has-avatar && is-dm: Avatar {
+                size: root.header-avatar;
+                name: root.channel-name;
+                y: (parent.height - self.height) / 2;
+                show-presence: true;
+                presence-color: root.presence-dot;
+                // The picture opens the same screen as the name (Telegram);
+                // the name stays the accessible and keyboard target.
+                TouchArea {
+                    enabled: root.show-settings;
+                    mouse-cursor: self.enabled ? pointer : default;
+                    clicked => { root.settings-clicked(); }
+                }
+            }
+
+            if has-channel && !root.has-avatar && (is-anon-dm || is-private-group): Avatar {
+                size: root.header-avatar;
+                name: root.channel-name;
+                anonymous: true;
+                y: (parent.height - self.height) / 2;
             }
 
             if has-channel && !root.has-avatar && is-saved: Rectangle {
@@ -352,99 +293,132 @@ export component ChatHeader inherits Rectangle {
             Rectangle {
                 horizontal-stretch: 1;
                 min-width: 0px;
-                Text {
+                VerticalLayout {
                     width: 100%;
-                    height: 100%;
-                    text: root.channel-name;
-                    color: name-touch.has-hover ? Colors.primary : Colors.text-primary;
-                    font-size: root.header-title-size;
-                    font-weight: Typography.semibold;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-                name-touch := TouchArea {
-                    enabled: root.show-settings;
-                    mouse-cursor: pointer;
-                    clicked => { root.settings-clicked(); }
+                    alignment: center;
+                    Rectangle {
+                        height: root.header-title-size + Spacing.xs;
+                        min-width: 0px;
+                        accessible-role: button;
+                        accessible-label: root.channel-name;
+                        accessible-enabled: root.show-settings;
+                        accessible-action-default => { if root.show-settings { root.settings-clicked(); } }
+                        KeyFocus { enabled: root.show-settings; border-radius: Spacing.radius-sm; activate => { root.settings-clicked(); } }
+                        Text {
+                            accessible-role: none;
+                            width: 100%;
+                            text: root.channel-name;
+                            color: name-touch.has-hover ? Colors.primary : Colors.text-primary;
+                            font-size: root.header-title-size;
+                            font-weight: Typography.semibold;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        name-touch := TouchArea {
+                            enabled: root.show-settings;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.settings-clicked();
+                            }
+                        }
+                    }
+
+                    // Typing shares the title's bounded column, so long peer
+                    // names yield to the call buttons instead of drawing over them.
+                    if root.typing-indicator != "" && !(JarvisGlobal.enabled && root.jarvis-thinking): HorizontalLayout {
+                        spacing: Spacing.xs;
+                        min-width: 0px;
+                        // The dots follow the words; a stretching label left
+                        // them floating at the far end, by the call button.
+                        alignment: start;
+                        Text {
+                            text: root.mobile && root.is-dm ? "Typing" : root.typing-indicator;
+                            color: Colors.text-secondary;
+                            font-size: Typography.xs;
+                            font-italic: true;
+                            min-width: 0px;
+                            horizontal-stretch: 0;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 21px;
+                                height: 12px;
+                                for dot in [0, 1, 2]: Rectangle {
+                                    x: dot * 7px;
+                                    y: Appearance.reduce-motion ? 5px : (dot == root.typing-phase ? 2px : 6px);
+                                    width: 4px;
+                                    height: 4px;
+                                    border-radius: 2px;
+                                    background: Colors.primary;
+                                    opacity: Appearance.reduce-motion || dot == root.typing-phase ? 1 : 0.45;
+                                    animate y { duration: Materials.motion-quick; easing: Materials.spring; }
+                                    animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+                                }
+                            }
+                        }
+                    }
+                    if root.typing-indicator == "" && has-channel && is-dm && root.last-seen != "": Text {
+                        text: root.last-seen;
+                        color: root.presence-status == "online" ? Colors.primary : Colors.text-muted;
+                        font-size: Typography.xs;
+                        overflow: elide;
+                        min-width: 0px;
+                    }
+                    // Secret chat (anon DM): device-bound and separate from
+                    // the regular DM with the same person — say so under the
+                    // name, with the lock the chat list draws on its row.
+                    if root.typing-indicator == "" && has-channel && is-anon-dm: HorizontalLayout {
+                        spacing: Spacing.xs;
+                        alignment: start;
+                        VerticalLayout {
+                            alignment: center;
+                            Image {
+                                source: Icons.lock;
+                                width: 11px;
+                                height: 11px;
+                                colorize: Colors.success;
+                            }
+                        }
+                        Text {
+                            text: "Secret chat";
+                            color: Colors.success;
+                            font-size: Typography.xs;
+                            overflow: elide;
+                            min-width: 0px;
+                        }
+                    }
+                    // Keep member count in the title column at every width.
+                    if root.typing-indicator == "" && has-channel && !root.read-only && (is-channel || is-private-group) && member-count > 0: Text {
+                        // The public badge (core-worded) rides on the count
+                        // line, so every open public channel says it.
+                        text: (root.member-count == 1 ? "1 member" : "\{root.member-count} members")
+                            + (root.is-private-group && root.invited-count > 0 ? (root.invited-count == 1 ? " · 1 invited" : " · \{root.invited-count} invited") : "")
+                            + (root.is-channel && MembershipGlobal.public-badge != "" ? " \u{b7} " + MembershipGlobal.public-badge : "");
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        overflow: elide;
+                    }
                 }
             }
 
-            // Mesh status, inline. The strip below the header used to carry three
-            // lines of this; on a phone that was most of the space above the
-            // first message. The facts that are short enough to sit on one line
-            // live here now, and the strip keeps only the sentence that cannot
-            // be shortened without changing what it says.
-            //
-            // The peer count is last and never elided: it is the connectivity
-            // signal for this feature, and the part before it is context.
-            if root.is-mesh: HorizontalLayout {
-                spacing: Spacing.xs;
-                alignment: center;
-                min-width: 0px;
-                Rectangle {
-                    width: 1px;
-                    height: 16px;
-                    background: Colors.text-muted;
-                    y: (parent.height - self.height) / 2;
-                }
-                if !root.mesh-tight: Text {
-                    text: root.mesh-standing;
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    min-width: 0px;
-                }
-                if !root.mesh-tight: Text {
-                    text: "·";
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                    horizontal-stretch: 0;
-                }
-                Text {
-                    text: root.mesh-peers;
-                    color: root.mesh-radio-down ? Colors.warning : Colors.text-muted;
-                    font-size: Typography.xs;
-                    font-weight: root.mesh-radio-down ? 600 : 400;
-                    vertical-alignment: center;
-                    horizontal-stretch: 0;
-                }
-            }
-
-            // Member count. min-width: 0 + elide so it yields on narrow screens
-            // (the members icon in the right section already covers this) instead
-            // of forcing the header — and the chat column — past the screen.
-            if root.show-member-count: HorizontalLayout {
-                spacing: Spacing.xs;
-                alignment: center;
-                min-width: 0px;
-                Rectangle {
-                    width: 1px;
-                    height: 16px;
-                    background: Colors.text-muted;
-                    y: (parent.height - self.height) / 2;
-                }
-                Text {
-                    text: "\{root.member-count} members";
-                    color: Colors.text-muted;
-                    font-size: Typography.sm;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    min-width: 0px;
-                }
-            }
         }
 
-        // Center section: Topic / Typing — only when there is something to put
+        // Center section: Topic / Jarvis — only when there is something to put
         // in it. An unconditional centre claimed width in the middle of the row
         // and then drew nothing, which is the gap the name beside it was eliding
         // to make room for.
-        if root.topic != "" || root.typing-indicator != "" || (JarvisGlobal.enabled && root.jarvis-thinking): Rectangle {
+        // A phone has no width for the topic beside the name: it elided to a lone
+        // muted "…". Typing lives under the title; Jarvis still shows here.
+        if (root.topic != "" && !root.mobile && root.typing-indicator == "") || (JarvisGlobal.enabled && root.jarvis-thinking): Rectangle {
             horizontal-stretch: 1;
             // Topic text
-            if root.topic != "" && root.typing-indicator == "" && !(JarvisGlobal.enabled && root.jarvis-thinking): Text {
+            if root.topic != "" && !root.mobile && root.typing-indicator == "" && !(JarvisGlobal.enabled && root.jarvis-thinking): Text {
                 width: 100%;
+                // Squeezed by the title it read "Op…"; show it only with room.
+                visible: self.width >= 120px;
                 text: root.topic;
                 color: Colors.text-muted;
                 font-size: Typography.sm;
@@ -453,28 +427,16 @@ export component ChatHeader inherits Rectangle {
                 horizontal-alignment: center;
             }
 
-            // Typing indicator
-            if root.typing-indicator != "" && !(JarvisGlobal.enabled && root.jarvis-thinking): HorizontalLayout {
-                alignment: center;
-                Text {
-                    text: root.typing-indicator;
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
-                    font-italic: true;
-                    vertical-alignment: center;
-                }
-            }
-
             // Jarvis thinking
             if JarvisGlobal.enabled && root.jarvis-thinking: HorizontalLayout {
-                spacing: 6px;
+                spacing: Spacing.sm;
                 alignment: center;
                 for i in [0, 1, 2]: Rectangle {
                     width: 6px;
                     height: 6px;
                     border-radius: 3px;
                     background: Colors.primary;
-                    y: (parent.height - self.height) / 2 + 2px * Math.sin((animation-tick() / 250ms + i * 0.3) * 360deg);
+                    y: (parent.height - self.height) / 2 + 2px * Math.sin((animation-tick() / (250ms / Appearance.animation-speed) + i * 0.3) * 360deg);
                 }
                 Text {
                     text: "Jarvis is thinking...";
@@ -490,28 +452,22 @@ export component ChatHeader inherits Rectangle {
         // to the name rather than being split with a group of fixed-size icons;
         // being the last child, it still ends flush with the right edge.
         HorizontalLayout {
-            // Groups sit 4px apart, buttons inside a group flush against each
-            // other: with the divider gone on a phone, that gap is the only
-            // thing left saying "calls" and "everything else" are two things.
-            spacing: Spacing.xs;
+            // One gap between every pair of header buttons, in every header.
+            spacing: Spacing.header-action-gap;
             alignment: end;
             horizontal-stretch: 0;
 
             // Call buttons group
             if root.show-calls: HorizontalLayout {
-                spacing: 0px;
+                spacing: Spacing.header-action-gap;
                 alignment: center;
-                IconButton {
-                    glyph-size: root.header-glyph;
-                    box-size: root.header-action-box;
+                HeaderButton {
+                    touch: root.mobile;
+                    plain: true;
+                    backdrop-paused: root.backdrop-paused;
                     icon: Icons.phone;
+                    label: "Voice call";
                     clicked => { root.voice-call-clicked(); }
-                }
-                IconButton {
-                    glyph-size: root.header-glyph;
-                    box-size: root.header-action-box;
-                    icon: Icons.video;
-                    clicked => { root.video-call-clicked(); }
                 }
                 // Divider — wide screens only. At 411dp it draws a line between
                 // two things the eye already reads as separate, in the one place
@@ -519,89 +475,141 @@ export component ChatHeader inherits Rectangle {
                 if !root.tight: Rectangle {
                     width: 1px;
                     height: 20px;
-                    background: Colors.text-muted.with-alpha(0.3);
-                    y: (parent.height - self.height) / 2;
-                }
-            }
-
-            // The mesh switch, where the mesh is — not in a settings screen the
-            // user would have to leave the conversation to find, and would have
-            // to reach through a working app in exactly the situation the mesh
-            // exists for. Off stops the radio; the conversations stay listed and
-            // readable, because they are messages that already arrived.
-            if root.is-mesh: HorizontalLayout {
-                spacing: Spacing.xs;
-                alignment: center;
-                // Always labelled. This used to be dropped below 520px, which
-                // left an unexplained pill switch in the corner of the one
-                // screen where flipping the wrong thing costs the user their
-                // only transport. "Mesh" is four characters; what the narrow
-                // header gives up is the standing claim beside the title, which
-                // is a sentence, not this.
-                Text {
-                    text: "Mesh";
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                }
-                // Wrapped and centred, the same way the header's other fixed-size
-                // children are: the toggle has its own height, and left to the
-                // row it rides above the text it belongs to.
-                VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 0;
-                    NeoActionToggle {
-                        checked: MeshGlobal.mesh-on;
-                        glow-mode: "cyan";
-                        accessible-text: "Bluetooth mesh";
-                        toggled(value) => { MeshGlobal.set-mesh-on(value); }
-                    }
-                }
-                // Separates the switch from the utility buttons — and only when
-                // there are any. In a mesh conversation invite, pin and settings
-                // are all suppressed (they are server operations), so this drew a
-                // rule against the right edge with nothing on the other side of
-                // it. A divider that divides one thing from nothing is a smudge.
-                if root.has-utility-actions: Rectangle {
-                    width: 1px;
-                    height: 20px;
-                    background: Colors.text-muted.with-alpha(0.3);
+                    background: Colors.divider;
                     y: (parent.height - self.height) / 2;
                 }
             }
 
             // Utility buttons group
             HorizontalLayout {
-                spacing: 0px;
+                spacing: Spacing.header-action-gap;
                 alignment: center;
-                if root.show-invite: IconButton {
-                    glyph-size: root.header-glyph;
-                    box-size: root.header-action-box;
+                if root.show-invite: HeaderButton {
+                    touch: root.mobile;
+                    plain: true;
+                    backdrop-paused: root.backdrop-paused;
                     icon: Icons.user-plus;
+                    label: "Invite";
                     clicked => { root.invite-clicked(); }
                 }
-                if has-channel && root.has-any-pinned: IconButton {
-                    glyph-size: root.header-glyph;
-                    box-size: root.header-action-box;
-                    icon: Icons.pin;
-                    icon-color: Colors.primary;
-                    clicked => { root.pin-clicked(); }
-                }
-                if root.show-settings: IconButton {
-                    glyph-size: root.header-glyph;
-                    box-size: root.header-action-box;
+                if root.show-more: HeaderButton {
+                    touch: root.mobile;
+                    plain: true;
+                    backdrop-paused: root.backdrop-paused;
                     icon: Icons.more-vertical;
-                    clicked => { root.settings-clicked(); }
+                    label: "More options";
+                    clicked => { root.more-clicked(root.show-calls, root.show-settings); }
                 }
             }
         }
     }
 
-    // Bottom edge — neo highlight creates glass edge
-    Rectangle {
-        y: parent.height - 1px;
+
+    if root.is-mesh: HorizontalLayout {
         width: 100%;
-        height: 1px;
-        background: Colors.neo-highlight;
+        padding-left: Spacing.sm + root.leading-inset;
+        padding-right: Spacing.sm;
+        spacing: Spacing.xs;
+
+        Rectangle {
+            width: root.mobile ? Spacing.header-action-box-touch : Spacing.header-action-box;
+            height: root.header-height;
+            if root.show-back-button: HeaderButton {
+                touch: root.mobile;
+                plain: true;
+                backdrop-paused: root.backdrop-paused;
+                icon: Icons.chevron-left;
+                label: "Back";
+                clicked => { root.back-clicked(); }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            height: root.header-height;
+            HorizontalLayout {
+                width: 100%;
+                height: 100%;
+                alignment: center;
+                spacing: Spacing.sm;
+                VerticalLayout {
+                    alignment: center;
+                    if MeshGlobal.active-kind == "dm": Avatar {
+                        size: Spacing.avatar-sm;
+                        name: MeshGlobal.active-title;
+                        show-presence: MeshGlobal.active-reachable;
+                        presence-color: Colors.online;
+                    }
+                    if MeshGlobal.active-kind != "dm": Rectangle {
+                        width: Spacing.avatar-sm;
+                        height: Spacing.avatar-sm;
+                        border-radius: MeshGlobal.active-kind == "private-channel" ? Spacing.radius-md : Spacing.radius-full;
+                        background: Colors.primary.with-alpha(0.16);
+                        Image {
+                            source: MeshGlobal.active-kind == "private-channel" ? Icons.lock : Icons.hash;
+                            width: 16px;
+                            height: 16px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            colorize: Colors.primary;
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    min-width: 0px;
+                    Text {
+                        text: MeshGlobal.active-title;
+                        color: Colors.text-primary;
+                        font-size: Typography.base;
+                        font-weight: Typography.semibold;
+                        overflow: elide;
+                        horizontal-alignment: left;
+                        min-width: 0px;
+                    }
+                    Text {
+                        text: MeshGlobal.active-kind == "dm"
+                            ? (!MeshGlobal.active-reachable ? "Waiting for a carrier"
+                                : MeshGlobal.active-verified ? "Verified ✓" : "Not verified ›")
+                            : MeshGlobal.active-kind == "private-channel" ? "Private group · invited devices"
+                            : MeshGlobal.active-kind == "geohash"
+                                ? (MeshGlobal.relay-count == 1 ? "1 relay" : MeshGlobal.relay-count + " relays")
+                                : (MeshGlobal.peer-count == 1 ? "1 nearby" : MeshGlobal.peer-count + " nearby");
+                        color: MeshGlobal.active-kind == "dm" && MeshGlobal.active-verified ? Colors.success : Colors.text-muted;
+                        font-size: Typography.xs;
+                        overflow: elide;
+                        horizontal-alignment: left;
+                        min-width: 0px;
+                    }
+                }
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                accessible-role: button;
+                accessible-label: "Open mesh conversation information";
+                accessible-action-default => {
+                    if MeshGlobal.active-kind == "dm" { MeshGlobal.open-peer(MeshGlobal.active-scope); }
+                    else { MeshGlobal.open-sheet("mesh-info"); }
+                }
+                clicked => {
+                    if MeshGlobal.active-kind == "dm" { MeshGlobal.open-peer(MeshGlobal.active-scope); }
+                    else { MeshGlobal.open-sheet("mesh-info"); }
+                }
+            }
+        }
+
+        HeaderButton {
+            touch: root.mobile;
+            plain: true;
+            backdrop-paused: root.backdrop-paused;
+            icon: Icons.info;
+            label: "Conversation info";
+            clicked => {
+                if MeshGlobal.active-kind == "dm" { MeshGlobal.open-peer(MeshGlobal.active-scope); }
+                else { MeshGlobal.open-sheet("mesh-info"); }
+            }
+        }
     }
+
 }

@@ -1,175 +1,274 @@
+use crate::domain::UserId;
+use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, RequestState};
+use crate::proto::content_v1::Content;
+use crate::proto::mailbox_v1::EnvelopeType;
 use chrono::Utc;
 use prost::Message as ProstMessage;
 use uuid::Uuid;
-use crate::domain::anon_dm::{AnonDmId, AnonDmMailbox};
-use crate::domain::UserId;
-use crate::proto::chat_v1::SealedSenderMessage;
-use crate::proto::content_v1::Content;
-use crate::proto::mailbox_v1::EnvelopeType;
 
 use super::{AnonDmError, AnonDmService};
 
+/// The send RPC's idempotency key for our request in `conversation_id`: the
+/// same on every resend, so the server queues the request at most once per
+/// device. Hashed so the server never sees the conversation id, and shaped
+/// like any random v4 UUID.
+pub(crate) fn request_id(conversation_id: &AnonDmId) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::new()
+        .chain_update(b"chatter.secret-chat.request-id")
+        .chain_update(conversation_id.to_string())
+        .finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    uuid::Builder::from_random_bytes(bytes)
+        .into_uuid()
+        .to_string()
+}
+
 impl AnonDmService {
-    /// Send content to a peer's device inbox (for message requests).
+    /// Send our message request for `conversation_id` to ONE of the peer's
+    /// device inboxes, fully anonymously over Tor
+    /// ([`PairwiseService::send_to_device_inbox`]). A first attempt lets the
+    /// server pick the peer's current device and binds the chat to it; a
+    /// resend goes to that device. The outcome is recorded by
+    /// [`Self::settle_request_send`].
     ///
-    /// Uses FULLY ANONYMOUS operations:
-    /// 1. Anonymous prekey fetch (blind signature token #1)
-    /// 2. Anonymous message send (blind signature token #2)
+    /// [`PairwiseService::send_to_device_inbox`]: crate::services::pairwise::PairwiseService::send_to_device_inbox
     pub(crate) async fn send_to_device_inbox(
         &self,
+        conversation_id: &AnonDmId,
         peer_id: &UserId,
         content: Content,
     ) -> Result<(), AnonDmError> {
-        // Serialize content
-        let plaintext = content.encode_to_vec();
-
-        // Get token #1 for anonymous prekey fetch (claim = fetch + mark used atomically)
-        let prekey_token = self.get_or_request_token().await?;
-
-        // Encrypt with Signal Protocol ANONYMOUSLY
-        let ciphertext = self
+        use crate::services::pairwise::PairwiseError;
+        let repo = &self.anon_dm_repo;
+        let dm = repo
+            .get_conversation(conversation_id)?
+            .ok_or(AnonDmError::ConversationNotFound(*conversation_id))?;
+        let mut reached_rpc = false;
+        let result = self
             .pairwise_service
-            .encrypt_anonymous(peer_id, &plaintext, &prekey_token)
-            .await
-            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
-
-        // Get token #2 for anonymous message send (claim = fetch + mark used atomically)
-        let send_token = self.get_or_request_token().await?;
-
-        // Build SealedSenderMessage
-        let server_key_id = self.settings_repo
-            .get::<u32>(crate::storage::repositories::settings_repo::keys::SENDER_CERTIFICATE_SERVER_KEY_ID)
-            .ok()
-            .flatten()
-            .unwrap_or(1);
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("Time should be after Unix epoch")
-            .as_nanos() as u64;
-        let sealed_message = SealedSenderMessage {
-            sealed_body: ciphertext,
-            server_key_id,
-            timestamp,
-        };
-
-        // Send to device inbox using ANONYMOUS client (no auth headers)
-        let mut anon_client = self.grpc_pool.anonymous_message_client();
-
-        anon_client
-            .send_with_anonymous_credential(
-                &peer_id.to_string(),
-                0, // All devices
-                sealed_message,
-                &send_token.public_key,
-                &send_token.signature,
-                send_token.randomizer.as_deref(),
+            .send_to_device_inbox(
+                &self.token_manager,
+                &request_id(conversation_id),
+                peer_id,
+                dm.peer_device_id,
+                &content.encode_to_vec(),
+                |device| {
+                    repo.pin_peer_device(conversation_id, device)?;
+                    repo.set_request_state(conversation_id, RequestState::Uncertain)?;
+                    reached_rpc = true;
+                    Ok(())
+                },
             )
-            .await
-            .map_err(|e| AnonDmError::MessageError(format!("Failed to send to device inbox: {}", e)))?;
-
-        tracing::debug!(
-            peer_id = %peer_id,
-            "Sent to device inbox using fully anonymous path"
-        );
-
+            .await;
+        if reached_rpc {
+            let rpc = match &result {
+                Ok(_) => Ok(()),
+                Err(PairwiseError::Network(e)) => Err(e),
+                // Only the RPC fails after the hook.
+                Err(_) => Err(&crate::error::NetworkError::Unavailable),
+            };
+            self.settle_request_send(&dm, rpc)?;
+        }
+        result?;
         Ok(())
     }
 
-    /// Atomically claim a token or request new ones.
-    ///
-    /// Uses `claim_available_token` (UPDATE ... RETURNING) so two concurrent
-    /// sends never see the same credential — the server rejects any repeat.
-    pub(crate) async fn get_or_request_token(&self) -> Result<crate::mailbox::token_manager::MailboxToken, AnonDmError> {
-        match self.token_manager.claim_available_token() {
-            Ok(Some(token)) => Ok(token),
-            Ok(None) => {
-                let mut mailbox_client = self.grpc_pool.mailbox_client();
-                self.token_manager
-                    .request_tokens(&mut mailbox_client, 5)
-                    .await
-                    .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
-
-                self.token_manager
-                    .claim_available_token()
-                    .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
-                    .ok_or_else(|| AnonDmError::CryptoError("No tokens available".to_string()))
+    /// Record how a request's send RPC ended. Marked [`RequestState::Uncertain`]
+    /// right before the RPC; the server accepting it makes it
+    /// [`RequestState::Submitted`]. A definite refusal of the FIRST attempt
+    /// (`dm` was [`RequestState::Unsent`]) proves nothing left this device, so
+    /// it goes back to `Unsent` and the caller discards it. Anything else
+    /// stays uncertain — a resend may be refused after an earlier attempt
+    /// went through — and is resent under the same [`request_id`].
+    pub(crate) fn settle_request_send(
+        &self,
+        dm: &AnonDm,
+        rpc: Result<(), &crate::error::NetworkError>,
+    ) -> Result<(), AnonDmError> {
+        let state = match rpc {
+            Ok(()) => RequestState::Submitted,
+            Err(e) if dm.request == RequestState::Unsent && e.is_definite_rejection() => {
+                RequestState::Unsent
             }
-            Err(e) => Err(AnonDmError::CryptoError(e.to_string())),
-        }
+            Err(_) => return Ok(()),
+        };
+        self.anon_dm_repo.set_request_state(&dm.id, state)?;
+        Ok(())
     }
 
-    /// Send content to a peer's anonymous mailbox.
+    /// Delete one of our mailboxes on the server, proving we hold its key
+    /// (challenge-response over the secret route, like a poll).
+    pub(crate) async fn delete_server_mailbox(
+        &self,
+        mailbox: &crate::domain::anon_dm::AnonDmMailbox,
+    ) -> Result<(), AnonDmError> {
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let net = |e: crate::error::NetworkError| AnonDmError::MessageError(e.to_string());
+        let mut client = self.grpc_pool.secret_mailbox_client().map_err(net)?;
+        let challenge = client
+            .get_mailbox_challenge(mailbox.public_key.to_vec())
+            .await
+            .map_err(net)?
+            .challenge;
+        let signature = SigningKey::from_keypair_bytes(&mailbox.private_key)
+            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
+            .sign(&challenge);
+        client
+            .delete_ephemeral_mailbox(
+                mailbox.public_key.to_vec(),
+                signature.to_bytes().to_vec(),
+                challenge,
+            )
+            .await
+            .map_err(net)
+    }
+
+    /// Claim a token from the pre-fetched batch (`claim_prefetched_token`).
+    ///
+    /// Never requests tokens: an empty batch fails the send rather than
+    /// linking an authenticated token request to this anonymous spend
+    /// (NDSS'21 §VI-F).
+    pub(crate) fn claim_token(
+        &self,
+    ) -> Result<crate::mailbox::token_manager::MailboxToken, AnonDmError> {
+        self.token_manager
+            .claim_prefetched_token()
+            .map_err(|e| match e {
+                crate::error::MailboxError::NoTokensAvailable => AnonDmError::TokensPending,
+                e => AnonDmError::CryptoError(e.to_string()),
+            })
+    }
+
+    /// Send content in secret chat `dm` to the peer's anonymous mailbox,
+    /// encrypted to the peer device that chat is bound to. The chat is
+    /// passed, never looked up by peer: one peer can hold several chats.
     pub(crate) async fn send_to_anon_mailbox(
         &self,
-        peer_id: &UserId,
+        dm: &AnonDm,
         mailbox_pk: &[u8; 32],
         content: Content,
     ) -> Result<(), AnonDmError> {
+        let peer_id = &dm.peer_id;
+        // Secret-chat traffic goes over Tor or not at all; refuse before any
+        // submission is recorded or token spent.
+        self.grpc_pool
+            .secret_channel()
+            .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
         // Serialize content
         let plaintext = content.encode_to_vec();
-
-        tracing::debug!(
-            peer_id = %peer_id,
-            mailbox_pk = hex::encode(&mailbox_pk[..8]),
-            plaintext_len = plaintext.len(),
-            "[ANON_DM_MAILBOX] Encrypting message for peer"
-        );
-
-        // Encrypt with Signal Protocol. If a session already exists, encrypt
-        // locally (no server contact keyed to the peer). If it does NOT — e.g.
-        // after a session was archived/invalidated — re-establishing via the
-        // authenticated prekey
-        // fetch would leak this anon-DM's sender->recipient edge to the server.
-        // Re-establish anonymously instead (blind token + anonymous fetch),
-        // mirroring the anon-group path. Without this guard a reset silently
-        // deanonymizes the conversation on the next message.
-        let ciphertext = if self
-            .pairwise_service
-            .has_session(peer_id)
-            .await
-            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
-        {
-            self.pairwise_service
-                .encrypt(peer_id, &plaintext)
-                .await
-                .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
+        let retained = if crate::services::gateway::submission::user_post(&content) {
+            let owner = self.current_user_id()?;
+            match crate::services::gateway::submission::prepare(
+                self.settings_repo.database(),
+                &owner.to_string(),
+                &peer_id.to_string(),
+                &plaintext,
+            )? {
+                crate::services::gateway::submission::Admission::First(key) => Some(key),
+                crate::services::gateway::submission::Admission::Confirmed => return Ok(()),
+                crate::services::gateway::submission::Admission::Unconfirmed => {
+                    crate::services::gateway::submission::mark_existing_submission();
+                    return Err(AnonDmError::DeliveryUnconfirmed);
+                }
+            }
         } else {
-            self.pairwise_service
-                .ensure_sender_certificate()
-                .await
-                .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
-            let token = self.get_or_request_token().await?;
-            self.pairwise_service
-                .encrypt_anonymous(peer_id, &plaintext, &token)
-                .await
-                .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
+            None
         };
 
-        tracing::debug!(
-            peer_id = %peer_id,
-            mailbox_pk = hex::encode(&mailbox_pk[..8]),
-            ciphertext_len = ciphertext.len(),
-            "[ANON_DM_MAILBOX] Sending to mailbox"
-        );
+        // Encrypt to the ONE peer device this chat is bound to, never over the
+        // normal transport. With a session: local encrypt. Without one (first
+        // contact as responder, or after the session was archived):
+        // re-establish anonymously (blind token + anonymous fetch over Tor) —
+        // an authenticated prekey fetch would leak this chat's
+        // sender->recipient edge. A chat with no bound device sends nothing.
+        let discard = |e: AnonDmError| {
+            if let Some(key) = retained.as_ref() {
+                crate::services::gateway::submission::discard_before_encryption(
+                    self.settings_repo.database(),
+                    key,
+                );
+            }
+            e
+        };
+        let device = dm.peer_device_id.ok_or_else(|| {
+            discard(AnonDmError::InvalidData(
+                "secret chat is not bound to a peer device".into(),
+            ))
+        })?;
+        let has_session = self
+            .pairwise_service
+            .has_session(peer_id, device)
+            .await
+            .map_err(|e| discard(e.into()))?;
+        // Our certificate first (over Tor if it must be fetched), so a missing
+        // one fails before any token is spent or submission started.
+        self.pairwise_service
+            .ensure_sender_certificate()
+            .await
+            .map_err(|e| discard(e.into()))?;
+        let ciphertext = if has_session {
+            crate::services::gateway::submission::mark_submission_started()
+                .map_err(|e| discard(e.into()))?;
+            self.pairwise_service
+                .encrypt_existing_session(peer_id, device, &plaintext)
+                .await?
+        } else {
+            let token = self.claim_token().map_err(discard)?;
+            crate::services::gateway::submission::mark_submission_started()
+                .map_err(|e| discard(e.into()))?;
+            self.pairwise_service
+                .encrypt_anonymous(peer_id, Some(device), &plaintext, &token)
+                .await?
+                .0
+        };
 
+        if let Some(key) = retained.as_ref() {
+            crate::services::gateway::submission::retain_deposit(
+                self.settings_repo.database(),
+                key,
+                &ciphertext,
+                mailbox_pk,
+                &content,
+            )
+            .map_err(|_| AnonDmError::DeliveryUnconfirmed)?;
+        }
         // Send to anonymous mailbox
         self.mailbox_manager
-            .send_to_mailbox(mailbox_pk, ciphertext, EnvelopeType::SealedSender)
+            .send_to_secret_mailbox(mailbox_pk, ciphertext, EnvelopeType::SealedSender)
             .await
             .map_err(|e| {
-                tracing::error!(
-                    mailbox_pk = hex::encode(&mailbox_pk[..8]),
-                    error = %e,
-                    "[ANON_DM_MAILBOX] Failed to send to mailbox"
-                );
-                AnonDmError::MessageError(e.to_string())
+                tracing::warn!(error = %e, "[ANON_DM_MAILBOX] Failed to send to mailbox");
+                if let Some(key) = retained.as_ref() {
+                    let _ = crate::services::gateway::submission::retry_later(
+                        self.settings_repo.database(),
+                        key,
+                    );
+                    AnonDmError::DeliveryUnconfirmed
+                } else if matches!(
+                    &e,
+                    crate::services::mailbox_manager::MailboxError::Network(
+                        crate::error::NetworkError::RequestNotSent(_)
+                    )
+                ) {
+                    AnonDmError::NotSubmitted(e.to_string())
+                } else if matches!(
+                    e,
+                    crate::services::mailbox_manager::MailboxError::Network(
+                        crate::error::NetworkError::NotFound(_)
+                    )
+                ) {
+                    AnonDmError::PeerMailboxGone
+                } else {
+                    AnonDmError::MessageError(e.to_string())
+                }
             })?;
-
-        tracing::info!(
-            peer_id = %peer_id,
-            mailbox_pk = hex::encode(&mailbox_pk[..8]),
-            "[ANON_DM_MAILBOX] Successfully sent to peer mailbox"
-        );
+        if let Some(key) = retained.as_ref() {
+            crate::services::gateway::submission::confirm(self.settings_repo.database(), key)
+                .map_err(|_| AnonDmError::DeliveryUnconfirmed)?;
+        }
 
         Ok(())
     }
@@ -179,23 +278,12 @@ impl AnonDmService {
         &self,
         conversation_id: &AnonDmId,
     ) -> Result<AnonDmMailbox, AnonDmError> {
+        // Over Tor or not at all; refuse before the token is spent.
+        self.grpc_pool
+            .secret_channel()
+            .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
         // Atomically claim a blind-signed token (marks used in same SQL stmt)
-        let token = match self.token_manager.claim_available_token() {
-            Ok(Some(token)) => token,
-            Ok(None) => {
-                let mut mailbox_client = self.grpc_pool.mailbox_client();
-                self.token_manager
-                    .request_tokens(&mut mailbox_client, 5)
-                    .await
-                    .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
-
-                self.token_manager
-                    .claim_available_token()
-                    .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
-                    .ok_or_else(|| AnonDmError::CryptoError("No tokens available".to_string()))?
-            }
-            Err(e) => return Err(AnonDmError::CryptoError(e.to_string())),
-        };
+        let token = self.claim_token()?;
 
         // Use the token's Ed25519 keypair for the mailbox
         let public_key: [u8; 32] = token
@@ -216,16 +304,19 @@ impl AnonDmService {
         let mut response_result = None;
         for attempt in 0..3u32 {
             if attempt > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(200 * (attempt as u64 + 1))).await;
+                tokio::time::sleep(std::time::Duration::from_millis(200 * (attempt as u64 + 1)))
+                    .await;
                 tracing::info!(attempt = attempt + 1, "Retrying create_ephemeral_mailbox");
             }
-            let mut mailbox_client = self.grpc_pool.anonymous_mailbox_client();
+            let mut mailbox_client = self
+                .grpc_pool
+                .secret_mailbox_client()
+                .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
             match mailbox_client
                 .create_ephemeral_mailbox(
                     token.public_key.clone(),
                     token.signature.clone(),
                     ttl_seconds,
-                    token.randomizer.clone().unwrap_or_default(),
                 )
                 .await
             {
@@ -235,11 +326,14 @@ impl AnonDmService {
                 }
                 Err(e) if e.is_retryable() => {
                     tracing::warn!(attempt = attempt + 1, error = %e, "create_ephemeral_mailbox transient error, disconnecting stale channel and retrying");
-                    self.grpc_pool.disconnect();
+                    self.grpc_pool.disconnect_secret();
                     last_err = Some(e);
                 }
                 Err(e) => {
-                    return Err(AnonDmError::MessageError(format!("Failed to create mailbox on server: {}", e)));
+                    return Err(AnonDmError::MessageError(format!(
+                        "Failed to create mailbox on server: {}",
+                        e
+                    )));
                 }
             }
         }

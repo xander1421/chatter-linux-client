@@ -1,0 +1,170 @@
+// The strip under a channel's header while its membership is not verified
+// (failed verification, a fork, or no verified state yet). Sending is paused
+// for exactly these states (`GroupStateGate::for_distribution`).
+//
+// Wording comes from chatter-core (`ChatterClient::channel_membership_header`).
+// Not dismissable: it explains why the channel will not send. "Details"
+// reveals the core-supplied explanation and state code; for a fork, which
+// nothing else clears, it also offers "Resume sending" (core decides when).
+
+import { KeyFocus } from "../components/key_focus.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { MembershipGlobal } from "membership_global.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
+
+export component MembershipBar inherits Rectangle {
+    property <bool> entered: false;
+    Timer {
+        interval: 16ms;
+        running: !root.entered;
+        triggered => { root.entered = true; }
+    }
+    transform-origin: { x: self.width / 2, y: 0px };
+    transform-scale-y: Appearance.reduce-motion || root.entered ? 100% : 88%;
+    opacity: Appearance.reduce-motion || root.entered ? 1 : 0;
+    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+    animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+    in property <string> channel-id;
+    property <bool> alert: MembershipGlobal.banner-severity == "alert";
+    property <color> accent: root.alert ? Colors.error : Colors.warning;
+    property <bool> expanded: false;
+
+    changed alert => { self.expanded = false; }
+
+    min-height: 24px;
+    // Opaque: the list scrolls under this strip.
+    background: Colors.surface.mix(root.accent, root.alert ? 0.82 : 0.88);
+
+    Rectangle {
+        y: parent.height - 1px;
+        width: 100%;
+        height: 1px;
+        background: root.accent.with-alpha(0.35);
+    }
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        padding-top: Spacing.sm;
+        padding-bottom: Spacing.sm;
+        spacing: Spacing.sm;
+
+        VerticalLayout {
+            alignment: start;
+            horizontal-stretch: 0;
+            Image {
+                source: root.alert ? Icons.alert-triangle : Icons.shield;
+                width: 16px;
+                height: 16px;
+                colorize: root.accent;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Spacing.xxs;
+
+            Text {
+                text: MembershipGlobal.banner-title;
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: 600;
+                wrap: word-wrap;
+                accessible-role: text;
+                accessible-label: MembershipGlobal.banner-title;
+            }
+
+            Rectangle {
+                width: 100%;
+                height: root.expanded ? detail-body.preferred-height : 0px;
+                clip: true;
+                background: transparent;
+                animate height { duration: Materials.motion-standard; easing: Materials.glide; }
+                detail-body := Text {
+                    width: 100%;
+                    visible: root.expanded || parent.height > 0px;
+                    text: MembershipGlobal.banner-detail;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                    opacity: root.expanded ? 1 : 0;
+                    animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+                    accessible-role: text;
+                    accessible-label: MembershipGlobal.banner-detail;
+                }
+            }
+
+            if root.expanded && MembershipGlobal.banner-can-acknowledge: HorizontalLayout {
+                alignment: start;
+                Rectangle {
+                    width: resume-label.preferred-width + Spacing.lg;
+                    height: Spacing.touch-target-min;
+                    border-radius: Spacing.radius-sm;
+                    background: resume-touch.has-hover ? root.accent.with-alpha(0.28) : root.accent.with-alpha(0.16);
+                    transform-scale-x: resume-touch.pressed ? 96% : 100%;
+                    transform-scale-y: resume-touch.pressed ? 94% : 100%;
+                    animate transform-scale-x { duration: resume-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: resume-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+
+                    resume-label := Text {
+                        text: "Resume sending";
+                        color: Colors.text-primary;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+
+                    resume-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        accessible-role: button;
+                        accessible-label: "Resume sending in this channel";
+                        accessible-action-default => { MembershipGlobal.acknowledge-fork(root.channel-id); }
+                        KeyFocus { activate => { MembershipGlobal.acknowledge-fork(root.channel-id); } }
+                        clicked => { MembershipGlobal.acknowledge-fork(root.channel-id); }
+                    }
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Rectangle {
+                width: details-label.preferred-width + Spacing.lg;
+                height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-sm;
+                background: details-touch.has-hover ? root.accent.with-alpha(0.28) : root.accent.with-alpha(0.16);
+                transform-scale-x: details-touch.pressed ? 96% : 100%;
+                transform-scale-y: details-touch.pressed ? 94% : 100%;
+                animate transform-scale-x { duration: details-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                animate transform-scale-y { duration: details-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+
+                details-label := Text {
+                    text: root.expanded ? "Hide" : "Details";
+                    color: Colors.text-primary;
+                    font-size: Typography.xs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
+                }
+
+                details-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    accessible-role: button;
+                    accessible-label: root.expanded ? "Hide membership details" : "Show membership details";
+                    accessible-action-default => { root.expanded = !root.expanded; }
+                    KeyFocus { activate => { root.expanded = !root.expanded; } }
+                    clicked => { root.expanded = !root.expanded; }
+                }
+            }
+        }
+    }
+}

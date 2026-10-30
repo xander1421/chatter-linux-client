@@ -18,7 +18,7 @@ use std::sync::Arc;
 use zeroize::Zeroize;
 
 use crate::crypto::svr_backup::{
-    decrypt_backup, derive_backup_id, encrypt_backup, KeyBackupPayload,
+    KeyBackupPayload, decrypt_backup, derive_backup_id, encrypt_backup,
 };
 use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::client_pool::GrpcClientPool;
@@ -46,9 +46,14 @@ pub enum SvrBackupError {
     #[error("rate limited: no fetch attempts remaining")]
     RateLimited,
 
-    /// Backup not found on server.
+    /// The account has no backup on the server (NOT_FOUND).
     #[error("backup not found")]
     BackupNotFound,
+
+    /// A backup exists but the PIN-derived id does not match it
+    /// (PERMISSION_DENIED). The attempt cost a server-side PIN strike.
+    #[error("wrong PIN")]
+    WrongPin,
 
     /// Backup permanently destroyed by server (too many failed PIN attempts).
     #[error("backup destroyed: re-register PIN to create a new backup")]
@@ -61,12 +66,30 @@ pub enum SvrBackupError {
     Generic(String),
 }
 
+/// Map the errors of a PIN-checked SVR RPC (FetchBackup, ChangePinBackup).
+/// The server answers NOT_FOUND only when the account has no backup and
+/// PERMISSION_DENIED when one exists under a different PIN-derived id.
+fn classify_pin_rpc_error(e: NetworkError) -> SvrBackupError {
+    match e {
+        NetworkError::NotFound(_) => SvrBackupError::BackupNotFound,
+        NetworkError::PermissionDenied => SvrBackupError::WrongPin,
+        NetworkError::RateLimited => SvrBackupError::RateLimited,
+        NetworkError::DataLoss(_) => {
+            tracing::error!("SVR backup destroyed by server (too many failed PIN attempts)");
+            SvrBackupError::BackupDestroyed
+        }
+        e => SvrBackupError::Network(e),
+    }
+}
+
 /// Result of a successful backup restore.
 pub struct RestoreResult {
     /// The recovered identity keypair (32-byte private || 32-byte public).
     pub identity_keypair: [u8; 64],
     /// The recovered 32-byte profile encryption key.
     pub profile_key: [u8; 32],
+    /// The recovered `nickname.discriminator` handle (`keys::FULL_USERNAME`).
+    pub full_username: String,
     /// How many fetch attempts remain before server-side lockout.
     pub remaining_attempts: i32,
 }
@@ -93,7 +116,7 @@ pub struct RestoreResult {
 pub struct SvrBackupService {
     grpc_pool: Arc<GrpcClientPool>,
     settings: Arc<SettingsRepository>,
-    signal_service: Arc<crate::services::signal_service::SignalService>,
+    signal_service: Arc<crate::services::signal::SignalService>,
 }
 
 impl SvrBackupService {
@@ -107,13 +130,27 @@ impl SvrBackupService {
     pub fn new(
         grpc_pool: Arc<GrpcClientPool>,
         settings: Arc<SettingsRepository>,
-        signal_service: Arc<crate::services::signal_service::SignalService>,
+        signal_service: Arc<crate::services::signal::SignalService>,
     ) -> Self {
         Self {
             grpc_pool,
             settings,
             signal_service,
         }
+    }
+
+    /// The account handle every backup carries (`keys::FULL_USERNAME`).
+    ///
+    /// Required: a backup without it restores an account with no handle
+    /// (§117), and every later backup would carry that loss forward.
+    pub fn local_full_username(&self) -> Result<String, SvrBackupError> {
+        use crate::storage::repositories::settings_repo::keys;
+        self.signal_service
+            .settings_repo
+            .get_string(keys::FULL_USERNAME)
+            .map_err(|e| SvrBackupError::Generic(format!("failed to read username: {e}")))?
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| SvrBackupError::Generic("no local username to back up".into()))
     }
 
     /// Run the full post-registration backup flow from raw credentials.
@@ -123,13 +160,50 @@ impl SvrBackupService {
     /// and uploads an encrypted backup. All sensitive intermediates are
     /// zeroized. Failure is non-fatal to the caller — the most common cause
     /// is a transient network error at registration time.
-    pub async fn backup_from_pin(
+    pub async fn backup_from_pin(&self, pin: &str, username: &str) -> Result<u32, SvrBackupError> {
+        use crate::storage::repositories::settings_repo::keys;
+        use zeroize::Zeroize;
+
+        let mut profile_key = match self
+            .signal_service
+            .settings_repo
+            .get_bytes(keys::PROFILE_KEY)
+        {
+            Ok(Some(bytes)) if bytes.len() == 32 => {
+                let mut pk = [0u8; 32];
+                pk.copy_from_slice(&bytes);
+                pk
+            }
+            Ok(_) => {
+                return Err(SvrBackupError::Generic(
+                    "profile key not found or invalid length".into(),
+                ));
+            }
+            Err(e) => {
+                return Err(SvrBackupError::Generic(format!(
+                    "failed to read profile key: {e}"
+                )));
+            }
+        };
+        let result = self
+            .backup_with_profile_key(pin, username, &profile_key)
+            .await;
+        profile_key.zeroize();
+        result
+    }
+
+    /// [`Self::backup_from_pin`] for an explicit profile key — a rotation
+    /// backs up the NEW key before it becomes the local one, so a restore can
+    /// never bring back a key the server profile is no longer encrypted under.
+    /// The caller must have verified `pin`: a wrong one would replace the
+    /// account's backup with one the real PIN cannot open.
+    pub async fn backup_with_profile_key(
         &self,
         pin: &str,
         username: &str,
+        profile_key: &[u8; 32],
     ) -> Result<u32, SvrBackupError> {
         use crate::crypto::svr::derive_svr_secret_async;
-        use crate::storage::repositories::settings_repo::keys;
         use zeroize::Zeroize;
 
         // CORRECTNESS: off the async worker — see `derive_svr_secret_async`.
@@ -140,12 +214,20 @@ impl SvrBackupService {
             .await
             .map_err(|e| SvrBackupError::Crypto(e))?;
 
-        let mut private_bytes = self.signal_service.actor.get_identity_private_key().await
+        let mut private_bytes = self
+            .signal_service
+            .actor
+            .get_identity_private_key()
+            .await
             .map_err(|e| {
                 svr_secret.zeroize();
                 SvrBackupError::Generic(format!("failed to get identity private key: {e}"))
             })?;
-        let public_bytes_33 = self.signal_service.actor.get_identity_public_key().await
+        let public_bytes_33 = self
+            .signal_service
+            .actor
+            .get_identity_public_key()
+            .await
             .map_err(|e| {
                 svr_secret.zeroize();
                 private_bytes.zeroize();
@@ -156,37 +238,59 @@ impl SvrBackupService {
         identity_keypair[32..].copy_from_slice(&public_bytes_33[1..]);
         private_bytes.zeroize();
 
-        let mut profile_key = match self.signal_service.settings_repo.get_bytes(keys::PROFILE_KEY) {
-            Ok(Some(bytes)) if bytes.len() == 32 => {
-                let mut pk = [0u8; 32];
-                pk.copy_from_slice(&bytes);
-                pk
+        let result = match self.local_full_username() {
+            Ok(full_username) => {
+                store_retrying_version_conflict(
+                    || {
+                        self.create_and_upload_backup(
+                            &svr_secret,
+                            &identity_keypair,
+                            profile_key,
+                            &full_username,
+                        )
+                    },
+                    || self.refresh_backup_version(&svr_secret),
+                )
+                .await
             }
-            Ok(_) => {
-                svr_secret.zeroize();
-                identity_keypair.zeroize();
-                return Err(SvrBackupError::Generic(
-                    "profile key not found or invalid length".into(),
-                ));
-            }
-            Err(e) => {
-                svr_secret.zeroize();
-                identity_keypair.zeroize();
-                return Err(SvrBackupError::Generic(format!(
-                    "failed to read profile key: {e}"
-                )));
-            }
+            Err(e) => Err(e),
         };
-
-        let result = self
-            .create_and_upload_backup(&svr_secret, &identity_keypair, &profile_key)
-            .await;
 
         svr_secret.zeroize();
         identity_keypair.zeroize();
-        profile_key.zeroize();
 
         result
+    }
+
+    /// Prove `pin` opens the account's backup by fetching and decrypting it,
+    /// for a device with no local PIN fingerprint (a linked one). Nothing is
+    /// written, so a wrong PIN leaves the backup as it was. Costs one of the
+    /// server's metered attempts, which the backup write that follows resets.
+    ///
+    /// Returns the local PIN fingerprint, derived from the same secret, for the
+    /// caller to persist so later checks stay local. Also syncs the local
+    /// version counter to the server's.
+    pub async fn verify_pin_against_backup(
+        &self,
+        pin: &str,
+        username: &str,
+    ) -> Result<[u8; 32], SvrBackupError> {
+        use crate::crypto::svr::{derive_svr_secret_async, pin_fingerprint_from_secret};
+
+        let mut svr_secret = derive_svr_secret_async(pin, username).await?;
+        let result = self.refresh_backup_version(&svr_secret).await;
+        let fingerprint = pin_fingerprint_from_secret(&svr_secret);
+        svr_secret.zeroize();
+        result.map(|()| fingerprint)
+    }
+
+    /// Fetch + decrypt the backup only to learn the server's version, zeroizing
+    /// the recovered keys.
+    async fn refresh_backup_version(&self, svr_secret: &[u8; 32]) -> Result<(), SvrBackupError> {
+        let mut restored = self.fetch_and_restore_backup(svr_secret).await?;
+        restored.identity_keypair.zeroize();
+        restored.profile_key.zeroize();
+        Ok(())
     }
 
     /// Public retry: load profile_key from local settings, then run the same
@@ -216,17 +320,27 @@ impl SvrBackupService {
             .map_err(|e| SvrBackupError::Generic(format!("settings read failed: {e}")))?
             .ok_or_else(|| SvrBackupError::Generic("no local profile_key to back up".into()))?;
         if stored.len() != 32 {
-            return Err(SvrBackupError::Generic("local profile_key has wrong length".into()));
+            return Err(SvrBackupError::Generic(
+                "local profile_key has wrong length".into(),
+            ));
         }
         let mut profile_key = [0u8; 32];
         profile_key.copy_from_slice(&stored);
 
-        let mut private_bytes = self.signal_service.actor.get_identity_private_key().await
+        let mut private_bytes = self
+            .signal_service
+            .actor
+            .get_identity_private_key()
+            .await
             .map_err(|e| {
                 profile_key.zeroize();
                 SvrBackupError::Generic(format!("failed to get identity private key: {e}"))
             })?;
-        let public_bytes_33 = self.signal_service.actor.get_identity_public_key().await
+        let public_bytes_33 = self
+            .signal_service
+            .actor
+            .get_identity_public_key()
+            .await
             .map_err(|e| {
                 profile_key.zeroize();
                 private_bytes.zeroize();
@@ -243,9 +357,18 @@ impl SvrBackupService {
             SvrBackupError::Crypto(e)
         })?;
 
-        let result = self
-            .create_and_upload_backup(&svr_secret, &identity_keypair, &profile_key)
-            .await;
+        let result = match self.local_full_username() {
+            Ok(full_username) => {
+                self.create_and_upload_backup(
+                    &svr_secret,
+                    &identity_keypair,
+                    &profile_key,
+                    &full_username,
+                )
+                .await
+            }
+            Err(e) => Err(e),
+        };
 
         svr_secret.zeroize();
         identity_keypair.zeroize();
@@ -265,6 +388,7 @@ impl SvrBackupService {
     /// * `svr_secret` - 32-byte secret derived from user's PIN (never stored)
     /// * `identity_keypair` - 64-byte Signal identity keypair (private || public)
     /// * `profile_key` - 32-byte profile encryption key
+    /// * `full_username` - the account handle (see [`Self::local_full_username`])
     ///
     /// # Returns
     ///
@@ -274,11 +398,13 @@ impl SvrBackupService {
         svr_secret: &[u8; 32],
         identity_keypair: &[u8; 64],
         profile_key: &[u8; 32],
+        full_username: &str,
     ) -> Result<u32, SvrBackupError> {
         // 1. Build and encrypt the payload
         let payload = KeyBackupPayload {
             identity_keypair: *identity_keypair,
             profile_key: *profile_key,
+            full_username: full_username.to_owned(),
         };
         let encrypted = encrypt_backup(&payload, svr_secret)?;
 
@@ -337,7 +463,10 @@ impl SvrBackupService {
     /// would destroy a live key.
     pub async fn has_key_backup(&self) -> Result<bool, SvrBackupError> {
         let mut client = self.grpc_pool.svr_client();
-        client.has_key_backup().await.map_err(SvrBackupError::Network)
+        client
+            .has_key_backup()
+            .await
+            .map_err(SvrBackupError::Network)
     }
 
     pub async fn fetch_and_restore_backup(
@@ -349,17 +478,10 @@ impl SvrBackupService {
 
         // 2. Fetch from server
         let mut client = self.grpc_pool.svr_client();
-        let result = client.fetch_backup(backup_id_hash.to_vec()).await.map_err(|e| {
-            match &e {
-                NetworkError::NotFound(_) => SvrBackupError::BackupNotFound,
-                NetworkError::RateLimited => SvrBackupError::RateLimited,
-                NetworkError::DataLoss(_) => {
-                    tracing::error!("SVR backup destroyed by server (too many failed PIN attempts)");
-                    SvrBackupError::BackupDestroyed
-                }
-                _ => SvrBackupError::Network(e),
-            }
-        })?;
+        let result = client
+            .fetch_backup(backup_id_hash.to_vec())
+            .await
+            .map_err(classify_pin_rpc_error)?;
 
         // 3. Check remaining attempts
         if result.remaining_attempts <= 0 {
@@ -374,8 +496,7 @@ impl SvrBackupService {
         let payload = decrypt_backup(&result.encrypted_backup, svr_secret)?;
 
         // 5. Store server version locally for future increments
-        self.settings
-            .set(SVR_BACKUP_VERSION_KEY, &result.version)?;
+        self.settings.set(SVR_BACKUP_VERSION_KEY, &result.version)?;
 
         tracing::info!(
             version = result.version,
@@ -386,6 +507,7 @@ impl SvrBackupService {
         Ok(RestoreResult {
             identity_keypair: payload.identity_keypair,
             profile_key: payload.profile_key,
+            full_username: payload.full_username.clone(),
             remaining_attempts: result.remaining_attempts,
         })
     }
@@ -402,6 +524,7 @@ impl SvrBackupService {
     /// * `new_svr_secret` - 32-byte secret derived from new PIN
     /// * `identity_keypair` - 64-byte Signal identity keypair (private || public)
     /// * `profile_key` - 32-byte profile encryption key
+    /// * `full_username` - the account handle (see [`Self::local_full_username`])
     /// * `new_registration_lock` - 32-byte registration lock from new PIN
     /// * `new_svr_public_key` - 32-byte SVR public key from new PIN
     pub async fn change_pin_backup(
@@ -410,6 +533,7 @@ impl SvrBackupService {
         new_svr_secret: &[u8; 32],
         identity_keypair: &[u8; 64],
         profile_key: &[u8; 32],
+        full_username: &str,
         new_registration_lock: &[u8; 32],
         new_svr_public_key: &[u8; 32],
     ) -> Result<(), SvrBackupError> {
@@ -420,6 +544,7 @@ impl SvrBackupService {
         let mut payload = KeyBackupPayload {
             identity_keypair: *identity_keypair,
             profile_key: *profile_key,
+            full_username: full_username.to_owned(),
         };
         let encrypted = encrypt_backup(&payload, new_svr_secret)?;
 
@@ -447,7 +572,8 @@ impl SvrBackupService {
                 new_registration_lock.to_vec(),
                 new_svr_public_key.to_vec(),
             )
-            .await?;
+            .await
+            .map_err(classify_pin_rpc_error)?;
 
         // 6. Persist confirmed version locally
         self.settings
@@ -509,6 +635,100 @@ impl SvrBackupService {
     }
 }
 
+/// `StoreBackup` accepts exactly stored+1, and the local counter only tracks
+/// what THIS device last wrote or read — another device's write leaves it
+/// behind. On that conflict, `refresh` re-reads the server's version and the
+/// store runs once more. The caller must have verified the PIN: `refresh`
+/// fetches under it, a metered attempt.
+async fn store_retrying_version_conflict<S, SF, R, RF>(
+    mut store: S,
+    refresh: R,
+) -> Result<u32, SvrBackupError>
+where
+    S: FnMut() -> SF,
+    SF: std::future::Future<Output = Result<u32, SvrBackupError>>,
+    R: FnOnce() -> RF,
+    RF: std::future::Future<Output = Result<(), SvrBackupError>>,
+{
+    match store().await {
+        Err(e) if is_version_conflict(&e) => {
+            tracing::info!("SVR backup version was stale; re-reading it and retrying once");
+            refresh().await?;
+            store().await
+        }
+        r => r,
+    }
+}
+
+/// The server's `ErrVersionConflict` is its only `FailedPrecondition` on the
+/// backup RPCs (svr/handlers `mapError`), which `NetworkError::from_status`
+/// turns into this prefix.
+fn is_version_conflict(e: &SvrBackupError) -> bool {
+    matches!(e, SvrBackupError::Network(NetworkError::InvalidRequest(m)) if m.starts_with("precondition failed"))
+}
+
+#[cfg(test)]
+mod conflict_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn conflict() -> SvrBackupError {
+        SvrBackupError::Network(NetworkError::InvalidRequest(
+            "precondition failed: backup version conflict".into(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn a_stale_version_is_refreshed_and_the_store_retried_once() {
+        let stores = Cell::new(0);
+        let refreshes = Cell::new(0);
+        let v = store_retrying_version_conflict(
+            || {
+                stores.set(stores.get() + 1);
+                let n = stores.get();
+                async move { if n == 1 { Err(conflict()) } else { Ok(8) } }
+            },
+            || {
+                refreshes.set(refreshes.get() + 1);
+                async { Ok(()) }
+            },
+        )
+        .await
+        .expect("the retry after a refresh must succeed");
+        assert_eq!((v, stores.get(), refreshes.get()), (8, 2, 1));
+    }
+
+    #[tokio::test]
+    async fn a_second_conflict_is_returned_not_looped() {
+        let stores = Cell::new(0);
+        let r = store_retrying_version_conflict(
+            || {
+                stores.set(stores.get() + 1);
+                async { Err::<u32, _>(conflict()) }
+            },
+            || async { Ok(()) },
+        )
+        .await;
+        assert!(r.is_err_and(|e| is_version_conflict(&e)));
+        assert_eq!(stores.get(), 2, "exactly one retry");
+    }
+
+    #[tokio::test]
+    async fn other_failures_neither_refresh_nor_retry() {
+        let stores = Cell::new(0);
+        let r = store_retrying_version_conflict(
+            || {
+                stores.set(stores.get() + 1);
+                async { Err::<u32, _>(SvrBackupError::Network(NetworkError::Unavailable)) }
+            },
+            || async { panic!("refresh is a metered PIN attempt; only a conflict earns it") },
+        )
+        .await;
+        assert!(r.is_err());
+        assert_eq!(stores.get(), 1);
+    }
+}
+
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
@@ -561,7 +781,11 @@ mod recovery_tests {
 
         SvrBackupService::clear_local_backup_version(&settings).unwrap();
 
-        let next = settings.get::<u32>(SVR_BACKUP_VERSION_KEY).unwrap().unwrap_or(0) + 1;
+        let next = settings
+            .get::<u32>(SVR_BACKUP_VERSION_KEY)
+            .unwrap()
+            .unwrap_or(0)
+            + 1;
         assert_eq!(
             next, 1,
             "the server deleted the row, so its stored version is 0 and only 1 is \

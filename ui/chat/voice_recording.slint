@@ -1,0 +1,46 @@
+import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
+
+// Presentation state only; capture, duration limits and attachment preparation
+// are owned by chatter-core's recording session.
+export global VoiceRecording {
+    in-out property <bool> active: false;
+    in-out property <string> owner: "";
+    in-out property <string> thread-root: "";
+    in-out property <bool> busy: false;
+    // Kept for API compatibility with older layout harnesses. The recording
+    // bar no longer has a lock control or a slide-to-lock interaction.
+    in-out property <bool> locked: false;
+    in-out property <string> elapsed: "00:00";
+    in-out property <string> status: "";
+    in-out property <[int]> live-levels: [];
+    in-out property <int> live-head: -1;
+    in-out property <bool> pulse-bright: false;
+    callback start();
+    callback finish();
+    callback cancel();
+}
+
+// The bars arrive from the capture worker at 25 Hz. There is no idle timer.
+export component LiveVoiceWaveform inherits Rectangle {
+    background: transparent;
+    min-width: 96px;
+    height: 30px;
+    horizontal-stretch: 1;
+    clip: true;
+
+    // A fixed 5px pitch keeps phone and tablet bars equally dense. The model
+    // is a ring: the newest sample stays at the right edge and older ones
+    // scroll left. Initial zeroes draw the quiet baseline before capture.
+    for level[idx] in VoiceRecording.live-levels: Rectangle {
+        property <int> age: Math.mod(VoiceRecording.live-head - idx + VoiceRecording.live-levels.length, VoiceRecording.live-levels.length);
+        x: root.width - (age + 1) * 5px;
+        height: 3px + min(100, level * 3.5) * (root.height - 3px) / 100;
+        y: (root.height - self.height) / 2;
+        width: 3px;
+        border-radius: 1px;
+        background: level < 2 ? Colors.text-muted : Colors.primary;
+        animate height { duration: Appearance.reduce-motion ? 0ms : Materials.motion-quick; easing: Materials.settle; }
+    }
+}

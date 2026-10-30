@@ -1,22 +1,24 @@
 // ChannelSettingsModal - Modal for viewing and editing channel settings
 
+import { KeyFocus } from "../components/key_focus.slint";
+import { ChannelNotificationsSection } from "channel_notifications.slint";
+import { ChannelAccessSection } from "channel_access.slint";
+import { ChannelMembersSection } from "channel_members.slint";
+import { ChannelDangerSection } from "channel_danger.slint";
+import { Avatar } from "../components/avatar.slint";
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
+import { SettingsRow } from "../components/settings_row.slint";
 import { Input } from "../components/input.slint";
-import { Toggle } from "../components/toggle.slint";
+import { DisappearingGlobal } from "../chat/disappearing_global.slint";
 import { ScrollView } from "std-widgets.slint";
 
-// Member data for the member list
-export struct ChannelMemberData {
-    user-id: string,
-    display-name: string,
-    username: string,
-    role: string,  // "owner", "admin", "moderator", "member"
-    joined-at: string,
-}
+import { ChannelMemberData, BannedMemberData, ChannelRosterRowData } from "channel_member_types.slint";
 
 export component ChannelSettingsModal inherits Rectangle {
     in property <bool> show-modal: false;
@@ -30,20 +32,28 @@ export component ChannelSettingsModal inherits Rectangle {
     in-out property <string> channel-description-draft: "";
     // Icon picker: Rust sets icon-path (chosen file) + icon-preview on pick;
     // Save reads icon-path to upload. Reset by Rust on open.
-    in-out property <string> channel-icon-path: "";
     in-out property <image> channel-icon-preview;
     in-out property <bool> channel-has-icon-preview: false;
+    // The current conversation's already privacy-shaped configured avatar.
+    in property <image> channel-avatar-source;
+    in property <bool> channel-has-avatar: false;
     in property <string> channel-type: "public";  // "public", "private", "dm"
     in property <bool> is-archived: false;
     in property <string> created-at: "";
     in property <int> member-count: 0;
+    in property <int> invited-count: 0;
 
     // Current user's permissions
     in property <bool> can-edit: false;
     in property <bool> can-manage-members: false;
+    in property <bool> can-invite: false;
     in property <bool> can-archive: false;
     in property <bool> can-delete: false;
     in property <bool> is-owner: false;
+    // Core's answer (`can_leave_channel`): a member who is not the owner.
+    in property <bool> can-leave: false;
+    // Private group blocked on this device (Danger Zone toggles it).
+    in property <bool> group-blocked: false;
 
     // Notification settings (per user)
     in-out property <string> notification-preference: "all";  // "all", "mentions", "none"
@@ -52,14 +62,22 @@ export component ChannelSettingsModal inherits Rectangle {
 
     // Member list
     in property <[ChannelMemberData]> members: [];
-
+    // Active bans; only filled for roles that can unban (can-view-bans).
+    in property <[BannedMemberData]> banned-members: [];
+    in property <[ChannelRosterRowData]> roster-rows: [];
+    in property <bool> can-view-bans: false;
     // Loading/error state
     in property <bool> loading: false;
+    in property <bool> saving: false;
     in property <string> error-message: "";
 
     // Active section for navigation
-    in-out property <string> active-section: "general";  // "general", "notifications", "members", "danger"
+    in-out property <string> active-section: "overview";
 
+    callback integrations();
+    callback server-calls();
+    callback pinned-messages();
+    callback clear-error();
     callback close();
     callback save-settings(string, string);  // name, description
     callback pick-channel-icon();  // opens native file picker for the channel icon
@@ -68,6 +86,12 @@ export component ChannelSettingsModal inherits Rectangle {
     callback toggle-ai(bool);
     callback change-member-role(string, string);  // user-id, new-role
     callback remove-member(string);  // user-id
+    callback ban-member(string);  // user-id
+    callback set-member-muted(string, bool, int);  // user-id, muted, minutes (0 = until unmuted)
+    callback unban-member(string);  // user-id
+    callback transfer-ownership(string);  // user-id of the new owner
+    callback block-member(string, bool);  // user-id, block (false = unblock)
+    callback block-group(bool);  // block (false = unblock)
     callback invite-members();  // opens invite modal (private groups)
     callback invite-channel-members();  // opens invite modal (regular channels)
     callback archive-channel();
@@ -80,165 +104,135 @@ export component ChannelSettingsModal inherits Rectangle {
     // a DIFFERENT channel) already asking to leave or delete.
     property <bool> show-delete-confirm: false;
     property <bool> show-leave-confirm: false;
+    property <bool> show-discard-confirm: false;
+    // user-id whose member action menu is open ("" = none).
+    property <string> role-picker-user: "";
+    // "remove" / "ban" while that member's action asks for confirmation
+    // ("" = none). Nothing leaves the UI until the second tap.
+    property <string> confirm-action: "";
+    changed role-picker-user => { self.confirm-action = ""; }
+    // The section is reset where settings is opened (Rust), not here: this
+    // also fires when a sheet opened from settings covers it.
     changed show-modal => {
         self.show-delete-confirm = false;
         self.show-leave-confirm = false;
+        self.show-discard-confirm = false;
+        self.role-picker-user = "";
     }
+    changed active-section => { root.clear-error(); }
 
     // Private group helper
     property <bool> is-private-group: channel-type == "private-group";
+    property <string> member-summary: (root.member-count > 0 || root.invited-count > 0
+        ? root.member-count + (root.member-count == 1 ? " member" : " members") : "")
+        + (root.is-private-group && root.invited-count > 0
+            ? " · " + root.invited-count + " invited" : "");
 
-    // Helper to get role display color
-    pure function role-color(role: string) -> color {
-        if role == "owner" {
-            return Colors.warning;
-        } else if role == "admin" {
-            return Colors.error;
-        } else if role == "moderator" {
-            return Colors.info;
-        } else {
-            return Colors.text-secondary;
-        }
-    }
+    // Channels with a signed membership log get the Access pane.
+    property <bool> has-access-pane: root.channel-type == "public" || root.channel-type == "private";
+    // Approval toggle for the next link created.
+    property <bool> link-needs-approval: false;
+    changed channel-id => { self.link-needs-approval = false; }
 
-    // Helper to get channel type icon
-    pure function type-icon(t: string) -> string {
-        if t == "private" {
-            return "\u{1F512}";  // Lock
-        } else if t == "dm" {
-            return "\u{1F4AC}";  // Speech bubble
-        } else {
-            return "#";
-        }
-    }
+    // Phone-width layout switch. No media queries in Slint; this is the one
+    // place the breakpoint is decided (§112z).
+    property <bool> narrow: root.width < 560px;
+    property <int> section-tab: root.active-section == "members" ? 1
+        : root.active-section == "access" ? 2
+        : root.active-section == "notifications" ? (root.has-access-pane ? 3 : 2) : 0;
+    property <bool> has-edits: root.can-edit
+        && (root.channel-name-draft != root.channel-name
+            || root.channel-description-draft != root.channel-description || root.channel-has-icon-preview);
+    property <bool> name-invalid: root.error-message == "Name must be at least 3 characters";
 
     Modal {
         show: root.show-modal;
-        title: "Channel Settings";
-        modal-width: 800px;
-        max-modal-height: 820px;
-        // Expand the card to the available height (capped at max-modal-height)
-        // instead of hugging content — the right panel scrolls.
+        title: root.is-private-group ? "Group settings" : "Channel settings";
+        modal-width: 640px;
+        // One fixed card height for every section, the body scrolling inside
+        // it: a card that hugged each tab's content changed height and, being
+        // centred, moved the tab bar under the pointer on every switch.
+        // Modal still caps this to the viewport.
+        max-modal-height: 720px;
         fill-height: true;
+        full-screen: root.narrow;
+        plain-header: true;
 
         close => {
-            root.close();
+            if root.has-edits { root.show-discard-confirm = true; }
+            else { root.close(); }
         }
 
-        HorizontalLayout {
+        // One content column on every screen; phones use Modal's full-screen page.
+        // Stretch: the content area fills the fixed card. Members has no
+        // preferred height (it owns the viewport) and was 0px tall at start.
+        VerticalLayout {
             spacing: 0;
+            alignment: stretch;
 
-            // Left sidebar - section navigation — Neo inset panel
-            Rectangle {
-                width: 160px;
-                background: Colors.neo-inset-bg;
-                border-radius: Spacing.radius-md;
-                border-width: 1px;
-                border-color: Colors.neo-inset-shadow;
+            if root.active-section != "general" && root.active-section != "destructive": Rectangle {
+                min-height: Spacing.touch-target-min + Spacing.sm * 2;
+                preferred-height: Spacing.touch-target-min + Spacing.sm * 2;
+                vertical-stretch: 0;
+                background: transparent;
 
-                VerticalLayout {
-                    padding: Spacing.sm;
-                    spacing: Spacing.xs;
-                    alignment: start;
+                settings-tabs := Rectangle {
+                    x: Spacing.md;
+                    y: Spacing.sm;
+                    width: parent.width - Spacing.md * 2;
+                    height: Spacing.touch-target-min;
+                    background: Colors.surface-control;
+                    border-radius: Spacing.radius-lg;
+                    property <int> tab-count: root.has-access-pane ? 4 : 3;
 
-                    // General section — Neo nav item
                     Rectangle {
-                        height: 36px;
-                        background: root.active-section == "general" ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-sm;
-                        border-width: root.active-section == "general" ? 1px : 0px;
-                        border-color: Colors.neo-highlight;
-
-                        TouchArea {
-                            clicked => { root.active-section = "general"; }
-
-                            HorizontalLayout {
-                                padding-left: Spacing.sm;
-                                padding-right: Spacing.sm;
-                                alignment: start;
-
-                                Text {
-                                    text: "\u{2699}\u{FE0F}  General";
-                                    color: root.active-section == "general" ? Colors.text-primary : Colors.text-secondary;
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
+                        x: 4px + root.section-tab * (settings-tabs.width - 8px) / settings-tabs.tab-count;
+                        y: 4px;
+                        width: (settings-tabs.width - 8px) / settings-tabs.tab-count;
+                        height: settings-tabs.height - 8px;
+                        background: Colors.surface-section;
+                        border-radius: Spacing.radius-md;
+                        animate x { duration: Materials.motion-standard; easing: Materials.glide; }
+                        animate width { duration: Materials.motion-standard; easing: Materials.glide; }
                     }
 
-                    // Notifications section — Neo nav item
-                    Rectangle {
-                        height: 36px;
-                        background: root.active-section == "notifications" ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-sm;
-                        border-width: root.active-section == "notifications" ? 1px : 0px;
-                        border-color: Colors.neo-highlight;
-
-                        TouchArea {
-                            clicked => { root.active-section = "notifications"; }
-
-                            HorizontalLayout {
-                                padding-left: Spacing.sm;
-                                padding-right: Spacing.sm;
-                                alignment: start;
-
-                                Text {
-                                    text: "\u{1F514}  Notifications";
-                                    color: root.active-section == "notifications" ? Colors.text-primary : Colors.text-secondary;
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
-                                }
+                    for tab[index] in root.has-access-pane ? ["Info", "Members", "Access", "Alerts"] : ["Info", "Members", "Alerts"]: Rectangle {
+                        x: index * settings-tabs.width / settings-tabs.tab-count;
+                        width: settings-tabs.width / settings-tabs.tab-count;
+                        height: settings-tabs.height;
+                        transform-scale-x: section-touch.pressed ? 0.96 : 1;
+                        transform-scale-y: section-touch.pressed ? 0.92 : 1;
+                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                        // A screen reader saw these as plain text it could not switch.
+                        accessible-role: AccessibleRole.tab;
+                        accessible-label: tab;
+                        accessible-item-selected: root.section-tab == index;
+                        accessible-action-default => {
+                            root.active-section = index == 0 ? "overview" : index == 1 ? "members"
+                                : root.has-access-pane && index == 2 ? "access" : "notifications";
+                        }
+                        KeyFocus {
+                            border-radius: parent.border-radius;
+                            activate => {
+                                root.active-section = index == 0 ? "overview" : index == 1 ? "members"
+                                    : root.has-access-pane && index == 2 ? "access" : "notifications";
                             }
                         }
-                    }
-
-                    // Members section — Neo nav item
-                    if root.can-manage-members: Rectangle {
-                        height: 36px;
-                        background: root.active-section == "members" ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-sm;
-                        border-width: root.active-section == "members" ? 1px : 0px;
-                        border-color: Colors.neo-highlight;
-
-                        TouchArea {
-                            clicked => { root.active-section = "members"; }
-
-                            HorizontalLayout {
-                                padding-left: Spacing.sm;
-                                padding-right: Spacing.sm;
-                                alignment: start;
-
-                                Text {
-                                    text: "\u{1F465}  Members";
-                                    color: root.active-section == "members" ? Colors.text-primary : Colors.text-secondary;
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
-                                }
-                            }
+                        Text {
+                            accessible-role: none;
+                            text: tab;
+                            width: 100%; height: 100%;
+                            color: root.section-tab == index ? Colors.text-primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: root.section-tab == index ? Typography.semibold : Typography.medium;
+                            horizontal-alignment: center; vertical-alignment: center;
                         }
-                    }
-
-                    // Danger zone section (only for those with permissions)
-                    if root.can-archive || root.can-delete: Rectangle {
-                        height: 36px;
-                        background: root.active-section == "danger" ? Colors.error.with-alpha(0.1) : transparent;
-                        border-radius: Spacing.radius-sm;
-
-                        TouchArea {
-                            clicked => { root.active-section = "danger"; }
-
-                            HorizontalLayout {
-                                padding-left: Spacing.sm;
-                                padding-right: Spacing.sm;
-                                alignment: start;
-
-                                Text {
-                                    text: "\u{26A0}\u{FE0F}  Danger Zone";
-                                    color: root.active-section == "danger" ? Colors.error : Colors.text-secondary;
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
-                                }
+                        section-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.active-section = index == 0 ? "overview" : index == 1 ? "members"
+                                    : root.has-access-pane && index == 2 ? "access" : "notifications";
                             }
                         }
                     }
@@ -248,51 +242,331 @@ export component ChannelSettingsModal inherits Rectangle {
             // Right content area
             Rectangle {
                 background: transparent;
+                // The scroll viewport may be shorter than its content on a
+                // phone. Keep the overview icon below the tab strip even
+                // while the layout compresses the content area.
+                clip: true;
+                min-height: 0px;
+                vertical-stretch: 1;
+                preferred-height: root.active-section == "members" ? 0px : content-area.preferred-height;
 
-                ScrollView {
+                settings-scroll := ScrollView {
+                    visible: root.active-section != "members";
+                    // The fluent ScrollView only pans with the wheel; a finger drag needs this.
+                    mouse-drag-pan-enabled: true;
+                    // Fill the area the layout gave us and scroll inside it.
+                    // Sized to the content instead, it was centered in a
+                    // shorter parent and the overview's top was cut off.
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    // Pin the viewport to the visible width: content wider than
+                    // the card elides instead of scrolling sideways off-screen.
+                    viewport-width: self.width;
                     viewport-height: content-area.preferred-height;
 
                     content-area := VerticalLayout {
+                        // Without a width the preferred height (and so the
+                        // viewport) was computed with wrapped text unwrapped;
+                        // the layout then ran short and Create link overlapped
+                        // the Join requests section (Access tab, 360dp phone).
+                        width: parent.width;
                         padding: Spacing.md;
                         spacing: Spacing.lg;
+                        alignment: start;
+
+                        if root.show-discard-confirm: VerticalLayout {
+                            spacing: Spacing.sm;
+                            Text {
+                                text: "Discard unsaved changes?";
+                                color: Colors.text-primary;
+                                font-size: Typography.sm;
+                                font-weight: Typography.semibold;
+                            }
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
+                                Button {
+                                    text: "Keep editing"; variant: "secondary";
+                                    height: Spacing.touch-target-min;
+                                    clicked => { root.show-discard-confirm = false; root.active-section = "general"; }
+                                }
+                                Button {
+                                    text: "Discard"; variant: "destructive";
+                                    height: Spacing.touch-target-min;
+                                    clicked => { root.show-discard-confirm = false; root.close(); }
+                                }
+                            }
+                        }
+
+                        // Error message
+                        if root.error-message != "" && !root.name-invalid: Rectangle {
+                            min-height: 40px;
+                            background: Colors.error.with-alpha(0.1);
+                            border-radius: Spacing.radius-sm;
+
+                            VerticalLayout {
+                                padding: Spacing.sm;
+                                alignment: center;
+
+                                Text {
+                                    width: max(0px, parent.width - parent.padding * 2);
+                                    text: root.error-message;
+                                    color: Colors.error;
+                                    font-size: Typography.sm;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+
+                        // Back sits at the leading edge, as a navigation bar's would.
+                        if root.active-section == "general" || root.active-section == "destructive": HorizontalLayout {
+                            alignment: start;
+                            Button {
+                                text: root.has-edits && root.active-section == "general" ? "‹ Info • unsaved changes" : "‹ Info";
+                                variant: "ghost";
+                                height: Spacing.touch-target-min;
+                                clicked => { root.active-section = "overview"; }
+                            }
+                        }
+
+                        // Messenger-style info page: identity first, then destinations.
+                        if root.active-section == "overview": VerticalLayout {
+                            spacing: Spacing.lg;
+                            alignment: start;
+                            VerticalLayout {
+                                spacing: Spacing.sm;
+                                Rectangle {
+                                    height: 80px;
+                                    background: transparent;
+                                    if root.channel-has-icon-preview || root.channel-has-avatar || root.is-private-group: Avatar {
+                                        source: root.channel-has-icon-preview ? root.channel-icon-preview : root.channel-avatar-source;
+                                        name: root.channel-name;
+                                        anonymous: root.is-private-group;
+                                        size: 80px;
+                                        x: (parent.width - self.width) / 2;
+                                    }
+                                    if !root.channel-has-icon-preview && !root.channel-has-avatar && !root.is-private-group: Rectangle {
+                                        width: 80px; height: 80px; border-radius: 40px; background: Colors.inset;
+                                        x: (parent.width - self.width) / 2;
+                                        Image {
+                                            source: root.is-private-group ? Icons.users : root.channel-type == "private" ? Icons.lock : Icons.hash;
+                                            width: 36px; height: 36px;
+                                            accessible-label: root.is-private-group ? "Group icon" : root.channel-type == "private" ? "Private channel icon" : "Channel icon";
+                                            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                            colorize: Colors.text-primary;
+                                        }
+                                    }
+                                }
+                                Text {
+                                    width: parent.width;
+                                    text: root.channel-name == "" ? (root.loading ? "Loading…" : "Info unavailable") : root.channel-name;
+                                    color: Colors.text-primary; font-size: Typography.xl;
+                                    font-weight: Typography.semibold; horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                                Text {
+                                    text: root.member-summary
+                                        + (root.created-at != "" ? (root.member-summary != "" ? " • " : "") + "Created " + root.created-at : "");
+                                    color: Colors.text-secondary; font-size: Typography.sm;
+                                    horizontal-alignment: center;
+                                }
+                                if root.can-edit: Rectangle {
+                                    horizontal-stretch: 1;
+                                    height: Spacing.touch-target-min;
+                                    background: transparent;
+                                    Button {
+                                        width: 220px;
+                                        height: Spacing.touch-target-min;
+                                        x: (parent.width - self.width) / 2;
+                                        text: root.is-private-group ? "Edit group info" : "Edit channel info";
+                                        variant: "secondary";
+                                        icon: Icons.edit;
+                                        clicked => { root.active-section = "general"; }
+                                    }
+                                }
+                            }
+                            if root.loading: Text { text: "Loading group info…"; color: Colors.text-secondary; font-size: Typography.sm; }
+                            if root.channel-description != "": Text {
+                                width: parent.width;
+                                text: root.channel-description; color: Colors.text-secondary;
+                                font-size: Typography.sm; wrap: word-wrap;
+                            }
+                            if root.channel-description == "" && root.can-edit && !root.loading: Text {
+                                width: parent.width;
+                                text: "Add a description so members know what this is for";
+                                color: Colors.text-secondary; font-size: Typography.sm;
+                                horizontal-alignment: center; wrap: word-wrap;
+                            }
+                            if root.has-edits: Text {
+                                text: root.is-private-group ? "Unsaved changes to group info" : "Unsaved changes to channel info";
+                                color: Colors.warning; font-size: Typography.sm;
+                            }
+                            if !root.loading: Rectangle {
+                                background: Colors.surface-section;
+                                border-radius: Spacing.radius-lg;
+                                VerticalLayout {
+                                    padding-left: Spacing.xs;
+                                    padding-right: Spacing.xs;
+                                    if root.can-manage-members || root.members.length > 0: SettingsRow {
+                                        touch: true;
+                                        icon: Icons.users; title: "Members";
+                                        detail: root.member-summary;
+                                        clicked => { root.active-section = "members"; }
+                                    }
+                                    if root.can-manage-members || root.members.length > 0: Rectangle { height: 1px; background: Colors.divider; }
+                                    if root.has-access-pane: SettingsRow {
+                                        touch: true;
+                                        icon: Icons.link; title: "Access and invite links";
+                                        clicked => { root.active-section = "access"; }
+                                    }
+                                    if root.has-access-pane: Rectangle { height: 1px; background: Colors.divider; }
+                                    SettingsRow {
+                                        touch: true;
+                                        icon: Icons.bell; title: "Notifications";
+                                        detail: root.is-muted ? "Muted" : root.notification-preference == "mentions" ? "Mentions only" : root.notification-preference == "none" ? "Off" : "All messages";
+                                        clicked => { root.active-section = "notifications"; }
+                                    }
+                                    Rectangle { height: 1px; background: Colors.divider; }
+                                    SettingsRow {
+                                        touch: true;
+                                        icon: Icons.pin; title: "Pinned messages";
+                                        clicked => { root.pinned-messages(); }
+                                    }
+                                    if !root.is-private-group: Rectangle { height: 1px; background: Colors.divider; }
+                                    // A channel's timer is fixed at creation:
+                                    // a value row, no chevron, not an action.
+                                    if !root.is-private-group: SettingsRow {
+                                        touch: true;
+                                        icon: Icons.clock; title: "Disappearing messages";
+                                        detail: DisappearingGlobal.active-label;
+                                        clickable: false;
+                                        show-chevron: false;
+                                    }
+                                    if !root.is-private-group && root.channel-type != "dm": Rectangle { height: 1px; background: Colors.divider; }
+                                    if !root.is-private-group && root.channel-type != "dm": SettingsRow {
+                                        touch: true;
+                                        icon: Icons.phone; title: "Call history";
+                                        clicked => { root.server-calls(); }
+                                    }
+                                    if root.is-owner && !root.is-private-group: Rectangle { height: 1px; background: Colors.divider; }
+                                    if root.is-owner && !root.is-private-group: SettingsRow {
+                                        touch: true;
+                                        icon: Icons.settings; title: "Integrations";
+                                        clicked => { root.integrations(); }
+                                    }
+                                }
+                            }
+                            if root.can-archive || root.can-delete || root.can-leave || root.is-private-group: VerticalLayout {
+                                spacing: Spacing.sm;
+                                Text { text: root.is-private-group ? "Manage group" : "Manage channel"; color: Colors.text-secondary;
+                                    font-size: Typography.sm; font-weight: Typography.medium; }
+                                Rectangle {
+                                    height: manage-row.preferred-height;
+                                    background: Colors.surface-section;
+                                    border-radius: Spacing.radius-lg;
+                                    manage-row := SettingsRow {
+                                        touch: true;
+                                    icon: Icons.alert-triangle;
+                                    // Name only what this user can do: a member saw
+                                    // "Leave, archive or delete" over a page with Leave.
+                                    title: root.can-archive || root.can-delete
+                                        ? (root.can-leave ? "Leave, archive or delete" : "Archive or delete")
+                                        : root.is-private-group && !root.can-leave ? "Manage group"
+                                        : root.is-private-group ? "Leave group" : "Leave channel";
+                                    destructive: true;
+                                    clicked => { root.active-section = "destructive"; }
+                                    }
+                                }
+                            }
+                        }
 
                         // ========== General Section ==========
                         if root.active-section == "general": VerticalLayout {
                             spacing: Spacing.md;
 
+                            Text {
+                                text: root.is-private-group ? "Edit group info" : "Edit channel info";
+                                color: Colors.text-primary;
+                                font-size: Typography.lg;
+                                font-weight: Typography.semibold;
+                            }
                             // Channel header info
                             HorizontalLayout {
                                 spacing: Spacing.sm;
                                 alignment: start;
 
-                                Text {
-                                    text: root.type-icon(root.channel-type);
-                                    font-size: Typography.xl;
-                                    vertical-alignment: center;
+                                if root.channel-has-icon-preview || root.channel-has-avatar || root.is-private-group: Avatar {
+                                    source: root.channel-has-icon-preview ? root.channel-icon-preview : root.channel-avatar-source;
+                                    name: root.channel-name;
+                                    anonymous: root.is-private-group;
+                                    size: 40px;
+                                }
+                                if !root.channel-has-icon-preview && !root.channel-has-avatar && !root.is-private-group: VerticalLayout {
+                                    alignment: center;
+                                    Image {
+                                        source: root.is-private-group ? Icons.users
+                                            : root.channel-type == "private" ? Icons.lock
+                                            : root.channel-type == "dm" ? Icons.message-circle : Icons.hash;
+                                        width: 24px; height: 24px;
+                                        colorize: Colors.text-primary;
+                                        accessible-label: root.is-private-group ? "Group icon"
+                                            : root.channel-type == "private" ? "Private channel icon" : "Channel icon";
+                                    }
                                 }
 
                                 VerticalLayout {
                                     spacing: Spacing.xs;
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
 
                                     Text {
                                         text: root.channel-name;
                                         color: Colors.text-primary;
                                         font-size: Typography.lg;
                                         font-weight: Typography.semibold;
+                                        wrap: word-wrap;
                                     }
 
                                     Text {
-                                        text: root.member-count + " members • Created " + root.created-at;
+                                        // No count once we left: the roster is no longer ours to see,
+                                        // and "0 members" contradicted the header.
+                                        text: root.member-summary
+                                            + (root.member-summary != "" && root.created-at != "" ? " • " : "")
+                                            + (root.created-at == "" ? "" : "Created " + root.created-at);
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
+                                }
+                            }
+
+                            // Disappearing messages. A channel's timer is fixed
+                            // when it is created (the server refuses to change
+                            // it), so this is information, not a control.
+                            if !root.is-private-group && DisappearingGlobal.active-label != "Off": HorizontalLayout {
+                                spacing: Spacing.sm;
+                                Image {
+                                    source: Icons.clock;
+                                    width: 16px;
+                                    height: 16px;
+                                    y: (parent.height - self.height) / 2;
+                                    colorize: Colors.text-muted;
+                                }
+                                Text {
+                                    width: max(0px, parent.width - 16px - parent.spacing);
+                                    horizontal-stretch: 1;
+                                    text: "Messages disappear after " + DisappearingGlobal.active-label + " (set when the channel was created)";
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.xs;
+                                    wrap: word-wrap;
                                 }
                             }
 
                             // Divider — Neo
                             Rectangle {
                                 height: 1px;
-                                background: Colors.neo-inset-shadow;
+                                background: Colors.divider;
                             }
 
                             // Channel name (editable if permitted)
@@ -300,25 +574,31 @@ export component ChannelSettingsModal inherits Rectangle {
                                 spacing: Spacing.xs;
 
                                 Text {
-                                    text: "Channel Name";
+                                    text: root.is-private-group ? "Group name" : "Channel name";
                                     color: Colors.text-secondary;
                                     font-size: Typography.sm;
                                     font-weight: Typography.medium;
                                 }
 
                                 if root.can-edit: Input {
+                                    control-height: Spacing.touch-target-min;
                                     text: root.channel-name-draft;
-                                    placeholder: "Channel name";
+                                    placeholder: root.is-private-group ? "Group name" : "Channel name";
 
+                                    error: root.name-invalid;
+                                    error-message: root.name-invalid ? "Name must be at least 3 characters" : "";
                                     edited(value) => {
                                         root.channel-name-draft = value;
+                                        root.clear-error();
                                     }
                                 }
 
                                 if !root.can-edit: Text {
+                                    width: parent.width;
                                     text: root.channel-name;
                                     color: Colors.text-primary;
                                     font-size: Typography.base;
+                                    wrap: word-wrap;
                                 }
                             }
 
@@ -334,19 +614,23 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
 
                                 if root.can-edit: Input {
+                                    control-height: Spacing.touch-target-min;
                                     text: root.channel-description-draft;
                                     placeholder: "Add a description...";
 
                                     edited(value) => {
                                         root.channel-description-draft = value;
+                                        root.clear-error();
                                     }
                                 }
 
                                 if !root.can-edit: Text {
+                                    width: parent.width;
                                     text: root.channel-description != "" ? root.channel-description : "No description";
                                     color: root.channel-description != "" ? Colors.text-primary : Colors.text-muted;
                                     font-size: Typography.base;
                                     font-italic: root.channel-description == "";
+                                    wrap: word-wrap;
                                 }
                             }
 
@@ -356,7 +640,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 spacing: Spacing.xs;
 
                                 Text {
-                                    text: "Channel Icon";
+                                    text: root.is-private-group ? "Group photo" : "Channel icon";
                                     color: Colors.text-secondary;
                                     font-size: Typography.sm;
                                     font-weight: Typography.medium;
@@ -373,7 +657,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                     }
 
                                     Button {
-                                        text: "Change Icon";
+                                        height: Spacing.touch-target-min;
+                                        text: root.is-private-group ? "Change photo" : "Change icon";
                                         variant: "secondary";
                                         clicked => {
                                             root.pick-channel-icon();
@@ -388,11 +673,11 @@ export component ChannelSettingsModal inherits Rectangle {
                             if root.can-edit: HorizontalLayout {
                                 alignment: end;
                                 Button {
-                                    text: "Save Changes";
+                                    text: "Save changes";
+                                    loading: root.saving;
+                                    height: Spacing.touch-target-min;
                                     variant: "primary";
-                                    disabled: root.channel-name-draft == root.channel-name
-                                        && root.channel-description-draft == root.channel-description
-                                        && !root.channel-has-icon-preview;
+                                    disabled: !root.has-edits || root.saving;
                                     clicked => {
                                         root.save-settings(root.channel-name-draft, root.channel-description-draft);
                                     }
@@ -402,557 +687,77 @@ export component ChannelSettingsModal inherits Rectangle {
                         }
 
                         // ========== Notifications Section ==========
-                        if root.active-section == "notifications": VerticalLayout {
-                            spacing: Spacing.md;
-
-                            Text {
-                                text: "Notification Preferences";
-                                color: Colors.text-primary;
-                                font-size: Typography.lg;
-                                font-weight: Typography.semibold;
-                            }
-
-                            // Mute toggle
-                            HorizontalLayout {
-                                spacing: Spacing.sm;
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-
-                                    Text {
-                                        text: "Mute Channel";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.sm;
-                                    }
-                                    Text {
-                                        text: "You won't receive any notifications from this channel";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                    }
-                                }
-
-                                Toggle {
-                                    checked: root.is-muted;
-                                    toggled(value) => {
-                                        root.toggle-mute(value);
-                                    }
-                                }
-                            }
-
-                            // AI assistant for this channel
-                            HorizontalLayout {
-                                spacing: Spacing.sm;
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-
-                                    Text {
-                                        text: "AI assistant";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.sm;
-                                    }
-                                    Text {
-                                        text: "Let the AI read this channel when you ask it something here. Off by default.";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                    }
-                                }
-
-                                Toggle {
-                                    checked: root.ai-enabled;
-                                    toggled(value) => {
-                                        root.toggle-ai(value);
-                                    }
-                                }
-                            }
-
-                            Rectangle {
-                                height: 1px;
-                                background: Colors.surface-hover;
-                            }
-
-                            Text {
-                                text: "When not muted, notify me for:";
-                                color: Colors.text-secondary;
-                                font-size: Typography.sm;
-                            }
-
-                            // All messages — Neo selection card
-                            Rectangle {
-                                height: 44px;
-                                background: root.notification-preference == "all" ? Colors.neo-inset-bg : transparent;
-                                border-radius: Spacing.radius-sm;
-                                border-width: root.notification-preference == "all" ? 1px : 0;
-                                border-color: Colors.glow-cyan.with-alpha(0.4);
-
-                                TouchArea {
-                                    clicked => { root.change-notification("all"); }
-
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
-
-                                        Rectangle {
-                                            width: 20px;
-                                            height: 20px;
-                                            border-radius: 10px;
-                                            border-width: 2px;
-                                            border-color: root.notification-preference == "all" ? Colors.glow-cyan : Colors.neo-inset-shadow;
-                                            background: root.notification-preference == "all" ? Colors.glow-cyan : transparent;
-                                        }
-
-                                        VerticalLayout {
-                                            Text {
-                                                text: "All Messages";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                            }
-                                            Text {
-                                                text: "Get notified for every message";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Mentions only — Neo selection card
-                            Rectangle {
-                                height: 44px;
-                                background: root.notification-preference == "mentions" ? Colors.neo-inset-bg : transparent;
-                                border-radius: Spacing.radius-sm;
-                                border-width: root.notification-preference == "mentions" ? 1px : 0;
-                                border-color: Colors.glow-cyan.with-alpha(0.4);
-
-                                TouchArea {
-                                    clicked => { root.change-notification("mentions"); }
-
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
-
-                                        Rectangle {
-                                            width: 20px;
-                                            height: 20px;
-                                            border-radius: 10px;
-                                            border-width: 2px;
-                                            border-color: root.notification-preference == "mentions" ? Colors.glow-cyan : Colors.neo-inset-shadow;
-                                            background: root.notification-preference == "mentions" ? Colors.glow-cyan : transparent;
-                                        }
-
-                                        VerticalLayout {
-                                            Text {
-                                                text: "Mentions Only";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                            }
-                                            Text {
-                                                text: "Only when someone @mentions you";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // None — Neo selection card
-                            Rectangle {
-                                height: 44px;
-                                background: root.notification-preference == "none" ? Colors.neo-inset-bg : transparent;
-                                border-radius: Spacing.radius-sm;
-                                border-width: root.notification-preference == "none" ? 1px : 0;
-                                border-color: Colors.glow-cyan.with-alpha(0.4);
-
-                                TouchArea {
-                                    clicked => { root.change-notification("none"); }
-
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
-
-                                        Rectangle {
-                                            width: 20px;
-                                            height: 20px;
-                                            border-radius: 10px;
-                                            border-width: 2px;
-                                            border-color: root.notification-preference == "none" ? Colors.glow-cyan : Colors.neo-inset-shadow;
-                                            background: root.notification-preference == "none" ? Colors.glow-cyan : transparent;
-                                        }
-
-                                        VerticalLayout {
-                                            Text {
-                                                text: "Nothing";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                            }
-                                            Text {
-                                                text: "Never notify (still shows unread badge)";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                        if root.active-section == "notifications": ChannelNotificationsSection {
+                            ai-enabled <=> root.ai-enabled;
+                            is-muted <=> root.is-muted;
+                            is-private-group: root.is-private-group;
+                            notification-preference <=> root.notification-preference;
+                            change-notification(arg0) => { root.change-notification(arg0); }
+                            toggle-ai(arg0) => { root.toggle-ai(arg0); }
+                            toggle-mute(arg0) => { root.toggle-mute(arg0); }
                         }
 
-                        // ========== Members Section ==========
-                        if root.active-section == "members": VerticalLayout {
-                            spacing: Spacing.md;
-
-                            HorizontalLayout {
-                                spacing: Spacing.sm;
-
-                                Text {
-                                    text: "Members";
-                                    color: Colors.text-primary;
-                                    font-size: Typography.lg;
-                                    font-weight: Typography.semibold;
-                                    horizontal-stretch: 1;
-                                }
-
-                                Text {
-                                    text: root.member-count + " total";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
-                                }
-
-                                // Invite button for private groups (admins/owners only)
-                                if root.is-private-group && root.can-manage-members: Rectangle {
-                                    width: invite-btn-text.width + Spacing.md * 2;
-                                    height: 28px;
-                                    background: invite-btn-touch.has-hover ? Colors.primary.darker(10%) : Colors.primary;
-                                    border-radius: Spacing.radius-sm;
-
-                                    invite-btn-text := Text {
-                                        text: "+ Invite";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.xs;
-                                        font-weight: Typography.medium;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-
-                                    invite-btn-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => { root.invite-members(); }
-                                    }
-                                }
-
-                                // Invite button for regular channels (admins/owners only)
-                                if !root.is-private-group && root.can-manage-members: Rectangle {
-                                    width: invite-ch-btn-text.width + Spacing.md * 2;
-                                    height: 28px;
-                                    background: invite-ch-btn-touch.has-hover ? Colors.primary.darker(10%) : Colors.primary;
-                                    border-radius: Spacing.radius-sm;
-
-                                    invite-ch-btn-text := Text {
-                                        text: "+ Invite";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.xs;
-                                        font-weight: Typography.medium;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-
-                                    invite-ch-btn-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => { root.invite-channel-members(); }
-                                    }
-                                }
-                            }
-
-                            // Member list
-                            for member in root.members: Rectangle {
-                                height: 52px;
-                                background: transparent;
-
-                                HorizontalLayout {
-                                    spacing: Spacing.sm;
-                                    padding: Spacing.xs;
-
-                                    // Avatar placeholder
-                                    Rectangle {
-                                        width: 36px;
-                                        height: 36px;
-                                        border-radius: 18px;
-                                        background: Colors.surface-hover;
-
-                                        Text {
-                                            text: member.display-name != "" ? member.display-name : "?";
-                                            color: Colors.text-secondary;
-                                            font-size: Typography.sm;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-
-                                    // Name and role
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-
-                                        HorizontalLayout {
-                                            spacing: Spacing.xs;
-
-                                            Text {
-                                                text: member.display-name;
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                            }
-
-                                            if member.role != "member": Rectangle {
-                                                width: role-text.width + Spacing.sm;
-                                                height: 18px;
-                                                background: root.role-color(member.role).with-alpha(0.15);
-                                                border-radius: Spacing.radius-sm;
-
-                                                role-text := Text {
-                                                    x: Spacing.xs;
-                                                    text: member.role;
-                                                    color: root.role-color(member.role);
-                                                    font-size: Typography.xs;
-                                                    font-weight: Typography.medium;
-                                                    vertical-alignment: center;
-                                                    height: 100%;
-                                                }
-                                            }
-                                        }
-
-                                        Text {
-                                            text: "@" + member.username;
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
-                                    }
-
-                                    // Actions (only if can manage and not owner)
-                                    if root.can-manage-members && member.role != "owner": Button {
-                                        text: "Remove";
-                                        variant: "ghost";
-
-                                        clicked => {
-                                            root.remove-member(member.user-id);
-                                        }
-                                    }
-                                }
-
-                                // Bottom border
-                                Rectangle {
-                                    y: parent.height - 1px;
-                                    height: 1px;
-                                    background: Colors.surface-hover.with-alpha(0.5);
-                                }
-                            }
+                        // ========== Access Section ==========
+                        // Everything here is shaped by chatter-core
+                        // (`ChatterClient::channel_access_view`).
+                        if root.active-section == "access": ChannelAccessSection {
+                            channel-id: root.channel-id;
+                            link-needs-approval <=> root.link-needs-approval;
                         }
 
                         // ========== Danger Zone Section ==========
-                        if root.active-section == "danger": VerticalLayout {
-                            spacing: Spacing.md;
-
-                            Text {
-                                text: "Danger Zone";
-                                color: Colors.error;
-                                font-size: Typography.lg;
-                                font-weight: Typography.semibold;
-                            }
-
-                            Text {
-                                text: "These actions are irreversible. Please be certain.";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                            }
-
-                            Rectangle {
-                                height: 1px;
-                                background: Colors.error.with-alpha(0.3);
-                            }
-
-                            // Leave channel. Gated unconditionally, not just
-                            // for private channels: leaving a private one has
-                            // no rejoin path, and a control that is sometimes
-                            // destructive and sometimes not, with no visual
-                            // difference, is worse than one that always asks.
-                            if !root.is-owner && !root.show-leave-confirm: HorizontalLayout {
-                                spacing: Spacing.sm;
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-
-                                    Text {
-                                        text: "Leave Channel";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.sm;
-                                    }
-                                    Text {
-                                        text: "You will lose access to this channel's messages";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                    }
-                                }
-
-                                Button {
-                                    text: "Leave";
-                                    variant: "secondary";
-
-                                    clicked => {
-                                        root.show-leave-confirm = true;
-                                    }
-                                }
-                            }
-
-                            if !root.is-owner && root.show-leave-confirm: VerticalLayout {
-                                spacing: Spacing.sm;
-
-                                Text {
-                                    text: "Leave \"" + root.channel-name + "\"? You lose access to its messages, and an invite-only channel cannot be rejoined on your own.";
-                                    color: Colors.error;
-                                    font-size: Typography.sm;
-                                    wrap: word-wrap;
-                                }
-
-                                HorizontalLayout {
-                                    spacing: Spacing.sm;
-
-                                    Button {
-                                        text: "Cancel";
-                                        variant: "secondary";
-                                        clicked => {
-                                            root.show-leave-confirm = false;
-                                        }
-                                    }
-
-                                    Button {
-                                        text: "Leave channel";
-                                        variant: "danger";
-                                        clicked => {
-                                            root.show-leave-confirm = false;
-                                            root.leave-channel();
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Archive channel
-                            if root.can-archive: HorizontalLayout {
-                                spacing: Spacing.sm;
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-
-                                    Text {
-                                        text: root.is-archived ? "Unarchive Channel" : "Archive Channel";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.sm;
-                                    }
-                                    Text {
-                                        text: root.is-archived ? "Make channel active again" : "Archive to hide from active channels";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                    }
-                                }
-
-                                Button {
-                                    text: root.is-archived ? "Unarchive" : "Archive";
-                                    variant: "secondary";
-
-                                    clicked => {
-                                        root.archive-channel();
-                                    }
-                                }
-                            }
-
-                            // Delete channel. H3: the one irreversible action
-                            // in this modal was a single click on a button
-                            // sitting in the same row rhythm as "Archive" —
-                            // one slip and the channel and every message in it
-                            // are gone. Same two-step reveal Settings uses for
-                            // Delete Account (settings_screen.slint
-                            // `show-delete-confirm`): the first click only
-                            // asks, and the answer defaults to Cancel.
-                            if root.can-delete && !root.show-delete-confirm: HorizontalLayout {
-                                spacing: Spacing.sm;
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-
-                                    Text {
-                                        text: "Delete Channel";
-                                        color: Colors.error;
-                                        font-size: Typography.sm;
-                                        font-weight: Typography.medium;
-                                    }
-                                    Text {
-                                        text: "Permanently delete this channel and all messages";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                    }
-                                }
-
-                                Button {
-                                    text: "Delete";
-                                    variant: "danger";
-
-                                    clicked => {
-                                        root.show-delete-confirm = true;
-                                    }
-                                }
-                            }
-
-                            if root.can-delete && root.show-delete-confirm: VerticalLayout {
-                                spacing: Spacing.sm;
-
-                                Text {
-                                    text: "Delete \"" + root.channel-name + "\" permanently? Every message in it goes with it. This cannot be undone.";
-                                    color: Colors.error;
-                                    font-size: Typography.sm;
-                                    wrap: word-wrap;
-                                }
-
-                                HorizontalLayout {
-                                    spacing: Spacing.sm;
-
-                                    // Cancel first, and it is the non-danger
-                                    // variant: the safe answer is the one the
-                                    // eye and the thumb land on.
-                                    Button {
-                                        text: "Cancel";
-                                        variant: "secondary";
-                                        clicked => {
-                                            root.show-delete-confirm = false;
-                                        }
-                                    }
-
-                                    Button {
-                                        text: "Delete channel";
-                                        variant: "danger";
-                                        clicked => {
-                                            root.show-delete-confirm = false;
-                                            root.delete-channel();
-                                        }
-                                    }
-                                }
-                            }
+                        if root.active-section == "destructive": ChannelDangerSection {
+                            active-section <=> root.active-section;
+                            can-archive: root.can-archive;
+                            can-delete: root.can-delete;
+                            can-leave: root.can-leave;
+                            channel-name: root.channel-name;
+                            group-blocked: root.group-blocked;
+                            is-archived: root.is-archived;
+                            is-owner: root.is-owner;
+                            is-private-group: root.is-private-group;
+                            show-delete-confirm <=> root.show-delete-confirm;
+                            show-leave-confirm <=> root.show-leave-confirm;
+                            archive-channel() => { root.archive-channel(); }
+                            block-group(arg0) => { root.block-group(arg0); }
+                            delete-channel() => { root.delete-channel(); }
+                            leave-channel() => { root.leave-channel(); }
                         }
 
-                        // Error message
-                        if root.error-message != "": Rectangle {
-                            height: 40px;
-                            background: Colors.error.with-alpha(0.1);
-                            border-radius: Spacing.radius-sm;
 
-                            Text {
-                                text: root.error-message;
-                                color: Colors.error;
-                                font-size: Typography.sm;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                        }
                     }
                 }
+                // Members own the whole content viewport, outside the Info scroll.
+                if root.active-section == "members": ChannelMembersSection {
+                    x: Spacing.md;
+                    y: Spacing.md;
+                    width: parent.width - Spacing.md * 2;
+                    height: parent.height - Spacing.md * 2;
+                    can-manage-members: root.can-manage-members;
+                    can-invite: root.can-invite;
+                    can-view-bans: root.can-view-bans;
+                    channel-name: root.channel-name;
+                    confirm-action <=> root.confirm-action;
+                    is-owner: root.is-owner;
+                    is-private-group: root.is-private-group;
+                    loading: root.loading;
+                    error-message: root.error-message;
+                    member-count: root.member-count;
+                    members: root.members;
+                    roster-rows: root.roster-rows;
+                    narrow: root.narrow;
+                    role-picker-user <=> root.role-picker-user;
+                    ban-member(arg0) => { root.ban-member(arg0); }
+                    block-member(arg0, arg1) => { root.block-member(arg0, arg1); }
+                    change-member-role(arg0, arg1) => { root.change-member-role(arg0, arg1); }
+                    invite-channel-members() => { root.invite-channel-members(); }
+                    invite-members() => { root.invite-members(); }
+                    remove-member(arg0) => { root.remove-member(arg0); }
+                    set-member-muted(arg0, arg1, arg2) => { root.set-member-muted(arg0, arg1, arg2); }
+                    transfer-ownership(arg0) => { root.transfer-ownership(arg0); }
+                    unban-member(arg0) => { root.unban-member(arg0); }
+                }
+
             }
         }
     }

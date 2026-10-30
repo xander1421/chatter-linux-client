@@ -26,15 +26,23 @@ const NONCE_SIZE: usize = 24;
 /// # Returns
 ///
 /// Encrypted message: `nonce (24 bytes) || ciphertext || tag (16 bytes)`
-pub fn encrypt_dm_message(plaintext: &str, shared_secret: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
+pub fn encrypt_dm_message(
+    plaintext: &str,
+    shared_secret: &[u8; 32],
+) -> Result<Vec<u8>, CryptoError> {
     // Create cipher from shared secret
     let cipher = XChaCha20Poly1305::new_from_slice(shared_secret)
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS CSPRNG must not fail");}
-    let nonce = XNonce::from_slice(&nonce_bytes);
+    {
+        use rand::TryRngCore;
+        rand::rngs::OsRng
+            .try_fill_bytes(&mut nonce_bytes)
+            .expect("OS CSPRNG must not fail");
+    }
+    let nonce = <&XNonce>::try_from(&nonce_bytes[..]).expect("fixed cryptographic input length");
 
     // Encrypt
     let ciphertext = cipher
@@ -62,15 +70,23 @@ pub fn encrypt_dm_message(plaintext: &str, shared_secret: &[u8; 32]) -> Result<V
 /// # Returns
 ///
 /// Encrypted bytes: `nonce (24 bytes) || ciphertext || tag (16 bytes)`
-pub fn encrypt_dm_bytes(plaintext: &[u8], shared_secret: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
+pub fn encrypt_dm_bytes(
+    plaintext: &[u8],
+    shared_secret: &[u8; 32],
+) -> Result<Vec<u8>, CryptoError> {
     // Create cipher from shared secret
     let cipher = XChaCha20Poly1305::new_from_slice(shared_secret)
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS CSPRNG must not fail");}
-    let nonce = XNonce::from_slice(&nonce_bytes);
+    {
+        use rand::TryRngCore;
+        rand::rngs::OsRng
+            .try_fill_bytes(&mut nonce_bytes)
+            .expect("OS CSPRNG must not fail");
+    }
+    let nonce = <&XNonce>::try_from(&nonce_bytes[..]).expect("fixed cryptographic input length");
 
     // Encrypt
     let ciphertext = cipher
@@ -97,7 +113,10 @@ pub fn encrypt_dm_bytes(plaintext: &[u8], shared_secret: &[u8; 32]) -> Result<Ve
 /// # Returns
 ///
 /// Decrypted bytes.
-pub fn decrypt_dm_bytes(encrypted: &[u8], shared_secret: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
+pub fn decrypt_dm_bytes(
+    encrypted: &[u8],
+    shared_secret: &[u8; 32],
+) -> Result<Vec<u8>, CryptoError> {
     if encrypted.len() < NONCE_SIZE + 16 {
         // Minimum: nonce + tag
         return Err(CryptoError::DecryptionFailed(
@@ -106,7 +125,8 @@ pub fn decrypt_dm_bytes(encrypted: &[u8], shared_secret: &[u8; 32]) -> Result<Ve
     }
 
     // Extract nonce and ciphertext
-    let nonce = XNonce::from_slice(&encrypted[..NONCE_SIZE]);
+    let nonce = <&XNonce>::try_from(&encrypted[..NONCE_SIZE][..])
+        .expect("fixed cryptographic input length");
     let ciphertext = &encrypted[NONCE_SIZE..];
 
     // Create cipher and decrypt
@@ -130,7 +150,10 @@ pub fn decrypt_dm_bytes(encrypted: &[u8], shared_secret: &[u8; 32]) -> Result<Ve
 /// # Returns
 ///
 /// Decrypted message as a string.
-pub fn decrypt_dm_message(encrypted: &[u8], shared_secret: &[u8; 32]) -> Result<String, CryptoError> {
+pub fn decrypt_dm_message(
+    encrypted: &[u8],
+    shared_secret: &[u8; 32],
+) -> Result<String, CryptoError> {
     if encrypted.len() < NONCE_SIZE + 16 {
         // Minimum: nonce + tag
         return Err(CryptoError::DecryptionFailed(
@@ -139,7 +162,8 @@ pub fn decrypt_dm_message(encrypted: &[u8], shared_secret: &[u8; 32]) -> Result<
     }
 
     // Extract nonce and ciphertext
-    let nonce = XNonce::from_slice(&encrypted[..NONCE_SIZE]);
+    let nonce = <&XNonce>::try_from(&encrypted[..NONCE_SIZE][..])
+        .expect("fixed cryptographic input length");
     let ciphertext = &encrypted[NONCE_SIZE..];
 
     // Create cipher and decrypt

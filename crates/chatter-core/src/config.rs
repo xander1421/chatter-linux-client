@@ -22,9 +22,9 @@
 //!   builds but PANICS the moment anything needs the trust root — which is
 //!   during `SignalService` construction, i.e. at startup.
 //! - **`--features dev-trust-root`**: the development trust root matching the
-//!   local docker-compose Vault. Its private key is committed in plaintext at
-//!   `deploy/vault/init-and-unseal.sh`, so this build trusts certificates
-//!   anyone can forge. Local development only.
+//!   local docker-compose Vault. Its private key is SHA-256 of a public string
+//!   documented in `deploy/vault/init-and-unseal.sh`, so this build trusts
+//!   certificates anyone can forge. Local development only.
 //!
 //! Configuring production:
 //!
@@ -32,28 +32,63 @@
 //! CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX=<64 hex chars> cargo build --release
 //! ```
 //!
-//! The value is the public half of the Curve25519 keypair the server signs
-//! sealed-sender certificates with — `public_key` under
-//! `sealed-sender/signing-keys/current` in Vault, base64 there, hex here. A
-//! malformed value, or one equal to the dev key, fails the BUILD.
+//! The value is the public half of the sealed-sender TRUST ROOT. The server
+//! never holds the root's private key: Vault has one secret,
+//! `sealed-sender/server-certificate` (a ServerCertificate the root signed
+//! offline with `cmd/sealed-sender-cert`, plus the intermediate's private key),
+//! and the server signs sender certificates with the intermediate.
+//! `scripts/provision-trust-root.sh` generates the root and writes this value
+//! (hex) to `.env`; the secret's `trust_root_public_key` field carries it in
+//! base64. A malformed value, or one equal to the dev key, fails the BUILD.
 
 use libsignal_protocol::PublicKey;
 
+// Dedicated release-update signing anchor. Never share this key with the
+// sealed-sender, KT, or TLS trust roots: it authorizes executable code.
+const DEV_RELEASE_UPDATE_PUBLIC_KEY_BYTES: [u8; 32] = [
+    0xca, 0x2e, 0xfc, 0x2c, 0x41, 0x86, 0xcd, 0xcd, 0xf2, 0x9f, 0xab, 0xe4, 0xf3, 0x39, 0x75, 0xdd,
+    0x46, 0x72, 0xbc, 0x2e, 0x09, 0x46, 0x9a, 0x42, 0x59, 0x5a, 0x86, 0x4f, 0xca, 0x39, 0x79, 0x5a,
+];
+
+#[cfg(feature = "dev-trust-root")]
+pub const RELEASE_UPDATE_PUBLIC_KEY_BYTES: [u8; 32] = DEV_RELEASE_UPDATE_PUBLIC_KEY_BYTES;
+
+#[cfg(not(feature = "dev-trust-root"))]
+pub const RELEASE_UPDATE_PUBLIC_KEY_BYTES: [u8; 32] =
+    match option_env!("CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX") {
+        Some(hex) => decode_hex32(hex),
+        None if cfg!(test) || cfg!(feature = "insecure-test-anchors") =>
+            DEV_RELEASE_UPDATE_PUBLIC_KEY_BYTES,
+        None => panic!("no release-update public key is baked into this build; provision CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX or use --features dev-trust-root for local development"),
+    };
+
+#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "insecure-test-anchors")))]
+const _: () = {
+    let mut same = true;
+    let mut i = 0;
+    while i < 32 {
+        if RELEASE_UPDATE_PUBLIC_KEY_BYTES[i] != DEV_RELEASE_UPDATE_PUBLIC_KEY_BYTES[i] {
+            same = false;
+        }
+        i += 1;
+    }
+    assert!(!same, "production update key is the public development key; use a provisioned release-update key");
+};
+
 // ─── Sealed sender trust root ──────────────────────────────────────────────
 
-/// Public half of the development keypair provisioned by
-/// `deploy/vault/init-and-unseal.sh` when `VAULT_GENERATE_KEYS` is not `true`.
+/// Public half of the development trust root that signed the development
+/// ServerCertificate `deploy/vault/init-and-unseal.sh` stores when
+/// `VAULT_GENERATE_KEYS` is not `true`.
 ///
 /// Base64: `yknZaqZBfXJLRTHfxsvcjikbUjHKrAiKMJLeUSC+aDM=`
 ///
-/// The matching PRIVATE key is committed next to it in that script, so this key
-/// authenticates nobody. Kept here so the production path can refuse to equal
+/// The matching PRIVATE key is SHA-256 of a public string documented in that
+/// script, so this key authenticates nobody. Kept here so the production path can refuse to equal
 /// it, and so `--features dev-trust-root` can select it on purpose.
 const DEV_TRUST_ROOT_BYTES: [u8; 32] = [
-    0xca, 0x49, 0xd9, 0x6a, 0xa6, 0x41, 0x7d, 0x72,
-    0x4b, 0x45, 0x31, 0xdf, 0xc6, 0xcb, 0xdc, 0x8e,
-    0x29, 0x1b, 0x52, 0x31, 0xca, 0xac, 0x08, 0x8a,
-    0x30, 0x92, 0xde, 0x51, 0x20, 0xbe, 0x68, 0x33,
+    0xca, 0x49, 0xd9, 0x6a, 0xa6, 0x41, 0x7d, 0x72, 0x4b, 0x45, 0x31, 0xdf, 0xc6, 0xcb, 0xdc, 0x8e,
+    0x29, 0x1b, 0x52, 0x31, 0xca, 0xac, 0x08, 0x8a, 0x30, 0x92, 0xde, 0x51, 0x20, 0xbe, 0x68, 0x33,
 ];
 
 /// The trust root a SHIPPABLE artifact of this build would pin — the cdylib,
@@ -83,7 +118,7 @@ const SHIPPED_TRUST_ROOT_BYTES: Option<[u8; 32]> =
 /// leak an insecure key into anything shippable.
 pub const TRUST_ROOT_PUBLIC_KEY_BYTES: Option<[u8; 32]> = match SHIPPED_TRUST_ROOT_BYTES {
     Some(configured) => Some(configured),
-    None if cfg!(test) || cfg!(feature = "testing") => Some(DEV_TRUST_ROOT_BYTES),
+    None if cfg!(test) || cfg!(feature = "insecure-test-anchors") => Some(DEV_TRUST_ROOT_BYTES),
     None => None,
 };
 
@@ -96,9 +131,17 @@ pub const TRUST_ROOT_PUBLIC_KEY_BYTES: Option<[u8; 32]> = match SHIPPED_TRUST_RO
 /// pinned keys behave the same way, which is the whole point of having one
 /// provisioning step for both.
 ///
-/// `cfg(test)` / `feature = "testing"` are excluded because those harnesses
-/// legitimately fall back to the dev key above.
-#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "testing")))]
+/// `cfg(test)` / `feature = "insecure-test-anchors"` are excluded because those
+/// harnesses legitimately fall back to the dev key above. That carve-out used
+/// to be keyed on `feature = "testing"`, which exists to widen accessors and is
+/// composed into ordinary builds by the Makefile — so it disarmed this guard,
+/// and the three below, in release builds too (ANCHOR-TESTING). The feature it
+/// names now does nothing else, and build.rs refuses it in a release profile.
+#[cfg(all(
+    not(feature = "dev-trust-root"),
+    not(test),
+    not(feature = "insecure-test-anchors")
+))]
 const _: () = {
     assert!(
         TRUST_ROOT_PUBLIC_KEY_BYTES.is_some(),
@@ -129,7 +172,7 @@ const _: () = {
             assert!(
                 !same,
                 "CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX is the publicly-known development \
-                 trust root, whose private key is committed in deploy/vault/init-and-unseal.sh. \
+                 trust root, whose private key is derivable from deploy/vault/init-and-unseal.sh. \
                  Use --features dev-trust-root if that is what you meant."
             );
         }
@@ -178,15 +221,15 @@ const MISSING_TRUST_ROOT: &str = "\n\
     \n\
       CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX=<64 hex chars> cargo build --release\n\
     \n\
-    That value is the public half of the Curve25519 keypair the SERVER signs\n\
-    sealed-sender certificates with: the `public_key` field of\n\
-    `sealed-sender/signing-keys/current` in Vault (base64 there, hex here).\n\
-    Provision it with VAULT_GENERATE_KEYS=true deploy/vault/init-and-unseal.sh,\n\
-    which generates a fresh random keypair, then read the public half back out.\n\
-    Client and server MUST be built/provisioned from the same keypair.\n\
+    That value is the public half of the sealed-sender TRUST ROOT, which signs\n\
+    the server's certificate OFFLINE (cmd/sealed-sender-cert); the server holds\n\
+    only `sealed-sender/server-certificate` in Vault (certificate + intermediate\n\
+    key; `trust_root_public_key` there is base64, hex here). Provision it with\n\
+    ./scripts/provision-trust-root.sh, which writes this value to .env.\n\
+    Client and server MUST be built/provisioned from the same trust root.\n\
     \n\
     For local development against the docker-compose Vault, build with\n\
-    `--features dev-trust-root` instead. That key's PRIVATE half is committed in\n\
+    `--features dev-trust-root` instead. That key's PRIVATE half is derivable from\n\
     this repository and anyone can forge certificates under it — never ship it.\n\
     ==============================================================================\n";
 
@@ -246,6 +289,18 @@ const DEV_TLS_ROOT_CA_PEM: &str = include_str!("../assets/dev_tls_root_ca.pem");
 /// insecure-by-default under `dev-trust-root`; this one cannot, because the
 /// keyless placeholder CA can't authenticate anything and the server it would
 /// need to front — a plaintext dev loop — no longer exists).
+/// The server's Tor v3 `.onion`, pinned into the build (`CHATTER_ONION_ADDR`
+/// at compile time: a bare `<hash>.onion` or a full `http://<hash>.onion:443`).
+/// Anon mode routes the whole client over Tor to this address only. Pinned,
+/// not read from the runtime environment, so a compromised environment cannot
+/// redirect anon-mode users to an attacker's onion (docs/ONION_DEPLOYMENT.md
+/// §5). `None` (unset or empty): anon mode cannot hide the network location
+/// and says so.
+pub const PINNED_ONION_ADDR: Option<&str> = match option_env!("CHATTER_ONION_ADDR") {
+    Some(addr) if !addr.is_empty() => Some(addr),
+    _ => None,
+};
+
 const SHIPPED_TLS_ROOT_CA_PEM: Option<&str> = option_env!("CHATTER_TLS_ROOT_CA_PEM");
 
 /// The TLS trust anchor this build actually uses. `cfg(test)` / `feature =
@@ -260,7 +315,7 @@ pub const TLS_ROOT_CA_PEM: Option<&str> = match SHIPPED_TLS_ROOT_CA_PEM {
     // unconfigured so the build-time guard below rejects it (or test/testing
     // falls back to the dev CA), never the user's first handshake.
     Some(pem) if !pem.is_empty() => Some(pem),
-    _ if cfg!(test) || cfg!(feature = "testing") => Some(DEV_TLS_ROOT_CA_PEM),
+    _ if cfg!(test) || cfg!(feature = "insecure-test-anchors") => Some(DEV_TLS_ROOT_CA_PEM),
     _ => None,
 };
 
@@ -270,7 +325,7 @@ pub const TLS_ROOT_CA_PEM: Option<&str> = match SHIPPED_TLS_ROOT_CA_PEM {
 /// roots), an unprovisioned build would reject every hostname-TLS connection
 /// at runtime — so, like the sealed-sender trust root, this must fail on the
 /// machine that builds it, not the user's.
-#[cfg(all(not(test), not(feature = "testing")))]
+#[cfg(all(not(test), not(feature = "insecure-test-anchors")))]
 const _: () = {
     assert!(
         TLS_ROOT_CA_PEM.is_some(),
@@ -312,10 +367,8 @@ const _: () = {
 /// source, so anyone with either repository can sign a tree head that this key
 /// verifies. It is only ever pinned under the `dev-trust-root` feature.
 const DEV_KT_TREE_HEAD_BYTES: [u8; 32] = [
-    0x88, 0xad, 0x41, 0x28, 0x06, 0x05, 0x4a, 0x75,
-    0x34, 0xe1, 0xb9, 0xde, 0xb4, 0x2e, 0xf2, 0x49,
-    0xbd, 0x7c, 0x92, 0x70, 0x9f, 0x5b, 0xeb, 0xf1,
-    0xd6, 0xbe, 0x7b, 0x0e, 0x40, 0x92, 0x6f, 0x72,
+    0x88, 0xad, 0x41, 0x28, 0x06, 0x05, 0x4a, 0x75, 0x34, 0xe1, 0xb9, 0xde, 0xb4, 0x2e, 0xf2, 0x49,
+    0xbd, 0x7c, 0x92, 0x70, 0x9f, 0x5b, 0xeb, 0xf1, 0xd6, 0xbe, 0x7b, 0x0e, 0x40, 0x92, 0x6f, 0x72,
 ];
 
 /// The pinned key-transparency tree-head signing key.
@@ -345,13 +398,12 @@ pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] =
         //
         // `cfg(test)` covers this crate's unit tests. It does NOT cover the
         // integration tests in `tests/`, which link chatter-core as an ordinary
-        // dependency with `cfg(test)` unset — hence `feature = "testing"`, which
-        // exists only to widen accessors for exactly those tests and is
-        // documented in Cargo.toml as never to be enabled for an application
-        // build (chatter-ui does not enable it).
+        // dependency with `cfg(test)` unset — hence
+        // `feature = "insecure-test-anchors"`, whose only effect is this
+        // fallback and which build.rs refuses to build in a release profile.
         //
         // Neither is `debug_assertions`, which the Android build path sets.
-        None if cfg!(test) || cfg!(feature = "testing") => DEV_KT_TREE_HEAD_BYTES,
+        None if cfg!(test) || cfg!(feature = "insecure-test-anchors") => DEV_KT_TREE_HEAD_BYTES,
         // No configured key. Falling back to the development key here is exactly
         // the defect this replaces, so the build stops instead.
         None => panic!(
@@ -367,7 +419,11 @@ pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] =
 
 /// A non-dev build must not end up pinning the development tree-head key, even
 /// if someone exports its hex by mistake. Mirrors the trust-root assertion.
-#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "testing")))]
+#[cfg(all(
+    not(feature = "dev-trust-root"),
+    not(test),
+    not(feature = "insecure-test-anchors")
+))]
 const _: () = {
     let mut i = 0;
     let mut same = true;
@@ -402,10 +458,8 @@ const _: () = {
 //
 // The DEVELOPMENT VRF key, derived from SHA-256("chatter-dev-kt-vrf-v1").
 const DEV_KT_VRF_BYTES: [u8; 32] = [
-    0x48, 0xaf, 0x97, 0x5f, 0xea, 0xba, 0x33, 0xea,
-    0x11, 0x0d, 0x4a, 0xb0, 0xc8, 0xf7, 0xa3, 0x8c,
-    0x5c, 0x71, 0x22, 0xdb, 0x18, 0x5f, 0xf9, 0x49,
-    0x9b, 0x81, 0xe5, 0xe7, 0x4d, 0xa6, 0xec, 0x47,
+    0x48, 0xaf, 0x97, 0x5f, 0xea, 0xba, 0x33, 0xea, 0x11, 0x0d, 0x4a, 0xb0, 0xc8, 0xf7, 0xa3, 0x8c,
+    0x5c, 0x71, 0x22, 0xdb, 0x18, 0x5f, 0xf9, 0x49, 0x9b, 0x81, 0xe5, 0xe7, 0x4d, 0xa6, 0xec, 0x47,
 ];
 
 /// The pinned KT query-privacy VRF public key.
@@ -418,22 +472,66 @@ const DEV_KT_VRF_BYTES: [u8; 32] = [
 /// production path existed on neither side. `make provision-keys` now generates
 /// it and emits both halves.
 ///
-/// UNLIKE the other two, a missing value here is NOT a build failure, and the
-/// server fails OPEN to its dev seed. That asymmetry is deliberate and matches
-/// the server's reasoning (`keytransparency/vrfkey.go`): the VRF key's secrecy
-/// buys QUERY PRIVACY — it keeps `user_id -> leaf index` unlinkable to an
-/// auditor scanning the log — and leaking it cannot forge an identity key, which
-/// still needs the tree-head signing key. Degraded unlinkability should not stop
-/// a build the way a forgeable trust anchor must.
+/// CRYPTO-6: this used to be the one anchor of the four that failed OPEN on both
+/// halves — a missing value silently pinned the dev key here, and the server
+/// silently signed with the matching dev seed. The old justification (the VRF
+/// key's secrecy buys QUERY PRIVACY, not integrity, so degraded unlinkability
+/// should not stop a build) understates two real failures:
+///
+///   - a shipped client that pins the dev key against a *provisioned* server
+///     rejects every VRF proof, so KT verifies nothing at all — silently; and
+///   - a deploy where both halves fall back runs on a world-known key, and
+///     anyone with this repository can compute `user_id -> leaf index` and
+///     de-anonymise the entire log.
+///
+/// So it now fails closed exactly like the tree-head key and the TLS root: no
+/// provisioned value, no build. `make provision-keys` emits both halves.
 #[cfg(feature = "dev-trust-root")]
 pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] = DEV_KT_VRF_BYTES;
 
 #[cfg(not(feature = "dev-trust-root"))]
-pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] =
-    match option_env!("CHATTER_KT_VRF_PUBLIC_KEY_HEX") {
-        Some(hex) => decode_hex32(hex),
-        None => DEV_KT_VRF_BYTES,
-    };
+pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] = match option_env!("CHATTER_KT_VRF_PUBLIC_KEY_HEX") {
+    Some(hex) => decode_hex32(hex),
+    // Same harness carve-out as the tree-head key above: `cargo test` must
+    // not require a provisioned key. Never true for an application build.
+    None if cfg!(test) || cfg!(feature = "insecure-test-anchors") => DEV_KT_VRF_BYTES,
+    None => panic!(
+        "no key-transparency VRF public key is baked into this build.\n\n\
+             Every GetProof response carries a VRF proof binding the queried user_id\n\
+             to the leaf index served. Pinned against the development key, that proof\n\
+             either verifies nothing (dev server) or fails outright (real server), and\n\
+             the log's user_id -> leaf-index mapping is public to anyone with this\n\
+             repository.\n\n\
+             Build with the production key:\n\n  \
+             CHATTER_KT_VRF_PUBLIC_KEY_HEX=<64 hex chars> cargo build --release\n\n\
+             It is printed by `make provision-keys` alongside the tree-head key.\n\n\
+             For local development only, build with --features dev-trust-root."
+    ),
+};
+
+/// A non-dev build must not end up pinning the development VRF key either.
+/// Mirrors the tree-head assertion above.
+#[cfg(all(
+    not(feature = "dev-trust-root"),
+    not(test),
+    not(feature = "insecure-test-anchors")
+))]
+const _: () = {
+    let mut i = 0;
+    let mut same = true;
+    while i < 32 {
+        if KT_VRF_PUBLIC_KEY_BYTES[i] != DEV_KT_VRF_BYTES[i] {
+            same = false;
+        }
+        i += 1;
+    }
+    assert!(
+        !same,
+        "CHATTER_KT_VRF_PUBLIC_KEY_HEX is the publicly-known development VRF key, \
+         whose private half derives from a seed phrase in source. Provision a real \
+         key or build with --features dev-trust-root."
+    );
+};
 
 // ─── Shared constants ──────────────────────────────────────────────────────
 
@@ -449,10 +547,10 @@ pub const MESSAGE_PAGE_SIZE: i32 = 50;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 
-    /// The DEV trust root's private key is committed in plaintext at
-    /// `deploy/vault/init-and-unseal.sh`, so anyone can mint a sender
+    /// The DEV trust root's private key is SHA-256 of a public string
+    /// documented in `deploy/vault/init-and-unseal.sh`, so anyone can mint a sender
     /// certificate under it. Selecting it must require an explicit opt-in
     /// feature — a debug build must never silently become an insecure build.
     /// (`android/build-android.sh` is the only Android build path and builds
@@ -532,6 +630,78 @@ mod tests {
         assert_eq!(
             der[0], 0x30,
             "DER certificate must begin with an ASN.1 SEQUENCE tag"
+        );
+    }
+
+    /// ANCHOR-TESTING regression test.
+    ///
+    /// `--features chatter-core/testing` used to disarm all four fail-closed
+    /// anchor guards. That feature exists to widen service accessors for the
+    /// integration tests in `tests/`, and the Makefile composes it into
+    /// ordinary builds (`check-features`, `test-rust`, `test-validated`), so a
+    /// release build carrying it silently pinned the dev sealed-sender root,
+    /// the dev TLS CA, the dev KT tree-head key and the dev VRF key — exactly
+    /// the selection the guards exist to make impossible.
+    ///
+    /// Anchor selection now lives on its own feature. This reads this file's
+    /// own source, because the property is about which cfg the guards are
+    /// keyed on and no runtime value can observe that: inside this harness
+    /// `cfg(test)` supplies the fallback either way.
+    #[test]
+    fn anchor_guards_are_not_keyed_on_the_accessor_feature() {
+        let source = include_str!("config.rs");
+        // Built, not written literally, so this scan does not match its own
+        // source lines.
+        let accessor_needle = format!("feature = {:?}", "testing");
+        let anchor_needle = format!("feature = {:?}", "insecure-test-anchors");
+
+        for (lineno, line) in source.lines().enumerate() {
+            // Skip prose.
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            assert!(
+                !line.contains(&accessor_needle),
+                "config.rs:{} keys an anchor on the accessor-widening feature: {}\n\n                 That feature is composed into ordinary builds, so this disarms a \
+                 fail-closed trust anchor in release artifacts. Use \
+                 `insecure-test-anchors`, which build.rs refuses in a release profile.",
+                lineno + 1,
+                line.trim()
+            );
+        }
+
+        // And the fallback that does exist must be the named one, on all four
+        // anchors: sealed-sender root, TLS CA, KT tree head, KT VRF.
+        let occurrences = source
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//") && l.contains(&anchor_needle))
+            .count();
+        assert!(
+            occurrences >= 8,
+            "expected each of the four anchors to name the anchor-fallback feature \
+             in both its fallback and its guard, found {occurrences} references"
+        );
+    }
+
+    /// The two features must stay distinct in Cargo.toml as well: re-adding
+    /// `insecure-test-anchors` to `testing`'s dependency list would restore the
+    /// original defect without touching a single line of this file.
+    #[test]
+    fn accessor_feature_does_not_imply_the_anchor_fallback() {
+        let manifest = include_str!("../Cargo.toml");
+        let line = manifest
+            .lines()
+            .find(|l| l.trim_start().starts_with("testing ="))
+            .expect("chatter-core must declare a `testing` feature");
+        // It may forward `testing` to its own crates (mesh-noise's test
+        // hooks); it must never name the anchor fallback.
+        assert!(
+            !line.contains("insecure-test-anchors"),
+            "`testing` must stay an accessor-widening feature; it must not pull in `insecure-test-anchors`: {line}"
+        );
+        assert!(
+            manifest.contains("insecure-test-anchors = []"),
+            "the anchor fallback feature is missing from Cargo.toml"
         );
     }
 }

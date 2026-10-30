@@ -40,42 +40,48 @@ unsafe fn remove_env(key: &str) {
 
 #[test]
 fn test_01_antidebug_init() {
-    use chatter_core::system::{init_antidebug, check_debugger};
+    use chatter_core::system::{check_debugger, init_antidebug};
 
     println!("\n=== Testing antidebug initialization ===");
 
     // Test check_debugger (non-destructive check via /proc/self/status)
-    let (status, duration) = with_timeout("check_debugger", || {
-        check_debugger()
-    }).expect("check_debugger should not hang");
+    let (status, duration) = with_timeout("check_debugger", || check_debugger())
+        .expect("check_debugger should not hang");
 
     println!("  Debugger status: {:?}", status);
-    assert!(duration < Duration::from_secs(1), "check_debugger should be fast");
+    assert!(
+        duration < Duration::from_secs(1),
+        "check_debugger should be fast"
+    );
 
     // Test init_antidebug (includes ptrace calls)
     // NOTE: This may affect the process state
-    let (result, duration) = with_timeout("init_antidebug", || {
-        init_antidebug()
-    }).expect("init_antidebug should not hang");
+    let (result, duration) = with_timeout("init_antidebug", || init_antidebug())
+        .expect("init_antidebug should not hang");
 
     println!("  init_antidebug returned: {}", result);
-    assert!(duration < Duration::from_secs(1), "init_antidebug should be fast");
+    assert!(
+        duration < Duration::from_secs(1),
+        "init_antidebug should be fast"
+    );
 }
 
 #[test]
 fn test_02_gstreamer_init() {
     println!("\n=== Testing GStreamer initialization ===");
 
-    let (result, duration) = with_timeout("gstreamer::init", || {
-        gstreamer::init()
-    }).expect("gstreamer::init should not hang");
+    let (result, duration) = with_timeout("gstreamer::init", || gstreamer::init())
+        .expect("gstreamer::init should not hang");
 
     match &result {
         Ok(()) => println!("  GStreamer version: {}", gstreamer::version_string()),
         Err(e) => println!("  GStreamer init failed (ok for headless): {}", e),
     }
 
-    assert!(duration < Duration::from_secs(3), "gstreamer init should complete within 3s");
+    assert!(
+        duration < Duration::from_secs(3),
+        "gstreamer init should complete within 3s"
+    );
 }
 
 #[test]
@@ -84,21 +90,23 @@ fn test_03_directories_init() {
 
     println!("\n=== Testing directories initialization ===");
 
-    let (result, duration) = with_timeout("Directories::new", || {
-        Directories::new()
-    }).expect("Directories::new should not hang");
+    let (result, duration) = with_timeout("Directories::new", || Directories::new())
+        .expect("Directories::new should not hang");
 
     match &result {
         Ok(dirs) => println!("  Data dir: {:?}", dirs.data_dir()),
         Err(e) => println!("  Directories init failed: {}", e),
     }
 
-    assert!(duration < Duration::from_secs(1), "directories init should be fast");
+    assert!(
+        duration < Duration::from_secs(1),
+        "directories init should be fast"
+    );
     assert!(result.is_ok(), "directories should initialize");
 }
 
 #[test]
-#[ignore] // Requires real keyring service (D-Bus secret service)
+#[ignore = "requires an unlocked D-Bus Secret Service; run serially"]
 fn test_04_keyring_access() {
     use chatter_core::system::Keyring;
     use std::path::PathBuf;
@@ -108,31 +116,37 @@ fn test_04_keyring_access() {
     // Use a test-specific path to avoid affecting real data
     let test_db_path = PathBuf::from("/tmp/chatter-startup-test/test.db");
 
-    let (keyring, duration) = with_timeout("Keyring::new", || {
-        Keyring::new(test_db_path)
-    }).expect("Keyring::new should not hang");
+    let (keyring, duration) = with_timeout("Keyring::new", || Keyring::new(test_db_path))
+        .expect("Keyring::new should not hang");
 
-    assert!(duration < Duration::from_millis(100), "keyring creation should be instant");
+    assert!(
+        duration < Duration::from_millis(100),
+        "keyring creation should be instant"
+    );
 
     // Test has_passphrase (should not block)
-    let (has_pass, duration) = with_timeout("keyring.has_passphrase", || {
-        keyring.has_passphrase()
-    }).expect("has_passphrase should not hang");
+    let (has_pass, duration) = with_timeout("keyring.has_passphrase", || keyring.has_passphrase())
+        .expect("has_passphrase should not hang");
 
     println!("  Has passphrase: {}", has_pass);
-    assert!(duration < Duration::from_secs(2), "has_passphrase should complete quickly");
+    assert!(
+        duration < Duration::from_secs(2),
+        "has_passphrase should complete quickly"
+    );
 
     // Test get_passphrase (may fail, but should not hang)
-    let (result, duration) = with_timeout("keyring.get_passphrase", || {
-        keyring.get_passphrase()
-    }).expect("get_passphrase should not hang");
+    let (result, duration) = with_timeout("keyring.get_passphrase", || keyring.get_passphrase())
+        .expect("get_passphrase should not hang");
 
     match &result {
         Ok(_) => println!("  Got existing passphrase"),
         Err(e) => println!("  No passphrase (expected for fresh db): {}", e),
     }
 
-    assert!(duration < Duration::from_secs(2), "get_passphrase should not block indefinitely");
+    assert!(
+        duration < Duration::from_secs(2),
+        "get_passphrase should not block indefinitely"
+    );
 }
 
 #[test]
@@ -151,7 +165,8 @@ fn test_05_keyring_with_env_bypass() {
 
     let (result, duration) = with_timeout("keyring.get_passphrase (with env)", || {
         keyring.get_passphrase()
-    }).expect("get_passphrase with env bypass should not hang");
+    })
+    .expect("get_passphrase with env bypass should not hang");
 
     // Clean up env var
     // SAFETY: Test runs single-threaded
@@ -159,44 +174,49 @@ fn test_05_keyring_with_env_bypass() {
 
     assert!(result.is_ok(), "should get passphrase from env");
     assert_eq!(result.unwrap(), "test-passphrase-for-ci");
-    assert!(duration < Duration::from_millis(10), "env bypass should be instant");
+    assert!(
+        duration < Duration::from_millis(10),
+        "env bypass should be instant"
+    );
 
     println!("  Env bypass works correctly");
 }
 
 #[test]
-#[ignore] // Requires keyring for DB passphrase; run with --test-threads=1
 fn test_06_database_open() {
     use chatter_core::storage::Database;
 
     println!("\n=== Testing database open ===");
 
-    let test_db_path = std::path::PathBuf::from("/tmp/chatter-startup-test/test.db");
-
-    // Ensure parent directory exists
-    if let Some(parent) = test_db_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
+    let dir = tempfile::tempdir().unwrap();
+    let test_db_path = dir.path().join("test.db");
 
     let (result, duration) = with_timeout("Database::open", || {
         Database::open(&test_db_path, "test-passphrase")
-    }).expect("Database::open should not hang");
+    })
+    .expect("Database::open should not hang");
 
     match &result {
         Ok(_) => println!("  Database opened successfully"),
         Err(e) => println!("  Database open failed: {}", e),
     }
 
-    assert!(duration < Duration::from_secs(2), "database open should be quick");
+    assert!(
+        duration < Duration::from_secs(2),
+        "database open should be quick"
+    );
     assert!(result.is_ok(), "database should open");
 
     // Test migrations
     if let Ok(db) = result {
-        let (mig_result, mig_duration) = with_timeout("Database::run_migrations", || {
-            db.run_migrations()
-        }).expect("run_migrations should not hang");
+        let (mig_result, mig_duration) =
+            with_timeout("Database::run_migrations", || db.run_migrations())
+                .expect("run_migrations should not hang");
 
-        assert!(mig_duration < Duration::from_secs(5), "migrations should complete");
+        assert!(
+            mig_duration < Duration::from_secs(5),
+            "migrations should complete"
+        );
         assert!(mig_result.is_ok(), "migrations should succeed");
         println!("  Migrations completed in {:?}", mig_duration);
     }
@@ -211,18 +231,22 @@ fn test_07_grpc_pool_creation() {
     // This should NOT connect, just create the pool
     let (result, duration) = with_timeout("GrpcClientPool::new", || {
         GrpcClientPool::new("https://localhost:50051")
-    }).expect("GrpcClientPool::new should not hang");
+    })
+    .expect("GrpcClientPool::new should not hang");
 
     match &result {
         Ok(_) => println!("  gRPC pool created"),
         Err(e) => println!("  gRPC pool creation failed: {}", e),
     }
 
-    assert!(duration < Duration::from_secs(1), "pool creation should be fast (no connection)");
+    assert!(
+        duration < Duration::from_secs(1),
+        "pool creation should be fast (no connection)"
+    );
 }
 
 #[test]
-#[ignore] // Requires keyring + real filesystem; run with --test-threads=1
+#[ignore = "mutates process environment for full desktop initialization; run serially via make test-rust-ignored"]
 fn test_08_infrastructure_container() {
     println!("\n=== Testing InfrastructureContainer (full init) ===");
 
@@ -236,8 +260,9 @@ fn test_08_infrastructure_container() {
     use chatter_core::app::InfrastructureContainer;
 
     let (result, duration) = with_timeout("InfrastructureContainer::new", || {
-        InfrastructureContainer::new(None)
-    }).expect("InfrastructureContainer::new should not hang");
+        InfrastructureContainer::new(None, "https://localhost:50051")
+    })
+    .expect("InfrastructureContainer::new should not hang");
 
     // Clean up
     // SAFETY: Test runs single-threaded
@@ -251,12 +276,15 @@ fn test_08_infrastructure_container() {
         Err(e) => println!("  Infrastructure init failed: {}", e),
     }
 
-    assert!(duration < Duration::from_secs(10), "infrastructure init should complete");
+    assert!(
+        duration < Duration::from_secs(10),
+        "infrastructure init should complete"
+    );
     assert!(result.is_ok(), "infrastructure should initialize");
 }
 
 #[test]
-#[ignore] // Requires keyring + real filesystem; run with --test-threads=1
+#[ignore = "mutates process environment for full desktop initialization; run serially via make test-rust-ignored"]
 fn test_09_app_context() {
     println!("\n=== Testing AppContext (full app init) ===");
 
@@ -269,9 +297,8 @@ fn test_09_app_context() {
 
     use chatter_core::app::AppContext;
 
-    let (result, duration) = with_timeout("AppContext::new", || {
-        AppContext::new(None)
-    }).expect("AppContext::new should not hang");
+    let (result, duration) = with_timeout("AppContext::new", || AppContext::new(None))
+        .expect("AppContext::new should not hang");
 
     // Clean up
     // SAFETY: Test runs single-threaded
@@ -285,13 +312,16 @@ fn test_09_app_context() {
         Err(e) => println!("  AppContext init failed: {}", e),
     }
 
-    assert!(duration < Duration::from_secs(15), "app context init should complete");
+    assert!(
+        duration < Duration::from_secs(15),
+        "app context init should complete"
+    );
     assert!(result.is_ok(), "app context should initialize");
 }
 
 /// Test that specifically checks for the keyring retry blocking issue.
 #[test]
-#[ignore] // Requires real keyring service (D-Bus secret service)
+#[ignore = "requires an unlocked D-Bus Secret Service; run serially"]
 fn test_10_keyring_no_retry_block() {
     use chatter_core::system::Keyring;
     use std::path::PathBuf;
@@ -315,7 +345,10 @@ fn test_10_keyring_no_retry_block() {
     // Wait max 5 seconds (1 retry * 1 second + overhead)
     match rx.recv_timeout(Duration::from_secs(5)) {
         Ok(result) => {
-            println!("  get_passphrase_with_retry completed: {:?}", result.is_ok());
+            println!(
+                "  get_passphrase_with_retry completed: {:?}",
+                result.is_ok()
+            );
             handle.join().unwrap();
         }
         Err(_) => {
@@ -324,54 +357,22 @@ fn test_10_keyring_no_retry_block() {
     }
 }
 
-/// Test with REAL retry parameters (6 retries, 5 second delays = 30+ seconds)
-/// This reproduces the actual hang in InfrastructureContainer
-#[test]
-#[ignore = "Takes 30+ seconds - run manually to verify hang behavior"]
-fn test_10b_keyring_real_retry_params() {
-    use chatter_core::system::Keyring;
-    use std::path::PathBuf;
-
-    println!("\n=== Testing keyring with REAL retry params (6, 5) ===");
-    println!("  WARNING: This test takes 30+ seconds if no passphrase exists");
-
-    // Fresh path with no entry
-    let unique_path = format!("/tmp/chatter-retry-test-{}", std::process::id());
-    let keyring = Keyring::new(PathBuf::from(&unique_path));
-
-    let start = std::time::Instant::now();
-
-    // These are the REAL parameters from InfrastructureContainer
-    let result = keyring.get_passphrase_with_retry(6, 5);
-
-    let elapsed = start.elapsed();
-
-    println!("  Result: {:?}", result.is_ok());
-    println!("  Total elapsed: {:?}", elapsed);
-
-    // If no passphrase exists, this SHOULD complete, but will take ~30 seconds
-    // The bug is that it takes way too long for a missing entry
-    assert!(result.is_err(), "Should fail (no entry)");
-
-    // This assertion shows the problem: 30 seconds for a simple "not found"
-    if elapsed > Duration::from_secs(25) {
-        println!("  BUG CONFIRMED: Took {:?} seconds just to find out there's no entry!", elapsed.as_secs());
-    }
-}
-
 /// Test keyring with the EXACT path the app uses (XDG_DATA_HOME based)
 /// Tests the NEW smart retry logic that fails fast on NoEntry errors.
 #[test]
-#[ignore] // Requires real keyring service (D-Bus secret service)
+#[ignore = "requires an unlocked D-Bus Secret Service; run serially"]
 fn test_11_keyring_real_path() {
-    use chatter_core::system::{Directories, Keyring};
+    use chatter_core::system::Keyring;
     use std::sync::mpsc;
     use std::thread;
 
     println!("\n=== Testing keyring with real app path (smart retry) ===");
 
     // Use a FRESH path that definitely has no entry
-    let unique_path = format!("/tmp/chatter-test-{}/chatter-linux/chatter.db", std::process::id());
+    let unique_path = format!(
+        "/tmp/chatter-test-{}/chatter-linux/chatter.db",
+        std::process::id()
+    );
     let db_path = std::path::PathBuf::from(&unique_path);
     println!("  Database path: {:?}", db_path);
 
@@ -386,7 +387,10 @@ fn test_11_keyring_real_path() {
         // Use the same parameters as InfrastructureContainer
         let result = keyring.get_passphrase_with_retry(6, 5);
         let elapsed = start.elapsed();
-        println!("  [thread] get_passphrase_with_retry completed in {:?}", elapsed);
+        println!(
+            "  [thread] get_passphrase_with_retry completed in {:?}",
+            elapsed
+        );
         let _ = tx.send((result, elapsed));
     });
 
@@ -408,7 +412,9 @@ fn test_11_keyring_real_path() {
             println!("  SUCCESS: NoEntry detected quickly without blocking retries");
         }
         Err(_) => {
-            panic!("HANG DETECTED: get_passphrase_with_retry blocked for >5 seconds (fix not working)");
+            panic!(
+                "HANG DETECTED: get_passphrase_with_retry blocked for >5 seconds (fix not working)"
+            );
         }
     }
 
@@ -440,7 +446,11 @@ fn test_12_keyring_set_passphrase() {
         let start = std::time::Instant::now();
         let result = keyring.set_passphrase("test-password-12345");
         let elapsed = start.elapsed();
-        println!("  [thread] set_passphrase completed in {:?}: {:?}", elapsed, result.is_ok());
+        println!(
+            "  [thread] set_passphrase completed in {:?}: {:?}",
+            elapsed,
+            result.is_ok()
+        );
         let _ = tx.send((result, elapsed));
     });
 
@@ -455,7 +465,10 @@ fn test_12_keyring_set_passphrase() {
                 println!("  ERROR: {:?}", result.err());
             }
 
-            assert!(elapsed < Duration::from_secs(3), "set_passphrase should not block");
+            assert!(
+                elapsed < Duration::from_secs(3),
+                "set_passphrase should not block"
+            );
         }
         Err(_) => {
             panic!("HANG DETECTED: keyring.set_passphrase() blocked for >5 seconds");
@@ -465,7 +478,7 @@ fn test_12_keyring_set_passphrase() {
 
 /// Test the full passphrase_or_generate flow with real path
 #[test]
-#[ignore] // Requires real keyring + filesystem; run with --test-threads=1
+#[ignore = "requires unlocked Secret Service and mutates XDG_DATA_HOME; run serially"]
 fn test_13_infrastructure_real_path() {
     use std::sync::mpsc;
     use std::thread;
@@ -485,7 +498,7 @@ fn test_13_infrastructure_real_path() {
 
         println!("  [thread] Creating InfrastructureContainer...");
         let start = std::time::Instant::now();
-        let result = InfrastructureContainer::new(None);
+        let result = InfrastructureContainer::new(None, "https://localhost:50051");
         let elapsed = start.elapsed();
         println!("  [thread] Completed in {:?}", elapsed);
         let _ = tx.send((result.is_ok(), elapsed));

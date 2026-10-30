@@ -1,0 +1,217 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+// Formatting toolbar (toggled)
+export component ComposerFormatToolbar inherits Rectangle {
+    callback apply-format(string);
+    background: transparent;
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.xxs;
+        alignment: start;
+
+        // Bold button
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: Spacing.radius-sm;
+                background: fmt-bold-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: "Bold";
+                accessible-action-default => { root.apply-format("bold"); }
+                border-width: bold-keys.has-focus ? 2px : 0px;
+                border-color: Colors.focus-ring;
+                bold-keys := FocusScope {
+                    width: 0px; height: 0px;
+                    key-pressed(event) => {
+                        if event.text == Key.Space || event.text == Key.Return { root.apply-format("bold"); return accept; }
+                        return reject;
+                    }
+                }
+
+                Text {
+                    text: "B";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    font-weight: Typography.bold;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                fmt-bold-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.apply-format("bold"); }
+                }
+            }
+        }
+
+        // Italic button
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: Spacing.radius-sm;
+                background: fmt-italic-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: "Italic";
+                accessible-action-default => { root.apply-format("italic"); }
+                border-width: italic-keys.has-focus ? 2px : 0px;
+                border-color: Colors.focus-ring;
+                italic-keys := FocusScope {
+                    width: 0px; height: 0px;
+                    key-pressed(event) => {
+                        if event.text == Key.Space || event.text == Key.Return { root.apply-format("italic"); return accept; }
+                        return reject;
+                    }
+                }
+
+                Text {
+                    text: "I";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    font-italic: true;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                fmt-italic-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.apply-format("italic"); }
+                }
+            }
+        }
+
+        // Strikethrough button
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: Spacing.radius-sm;
+                background: fmt-strike-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: "Strikethrough";
+                accessible-action-default => { root.apply-format("strikethrough"); }
+                border-width: strike-keys.has-focus ? 2px : 0px;
+                border-color: Colors.focus-ring;
+                strike-keys := FocusScope {
+                    width: 0px; height: 0px;
+                    key-pressed(event) => {
+                        if event.text == Key.Space || event.text == Key.Return { root.apply-format("strikethrough"); return accept; }
+                        return reject;
+                    }
+                }
+
+                Text {
+                    text: "S";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                // Strikethrough line
+                Rectangle {
+                    width: 10px;
+                    height: 1px;
+                    x: (parent.width - self.width) / 2;
+                    y: parent.height / 2;
+                    background: Colors.text-secondary;
+                }
+
+                fmt-strike-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.apply-format("strikethrough"); }
+                }
+            }
+        }
+
+        // Code button
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: Spacing.radius-sm;
+                background: fmt-code-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: "Inline code";
+                accessible-action-default => { root.apply-format("code"); }
+                border-width: code-keys.has-focus ? 2px : 0px;
+                border-color: Colors.focus-ring;
+                code-keys := FocusScope {
+                    width: 0px; height: 0px;
+                    key-pressed(event) => {
+                        if event.text == Key.Space || event.text == Key.Return { root.apply-format("code"); return accept; }
+                        return reject;
+                    }
+                }
+
+                Text {
+                    text: "</>";
+                    color: Colors.text-secondary;
+                    font-size: Typography.xxs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                fmt-code-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.apply-format("code"); }
+                }
+            }
+        }
+
+        // Separator
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 1px;
+                height: 20px;
+                background: Colors.divider;
+            }
+        }
+
+        // Code block button
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: Spacing.radius-sm;
+                background: fmt-codeblock-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: "Code block";
+                accessible-action-default => { root.apply-format("codeblock"); }
+                border-width: codeblock-keys.has-focus ? 2px : 0px;
+                border-color: Colors.focus-ring;
+                codeblock-keys := FocusScope {
+                    width: 0px; height: 0px;
+                    key-pressed(event) => {
+                        if event.text == Key.Space || event.text == Key.Return { root.apply-format("codeblock"); return accept; }
+                        return reject;
+                    }
+                }
+
+                Text {
+                    text: "```";
+                    color: Colors.text-secondary;
+                    font-size: Typography.xxs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                fmt-codeblock-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.apply-format("codeblock"); }
+                }
+            }
+        }
+    }
+}

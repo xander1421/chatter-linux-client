@@ -6,7 +6,7 @@ authors = ["xander1421"]
 description = "Slint UI for Chatter secure messaging"
 license = "GPL-3.0"
 repository = "https://github.com/xander1421/chatter"
-rust-version = "1.85"
+rust-version = "1.99"
 default-run = "chatter-ui"
 
 [lib]
@@ -18,24 +18,53 @@ path = "src/lib.rs"
 name = "chatter-ui"
 path = "src/main.rs"
 
-[[bin]]
-name = "test_thumbnail"
-path = "src/bin/test_thumbnail.rs"
-required-features = ["desktop-media"]
-
 [[example]]
 name = "video_present_bench"
 path = "examples/video_present_bench.rs"
 required-features = ["desktop"]
 
+# These suites query Slint elements by type/label and need compiler metadata.
+[[test]]
+name = "ui_wiring"
+required-features = ["ui-test-debug"]
+
+[[test]]
+name = "ui_layout"
+required-features = ["ui-test-debug"]
+
+[[test]]
+name = "ui_render"
+required-features = ["ui-test-debug"]
+
+[[test]]
+name = "ui_call_bubble"
+required-features = ["ui-test-debug"]
+
+[[test]]
+name = "ui_call_verification"
+required-features = ["ui-test-debug"]
+
+[[test]]
+name = "ui_edit_pin_refresh"
+required-features = ["ui-test-debug"]
+
+[[test]]
+name = "ui_reaction_footer"
+required-features = ["ui-test-debug"]
+
 [dependencies]
+chatter-ui-slint = { path = "../chatter-ui-slint" }
 chatter-core = { path = "../chatter-core", default-features = false }
 
 # ============================================================================
 # UI Framework - Slint
 # ============================================================================
-slint = { version = "1.15.1", default-features = false, features = ["compat-1-2", "accessibility", "raw-window-handle-06"] }
-i-slint-backend-winit = { version = "1.15.1", optional = true }
+slint = { version = "=1.17.1", default-features = false, features = ["compat-1-2", "accessibility", "raw-window-handle-06"] }
+i-slint-backend-winit = { version = "=1.17.1", optional = true }
+# Named directly only for `StyledText::from_paragraphs` and its paragraph types,
+# a patch in vendor/i-slint-core (see its PATCHES.md): message bodies are built
+# from our own markdown spans, never through Slint's markdown parser.
+i-slint-core = { version = "=1.17.1", default-features = false, features = ["std"] }
 winit = { version = "0.30", optional = true }
 
 # ============================================================================
@@ -45,30 +74,30 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-gstreamer = { version = "0.23", optional = true }
-gstreamer-app = { version = "0.23", optional = true }
-gstreamer-video = { version = "0.23", optional = true }
-gstreamer-gl = { version = "0.23", optional = true }
+gstreamer = { version = "0.25", optional = true }
+gstreamer-app = { version = "0.25", optional = true }
+gstreamer-video = { version = "0.25", optional = true }
+gstreamer-gl = { version = "0.25", optional = true }
 livekit = { version = "0.7.52", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
-rand = "0.9"
+rand = "0.10.3"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+ab_glyph = "0.2"
+tempfile = "3"
 pdfium-render = { version = "0.9", optional = true }
-dirs = "5"
+dirs = "7.0.0"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
-serde_json = "1"
-base64 = "0.22"
 mime_guess = "2"
+url = "2"
 # once_cell + lazy_static removed — migrated to std::sync::LazyLock
 zeroize = { version = "1.8", features = ["derive"] }
-open = "5"
 arboard = { version = "3", features = ["wayland-data-control"], optional = true }
 
 # ============================================================================
 # Platform-specific: Linux (GL video rendering)
 # ============================================================================
 [target.'cfg(target_os = "linux")'.dependencies]
-gstreamer-gl-egl = { version = "0.23", optional = true }
+gstreamer-gl-egl = { version = "0.25", optional = true }
 glutin_egl_sys = { version = "0.7", optional = true }
 
 # ============================================================================
@@ -82,14 +111,13 @@ glutin_egl_sys = { version = "0.7", optional = true }
 # this doesn't add a new crate family, just a direct edge to one already present.
 objc2 = { version = "0.6", optional = true }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWindow", "NSResponder", "NSView"], optional = true }
-objc2-foundation = { version = "0.3", optional = true }
 raw-window-handle = { version = "0.6", optional = true }
 
 # ============================================================================
 # Platform-specific: Android
 # ============================================================================
 [target.'cfg(target_os = "android")'.dependencies]
-i-slint-backend-android-activity = { version = "1.15.1", default-features = false, features = ["aa-06", "game-activity"], optional = true }
+i-slint-backend-android-activity = { version = "=1.17.1", default-features = false, features = ["aa-06", "game-activity"], optional = true }
 android-activity = { version = "0.6", features = ["game-activity"], optional = true }
 # Slint's backend-selector unconditionally references i_slint_backend_android_activity
 # on android (api.rs uses `cfg!(...)`, which still compiles the reference). The only
@@ -97,70 +125,85 @@ android-activity = { version = "0.6", features = ["game-activity"], optional = t
 # `native-activity`, conflicting with game-activity. So we enable the selector's
 # `backend-android-activity` feature directly here — it pulls the backend crate with
 # default-features=false, letting our game-activity selection above stand alone.
-i-slint-backend-selector = { version = "1.15.1", default-features = false, optional = true }
+i-slint-backend-selector = { version = "=1.17.1", default-features = false, optional = true }
 # JNI bindings for Android system APIs (notifications, window insets).
 # These live in chatter-ui (platform layer), not chatter-core (platform-neutral).
-jni = "0.21"
+jni = "0.22.4"
+# Pinned libwebrtc exposes this JavaVM type at its one initialization boundary.
+jni_021 = { package = "jni", version = "=0.21.1" }
 ndk-context = "0.1"
 
 [dev-dependencies]
-tempfile = "3"
+chatter-core = { path = "../chatter-core", default-features = false, features = ["testing"] }
 # Headless GUI test backend for VALIDATED-UI.md (slint::testing analog).
-# Pinned to =1.16.1 to match the `slint` crate exactly — the testing backend
+# Pinned to =1.17.1 to match the `slint` crate exactly — the testing backend
 # links i-slint-core, which must be the SAME version as the generated MainWindow's
 # i-slint-core or ElementHandle/Window types won't line up. default-features=false
 # keeps it lean (no mcp/protobuf/system-testing pulled in).
-i-slint-backend-testing = { version = "=1.16.1", default-features = false }
+i-slint-backend-testing = { version = "=1.17.1", default-features = false, features = ["renderer-software"] }
 
 [build-dependencies]
-slint-build = "1.15.1"
 # Android calls: force-keep + export the libwebrtc Java_* JNI symbols so the
 # bundled livekit.org.webrtc Java classes resolve their native methods (else the
 # linker dead-strips them and calls abort with UnsatisfiedLinkError on join).
 # Version must match the webrtc-sys that livekit pulls (see Cargo.lock).
-webrtc-sys-build = "0.3.16"
+webrtc-sys-build = "=0.3.18"
 
 [features]
-default = ["desktop", "jarvis"]
+# `onion` is default: secret chats (anonymous DMs/groups) ride Tor only, and a
+# build without it would have none (owner decision 2026-10-10).
+default = ["desktop", "jarvis", "onion"]
+# Emit Slint element metadata for the headless UI query suites.
+ui-test-debug = ["chatter-ui-slint/ui-test-debug"]
 # The bitchat mesh. Off by default while the radio stack is unproven against a
-# second device. `mesh` alone gives BLE; add `onion` for geohash channels and
-# Nostr DMs, which are Tor-only on purpose.
+# second device: a default build links no chatter-mesh* crate at all. `mesh`
+# alone gives BLE; add `onion` for geohash channels and Nostr DMs, which are
+# Tor-only on purpose. android/build-android.sh turns it on (MESH=0 to omit).
 mesh = ["chatter-core/mesh"]
 desktop = [
     "dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit",
-    "slint/renderer-skia", "chatter-core/desktop-system", "chatter-core/desktop-media",
+    "slint/renderer-skia", "chatter-core/desktop-system", "chatter-core/desktop-native", "chatter-core/desktop-media",
     "dep:pdfium-render", "desktop-media",
-    "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:raw-window-handle"
+    "dep:objc2", "dep:objc2-app-kit", "dep:raw-window-handle"
 ]
 # windows-cross: No LiveKit (webrtc-sys requires MSVC, can't cross-compile with MinGW).
-# GStreamer still links (unconditional dep in chatter-ui). For full features, build
-# natively on Windows with the 'desktop' feature.
-# windows-cross: GStreamer only, no LiveKit (webrtc-sys requires MSVC, can't cross-compile
-# with MinGW). For full features including calls, build natively on Windows.
+# GStreamer decode (video, GIF, waveform, thumbnails) still works through
+# `desktop-gstreamer`. For calls, build natively on Windows with 'desktop'.
 windows-cross = [
     "dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit",
-    "slint/renderer-software", "chatter-core/desktop-system", "chatter-core/desktop-gstreamer",
-    "desktop-media-no-livekit"
+    "slint/renderer-software", "chatter-core/desktop-system", "chatter-core/desktop-native", "desktop-gstreamer",
 ]
-desktop-media = [
-    "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video", "dep:gstreamer-gl",
-    "dep:livekit", "dep:gstreamer-gl-egl", "dep:glutin_egl_sys",
-    "call-ui"
-]
+desktop-media = ["desktop-gstreamer", "dep:livekit", "call-ui"]
 # Call UI wiring (features/calls, call event routing, video-frame→image). Enabled
 # by both desktop (desktop-media) and mobile so the call screens are actually
 # driven on both. The Slint call screens themselves compile unconditionally; this
-# only gates the Rust glue. gstreamer-init stays desktop-media-only (lib.rs).
+# only gates the Rust glue.
 call-ui = []
-desktop-media-no-livekit = [
+# GStreamer (init, GIF viewer decode) here plus core's GStreamer decoders.
+desktop-gstreamer = [
     "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video", "dep:gstreamer-gl",
-    "dep:gstreamer-gl-egl", "dep:glutin_egl_sys"
+    "dep:gstreamer-gl-egl", "dep:glutin_egl_sys", "chatter-core/desktop-gstreamer",
 ]
 local-ai = ["chatter-core/local-ai"]
 jarvis = ["chatter-core/jarvis"]
+# The create-channel "AI assistant" template. OFF by default: nothing on that
+# path can supply the provider API key the server requires unconditionally
+# (internal/services/ai/providers/factory.go:85), so the integration is never
+# created and the channel comes up with no bot in it. Mirrored into
+# `AiIntegrationGlobal.channel-template-enabled` (lib.rs) so the control is not
+# rendered at all. See docs/OPEN-ITEMS.md §58 (FEAT-5).
+ai-channel-template = []
 # Build against the local dev Vault's sealed-sender trust root. Insecure by
 # construction (its private key is in this repo) — see chatter-core/config.rs.
 dev-trust-root = ["chatter-core/dev-trust-root"]
+# Auto-register a throwaway account on first launch with fixed, publicly-known
+# credentials (lib.rs `dev_auto_register`). Insecure by construction, same as
+# dev-trust-root: it is an explicit opt-in feature and NOT in `default`, so the
+# credential literals are compiled out of every build that does not ask for it.
+# This was previously a runtime `cfg!(target_os = "android")` test, which meant
+# release APKs auto-registered too. Enabled by dev-run.sh and, on the debug path
+# only, android/build-android.sh.
+dev-auto-register = []
 # Route the network transport over Tor for anon mode. Forwards to chatter-core,
 # which owns the onion connector. See docs/ONION_DEPLOYMENT.md §8.3.
 onion = ["chatter-core/onion"]
@@ -213,10 +256,7 @@ config_changes = "orientation|screenSize|keyboardHidden"
 # own JNI inset polling, so the manifest must match Slint's default.
 window_soft_input_mode = "adjustResize"
 
-# Release signing — for local dev builds we reuse Android's debug keystore
-# (same one Android Studio uses). Production release builds should replace this
-# with a proper keystore and password. The device trusts this signature for
-# testing; the Play Store rejects APKs signed with it.
-[package.metadata.android.signing.release]
-path = "/home/alex/.android/debug.keystore"
-keystore_password = "android"
+# Release signing is not declared here. cargo-apk is not the Android build
+# path. android/build-android.sh RELEASE=1 signs with CHATTER_KEYSTORE,
+# CHATTER_KEYSTORE_PASSWORD, CHATTER_KEY_ALIAS and CHATTER_KEY_PASSWORD,
+# read by app/build.gradle.kts. A debug keystore does not belong in this file.

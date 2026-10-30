@@ -1,47 +1,50 @@
 //! Helper functions for domain event UI updates.
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use slint::{Model, Weak};
 
-use chatter_core::client::ChatterClient;
 use crate::MainWindow;
+use chatter_core::client::ChatterClient;
+use chatter_core::domain::ConversationType;
 
-/// Update unread count badge in sidebar (DM + channel models).
+/// Whether the open conversation, stored as `active` (see
+/// `ConversationHandle::storage_kind`), takes an event about a row stored as
+/// `event`. Both directions: a Saved view takes only `SavedMessages` events
+/// and no other view takes one, so a same-id channel, DM or group row cannot
+/// patch a Saved bubble sharing its author and clock, nor the reverse. A
+/// `Channel` view also takes `AnonGroup` — an encrypted channel stores its
+/// rows under that kind with its real channel id.
+pub(super) fn accepts_event_kind(active: ConversationType, event: ConversationType) -> bool {
+    match active {
+        ConversationType::SavedMessages => event == ConversationType::SavedMessages,
+        ConversationType::Channel => matches!(
+            event,
+            ConversationType::Channel | ConversationType::AnonGroup
+        ),
+        other => event == other,
+    }
+}
+
+/// Update a chat-list row's unread badge.
 pub(crate) fn update_unread_count(
     window: &MainWindow,
     ui_ctx: &Arc<ChatterClient>,
     channel_id: &str,
     count: u32,
 ) {
-    let count_i32 = count as i32;
-
-    // Try DM sidebar first (match by channel_id field)
-    let dms = window.get_dm_conversations();
-    for i in 0..dms.row_count() {
-        if let Some(dm) = dms.row_data(i) {
-            if dm.channel_id.as_str() == channel_id {
-                let mut updated = dm.clone();
-                updated.unread_count = count_i32;
-                if let Some(model) = dms.as_any().downcast_ref::<slint::VecModel<crate::DMListItemData>>() {
-                    model.set_row_data(i, updated);
+    let rows = window.global::<crate::SidebarPane>().get_chat_rows();
+    for i in 0..rows.row_count() {
+        if let Some(mut row) = rows.row_data(i) {
+            if row.conversation_id.as_str() == channel_id {
+                if row.unread_count == count as i32 {
+                    return;
                 }
-                recompute_total_unread(window, ui_ctx);
-                return;
-            }
-        }
-    }
-
-    // Try channel sidebar
-    let channels = window.get_channels();
-    for i in 0..channels.row_count() {
-        if let Some(ch) = channels.row_data(i) {
-            if ch.channel_id.as_str() == channel_id {
-                let mut updated = ch.clone();
-                updated.unread_count = count_i32;
-                if let Some(model) = channels.as_any().downcast_ref::<slint::VecModel<crate::ChannelListItemData>>() {
-                    model.set_row_data(i, updated);
-                }
+                row.unread_count = count as i32;
+                crate::bin_ui::converters::channel::refresh_row_accessible_label(&mut row);
+                rows.set_row_data(i, row);
+                crate::bin_ui::features::sidebar::refresh_flat_rows(window);
                 recompute_total_unread(window, ui_ctx);
                 return;
             }
@@ -52,102 +55,165 @@ pub(crate) fn update_unread_count(
 }
 
 /// Update the mobile bottom-nav badge from the authoritative total computed
-/// in `chatter-core` (sums unread across DMs, channels, anon DMs, anon groups
-/// from the unified conversation repo). The UI no longer walks per-bucket
-/// Slint models — that aggregation is business logic and lives in the service.
+/// in `chatter-core`. The count is a GROUP BY over every message, so it runs
+/// on the runtime and only the setter runs on the UI thread.
 pub(crate) fn recompute_total_unread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let total = ui_ctx.total_unread_count();
-    window.set_total_unread_count(total as i32);
+    let weak = slint::ComponentHandle::as_weak(window);
+    let ui_ctx = ui_ctx.clone();
+    tokio::spawn(async move {
+        let total = ui_ctx.unread_conversation_count();
+        crate::run_ui!(weak, |w| {
+            let pane = w.global::<crate::SidebarPane>();
+            if pane.get_total_unread_count() != total as i32 {
+                pane.set_total_unread_count(total as i32);
+            }
+        });
+    });
 }
 
 /// Handle pin/unpin domain events for UI update.
 ///
 /// Updates the message's `is_pinned` flag, the pinned bar preview/count,
 /// and the `ChatState` pinned-bar substate so that navigation arrows work correctly.
+/// `message_id` and `actor` are the event's: for a Saved event the row is
+/// re-read by them inside the UI closure, and the event's own flag is not
+/// what gets painted.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_pin_ui_update(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     channel_id: chatter_core::domain::ids::ChannelId,
+    conversation_type: ConversationType,
+    message_id: chatter_core::domain::ids::MessageId,
+    actor: chatter_core::domain::ids::UserId,
     target_sent_timestamp: u64,
     unpin: bool,
 ) {
-    let weak = window.clone();
-    let chat_state = ui_ctx.chat_state().clone();
-    let ui_ctx_active = ui_ctx.clone();
+    if !ui_ctx.is_showing_conversation(channel_id) {
+        return;
+    }
+    // The bubble is matched by clock alone below, so the event's storage
+    // kind has to be the open view's (`accepts_event_kind`), and the view
+    // this was queued for has to be the one still open when it runs — same
+    // session, conversation and history epoch (`HistoryOwner`), checked
+    // again inside the UI closure before any state is moved.
+    let conversation = ui_ctx.active_conversation();
+    let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(ui_ctx, conversation);
+    let handle = ui_ctx.conversation(conversation);
+    if !handle
+        .storage_kind()
+        .is_ok_and(|active| accepts_event_kind(active, conversation_type.clone()))
+    {
+        return;
+    }
+    let refresh_ctx = ui_ctx.clone();
+    let chat_state = ui_ctx.clone();
     let channel_id_str = channel_id.to_string();
     let target_ts_str = target_sent_timestamp.to_string();
 
-    let _ = slint::invoke_from_event_loop(move || {
-        let Some(w) = weak.upgrade() else { return };
+    crate::run_history_ui!(window, owner, |w| {
+        // A Saved pin is durable before its event, so the stored row as of
+        // publication decides the flag and the preview, not the event: a
+        // queued older pin cannot repaint over a later unpin, edit or
+        // delete. The row must be the event's (real id) at this account's
+        // Saved key — foreign, deleted or missing: nothing is painted — and
+        // its bubble is matched by that id, not by clock.
+        let saved = conversation_type == ConversationType::SavedMessages;
+        let (new_pinned, mut preview) = if saved {
+            let row = match refresh_ctx
+                .conversation(conversation)
+                .stored_message_scoped(&actor, target_sent_timestamp)
+            {
+                Ok(row) if row.id == message_id => row,
+                _ => return,
+            };
+            let preview = if row.is_pinned {
+                refresh_ctx.pinned_message_preview(&conversation, &row.id)
+            } else {
+                String::new()
+            };
+            (row.is_pinned, preview)
+        } else {
+            (!unpin, String::new())
+        };
+        let message_id_str = message_id.to_string();
+        let pane = w.global::<crate::ChatPane>();
 
-        // Check if the pin is for the currently active conversation using the
-        // typed `matches_*` predicates in `chatter-core`.
-        let active = ui_ctx_active.active_conversation();
-        let is_dm_match = matches!(
-            active,
-            chatter_core::state::ActiveConversation::ServerDm { .. }
-                | chatter_core::state::ActiveConversation::MailboxDm { .. }
-        ) && active.channel_id() == Some(channel_id);
-        let is_active = active.matches_channel(&channel_id)
-            || is_dm_match
-            || channel_id_str
-                .parse()
-                .map(|id| active.matches_anon_dm(&id))
-                .unwrap_or(false)
-            || channel_id_str
-                .parse()
-                .map(|id| active.matches_anon_group(&id))
-                .unwrap_or(false);
-        if !is_active {
-            return;
-        }
-
-        let messages = w.get_messages();
-        let new_pinned = !unpin;
-        let mut preview = String::new();
-
-        // Find message by timestamp_ns, update is_pinned, generate preview
-        for i in 0..messages.row_count() {
-            if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ns.as_str() == target_ts_str.as_str() {
-                    preview = super::super::utils::generate_preview_from_ui_message(&msg);
-
-                    let mut updated_msg = msg.clone();
-                    updated_msg.is_pinned = new_pinned;
-                    if let Some(model) = messages.as_any().downcast_ref::<slint::VecModel<crate::MessageItemData>>() {
-                        model.set_row_data(i, updated_msg);
-                    }
-
-                    // Update pinned-bar substate with the real message_id from the UI model
-                    if let Ok(msg_id) = msg.message_id.to_string().parse::<chatter_core::domain::ids::MessageId>() {
-                        if new_pinned {
-                            chat_state.add_pinned_message(msg_id);
-                        } else {
-                            chat_state.remove_pinned_message(&msg_id);
+        // Find the bubble, update is_pinned, generate preview. The open
+        // thread panel keeps its own model; a pinned reply lives there.
+        'found: for messages in [pane.get_messages(), pane.get_thread_replies()] {
+            for i in 0..messages.row_count() {
+                if let Some(msg) = messages.row_data(i) {
+                    let hit = if saved {
+                        msg.message_id.as_str() == message_id_str.as_str()
+                    } else {
+                        msg.timestamp_ns.as_str() == target_ts_str.as_str()
+                    };
+                    if hit {
+                        if !saved {
+                            preview = super::super::utils::generate_preview_from_ui_message(&msg);
                         }
+
+                        let mut updated_msg = msg.clone();
+                        updated_msg.is_pinned = new_pinned;
+                        if let Some(model) = messages
+                            .as_any()
+                            .downcast_ref::<slint::VecModel<crate::MessageItemData>>()
+                        {
+                            model.set_row_data(i, updated_msg);
+                        }
+
+                        // Update pinned-bar substate with the real message_id from the UI model
+                        if let Ok(msg_id) = msg
+                            .message_id
+                            .to_string()
+                            .parse::<chatter_core::domain::ids::MessageId>()
+                        {
+                            if new_pinned {
+                                chat_state.add_pinned_message(msg_id);
+                            } else {
+                                chat_state.remove_pinned_message(&msg_id);
+                            }
+                        }
+                        break 'found;
                     }
-                    break;
                 }
+            }
+        }
+        // The Saved row's id is known whether or not its bubble is loaded.
+        if saved {
+            if new_pinned {
+                chat_state.add_pinned_message(message_id);
+            } else {
+                chat_state.remove_pinned_message(&message_id);
             }
         }
 
         let pinned_count = chat_state.pinned_total_count() as i32;
-        if unpin {
-            w.set_pinned_total_count(pinned_count);
-            w.set_has_pinned_messages(pinned_count > 0);
+        if !new_pinned {
+            w.global::<crate::ChatPane>()
+                .set_pinned_total_count(pinned_count);
+            w.global::<crate::ChatPane>()
+                .set_has_pinned_messages(pinned_count > 0);
             if pinned_count == 0 {
-                w.set_pinned_message_preview("".into());
+                w.global::<crate::ChatPane>()
+                    .set_pinned_message_preview("".into());
             }
         } else {
             // Use fallback if message wasn't in the loaded UI messages
             if preview.is_empty() {
                 preview = "[Pinned message]".to_string();
             }
-            w.set_pinned_total_count(pinned_count);
-            w.set_has_pinned_messages(true);
-            w.set_pinned_message_preview(preview.into());
-            w.set_pinned_current_index(pinned_count);
+            w.global::<crate::ChatPane>()
+                .set_pinned_total_count(pinned_count);
+            w.global::<crate::ChatPane>().set_has_pinned_messages(true);
+            w.global::<crate::ChatPane>()
+                .set_pinned_message_preview(preview.into());
+            w.global::<crate::ChatPane>()
+                .set_pinned_current_index(1);
         }
+
+        crate::bin_ui::features::header::refresh_pinned_ui(&w, &refresh_ctx);
 
         tracing::debug!(
             channel_id = %channel_id_str,

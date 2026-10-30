@@ -1,8 +1,13 @@
+import { GlassSurface } from "glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // Mention autocomplete popup for @user, #channel, @here, @all suggestions
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Avatar } from "avatar.slint";
 
 // Mention suggestion data struct
 export struct MentionSuggestion {
@@ -10,12 +15,30 @@ export struct MentionSuggestion {
     name: string,
     mention-type: string,  // "user", "channel", "here", "all"
     avatar: image,         // Loaded from Rust (empty for non-users)
-    has-avatar: bool,      // Whether avatar image is available
 }
 
-export component MentionAutocomplete inherits Rectangle {
+export component MentionAutocomplete inherits GlassSurface {
+    // The root remains the stable overlay frame. Its glass child grows up from
+    // the composer edge, so the native input and the overlay anchor never move.
+    material-enabled: false;
+
     // Popup visibility
     in property <bool> show: false;
+    property <bool> entered: false;
+    property <float> reveal: 0;
+    animate reveal { duration: Materials.motion-standard; easing: Materials.spring; }
+    init => { if (Appearance.reduce-motion && root.show) { root.reveal = 1; } }
+    changed show => {
+        root.entered = false;
+        root.reveal = Appearance.reduce-motion && root.show ? 1 : 0;
+    }
+    Timer {
+        interval: 16ms;
+        running: root.show && !root.entered && !Appearance.reduce-motion;
+        triggered => { root.entered = true; root.reveal = 1; }
+    }
+    opacity: root.show ? 1 : 0;
+    animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
 
     // Suggestions from Rust (max 8 shown)
     in property <[MentionSuggestion]> suggestions: [];
@@ -28,153 +51,177 @@ export component MentionAutocomplete inherits Rectangle {
     callback close();
 
     // Only render when visible
-    visible: root.show;
-    opacity: root.show ? 1 : 0;
+    visible: root.show || self.opacity > 0;
 
     // Compact popup - responsive width, height based on suggestions
     in property <length> max-popup-width: 240px;
+    in property <length> max-popup-height: 1000px;
     width: root.max-popup-width;
-    height: Math.min(suggestions.length, 8) * 40px + Spacing.sm * 2;
-    background: Colors.surface;
-    border-radius: Spacing.radius-lg;
-
-    // Drop shadow effect via border
-    border-width: 1px;
-    border-color: Colors.text-muted.with-alpha(0.2);
+    height: min(root.max-popup-height,
+        max(40px, Math.min(suggestions.length, 8) * Spacing.button-height * Appearance.text-grow) + Spacing.sm * 2);
 
     // Block clicks from passing through
     TouchArea {
         width: 100%;
         height: 100%;
+        enabled: root.show;
     }
 
-    // Suggestions list
-    VerticalLayout {
-        padding: Spacing.sm;
-        spacing: 0;
+    popup := GlassSurface {
+        x: 0;
+        y: root.height - self.height;
+        width: 44px + (root.max-popup-width - 44px) * root.reveal;
+        height: 12px + (root.height - 12px) * root.reveal;
+        material-level: 3;
+        elevation: 4;
+        border-radius: min(Spacing.radius-xl, self.height / 2);
 
-        for suggestion[index] in root.suggestions: Rectangle {
-            height: 40px;
-            border-radius: Spacing.radius-sm;
-            background: index == root.selected-index ? Colors.primary.with-alpha(0.2) : (item-area.has-hover ? Colors.surface-hover : transparent);
-
-            HorizontalLayout {
-                padding-left: Spacing.sm;
-                padding-right: Spacing.sm;
-                spacing: Spacing.sm;
-
-                // Avatar or icon based on type
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    y: (parent.height - self.height) / 2;
-                    border-radius: suggestion.mention-type == "user" ? Spacing.radius-full : Spacing.radius-sm;
-                    background: suggestion.mention-type == "user" ? Colors.primary.with-alpha(0.3) : Colors.background;
-
-                    // User avatar (if available) or fallback
-                    if suggestion.mention-type == "user" && suggestion.has-avatar: Image {
-                        width: parent.width;
-                        height: parent.height;
-                        source: suggestion.avatar;
-                        image-fit: cover;
-                    }
-
-                    // User fallback icon (first letter)
-                    if suggestion.mention-type == "user" && !suggestion.has-avatar: Text {
-                        text: "@";
-                        color: Colors.primary;
-                        font-size: Typography.sm;
-                        font-weight: Typography.semibold;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    // Channel icon
-                    if suggestion.mention-type == "channel": Text {
-                        text: "#";
-                        color: Colors.text-secondary;
-                        font-size: Typography.base;
-                        font-weight: Typography.semibold;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    // Here/All icon
-                    if suggestion.mention-type == "here" || suggestion.mention-type == "all": Text {
-                        text: "@";
-                        color: Colors.warning;
-                        font-size: Typography.base;
-                        font-weight: Typography.semibold;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-
-                // Name and type indicator
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    alignment: center;
-                    spacing: 2px;
-
-                    // Display name with prefix
-                    Text {
-                        text: suggestion.mention-type == "channel" ? "#" + suggestion.name : "@" + suggestion.name;
-                        color: index == root.selected-index ? Colors.text-primary : Colors.text-secondary;
-                        font-size: Typography.sm;
-                        font-weight: index == root.selected-index ? Typography.medium : Typography.normal;
-                        overflow: elide;
-                    }
-
-                    // Type description (for here/all only)
-                    if suggestion.mention-type == "here": Text {
-                        text: "Notify online members";
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        overflow: elide;
-                    }
-
-                    if suggestion.mention-type == "all": Text {
-                        text: "Notify all members";
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        overflow: elide;
-                    }
-                }
-
-                // Selection indicator for keyboard navigation
-                if index == root.selected-index: Rectangle {
-                    width: 4px;
-                    height: 20px;
-                    y: (parent.height - self.height) / 2;
-                    border-radius: 2px;
-                    background: Colors.primary;
-                }
-            }
-
-            item-area := TouchArea {
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            clip: true;
+            // Keep every suggestion reachable when the keyboard leaves less
+            // room than the full list needs.
+            Flickable {
                 width: 100%;
                 height: 100%;
-                clicked => {
-                    // Build display text based on type
-                    if suggestion.mention-type == "channel" {
-                        root.suggestion-selected(suggestion.id, "#" + suggestion.name);
-                    } else {
-                        root.suggestion-selected(suggestion.id, "@" + suggestion.name);
+                immediate-child-press: true;
+                viewport-width: self.width;
+                viewport-height: suggestion-list.preferred-height;
+                suggestion-list := VerticalLayout {
+                    width: parent.width;
+                    padding: Spacing.sm;
+                    spacing: 0;
+
+                for suggestion[index] in root.suggestions: Rectangle {
+                    height: Spacing.button-height * Appearance.text-grow;
+                    border-radius: Spacing.radius-sm;
+                    background: index == root.selected-index ? Colors.tint-strong : (item-area.pressed ? Materials.pressed : item-area.has-hover ? Materials.hover : transparent);
+                    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                    accessible-role: list-item;
+                    accessible-label: suggestion.mention-type == "user" ? suggestion.name : suggestion.mention-type == "channel" ? "#" + suggestion.name : "@" + suggestion.name;
+                    accessible-item-selected: index == root.selected-index;
+                    accessible-action-default => {
+                        if suggestion.mention-type == "channel" {
+                            root.suggestion-selected(suggestion.id, "#" + suggestion.name);
+                        } else {
+                            root.suggestion-selected(suggestion.id, "@" + suggestion.name);
+                        }
+                    }
+                    transform-scale-x: item-area.pressed ? 97% : 100%;
+                    transform-scale-y: item-area.pressed ? 94% : 100%;
+                    animate transform-scale-x { duration: item-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: item-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        spacing: Spacing.sm;
+
+                        // Avatar or icon based on type
+                        if suggestion.mention-type == "user": Avatar {
+                            size: 28px;
+                            y: (parent.height - self.height) / 2;
+                            source: suggestion.avatar;
+                            name: suggestion.name;
+                        }
+
+                        if suggestion.mention-type != "user": Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: Spacing.radius-sm;
+                            background: Colors.surface-control;
+                            // Channel icon
+                            if suggestion.mention-type == "channel": Text {
+                                text: "#";
+                                color: Colors.text-secondary;
+                                font-size: Typography.base;
+                                font-weight: Typography.semibold;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            if suggestion.mention-type == "here" || suggestion.mention-type == "all": Image {
+                                x: 5px;
+                                y: 5px;
+                                width: 18px;
+                                height: 18px;
+                                source: Icons.users;
+                                colorize: Colors.text-secondary;
+                            }
+                        }
+
+                        // Name and type indicator
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: Spacing.xxs;
+
+                            // Display name with prefix
+                            Text {
+                                accessible-role: none;
+                                text: suggestion.mention-type == "user" ? suggestion.name : suggestion.mention-type == "channel" ? "#" + suggestion.name : "@" + suggestion.name;
+                                color: index == root.selected-index ? Colors.text-primary : Colors.text-secondary;
+                                font-size: Typography.sm;
+                                font-weight: index == root.selected-index ? Typography.medium : Typography.normal;
+                                overflow: elide;
+                            }
+
+                            // Type description (for here/all only)
+                            if suggestion.mention-type == "here": Text {
+                                text: "Notify online members";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                overflow: elide;
+                            }
+
+                            if suggestion.mention-type == "all": Text {
+                                text: "Notify all members";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                overflow: elide;
+                            }
+                        }
+
+                        // Selection indicator for keyboard navigation
+                        if index == root.selected-index: Rectangle {
+                            width: 4px;
+                            height: 20px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 2px;
+                            background: Colors.primary;
+                        }
+                    }
+
+                    item-area := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        enabled: root.show;
+                        clicked => {
+                            // Build display text based on type
+                            if suggestion.mention-type == "channel" {
+                                root.suggestion-selected(suggestion.id, "#" + suggestion.name);
+                            } else {
+                                root.suggestion-selected(suggestion.id, "@" + suggestion.name);
+                            }
+                        }
                     }
                 }
-            }
-        }
 
-        // Empty state
-        if root.suggestions.length == 0: Rectangle {
-            height: 40px;
+                // Empty state
+                if root.suggestions.length == 0: Rectangle {
+                    height: 40px;
 
-            Text {
-                text: "No suggestions";
-                color: Colors.text-muted;
-                font-size: Typography.sm;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+                    Text {
+                        text: "No suggestions";
+                        color: Colors.text-muted;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                }
             }
         }
     }

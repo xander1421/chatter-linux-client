@@ -5,7 +5,7 @@
 //! caches five things, and each of them for a specific reason:
 //!
 //! - the **`JavaVM`**, because mesh tasks run on threads the JVM has never
-//!   seen, and the only way to get a `JNIEnv` on such a thread is to attach it
+//!   seen, and the only way to get a `Env` on such a thread is to attach it
 //!   through the VM;
 //! - a **global ref to the bridge class**, because a `JMethodID` is only valid
 //!   while its class is loaded, and holding the class is what guarantees that;
@@ -52,26 +52,19 @@
 //! sending continuously, that is an unbounded leak of JVM references.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use chatter_mesh_link::LinkError;
-use jni::objects::{GlobalRef, JClass, JMethodID, JObject, JStaticFieldID, JString, JValue};
+use jni::objects::{Global, JClass, JMethodID, JObject, JStaticFieldID, JString, JValue};
 use jni::signature::{JavaType, Primitive, ReturnType};
 use jni::sys::{JNI_FALSE, JNI_TRUE, jvalue};
-use jni::{JNIEnv, JavaVM};
+use jni::{Env, JavaVM};
 
 use crate::error::{self, Failure, Op};
 use crate::{BRIDGE_CLASS, BRIDGE_METHODS};
 
 /// The static field holding the Kotlin singleton.
 const INSTANCE_FIELD: &str = "INSTANCE";
-
-/// How many local references each bridge call may allocate.
-///
-/// Generous on purpose: `GetStringUTFChars` by way of `JNIEnv::get_string`
-/// looks up `java/lang/String` and the argument's class, so even a call that
-/// looks like it creates one reference creates several.
-const LOCAL_FRAME_CAPACITY: i32 = 8;
 
 /// The bridge, once `JNI_OnLoad` has installed it.
 static BRIDGE: OnceLock<Bridge> = OnceLock::new();
@@ -90,7 +83,7 @@ struct Methods {
 }
 
 impl Methods {
-    fn resolve(env: &mut JNIEnv<'_>, class: &GlobalRef) -> Result<Self, String> {
+    fn resolve(env: &mut Env<'_>, class: &Global<JClass<'static>>) -> Result<Self, String> {
         Ok(Self {
             attach: method_id(env, class, "attach")?,
             start: method_id(env, class, "start")?,
@@ -111,7 +104,10 @@ impl Methods {
 /// the frozen table, so there is exactly one place a descriptor can be wrong
 /// and one test that checks it against the compiled Kotlin.
 fn descriptor(name: &str) -> Option<&'static str> {
-    BRIDGE_METHODS.iter().find(|(method, _)| *method == name).map(|(_, sig)| *sig)
+    BRIDGE_METHODS
+        .iter()
+        .find(|(method, _)| *method == name)
+        .map(|(_, sig)| *sig)
 }
 
 /// The JNI type descriptor of the bridge class, `Lcom/chatter/client/…;`.
@@ -122,10 +118,21 @@ fn instance_descriptor() -> String {
     format!("L{BRIDGE_CLASS};")
 }
 
-fn method_id(env: &mut JNIEnv<'_>, class: &GlobalRef, name: &'static str) -> Result<JMethodID, String> {
-    let sig = descriptor(name)
-        .ok_or_else(|| format!("{name} is not listed in BRIDGE_METHODS, so it has no descriptor"))?;
-    match env.get_method_id(class, name, sig) {
+fn method_id(
+    env: &mut Env<'_>,
+    class: &Global<JClass<'static>>,
+    name: &'static str,
+) -> Result<JMethodID, String> {
+    let sig = descriptor(name).ok_or_else(|| {
+        format!("{name} is not listed in BRIDGE_METHODS, so it has no descriptor")
+    })?;
+    match env.get_method_id(
+        class,
+        jni::strings::JNIString::from(name),
+        jni::signature::RuntimeMethodSignature::from_str(sig)
+            .map_err(|e| e.to_string())?
+            .method_signature(),
+    ) {
         Ok(id) => Ok(id),
         Err(err) => {
             // A NoSuchMethodError is pending at this point; leaving it there
@@ -133,7 +140,9 @@ fn method_id(env: &mut JNIEnv<'_>, class: &GlobalRef, name: &'static str) -> Res
             let described = error::drain_exception(env, &format!("GetMethodID {name}{sig}"));
             Err(format!(
                 "{name}{sig} is missing from the Kotlin bridge: {err}{}",
-                described.map(|text| format!(" ({text})")).unwrap_or_default()
+                described
+                    .map(|text| format!(" ({text})"))
+                    .unwrap_or_default()
             ))
         }
     }
@@ -145,30 +154,19 @@ pub struct Bridge {
     vm: JavaVM,
     /// Holding the class keeps the cached ids valid — method and field ids are
     /// invalidated when their class is unloaded.
-    class: GlobalRef,
+    class: Global<JClass<'static>>,
     methods: Methods,
     instance_field: JStaticFieldID,
     /// The singleton, fetched on first use. See the module docs for why this is
     /// not resolved at load time with everything else.
-    instance: Mutex<Option<GlobalRef>>,
+    instance: Mutex<Option<Arc<Global<JObject<'static>>>>>,
     /// Whether `attach(Context)` has already succeeded.
     attached: AtomicBool,
 }
 
 impl Bridge {
-    /// A `JNIEnv` for the calling thread, attaching it first if needed.
-    ///
-    /// Attached as a *daemon* so that a lingering mesh thread cannot keep the
-    /// JVM from exiting, and permanently rather than scoped because these
-    /// threads make many calls and attach/detach is expensive.
-    fn env(&self) -> Result<JNIEnv<'_>, Failure> {
-        self.vm
-            .attach_current_thread_as_daemon()
-            .map_err(|err| Failure::Jni(format!("AttachCurrentThreadAsDaemon failed: {err}")))
-    }
-
     /// `MeshBleBridge.INSTANCE`, fetched on first use and held globally after.
-    fn instance(&self, env: &mut JNIEnv<'_>) -> Result<GlobalRef, Failure> {
+    fn instance(&self, env: &mut Env<'_>) -> Result<Arc<Global<JObject<'static>>>, Failure> {
         let mut slot = self.instance.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(existing) = slot.as_ref() {
             return Ok(existing.clone());
@@ -177,15 +175,18 @@ impl Bridge {
         // The descriptor string is ignored for an object field — the id already
         // says which field this is — but naming it correctly keeps the call
         // readable next to the `GetStaticFieldID` that produced the id.
-        let fetched = env.get_static_field_unchecked(
-            &self.class,
-            self.instance_field,
-            JavaType::Object(BRIDGE_CLASS.to_string()),
-        );
+        // SAFETY: INSTANCE was resolved as an object field on this held class.
+        let fetched = unsafe {
+            env.get_static_field_unchecked(&self.class, self.instance_field, JavaType::Object)
+        };
         let value = match fetched {
             Ok(value) => value,
             Err(err) => {
-                return Err(error::jni_failure(env, "GetStaticObjectField(INSTANCE)", &err));
+                return Err(error::jni_failure(
+                    env,
+                    "GetStaticObjectField(INSTANCE)",
+                    &err,
+                ));
             }
         };
 
@@ -196,10 +197,12 @@ impl Bridge {
             )));
         }
 
-        let global = match env.new_global_ref(&object) {
+        let global = Arc::new(match env.new_global_ref(&object) {
             Ok(global) => global,
-            Err(err) => return Err(error::jni_failure(env, "NewGlobalRef(INSTANCE)", &err)),
-        };
+            Err(err) => {
+                return Err(error::jni_failure(env, "NewGlobalRef(INSTANCE)", &err));
+            }
+        });
         *slot = Some(global.clone());
         error::log_info("chatter mesh: MeshBleBridge.INSTANCE resolved");
         Ok(global)
@@ -212,7 +215,7 @@ impl Bridge {
 /// than propagating the panic `ndk_context::android_context` raises in that
 /// case — a missing context means "no radio here", which is a condition the
 /// mesh already handles, not a reason to take the process down.
-fn app_context() -> Option<JObject<'static>> {
+fn app_context<'local>(env: &Env<'local>) -> Option<JObject<'local>> {
     let context = std::panic::catch_unwind(ndk_context::android_context).ok()?;
     let raw: jni::sys::jobject = context.context().cast();
     if raw.is_null() {
@@ -222,7 +225,7 @@ fn app_context() -> Option<JObject<'static>> {
     // Activity/Application that lives for the whole process. It is only ever
     // passed on as an argument here and never deleted, which is what a
     // borrowed global reference allows.
-    Some(unsafe { JObject::from_raw(raw) })
+    Some(unsafe { JObject::from_raw(env, raw) })
 }
 
 /// Cache the class, its method ids and the `INSTANCE` field id. Called once,
@@ -231,15 +234,23 @@ fn app_context() -> Option<JObject<'static>> {
 /// Failing here disables the mesh but must not disable the app: the caller logs
 /// and carries on, so every later bridge call reports
 /// [`Failure::NotInitialised`] instead.
-pub fn install(env: &mut JNIEnv<'_>, class: &JClass<'_>) -> Result<(), String> {
-    let vm = env.get_java_vm().map_err(|err| format!("GetJavaVM failed: {err}"))?;
+pub fn install(env: &mut Env<'_>, class: &JClass<'_>) -> Result<(), String> {
+    let vm = env
+        .get_java_vm()
+        .map_err(|err| format!("GetJavaVM failed: {err}"))?;
     let class = env
         .new_global_ref(class)
         .map_err(|err| format!("NewGlobalRef on the bridge class failed: {err}"))?;
     let methods = Methods::resolve(env, &class)?;
 
     let descriptor = instance_descriptor();
-    let instance_field = match env.get_static_field_id(&class, INSTANCE_FIELD, &descriptor) {
+    let instance_field = match env.get_static_field_id(
+        &class,
+        jni::strings::JNIString::from(INSTANCE_FIELD),
+        jni::signature::RuntimeFieldSignature::from_str(&descriptor)
+            .map_err(|e| e.to_string())?
+            .field_signature(),
+    ) {
         Ok(id) => id,
         Err(err) => {
             let described =
@@ -247,7 +258,9 @@ pub fn install(env: &mut JNIEnv<'_>, class: &JClass<'_>) -> Result<(), String> {
             return Err(format!(
                 "{INSTANCE_FIELD} {descriptor} is missing from the Kotlin bridge, so the \
                  singleton cannot be reached: {err}{}",
-                described.map(|text| format!(" ({text})")).unwrap_or_default()
+                described
+                    .map(|text| format!(" ({text})"))
+                    .unwrap_or_default()
             ));
         }
     };
@@ -277,21 +290,30 @@ pub fn is_installed() -> bool {
 fn with_bridge<T>(
     op: Op,
     subject: &str,
-    body: impl FnOnce(&mut JNIEnv<'_>, &Bridge, &GlobalRef) -> Result<T, Failure>,
+    body: impl FnOnce(&mut Env<'_>, &Bridge, &Global<JObject<'static>>) -> Result<T, Failure>,
 ) -> Result<T, LinkError> {
     let to_error = |failure| error::link_error(op, subject, failure);
 
-    let bridge = BRIDGE.get().ok_or(Failure::NotInitialised).map_err(to_error)?;
-    let mut env = bridge.env().map_err(to_error)?;
-    let instance = bridge.instance(&mut env).map_err(to_error)?;
-    env.with_local_frame(LOCAL_FRAME_CAPACITY, |env| body(env, bridge, &instance)).map_err(to_error)
+    let bridge = BRIDGE
+        .get()
+        .ok_or(Failure::NotInitialised)
+        .map_err(to_error)?;
+    bridge
+        .vm
+        .attach_current_thread(|env| {
+            // Stays attached until the thread exits: a scoped attach made ART create
+            // a new Thread object on every mesh call. Each call still gets a local frame.
+            let instance = bridge.instance(env)?;
+            body(env, bridge, &instance)
+        })
+        .map_err(to_error)
 }
 
 /// Map a failed JNI call, draining any exception it left pending.
 ///
 /// Always used in two steps — evaluate the call, then classify — because the
-/// call needs `&mut JNIEnv` and the classification needs `&JNIEnv`.
-fn classify<T>(env: &JNIEnv<'_>, during: &str, result: jni::errors::Result<T>) -> Result<T, Failure> {
+/// call needs `&mut Env` and the classification needs `&Env`.
+fn classify<T>(env: &Env<'_>, during: &str, result: jni::errors::Result<T>) -> Result<T, Failure> {
     result.map_err(|err| error::jni_failure(env, during, &err))
 }
 
@@ -305,7 +327,7 @@ pub fn attach() -> Result<(), LinkError> {
             return Ok(());
         }
 
-        let Some(context) = app_context() else {
+        let Some(context) = app_context(env) else {
             return Err(Failure::NotInitialised);
         };
         let args = [JValue::Object(&context).as_jni()];
@@ -354,7 +376,11 @@ pub fn start() -> Result<(), LinkError> {
             )
         };
         let started = classify(env, "MeshBleBridge.start", called)?.z()?;
-        if started { Ok(()) } else { Err(Failure::Rejected) }
+        if started {
+            Ok(())
+        } else {
+            Err(Failure::Rejected)
+        }
     })
 }
 
@@ -382,7 +408,9 @@ pub fn set_scanning(on: bool) -> Result<(), LinkError> {
         // A `jvalue` is built directly rather than through `JValue::Bool`,
         // whose object type parameter is unconstrained for a primitive-only
         // argument list. Constructing a union is safe; only reading is not.
-        let args = [jvalue { z: if on { JNI_TRUE } else { JNI_FALSE } }];
+        let args = [jvalue {
+            z: if on { JNI_TRUE } else { JNI_FALSE },
+        }];
         // SAFETY: `setScanning` was resolved from BRIDGE_METHODS as `(Z)Z` on
         // this exact class, and is called with one boolean and read as one.
         let called = unsafe {
@@ -394,7 +422,11 @@ pub fn set_scanning(on: bool) -> Result<(), LinkError> {
             )
         };
         let accepted = classify(env, "MeshBleBridge.setScanning", called)?.z()?;
-        if accepted { Ok(()) } else { Err(Failure::Rejected) }
+        if accepted {
+            Ok(())
+        } else {
+            Err(Failure::Rejected)
+        }
     })
 }
 
@@ -429,9 +461,13 @@ pub fn connect(address: &str) -> Result<String, LinkError> {
             return Err(Failure::Rejected);
         }
 
-        let handle = JString::from(returned);
-        let read = env.get_string(&handle);
-        Ok(String::from(classify(env, "GetStringUTFChars(link id)", read)?))
+        let handle = env.cast_local::<JString>(returned)?;
+        let read = (handle).try_to_string(&env);
+        Ok(String::from(classify(
+            env,
+            "GetStringUTFChars(link id)",
+            read,
+        )?))
     })
 }
 
@@ -499,7 +535,10 @@ pub fn send(handle: &str, bytes: &[u8]) -> Result<(), LinkError> {
         let target = classify(env, "NewStringUTF(link id)", created)?;
         let allocated = env.byte_array_from_slice(bytes);
         let payload = classify(env, "NewByteArray(payload)", allocated)?;
-        let args = [JValue::Object(&target).as_jni(), JValue::Object(&payload).as_jni()];
+        let args = [
+            JValue::Object(&target).as_jni(),
+            JValue::Object(&payload).as_jni(),
+        ];
 
         // SAFETY: `send` was resolved from BRIDGE_METHODS as
         // `(Ljava/lang/String;[B)Z` on this exact class, and is called with one
@@ -513,7 +552,11 @@ pub fn send(handle: &str, bytes: &[u8]) -> Result<(), LinkError> {
             )
         };
         let accepted = classify(env, "MeshBleBridge.send", called)?.z()?;
-        if accepted { Ok(()) } else { Err(Failure::Rejected) }
+        if accepted {
+            Ok(())
+        } else {
+            Err(Failure::Rejected)
+        }
     })
 }
 
@@ -552,7 +595,9 @@ pub fn max_write(handle: &str) -> Option<i32> {
     match queried {
         Ok(reported) => usable_max_write(reported),
         Err(err) => {
-            error::log_warn(&format!("mesh: maxWrite({handle}) failed, keeping the cached size: {err}"));
+            error::log_warn(&format!(
+                "mesh: maxWrite({handle}) failed, keeping the cached size: {err}"
+            ));
             None
         }
     }
@@ -591,7 +636,10 @@ mod tests {
         // rather than the strings.
         assert_eq!(descriptor("attach"), Some("(Landroid/content/Context;)V"));
         assert_eq!(descriptor("start"), Some("()Z"));
-        assert_eq!(descriptor("connect"), Some("(Ljava/lang/String;)Ljava/lang/String;"));
+        assert_eq!(
+            descriptor("connect"),
+            Some("(Ljava/lang/String;)Ljava/lang/String;")
+        );
         assert_eq!(descriptor("send"), Some("(Ljava/lang/String;[B)Z"));
         assert_eq!(descriptor("maxWrite"), Some("(Ljava/lang/String;)I"));
     }
@@ -613,10 +661,16 @@ mod tests {
         // all. Both are caught without a JVM.
         assert_eq!(RESOLVED.len(), BRIDGE_METHODS.len());
         for name in RESOLVED {
-            assert!(descriptor(name).is_some(), "{name} is resolved but not in BRIDGE_METHODS");
+            assert!(
+                descriptor(name).is_some(),
+                "{name} is resolved but not in BRIDGE_METHODS"
+            );
         }
         for (name, _) in BRIDGE_METHODS {
-            assert!(RESOLVED.contains(name), "{name} is in BRIDGE_METHODS but never resolved");
+            assert!(
+                RESOLVED.contains(name),
+                "{name} is in BRIDGE_METHODS but never resolved"
+            );
         }
     }
 

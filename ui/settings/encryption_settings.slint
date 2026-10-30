@@ -1,0 +1,152 @@
+import { Colors } from "../theme/colors.slint";
+import { Elevation } from "../theme/elevation.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+import { ToggleRow } from "../components/toggle_row.slint";
+
+export component EncryptionSettings inherits VerticalLayout {
+    in property <bool> compact-mode;
+    in property <string> identity-fingerprint;
+    in property <bool> mobile-platform;
+    in-out property <bool> sealed-sender-unrestricted;
+    callback copy-fingerprint-clicked();
+    callback sealed-sender-changed(bool);
+
+
+    spacing: Spacing.lg;
+
+    // Section header
+    Text {
+        text: "Encryption";
+        color: Colors.text-primary;
+        font-size: Typography.xl;
+        font-weight: Typography.semibold;
+    }
+
+    Text {
+        width: parent.width;
+        text: "Your messages are protected with Signal Protocol end-to-end encryption";
+        color: Colors.text-muted;
+        font-size: Typography.sm;
+        wrap: word-wrap;
+    }
+
+    // Identity Verification group
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        preferred-height: identity-content.preferred-height;
+
+        identity-content := VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            Text {
+                // Our identity key's fingerprint. A safety
+                // number is per conversation (Signal) and
+                // lives on the contact's profile.
+                text: "Your identity key";
+                color: Colors.text-primary;
+                font-size: Typography.lg;
+                font-weight: Typography.medium;
+            }
+
+            // Fingerprint display — Neo inset
+            Rectangle {
+                background: Colors.inset;
+                border-radius: Spacing.radius-md;
+
+                preferred-height: fingerprint-content.preferred-height;
+
+                fingerprint-content := VerticalLayout {
+                    padding: Spacing.lg;
+
+                    Text {
+                        text: root.identity-fingerprint != "" ? root.identity-fingerprint : "No fingerprint available";
+                        color: root.identity-fingerprint != "" ? Colors.text-secondary : Colors.text-muted;
+                        font-size: Typography.sm;
+                        letter-spacing: 1px;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                        min-width: 0px;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: space-between;
+
+                Text {
+                    width: max(0px, parent.width - (root.compact-mode ? 0px : Spacing.button-min-width));
+                    text: "To verify a contact, compare safety numbers from their profile";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                }
+
+                if !root.compact-mode: Button {
+                    touch: root.mobile-platform;
+                    text: "Copy";
+                    variant: "ghost";
+                    clicked => { root.copy-fingerprint-clicked(); }
+                }
+            }
+
+            // Compact: full-width button stacked below
+            if root.compact-mode: Button {
+                touch: root.mobile-platform;
+                text: "Copy";
+                variant: "ghost";
+                clicked => { root.copy-fingerprint-clicked(); }
+            }
+        }
+    }
+
+    // Sealed Sender setting
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        preferred-height: sealed-sender-row.preferred-height;
+
+        sealed-sender-row := ToggleRow {
+            row-padding: Spacing.md;
+            row-spacing: Spacing.md;
+            label-spacing: Spacing.sm;
+            min-height: root.compact-mode ? 128px : Spacing.button-height;
+            accessible-text: "Allow sealed sender from anyone";
+            checked <=> root.sealed-sender-unrestricted;
+            toggled(value) => {
+                root.sealed-sender-unrestricted = value;
+                root.sealed-sender-changed(value);
+            }
+
+            Text {
+                text: "Allow sealed sender from anyone";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+            Text {
+                width: sealed-sender-row.label-width;
+                text: "Let people who aren't your contacts send you sealed messages. The server still can't see who sent them.";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

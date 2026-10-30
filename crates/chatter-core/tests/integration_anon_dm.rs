@@ -15,10 +15,10 @@
 //! - Domain type construction and validation
 //! - Two-user flow simulation
 
-mod common;
+use crate::{common, skip_if_no_server};
 
-use chatter_core::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, AnonDmMessage, AnonDmStatus};
 use chatter_core::domain::UserId;
+use chatter_core::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, AnonDmMessage, AnonDmStatus};
 use chatter_core::network::grpc::MailboxClient;
 use chatter_core::proto::mailbox_v1::EnvelopeType;
 use chrono::Utc;
@@ -74,9 +74,18 @@ async fn test_anon_dm_id_display() {
 async fn test_anon_dm_status_can_send() {
     // Only Active status allows sending
     assert!(AnonDmStatus::Active.can_send(), "Active should allow send");
-    assert!(!AnonDmStatus::Pending.can_send(), "Pending should not allow send");
-    assert!(!AnonDmStatus::Blocked.can_send(), "Blocked should not allow send");
-    assert!(!AnonDmStatus::Declined.can_send(), "Declined should not allow send");
+    assert!(
+        !AnonDmStatus::Pending.can_send(),
+        "Pending should not allow send"
+    );
+    assert!(
+        !AnonDmStatus::Blocked.can_send(),
+        "Blocked should not allow send"
+    );
+    assert!(
+        !AnonDmStatus::Declined.can_send(),
+        "Declined should not allow send"
+    );
 }
 
 #[tokio::test]
@@ -143,7 +152,10 @@ async fn test_anon_dm_is_ready() {
 
     // is_ready() requires both Active status AND peer_mailbox_pk
     dm.status = AnonDmStatus::Active;
-    assert!(!dm.is_ready(), "Active without peer mailbox should not be ready");
+    assert!(
+        !dm.is_ready(),
+        "Active without peer mailbox should not be ready"
+    );
 
     // Set peer mailbox pk (simulating acceptance response received)
     let mut mailbox_pk = [0u8; 32];
@@ -216,8 +228,8 @@ async fn test_anon_dm_message_text() {
 async fn test_anon_dm_request_serialization() {
     skip_if_no_server!();
 
-    use prost::Message;
     use chatter_core::proto::content_v1::{self, AnonDmRequest, Content};
+    use prost::Message;
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -238,7 +250,8 @@ async fn test_anon_dm_request_serialization() {
             .as_millis() as u64,
         profile_key: Some(vec![0u8; 32]), // Optional profile key
         encrypted_display_name: None,
-        encrypted_avatar: None,
+        avatar: None,
+        disappearing_seconds: 0,
     };
 
     let content = Content {
@@ -271,8 +284,8 @@ async fn test_anon_dm_request_serialization() {
 async fn test_anon_dm_accept_serialization() {
     skip_if_no_server!();
 
-    use prost::Message;
     use chatter_core::proto::content_v1::{self, AnonDmAccept, Content};
+    use prost::Message;
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -290,10 +303,9 @@ async fn test_anon_dm_accept_serialization() {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64,
-        responder_display_name: String::new(),
         profile_key: Some(vec![0u8; 32]),
         encrypted_display_name: None,
-        encrypted_avatar: None,
+        avatar: None,
     };
 
     let content = Content {
@@ -325,8 +337,10 @@ async fn test_anon_dm_accept_serialization() {
 async fn test_anon_dm_message_serialization() {
     skip_if_no_server!();
 
+    use chatter_core::proto::content_v1::{
+        self, AnonDmMessage as ProtoAnonDmMessage, Content, DataMessage,
+    };
     use prost::Message;
-    use chatter_core::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, DataMessage};
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -347,7 +361,9 @@ async fn test_anon_dm_message_serialization() {
     };
 
     let content = Content {
-        content: Some(content_v1::content::Content::AnonDmMessage(Box::new(dm_msg))),
+        content: Some(content_v1::content::Content::AnonDmMessage(Box::new(
+            dm_msg,
+        ))),
         ephemeral_reply_to: None,
         timestamp: 0,
         padding: vec![0u8; 32],
@@ -400,7 +416,9 @@ async fn test_anon_dm_mailbox_challenge_response() {
     let public_key = verifying_key.to_bytes();
 
     // Try to get a challenge for the mailbox
-    let result = mailbox_client.get_mailbox_challenge(public_key.to_vec()).await;
+    let result = mailbox_client
+        .get_mailbox_challenge(public_key.to_vec())
+        .await;
 
     match result {
         Ok(response) => {
@@ -411,13 +429,18 @@ async fn test_anon_dm_mailbox_challenge_response() {
 
             // Verify locally that our signature is valid
             assert!(
-                verifying_key.verify(&response.challenge, &signature).is_ok(),
+                verifying_key
+                    .verify(&response.challenge, &signature)
+                    .is_ok(),
                 "Signature should verify locally"
             );
         }
         Err(e) => {
             // Expected if mailbox doesn't exist
-            eprintln!("Challenge error (expected if mailbox not registered): {:?}", e);
+            eprintln!(
+                "Challenge error (expected if mailbox not registered): {:?}",
+                e
+            );
         }
     }
 }
@@ -608,8 +631,10 @@ async fn test_anon_dm_block_flow() {
 async fn test_anon_dm_message_with_attachment() {
     skip_if_no_server!();
 
+    use chatter_core::proto::content_v1::{
+        self, AnonDmMessage as ProtoAnonDmMessage, AttachmentMessage, Content,
+    };
     use prost::Message;
-    use chatter_core::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, AttachmentMessage, Content};
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -635,7 +660,9 @@ async fn test_anon_dm_message_with_attachment() {
     };
 
     let content = Content {
-        content: Some(content_v1::content::Content::AnonDmMessage(Box::new(dm_msg))),
+        content: Some(content_v1::content::Content::AnonDmMessage(Box::new(
+            dm_msg,
+        ))),
         ephemeral_reply_to: None,
         timestamp: 0,
         padding: vec![0u8; 32],
@@ -657,15 +684,20 @@ async fn test_anon_dm_message_with_attachment() {
         _ => panic!("Expected AnonDmMessage"),
     }
 
-    eprintln!("AnonDmMessage with attachment size: {} bytes", encoded.len());
+    eprintln!(
+        "AnonDmMessage with attachment size: {} bytes",
+        encoded.len()
+    );
 }
 
 #[tokio::test]
 async fn test_anon_dm_message_with_reaction() {
     skip_if_no_server!();
 
+    use chatter_core::proto::content_v1::{
+        self, AnonDmMessage as ProtoAnonDmMessage, Content, Reaction,
+    };
     use prost::Message;
-    use chatter_core::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, Reaction};
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -691,7 +723,9 @@ async fn test_anon_dm_message_with_reaction() {
     };
 
     let content = Content {
-        content: Some(content_v1::content::Content::AnonDmMessage(Box::new(dm_msg))),
+        content: Some(content_v1::content::Content::AnonDmMessage(Box::new(
+            dm_msg,
+        ))),
         ephemeral_reply_to: None,
         timestamp: 0,
         padding: vec![0u8; 32],
@@ -766,15 +800,18 @@ async fn test_anon_dm_keypair_bytes_roundtrip() {
     assert_eq!(keypair_bytes.len(), 64);
 
     // Restore from bytes
-    let restored_signing_key = SigningKey::from_keypair_bytes(&keypair_bytes)
-        .expect("Should restore from keypair bytes");
+    let restored_signing_key =
+        SigningKey::from_keypair_bytes(&keypair_bytes).expect("Should restore from keypair bytes");
 
     // Verify they produce same signatures
     let test_message = b"Test message for anonymous DM";
     let original_sig = original_signing_key.sign(test_message);
     let restored_sig = restored_signing_key.sign(test_message);
 
-    assert_eq!(original_sig, restored_sig, "Signatures should match after restore");
+    assert_eq!(
+        original_sig, restored_sig,
+        "Signatures should match after restore"
+    );
 }
 
 // ============================================================================
@@ -829,8 +866,10 @@ async fn test_anon_dm_mailbox_unlinkability() {
 async fn test_anon_dm_message_with_typing() {
     skip_if_no_server!();
 
+    use chatter_core::proto::content_v1::{
+        self, AnonDmMessage as ProtoAnonDmMessage, Content, TypingMessage, typing_message,
+    };
     use prost::Message;
-    use chatter_core::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, TypingMessage, typing_message};
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -857,7 +896,9 @@ async fn test_anon_dm_message_with_typing() {
     };
 
     let content = Content {
-        content: Some(content_v1::content::Content::AnonDmMessage(Box::new(dm_msg))),
+        content: Some(content_v1::content::Content::AnonDmMessage(Box::new(
+            dm_msg,
+        ))),
         ephemeral_reply_to: None,
         timestamp: 0,
         padding: vec![0u8; 32],
@@ -890,8 +931,10 @@ async fn test_anon_dm_message_with_typing() {
 async fn test_anon_dm_message_with_read_receipt() {
     skip_if_no_server!();
 
+    use chatter_core::proto::content_v1::{
+        self, AnonDmMessage as ProtoAnonDmMessage, Content, ReceiptMessage, receipt_message,
+    };
     use prost::Message;
-    use chatter_core::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, ReceiptMessage, receipt_message};
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -919,7 +962,9 @@ async fn test_anon_dm_message_with_read_receipt() {
     };
 
     let content = Content {
-        content: Some(content_v1::content::Content::AnonDmMessage(Box::new(dm_msg))),
+        content: Some(content_v1::content::Content::AnonDmMessage(Box::new(
+            dm_msg,
+        ))),
         ephemeral_reply_to: None,
         timestamp: 0,
         padding: vec![0u8; 32],
@@ -942,7 +987,10 @@ async fn test_anon_dm_message_with_read_receipt() {
         _ => panic!("Expected AnonDmMessage"),
     }
 
-    eprintln!("AnonDmMessage with read receipt size: {} bytes", encoded.len());
+    eprintln!(
+        "AnonDmMessage with read receipt size: {} bytes",
+        encoded.len()
+    );
 }
 
 // ============================================================================
@@ -953,13 +1001,18 @@ async fn test_anon_dm_message_with_read_receipt() {
 async fn test_anon_dm_message_with_delete() {
     skip_if_no_server!();
 
+    use chatter_core::proto::content_v1::{
+        self, AnonDmMessage as ProtoAnonDmMessage, Content, DataMessage, Delete,
+    };
     use prost::Message;
-    use chatter_core::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, DataMessage, Delete};
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
     // Create delete-for-everyone (DataMessage with Delete field)
     let delete = Delete {
+        target_author_aci: None,
+        destination_user_id: None,
+        target_call_id: None,
         target_sent_timestamp: 1234567890,
     };
 
@@ -981,7 +1034,9 @@ async fn test_anon_dm_message_with_delete() {
     };
 
     let content = Content {
-        content: Some(content_v1::content::Content::AnonDmMessage(Box::new(dm_msg))),
+        content: Some(content_v1::content::Content::AnonDmMessage(Box::new(
+            dm_msg,
+        ))),
         ephemeral_reply_to: None,
         timestamp: 0,
         padding: vec![0u8; 32],

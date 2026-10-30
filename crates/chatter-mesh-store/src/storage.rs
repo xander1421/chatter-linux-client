@@ -16,7 +16,7 @@
 
 use crate::error::StoreError;
 
-/// Which durable blob is being addressed.
+/// Which sealed durable blob is being addressed.
 ///
 /// A closed enum rather than free-form keys: the set of things this stack persists is
 /// small, fixed, and each has different wipe semantics. A string key would invite a
@@ -27,10 +27,6 @@ pub enum StorageKey {
     Outbox,
     /// Envelopes we are carrying for other people. Opaque to us by construction.
     CourierPool,
-    /// Cached public broadcast traffic for gossip sync. Already public.
-    PublicArchive,
-    /// Bare local counters. No identities, no message IDs, no timestamps.
-    Metrics,
     /// Which bridge drops we have already published or already seen.
     ///
     /// Must survive a restart. bitchat's own comment records a field-verified
@@ -39,22 +35,36 @@ pub enum StorageKey {
     /// gateway watching the tag does the same.
     ///
     /// **Seal this one.** It is a set of recipient tags and event IDs — metadata
-    /// about who this device is messaging and when — so unlike [`Self::Metrics`] it
-    /// is not safe to persist in the clear.
+    /// about who this device is messaging and when — so it is not safe to persist
+    /// in the clear.
     BridgeDropDedup,
+    /// The keys each peer ID was first seen with.
+    ///
+    /// Must survive a restart, or trust on first use starts over every launch
+    /// and the first announce to claim a known peer's ID is believed.
+    ///
+    /// **Seal this one** too: public keys, but the list of them is everyone
+    /// this device has been near.
+    PeerPins,
+    /// Our one-time prekey secrets, their consumption times, and the stamp of
+    /// the bundle that published them.
+    ///
+    /// Must survive a restart, or mail already sealed to a published prekey can
+    /// never be opened. **Seal this one**: these are private keys.
+    LocalPrekeys,
 }
 
 impl StorageKey {
-    /// Every key, for a wipe that must not miss one.
+    /// Every sealed blob key, for a wipe that must not miss one.
     ///
     /// Panic mode has to clear all of them. Deriving the list here means adding a
     /// key cannot leave a hole in the wipe.
     pub const ALL: &'static [StorageKey] = &[
         StorageKey::Outbox,
         StorageKey::CourierPool,
-        StorageKey::PublicArchive,
-        StorageKey::Metrics,
         StorageKey::BridgeDropDedup,
+        StorageKey::PeerPins,
+        StorageKey::LocalPrekeys,
     ];
 
     /// Stable identifier for a file name or a database row.
@@ -62,9 +72,9 @@ impl StorageKey {
         match self {
             StorageKey::Outbox => "outbox",
             StorageKey::CourierPool => "courier-pool",
-            StorageKey::PublicArchive => "public-archive",
-            StorageKey::Metrics => "sf-metrics",
             StorageKey::BridgeDropDedup => "bridge-drop-dedup",
+            StorageKey::PeerPins => "peer-pins",
+            StorageKey::LocalPrekeys => "local-prekeys",
         }
     }
 }
@@ -97,6 +107,12 @@ pub trait Storage: Send + Sync {
 
     fn wipe(&self, key: StorageKey) -> Result<(), StoreError>;
 
+    /// Public packets are already broadcast in cleartext; their keyed rows are
+    /// separate from the sealed, fixed-key blobs above.
+    fn load_archive_packets(&self) -> Result<Vec<([u8; 16], Vec<u8>)>, StoreError>;
+    fn apply_archive_changes(&self, changes: &[([u8; 16], Option<Vec<u8>>)]) -> Result<(), StoreError>;
+    fn wipe_archive(&self) -> Result<(), StoreError>;
+
     /// Panic wipe: forget everything.
     fn wipe_all(&self) -> Result<(), StoreError> {
         let mut first_error = None;
@@ -110,6 +126,9 @@ pub trait Storage: Send + Sync {
                 first_error = Some(error);
             }
         }
+        if let Err(error) = self.wipe_archive() && first_error.is_none() {
+            first_error = Some(error);
+        }
         match first_error {
             Some(error) => Err(error),
             None => Ok(()),
@@ -117,10 +136,37 @@ pub trait Storage: Send + Sync {
     }
 }
 
+/// A shared handle is the store it points at. [`crate::courier::CourierStore`] is
+/// generic over an owned `S: Storage` while the outbox takes `Arc<dyn Storage>`,
+/// so one shared database can back both.
+impl<T: Storage + ?Sized> Storage for std::sync::Arc<T> {
+    fn load(&self, key: StorageKey) -> Result<Option<Vec<u8>>, StoreError> {
+        (**self).load(key)
+    }
+
+    fn save(&self, key: StorageKey, sealed: &[u8]) -> Result<(), StoreError> {
+        (**self).save(key, sealed)
+    }
+
+    fn wipe(&self, key: StorageKey) -> Result<(), StoreError> {
+        (**self).wipe(key)
+    }
+    fn load_archive_packets(&self) -> Result<Vec<([u8; 16], Vec<u8>)>, StoreError> {
+        (**self).load_archive_packets()
+    }
+    fn apply_archive_changes(&self, changes: &[([u8; 16], Option<Vec<u8>>)]) -> Result<(), StoreError> {
+        (**self).apply_archive_changes(changes)
+    }
+    fn wipe_archive(&self) -> Result<(), StoreError> {
+        (**self).wipe_archive()
+    }
+}
+
 /// In-memory storage for tests.
 #[derive(Debug, Default)]
 pub struct MemoryStorage {
     blobs: std::sync::Mutex<std::collections::BTreeMap<StorageKey, Vec<u8>>>,
+    archive: std::sync::Mutex<Vec<([u8; 16], Vec<u8>)>>,
 }
 
 impl MemoryStorage {
@@ -131,6 +177,7 @@ impl MemoryStorage {
     /// How many blobs are currently held. Lets a test assert a wipe emptied it.
     pub fn len(&self) -> usize {
         self.blobs.lock().map(|b| b.len()).unwrap_or(0)
+            + self.archive.lock().map(|a| a.len()).unwrap_or(0)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -155,11 +202,49 @@ impl Storage for MemoryStorage {
         blobs.remove(&key);
         Ok(())
     }
+    fn load_archive_packets(&self) -> Result<Vec<([u8; 16], Vec<u8>)>, StoreError> {
+        let archive = self.archive.lock().map_err(|_| StoreError::StoragePoisoned)?;
+        Ok(archive.clone())
+    }
+    fn apply_archive_changes(&self, changes: &[([u8; 16], Option<Vec<u8>>)]) -> Result<(), StoreError> {
+        let mut archive = self.archive.lock().map_err(|_| StoreError::StoragePoisoned)?;
+        for (id, bytes) in changes {
+            if let Some(position) = archive.iter().position(|(stored_id, _)| stored_id == id) {
+                if let Some(bytes) = bytes {
+                    archive[position].1 = bytes.clone();
+                } else {
+                    archive.remove(position);
+                }
+            } else if let Some(bytes) = bytes {
+                archive.push((*id, bytes.clone()));
+            }
+        }
+        Ok(())
+    }
+    fn wipe_archive(&self) -> Result<(), StoreError> {
+        self.archive.lock().map_err(|_| StoreError::StoragePoisoned)?.clear();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shared_handle_reaches_the_same_blobs() {
+        let backing = std::sync::Arc::new(MemoryStorage::new());
+        let shared: std::sync::Arc<dyn Storage> = backing.clone();
+        let courier_side = crate::courier::CourierStore::new(std::sync::Arc::clone(&shared));
+
+        courier_side
+            .storage()
+            .save(StorageKey::CourierPool, b"sealed")
+            .expect("save");
+        assert_eq!(backing.len(), 1);
+        shared.wipe(StorageKey::CourierPool).expect("wipe");
+        assert!(backing.is_empty());
+    }
 
     #[test]
     fn round_trips_and_reports_absence_as_none() {

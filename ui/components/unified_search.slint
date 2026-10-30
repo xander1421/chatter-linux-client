@@ -1,12 +1,14 @@
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "glass_surface.slint";
 // Unified search — full-window overlay palette.
 // Replaces QuickSwitcher (Ctrl+K) and SearchModal (Ctrl+F).
 //
 // Opened from the sidebar "Search" row (top, above Saved Messages) or the
-// Ctrl+K / Ctrl+F shortcut. `UnifiedSearch` is an App-root overlay driven by a
-// boolean `if` — same pattern as every other modal here — which makes the
-// shortcut + click-outside + Escape reliable.
+// Ctrl+K / Ctrl+F shortcut. The overlay remains mounted so its native input
+// keeps its identity while the palette grows and recedes.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -18,6 +20,10 @@ export struct QuickSwitcherItem {
     conv-type: string,
     presence-status: string,
     unread-count: int,
+    // Invite-only channel: the sidebar's lock glyph instead of #.
+    private-channel: bool,
+    avatar: image,
+    has-avatar: bool,
 }
 
 export struct SearchResult {
@@ -29,13 +35,27 @@ export struct SearchResult {
     timestamp: string,
     highlight-start: int,
     highlight-end: int,
+    preview-before: string,
+    preview-match: string,
+    preview-after: string,
+}
+
+export struct CalendarDay {
+    date: string,
+    label: string,
+    in-month: bool,
+    is-today: bool,
+    // "27 Oct": the date filter chip names a chosen day or range with it.
+    short: string,
 }
 
 // One "Jump to" conversation row.
 component ConvRow inherits Rectangle {
+    in property <bool> interactive: true;
     in property <string> item-id;
     in property <string> name;
     in property <string> conv-type;
+    in property <bool> private-channel;
     in property <int> unread-count;
     in property <bool> selected: false;
     callback clicked(string, string);
@@ -43,11 +63,32 @@ component ConvRow inherits Rectangle {
     // 48px, matching every other tappable row in the app. Search is opened by
     // someone who already knows where they are going, so mis-tapping here costs
     // them the whole trip — and at 40px this was the shortest target on screen.
-    height: Spacing.touch-target-min;
+    height: Spacing.touch-target-min * Appearance.text-grow;
     border-radius: Spacing.radius-sm;
-    background: root.selected ? Colors.neo-inset-bg : touch.has-hover ? Colors.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.name;
+    accessible-enabled: root.interactive;
+    accessible-action-default => { if root.interactive { root.clicked(root.item-id, root.conv-type); } }
+    keys := FocusScope {
+        width: 0px; height: 0px; enabled: root.interactive;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked(root.item-id, root.conv-type);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if keys.has-focus: Rectangle { border-width: 2px; border-color: Colors.focus-ring; border-radius: root.border-radius; }
+    background: touch.pressed ? Materials.pressed : root.selected ? Colors.selected : touch.has-hover ? Colors.surface-hover : transparent;
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale-x: touch.pressed ? 98% : 100%;
+    transform-scale-y: touch.pressed ? 96% : 100%;
+    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
     touch := TouchArea {
+        enabled: root.interactive;
         mouse-cursor: pointer;
         clicked => { root.clicked(root.item-id, root.conv-type); }
     }
@@ -56,11 +97,27 @@ component ConvRow inherits Rectangle {
         padding-left: Spacing.md;
         padding-right: Spacing.md;
         spacing: Spacing.sm;
-        Text {
-            // "))" is the mesh mark: radio waves, matching the sidebar glyph —
-            // a jump target that reaches no server looks different from one
-            // that does.
-            text: root.conv-type == "saved_messages" ? "🔖" : root.conv-type == "channel" ? "#" : root.conv-type == "private_group" ? "🔒" : root.conv-type == "anon_dm" ? "👤" : root.conv-type == "mesh" ? "))" : "@";
+        // The sidebar's line glyphs, not emoji: a colour 🔖 beside grey
+        // text read as a different app, and emoji need a colour font Android
+        // 10 may not have.
+        if root.conv-type != "mesh": VerticalLayout {
+            alignment: center;
+            width: 20px;
+            Image {
+                source: root.conv-type == "saved_messages" ? Icons.bookmark
+                      : root.conv-type == "channel" ? (root.private-channel ? Icons.lock : Icons.hash)
+                      : root.conv-type == "private_group" ? Icons.users
+                      : Icons.user;
+                width: 16px;
+                height: 16px;
+                colorize: root.selected ? Colors.primary : Colors.text-muted;
+            }
+        }
+        // "))" is the mesh mark: radio waves, matching the sidebar glyph —
+        // a jump target that reaches no server looks different from one
+        // that does.
+        if root.conv-type == "mesh": Text {
+            text: "))";
             color: root.selected ? Colors.primary : Colors.text-muted;
             font-size: Typography.sm;
             font-weight: Typography.semibold;
@@ -78,10 +135,10 @@ component ConvRow inherits Rectangle {
         }
         if root.unread-count > 0: Rectangle {
             width: 20px; height: 20px; border-radius: 10px;
-            background: Colors.primary; y: (parent.height - self.height) / 2;
+            background: Colors.action-fill; y: (parent.height - self.height) / 2;
             Text {
                 text: root.unread-count > 99 ? "99+" : root.unread-count;
-                color: Colors.text-primary; font-size: Typography.xs;
+                color: Colors.on-action; font-size: Typography.xs;
                 horizontal-alignment: center; vertical-alignment: center;
                 width: 100%; height: 100%;
             }
@@ -91,19 +148,48 @@ component ConvRow inherits Rectangle {
 
 // One "Messages" content row.
 component MsgRow inherits Rectangle {
+    in property <bool> interactive: true;
     in property <string> message-id;
     in property <string> channel-name;
     in property <string> sender-name;
     in property <string> content-preview;
+    in property <string> preview-before;
+    in property <string> preview-match;
+    in property <string> preview-after;
     in property <string> timestamp;
+    in property <string> match-term;
+    in property <int> highlight-start: 0;
+    in property <int> highlight-end: 0;
     in property <bool> selected: false;
     callback clicked(string);
 
-    height: 56px;
+    height: 56px * Appearance.text-grow;
+    clip: true;
     border-radius: Spacing.radius-sm;
-    background: root.selected ? Colors.neo-inset-bg : touch.has-hover ? Colors.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.sender-name + " in " + root.channel-name + ": " + root.content-preview;
+    accessible-enabled: root.interactive;
+    accessible-action-default => { if root.interactive { root.clicked(root.message-id); } }
+    keys := FocusScope {
+        width: 0px; height: 0px; enabled: root.interactive;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked(root.message-id);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if keys.has-focus: Rectangle { border-width: 2px; border-color: Colors.focus-ring; border-radius: root.border-radius; }
+    background: touch.pressed ? Materials.pressed : root.selected ? Colors.selected : touch.has-hover ? Colors.surface-hover : transparent;
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale-x: touch.pressed ? 98% : 100%;
+    transform-scale-y: touch.pressed ? 96% : 100%;
+    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
     touch := TouchArea {
+        enabled: root.interactive;
         mouse-cursor: pointer;
         clicked => { root.clicked(root.message-id); }
     }
@@ -113,7 +199,7 @@ component MsgRow inherits Rectangle {
         padding-right: Spacing.md;
         padding-top: Spacing.xs;
         padding-bottom: Spacing.xs;
-        spacing: 2px;
+        spacing: Spacing.xxs;
         HorizontalLayout {
             spacing: Spacing.sm;
             Text {
@@ -121,40 +207,68 @@ component MsgRow inherits Rectangle {
                 color: Colors.text-primary;
                 font-size: Typography.xs;
                 font-weight: Typography.semibold;
+                wrap: no-wrap;
+                overflow: elide;
             }
             Text {
                 text: root.channel-name;
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 horizontal-stretch: 1;
+                wrap: no-wrap;
                 overflow: elide;
             }
             Text {
                 text: root.timestamp;
                 color: Colors.text-muted;
                 font-size: Typography.xs;
+                wrap: no-wrap;
             }
         }
-        Text {
-            text: root.content-preview;
-            color: Colors.text-secondary;
-            font-size: Typography.sm;
-            overflow: elide;
+        HorizontalLayout {
+            spacing: 0px;
+            before-text := Text { text: root.preview-before; color: Colors.text-secondary; font-size: Typography.sm;
+                width: min(self.preferred-width, parent.width * 0.55); wrap: no-wrap; overflow: elide; }
+            match-text := Text { text: root.preview-match; color: Colors.primary; font-size: Typography.sm; font-weight: Typography.semibold;
+                width: min(self.preferred-width, parent.width * 0.4); wrap: no-wrap; overflow: elide; }
+            Text { text: root.preview-after; color: Colors.text-secondary; font-size: Typography.sm; horizontal-stretch: 1; wrap: no-wrap; overflow: elide; }
         }
     }
 }
 
 // One resolved "People" row (exact-handle lookup result).
 component PersonRow inherits Rectangle {
+    in property <bool> interactive: true;
     in property <string> name;
     in property <string> handle;
     callback clicked();
 
-    height: Spacing.touch-target-min;
+    height: Spacing.touch-target-min * Appearance.text-grow;
     border-radius: Spacing.radius-sm;
-    background: touch.has-hover ? Colors.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.name + ", @" + root.handle;
+    accessible-enabled: root.interactive;
+    accessible-action-default => { if root.interactive { root.clicked(); } }
+    keys := FocusScope {
+        width: 0px; height: 0px; enabled: root.interactive;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if keys.has-focus: Rectangle { border-width: 2px; border-color: Colors.focus-ring; border-radius: root.border-radius; }
+    background: touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-hover : transparent;
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale-x: touch.pressed ? 98% : 100%;
+    transform-scale-y: touch.pressed ? 96% : 100%;
+    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
     touch := TouchArea {
+        enabled: root.interactive;
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
@@ -188,72 +302,146 @@ component PersonRow inherits Rectangle {
     }
 }
 
-// Full-window overlay palette (rendered at App root via `if open`).
+// Full-window overlay palette (rendered at the window root via `if open`).
 export component UnifiedSearch inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     in property <bool> show: false;
     in property <[QuickSwitcherItem]> conversations: [];
     in property <[SearchResult]> messages: [];
     in property <bool> searching: false;
+    in property <length> source-x: 12px;
+    in property <length> source-y: 12px;
+    in property <length> source-width: 240px;
     in-out property <string> query: "";
     in-out property <int> selected-index: 0;
+    in-out property <string> category: "all";
+    in-out property <string> sort-order: "relevance";
+    in-out property <string> date-filter: "any";
+    in-out property <string> from-filter: "";
+    in-out property <string> in-filter: "";
+    in-out property <string> from-label: "";
+    in-out property <string> in-label: "";
+    in property <[QuickSwitcherItem]> picker-options: [];
+    in property <bool> picker-searching: false;
+    property <string> picker-mode: "";
+    // Typing goes to the sheet's own field, not the search behind it.
+    changed picker-mode => {
+        if root.picker-mode != "" { picker-input.focus(); }
+        else if root.show { search-input.focus(); }
+    }
+    property <string> picker-query: "";
+    callback picker-request(string, string);
+    in property <[string]> recent-searches: [];
+    in property <[int]> category-counts: [0, 0, 0, 0, 0, 0, 0];
+    in property <[int]> page-limits: [50, 50, 50, 50, 50, 50, 50];
+    callback show-more(string);
+    in property <[image]> thumbnails: [];
+    in property <[bool]> has-thumbnails: [];
+    in property <[string]> message-kinds: [];
+    callback filters-changed(string, string, string, string, string);
+    callback recent-selected(string);
+    in property <int> caret-end-seq;
+    changed caret-end-seq => {
+        search-input.focus();
+        search-input.set-selection-offsets(2147483647, 2147483647);
+    }
+    callback recent-clear();
+    callback recent-remove(string);
+    in-out property <bool> date-sheet-open: false;
+    in property <string> calendar-month: "";
+    in property <[CalendarDay]> calendar-days: [];
+    callback calendar-shift(int);
+    property <string> custom-start: "";
+    property <string> custom-end: "";
+    property <string> custom-start-short: "";
+    property <string> custom-end-short: "";
+    property <length> calendar-swipe-start: 0px;
+    property <bool> calendar-swiped: false;
 
-    callback opened();
     callback query-changed(string);
+    property <string> last-edited-query: "";
     callback conversation-selected(string, string);
     callback message-selected(string);
     callback close();
+    callback cancel();
 
     // People (exact-handle resolve-on-Enter). `query-is-handle` is set by the
     // glue when the query looks like `nickname.discriminator`. `person-status`:
-    // "" idle | "searching" | "found" | "notfound".
+    // "" idle | "searching" | "found" | "notfound" | "error" (core's
+    // user-facing reason in `person-error`).
     in property <bool> query-is-handle: false;
     in property <string> person-status: "";
+    in property <string> person-error: "";
     in property <string> person-id: "";
     in property <string> person-name: "";
     in property <string> person-handle: "";
     callback resolve(string);
     callback person-selected(string);
 
-    property <int> total-count: root.conversations.length + root.messages.length;
+    property <int> visible-conversation-count: root.category == "all" || root.category == "chats" ? root.conversations.length : 0;
+    property <int> visible-message-count: root.category == "chats" ? 0 : root.messages.length;
+    property <int> total-count: root.visible-conversation-count + root.visible-message-count;
+    property <float> open-progress: root.show ? 1 : 0;
+    animate open-progress { duration: Materials.motion-standard; easing: Materials.glide; }
+    property <float> shape-progress: root.show ? 1 : 0;
+    animate shape-progress { duration: Materials.motion-standard; easing: Materials.spring; }
+    property <length> panel-width: min(940px, root.width - 24px);
+    changed show => {
+        // Whatever the query is on open/close, the next edit compares to it.
+        root.last-edited-query = root.query;
+        if root.show { search-input.focus(); }
+        else { root.date-sheet-open = false; root.picker-mode = ""; }
+    }
 
-    visible: root.show;
+    visible: root.show || root.open-progress > 0 || root.shape-progress > 0;
 
     function activate-selected() {
-        if root.selected-index < root.conversations.length {
+        if root.selected-index < root.visible-conversation-count {
             root.conversation-selected(
                 root.conversations[root.selected-index].id,
                 root.conversations[root.selected-index].conv-type);
         } else if root.selected-index < root.total-count {
             root.message-selected(
-                root.messages[root.selected-index - root.conversations.length].message-id);
+                root.messages[root.selected-index - root.visible-conversation-count].message-id);
         }
     }
 
     // Dim backdrop — clicking outside the panel closes.
+    GlassSurface {
+        width: 100%; height: 100%;
+        material-level: 0; material-tint: transparent; elevation: 0;
+        opacity: root.open-progress;
+    }
     Rectangle {
         width: 100%;
         height: 100%;
-        background: Colors.overlay;
-        TouchArea { clicked => { root.close(); } }
+        background: Materials.scrim;
+        opacity: root.open-progress;
+        TouchArea { enabled: root.show; clicked => { root.close(); } }
     }
 
     // Palette panel — near top, centered.
-    Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: min(72px, parent.height * 0.1);
-        width: min(640px, parent.width - 32px);
-        height: min(content.preferred-height, parent.height - 160px);
-        background: Colors.surface;
-        border-radius: Spacing.radius-lg;
-        border-width: 1px;
-        border-color: Colors.neo-highlight-strong;
-        drop-shadow-blur: Spacing.neo-blur-lg;
-        drop-shadow-color: Colors.neo-shadow-strong;
+    palette := GlassSurface {
+        material-level: 3;
+        material-tint: Materials.ultra-thin.mix(Materials.search-raised, root.open-progress);
+        elevation: 4;
+
+        x: root.source-x + ((root.width - root.panel-width) / 2 - root.source-x) * root.open-progress;
+        y: root.source-y + (min(42px, parent.height * 0.04) - root.source-y) * root.open-progress;
+        width: min(root.source-width, root.panel-width) + (root.panel-width - min(root.source-width, root.panel-width)) * root.shape-progress;
+        height: Spacing.touch-target-min + (parent.height - 2 * self.y - Spacing.touch-target-min) * root.shape-progress;
+        border-radius: Spacing.radius-xl;
+        clip: true;
 
         // Swallow clicks so they don't reach the backdrop.
-        TouchArea {}
+        TouchArea { enabled: root.show; }
 
         content := VerticalLayout {
+            opacity: root.show ? 1 : 0;
+            animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
             padding: Spacing.md;
             spacing: Spacing.sm;
 
@@ -264,10 +452,11 @@ export component UnifiedSearch inherits Rectangle {
                 // hides that on first open and not at all afterwards, when the
                 // user taps it to correct a query.
                 height: Spacing.touch-target-min;
-                border-radius: Spacing.radius-md;
-                background: Colors.neo-inset-bg;
-                border-width: 1px;
-                border-color: search-input.has-focus ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+                // Concentric with the panel: its radius minus the padding.
+                border-radius: Spacing.radius-xl - Spacing.md;
+                background: Colors.inset;
+                border-width: Spacing.stroke;
+                border-color: search-input.has-focus ? Colors.primary : Colors.border;
 
                 HorizontalLayout {
                     padding-left: Spacing.md;
@@ -279,58 +468,305 @@ export component UnifiedSearch inherits Rectangle {
                         colorize: Colors.text-muted;
                         y: (parent.height - self.height) / 2;
                     }
-                    search-input := TextInput {
-                        text <=> root.query;
-                        font-size: Typography.sm;
-                        color: Colors.text-primary;
-                        vertical-alignment: center;
+                    Rectangle {
                         horizontal-stretch: 1;
-                        single-line: true;
-                        // Focus as soon as the overlay is created.
-                        init => { self.focus(); }
-                        edited => {
-                            root.selected-index = 0;
-                            root.query-changed(root.query);
-                        }
-                        accepted => {
-                            if (root.person-status == "found") {
-                                root.person-selected(root.person-id);
-                            } else if (root.query-is-handle) {
-                                root.resolve(root.query);
-                            } else {
-                                root.activate-selected();
+                        // The placeholder overlays the field at its text origin,
+                        // rather than taking a trailing HorizontalLayout slot.
+                        search-input := TextInput {
+                            text <=> root.query;
+                            font-size: Typography.sm;
+                            color: Colors.text-primary;
+                            vertical-alignment: center;
+                            width: 100%;
+                            height: 100%;
+                            single-line: true;
+                            // Samsung's IME on Android 10 re-delivers the same
+                            // text after the tap that ends composition; a search
+                            // for an unchanged query cleared the result rows
+                            // between press and release, so the tap was lost.
+                            edited => {
+                                if root.query == root.last-edited-query { return; }
+                                root.last-edited-query = root.query;
+                                root.selected-index = 0;
+                                root.query-changed(root.query);
+                            }
+                            accepted => {
+                                if (root.person-status == "found") {
+                                    root.person-selected(root.person-id);
+                                } else if (root.query-is-handle) {
+                                    root.resolve(root.query);
+                                } else {
+                                    root.activate-selected();
+                                }
+                            }
+                            key-pressed(event) => {
+                                if (event.text == Key.UpArrow) {
+                                    if (root.selected-index > 0) { root.selected-index -= 1; }
+                                    return accept;
+                                }
+                                if (event.text == Key.DownArrow) {
+                                    if (root.selected-index < root.total-count - 1) { root.selected-index += 1; }
+                                    return accept;
+                                }
+                                if (event.text == Key.Escape) {
+                                    if (root.date-sheet-open) { root.date-sheet-open = false; }
+                                    else if (root.picker-mode != "") { root.picker-mode = ""; }
+                                    else { root.close(); }
+                                    return accept;
+                                }
+                                return reject;
                             }
                         }
-                        key-pressed(event) => {
-                            if (event.text == Key.UpArrow) {
-                                if (root.selected-index > 0) { root.selected-index -= 1; }
-                                return accept;
-                            }
-                            if (event.text == Key.DownArrow) {
-                                if (root.selected-index < root.total-count - 1) { root.selected-index += 1; }
-                                return accept;
-                            }
-                            if (event.text == Key.Escape) {
-                                root.close();
-                                return accept;
-                            }
-                            return reject;
+                        // Shown whenever the field is empty: on a phone it has
+                        // focus the whole time, so hiding it on focus meant never.
+                        if root.query == "" && search-input.preedit-text == "": search-placeholder := Text {
+                            width: 100%;
+                            height: 100%;
+                            text: "Search…";
+                            color: Colors.text-muted;
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                            horizontal-alignment: left;
                         }
                     }
-                    if root.query == "" && !search-input.has-focus: Text {
-                        text: "Search…";
-                        color: Colors.text-muted;
-                        font-size: Typography.sm;
-                        vertical-alignment: center;
+                    if root.query != "": Rectangle {
+                        width: Spacing.touch-target-min; height: Spacing.touch-target-min;
+                        border-radius: self.width / 2;
+                        background: clear-touch.pressed ? Materials.pressed : clear-touch.has-hover ? Materials.hover : transparent;
+                        accessible-role: button; accessible-label: "Clear search";
+                        accessible-action-default => { root.query = ""; root.last-edited-query = ""; root.query-changed(""); search-input.focus(); }
+                        clear-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.query = ""; root.last-edited-query = ""; root.query-changed(""); search-input.focus(); return accept; } return reject; }
+                        }
+                        Rectangle { border-width: clear-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: self.width / 2; }
+                        clear-touch := TouchArea { mouse-cursor: pointer; clicked => { root.query = ""; root.last-edited-query = ""; root.query-changed(""); search-input.focus(); } }
+                        Text { text: "×"; color: Colors.text-secondary; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Rectangle {
+                        width: 72px; height: Spacing.touch-target-min;
+                        border-radius: Spacing.radius-lg;
+                        background: cancel-touch.pressed ? Materials.pressed : cancel-touch.has-hover ? Materials.hover : transparent;
+                        accessible-role: button; accessible-label: "Cancel search";
+                        accessible-action-default => { root.cancel(); }
+                        cancel-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.cancel(); return accept; } return reject; }
+                        }
+                        Rectangle { border-width: cancel-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
+                        cancel-touch := TouchArea { mouse-cursor: pointer; clicked => { root.cancel(); } }
+                        Text { text: "Cancel"; color: Colors.primary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
             }
 
-            if root.query == "": Text {
-                text: "Recent conversations";
+            // A single persistent input sits above these controls; changing a
+            // tab or filter never reparents it, preserving keyboard and IME.
+            Flickable {
+                height: Spacing.touch-target-min + Spacing.xs;
+                viewport-width: tab-row.width;
+                viewport-height: self.height;
+                tab-row := Rectangle {
+                    width: 7 * 110px;
+                    height: Spacing.touch-target-min;
+                    background: transparent;
+                    selection := Rectangle {
+                        property <int> active-index: root.category == "chats" ? 1 : root.category == "messages" ? 2
+                            : root.category == "media" ? 3 : root.category == "files" ? 4
+                            : root.category == "links" ? 5 : root.category == "voice" ? 6 : 0;
+                        x: self.active-index * 110px + 2px;
+                        y: 4px;
+                        width: 106px;
+                        height: parent.height - 8px;
+                        border-radius: self.height / 2;
+                        background: Colors.row-selected;
+                        border-width: Spacing.stroke;
+                        border-color: Colors.primary;
+                        animate x { duration: Materials.motion-standard; easing: Materials.spring; }
+                        animate width { duration: Materials.motion-standard; easing: Materials.spring; }
+                    }
+                    for category-name[i] in ["All", "Chats", "Messages", "Media", "Files", "Links", "Voice"]: Rectangle {
+                        x: i * 110px;
+                        width: 110px;
+                        height: Spacing.touch-target-min;
+                        border-radius: Spacing.radius-xl;
+                        background: tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent;
+                        accessible-role: tab;
+                        accessible-label: category-name;
+                        accessible-description: root.category == category-name.to-lowercase() ? "Selected" : "";
+                        accessible-action-default => { root.category = category-name.to-lowercase(); root.selected-index = 0; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
+                        border-width: tab-keys.has-focus ? 2px : 0px;
+                        border-color: Colors.focus-ring;
+                        tab-keys := FocusScope {
+                            width: 0px; height: 0px; enabled: root.show;
+                            key-pressed(event) => {
+                                if event.text == Key.Space || event.text == Key.Return {
+                                    root.category = category-name.to-lowercase(); root.selected-index = 0;
+                                    root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                        animate background { duration: Materials.motion-quick; easing: Materials.spring; }
+                        transform-origin: { x: self.width / 2, y: self.height / 2 };
+                        transform-scale-x: tab-touch.pressed ? 94% : 100%;
+                        transform-scale-y: tab-touch.pressed ? 94% : 100%;
+                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                        tab-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.category = category-name.to-lowercase(); root.selected-index = 0; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
+                        }
+                        tab-label := Text { text: category-name + (root.category-counts[i] > 0 ? " " + (root.category-counts[i] > root.page-limits[i] ? root.page-limits[i] + "+" : root.category-counts[i]) : ""); color: root.category == category-name.to-lowercase() ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
+                    }
+                }
+            }
+
+            Flickable {
+                height: Spacing.touch-target-min;
+                viewport-width: filter-row.preferred-width;
+                viewport-height: self.height;
+                // An In: scope set on open (Search in chat) is the last chip:
+                // on a phone it sat past the edge, so the scope was invisible.
+                property <bool> scoped: root.show && root.in-filter != "";
+                changed scoped => {
+                    if self.scoped { self.viewport-x = min(0px, self.width - self.viewport-width); }
+                }
+                filter-row := HorizontalLayout {
+                spacing: Spacing.xs;
+                Rectangle {
+                    width: 94px; height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
+                    background: sort-touch.pressed ? Materials.pressed : root.sort-order != "relevance" ? Colors.row-selected : Materials.ultra-thin;
+                    border-width: Spacing.stroke; border-color: root.sort-order != "relevance" ? Colors.primary : Colors.border;
+                    accessible-role: button; accessible-label: "Sort: " + root.sort-order;
+                    accessible-action-default => { root.sort-order = root.sort-order == "relevance" ? "newest" : root.sort-order == "newest" ? "oldest" : root.sort-order == "oldest" ? "largest" : "relevance"; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
+                    sort-keys := FocusScope { width: 0px; height: 0px; enabled: root.show;
+                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.sort-order = root.sort-order == "relevance" ? "newest" : root.sort-order == "newest" ? "oldest" : root.sort-order == "oldest" ? "largest" : "relevance"; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); return accept; } return reject; }
+                    }
+                    Rectangle { border-width: sort-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
+                    sort-touch := TouchArea { mouse-cursor: pointer; clicked => {
+                        root.sort-order = root.sort-order == "relevance" ? "newest" : root.sort-order == "newest" ? "oldest" : root.sort-order == "oldest" ? "largest" : "relevance";
+                        root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                    } }
+                    Text { text: root.sort-order == "relevance" ? "Relevance" : root.sort-order == "newest" ? "Newest" : root.sort-order == "oldest" ? "Oldest" : "Largest"; color: root.sort-order != "relevance" ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
+                }
+                Rectangle {
+                    // Grows to a chosen range ("27 Oct – 28 Oct"), like From/In.
+                    width: max(90px, min(170px, date-label.preferred-width + 2 * Spacing.md)); height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
+                    background: date-touch.pressed ? Materials.pressed : root.date-filter != "any" ? Colors.row-selected : Materials.ultra-thin;
+                    border-width: Spacing.stroke; border-color: root.date-filter != "any" ? Colors.primary : Colors.border;
+                    accessible-role: button; accessible-label: "Date filter: " + root.date-filter;
+                    accessible-action-default => { root.date-sheet-open = true; root.calendar-shift(0); }
+                    date-keys := FocusScope { width: 0px; height: 0px; enabled: root.show;
+                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.date-sheet-open = true; root.calendar-shift(0); return accept; } return reject; }
+                    }
+                    Rectangle { border-width: date-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
+                    date-touch := TouchArea { mouse-cursor: pointer; clicked => { root.date-sheet-open = true; root.calendar-shift(0); } }
+                    date-label := Text { text: root.date-filter == "any" ? "Any time" : root.date-filter == "today" ? "Today" : root.date-filter == "week" ? "7 days" : root.date-filter == "month" ? "30 days" : root.date-filter == "year" ? "This year"
+                        // The days chosen, not a bare "Range".
+                        : root.custom-end-short == "" || root.custom-end == root.custom-start ? root.custom-start-short
+                        : root.custom-start-short + " – " + root.custom-end-short; color: root.date-filter != "any" ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
+                }
+                for kind in ["from", "in"]: Rectangle {
+                    // A set filter grows to show its name (up to a cap) beside the ×.
+                    property <bool> chip-set: (kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "");
+                    property <length> base-width: kind == "from" ? 126px : 112px;
+                    width: self.chip-set
+                        ? max(self.base-width, min(200px, picker-chip-label.preferred-width + Spacing.touch-target-min + Spacing.lg))
+                        : self.base-width;
+                    height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
+                    background: chip-touch.pressed ? Materials.pressed : ((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Colors.row-selected : Materials.ultra-thin;
+                    border-width: Spacing.stroke; border-color: ((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Colors.primary : Colors.border;
+                    accessible-role: button; accessible-label: kind == "from" ? "Filter by sender" : "Filter by conversation";
+                    accessible-action-default => { root.picker-mode = kind; root.picker-query = ""; root.picker-request(kind, ""); }
+                    chip-keys := FocusScope { width: 0px; height: 0px; enabled: root.show;
+                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.picker-mode = kind; root.picker-query = ""; root.picker-request(kind, ""); return accept; } return reject; }
+                    }
+                    Rectangle { border-width: chip-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
+                    chip-touch := TouchArea { mouse-cursor: pointer; clicked => {
+                        root.picker-mode = kind; root.picker-query = ""; root.picker-request(kind, "");
+                    } }
+                    picker-chip-label := Text { text: kind == "from" ? (root.from-label == "" ? "From" : "From: " + root.from-label) : (root.in-label == "" ? "In" : "In: " + root.in-label);
+                        width: parent.width - (((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Spacing.touch-target-min : 0px);
+                        height: 100%; color: ((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; wrap: no-wrap; overflow: elide; }
+                    if (kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != ""): Rectangle {
+                        x: parent.width - self.width; width: Spacing.touch-target-min; height: Spacing.touch-target-min; border-radius: self.width / 2;
+                        background: unselect-touch.pressed ? Materials.pressed : unselect-touch.has-hover ? Materials.hover : transparent;
+                        accessible-role: button; accessible-label: kind == "from" ? "Clear sender filter" : "Clear conversation filter";
+                        accessible-action-default => { if kind == "from" { root.from-filter = ""; root.from-label = ""; } else { root.in-filter = ""; root.in-label = ""; } root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
+                        unselect-keys := FocusScope { width: 0px; height: 0px; enabled: root.show;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { if kind == "from" { root.from-filter = ""; root.from-label = ""; } else { root.in-filter = ""; root.in-label = ""; } root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); return accept; } return reject; }
+                        }
+                        Rectangle { border-width: unselect-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: self.width / 2; }
+                        unselect-touch := TouchArea { mouse-cursor: pointer; clicked => {
+                            if (kind == "from") { root.from-filter = ""; root.from-label = ""; }
+                            else { root.in-filter = ""; root.in-label = ""; }
+                            root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                        } }
+                        Text { text: "×"; width: 100%; height: 100%; color: Colors.text-muted; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+                }
+            }
+
+            // Recent searches belong to the search itself; a content tab
+            // (Media, Files, Links, Voice) lists what was shared instead.
+            if root.query == "" && root.recent-searches.length > 0
+                && (root.category == "all" || root.category == "chats" || root.category == "messages"): VerticalLayout {
+                height: Spacing.touch-target-min + root.recent-searches.length * (Spacing.touch-target-min + Spacing.xs);
+                vertical-stretch: 0;
+                spacing: Spacing.xs;
+                HorizontalLayout {
+                    height: Spacing.touch-target-min;
+                    vertical-stretch: 0;
+                    Text { text: "Recent searches"; color: Colors.text-muted; font-size: Typography.xs; horizontal-stretch: 1; vertical-alignment: center; }
+                    Rectangle { width: Spacing.touch-target-min; height: Spacing.touch-target-min;
+                        accessible-role: button; accessible-label: "Clear recent searches";
+                        accessible-action-default => { root.recent-clear(); }
+                        recent-clear-keys := FocusScope { width: 0px; height: 0px; enabled: root.show;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.recent-clear(); return accept; } return reject; }
+                        }
+                        border-width: recent-clear-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.recent-clear(); } }
+                        Text { text: "Clear"; color: Colors.primary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+                for recent in root.recent-searches: Rectangle {
+                    height: Spacing.touch-target-min; border-radius: Spacing.radius-sm;
+                    background: recent-touch.pressed ? Materials.pressed : recent-touch.has-hover ? Materials.hover : transparent;
+                    accessible-role: button; accessible-label: "Search for " + recent;
+                    accessible-action-default => { root.recent-selected(recent); search-input.focus(); }
+                    recent-keys := FocusScope { width: 0px; height: 0px;
+                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.recent-selected(recent); search-input.focus(); return accept; } return reject; }
+                    }
+                    Rectangle { border-width: recent-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-sm; }
+                    recent-touch := TouchArea { mouse-cursor: pointer; clicked => { root.recent-selected(recent); search-input.focus(); } }
+                    Text { text: recent; color: Colors.text-secondary; font-size: Typography.sm; x: Spacing.md; width: parent.width - Spacing.touch-target-min - Spacing.md; vertical-alignment: center; height: 100%; overflow: elide; }
+                    Rectangle {
+                        x: parent.width - self.width; width: Spacing.touch-target-min; height: Spacing.touch-target-min;
+                        border-radius: self.width / 2;
+                        background: remove-touch.pressed ? Materials.pressed : remove-touch.has-hover ? Materials.hover : transparent;
+                        accessible-role: button; accessible-label: "Remove recent search " + recent;
+                        accessible-action-default => { root.recent-remove(recent); }
+                        remove-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.recent-remove(recent); return accept; } return reject; }
+                        }
+                        Rectangle { border-width: remove-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: self.width / 2; }
+                        remove-touch := TouchArea { mouse-cursor: pointer; clicked => { root.recent-remove(recent); } }
+                        Text { text: "×"; width: 100%; height: 100%; color: Colors.text-muted; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+            }
+
+            // `query` excludes IME preedit, so while a word is still being
+            // composed it reads "" over an emptied list; a header with nothing
+            // under it is noise.
+            if root.query == "" && root.conversations.length > 0: Text {
+                text: "Suggested chats";
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 horizontal-alignment: left;
+                height: 20px;
+                vertical-stretch: 0;
             }
 
             // People — exact-handle resolution (resolve-on-Enter, no enumeration).
@@ -342,6 +778,7 @@ export component UnifiedSearch inherits Rectangle {
                     font-size: Typography.xs;
                 }
                 if root.person-status == "found": PersonRow {
+                    interactive: root.show;
                     name: root.person-name;
                     handle: root.person-handle;
                     clicked => { root.person-selected(root.person-id); }
@@ -356,56 +793,460 @@ export component UnifiedSearch inherits Rectangle {
                     color: Colors.text-muted;
                     font-size: Typography.sm;
                 }
-                if root.person-status == "": Text {
-                    text: "Press ↵ to find @" + root.query;
-                    color: Colors.text-secondary;
+                if root.person-status == "error": Text {
+                    text: root.person-error;
+                    color: Colors.text-muted;
                     font-size: Typography.sm;
+                    wrap: word-wrap;
+                }
+                // Tappable: a phone user has no ↵ to press, and the IME's
+                // action key is not guaranteed to reach `accepted`.
+                // `person-handle` is the query with a leading "@" dropped.
+                if root.person-status == "": Rectangle {
+                    height: Spacing.touch-target-min;
+                    border-radius: Spacing.radius-sm;
+                    background: find-touch.has-hover ? Colors.surface-hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Find @" + root.person-handle;
+                    accessible-action-default => { root.resolve(root.query); }
+                    find-touch := TouchArea {
+                        enabled: root.show;
+                        mouse-cursor: pointer;
+                        clicked => { root.resolve(root.query); }
+                    }
+                    HorizontalLayout {
+                        padding-left: Spacing.md;
+                        padding-right: Spacing.md;
+                        spacing: Spacing.sm;
+                        Text {
+                            accessible-role: none;
+                            text: "👤";
+                            color: Colors.primary;
+                            font-size: Typography.sm;
+                            width: 20px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            accessible-role: none;
+                            text: "Find @" + root.person-handle;
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        Text {
+                            accessible-role: none;
+                            text: "↵";
+                            color: Colors.text-muted;
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
             }
 
             Flickable {
                 vertical-stretch: 1;
                 min-height: 40px;
-                max-height: 420px;
-                VerticalLayout {
+                // Press a result immediately; the Flickable still takes over
+                // drags and cancels the row press when scrolling starts.
+                immediate-child-press: true;
+                viewport-width: self.width;
+                viewport-height: results-list.preferred-height;
+                changed viewport-y => {
+                    if (!root.searching && root.query != "" && root.category != "chats"
+                        && self.viewport-height + self.viewport-y - self.height < self.height) {
+                        root.show-more(root.category);
+                    }
+                }
+                results-list := VerticalLayout {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
                     spacing: Spacing.xxs;
 
-                    // Jump to (conversations)
-                    if root.conversations.length > 0: Text {
+                    // Jump to (conversations). An empty query is already titled
+                    // "Recent conversations" above; two headers stacked there.
+                    if (root.category == "all" || root.category == "chats") && root.query != "" && root.conversations.length > 0: Text {
                         text: "Jump to";
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
-                    for c[i] in root.conversations: ConvRow {
-                        item-id: c.id;
-                        name: c.name;
-                        conv-type: c.conv-type;
-                        unread-count: c.unread-count;
-                        selected: i == root.selected-index;
-                        clicked(id, t) => { root.conversation-selected(id, t); }
+                    if root.category == "all" || root.category == "chats": VerticalLayout {
+                        for c[i] in root.conversations: ConvRow {
+                            interactive: root.show;
+                            item-id: c.id;
+                            name: c.name;
+                            conv-type: c.conv-type;
+                            private-channel: c.private-channel;
+                            unread-count: c.unread-count;
+                            selected: i == root.selected-index;
+                            clicked(id, t) => { root.conversation-selected(id, t); }
+                        }
                     }
 
                     // Messages (content)
-                    if root.messages.length > 0: Text {
-                        text: "Messages";
+                    if root.category != "all" && root.category != "chats" && root.messages.length > 0: Text {
+                        text: root.category == "all" ? "Messages and shared content"
+                            : root.category == "media" ? "Photos and videos"
+                            : root.category == "files" ? "Files"
+                            : root.category == "links" ? "Links"
+                            : root.category == "voice" ? "Voice messages" : "Messages";
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
-                    for m[j] in root.messages: MsgRow {
-                        message-id: m.message-id;
-                        channel-name: m.channel-name;
-                        sender-name: m.sender-name;
-                        content-preview: m.content-preview;
-                        timestamp: m.timestamp;
-                        selected: (root.conversations.length + j) == root.selected-index;
-                        clicked(id) => { root.message-selected(id); }
+                    if root.category != "media" && root.category != "chats": VerticalLayout {
+                        for m[j] in root.messages: VerticalLayout {
+                            property <bool> section-start: root.category == "all" && j < root.message-kinds.length
+                                && (j == 0 || root.message-kinds[j] != root.message-kinds[max(0, j - 1)]);
+                            if self.section-start: Text {
+                                height: 22px;
+                                text: root.message-kinds[j] == "media" ? "Photos and videos"
+                                    : root.message-kinds[j] == "files" ? "Files"
+                                    : root.message-kinds[j] == "links" ? "Links"
+                                    : root.message-kinds[j] == "voice" ? "Voice messages" : "Messages";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                vertical-alignment: center;
+                            }
+                            MsgRow {
+                                interactive: root.show;
+                                message-id: m.message-id;
+                                channel-name: m.channel-name;
+                                sender-name: m.sender-name;
+                                content-preview: m.content-preview;
+                                preview-before: m.preview-before;
+                                preview-match: m.preview-match;
+                                preview-after: m.preview-after;
+                                match-term: root.query;
+                                highlight-start: m.highlight-start;
+                                highlight-end: m.highlight-end;
+                                timestamp: m.timestamp;
+                                selected: (root.visible-conversation-count + j) == root.selected-index;
+                                clicked(id) => { root.message-selected(id); }
+                            }
+                        }
+                    }
+                    if root.category == "media": media-grid := Rectangle {
+                        property <int> columns: root.width < 600px ? 2 : 4;
+                        property <length> gutter: Spacing.sm;
+                        property <length> tile: (self.width - (self.columns - 1) * self.gutter) / self.columns;
+                        height: Math.ceil(root.messages.length / self.columns) * (self.tile + self.gutter);
+                        for m[index] in root.messages: Rectangle {
+                            x: mod(index, media-grid.columns) * (media-grid.tile + media-grid.gutter);
+                            y: Math.floor(index / media-grid.columns) * (media-grid.tile + media-grid.gutter);
+                            width: media-grid.tile;
+                            height: media-grid.tile;
+                            border-radius: Spacing.radius-md;
+                            background: Colors.inset;
+                            border-width: root.visible-conversation-count + index == root.selected-index ? 2px : 0px;
+                            border-color: Colors.primary;
+                            clip: true;
+                            accessible-role: button;
+                            accessible-label: m.content-preview;
+                            accessible-action-default => { root.message-selected(m.message-id); }
+                            if index < root.has-thumbnails.length && root.has-thumbnails[index]: Image {
+                                width: 100%; height: 100%; source: root.thumbnails[index]; image-fit: cover;
+                            }
+                            if index >= root.has-thumbnails.length || !root.has-thumbnails[index]: Image {
+                                source: Icons.image; width: 30px; height: 30px;
+                                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                colorize: Colors.text-muted;
+                            }
+                            Rectangle { y: parent.height - 38px; height: 38px; width: 100%; background: Materials.thick;
+                                Text { text: m.content-preview; color: Colors.text-primary; font-size: Typography.xs;
+                                    x: Spacing.sm; width: parent.width - 2 * Spacing.sm; height: 100%; vertical-alignment: center; overflow: elide; }
+                            }
+                            TouchArea { enabled: root.show; mouse-cursor: pointer; clicked => { root.message-selected(m.message-id); } }
+                        }
+                    }
+                    for section[i] in ["Messages", "Media", "Files", "Links", "Voice"]: Rectangle {
+                        visible: (root.category == "all" || root.category == section.to-lowercase()) && root.category-counts[i + 2] > root.page-limits[i + 2];
+                        height: self.visible ? Spacing.touch-target-min : 0px;
+                        border-radius: Spacing.radius-lg;
+                        background: more-touch.pressed ? Materials.pressed : more-touch.has-hover ? Colors.surface-hover : Colors.inset;
+                        accessible-role: button;
+                        accessible-label: "Show more " + section.to-lowercase();
+                        accessible-action-default => { root.show-more(section.to-lowercase()); }
+                        more-touch := TouchArea { enabled: parent.visible; mouse-cursor: pointer; clicked => { root.show-more(section.to-lowercase()); } }
+                        Text { accessible-role: none; text: "Show more " + section.to-lowercase(); color: Colors.primary; font-size: Typography.sm; width: 100%; height: 100%; horizontal-alignment: center; vertical-alignment: center; }
                     }
 
-                    if root.total-count == 0 && root.query != "" && !root.searching && !root.query-is-handle: Text {
-                        text: "No results";
+                    if root.searching: Text {
+                        text: "Searching this device…";
                         color: Colors.text-muted;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
+                    }
+
+                    // A content tab with nothing shared yet says so, instead of
+                    // showing an empty list under the recent searches.
+                    if root.query == "" && !root.searching && root.messages.length == 0
+                        && (root.category == "media" || root.category == "files" || root.category == "links" || root.category == "voice"): Text {
+                        text: root.category == "media" ? "No photos or videos yet"
+                            : root.category == "files" ? "No files yet"
+                            : root.category == "links" ? "No links yet" : "No voice messages yet";
+                        color: Colors.text-muted;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                    }
+
+                    if root.total-count == 0 && root.query != "" && !root.searching && !root.query-is-handle: Text {
+                        text: "No matches on this device";
+                        color: Colors.text-muted;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+    date-layer := Rectangle {
+        property <float> reveal: root.date-sheet-open ? 1 : 0;
+        animate reveal { duration: Materials.motion-standard; easing: Materials.glide; }
+        visible: root.date-sheet-open || self.reveal > 0;
+        opacity: self.reveal;
+        width: 100%; height: 100%; background: Materials.scrim;
+        TouchArea { enabled: root.date-sheet-open; clicked => { root.date-sheet-open = false; } }
+        GlassSurface {
+            material-level: 3; elevation: 4;
+            x: (parent.width - self.width) / 2;
+            y: max(0px, min(parent.height - self.height - Spacing.md
+                + (1 - date-layer.reveal) * 48px, parent.height - self.height));
+            width: min(420px, parent.width - 24px);
+            height: min(548px, parent.height - 24px);
+            border-radius: Spacing.radius-xl;
+            transform-origin: { x: self.width / 2, y: self.height };
+            transform-scale-x: 94% + date-layer.reveal * 6%;
+            transform-scale-y: 94% + date-layer.reveal * 6%;
+            VerticalLayout {
+                padding: Spacing.lg;
+                spacing: Spacing.xs;
+                Text { text: "When"; color: Colors.text-primary; font-size: Typography.lg; font-weight: Typography.semibold; }
+                Flickable {
+                    height: Spacing.touch-target-min;
+                    viewport-width: quick-choices.preferred-width;
+                    viewport-height: self.height;
+                    quick-choices := HorizontalLayout {
+                        spacing: Spacing.xs;
+                for choice in ["Any time", "Today", "7 days", "30 days", "This year"]: Rectangle {
+                    width: max(70px, choice-label.preferred-width + 20px);
+                    height: Spacing.touch-target-min; border-radius: Spacing.radius-sm;
+                    background: choice-touch.pressed ? Materials.pressed : choice-touch.has-hover ? Materials.hover : transparent;
+                    accessible-role: button; accessible-label: choice;
+                    accessible-action-default => {
+                        root.date-filter = choice == "Today" ? "today" : choice == "7 days" ? "week" : choice == "30 days" ? "month" : choice == "This year" ? "year" : "any";
+                        root.date-sheet-open = false;
+                        root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                    }
+                    choice-keys := FocusScope { width: 0px; height: 0px; enabled: root.date-sheet-open;
+                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return {
+                            root.date-filter = choice == "Today" ? "today" : choice == "7 days" ? "week" : choice == "30 days" ? "month" : choice == "This year" ? "year" : "any";
+                            root.date-sheet-open = false;
+                            root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                            return accept;
+                        } return reject; }
+                    }
+                    Rectangle { border-width: choice-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-sm; }
+                    choice-touch := TouchArea { mouse-cursor: pointer; clicked => {
+                        root.date-filter = choice == "Today" ? "today" : choice == "7 days" ? "week" : choice == "30 days" ? "month" : choice == "This year" ? "year" : "any";
+                        root.date-sheet-open = false;
+                        root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                    } }
+                    choice-label := Text { text: choice; width: 100%; color: Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; height: 100%; vertical-alignment: center; }
+                }
+                    }
+                }
+                HorizontalLayout {
+                    height: Spacing.touch-target-min;
+                    Rectangle { width: Spacing.touch-target-min; height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
+                        background: prev-touch.pressed ? Materials.pressed : prev-touch.has-hover ? Materials.hover : Colors.inset;
+                        accessible-role: button; accessible-label: "Previous month";
+                        accessible-action-default => { root.calendar-shift(-1); }
+                        prev-keys := FocusScope { width: 0px; height: 0px; enabled: root.date-sheet-open;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.calendar-shift(-1); return accept; } return reject; }
+                        }
+                        Rectangle { border-width: prev-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
+                        prev-touch := TouchArea { mouse-cursor: pointer; clicked => { root.calendar-shift(-1); } }
+                        Text { text: "‹"; width: 100%; height: 100%; color: Colors.primary; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Text { text: root.calendar-month; color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; horizontal-stretch: 1; horizontal-alignment: center; vertical-alignment: center; }
+                    Rectangle { width: Spacing.touch-target-min; height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
+                        background: next-touch.pressed ? Materials.pressed : next-touch.has-hover ? Materials.hover : Colors.inset;
+                        accessible-role: button; accessible-label: "Next month";
+                        accessible-action-default => { root.calendar-shift(1); }
+                        next-keys := FocusScope { width: 0px; height: 0px; enabled: root.date-sheet-open;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.calendar-shift(1); return accept; } return reject; }
+                        }
+                        Rectangle { border-width: next-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
+                        next-touch := TouchArea { mouse-cursor: pointer; clicked => { root.calendar-shift(1); } }
+                        Text { text: "›"; width: 100%; height: 100%; color: Colors.primary; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+                HorizontalLayout {
+                    height: 24px;
+                    for weekday in ["M", "T", "W", "T", "F", "S", "S"]: Text {
+                        text: weekday; color: Colors.text-muted; font-size: Typography.xs;
+                        horizontal-stretch: 1; horizontal-alignment: center; vertical-alignment: center;
+                    }
+                }
+                calendar-grid := Rectangle {
+                    height: 6 * Spacing.touch-target-min;
+                    for day[index] in root.calendar-days: Rectangle {
+                        x: mod(index, 7) * parent.width / 7;
+                        y: Math.floor(index / 7) * Spacing.touch-target-min;
+                        width: parent.width / 7; height: Spacing.touch-target-min;
+                        border-radius: Spacing.radius-lg;
+                        background: day.date == root.custom-start || day.date == root.custom-end ? Colors.action-fill
+                            : root.custom-start != "" && root.custom-end != "" && day.date > root.custom-start && day.date < root.custom-end ? Colors.selected
+                            : day-touch.pressed ? Materials.pressed : day-touch.has-hover ? Materials.hover : transparent;
+                        transform-origin: { x: self.width / 2, y: self.height / 2 };
+                        transform-scale-x: day-touch.pressed ? 90% : 100%;
+                        transform-scale-y: day-touch.pressed ? 90% : 100%;
+                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                        accessible-role: button; accessible-label: day.date;
+                        accessible-action-default => {
+                            if (root.custom-start == "" || root.custom-end != "") {
+                                root.custom-start = day.date; root.custom-end = ""; root.custom-start-short = day.short; root.custom-end-short = "";
+                            } else {
+                                if (day.date < root.custom-start) { root.custom-end = root.custom-start; root.custom-start = day.date; root.custom-end-short = root.custom-start-short; root.custom-start-short = day.short; }
+                                else { root.custom-end = day.date; root.custom-end-short = day.short; }
+                                root.date-filter = "custom:" + root.custom-start + ".." + root.custom-end;
+                                root.date-sheet-open = false;
+                                root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                            }
+                        }
+                        day-keys := FocusScope { width: 0px; height: 0px; enabled: root.date-sheet-open;
+                            key-pressed(event) => {
+                                if event.text == Key.Space || event.text == Key.Return {
+                                    if (root.custom-start == "" || root.custom-end != "") {
+                                        root.custom-start = day.date; root.custom-end = ""; root.custom-start-short = day.short; root.custom-end-short = "";
+                                    } else {
+                                        if (day.date < root.custom-start) { root.custom-end = root.custom-start; root.custom-start = day.date; root.custom-end-short = root.custom-start-short; root.custom-start-short = day.short; }
+                                        else { root.custom-end = day.date; root.custom-end-short = day.short; }
+                                        root.date-filter = "custom:" + root.custom-start + ".." + root.custom-end;
+                                        root.date-sheet-open = false;
+                                        root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                                    }
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                        if day-keys.has-focus: Rectangle { border-width: 2px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
+                        day-touch := TouchArea { mouse-cursor: pointer;
+                            pointer-event(event) => {
+                                if (event.kind == PointerEventKind.down) {
+                                    root.calendar-swipe-start = self.absolute-position.x + self.mouse-x;
+                                    root.calendar-swiped = false;
+                                }
+                                if (event.kind == PointerEventKind.up && abs(self.absolute-position.x + self.mouse-x - root.calendar-swipe-start) > 64px) {
+                                    root.calendar-swiped = true;
+                                    root.calendar-shift(self.absolute-position.x + self.mouse-x < root.calendar-swipe-start ? 1 : -1);
+                                }
+                            }
+                            clicked => {
+                            if (root.calendar-swiped) { root.calendar-swiped = false; return; }
+                            if (root.custom-start == "" || root.custom-end != "") {
+                                root.custom-start = day.date; root.custom-end = ""; root.custom-start-short = day.short; root.custom-end-short = "";
+                            } else {
+                                if (day.date < root.custom-start) { root.custom-end = root.custom-start; root.custom-start = day.date; root.custom-end-short = root.custom-start-short; root.custom-start-short = day.short; }
+                                else { root.custom-end = day.date; root.custom-end-short = day.short; }
+                                root.date-filter = "custom:" + root.custom-start + ".." + root.custom-end;
+                                root.date-sheet-open = false;
+                                root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                            }
+                        } }
+                        Text { text: day.label; width: 100%; height: 100%; color: day.date == root.custom-start || day.date == root.custom-end ? Colors.on-action : day.is-today ? Colors.primary : day.in-month ? Colors.text-primary : Colors.text-muted;
+                            font-weight: day.is-today ? Typography.semibold : Typography.normal;
+                            font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+                Text { text: root.custom-start == "" ? "Tap a start day, then an end day" : root.custom-end == "" ? "Start: " + root.custom-start + " · choose end" : root.custom-start + " – " + root.custom-end;
+                    color: Colors.text-muted; font-size: Typography.xs; horizontal-alignment: center; }
+            }
+        }
+    }
+    picker-layer := Rectangle {
+        property <float> reveal: root.picker-mode != "" ? 1 : 0;
+        animate reveal { duration: Materials.motion-standard; easing: Materials.glide; }
+        visible: root.picker-mode != "" || self.reveal > 0;
+        opacity: self.reveal;
+        width: 100%; height: 100%; background: Materials.scrim;
+        TouchArea { enabled: root.picker-mode != ""; clicked => { root.picker-mode = ""; } }
+        GlassSurface {
+            material-level: 3; elevation: 4;
+            x: (parent.width - self.width) / 2;
+            y: max(0px, min(parent.height - self.height - Spacing.md
+                + (1 - picker-layer.reveal) * 48px, parent.height - self.height));
+            width: min(420px, parent.width - 24px);
+            height: min(560px, parent.height - 24px);
+            border-radius: Spacing.radius-xl;
+            transform-origin: { x: self.width / 2, y: self.height };
+            transform-scale-x: 94% + picker-layer.reveal * 6%;
+            transform-scale-y: 94% + picker-layer.reveal * 6%;
+            VerticalLayout {
+                // The list is capped at its rows: spare height goes below it,
+                // not above the field.
+                alignment: start;
+                padding: Spacing.lg; spacing: Spacing.sm;
+                Text { vertical-stretch: 0; text: root.picker-mode == "from" ? "From a person" : "In a chat"; color: Colors.text-primary; font-size: Typography.lg; font-weight: Typography.semibold; }
+                Rectangle {
+                    vertical-stretch: 0;
+                    height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
+                    background: Colors.inset;
+                    accessible-role: text-input;
+                    accessible-label: root.picker-mode == "from" ? "Search people" : "Search chats";
+                    if root.picker-query == "" && picker-input.preedit-text == "": Text {
+                        x: Spacing.md; width: parent.width - 2 * Spacing.md; height: 100%;
+                        text: root.picker-mode == "from" ? "Search people" : "Search chats";
+                        color: Colors.text-muted; font-size: Typography.sm; vertical-alignment: center;
+                    }
+                    picker-input := TextInput { text <=> root.picker-query; x: Spacing.md; width: parent.width - 2 * Spacing.md; height: 100%; single-line: true; color: Colors.text-primary; font-size: Typography.sm; vertical-alignment: center;
+                        edited => { root.picker-request(root.picker-mode, root.picker-query); }
+                    }
+                }
+                Flickable {
+                    vertical-stretch: 1;
+                    viewport-width: self.width;
+                    viewport-height: picker-list.preferred-height;
+                    picker-list := VerticalLayout {
+                        width: parent.width; spacing: Spacing.xxs;
+                        for option in root.picker-options: Rectangle {
+                            height: Spacing.touch-target-min + Spacing.xs;
+                            border-radius: Spacing.radius-sm;
+                            background: option-touch.pressed ? Materials.pressed : option-touch.has-hover ? Materials.hover : transparent;
+                            transform-origin: { x: self.width / 2, y: self.height / 2 };
+                            transform-scale-x: option-touch.pressed ? 96% : 100%;
+                            transform-scale-y: option-touch.pressed ? 96% : 100%;
+                            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                            accessible-role: list-item;
+                            accessible-label: option.name;
+                            accessible-action-default => {
+                                if (root.picker-mode == "from") { root.from-filter = option.id; root.from-label = option.name; }
+                                else { root.in-filter = option.id; root.in-label = option.name; }
+                                root.picker-mode = "";
+                                root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                            }
+                            option-touch := TouchArea { mouse-cursor: pointer; clicked => {
+                                if (root.picker-mode == "from") { root.from-filter = option.id; root.from-label = option.name; }
+                                else { root.in-filter = option.id; root.in-label = option.name; }
+                                root.picker-mode = "";
+                                root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                            } }
+                            Rectangle { x: Spacing.sm; y: (parent.height - self.height) / 2; width: 32px; height: 32px; border-radius: self.width / 2; background: Colors.selected; clip: true;
+                                if option.has-avatar: Image { source: option.avatar; width: 100%; height: 100%; image-fit: cover; }
+                                if !option.has-avatar: Image { source: option.conv-type == "channel" ? Icons.hash : option.conv-type == "private_group" ? Icons.users : Icons.user;
+                                    x: 8px; y: 8px; width: 16px; height: 16px; colorize: Colors.primary; }
+                            }
+                            Text { accessible-role: none; text: option.name; x: Spacing.sm + 40px; width: parent.width - Spacing.sm - 48px; height: 100%; color: Colors.text-primary;
+                                font-size: Typography.sm; vertical-alignment: center; overflow: elide; }
+                        }
+                        if root.picker-options.length == 0: Text { text: root.picker-searching ? "Searching this device…" : "No matches"; color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; }
                     }
                 }
             }

@@ -1,0 +1,134 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+import { Icons } from "../theme/icons.slint";
+import { Elevation } from "../theme/elevation.slint";
+export component ProfileSafetyNumber inherits VerticalLayout {
+    in property <string> safety-number;
+    in property <bool> is-verified;
+    in property <bool> verification-pending;
+    in-out property <bool> show-safety-number;
+    callback view-safety-number();
+    callback toggle-verified();
+    padding-left: Spacing.md;
+    padding-right: Spacing.md;
+    spacing: Spacing.sm;
+
+    safety-number-toggle := TouchArea {
+        mouse-cursor: pointer;
+        height: 32px;
+        accessible-role: button;
+        accessible-label: root.is-verified ? "Verified, safety number" : "Not verified, safety number";
+        accessible-action-default => {
+            if root.safety-number == "" {
+                root.view-safety-number();
+            } else {
+                root.show-safety-number = !root.show-safety-number;
+            }
+        }
+        KeyFocus {
+            activate => {
+                if root.safety-number == "" {
+                    root.view-safety-number();
+                } else {
+                    root.show-safety-number = !root.show-safety-number;
+                }
+            }
+        }
+
+        clicked => {
+            if root.safety-number == "" {
+                root.view-safety-number();
+            } else {
+                root.show-safety-number = !root.show-safety-number;
+            }
+        }
+
+        HorizontalLayout {
+            alignment: space-between;
+
+            Text {
+                accessible-role: none;
+                text: root.is-verified ? "✓ Verified" : "Not verified · Safety number";
+                color: root.is-verified ? Colors.online : Colors.text-muted;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+                vertical-alignment: center;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    source: Icons.chevron-right;
+                    width: 16px;
+                    height: 16px;
+                    transform-rotation: root.show-safety-number ? 270deg : 90deg;
+                    colorize: safety-number-toggle.has-hover ? Colors.text-primary : Colors.text-muted;
+                }
+            }
+        }
+    }
+
+    if root.show-safety-number && root.safety-number != "": VerticalLayout {
+        spacing: Spacing.sm;
+
+        // Explicit height from an inner layout, as the
+        // number box below: a bare wrapped Text here was
+        // measured a line short on a phone, and the next
+        // row covered Mark as verified.
+        Rectangle {
+            height: safety-hint.preferred-height;
+            safety-hint := VerticalLayout {
+                Text {
+                    text: "Compare this number with your contact to verify end-to-end encryption. If the numbers match, your conversation is secure.";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // A padded layout, not an absolutely placed Text: the
+        // box was sized from the unwrapped text height, so the
+        // wrapped number ran out of it over the buttons below.
+        Rectangle {
+            height: safety-number-content.preferred-height;
+            background: Colors.surface-section;
+            border-radius: Spacing.radius-md;
+            drop-shadow-blur: Elevation.card-blur;
+            drop-shadow-offset-y: Elevation.card-offset;
+            drop-shadow-color: Elevation.card-shadow;
+            border-width: Elevation.rim-width;
+            border-color: Elevation.card-rim;
+
+            safety-number-content := VerticalLayout {
+                padding: Spacing.md;
+
+                safety-number-text := Text {
+                    text: root.safety-number;
+                    color: Colors.text-primary;
+                    font-size: Typography.sm2;
+                    font-family: Typography.font-family-mono;
+                    font-weight: Typography.medium;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                    // No letter-spacing: layout measures
+                    // wrapped text without it, so on a
+                    // phone the box came out a line short
+                    // and the next row covered the verify
+                    // button (taps went to it).
+                }
+            }
+        }
+
+        Button {
+            text: root.verification-pending ? "Updating verification…" : root.is-verified ? "Clear verification" : "Mark as verified";
+            variant: root.is-verified ? "secondary" : "primary";
+            loading: root.verification-pending;
+            height: Spacing.touch-target-min;
+            clicked => { root.toggle-verified(); }
+        }
+    }
+}

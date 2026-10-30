@@ -1,3 +1,12 @@
+import { MessageBody } from "message_body.slint";
+import { MessageCall } from "message_call.slint";
+import { MessageQuote } from "message_quote.slint";
+import { MessageAttachments } from "message_attachments.slint";
+import { MessageFooter } from "message_footer.slint";
+import { MessageActions } from "message_actions.slint";
+import { MessageThreadIndicator } from "message_thread.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 // Single message item component with bubble layout
 //
 // Displays an individual message with chat-style bubbles.
@@ -7,13 +16,12 @@
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Elevation } from "../theme/elevation.slint";
 import { Typography } from "../theme/typography.slint";
 import { Avatar } from "../components/avatar.slint";
 import { Haptics } from "../components/haptics.slint";
-import { MessageAttachmentData, ReactionEntry, LinkPreviewData, RichTextSpan } from "types.slint";
+import { MessageAttachmentData, ReactionEntry, RichTextBlock } from "types.slint";
 import { Icons } from "../theme/icons.slint";
-import { AudioPlayer } from "audio_player.slint";
-import { HoldArea } from "../components/hold_area.slint";
 
 export component MessageItem inherits Rectangle {
     // Message identity
@@ -29,19 +37,30 @@ export component MessageItem inherits Rectangle {
 
     // Content
     in property <string> content: "";
-    in property <[RichTextSpan]> rich-content: [];
+    in property <[RichTextBlock]> rich-content: [];
     in property <string> timestamp: "";
+
+    // Ordinary messages have one span, even when they contain no markdown.
+    // Keep that common case out of the nested rich-text layout/repeater.
+    // 70% of the pane, but capped: on a wide tablet or desktop window a long
+    // message otherwise ran ~130 characters to a line.
+    property <length> bubble-max-width: min(root.width * 0.7, 600px * Appearance.text-grow);
+    property <length> text-max-width: root.bubble-max-width - Spacing.sm * 2;
 
     // Flags
     in property <bool> is-own: false;
     in property <bool> is-edited: false;
+    in property <bool> disappearing: false;
     in property <bool> is-deleted: false;
     in property <bool> is-system: false;
     in property <bool> is-ai: false;
     in property <bool> is-pinned: false;
     in property <bool> show-sender: true;
+    in property <bool> is-anonymous: false;
     in property <bool> is-dm: false;  // When true, hide avatar/name - just bubbles
-    in property <string> delivery-status: "";  // "sent", "delivered", "read" for own messages
+    in property <bool> can-thread: true;  // Threads are a channel feature
+    in property <string> failure-reason: "";
+    in property <string> delivery-status: "";  // "sending", "unconfirmed", "sent", "failed", "delivered", "read" for own messages
     /// Whether this message went over the mesh. Set by the caller rather than
     /// inferred from the status string: "sent" is a mesh state too — in fact the
     /// most common one, since every room and cell message is a broadcast — so a
@@ -55,13 +74,34 @@ export component MessageItem inherits Rectangle {
 
     // Call message
     in property <bool> is-call: false;
+    callback sender-profile-requested(string);
     in property <string> call-type: "";
     in property <string> call-duration: "";
 
     // Attachments
     in property <bool> has-attachments: false;
+    // What a screen reader says for the body: the text, else what the first
+    // attachment is (a voice note or photo has no text to read).
+    property <string> attachment-spoken: root.attachment-count == 0 ? ""
+        : root.attachments[0].category == "audio" ? "Voice message, " + root.attachments[0].duration-display
+        : root.attachments[0].is-image ? (root.attachment-count > 1 ? root.attachment-count + " photos" : "Photo")
+        : root.attachments[0].is-video ? "Video"
+        : "File " + root.attachments[0].filename;
+    property <string> spoken-content: root.content != "" && root.attachment-spoken != ""
+        ? root.attachment-spoken + ", " + root.content
+        : root.content != "" ? root.content : root.attachment-spoken;
     in property <int> attachment-count: 0;
     in property <[MessageAttachmentData]> attachments: [];
+    in property <[int]> standalone-attachment-indices: [];
+    property <bool> album-message: root.has-attachments && root.attachments.length > 0 && root.attachments[0].album-count >= 2;
+    property <bool> photo-message: root.album-message || (root.has-attachments && root.attachments.length == 1 && root.attachments[0].is-image);
+    property <bool> photo-only: root.photo-message && root.content == "" && !root.is-reply && !root.is-thread-reply;
+    property <float> photo-aspect: root.photo-message && !root.album-message && root.attachments[0].height > 0
+        ? root.attachments[0].width / max(1, root.attachments[0].height) : 1.5;
+    property <length> photo-width: root.album-message ? min(280px, root.width * 0.7 - Spacing.md) : root.photo-message
+        ? (root.attachments[0].width > 0 && root.attachments[0].height > 0
+            ? max(100px, min(min(280px, root.width * 0.7 - Spacing.md), 380px * root.photo-aspect))
+            : 180px) : 0px;
 
     // Audio playback state
     in property <string> current-playing-attachment-id: "";
@@ -69,15 +109,10 @@ export component MessageItem inherits Rectangle {
     in property <float> audio-progress: 0.0;
     in property <string> audio-elapsed: "0:00";
 
-    // Link preview
-    in property <bool> has-link-preview: false;
-    in property <LinkPreviewData> link-preview;
-
-    // Callbacks for link preview
-    callback link-preview-clicked(string);  // url
-
     // Reactions
     in property <bool> has-reactions: false;
+    // Window y of the floating header's lower edge; hover actions stay below it.
+    in property <length> chrome-bottom: 0px;
     in property <string> reaction-summary: "";
     in property <[ReactionEntry]> reactions: [];
 
@@ -94,6 +129,9 @@ export component MessageItem inherits Rectangle {
     in property <bool> reply-to-not-found: false;  // Quoted parent missing/deleted
     in property <string> reply-to-message-id: "";  // Parent MessageId — tap-to-jump target
     in property <bool> highlighted: false;          // Brief green flash when this is a jump target
+    // Animate outside the conditional overlay so it survives until fade-out ends.
+    property <float> highlight-progress: root.highlighted ? 1.0 : 0.0;
+    animate highlight-progress { duration: Materials.motion-standard; easing: Materials.glide; }
     in property <string> reply-to-sender-name: "";
     in property <string> reply-to-preview: "";
     in property <string> reply-to-category: "";        // Quoted parent media category ("audio"/"image"/"video"/"")
@@ -115,23 +153,86 @@ export component MessageItem inherits Rectangle {
     // to predict where it would draw and land on it blind, and a plain scroll
     // spawned it under the thumb. Press-and-hold (below) is the touch entry
     // point to the same menu, so gating this on `!mobile` costs touch nothing.
-    property <bool> is-hovered: !root.mobile && touch.has-hover;
+    // While the context menu or reaction picker is up for any message, the
+    // hover bar hides: two menus for one message read as competing controls.
+    in property <bool> menu-open: false;
+    property <bool> is-hovered: !root.mobile && !root.menu-open && touch.has-hover;
 
     // Multi-select
     in property <bool> selected: false;
+    // The list marks only a newly appended row. Virtualized history rows
+    // remain still when they are recycled during a scroll.
+    in property <bool> animate-arrival: false;
+    in property <int> arrival-stagger-index: 0;
+    property <float> arrival-progress: 1;
+    init => {
+        if (root.animate-arrival) {
+            arrival-timer.running = true;
+            root.arrival-progress = 0;
+        }
+    }
+    changed animate-arrival => {
+        if (root.animate-arrival) {
+            arrival-timer.running = true;
+            root.arrival-progress = 0;
+        }
+    }
+    arrival-timer := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => { self.running = false; root.arrival-progress = 1; }
+    }
+    animate arrival-progress {
+        duration: arrival-timer.running ? 0ms : Materials.motion-emphasized;
+        easing: Materials.spring;
+        delay: Appearance.reduce-motion ? 0ms : min(root.arrival-stagger-index, 5) * 30ms / Appearance.animation-speed;
+    }
     in property <bool> selection-mode: false;
     // Touch platform. Gates the hold gesture so a desktop left-button hold
     // does not open the menu (desktop keeps right-click).
     in property <bool> mobile: false;
+    // Core's permission for forwarding from the open conversation.
+    in property <bool> can-forward: false;
 
     // Callbacks
     callback reply-clicked(string, string);
+    // A horizontal bubble swipe owns the gesture: the host list stops
+    // scrolling so a few pixels of vertical drift cannot steal it.
+    callback swipe-engaged(bool);
+    callback forward-clicked(string, string);
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    // Tapping an existing reaction toggles YOUR reaction of that emoji. Before
+    // this the whole pill only opened the picker, so there was no way to take a
+    // reaction back except adding it again from the picker (§112w).
+    callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    out property <length> menu-anchor-top: 0px;
+    out property <length> menu-anchor-bottom: 0px;
+    out property <length> menu-anchor-left: 0px;
+    out property <length> menu-anchor-right: 0px;
     callback selection-toggled(string);
+    callback open-message-link(string, string);
     callback message-clicked(string);
     callback attachment-clicked(string);
+    // Synchronous image-viewer origin. The existing attachment callback stays
+    // intact for direct MessageItem users such as the thread panel.
+    out property <length> viewer-origin-x: 0px;
+    out property <length> viewer-origin-y: 0px;
+    out property <length> viewer-origin-width: 0px;
+    out property <length> viewer-origin-height: 0px;
+    function open-image(id: string, x: length, y: length, width: length, height: length) {
+        root.viewer-origin-x = x;
+        root.viewer-origin-y = y;
+        root.viewer-origin-width = width;
+        root.viewer-origin-height = height;
+        root.attachment-clicked(id);
+    }
+    function open-other-attachment(id: string) {
+        root.viewer-origin-width = 0px;
+        root.viewer-origin-height = 0px;
+        root.attachment-clicked(id);
+    }
     callback audio-seek(string, float);
     callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
 
@@ -161,18 +262,131 @@ export component MessageItem inherits Rectangle {
     // not reachable from a component-level function.
     property <length> anchor-x: 0px;
     property <length> anchor-y: 0px;
+    function request-menu(x: length, y: length, top: length, bottom: length, left: length, right: length) {
+        root.menu-anchor-top = top;
+        root.menu-anchor-bottom = bottom;
+        root.menu-anchor-left = left;
+        root.menu-anchor-right = right;
+        root.more-clicked(root.sender-id, root.timestamp-ns, x, y);
+    }
     property <bool> holding: false;
     // 0 = nothing fired yet, 1 = menu opened, 2 = selection engaged. Also used
     // to swallow the release-tap, so a hold never doubles as a click.
     property <int> hold-tier: 0;
+    // Touch swipe starts only after horizontal travel wins over scrolling.
+    out property <bool> swipe-tracking: false;
+    property <bool> swipe-active: false;
+    property <bool> swipe-armed: false;
+    property <bool> swipe-haptic-fired: false;
+    property <length> swipe-offset: 0px;
+    property <length> swipe-threshold: 36px;
+    property <bool> swipe-forward: false;
+
+    function begin-swipe(x: length, y: length) {
+        root.swipe-tracking = root.mobile && !root.selection-mode
+            && !root.is-deleted && !root.is-system && !root.is-call
+            && (!root.is-own || (root.delivery-status != "failed" && root.delivery-status != "sending"));
+        root.swipe-active = false;
+        root.swipe-armed = false;
+        root.swipe-haptic-fired = false;
+        root.swipe-forward = false;
+        root.swipe-offset = 0px;
+        root.press-x = x;
+        root.press-y = y;
+    }
+
+    function move-swipe(x: length, y: length) {
+        if (!root.swipe-tracking || root.hold-tier != 0) { return; }
+        let dx = x - root.press-x;
+        let dy = y - root.press-y;
+        let toward-center = root.is-own ? -dx : dx;
+        let forward = toward-center < 0px;
+        if (forward && !root.can-forward) {
+            root.swipe-offset = 0px;
+            root.swipe-armed = false;
+            return;
+        }
+        if (!root.swipe-active) {
+            if (abs(dy) > 9px && abs(dy) >= abs(dx)) {
+                root.swipe-tracking = false;
+                return;
+            }
+            if (abs(dx) < 9px || abs(dx) <= abs(dy)) { return; }
+            root.swipe-active = true;
+            root.swipe-engaged(true);
+            root.cancel-hold();
+        }
+        if (root.swipe-forward != forward) { root.swipe-haptic-fired = false; }
+        root.swipe-forward = forward;
+        // Resistance beyond the action threshold keeps a long drag attached
+        // to the bubble without letting it run away from the finger.
+        let travel = abs(toward-center);
+        let direction = (root.is-own ? -1 : 1) * (forward ? -1 : 1);
+        root.swipe-offset = direction
+            * (min(travel, root.swipe-threshold)
+                + min(max(travel - root.swipe-threshold, 0px) * 0.33, 24px));
+        let armed = travel >= root.swipe-threshold;
+        if (armed && !root.swipe-haptic-fired) {
+            Haptics.reply-ready();
+            root.swipe-haptic-fired = true;
+        }
+        root.swipe-armed = armed;
+    }
+
+    function end-swipe(cancelled: bool) {
+        let trigger = !cancelled && root.swipe-active && root.swipe-armed;
+        if (root.swipe-active) { root.hold-tier = 3; root.swipe-engaged(false); }
+        root.swipe-tracking = false;
+        root.swipe-active = false;
+        root.swipe-armed = false;
+        root.swipe-offset = 0px;
+        if (trigger) {
+            if (root.swipe-forward) {
+                root.forward-clicked(root.sender-id, root.timestamp-ns);
+            } else {
+                root.reply-clicked(root.sender-id, root.timestamp-ns);
+            }
+        }
+    }
 
     function cancel-hold() {
         root.holding = false;
         tier1-timer.running = false;
     }
 
+    // Both the bubble TouchArea and link-owned StyledText stream use absolute
+    // coordinates, so movement and anchoring are identical across inline runs.
+    function begin-message-press(x: length, y: length, menu-x: length, menu-y: length, menu-top: length, menu-right: length) {
+        root.cancel-hold();
+        root.begin-swipe(x, y);
+        root.press-x = x;
+        root.press-y = y;
+        root.anchor-x = menu-x;
+        root.anchor-y = menu-y;
+        root.menu-anchor-top = menu-top;
+        root.menu-anchor-bottom = menu-y;
+        root.menu-anchor-left = menu-x;
+        root.menu-anchor-right = menu-right;
+        root.hold-tier = 0;
+        if (root.mobile && !root.selection-mode
+            && (!root.is-system || root.is-call) && !root.is-deleted) {
+            root.holding = true;
+            tier1-timer.running = true;
+        }
+    }
+
+    function move-message-press(x: length, y: length) {
+        root.move-swipe(x, y);
+        if (root.holding
+            && (abs(x - root.press-x) > root.hold-slop
+                || abs(y - root.press-y) > root.hold-slop)) {
+            root.cancel-hold();
+        }
+    }
+
     function open-menu() {
-        root.more-clicked(root.sender-id, root.timestamp-ns, root.anchor-x, root.anchor-y);
+        root.request-menu(root.anchor-x, root.anchor-y, root.menu-anchor-top, root.menu-anchor-bottom,
+            root.menu-anchor-left, root.menu-anchor-right);
     }
 
     tier1-timer := Timer {
@@ -190,12 +404,22 @@ export component MessageItem inherits Rectangle {
         }
     }
 
+    // Bubble corners (one rule for text, media and call bubbles): round
+    // everywhere except the outer side — its bottom corner is the tail, and
+    // its top corner tightens where the bubble continues a same-sender run,
+    // so a run reads as one stacked group.
+    property <length> r-round: Spacing.radius-bubble;
+    property <length> r-outer-top: root.is-continuation ? Spacing.radius-bubble-joint : Spacing.radius-bubble;
+    property <length> r-outer-bottom: Spacing.radius-bubble-joint;
+
     // Styling
     min-height: main-layout.preferred-height;
-    // Selected rows tint rather than outline: the bubbles already carry Neo
-    // borders, and a second border on top read as a rendering artefact.
-    background: root.selected ? Colors.primary.with-alpha(0.18) : transparent;
-    animate background { duration: 150ms; easing: ease-out; }
+    // Selected rows tint rather than outline the flat bubbles.
+    // Animate a private property so Slint can share MessageItem between the
+    // main conversation and thread panel instead of inlining both trees.
+    property <brush> selection-background: root.selected ? Colors.tint-strong : transparent;
+    background: root.selection-background;
+    animate selection-background { duration: Materials.motion-quick; easing: Materials.settle; }
 
     // Wrap entire content in TouchArea for reliable hover detection.
     // Width/Height 100% ensures it covers the whole row.
@@ -215,7 +439,12 @@ export component MessageItem inherits Rectangle {
 
     main-layout := VerticalLayout {
         width: 100%;
-        padding: root.is-continuation ? Spacing.xxs : Spacing.xs;
+        y: (root.is-own ? 42px : 20px) * (1 - root.arrival-progress);
+        opacity: root.arrival-progress;
+        transform-origin: { x: root.is-own ? self.width : 0px, y: self.height };
+        transform-scale-x: root.is-own ? 84% + 16% * root.arrival-progress : 96% + 4% * root.arrival-progress;
+        transform-scale-y: root.is-own ? 84% + 16% * root.arrival-progress : 96% + 4% * root.arrival-progress;
+        padding: root.is-continuation ? Spacing.message-padding-continuation : Spacing.message-padding;
         padding-left: Spacing.sm;
         padding-right: Spacing.sm;
         spacing: root.is-continuation ? Spacing.xxs : Spacing.xs;
@@ -237,97 +466,34 @@ export component MessageItem inherits Rectangle {
         }
 
         // Call message (card style, aligned based on direction)
-        if root.is-call: HorizontalLayout {
-            width: 100%;
-            spacing: Spacing.sm;
-            alignment: root.is-own ? end : start;
-
-            Rectangle {
-                property <bool> is-missed: root.call-type == "missed";
-                property <bool> is-outgoing: root.call-type == "outgoing";
-
-                width: call-content.preferred-width + Spacing.lg * 2;
-                height: call-content.preferred-height + Spacing.md * 2;
-                background: is-missed ? Colors.error.transparentize(0.9) : Colors.surface;
-                border-radius: Spacing.radius-lg;
-                border-width: 1px;
-                border-color: is-missed ? Colors.error.transparentize(0.7) : Colors.neo-highlight;
-                drop-shadow-blur: Spacing.neo-blur-sm;
-                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                drop-shadow-color: Colors.neo-shadow;
-
-                call-content := HorizontalLayout {
-                    padding: Spacing.md;
-                    spacing: Spacing.md;
-                    alignment: center;
-
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 2px;
-
-                        HorizontalLayout {
-                            spacing: Spacing.xs;
-                            alignment: start;
-
-                            Text {
-                                property <string> arrow: is-outgoing ? "\u{2197}" : "\u{2199}";
-                                text: arrow;
-                                color: is-missed ? Colors.error : (is-outgoing ? Colors.success : Colors.primary);
-                                font-size: Typography.sm;
-                                vertical-alignment: center;
-                            }
-
-                            Text {
-                                text: is-missed ? "Missed call" : (is-outgoing ? "Outgoing call" : "Incoming call");
-                                color: is-missed ? Colors.error : Colors.text-primary;
-                                font-size: Typography.sm;
-                                font-weight: Typography.medium;
-                            }
-                        }
-
-                        HorizontalLayout {
-                            spacing: Spacing.xs;
-                            alignment: start;
-
-                            Text {
-                                text: root.timestamp;
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                            }
-
-                            if root.call-duration != "": Text {
-                                text: ", " + root.call-duration;
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        width: 40px;
-                        height: 40px;
-                        border-radius: 20px;
-                        background: is-missed ? Colors.error.transparentize(0.8) : Colors.primary.transparentize(0.85);
-
-                        Image {
-                            width: 20px;
-                            height: 20px;
-                            source: Icons.phone;
-                            colorize: is-missed ? Colors.error : Colors.primary;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                        }
-                    }
-                }
-
-                call-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.message-clicked(root.message-id);
-                    }
-                }
-            }
+        if root.is-call: MessageCall {
+            call-duration: root.call-duration;
+            call-type: root.call-type;
+            hold-tier: root.hold-tier;
+            is-anonymous: root.is-anonymous;
+            is-continuation: root.is-continuation;
+            is-dm: root.is-dm;
+            is-own: root.is-own;
+            message-id: root.message-id;
+            message-width: root.width;
+            r-outer-bottom: root.r-outer-bottom;
+            r-outer-top: root.r-outer-top;
+            r-round: root.r-round;
+            selection-mode: root.selection-mode;
+            sender-avatar-source: root.sender-avatar-source;
+            sender-id: root.sender-id;
+            sender-initials: root.sender-initials;
+            sender-name: root.sender-name;
+            show-sender: root.show-sender;
+            timestamp: root.timestamp;
+            selection-toggled(a0) => { root.selection-toggled(a0); }
+            sender-profile-requested(a0) => { root.sender-profile-requested(a0); }
+            request-menu(a0, a1, a2, a3, a4, a5) => { root.request-menu(a0, a1, a2, a3, a4, a5); }
+            begin-message-press(a0, a1, a2, a3, a4, a5) => { root.begin-message-press(a0, a1, a2, a3, a4, a5); }
+            cancel-hold() => { root.cancel-hold(); }
+            move-message-press(a0, a1) => { root.move-message-press(a0, a1); }
+            message-clicked(a0) => { root.message-clicked(a0); }
+            clear-hold-tier() => { root.hold-tier = 0; }
         }
 
         // Deleted message (simple text, aligned)
@@ -350,49 +516,152 @@ export component MessageItem inherits Rectangle {
             alignment: root.is-own ? end : start;
 
             // Avatar for others in channels (before bubble, hidden in continuations)
+            // A continuation hides the avatar but keeps its column, so every
+            // bubble of one sender shares a left edge.
+            if !root.is-own && !root.is-dm && root.show-sender && root.is-continuation: Rectangle {
+                width: Spacing.avatar-sm;
+                height: 1px;
+            }
             if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: Avatar {
                 size: Spacing.avatar-sm;
+                anonymous: root.is-anonymous;
                 source: root.sender-avatar-source;
                 fallback-text: root.sender-initials;
+                alt-name: root.sender-name;
+                accessible-role: button;
+                accessible-label: "View profile of " + root.sender-name;
+                accessible-action-default => {
+                    if root.selection-mode { root.selection-toggled(root.message-id); }
+                    else { root.sender-profile-requested(root.sender-id); }
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if root.selection-mode { root.selection-toggled(root.message-id); }
+                        else { root.sender-profile-requested(root.sender-id); }
+                    }
+                }
+
             }
 
             // Message bubble
             VerticalLayout {
                 spacing: Spacing.xs;
-                // Limit bubble width to 70% of container
-                max-width: root.width * 0.7;
+                max-width: root.bubble-max-width;
 
-                // Wrapper for bubble + absolutely positioned reactions
+                // Bubble wrapper; reactions participate in the content layout.
                 Rectangle {
                     width: bubble.width;
-                    height: bubble.height + (root.has-reactions ? 11px : 0);
+                    height: bubble.height;
+
+                Image {
+                    source: root.swipe-forward ? Icons.send : Icons.reply;
+                    width: 24px;
+                    height: 24px;
+                    x: (root.is-own == root.swipe-forward ? bubble.width : 0px)
+                        + root.swipe-offset / 2 - self.width / 2;
+                    y: (bubble.height - self.height) / 2;
+                    colorize: root.swipe-armed ? Colors.primary : Colors.text-muted;
+                    opacity: min(1, abs(root.swipe-offset) / root.swipe-threshold);
+                    transform-scale-x: 60% + 40% * min(1, abs(root.swipe-offset) / root.swipe-threshold);
+                    transform-scale-y: self.transform-scale-x;
+                    visible: root.swipe-active || self.opacity > 0;
+                    animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                }
 
                 bubble := Rectangle {
+                    x: root.swipe-offset;
+                    animate x { duration: root.swipe-active ? 0ms : Materials.motion-standard; easing: Materials.spring; }
+                    y: 0px;
                     property <bool> bubble-hovered: bubble-touch.has-hover;
                     accessible-role: text;
-                    accessible-label: root.is-own ? "Your message: " + root.content : root.sender-name + " says: " + root.content;
+                    accessible-label: root.is-own ? "Your message: " + root.spoken-content : root.sender-name + " says: " + root.spoken-content;
+                    // Selecting messages: say which ones are picked.
+                    accessible-checkable: root.selection-mode;
+                    accessible-checked: root.selected;
+                    // A screen reader has no long press: its activation opens the
+                    // message's menu (Reply, react, Edit, …), or picks the
+                    // message while selecting. Without it TalkBack could read a
+                    // message but do nothing with it.
+                    accessible-action-default => {
+                        if root.selection-mode {
+                            root.selection-toggled(root.message-id);
+                        } else if !root.is-system && !root.is-deleted {
+                            root.request-menu(self.absolute-position.x + self.width / 2,
+                                self.absolute-position.y + self.height,
+                                self.absolute-position.y, self.absolute-position.y + self.height,
+                                self.absolute-position.x, self.absolute-position.x + self.width);
+                        }
+                    }
 
-                    // Neo 2.0: Own = convex (raised), Others = concave (inset)
-                    // AI messages get distinct primary-tinted neo surface
-                    background: root.is-ai
-                        ? (bubble-hovered ? Colors.primary.with-alpha(0.12) : Colors.primary.with-alpha(0.08))
-                        : (bubble-hovered
-                            ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
-                            : (root.is-own ? Colors.bubble-own : Colors.bubble-other));
-                    border-radius: Spacing.radius-md;
-
-                    // Neo convex: outgoing bubbles get highlight border + drop shadow
-                    // Neo concave: incoming bubbles get inset border
-                    border-width: 1px;
-                    border-color: root.is-own ? Colors.neo-highlight : Colors.neo-inset-shadow;
-                    drop-shadow-blur: root.is-own ? Spacing.neo-blur-md : 0px;
-                    drop-shadow-offset-x: root.is-own ? Spacing.neo-offset-md : 0px;
-                    drop-shadow-offset-y: root.is-own ? Spacing.neo-offset-md : 0px;
-                    drop-shadow-color: root.is-own ? Colors.neo-shadow : transparent;
+                    // One rounded surface avoids a square backing at the corners.
+                    background: transparent;
+                    border-top-left-radius: root.is-own ? root.r-round : root.r-outer-top;
+                    border-top-right-radius: root.is-own ? root.r-outer-top : root.r-round;
+                    border-bottom-left-radius: root.is-own ? root.r-round : root.r-outer-bottom;
+                    border-bottom-right-radius: root.is-own ? root.r-outer-bottom : root.r-round;
+                    clip: root.photo-message;
 
                     // Calculate height based on content
                     height: bubble-content.preferred-height;
-                    width: bubble-content.preferred-width + (root.is-ai ? 4px : 0);
+                    width: (root.photo-message ? root.photo-width : bubble-content.preferred-width) + (root.is-ai && !root.photo-message ? 4px : 0);
+
+                    Rectangle {
+                        y: 0;
+                        width: parent.width;
+                        height: bubble-content.preferred-height;
+                        background: bubble-hovered
+                            ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
+                            : (root.is-own ? Colors.bubble-own : Colors.bubble-other);
+                        border-top-left-radius: parent.border-top-left-radius;
+                        border-top-right-radius: parent.border-top-right-radius;
+                        border-bottom-left-radius: parent.border-bottom-left-radius;
+                        border-bottom-right-radius: parent.border-bottom-right-radius;
+                        border-width: Elevation.rim-width;
+                        border-color: Elevation.raised-rim;
+                    }
+
+                    // Send progress: a thin line along the bubble's bottom edge
+                    // while this message is on its way, red once it is not
+                    // going. On the bubble, so it says which message is in
+                    // flight and never moves the composer; a 2px line, so the
+                    // bubble keeps its final height from the first frame. Core
+                    // reports no byte progress for an upload, so the sending
+                    // sweep is indeterminate and only the state is real:
+                    // sending / landed (line gone, tick) / failed.
+                    if root.is-own && !root.mesh-delivery
+                        && (root.delivery-status == "sending" || root.delivery-status == "waiting-tor" || root.delivery-status == "failed"): send-line := Rectangle {
+                        property <bool> failed: root.delivery-status == "failed";
+                        // Inset past the bottom corners' curve so the line
+                        // never pokes out of the rounded fill.
+                        x: root.r-round;
+                        width: parent.width - root.r-round * 2;
+                        height: 2px;
+                        y: bubble-content.preferred-height - self.height - Elevation.rim-width - 1px;
+                        border-radius: 1px;
+                        clip: true;
+                        // Reduce animations: the line is a solid, still
+                        // "Sending" mark — same state, no sweep, no tick.
+                        background: failed ? Colors.error
+                            : Appearance.reduce-motion ? Colors.primary
+                            : Colors.primary.transparentize(0.8);
+                        accessible-role: progress-indicator;
+                        accessible-label: failed ? "Not sent" : root.delivery-status == "waiting-tor" ? "Waiting for Tor" : "Sending";
+
+                        // One sweep per 1.4s; `animation-tick` only ticks while
+                        // this element exists, i.e. while a send is pending
+                        // and the user has not asked for reduced motion (then
+                        // the element is never created, so nothing ticks).
+                        if !send-line.failed && !Appearance.reduce-motion: Rectangle {
+                            width: parent.width * 0.35;
+                            x: (parent.width + self.width) * (Math.mod(animation-tick(), 1400ms / Appearance.animation-speed) / (1400ms / Appearance.animation-speed)) - self.width;
+                            height: parent.height;
+                            border-radius: parent.border-radius;
+                            background: Colors.primary;
+                        }
+                    }
 
                     // AI message left accent bar
                     if root.is-ai: Rectangle {
@@ -412,48 +681,39 @@ export component MessageItem inherits Rectangle {
                             // Unreachable from a finger — see the note on the
                             // hold timers above.
                             if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
-                                root.more-clicked(root.sender-id, root.timestamp-ns,
-                                    self.absolute-position.x + self.mouse-x,
-                                    self.absolute-position.y + self.mouse-y);
+                                root.request-menu(self.absolute-position.x + self.mouse-x,
+                                    self.absolute-position.y + self.mouse-y,
+                                    bubble.absolute-position.y, bubble.absolute-position.y + bubble.height,
+                                    bubble.absolute-position.x, bubble.absolute-position.x + bubble.width);
                                 return;
                             }
 
                             if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                                root.press-x = self.mouse-x;
-                                root.press-y = self.mouse-y;
-                                // Anchor under the bubble, not under the finger,
-                                // so the menu does not open beneath the thumb
-                                // that opened it.
-                                root.anchor-x = self.absolute-position.x;
-                                root.anchor-y = self.absolute-position.y + self.height;
-                                root.hold-tier = 0;
-                                // No hold while already selecting: there, a tap
-                                // is the toggle and a hold would re-open a menu
-                                // over the selection bar.
-                                if (root.mobile && !root.selection-mode
-                                    && !root.is-system && !root.is-deleted && !root.is-call) {
-                                    root.holding = true;
-                                    tier1-timer.running = true;
-                                }
+                                root.begin-message-press(
+                                    self.absolute-position.x + self.mouse-x,
+                                    self.absolute-position.y + self.mouse-y,
+                                    self.absolute-position.x,
+                                    self.absolute-position.y + self.height,
+                                    self.absolute-position.y,
+                                    self.absolute-position.x + self.width);
                             }
 
                             // Release, or a grab stolen by the scrolling
                             // Flickable (Slint delivers that as Cancel).
                             //
                             if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                                root.end-swipe(event.kind == PointerEventKind.cancel);
                                 root.cancel-hold();
                             }
                         }
 
                         moved => {
-                            if (root.holding
-                                && (abs(self.mouse-x - root.press-x) > root.hold-slop
-                                    || abs(self.mouse-y - root.press-y) > root.hold-slop)) {
-                                root.cancel-hold();
-                            }
+                            root.move-message-press(self.absolute-position.x + self.mouse-x,
+                                self.absolute-position.y + self.mouse-y);
                         }
 
                         clicked => {
+                            if (root.swipe-active) { return; }
                             if (root.selection-mode) {
                                 root.selection-toggled(root.message-id);
                                 return;
@@ -469,24 +729,33 @@ export component MessageItem inherits Rectangle {
                     }
 
                     bubble-content := VerticalLayout {
-                        padding: Spacing.sm + 2px;
-                        padding-left: root.is-ai ? Spacing.sm + 6px : Spacing.sm + 2px;
-                        spacing: Spacing.xs;
+                        y: 0;
+                        width: root.photo-message ? root.photo-width : self.preferred-width;
+                        height: self.preferred-height;
+                        padding: root.photo-message ? 0px : Spacing.sm + Spacing.xxs;
+                        padding-left: root.photo-message ? 0px : root.is-ai ? Spacing.sm + Spacing.sm : Spacing.sm + Spacing.xxs;
+                        spacing: root.photo-message ? 0px : Spacing.xs;
 
                         // Sender name + timestamp (only in channels for others, hidden in continuations)
                         if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: HorizontalLayout {
                             spacing: Spacing.sm;
                             alignment: start;
+                            padding: root.photo-message ? Spacing.sm : 0px;
 
                             Text {
                                 text: root.sender-name;
-                                color: root.is-ai ? Colors.info : Colors.primary;
+                                color: root.is-ai ? Colors.info : Colors.sender-name;
                                 font-size: Typography.sm;
                                 font-weight: Typography.medium;
+                                // Elide alone lets a short message shrink the
+                                // name to "anon…"; widen the bubble for it first.
+                                min-width: min(self.preferred-width, 220px);
+                                overflow: elide;
+                                vertical-alignment: center;
                             }
 
                             if root.is-ai: Rectangle {
-                                height: 16px;
+                                height: Spacing.badge-sm;
                                 width: ai-text.preferred-width + 8px;
                                 background: Colors.info;
                                 border-radius: 4px;
@@ -507,14 +776,18 @@ export component MessageItem inherits Rectangle {
                         // quote block below). Purple to keep it distinct from
                         // the teal quote accent.
                         if root.is-thread-reply: HorizontalLayout {
-                            spacing: 4px;
+                            spacing: Spacing.xs;
                             alignment: start;
+                            padding: root.photo-message ? Spacing.sm : 0px;
 
-                            Image {
-                                width: 11px;
-                                height: 11px;
-                                source: Icons.message-circle;
-                                colorize: Colors.accent-purple;
+                            VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    width: 11px;
+                                    height: 11px;
+                                    source: Icons.message-circle;
+                                    colorize: Colors.accent-purple;
+                                }
                             }
 
                             Text {
@@ -526,1052 +799,220 @@ export component MessageItem inherits Rectangle {
                         }
 
                         // Quote / reply-to bubble
-                        if root.is-reply: Rectangle {
-                            background: root.is-own ? Colors.background.with-alpha(0.08) : Colors.background.with-alpha(0.06);
-                            border-radius: 6px;
-                            max-width: root.width * 0.7 - Spacing.sm * 2;
-                            height: quote-row.preferred-height + Spacing.xs;
-
-                            // Tap the quote to jump to the original message.
-                            // Suppressed when the parent is gone/unknown.
-                            //
-                            // Declared BEFORE quote-row so it sits on the bottom
-                            // z-layer: the inline audio player's play/seek
-                            // TouchAreas (inside quote-row, above this) consume
-                            // their own clicks, while taps on text/thumbnail —
-                            // which carry no TouchArea — fall through here to jump.
-                            quote-touch := TouchArea {
-                                mouse-cursor: (root.reply-to-not-found || root.reply-to-message-id == "") ? default : pointer;
-                                clicked => {
-                                    if (!root.reply-to-not-found && root.reply-to-message-id != "") {
-                                        root.quote-clicked(root.reply-to-message-id);
-                                    }
-                                }
-                            }
-
-                            // Compact Signal/Telegram-style quote: small media
-                            // thumbnail on the LEFT, sender + label/player filling
-                            // the right. A thin strip — no big block that leaves a
-                            // wasted L-shape when the reply body is wide.
-                            quote-row := HorizontalLayout {
-                                padding: Spacing.xs;
-                                spacing: Spacing.sm;
-                                alignment: stretch;
-
-                                // Accent bar
-                                Rectangle {
-                                    width: 3px;
-                                    background: Colors.primary;
-                                    border-radius: 1.5px;
-                                }
-
-                                // Small media thumbnail on the LEFT (image/gif/video).
-                                // Aspect-fit within a compact box so the whole preview
-                                // shows without dominating the bubble.
-                                if root.reply-to-category != "audio" && root.reply-to-has-thumbnail: Rectangle {
-                                    property <float> aspect: root.reply-to-thumbnail-width > 0 && root.reply-to-thumbnail-height > 0
-                                        ? root.reply-to-thumbnail-width / root.reply-to-thumbnail-height
-                                        : 1.4;
-                                    property <length> max-h: 60px;
-                                    property <length> max-w: 96px;
-                                    height: min(self.max-h, self.max-w / self.aspect);
-                                    width: self.height * self.aspect;
-                                    border-radius: 4px;
-                                    clip: true;
-
-                                    Image {
-                                        source: root.reply-to-thumbnail;
-                                        width: parent.width;
-                                        height: parent.height;
-                                        image-fit: cover;
-                                    }
-
-                                    // Video play badge (compact, centered).
-                                    if root.reply-to-category == "video": Rectangle {
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                        width: 20px;
-                                        height: 20px;
-                                        border-radius: 10px;
-                                        background: Colors.overlay;
-                                        Image {
-                                            width: 9px;
-                                            height: 9px;
-                                            source: Icons.play;
-                                            colorize: Colors.text-primary;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                        }
-                                    }
-
-                                    // GIF chip — tiny corner tag.
-                                    if root.reply-to-category == "gif": Rectangle {
-                                        x: 2px;
-                                        y: 2px;
-                                        width: gif-label.preferred-width + 6px;
-                                        height: 13px;
-                                        border-radius: 3px;
-                                        background: Colors.primary;
-                                        gif-label := Text {
-                                            text: "GIF";
-                                            color: Colors.text-primary;
-                                            font-size: 8px;
-                                            font-weight: Typography.semibold;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                        }
-                                    }
-                                }
-
-                                // Right column — sender name + label/player, fills
-                                // the width beside the thumbnail (no empty gap).
-                                VerticalLayout {
-                                    spacing: 4px;
-                                    horizontal-stretch: 1;
-                                    alignment: center;
-
-                                    Text {
-                                        text: root.reply-to-sender-name;
-                                        color: Colors.primary;
-                                        font-size: Typography.xs;
-                                        font-weight: Typography.semibold;
-                                        overflow: elide;
-                                    }
-
-                                    // Audio parent — the shared inline player (compact
-                                    // variant). Its play/seek TouchAreas sit above
-                                    // quote-touch so they consume their clicks; the rest
-                                    // of the quote still falls through to jump.
-                                    if root.reply-to-category == "audio": AudioPlayer {
-                                        mobile: root.mobile;
-                                        compact: true;
-                                        attachment-id: root.reply-to-attachment-id;
-                                        filename: root.reply-to-filename;
-                                        waveform: root.reply-to-waveform;
-                                        duration-display: root.reply-to-duration;
-                                        current-playing-attachment-id: root.current-playing-attachment-id;
-                                        is-media-playing: root.is-media-playing;
-                                        audio-progress: root.audio-progress;
-                                        audio-elapsed: root.audio-elapsed;
-
-                                        play-clicked(id) => { root.attachment-clicked(id); }
-                                        audio-seek(id, pos) => { root.audio-seek(id, pos); }
-                                    }
-
-                                    // Non-audio: one-line preview/label filling the
-                                    // right of the thumbnail. Guard the empty edge so
-                                    // the quote is never just a bare sender name.
-                                    if root.reply-to-category != "audio": Text {
-                                        text: root.reply-to-preview != ""
-                                            ? root.reply-to-preview
-                                            : (root.reply-to-category != "" ? "📎 Attachment" : "Message");
-                                        color: Colors.text-secondary;
-                                        font-size: Typography.xs;
-                                        overflow: elide;
-                                    }
-
-                                    // Signal-Desktop parity: warn when the original is gone.
-                                    if root.reply-to-not-found: Text {
-                                        text: "Original message not found";
-                                        color: Colors.warning;
-                                        font-size: Typography.xs;
-                                        font-italic: true;
-                                        overflow: elide;
-                                    }
-                                }
+                        if root.is-reply: HorizontalLayout {
+                            width: root.photo-message ? root.photo-width : self.preferred-width;
+                            padding: root.photo-message ? Spacing.sm : 0px;
+                            MessageQuote {
+                                audio-elapsed: root.audio-elapsed;
+                                audio-progress: root.audio-progress;
+                                current-playing-attachment-id: root.current-playing-attachment-id;
+                                is-media-playing: root.is-media-playing;
+                                mobile: root.mobile;
+                                reply-to-attachment-id: root.reply-to-attachment-id;
+                                reply-to-category: root.reply-to-category;
+                                reply-to-duration: root.reply-to-duration;
+                                reply-to-filename: root.reply-to-filename;
+                                reply-to-has-thumbnail: root.reply-to-has-thumbnail;
+                                reply-to-message-id: root.reply-to-message-id;
+                                reply-to-not-found: root.reply-to-not-found;
+                                reply-to-preview: root.reply-to-preview;
+                                reply-to-sender-name: root.reply-to-sender-name;
+                                reply-to-thumbnail: root.reply-to-thumbnail;
+                                reply-to-thumbnail-height: root.reply-to-thumbnail-height;
+                                reply-to-thumbnail-width: root.reply-to-thumbnail-width;
+                                reply-to-waveform: root.reply-to-waveform;
+                                text-max-width: root.photo-message ? root.photo-width - Spacing.sm * 2 : root.text-max-width;
+                                quote-clicked(a0) => { root.quote-clicked(a0); }
+                                open-other-attachment(a0) => { root.open-other-attachment(a0); }
+                                audio-seek(a0, a1) => { root.audio-seek(a0, a1); }
                             }
                         }
 
-                        // Message content — rich text rendering
-                        // Uses parsed markdown spans when available, falls back to plain text
-                        if root.content != "" && root.rich-content.length > 0: VerticalLayout {
-                            spacing: 4px;
-                            max-width: root.width * 0.7 - Spacing.sm * 2;
-
-                            for span in root.rich-content: VerticalLayout {
-                                // Code block: monospace + dark background
-                                if span.code-block: Rectangle {
-                                    background: root.is-own ? Colors.background.with-alpha(0.12) : Colors.code-bg;
-                                    border-radius: 4px;
-
-                                    VerticalLayout {
-                                        padding: 8px;
-
-                                        Text {
-                                            text: span.text;
-                                            color: span.code-block && !root.is-own ? Colors.code-text : Colors.text-primary;
-                                            font-family: Typography.font-family-mono;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                            max-width: root.width * 0.7 - Spacing.sm * 2 - 16px;
-                                        }
-                                    }
-                                }
-
-                                // Inline code: monospace + subtle background
-                                if span.code && !span.code-block: HorizontalLayout {
-                                    alignment: start;
-
-                                    Rectangle {
-                                        background: root.is-own ? Colors.background.with-alpha(0.08) : Colors.surface-hover;
-                                        border-radius: 3px;
-                                        width: code-text.preferred-width + 8px;
-                                        height: code-text.preferred-height + 4px;
-
-                                        code-text := Text {
-                                            x: 4px;
-                                            y: 2px;
-                                            text: span.text;
-                                            color: Colors.text-primary;
-                                            font-family: Typography.font-family-mono;
-                                            font-size: Typography.xs;
-                                        }
-                                    }
-                                }
-
-                                // Strikethrough: text with line-through overlay
-                                if span.strikethrough && !span.code && !span.code-block: Rectangle {
-                                    height: strike-text.preferred-height;
-                                    width: strike-text.preferred-width;
-
-                                    strike-text := Text {
-                                        text: span.text;
-                                        color: Colors.text-secondary;
-                                        font-size: Typography.sm;
-                                        wrap: word-wrap;
-                                        max-width: root.width * 0.7 - Spacing.sm * 2;
-                                    }
-
-                                    Rectangle {
-                                        y: parent.height / 2;
-                                        height: 1px;
-                                        width: strike-text.preferred-width;
-                                        background: Colors.text-secondary;
-                                    }
-                                }
-
-                                // Normal / bold / italic text
-                                if !span.code && !span.code-block && !span.strikethrough: Text {
-                                    text: span.text;
-                                    color: Colors.text-primary;
-                                    font-size: Typography.sm;
-                                    font-weight: span.bold ? 700 : 400;
-                                    font-italic: span.italic;
-                                    wrap: word-wrap;
-                                    max-width: root.width * 0.7 - Spacing.sm * 2;
-                                }
-                            }
-                        }
-
-                        // Fallback: plain text when rich-content is empty
-                        if root.content != "" && root.rich-content.length == 0: Text {
-                            text: root.content;
-                            color: Colors.text-primary;
-                            font-size: Typography.sm;
-                            wrap: word-wrap;
-                            max-width: root.width * 0.7 - Spacing.sm * 2;
-                        }
-
-                        // Link preview card
-                        if root.has-link-preview: Rectangle {
-                            max-width: min(300px, root.width * 0.7);
-                            background: root.is-own ? Colors.background.with-alpha(0.08) : Colors.surface;
-                            border-radius: Spacing.radius-sm;
-                            border-width: 1px;
-                            border-color: Colors.text-muted.with-alpha(0.15);
-
-                            HorizontalLayout {
-                                padding: 0;
-                                spacing: 0;
-
-                                // Left accent bar
-                                Rectangle {
-                                    width: 3px;
-                                    background: Colors.primary;
-                                    border-radius: 1.5px;
-                                }
-
-                                // Text content
-                                VerticalLayout {
-                                    padding: Spacing.sm;
-                                    spacing: 4px;
-                                    horizontal-stretch: 1;
-
-                                    // Domain
-                                    Text {
-                                        text: root.link-preview.domain;
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                        overflow: elide;
-                                    }
-
-                                    // Title
-                                    if root.link-preview.title != "": Text {
-                                        text: root.link-preview.title;
-                                        color: Colors.primary;
-                                        font-size: Typography.sm;
-                                        font-weight: Typography.medium;
-                                        wrap: word-wrap;
-                                        max-width: root.link-preview.has-image ? min(200px, root.width * 0.5) : min(280px, root.width * 0.65);
-                                    }
-
-                                    // Description
-                                    if root.link-preview.description != "": Text {
-                                        text: root.link-preview.description;
-                                        color: Colors.text-secondary;
-                                        font-size: Typography.xs;
-                                        wrap: word-wrap;
-                                        overflow: elide;
-                                        max-width: root.link-preview.has-image ? min(200px, root.width * 0.5) : min(280px, root.width * 0.65);
-                                    }
-                                }
-
-                                // Preview image (right side)
-                                if root.link-preview.has-image: Rectangle {
-                                    width: 72px;
-                                    clip: true;
-                                    border-radius: Spacing.radius-sm;
-
-                                    Image {
-                                        width: 100%;
-                                        height: 100%;
-                                        source: root.link-preview.preview-image;
-                                        image-fit: cover;
-                                    }
-                                }
-                            }
-
-                            link-touch := HoldArea {
-                                enabled-for-touch: root.mobile;
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    if (self.hold-fired) { return; }
-                                    root.link-preview-clicked(root.link-preview.url);
-                                }
-                                held => {
-                                    root.more-clicked(root.sender-id, root.timestamp-ns,
-                                        self.anchor-x, self.anchor-y);
-                                }
-                            }
+                        // Message content. A body with markdown arrives as
+                        // blocks: each inline run is ONE StyledText, so mixed
+                        // bold/italic/strike/code flow and word-wrap in one
+                        // paragraph; fenced code blocks are boxes of their own.
+                        // Non-link text and right-click pass through to bubble-touch.
+                        // Link taps own their stream and feed the same hold timer
+                        // through pointer-event (vendored core/compiler patch).
+                        if !root.photo-message && root.content != "": MessageBody {
+                            bubble-right: bubble.absolute-position.x + bubble.width;
+                            bubble-y: bubble.absolute-position.y;
+                            content: root.content;
+                            hold-tier: root.hold-tier;
+                            is-own: root.is-own;
+                            message-id: root.message-id;
+                            mobile: root.mobile;
+                            press-anchor-x: bubble-touch.absolute-position.x;
+                            press-anchor-y: bubble-touch.absolute-position.y + bubble-touch.height;
+                            rich-content: root.rich-content;
+                            selection-mode: root.selection-mode;
+                            swipe-active: root.swipe-active;
+                            text-max-width: root.text-max-width;
+                            begin-message-press(a0, a1, a2, a3, a4, a5) => { root.begin-message-press(a0, a1, a2, a3, a4, a5); }
+                            move-message-press(a0, a1) => { root.move-message-press(a0, a1); }
+                            end-swipe(a0) => { root.end-swipe(a0); }
+                            cancel-hold() => { root.cancel-hold(); }
+                            selection-toggled(a0) => { root.selection-toggled(a0); }
+                            open-message-link(a0, a1) => { root.open-message-link(a0, a1); }
+                            message-clicked(a0) => { root.message-clicked(a0); }
+                            clear-hold-tier() => { root.hold-tier = 0; }
                         }
 
                         // Attachments
-                        if root.has-attachments: VerticalLayout {
-                            spacing: Spacing.sm;
+                        if root.has-attachments: MessageAttachments {
+                            width: root.photo-message ? root.photo-width : self.preferred-width;
+                            attachments: root.attachments;
+                            standalone-attachment-indices: root.standalone-attachment-indices;
+                            edge-to-edge: root.photo-message;
+                            media-width: root.photo-width;
+                            overlay-stamp: root.photo-only;
+                            timestamp: root.timestamp;
+                            timestamp-ns: root.timestamp-ns;
+                            sender-id: root.sender-id;
+                            message-id: root.message-id;
+                            delivery-status: root.delivery-status;
+                            failure-reason: root.failure-reason;
+                            is-own: root.is-own;
+                            is-edited: root.is-edited;
+                            disappearing: root.disappearing;
+                            is-pinned: root.is-pinned;
+                            mesh-delivery: root.mesh-delivery;
+                            audio-elapsed: root.audio-elapsed;
+                            audio-progress: root.audio-progress;
+                            current-playing-attachment-id: root.current-playing-attachment-id;
+                            is-media-playing: root.is-media-playing;
+                            mobile: root.mobile;
+                            swipe-active: root.swipe-active;
+                            text-max-width: root.text-max-width;
+                            bubble-height: bubble.height;
+                            bubble-width: bubble.width;
+                            bubble-x: bubble.absolute-position.x;
+                            bubble-y: bubble.absolute-position.y;
+                            message-width: root.width;
+                            begin-swipe(a0, a1) => { root.begin-swipe(a0, a1); }
+                            move-swipe(a0, a1) => { root.move-swipe(a0, a1); }
+                            end-swipe(a0) => { root.end-swipe(a0); }
+                            open-image(a0, a1, a2, a3, a4) => { root.open-image(a0, a1, a2, a3, a4); }
+                            open-other-attachment(a0) => { root.open-other-attachment(a0); }
+                            request-menu(a0, a1, a2, a3, a4, a5) => { root.request-menu(a0, a1, a2, a3, a4, a5); }
+                            audio-seek(a0, a1) => { root.audio-seek(a0, a1); }
+                            message-clicked(a0) => { root.message-clicked(a0); }
+                        }
 
-                            for attachment in root.attachments: HorizontalLayout {
-                                alignment: start;
-
-                                // Image attachments
-                                if attachment.is-image: Rectangle {
-                                    property <float> aspect-ratio: attachment.width > 0 ? attachment.width / max(1, attachment.height) : 1.5;
-                                    property <length> max-w: min(280px, root.width * 0.7 - Spacing.md);
-                                    property <length> max-h: 380px;
-                                    property <length> calc-w: aspect-ratio >= 1 ? min(max-w, attachment.width * 1px) : min(max-h * aspect-ratio, attachment.width * 1px);
-                                    property <length> calc-h: aspect-ratio >= 1 ? min(max-h, calc-w / aspect-ratio) : min(max-h, attachment.height * 1px);
-
-                                    width: attachment.has-thumbnail && attachment.width > 0 ? max(100px, min(max-w, calc-w)) : 180px;
-                                    height: attachment.has-thumbnail && attachment.height > 0 ? max(60px, min(max-h, calc-h)) : 140px;
-                                    background: Colors.surface;
-                                    border-radius: Spacing.radius-sm;
-                                    clip: true;
-
-                                    if attachment.has-thumbnail: Image {
-                                        width: 100%;
-                                        height: 100%;
-                                        source: attachment.thumbnail;
-                                        image-fit: contain;
-                                    }
-
-                                    if !attachment.has-thumbnail: Rectangle {
-                                        width: 100%;
-                                        height: 100%;
-                                        background: Colors.surface-hover;
-
-                                        VerticalLayout {
-                                            alignment: center;
-                                            spacing: Spacing.xs;
-
-                                            Image {
-                                                width: 32px;
-                                                height: 32px;
-                                                source: Icons.image;
-                                                colorize: Colors.text-muted;
-                                                horizontal-alignment: center;
-                                            }
-                                            Text {
-                                                text: attachment.filename;
-                                                color: Colors.text-secondary;
-                                                font-size: Typography.xs;
-                                                horizontal-alignment: center;
-                                                overflow: elide;
-                                            }
-                                        }
-                                    }
-
-                                    // Progress overlay
-                                    if attachment.is-uploading || attachment.is-downloading: Rectangle {
-                                        width: 100%;
-                                        height: 100%;
-                                        background: Colors.overlay;
-                                        accessible-role: progress-indicator;
-                                        accessible-label: attachment.is-uploading ? "Uploading " + attachment.filename : "Downloading " + attachment.filename;
-                                        accessible-value: Math.round(attachment.progress * 100) + " percent";
-
-                                        VerticalLayout {
-                                            alignment: center;
-                                            spacing: Spacing.sm;
-
-                                            Text {
-                                                text: attachment.is-uploading ? "Uploading..." : "Downloading...";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                horizontal-alignment: center;
-                                            }
-
-                                            Rectangle {
-                                                width: 80%;
-                                                height: 4px;
-                                                background: Colors.surface-hover;
-                                                border-radius: 2px;
-
-                                                Rectangle {
-                                                    width: parent.width * attachment.progress;
-                                                    height: 100%;
-                                                    background: Colors.primary;
-                                                    border-radius: 2px;
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    img-touch := HoldArea {
-                                        enabled-for-touch: root.mobile;
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            if (self.hold-fired) { return; }
-                                            root.attachment-clicked(attachment.id);
-                                        }
-                                        held => {
-                                            root.more-clicked(root.sender-id, root.timestamp-ns,
-                                                self.anchor-x, self.anchor-y);
-                                        }
-                                    }
-                                }
-
-                                // Audio attachments — shared inline player
-                                if attachment.category == "audio": AudioPlayer {
-                                    mobile: root.mobile;
-                                    attachment-id: attachment.id;
-                                    filename: attachment.filename;
-                                    waveform: attachment.waveform;
-                                    duration-display: attachment.duration-display;
-                                    current-playing-attachment-id: root.current-playing-attachment-id;
-                                    is-media-playing: root.is-media-playing;
-                                    audio-progress: root.audio-progress;
-                                    audio-elapsed: root.audio-elapsed;
-
-                                    play-clicked(id) => { root.attachment-clicked(id); }
-                                    audio-seek(id, pos) => { root.audio-seek(id, pos); }
-                                    more-clicked(x, y) => {
-                                        root.more-clicked(root.sender-id, root.timestamp-ns, x, y);
-                                    }
-                                }
-
-                                // Video attachments
-                                if attachment.category == "video": Rectangle {
-                                    property <float> aspect-ratio: attachment.width > 0 ? attachment.width / max(1, attachment.height) : 1.6;
-                                    property <length> max-w: min(280px, root.width * 0.7 - Spacing.md);
-                                    property <length> max-h: 220px;
-                                    property <length> calc-w: aspect-ratio >= 1 ? min(max-w, attachment.width * 1px) : min(max-h * aspect-ratio, attachment.width * 1px);
-                                    property <length> calc-h: aspect-ratio >= 1 ? min(max-h, calc-w / aspect-ratio) : min(max-h, attachment.height * 1px);
-
-                                    width: attachment.has-thumbnail && attachment.width > 0 ? max(160px, min(max-w, calc-w)) : 260px;
-                                    height: attachment.has-thumbnail && attachment.height > 0 ? max(100px, min(max-h, calc-h)) : 160px;
-                                    background: attachment.has-thumbnail ? Colors.surface-hover : Colors.surface;
-                                    border-radius: Spacing.radius-sm;
-                                    clip: true;
-
-                                    if attachment.has-thumbnail: Image {
-                                        width: 100%;
-                                        height: 100%;
-                                        source: attachment.thumbnail;
-                                        image-fit: contain;
-                                    }
-
-                                    // No thumbnail: the play button IS the icon, stacked
-                                    // above the filename rather than floated over it.
-                                    // Previously this branch centred icon+name+size in
-                                    // the tile and the overlay below centred a 56px
-                                    // opaque circle on the same point, so the one thing
-                                    // identifying the file — its name — was underneath
-                                    // the button. A video with no thumbnail is exactly
-                                    // the case where the name is all the user has.
-                                    if !attachment.has-thumbnail: VerticalLayout {
-                                        alignment: center;
-                                        spacing: Spacing.xs;
-
-                                        // Wrapped: a Rectangle has no alignment of its
-                                        // own, so the row centres it.
-                                        HorizontalLayout {
-                                            alignment: center;
-                                            Rectangle {
-                                                width: 56px;
-                                                height: 56px;
-                                                border-radius: 28px;
-                                                background: video-touch.has-hover ? Colors.primary : Colors.primary.transparentize(0.2);
-
-                                                Image {
-                                                    width: 24px;
-                                                    height: 24px;
-                                                    source: Icons.play;
-                                                    colorize: Colors.text-primary;
-                                                    x: (parent.width - self.width) / 2;
-                                                    y: (parent.height - self.height) / 2;
-                                                }
-                                            }
-                                        }
-                                        Text {
-                                            text: attachment.filename;
-                                            color: Colors.text-secondary;
-                                            font-size: Typography.xs;
-                                            horizontal-alignment: center;
-                                            overflow: elide;
-                                        }
-                                        Text {
-                                            text: attachment.size-display;
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            horizontal-alignment: center;
-                                        }
-                                    }
-
-                                    // Play button overlay — only over a thumbnail, where
-                                    // there is a picture to float it on. Without one it
-                                    // is drawn inline above, by the branch just above.
-                                    if attachment.has-thumbnail: Rectangle {
-                                        x: (parent.width - 56px) / 2;
-                                        y: (parent.height - 56px) / 2;
-                                        width: 56px;
-                                        height: 56px;
-                                        border-radius: 28px;
-                                        background: video-touch.has-hover ? Colors.primary : Colors.primary.transparentize(0.2);
-
-                                        Image {
-                                            width: 24px;
-                                            height: 24px;
-                                            source: Icons.play;
-                                            colorize: Colors.text-primary;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                        }
-                                    }
-
-                                    video-touch := HoldArea {
-                                        enabled-for-touch: root.mobile;
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            if (self.hold-fired) { return; }
-                                            root.attachment-clicked(attachment.id);
-                                        }
-                                        held => {
-                                            root.more-clicked(root.sender-id, root.timestamp-ns,
-                                                self.anchor-x, self.anchor-y);
-                                        }
-                                    }
-                                }
-
-                                // File attachments
-                                if !attachment.is-image && attachment.category != "audio" && attachment.category != "video": Rectangle {
-                                    width: min(240px, root.width * 0.7 - Spacing.md);
-                                    height: 52px;
-                                    background: Colors.surface;
-                                    border-radius: Spacing.radius-md;
-                                    border-width: 1px;
-                                    border-color: Colors.neo-highlight;
-                                    drop-shadow-blur: Spacing.neo-blur-sm;
-                                    drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                    drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                    drop-shadow-color: Colors.neo-shadow;
-
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
-
-                                        Rectangle {
-                                            width: 36px;
-                                            height: 36px;
-                                            border-radius: Spacing.radius-sm;
-                                            background: Colors.primary.transparentize(0.85);
-
-                                            Image {
-                                                width: 18px;
-                                                height: 18px;
-                                                source: Icons.file;
-                                                colorize: Colors.primary;
-                                                x: (parent.width - self.width) / 2;
-                                                y: (parent.height - self.height) / 2;
-                                            }
-                                        }
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            spacing: 2px;
-
-                                            Text {
-                                                text: attachment.filename;
-                                                color: Colors.text-primary;
-                                                font-size: Typography.xs;
-                                                overflow: elide;
-                                            }
-                                            Text {
-                                                text: attachment.size-display;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
-                                        }
-
-                                        Rectangle {
-                                            width: 28px;
-                                            height: 28px;
-                                            background: file-touch.has-hover ? Colors.surface-hover : transparent;
-                                            border-radius: Spacing.radius-sm;
-
-                                            Image {
-                                                width: 14px;
-                                                height: 14px;
-                                                source: Icons.download;
-                                                colorize: Colors.primary;
-                                                x: (parent.width - self.width) / 2;
-                                                y: (parent.height - self.height) / 2;
-                                            }
-                                        }
-                                    }
-
-                                    // Progress bar
-                                    if attachment.is-uploading || attachment.is-downloading: Rectangle {
-                                        y: parent.height - 3px;
-                                        width: parent.width;
-                                        height: 3px;
-                                        background: Colors.surface-hover;
-                                        border-radius: 1.5px;
-                                        accessible-role: progress-indicator;
-                                        accessible-label: attachment.is-uploading ? "Upload progress" : "Download progress";
-                                        accessible-value: Math.round(attachment.progress * 100) + " percent";
-
-                                        Rectangle {
-                                            width: parent.width * attachment.progress;
-                                            height: 100%;
-                                            background: Colors.primary;
-                                            border-radius: 1.5px;
-                                        }
-                                    }
-
-                                    file-touch := HoldArea {
-                                        enabled-for-touch: root.mobile;
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            if (self.hold-fired) { return; }
-                                            root.attachment-clicked(attachment.id);
-                                        }
-                                        held => {
-                                            root.more-clicked(root.sender-id, root.timestamp-ns,
-                                                self.anchor-x, self.anchor-y);
-                                        }
-                                    }
-                                }
+                        // Message content. A body with markdown arrives as
+                        // blocks: each inline run is ONE StyledText, so mixed
+                        // bold/italic/strike/code flow and word-wrap in one
+                        // paragraph; fenced code blocks are boxes of their own.
+                        // Non-link text and right-click pass through to bubble-touch.
+                        // Link taps own their stream and feed the same hold timer
+                        // through pointer-event (vendored core/compiler patch).
+                        if root.photo-message && root.content != "": HorizontalLayout {
+                            width: root.photo-message ? root.photo-width : self.preferred-width;
+                            padding: root.photo-message ? Spacing.sm : 0px;
+                            MessageBody {
+                                width: root.photo-message ? root.photo-width - Spacing.sm * 2 : self.preferred-width;
+                                bubble-right: bubble.absolute-position.x + bubble.width;
+                                bubble-y: bubble.absolute-position.y;
+                                content: root.content;
+                                hold-tier: root.hold-tier;
+                                is-own: root.is-own;
+                                message-id: root.message-id;
+                                media-caption: root.photo-message;
+                                mobile: root.mobile;
+                                press-anchor-x: bubble-touch.absolute-position.x;
+                                press-anchor-y: bubble-touch.absolute-position.y + bubble-touch.height;
+                                rich-content: root.rich-content;
+                                selection-mode: root.selection-mode;
+                                swipe-active: root.swipe-active;
+                                text-max-width: root.photo-message ? root.photo-width - Spacing.sm * 2 : root.text-max-width;
+                                begin-message-press(a0, a1, a2, a3, a4, a5) => { root.begin-message-press(a0, a1, a2, a3, a4, a5); }
+                                move-message-press(a0, a1) => { root.move-message-press(a0, a1); }
+                                end-swipe(a0) => { root.end-swipe(a0); }
+                                cancel-hold() => { root.cancel-hold(); }
+                                selection-toggled(a0) => { root.selection-toggled(a0); }
+                                open-message-link(a0, a1) => { root.open-message-link(a0, a1); }
+                                message-clicked(a0) => { root.message-clicked(a0); }
+                                clear-hold-tier() => { root.hold-tier = 0; }
                             }
                         }
 
-                        // Timestamp row — bottom-right for all messages (messenger convention)
-                        HorizontalLayout {
-                            spacing: 4px;
-                            alignment: end;
-
-                            // Own messages: timestamp+status
-                            if root.is-own: HorizontalLayout {
-                                spacing: 4px;
-                                alignment: end;
-
-                                if root.is-pinned: Image {
-                                    source: Icons.pin;
-                                    width: 12px;
-                                    height: 12px;
-                                    colorize: Colors.primary;
-                                }
-
-                                Text {
-                                    text: root.timestamp;
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs;
-                                }
-
-                                if root.is-edited: Text {
-                                    text: "edited";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs;
-                                    font-italic: true;
-                                }
-
-                                // Delivery status. Mesh states get a word rather
-                                // than a tick: over couriers "sent" and
-                                // "delivered" are hours apart, and two ticks
-                                // would claim an arrival nobody has confirmed.
-                                if root.mesh-delivery: Text {
-                                    // "sent" is deliberately not reused for a
-                                    // broadcast: a room or cell message has no
-                                    // recipient to acknowledge it, so there is
-                                    // never anything to upgrade it to.
-                                    text: root.delivery-status == "carried" ? "carried"
-                                        : root.delivery-status == "waiting" ? "waiting"
-                                        : root.delivery-status == "undelivered" ? "not delivered"
-                                        : root.delivery-status == "delivered" ? "delivered"
-                                        : root.delivery-status == "read" ? "read"
-                                        : root.delivery-status == "broadcast" ? "broadcast"
-                                        : "sent";
-                                    color: root.delivery-status == "undelivered" ? Colors.text-secondary : Colors.text-muted;
-                                    font-size: Typography.xs;
-                                    font-italic: true;
-                                    accessible-role: text;
-                                    accessible-label: root.delivery-status == "carried"
-                                            ? "Handed to a passing device; may arrive later"
-                                        : root.delivery-status == "waiting"
-                                            ? "Held on this device until something can carry it"
-                                        : root.delivery-status == "undelivered"
-                                            ? "Left the outbox without ever being acknowledged"
-                                        : root.delivery-status == "delivered"
-                                            ? "The peer's device acknowledged it"
-                                        : root.delivery-status == "read"
-                                            ? "Read by the peer"
-                                        : root.delivery-status == "broadcast"
-                                            ? "Went out to whoever is in range; nobody acknowledges a broadcast"
-                                        : "Handed to a live link; not yet acknowledged";
-                                }
-
-                                // Delivery status checkmarks. SVG, not "✓": the
-                                // glyph has no coverage in the Android system
-                                // font and rendered as a tofu box on every
-                                // message. Fixed 12px so the row — and the
-                                // bubble — keeps the height the text tick had.
-                                if !root.mesh-delivery: ticks := Rectangle {
-                                    property <bool> double-tick: root.delivery-status != "sent";
-                                    property <color> tick-color: root.delivery-status == "read" ? Colors.primary : Colors.text-muted;
-                                    width: self.double-tick ? 17px : 12px;
-                                    height: 12px;
-                                    accessible-role: text;
-                                    accessible-label: root.delivery-status == "sent" ? "Sent"
-                                        : root.delivery-status == "delivered" ? "Delivered"
-                                        : root.delivery-status == "read" ? "Read" : "";
-
-                                    // Second tick behind, offset left, so the
-                                    // pair reads as the usual overlapping ✓✓.
-                                    if ticks.double-tick: Image {
-                                        source: Icons.check;
-                                        width: 12px;
-                                        height: 12px;
-                                        x: 0px;
-                                        y: 0px;
-                                        colorize: ticks.tick-color;
-                                    }
-
-                                    Image {
-                                        source: Icons.check;
-                                        width: 12px;
-                                        height: 12px;
-                                        x: parent.width - self.width;
-                                        y: 0px;
-                                        colorize: ticks.tick-color;
-                                    }
-                                }
-                            }
-
-                            // Others' messages: timestamp
-                            if !root.is-own: HorizontalLayout {
-                                spacing: 4px;
-
-                                if root.is-pinned: Image {
-                                    source: Icons.pin;
-                                    width: 12px;
-                                    height: 12px;
-                                    colorize: Colors.primary;
-                                }
-
-                                if root.is-edited: Text {
-                                    text: "edited";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs;
-                                    font-italic: true;
-                                }
-
-                                Text {
-                                    text: root.timestamp;
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs;
-                                }
-                            }
+                        // Footer: reactions start, clock and status end, on one row.
+                        if !root.photo-only || root.has-reactions: MessageFooter {
+                            width: root.photo-message ? root.photo-width : self.preferred-width;
+                            show-meta: !root.photo-only;
+                            padding-left: root.photo-message ? Spacing.sm : 0px;
+                            padding-right: root.photo-message ? Spacing.sm : 0px;
+                            padding-bottom: root.photo-message ? Spacing.sm : 0px;
+                            delivery-status: root.delivery-status;
+                            failure-reason: root.failure-reason;
+                            has-reactions: root.has-reactions;
+                            is-edited: root.is-edited;
+                            disappearing: root.disappearing;
+                            is-own: root.is-own;
+                            is-pinned: root.is-pinned;
+                            mesh-delivery: root.mesh-delivery;
+                            message-id: root.message-id;
+                            mobile: root.mobile;
+                            reaction-summary: root.reaction-summary;
+                            reactions: root.reactions;
+                            sender-id: root.sender-id;
+                            timestamp: root.timestamp;
+                            timestamp-ns: root.timestamp-ns;
+                            reaction-toggled(a0, a1, a2) => { root.reaction-toggled(a0, a1, a2); }
+                            message-clicked(a0) => { root.message-clicked(a0); }
                         }
 
                     }
 
                     // Tap-to-jump flash — brief green highlight when this bubble
                     // is the scroll target of a quote click. Plain Rectangle
-                    // (no TouchArea) so it never blocks input; fades via animate.
-                    Rectangle {
+                    // (no TouchArea) so it never blocks input. Absent on idle rows.
+                    if root.highlight-progress > 0: Rectangle {
                         width: 100%;
                         height: 100%;
-                        border-radius: bubble.border-radius;
-                        background: Colors.primary.with-alpha(root.highlighted ? 0.22 : 0.0);
-                        border-width: root.highlighted ? 1.5px : 0px;
-                        border-color: Colors.primary.with-alpha(root.highlighted ? 0.85 : 0.0);
-                        animate background, border-color, border-width {
-                            duration: 400ms;
-                            easing: ease-out;
-                        }
+                        border-top-left-radius: bubble.border-top-left-radius;
+                        border-top-right-radius: bubble.border-top-right-radius;
+                        border-bottom-left-radius: bubble.border-bottom-left-radius;
+                        border-bottom-right-radius: bubble.border-bottom-right-radius;
+                        background: Colors.primary.with-alpha(root.highlight-progress * 0.22);
+                        border-width: root.highlight-progress * Spacing.stroke;
+                        border-color: Colors.primary;
                     }
                 }
 
-                // Reactions pill - straddling bubble's bottom corner
-                // Half inside / half outside on both X and Y
-                if root.has-reactions: reactions-pill := Rectangle {
-                    height: 22px;
-                    width: reactions-row.preferred-width + 8px;
-                    background: Colors.surface;
-                    border-radius: 11px;
-                    border-width: 1px;
-                    border-color: Colors.neo-highlight;
-                    drop-shadow-blur: Spacing.neo-blur-sm;
-                    drop-shadow-offset-x: Spacing.neo-offset-sm;
-                    drop-shadow-offset-y: Spacing.neo-offset-sm;
-                    drop-shadow-color: Colors.neo-shadow;
-                    x: root.is-own ? -self.width + 8px : bubble.width - 8px;
-                    y: bubble.height - 4px;
-                    accessible-role: button;
-                    accessible-label: "Reactions: " + root.reaction-summary;
-
-                    reactions-row := HorizontalLayout {
-                        padding-left: 6px;
-                        padding-right: 6px;
-                        spacing: 6px;
-                        alignment: center;
-
-                        for reaction in root.reactions: HorizontalLayout {
-                            spacing: 2px;
-                            alignment: center;
-
-                            Text {
-                                text: reaction.emoji;
-                                font-family: Typography.font-family-emoji;
-                                font-size: Typography.xs;
-                                vertical-alignment: center;
-                            }
-
-                            if reaction.count > 1: Text {
-                                text: reaction.count;
-                                color: Colors.text-secondary;
-                                font-size: Typography.xs;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
-
-                    TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.react-clicked(root.sender-id, root.timestamp-ns,
-                                reactions-pill.absolute-position.x,
-                                reactions-pill.absolute-position.y + reactions-pill.height);
-                        }
-                    }
-                }
-                // Action buttons — float above top corner of bubble on opposed side
-                Rectangle {
-                    x: root.is-own ? -action-btns.width + 8px : bubble.width - 8px;
-                    y: -14px; // Float halfway above the top edge
-                    width: action-btns.width;
-                    height: action-btns.height;
-                    visible: root.is-hovered && !root.is-system && !root.is-deleted && !root.is-call;
-
-                    action-btns := Rectangle {
-                        height: 28px;
-                        width: 106px;
-                        background: Colors.surface;
-                        border-radius: Spacing.radius-md;
-                        border-width: 1px;
-                        border-color: Colors.neo-highlight-strong;
-                        drop-shadow-blur: Spacing.neo-blur-sm;
-                        drop-shadow-offset-x: Spacing.neo-offset-sm;
-                        drop-shadow-offset-y: Spacing.neo-offset-sm;
-                        drop-shadow-color: Colors.neo-shadow;
-
-                        HorizontalLayout {
-                            padding: 2px;
-                            spacing: 2px;
-                            alignment: center;
-
-                            // Reply button
-                            Rectangle {
-                                height: 24px;
-                                width: 24px;
-                                background: reply-touch.has-hover ? Colors.surface-hover : transparent;
-                                border-radius: Spacing.radius-sm;
-                                accessible-role: button;
-                                accessible-label: "Reply to message";
-
-                                Image {
-                                    width: 14px;
-                                    height: 14px;
-                                    source: Icons.reply;
-                                    colorize: Colors.text-secondary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                reply-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.reply-clicked(root.sender-id, root.timestamp-ns);
-                                    }
-                                }
-                            }
-
-                            // React button
-                            react-btn := Rectangle {
-                                height: 24px;
-                                width: 24px;
-                                background: react-btn-touch.has-hover ? Colors.surface-hover : transparent;
-                                border-radius: Spacing.radius-sm;
-                                accessible-role: button;
-                                accessible-label: "Add reaction";
-
-                                Image {
-                                    width: 14px;
-                                    height: 14px;
-                                    source: Icons.smile;
-                                    colorize: Colors.text-secondary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                react-btn-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.react-clicked(root.sender-id, root.timestamp-ns,
-                                            react-btn.absolute-position.x,
-                                            react-btn.absolute-position.y + react-btn.height);
-                                    }
-                                }
-                            }
-
-                            // Reply-in-thread button — opens/starts a thread on
-                            // this message. Previously the ONLY thread entry was
-                            // the "N replies" badge (rendered `if reply-count > 0`),
-                            // so a message with no replies could never START a thread.
-                            thread-btn := Rectangle {
-                                height: 24px;
-                                width: 24px;
-                                background: thread-btn-touch.has-hover ? Colors.surface-hover : transparent;
-                                border-radius: Spacing.radius-sm;
-                                accessible-role: button;
-                                accessible-label: "Reply in thread";
-
-                                Image {
-                                    width: 14px;
-                                    height: 14px;
-                                    source: Icons.message-circle;
-                                    colorize: Colors.text-secondary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                thread-btn-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.thread-clicked(root.message-id);
-                                    }
-                                }
-                            }
-
-                            // More button
-                            more-btn := Rectangle {
-                                height: 24px;
-                                width: 24px;
-                                background: more-touch.has-hover ? Colors.surface-hover : transparent;
-                                border-radius: Spacing.radius-sm;
-                                accessible-role: button;
-                                accessible-label: "More message actions";
-
-                                Image {
-                                    width: 14px;
-                                    height: 14px;
-                                    source: Icons.more-horizontal;
-                                    colorize: Colors.text-secondary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                more-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.more-clicked(root.sender-id, root.timestamp-ns,
-                                            more-btn.absolute-position.x,
-                                            more-btn.absolute-position.y + more-btn.height);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                // Action buttons — float above top corner of bubble on opposed side.
+                // Do not allocate hidden controls for every row (or any mobile row).
+                if root.is-hovered && !root.selection-mode: MessageActions {
+                    can-thread: root.can-thread;
+                    is-call: root.is-call;
+                    is-deleted: root.is-deleted;
+                    is-hovered: root.is-hovered;
+                    is-own: root.is-own;
+                    is-system: root.is-system;
+                    message-id: root.message-id;
+                    sender-id: root.sender-id;
+                    timestamp-ns: root.timestamp-ns;
+                    bubble-height: bubble.height;
+                    bubble-width: bubble.width;
+                    bubble-x: bubble.absolute-position.x;
+                    bubble-y: bubble.absolute-position.y;
+                    row-width: root.width;
+                    row-x: root.absolute-position.x;
+                    chrome-bottom: root.chrome-bottom;
+                    reply-clicked(a0, a1) => { root.reply-clicked(a0, a1); }
+                    react-clicked(a0, a1, a2, a3) => { root.react-clicked(a0, a1, a2, a3); }
+                    thread-clicked(a0) => { root.thread-clicked(a0); }
+                    request-menu(a0, a1, a2, a3, a4, a5) => { root.request-menu(a0, a1, a2, a3, a4, a5); }
                 }
                 } // end wrapper
 
                 // Thread replies indicator (below bubble)
-                if root.reply-count > 0: HorizontalLayout {
-                    spacing: Spacing.sm;
-                    alignment: root.is-own ? end : start;
-                    padding-left: Spacing.xs;
-                    padding-right: Spacing.xs;
-
-                    // Pill button (not bare text) so the thread entry point
-                    // reads as clickable.
-                    Rectangle {
-                        height: 22px;
-                        width: thread-layout.preferred-width + Spacing.sm * 2;
-                        border-radius: 11px;
-                        background: thread-touch.has-hover
-                            ? Colors.primary.transparentize(0.75)
-                            : Colors.primary.transparentize(0.9);
-                        border-width: 1px;
-                        border-color: Colors.primary.with-alpha(0.35);
-                        accessible-role: button;
-                        accessible-label: "Open thread: " + root.reply-count-text;
-
-                        thread-layout := HorizontalLayout {
-                            spacing: Spacing.xs;
-                            padding: 2px;
-                            padding-left: Spacing.sm;
-                            alignment: center;
-
-                            Image {
-                                width: 12px;
-                                height: 12px;
-                                source: Icons.message-circle;
-                                colorize: Colors.primary;
-                                y: (parent.height - self.height) / 2;
-                            }
-
-                            Text {
-                                text: root.reply-count-text;
-                                color: Colors.primary;
-                                font-size: Typography.xs;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        thread-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.thread-clicked(root.message-id); }
-                        }
-                    }
+                if root.reply-count > 0: MessageThreadIndicator {
+                    is-own: root.is-own;
+                    message-id: root.message-id;
+                    reply-count-text: root.reply-count-text;
+                    thread-clicked(a0) => { root.thread-clicked(a0); }
                 }
             }
         }

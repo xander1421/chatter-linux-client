@@ -5,14 +5,12 @@
 //! - Message decryption with shared secrets
 //! - Event emission for UI updates
 
-mod common;
-
 use std::sync::Arc;
 use tempfile::TempDir;
 
 use chatter_core::crypto::dm_crypto::{decrypt_dm_message, encrypt_dm_message};
 use chatter_core::domain::UserId;
-use chatter_core::inbox::{InboxConfig, InboxEvent};
+use chatter_core::inbox::InboxEvent;
 use chatter_core::mailbox::dm::{
     ConversationKey, DmConversation, DmConversationManager, DmMailbox, PeerMailbox, TwoWayAnonymity,
 };
@@ -159,7 +157,7 @@ fn test_dm_conversation_new() {
 
     assert_eq!(conv.peer_id, peer_id);
     assert!(conv.our_mailbox.is_none());
-    assert!(conv.peer_mailbox.is_none());
+    assert!(conv.peer_mailboxes.is_empty());
     assert!(conv.conversation_key.is_none());
     assert!(conv.needs_bootstrap());
     assert!(!conv.is_ready_to_send());
@@ -176,8 +174,8 @@ fn test_dm_conversation_ready_states() {
         id: "test".to_string(),
         public_key: [0u8; 32],
         private_key: [0u8; 64],
+        encryption_private_key: [0u8; 32],
         signature: vec![],
-        randomizer: None,
         token_id: "token".to_string(),
         created_at: Utc::now(),
         expires_at: Utc::now() + Duration::days(7),
@@ -188,19 +186,14 @@ fn test_dm_conversation_ready_states() {
     assert!(conv.is_ready_to_receive());
     assert!(!conv.is_ready_to_send()); // Still need peer mailbox and key
 
-    // Add peer mailbox
-    conv.peer_mailbox = Some(PeerMailbox::new([0u8; 32], None));
-    assert!(!conv.is_ready_to_send()); // Still need conversation key
+    // Add one peer device's half (its mailbox + ephemeral)
+    let peer_ephemeral = ConversationKey::new().our_ephemeral_public;
+    conv.peer_mailboxes
+        .push(PeerMailbox::new([0u8; 32], 1, peer_ephemeral, None));
+    assert!(!conv.is_ready_to_send()); // Still need our half
 
-    // Add conversation key without shared secret
+    // Our half: the secret with each device is derived from it
     conv.conversation_key = Some(ConversationKey::new());
-    assert!(!conv.is_ready_to_send()); // Need shared secret
-
-    // Establish shared secret
-    let mut key = conv.conversation_key.take().unwrap();
-    key.derive_shared_secret([1u8; 32]).unwrap();
-    conv.conversation_key = Some(key);
-
     assert!(conv.is_ready_to_send());
 }
 
@@ -217,7 +210,12 @@ fn setup_test_db() -> (TempDir, Arc<Database>) {
 }
 
 /// Create a test mailbox with all required parent records.
-fn create_test_mailbox(db: &Database, _peer_id: &UserId, mailbox_id: &str, token_id: &str) -> DmMailbox {
+fn create_test_mailbox(
+    db: &Database,
+    _peer_id: &UserId,
+    mailbox_id: &str,
+    token_id: &str,
+) -> DmMailbox {
     let conn = db.connection().unwrap();
 
     // Create server key first (parent of mailbox_tokens)
@@ -239,7 +237,7 @@ fn create_test_mailbox(db: &Database, _peer_id: &UserId, mailbox_id: &str, token
     rand::fill(&mut ephemeral_public);
 
     // Create mailbox token (parent of dm_mailboxes)
-    // Schema: id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer, server_key_id, created_at, expires_at, used_at
+    // Schema: id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at, expires_at, used_at
     conn.execute(
         "INSERT INTO mailbox_tokens (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -257,8 +255,8 @@ fn create_test_mailbox(db: &Database, _peer_id: &UserId, mailbox_id: &str, token
         id: mailbox_id.to_string(),
         public_key: [1u8; 32],
         private_key: [2u8; 64],
+        encryption_private_key: [2u8; 32],
         signature: vec![3, 4, 5],
-        randomizer: Some(vec![6, 7, 8]),
         token_id: token_id.to_string(),
         created_at: Utc::now(),
         expires_at: Utc::now() + Duration::days(7),
@@ -281,20 +279,26 @@ fn test_dm_conversation_manager_save_load() {
     let mailbox = create_test_mailbox(&db, &peer_id, "mailbox-123", "token-abc");
     manager.save_our_mailbox(&peer_id, &mailbox).unwrap();
 
-    // Save peer mailbox
-    let peer_mailbox = PeerMailbox::new([9u8; 32], Some(Utc::now() + Duration::days(7)));
-    manager.save_peer_mailbox(&peer_id, &peer_mailbox).unwrap();
+    // Save our half first: a new ephemeral of ours drops every device half
+    manager
+        .save_conversation_key(&peer_id, &ConversationKey::new())
+        .unwrap();
 
-    // Save conversation key
-    let mut conv_key = ConversationKey::new();
-    conv_key.derive_shared_secret([10u8; 32]).unwrap();
-    manager.save_conversation_key(&peer_id, &conv_key).unwrap();
+    // Save one peer device's half
+    let peer_ephemeral = ConversationKey::new().our_ephemeral_public;
+    let peer_mailbox = PeerMailbox::new(
+        [9u8; 32],
+        1,
+        peer_ephemeral,
+        Some(Utc::now() + Duration::days(7)),
+    );
+    manager.save_peer_mailbox(&peer_id, &peer_mailbox).unwrap();
 
     // Load and verify
     let loaded = manager.load_conversation(&peer_id).unwrap().unwrap();
     assert_eq!(loaded.peer_id, peer_id);
     assert!(loaded.our_mailbox.is_some());
-    assert!(loaded.peer_mailbox.is_some());
+    assert_eq!(loaded.peer_mailboxes.len(), 1);
     assert!(loaded.conversation_key.is_some());
     assert!(loaded.is_ready_to_send());
     assert!(loaded.is_ready_to_receive());
@@ -340,7 +344,9 @@ fn test_dm_conversation_manager_cleanup_expired() {
     let mut expired_mailbox = create_test_mailbox(&db, &peer_id, "expired", "t1");
     expired_mailbox.created_at = Utc::now() - Duration::days(14);
     expired_mailbox.expires_at = Utc::now() - Duration::days(7); // Expired!
-    manager.save_our_mailbox(&peer_id, &expired_mailbox).unwrap();
+    manager
+        .save_our_mailbox(&peer_id, &expired_mailbox)
+        .unwrap();
 
     // Cleanup should remove it
     let cleaned = manager.cleanup_expired().unwrap();
@@ -360,7 +366,6 @@ fn test_inbox_event_dm_received_format() {
     let peer_id = UserId::new();
     let event = InboxEvent::DmReceived {
         peer_id,
-        channel_id: chatter_core::domain::ids::ChannelId::new(),
         text: "Hello!".to_string(),
         timestamp: 1234567890,
         message_id: "msg-123".to_string(),
@@ -380,7 +385,7 @@ fn test_inbox_event_dm_decryption_failed_format() {
     let event = InboxEvent::DmDecryptionFailed {
         peer_id,
         error: "No shared secret".to_string(),
-        convergence_failed: false,
+        session_desync: false,
     };
 
     let debug_str = format!("{:?}", event);
@@ -414,11 +419,16 @@ fn test_two_way_anonymity_can_send_receive() {
     // Add mailboxes and key
     let mailbox = create_test_mailbox(&db, &peer_id, "mb", "t");
     manager.save_our_mailbox(&peer_id, &mailbox).unwrap();
-    manager.save_peer_mailbox(&peer_id, &PeerMailbox::new([9u8; 32], None)).unwrap();
-
-    let mut key = ConversationKey::new();
-    key.derive_shared_secret([10u8; 32]).unwrap();
-    manager.save_conversation_key(&peer_id, &key).unwrap();
+    manager
+        .save_conversation_key(&peer_id, &ConversationKey::new())
+        .unwrap();
+    let peer_ephemeral = ConversationKey::new().our_ephemeral_public;
+    manager
+        .save_peer_mailbox(
+            &peer_id,
+            &PeerMailbox::new([9u8; 32], 1, peer_ephemeral, None),
+        )
+        .unwrap();
 
     // Now should be able to send and receive
     assert!(two_way.can_send(&peer_id).unwrap());

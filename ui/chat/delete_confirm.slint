@@ -1,0 +1,88 @@
+// One delete entry opens a scope choice; choosing a scope performs the delete.
+// The remote choice uses the existing delete-for-everyone permission predicate.
+// A direct invocation without the chooser still requires confirmation.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+
+export component DeleteConfirm inherits Rectangle {
+    // Messages the delete would remove; 0 hides the dialog.
+    in property <int> count: 0;
+    // Confirm the chosen remote or local scope for one or several messages.
+    in property <bool> for-everyone: false;
+    in property <bool> is-dm: false;
+    property <string> remote-label: root.is-dm ? "Delete for both" : "Delete for everyone";
+
+    in property <bool> choosing-in: false;
+    in property <bool> can-delete-everyone: false;
+    in property <bool> can-delete-me: true;
+    // A choice of one is no choice (Saved messages, or a message only this
+    // account can drop): confirm that scope directly.
+    property <bool> choosing: root.choosing-in && root.can-delete-everyone && root.can-delete-me;
+    callback scope-chosen(bool);
+
+    callback confirmed();
+    callback cancelled();
+
+    Modal {
+        show: root.count > 0;
+        title: root.choosing ? root.count > 1 ? "Delete " + root.count + " messages" : "Delete message" : root.for-everyone || (root.choosing-in && !root.can-delete-me) ? root.remote-label + "?"
+            : root.count > 1 ? "Delete " + root.count + " messages?" : "Delete message?";
+        modal-width: 400px;
+        show-close: false;
+
+        close => { root.cancelled(); }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+
+            Text {
+                text: root.choosing ? root.count > 1 ? "Choose who to delete these messages for." : "Choose who to delete this message for." : root.for-everyone || (root.choosing-in && !root.can-delete-me)
+                    ? root.count > 1 ? "These messages will be deleted for everyone in the chat." : "This message will be deleted for everyone in the chat."
+                    : root.count > 1
+                    ? "These messages will be deleted from your history."
+                    : "This message will be deleted from your history.";
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+
+            if root.choosing: VerticalLayout {
+                spacing: Spacing.sm;
+                if root.can-delete-me: Button {
+                    text: "Delete for me";
+                    variant: "secondary";
+                    clicked => { root.scope-chosen(false); root.confirmed(); }
+                }
+                if root.can-delete-everyone: Button {
+                    text: root.remote-label;
+                    variant: "destructive";
+                    clicked => { root.scope-chosen(true); root.confirmed(); }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                alignment: end;
+
+                Button {
+                    text: "Cancel";
+                    variant: "secondary";
+                    clicked => { root.cancelled(); }
+                }
+
+                if !root.choosing: Button {
+                    text: root.for-everyone || (root.choosing-in && !root.can-delete-me) ? root.remote-label : root.choosing-in ? "Delete" : "Delete for me";
+                    variant: "destructive";
+                    clicked => {
+                        if root.choosing-in { root.scope-chosen(!root.can-delete-me); }
+                        root.confirmed();
+                    }
+                }
+            }
+        }
+    }
+}

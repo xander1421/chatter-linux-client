@@ -43,6 +43,42 @@ pub fn keyring_disabled(db_path: &std::path::Path) -> bool {
         .is_some_and(|dir| dir.join(NO_KEYRING_MARKER).exists())
 }
 
+/// Install the native persistent backend before creating an entry.
+/// Unsupported builds fail closed; an in-memory store is never selected implicitly.
+pub(crate) fn ensure_default_store() -> keyring::Result<()> {
+    static INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = INIT.lock().expect("keyring initialization mutex poisoned");
+    if keyring::get_default_store().is_some() {
+        return Ok(());
+    }
+    #[cfg(all(target_os = "linux", feature = "desktop-system"))]
+    let store = zbus_secret_service_keyring_store::Store::new()?;
+    #[cfg(all(target_os = "windows", feature = "desktop-system"))]
+    let store = windows_native_keyring_store::Store::new()?;
+    #[cfg(all(target_os = "macos", feature = "desktop-system"))]
+    let store = apple_native_keyring_store::keychain::Store::new()?;
+    #[cfg(all(target_os = "ios", feature = "ios"))]
+    let store = apple_native_keyring_store::protected::Store::new()?;
+    #[cfg(any(
+        all(
+            any(target_os = "linux", target_os = "windows", target_os = "macos"),
+            feature = "desktop-system"
+        ),
+        all(target_os = "ios", feature = "ios")
+    ))]
+    {
+        keyring::set_default_store(store);
+        Ok(())
+    }
+    #[cfg(not(any(
+        all(
+            any(target_os = "linux", target_os = "windows", target_os = "macos"),
+            feature = "desktop-system"
+        ),
+        all(target_os = "ios", feature = "ios")
+    )))]
+    Err(keyring::Error::NoDefaultStore)
+}
 
 /// Secure credential storage using the system keyring.
 ///
@@ -88,11 +124,16 @@ impl Keyring {
         let mut local_path = db_path.clone();
         local_path.set_extension("passphrase");
 
-        Self { username, local_path, db_path }
+        Self {
+            username,
+            local_path,
+            db_path,
+        }
     }
 
     /// Creates a new keyring Entry for the database passphrase.
     fn entry(&self) -> Result<keyring::Entry, SystemError> {
+        ensure_default_store().map_err(map_keyring_error)?;
         keyring::Entry::new(SERVICE, &self.username).map_err(map_keyring_error)
     }
 
@@ -171,7 +212,9 @@ impl Keyring {
                     // transient case this loop exists for: the backend
                     // itself being unavailable (e.g. Secret Service not up
                     // yet at login on Linux).
-                    Err(e @ keyring::Error::NoStorageAccess(_)) => return Err(map_keyring_error(e)),
+                    Err(e @ keyring::Error::NoStorageAccess(_)) => {
+                        return Err(map_keyring_error(e));
+                    }
                     Err(_) => continue,
                 },
                 Err(e) => return Err(e),
@@ -282,9 +325,7 @@ impl Keyring {
     /// - The keyring service is unavailable
     /// - Access is denied
     pub fn delete_passphrase(&self) -> Result<(), SystemError> {
-        self.entry()?
-            .delete_credential()
-            .map_err(map_keyring_error)
+        self.entry()?.delete_credential().map_err(map_keyring_error)
     }
 
     /// Checks if a passphrase exists in the keyring or environment.
@@ -306,8 +347,115 @@ fn map_keyring_error(e: keyring::Error) -> SystemError {
     SystemError::Keyring(e.to_string())
 }
 
+/// Test-only keyring backend that persists for the whole test process.
+///
+/// `keyring::mock` builds a fresh, empty credential for every `Entry::new`, so a
+/// store written through one entry is invisible to the next: first-run passphrase
+/// verification logs "FAILED to verify passphrase storage" and any fixture that
+/// reopens its database gets `NoEntry`. Entries are keyed by service and user,
+/// and the user is derived from the database path, so tests in distinct temp
+/// directories never see each other's secrets.
+#[cfg(test)]
+pub(crate) fn test_credential_store() -> std::sync::Arc<keyring::CredentialStore> {
+    use keyring::api::{CredentialApi, CredentialStoreApi};
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+
+    type Store = Mutex<HashMap<(String, String), Vec<u8>>>;
+    static STORE: LazyLock<Store> = LazyLock::new(Store::default);
+
+    #[derive(Debug)]
+    struct Cred(String, String);
+    impl CredentialApi for Cred {
+        fn get_credential(&self) -> keyring::Result<Option<std::sync::Arc<keyring::Credential>>> {
+            Ok(None)
+        }
+        fn get_specifiers(&self) -> Option<(String, String)> {
+            Some((self.0.clone(), self.1.clone()))
+        }
+        fn set_secret(&self, secret: &[u8]) -> keyring::Result<()> {
+            let key = (self.0.clone(), self.1.clone());
+            STORE.lock().unwrap().insert(key, secret.to_vec());
+            Ok(())
+        }
+        fn get_secret(&self) -> keyring::Result<Vec<u8>> {
+            let key = (self.0.clone(), self.1.clone());
+            STORE
+                .lock()
+                .unwrap()
+                .get(&key)
+                .cloned()
+                .ok_or(keyring::Error::NoEntry)
+        }
+        fn delete_credential(&self) -> keyring::Result<()> {
+            let key = (self.0.clone(), self.1.clone());
+            STORE
+                .lock()
+                .unwrap()
+                .remove(&key)
+                .map(drop)
+                .ok_or(keyring::Error::NoEntry)
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[derive(Debug)]
+    struct Builder;
+    impl CredentialStoreApi for Builder {
+        fn vendor(&self) -> String {
+            "chatter-test".into()
+        }
+        fn id(&self) -> String {
+            "persistent-process-store".into()
+        }
+        fn persistence(&self) -> keyring::CredentialPersistence {
+            keyring::CredentialPersistence::ProcessOnly
+        }
+        fn build(
+            &self,
+            service: &str,
+            user: &str,
+            _modifiers: Option<&HashMap<&str, &str>>,
+        ) -> keyring::Result<keyring::Entry> {
+            Ok(keyring::Entry::new_with_credential(std::sync::Arc::new(
+                Cred(service.to_owned(), user.to_owned()),
+            )))
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    std::sync::Arc::new(Builder)
+}
+
 #[cfg(test)]
 mod tests {
+    /// A desktop dependency must not switch shared blocking zbus to Tokio:
+    /// keyring/notification calls from async app code would nest runtimes.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn blocking_dbus_inside_async_runtime_reports_connection_error() {
+        // A unique absent socket avoids the user's bus, keyring and prompts.
+        let directory = tempfile::tempdir().unwrap();
+        let address = format!("unix:path={}/absent-bus", directory.path().display());
+        let connection = std::panic::catch_unwind(|| {
+            zbus::blocking::connection::Builder::address(address.as_str())
+                .unwrap()
+                .build()
+        });
+        assert!(
+            connection.is_ok(),
+            "blocking D-Bus must not nest Tokio runtimes"
+        );
+        assert!(
+            connection.unwrap().is_err(),
+            "absent socket must fail closed"
+        );
+    }
+
     use super::*;
 
     // Note: These tests require a running Secret Service (GNOME Keyring/KWallet).
@@ -341,5 +489,17 @@ mod tests {
 
         assert_ne!(keyring1.username, keyring2.username);
         assert_ne!(keyring1.local_path, keyring2.local_path);
+    }
+
+    #[test]
+    fn test_credential_store_persists_across_entries() {
+        let builder = test_credential_store();
+        let user = format!("persist-{}", std::process::id());
+        let write = builder.build(SERVICE, &user, None).unwrap();
+        write.set_password("p").unwrap();
+        let reopened = builder.build(SERVICE, &user, None).unwrap();
+        assert_eq!(reopened.get_password().unwrap(), "p");
+        reopened.delete_credential().unwrap();
+        assert!(matches!(write.get_password(), Err(keyring::Error::NoEntry)));
     }
 }

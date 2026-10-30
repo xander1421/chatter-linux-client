@@ -69,3 +69,32 @@ pub fn apply_unified_titlebar(window: &slint::Window) -> bool {
     ns_window.setStyleMask(mask);
     true
 }
+
+/// Point GStreamer at the plugins `macos/bundle.sh` staged in the .app.
+///
+/// Double-click and `open` have no shell in which to export
+/// `GST_PLUGIN_SYSTEM_PATH`. Without it, each plugin dlopens Homebrew's
+/// GLib while the bundle has already loaded its own copy. `cargo run` has
+/// no bundled plugin directory, so the variable is left alone. A value
+/// already set by the caller is also left alone.
+pub fn prepare_bundled_gstreamer() {
+    if std::env::var_os("GST_PLUGIN_SYSTEM_PATH").is_some() {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(macos_dir) = exe.parent() else {
+        return;
+    };
+    let plugins = macos_dir.join("../Resources/gstreamer-1.0-plugins");
+    if !plugins.is_dir() {
+        return;
+    }
+    let path = match plugins.canonicalize() {
+        Ok(canonical) => canonical,
+        Err(_) => plugins,
+    };
+    tracing::info!(path = %path.display(), "using bundled GStreamer plugins");
+    std::env::set_var("GST_PLUGIN_SYSTEM_PATH", &path);
+}

@@ -13,8 +13,10 @@ use std::time::{Duration, Instant};
 /// Create a unique temp directory for a test to avoid SQLite lock contention
 /// when multiple tests run in parallel.
 fn test_data_dir(test_name: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("chatter-test-{}-{}", test_name, std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("chatter-test-{}-{}", test_name, std::process::id()));
     std::fs::create_dir_all(&dir).expect("create test data dir");
+    crate::common::headless(&dir);
     dir.to_string_lossy().into_owned()
 }
 
@@ -30,10 +32,22 @@ async fn test_appcontext_three_tier_initialization() {
     let start = Instant::now();
     let data_dir = test_data_dir("appcontext_init");
 
-    let ctx = chatter_core::app::AppContext::with_config(Some("https://localhost:50051".to_string()), Some(data_dir));
+    let ctx = chatter_core::app::AppContext::with_config(
+        Some("https://localhost:50051".to_string()),
+        Some(data_dir),
+    );
 
+    // A hang detector, not a performance budget. This was `< 30s` and failed at
+    // 44s inside `make test-rust`, where the whole workspace runs in parallel —
+    // 18s standalone on the same machine. A wall-clock bound tight enough to
+    // measure the code measures the load instead, and a gate that fails on a
+    // busy machine trains people to re-run it (OPEN-ITEMS §95). Wide enough that
+    // only a real hang trips it.
     let elapsed = start.elapsed();
-    assert!(elapsed < Duration::from_secs(30), "AppContext init took too long: {:?}", elapsed);
+    assert!(
+        elapsed < Duration::from_secs(180),
+        "AppContext init did not finish: {elapsed:?}"
+    );
 
     match ctx {
         Ok(_ctx) => {
@@ -58,12 +72,14 @@ async fn test_appcontext_three_tier_initialization() {
             // a successful `build()` above already proves they constructed.
 
             // Tier 3: State stores are initialized
-            assert!(!client.auth_state().is_logged_in(), "Should not be logged in on fresh init");
-            let _ = client.chat_state();
-            let _ = client.message_state();
-            let _ = client.user_state();
-            let _ = client.offline_state();
-            let _ = client.privacy_state();
+            assert!(
+                !client.has_auth_identity(),
+                "Should not be logged in on fresh init"
+            );
+            let _ = client.chat_snapshot();
+            let _ = client.message_snapshot();
+            let _ = client.user_snapshot();
+            let _ = client.offline_snapshot();
             #[cfg(feature = "jarvis")]
             let _ = client.jarvis_state();
 
@@ -94,13 +110,12 @@ async fn test_chatter_client_builder() {
 
     match result {
         Ok(client) => {
-            // Client exposes all state stores
-            assert!(!client.auth_state().is_logged_in());
-            let _ = client.chat_state();
-            let _ = client.message_state();
-            let _ = client.user_state();
-            let _ = client.offline_state();
-            let _ = client.privacy_state();
+            // Client exposes read-only state snapshots
+            assert!(!client.has_auth_identity());
+            let _ = client.chat_snapshot();
+            let _ = client.message_snapshot();
+            let _ = client.user_snapshot();
+            let _ = client.offline_snapshot();
             #[cfg(feature = "jarvis")]
             let _ = client.jarvis_state();
 
@@ -159,8 +174,7 @@ async fn test_oncelock_services_uninitialized_before_login() {
 ///
 /// Architecture reference:
 ///   EventBus is part of Tier 3 (CoreServices).
-///   It has domain_tx (broadcast/64) for DomainEvents
-///   and ui_tx for UiEvents.
+///   It has domain_tx (broadcast/64) for DomainEvents.
 #[tokio::test]
 async fn test_event_bus_created_on_init() {
     let result = chatter_core::client::ChatterClient::builder()
@@ -175,7 +189,6 @@ async fn test_event_bus_created_on_init() {
             // Can create multiple subscribers (broadcast pattern)
             let _rx1 = bus.subscribe_domain();
             let _rx2 = bus.subscribe_domain();
-            let _rx3 = bus.subscribe_ui();
 
             println!("EventBus is functional with multiple subscribers");
         }
@@ -200,10 +213,10 @@ async fn test_fresh_init_not_logged_in() {
     match result {
         Ok(client) => {
             // Not logged in on fresh init
-            assert!(!client.auth_state().is_logged_in());
+            assert!(!client.has_auth_identity());
 
             // Auth state data should be empty
-            let auth_data = client.auth_state().get();
+            let auth_data = client.auth_snapshot();
             assert!(auth_data.current_user_id.is_none());
             assert!(auth_data.device_id.is_none());
             assert!(!auth_data.is_logging_in);

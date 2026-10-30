@@ -1,6 +1,7 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
+// cSpell: ignore Dexer multidex
 use std::env;
 use std::path::PathBuf;
 
@@ -13,7 +14,7 @@ fn main() {
     }
     let release_mode = env::var("PROFILE").as_ref().map(|s| s.as_str()) == Ok("release");
 
-    // This is the only Java source file
+    // Android host plus its independently testable inset lifecycle policy
     let java_src = "SlintAndroidJavaHelper.java";
     let java_src_path = format!("java/{java_src}");
 
@@ -35,6 +36,7 @@ fn main() {
     // Compile the Java file into .class files
     let o = JavaBuild::new()
         .file(&java_src_path)
+        .file("java/InsetsRecovery.java")
         .class_path(&android_jar)
         .classes_out_dir(&out_class_dir)
         .java_source_version(8)
@@ -82,4 +84,5 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed={java_src_path}");
+    println!("cargo:rerun-if-changed=java/InsetsRecovery.java");
 }

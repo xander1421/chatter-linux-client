@@ -7,12 +7,13 @@
 // feedback the visual layer structurally cannot give — the finger is covering
 // the thing that would have shown it.
 //
-// Deliberately two events, not a palette. Haptics stop carrying information the
+// Deliberately three events, not a palette. Haptics stop carrying information the
 // moment everything buzzes, so the rule here is: fire only where the user
 // crossed a boundary they could not see, or where something failed and the
 // visual signal is a small coloured toast that may be off-screen.
 //
 //   long-press  — a hold gesture just armed. The menu is about to open.
+//   reply-ready — a horizontal message swipe crossed the reply threshold.
 //   error       — an action failed. Pairs with an error toast, never alone.
 //
 // Anything the user can plainly see happen does not get a buzz.
@@ -26,5 +27,6 @@
 // a no-op, so this costs those builds a virtual call that returns.
 export global Haptics {
     callback long-press();
+    callback reply-ready();
     callback error();
 }

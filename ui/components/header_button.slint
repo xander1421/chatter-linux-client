@@ -1,0 +1,131 @@
+import { GlassSurface } from "glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
+// HeaderButton — the ONE control that sits in a header or title row.
+//
+// Back, close, ⋮, search, call, video, +, Shield, settings: every icon control
+// in every title row of the app is this component, so they all share one box
+// (Spacing.header-action-box / -touch), one glyph size (Spacing.header-glyph /
+// -touch), one hover/pressed treatment and a circular shared glass shell.
+//
+// The ROOT has no fixed height: in a layout it stretches to the row (never
+// shorter than the box) and draws the square box vertically centred, so the
+// button sits on the row's axis however tall the row is. A fixed-height child
+// is left at the TOP of a taller HorizontalLayout — that put every chat-header
+// and selection-bar button above its title (RC24 D1). Outside a layout the
+// root fills its parent, so a caller that positions it absolutely centres the
+// box in the parent too.
+// Adjacent header buttons sit Spacing.header-action-gap apart.
+//
+// The test `headers_use_the_shared_header_button` in ui_wiring.rs fails if a
+// header draws its own icon button.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+
+export component HeaderButton inherits Rectangle {
+    in property <image> icon;
+    // Required in practice: an icon-only control has no other name for a
+    // screen reader.
+    in property <string> label;
+    // Density: the touch box and glyph, or the mouse ones.
+    in property <bool> touch: false;
+    // The on-state of a header toggle (Shield): tinted, not outlined.
+    in property <bool> active: false;
+    in property <bool> destructive: false;
+    in property <bool> enabled: true;
+    in property <bool> plain: false;
+    // Forwarded to the glass shell; see GlassSurface.backdrop-paused.
+    in property <bool> backdrop-paused: false;
+    // What is drawn, as opposed to what is tappable. The root box is always
+    // the touch target; a row with lighter chrome around it (the sidebar
+    // header's '+' and Shield beside 24px quick-link glyphs) draws a smaller
+    // shell and glyph inside the same box.
+    in property <length> shell: root.width;
+    in property <length> glyph: root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph;
+
+    callback clicked();
+
+    // Keyboard: Tab lands here, Space/Enter activates. The focused state is
+    // the tint (no stroke: the shell's material owns its edge).
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+
+    width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+    min-height: self.width;
+
+    // Keeping opacity below the root lets childless header controls share
+    // generated code; caller-supplied status marks remain inside this box.
+    box := GlassSurface {
+        transform-scale-x: touch-area.pressed && root.enabled ? 94% : 100%;
+        transform-scale-y: touch-area.pressed && root.enabled ? 94% : 100%;
+        animate transform-scale-x { duration: touch-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: touch-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+        material-enabled: !root.plain;
+        opacity: root.enabled ? 1.0 : 0.4;
+        material-level: 1;
+        elevation: 0;
+        backdrop-paused: root.backdrop-paused;
+        highlighted: root.enabled && (touch-area.pressed || touch-area.has-hover || keys.has-focus);
+        width: min(root.shell, parent.width);
+        height: self.width;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: self.height / 2;
+        background: touch-area.pressed && root.enabled ? Materials.pressed : touch-area.has-hover && root.enabled ? Materials.hover
+            : (root.active || keys.has-focus ? Colors.tint-strong : transparent);
+
+        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+
+        Rectangle {
+            border-radius: parent.border-radius;
+            background: Materials.specular;
+            opacity: root.enabled && touch-area.pressed ? 0.9 : root.enabled && touch-area.has-hover ? 0.45 : 0;
+            animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+        }
+        Rectangle {
+            border-radius: parent.border-radius;
+            border-width: keys.has-focus ? 2px : 0px;
+            border-color: Colors.focus-ring;
+            animate border-width { duration: Materials.motion-quick; easing: Materials.settle; }
+        }
+
+        Image {
+            source: root.icon;
+            width: min(root.glyph, parent.width);
+            height: self.width;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: root.destructive ? Colors.error
+                : root.active ? Colors.glass-accent
+                : touch-area.pressed ? Colors.text-muted
+                : (touch-area.has-hover ? Colors.text-primary : Colors.text-secondary);
+        }
+
+        // Status marks drawn over the glyph (Shield's Tor dot), relative to
+        // the shell.
+        @children
+    }
+
+    // The whole root box, not the shell: the target never shrinks with the
+    // drawing.
+    touch-area := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { if root.enabled { root.clicked(); } }
+    }
+}

@@ -3,19 +3,18 @@
 //! Client for AI integration service operations including CRUD operations,
 //! webhook management, channel integrations, and event streaming.
 
+use crate::network::grpc::transport::GrpcTransport;
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    integration_service_client::IntegrationServiceClient, AddIntegrationToChannelRequest,
-    AddIntegrationToChannelResponse, CreateIntegrationRequest, CreateIntegrationResponse,
-    DeleteIntegrationRequest, DeleteIntegrationResponse, DisableIntegrationRequest,
-    DisableIntegrationResponse, EnableIntegrationRequest, EnableIntegrationResponse,
-    GetChannelIntegrationsRequest, GetChannelIntegrationsResponse, GetIntegrationRequest,
-    GetIntegrationResponse, GetModelLimitsRequest, GetModelLimitsResponse,
+    AddIntegrationToChannelRequest, AddIntegrationToChannelResponse, CreateIntegrationRequest,
+    CreateIntegrationResponse, DeleteIntegrationRequest, DeleteIntegrationResponse,
+    DisableIntegrationRequest, DisableIntegrationResponse, EnableIntegrationRequest,
+    EnableIntegrationResponse, GetChannelIntegrationsRequest, GetChannelIntegrationsResponse,
+    GetIntegrationRequest, GetIntegrationResponse, GetModelLimitsRequest, GetModelLimitsResponse,
     HandleWebhookCallbackRequest, HandleWebhookCallbackResponse, Integration, IntegrationConfig,
     IntegrationType, ListAvailableModelsRequest, ListAvailableModelsResponse,
     ListIntegrationsRequest, ListIntegrationsResponse, RegisterWebhookRequest,
@@ -23,7 +22,7 @@ use crate::proto::chat_v1::{
     RemoveIntegrationFromChannelResponse, StreamIntegrationEventsRequest,
     StreamIntegrationEventsResponse, TestIntegrationRequest, TestIntegrationResponse,
     UnregisterWebhookRequest, UnregisterWebhookResponse, UpdateIntegrationRequest,
-    UpdateIntegrationResponse, WebhookConfig,
+    UpdateIntegrationResponse, WebhookConfig, integration_service_client::IntegrationServiceClient,
 };
 
 /// Integration service client wrapper.
@@ -157,10 +156,14 @@ impl IntegrationClient {
             config_history: vec![],
         };
 
+        let mut paths = Vec::new();
+        if name.is_some() { paths.push("name".to_string()); }
+        if integration.config.is_some() { paths.push("config".to_string()); }
+
         let request = UpdateIntegrationRequest {
             integration_id: integration_id.to_string(),
             integration: Some(integration),
-            update_mask: None,
+            update_mask: Some(prost_types::FieldMask { paths }),
         };
 
         self.inner
@@ -429,22 +432,31 @@ impl IntegrationClient {
 
     // ==================== Event Streaming ====================
 
-    /// Stream integration events.
+    /// Stream integration events for integrations this user owns.
     ///
-    /// Long-lived stream for real-time integration events.
-    ///
-    /// # Arguments
-    ///
-    /// * `integration_id` - Optional integration ID. If not provided, streams events for all integrations.
+    /// `integration_ids` MUST name at least one integration. The empty list
+    /// used to mean "every integration on the server" and the server now
+    /// rejects it with `InvalidArgument` (integration/handlers/handlers.go:
+    /// StreamIntegrationEvents) — it was a cross-tenant leak, not a wildcard.
+    /// This wrapper used to send `unwrap_or_default()` and document the old
+    /// semantics, so the "stream everything" call compiled and failed at the
+    /// server (INFRA-38); it is now rejected here, with the reason.
     pub async fn stream_integration_events(
         &mut self,
-        integration_id: Option<&str>,
-    ) -> Result<impl Stream<Item = Result<StreamIntegrationEventsResponse, NetworkError>>, NetworkError>
-    {
+        integration_ids: &[String],
+    ) -> Result<
+        impl Stream<Item = Result<StreamIntegrationEventsResponse, NetworkError>>,
+        NetworkError,
+    > {
+        if integration_ids.is_empty() {
+            return Err(NetworkError::InvalidRequest(
+                "stream_integration_events requires at least one integration id; \
+                 the server rejects an empty list (it is not a wildcard)"
+                    .to_string(),
+            ));
+        }
         let request = StreamIntegrationEventsRequest {
-            integration_ids: integration_id
-                .map(|id| vec![id.to_string()])
-                .unwrap_or_default(),
+            integration_ids: integration_ids.to_vec(),
             event_types: vec![],
             since: 0,
         };
@@ -573,7 +585,6 @@ mod tests {
             supported_models: vec!["claude-3-opus".to_string(), "claude-3-sonnet".to_string()],
             include_history: true,
             history_limit: 10,
-            respond_to_all: false,
             webhook_url: String::new(),
             timeout_seconds: 30,
             retry_enabled: true,

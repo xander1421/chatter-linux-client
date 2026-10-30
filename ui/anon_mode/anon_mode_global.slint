@@ -1,17 +1,55 @@
 // Anon mode runtime flag — Slint global mirroring `JarvisGlobal`.
 //
-// When `enabled = true`, the sidebar hides server-friend DMs and public
-// channels and shows only anon DMs + anon groups. Default-off; PIN-gated
+// When `enabled = true`, the sidebar hides channels and Saved Messages and
+// shows anon DMs; friend DMs stay (sent via mailbox) — see chatter-core
+// `ChatterClient::visible_in_mode`. Default-off; PIN-gated
 // on enable from the Rust side. In-memory only — resets to off on every
 // fresh window (lib.rs forces this after login bring-up).
 
 export global AnonMode {
     in-out property <bool> enabled: false;
+
+    // The `onion` Cargo feature is built in. Mirrored from Rust at startup
+    // (`lib.rs`), exactly as `JarvisGlobal.enabled` and `MeshGlobal.enabled`
+    // are, because Slint cannot `cfg`-gate.
+    //
+    // STUB-1: the default client build does NOT include `onion`
+    // (`crates/chatter-ui/Cargo.toml`, `default = ["desktop", "jarvis"]`), and
+    // until this existed no anon surface was gated on it at all. The shield
+    // was offered, the PIN gate accepted, the shield glowed — and the
+    // transport stayed direct, because `set_transport_mode(Onion)` has nothing
+    // to switch to. Every anon entry point is now wrapped in
+    // `if AnonMode.onion-built : ...` so a build that cannot honour the
+    // promise does not make it.
+    in-out property <bool> onion-built: false;
+
+    // Shield can hide the network location in this build: `onion` built AND a
+    // server .onion pinned. From chatter-core `ChatterClient::shield_available`
+    // at startup. The sign-in / create-account Shield toggle is disabled
+    // without it — there is nothing to connect over.
+    in-out property <bool> shield-available: false;
+
+    // Sign-in / create-account screens: "connecting over Tor…" etc. while a
+    // Shield onboarding call is in flight; empty otherwise. Set from Rust.
+    in-out property <string> onboarding-progress: "";
+
+    // The Shield toggle on the sign-in and create-account screens. Separate
+    // from the chat-list `toggle-anon-mode`: there is no account and no PIN
+    // yet, and turning it on must fail closed (chatter-core
+    // `set_shield_before_login`).
+    callback toggle-before-login();
 }
 
 // Tor onion transport status, pushed from Rust (see connection.rs `tor_status`).
 // 0 = Off (not on onion), 1 = Connecting, 2 = Connected (onion RPC round-tripped),
-// 3 = Error (connect/poll timed out). Drives the sidebar dot + the connection banner.
+// 3 = Error (connect/poll timed out), 4 = Unavailable (Shield on, onion switch
+// failed — traffic is DIRECT). Drives the sidebar dot, the connection banner and
+// the Shield network banner.
+//
+// STUB-1: state 0 is OFF — traffic is going direct. It is NOT "connecting", and
+// the sidebar dot must not render it amber; the dot's fallback colour used to do
+// exactly that, so a build with no Tor in it showed a reassuring amber
+// "connecting" dot forever. Only state 1 is amber.
 export global TorStatus {
     in-out property <int> state: 0;
 }

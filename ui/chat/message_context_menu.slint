@@ -1,3 +1,6 @@
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // Message context menu component
 //
 // The single surface a message hold (or a desktop right-click) opens:
@@ -13,28 +16,118 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { QuickReactions } from "types.slint";
+import { MessageItemData } from "types.slint";
+import { MessageItem } from "message_item.slint";
+
+// Action flags for this hold. Core fills them before the menu is shown;
+// this file only renders them.
+export global MessageMenuActions {
+    in-out property <bool> resend: false;
+    in-out property <bool> react: false;
+    in-out property <bool> reply: false;
+    in-out property <bool> edit: false;
+    in-out property <bool> pin: false;
+    in-out property <bool> pinned: false;
+    in-out property <bool> delete-for-everyone: false;
+    in-out property <bool> delete-for-me: false;
+    in-out property <bool> forward: false;
+    in-out property <bool> copy: false;
+    in-out property <bool> download: false;
+    in-out property <bool> info: false;
+    in-out property <bool> select: false;
+}
 
 // One tap-to-react emoji in the quick row. 48px so it is a real touch target.
+// A button to a screen reader and to the keyboard too, like IconAction: the
+// pointer path alone left every quick reaction invisible to TalkBack.
 component QuickReaction inherits Rectangle {
     in property <string> emoji;
+    in property <string> short-name;
+    in property <bool> shown: false;
+    in property <int> stagger-index: 0;
+    // The emoji's spoken name; the glyph alone is not a name.
+    in property <string> name;
+    in property <int> nav-index: 0;
+    in property <int> focused-index: 0;
+    in property <bool> keyboard-active: false;
+    in property <bool> initial-focus: false;
     callback clicked();
+    callback navigate(int, int);
+    callback focused(int, length, length);
 
     width: Spacing.touch-target-min;
     height: Spacing.touch-target-min;
+    transform-scale-x: root.shown ? 100% : 64%;
+    transform-scale-y: root.shown ? 100% : 64%;
+    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : root.stagger-index * 18ms / Appearance.animation-speed; }
+    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : root.stagger-index * 18ms / Appearance.animation-speed; }
     border-radius: Spacing.touch-target-min / 2;
-    background: touch.has-hover ? Colors.surface-hover : transparent;
+    background: touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-hover : transparent;
+    border-width: keys.has-focus ? Spacing.stroke : 0px;
+    border-color: Colors.primary;
+    accessible-role: button;
+    accessible-label: "React with " + root.name;
+    accessible-action-default => { root.clicked(); }
+
+    // Items are created with the menu already shown, so `changed` alone never fires.
+    init => { if root.initial-focus { keys.focus(); } }
+    changed initial-focus => { if root.initial-focus { keys.focus(); } }
+    changed focused-index => {
+        if root.keyboard-active && root.focused-index == root.nav-index { keys.focus(); }
+    }
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        changed has-focus => { if self.has-focus { root.focused(root.nav-index, root.y, root.height); } }
+        key-pressed(event) => {
+            // The reactions are one row: Left/Right walk it, Down leaves it.
+            if event.text == Key.LeftArrow { root.navigate(root.nav-index, -1); return accept; }
+            if event.text == Key.RightArrow { root.navigate(root.nav-index, 1); return accept; }
+            if event.text == Key.DownArrow { root.navigate(root.nav-index, 3); return accept; }
+            if event.text == Key.UpArrow { return accept; }
+            if event.text == Key.Home { root.navigate(root.nav-index, -2); return accept; }
+            if event.text == Key.End { root.navigate(root.nav-index, 2); return accept; }
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
 
     Text {
         text: root.emoji;
+        color: Colors.text-primary;
+        transform-scale-x: touch.pressed ? 90% : 100%;
+        transform-scale-y: touch.pressed ? 90% : 100%;
+        animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
         // Same font the reaction picker and the reactions pill use — the app's
         // bundled UI font has no emoji coverage, which is what turns bare
         // dingbats into tofu boxes elsewhere in this tree.
         font-family: Typography.font-family-emoji;
-        font-size: 24px;
+        // The emoji face draws past its line box; keep it clear of the label.
+        font-size: 20px;
         horizontal-alignment: center;
         vertical-alignment: center;
+        y: 2px;
         width: 100%;
-        height: 100%;
+        height: 28px;
+    }
+
+    // Color emoji is unavailable to some software renderers. Keep the action
+    // identifiable there, while the full emoji remains visible on device.
+    Text {
+        text: root.short-name;
+        color: Colors.text-secondary;
+        font-size: 10px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        y: 32px;
+        width: 100%;
+        height: 14px;
     }
 
     touch := TouchArea {
@@ -48,11 +141,50 @@ component MenuItem inherits Rectangle {
     in property <image> icon;
     in property <string> label;
     in property <bool> destructive: false;
+    in property <int> nav-index: 0;
+    in property <int> focused-index: 0;
+    in property <bool> keyboard-active: false;
+    in property <bool> initial-focus: false;
     callback clicked();
+    callback navigate(int, int);
+    callback focused(int, length, length);
 
-    height: 44px;
-    background: touch.has-hover ? Colors.surface-hover : transparent;
+    height: Spacing.touch-target-min;
+    background: touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-hover : transparent;
+    transform-scale-x: touch.pressed ? 97% : 100%;
+    transform-scale-y: touch.pressed ? 94% : 100%;
+    animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+    animate transform-scale-y { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
     border-radius: Spacing.radius-sm;
+    border-width: keys.has-focus ? Spacing.stroke : 0px;
+    border-color: Colors.primary;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+
+    // Items are created with the menu already shown, so `changed` alone never fires.
+    init => { if root.initial-focus { keys.focus(); } }
+    changed initial-focus => { if root.initial-focus { keys.focus(); } }
+    changed focused-index => {
+        if root.keyboard-active && root.focused-index == root.nav-index { keys.focus(); }
+    }
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        changed has-focus => { if self.has-focus { root.focused(root.nav-index, root.y, root.height); } }
+        key-pressed(event) => {
+            if event.text == Key.UpArrow { root.navigate(root.nav-index, -1); return accept; }
+            if event.text == Key.DownArrow { root.navigate(root.nav-index, 1); return accept; }
+            if event.text == Key.Home { root.navigate(root.nav-index, -2); return accept; }
+            if event.text == Key.End { root.navigate(root.nav-index, 2); return accept; }
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
 
     HorizontalLayout {
         padding-left: Spacing.lg;
@@ -60,12 +192,14 @@ component MenuItem inherits Rectangle {
         spacing: Spacing.md;
         alignment: start;
 
-        Image {
-            source: icon;
-            width: 20px;
-            height: 20px;
-            y: (parent.height - self.height) / 2;
-            colorize: destructive ? Colors.error : Colors.text-secondary;
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: icon;
+                width: 20px;
+                height: 20px;
+                colorize: destructive ? Colors.error : Colors.text-secondary;
+            }
         }
 
         Text {
@@ -83,30 +217,101 @@ component MenuItem inherits Rectangle {
 }
 
 export component MessageContextMenu inherits Rectangle {
+    in property <length> content-bottom: root.height;
     // Visibility and position - menu appears where clicked
     in property <bool> show: false;
+    // Keep the common actions on one short page, even with the IME open.
+    // Secondary actions retain the capped scrollable page below.
+    private property <bool> more-actions: false;
+    changed show => { root.more-actions = false; root.focus-index = 0; }
     in property <length> position-x: 0;
     in property <length> position-y: 0;
+    // Window-local vertical bounds of the pressed bubble. Zero/zero keeps
+    // callers without a message anchor on the press-point placement.
+    in property <length> anchor-top: 0px;
+    in property <length> anchor-bottom: 0px;
+    in property <length> anchor-left: 0px;
+    in property <length> anchor-right: 0px;
+    // Snapshot the row with the anchor. The virtual list can recycle it while
+    // the menu is open, so the lifted copy must use the captured data/geometry.
+    in property <MessageItemData> preview-message;
+    in property <length> preview-row-x: 0px;
+    in property <length> preview-row-y: 0px;
+    in property <length> preview-row-width: 0px;
+    // Match the source row's layout mode. Touch reaction chips change both
+    // the bubble's width and its height, shifting an outgoing copy inward.
+    in property <bool> preview-mobile: false;
+    in property <bool> preview-from-thread: false;
+    in property <bool> preview-is-dm: false;
+    in property <bool> preview-is-anonymous: false;
+    in property <bool> preview-is-mesh: false;
+    in property <string> preview-playing-attachment-id: "";
+    in property <bool> preview-media-playing: false;
+    in property <float> preview-audio-progress: 0.0;
+    in property <string> preview-audio-elapsed: "0:00";
+    private property <bool> has-bubble-anchor: root.anchor-bottom > root.anchor-top
+        && root.anchor-right > root.anchor-left;
+    private property <length> visible-bubble-top: max(root.content-top, min(root.height, root.anchor-top));
+    private property <length> visible-bubble-bottom: max(0px, min(root.height, root.anchor-bottom));
+    private property <length> visible-bubble-left: max(0px, min(root.width, root.anchor-left));
+    private property <length> visible-bubble-right: max(0px, min(root.width, root.anchor-right));
+    private property <bool> bubble-in-view: root.has-bubble-anchor
+        && root.visible-bubble-bottom > root.visible-bubble-top
+        && root.visible-bubble-right > root.visible-bubble-left;
+    out property <length> popup-top: menu-container.y;
+    out property <length> popup-bottom: menu-container.y + menu-container.height;
 
-    // Viewport insets, so the popup never renders under the status bar or the
-    // gesture-nav strip on Android.
-    in property <length> safe-area-top: 0px;
-    in property <length> safe-area-bottom: 0px;
+    // Local y of conversation content below the header. The parent already
+    // excludes system bars and the IME, exactly like the composer.
+    in property <length> content-top: 0px;
 
     // Message context (Signal-style identification: sender_id + timestamp_ns)
     in property <string> sender-id: "";
     in property <string> timestamp-ns: "";
     in property <string> message-id: "";        // Thread + selection are keyed by message id
-    in property <bool> is-own-message: false;  // Can edit own messages
-    in property <bool> can-delete-for-everyone: false;  // Derived from permissions
-    in property <bool> is-pinned: false;
-    in property <bool> has-attachments: false;  // Show download option when true
-
-    // The six one-tap reactions. Not configurable by design — this is the quick
-    // row; anything else is a tap away behind "More reactions".
-    property <[string]> quick-reactions: ["\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F64F}"];
+    in property <bool> can-thread: false;  // Threads are a channel feature (none in 1:1, as in Signal)
+    // Something on the second page is offered. Core decides each flag.
+    private property <bool> more-page: MessageMenuActions.react || MessageMenuActions.info
+        || (MessageMenuActions.reply && root.can-thread) || root.can-select
+        || MessageMenuActions.pin || MessageMenuActions.download
+        || MessageMenuActions.delete-for-everyone || MessageMenuActions.delete-for-me;
+    private property <int> focus-index: 0;
+    private property <int> primary-start: MessageMenuActions.react ? QuickReactions.emojis.length : 0;
+    private property <int> resend-index: root.primary-start;
+    private property <int> reply-index: root.resend-index + (MessageMenuActions.resend ? 1 : 0);
+    private property <int> edit-index: root.reply-index + (MessageMenuActions.reply ? 1 : 0);
+    private property <int> copy-index: root.edit-index + (MessageMenuActions.edit ? 1 : 0);
+    private property <int> forward-index: root.copy-index + (MessageMenuActions.copy ? 1 : 0);
+    private property <int> more-index: root.forward-index + (MessageMenuActions.forward ? 1 : 0);
+    private property <int> reactions-index: 1;
+    private property <int> info-index: root.reactions-index + (MessageMenuActions.react ? 1 : 0);
+    private property <int> thread-index: root.info-index + (MessageMenuActions.info ? 1 : 0);
+    private property <int> select-index: root.thread-index + (MessageMenuActions.reply && root.can-thread ? 1 : 0);
+    // Multi-select works on the main list only; the thread panel has none.
+    private property <bool> can-select: MessageMenuActions.select && !root.preview-from-thread;
+    private property <int> pin-index: root.select-index + (root.can-select ? 1 : 0);
+    private property <int> download-index: root.pin-index + (MessageMenuActions.pin ? 1 : 0);
+    private property <int> delete-index: root.download-index + (MessageMenuActions.download ? 1 : 0);
+    private property <int> focus-count: root.more-actions
+        ? root.delete-index + (MessageMenuActions.delete-for-me || MessageMenuActions.delete-for-everyone ? 1 : 0)
+        : root.more-index + (root.more-page ? 1 : 0);
+    function move-focus(from: int, direction: int) {
+        // 3 = down out of the reaction row; Up from the first action goes back to it.
+        root.focus-index = direction == -2 ? 0 : direction == 2 ? root.focus-count - 1
+            : direction == 3 ? min(root.focus-count - 1, root.primary-start)
+            : direction == -1 && from == root.primary-start && root.primary-start > 0 && !root.more-actions ? 0
+            : max(0, min(root.focus-count - 1, from + direction));
+    }
+    function keep-visible(top: length, item-height: length) {
+        if (top + menu-scroll.viewport-y < 0px) { menu-scroll.viewport-y = -top; }
+        else if (top + item-height + menu-scroll.viewport-y > menu-scroll.height) {
+            menu-scroll.viewport-y = menu-scroll.height - top - item-height;
+        }
+    }
 
     // Callbacks - use (sender_id, timestamp_ns) for Signal-style lookups
+    callback retry-clicked(string);
+    callback info-clicked(string);
     callback close();
     callback quick-react(string, string, string);   // (sender_id, timestamp_ns, emoji)
     callback more-reactions-clicked(string, string);
@@ -114,8 +319,7 @@ export component MessageContextMenu inherits Rectangle {
     callback select-clicked(string);                // (message_id) — enters selection mode
     callback reply-clicked(string, string);
     callback edit-clicked(string, string);
-    callback delete-clicked(string, string);           // Delete for me (local only)
-    callback delete-everyone-clicked(string, string);  // Delete for everyone
+    callback delete-clicked(string, string);           // Choose deletion scope
     callback pin-clicked(string, string);
     callback forward-clicked(string, string);
     callback copy-clicked(string, string);
@@ -125,193 +329,443 @@ export component MessageContextMenu inherits Rectangle {
     // dismisses this menu at the same moment the message becomes selected, and
     // an instant disappearance there reads as a glitch rather than as an
     // escalation.
-    visible: root.show;
+    // Keep every descendant of chat chrome below this modal scrim.
+    z: 10;
+    visible: root.show || self.opacity > 0;
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     opacity: root.show ? 1 : 0;
-    animate opacity { duration: 120ms; easing: ease-out; }
+    animate opacity { duration: Materials.motion-standard; easing: Materials.glide; }
 
-    // Full screen backdrop
+    // Full screen backdrop, dimmed like every other modal surface so the menu
+    // reads as a modal choice over the chat, not a stray card on top of it.
     width: 100%;
     height: 100%;
     background: transparent;
 
-    // Backdrop touch area to close menu
+    // One uninterrupted wash also covers messages that scroll under the
+    // floating header. On touch, repaint the pressed row at its original size.
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Materials.scrim;
+    }
+
+    if root.preview-mobile && root.bubble-in-view && root.preview-message.message-id != "": Rectangle {
+        y: root.content-top;
+        width: 100%;
+        height: max(0px, root.height - self.y);
+        clip: true;
+
+        MessageItem {
+            x: root.preview-row-x;
+            y: root.preview-row-y - parent.y;
+            width: root.preview-row-width;
+            message-id: root.preview-message.message-id;
+            sender-id: root.preview-message.sender-id;
+            timestamp-ns: root.preview-message.timestamp-ns;
+            sender-name: root.preview-message.sender-name;
+            sender-initials: root.preview-message.sender-initials;
+            sender-avatar-source: root.preview-message.sender-avatar-source;
+            has-avatar: root.preview-message.has-avatar;
+            content: root.preview-message.content;
+            rich-content: root.preview-message.rich-content;
+            timestamp: root.preview-message.timestamp;
+            is-own: root.preview-message.is-own;
+            is-edited: root.preview-message.is-edited;
+            is-pinned: root.preview-message.is-pinned;
+            is-deleted: root.preview-message.is-deleted;
+            is-system: root.preview-message.is-system;
+            is-ai: root.preview-message.is-ai;
+            is-dm: !root.preview-from-thread && root.preview-is-dm;
+            is-anonymous: !root.preview-from-thread && root.preview-is-anonymous;
+            can-thread: !root.preview-from-thread && root.can-thread;
+            is-mesh: !root.preview-from-thread && root.preview-is-mesh;
+            is-call: root.preview-message.is-call;
+            call-type: root.preview-message.call-type;
+            call-duration: root.preview-message.call-duration;
+            has-attachments: root.preview-message.has-attachments;
+            attachment-count: root.preview-message.attachment-count;
+            attachments: root.preview-message.attachments;
+            standalone-attachment-indices: root.preview-message.standalone-attachment-indices;
+            current-playing-attachment-id: root.preview-playing-attachment-id;
+            is-media-playing: root.preview-media-playing;
+            audio-progress: root.preview-audio-progress;
+            audio-elapsed: root.preview-audio-elapsed;
+            has-reactions: root.preview-message.has-reactions;
+            reaction-summary: root.preview-message.reaction-summary;
+            reactions: root.preview-message.reactions;
+            reply-count: root.preview-from-thread ? 0 : root.preview-message.reply-count;
+            reply-count-text: root.preview-message.reply-count-text;
+            is-thread-reply: !root.preview-from-thread && root.preview-message.is-thread-reply;
+            is-continuation: root.preview-message.is-continuation;
+            is-reply: root.preview-message.is-reply;
+            reply-to-not-found: root.preview-message.reply-to-not-found;
+            reply-to-message-id: root.preview-message.reply-to-message-id;
+            reply-to-sender-name: root.preview-message.reply-to-sender-name;
+            reply-to-preview: root.preview-message.reply-to-preview;
+            reply-to-category: root.preview-message.reply-to-category;
+            reply-to-attachment-id: root.preview-message.reply-to-attachment-id;
+            reply-to-duration: root.preview-message.reply-to-duration;
+            reply-to-filename: root.preview-message.reply-to-filename;
+            reply-to-waveform: root.preview-message.reply-to-waveform;
+            reply-to-has-thumbnail: root.preview-message.reply-to-has-thumbnail;
+            reply-to-thumbnail: root.preview-message.reply-to-thumbnail;
+            reply-to-thumbnail-width: root.preview-message.reply-to-thumbnail-width;
+            reply-to-thumbnail-height: root.preview-message.reply-to-thumbnail-height;
+            show-sender: root.preview-message.show-sender;
+            delivery-status: root.preview-message.delivery-status;
+            failure-reason: root.preview-message.failure-reason;
+            mobile: root.preview-mobile;
+            menu-open: true;
+        }
+    }
+
+    // Backdrop touch area to close menu. A wheel closes it too instead of
+    // scrolling the messages under the lifted bubble.
     TouchArea {
         width: 100%;
         height: 100%;
+        enabled: root.show;
         clicked => { root.close(); }
+        scroll-event(event) => {
+            root.close();
+            accept
+        }
+    }
+
+    if root.bubble-in-view: Rectangle {
+        x: root.visible-bubble-left;
+        y: root.visible-bubble-top;
+        width: max(0px, root.visible-bubble-right - self.x);
+        height: max(0px, root.visible-bubble-bottom - self.y);
+        border-radius: Spacing.radius-bubble;
+        border-width: Spacing.stroke;
+        border-color: Colors.primary.with-alpha(0.65);
     }
 
     // Menu container - positioned at the anchor (press point / click point).
     //
-    // Anchoring rules, in order:
-    //   * prefer just below the anchor, so the popup does not sit under the
-    //     finger that opened it;
-    //   * if that would overflow the bottom inset, flip to just above it;
-    //   * clamp into [safe-area-top, height - safe-area-bottom] regardless, so
-    //     a tall menu on a short screen is merely cropped at a sane edge rather
-    //     than rendered under the status bar or the gesture strip.
-    menu-container := Rectangle {
-        property <length> menu-h: menu-layout.preferred-height + Spacing.sm * 2;
-        property <length> top-limit: root.safe-area-top + Spacing.sm;
-        property <length> bottom-limit: parent.height - root.safe-area-bottom - Spacing.sm;
-        // Does the preferred (below-the-anchor) placement fit?
-        property <bool> flip-up: root.position-y + Spacing.sm + self.menu-h > self.bottom-limit;
+    // Touch keeps the card clear of the raised bubble. Desktop places the
+    // full card by the pointer, flipping above it near the window bottom.
+    // Both paths clamp to the usable vertical band and scroll if needed.
+    menu-container := GlassSurface {
+        enter-distance: self.flip-up ? -20px : 20px;
+        enter-duration: Materials.motion-standard;
+        shown: root.show;
+        transform-origin: { x: max(0px, min(root.position-x - self.x, self.width)), y: max(0px, min(root.position-y - self.y, self.height)) };
+        transform-scale-x: root.show ? 100% : 86%;
+        transform-scale-y: root.show ? 100% : 86%;
+        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+
+        material-level: 3;
+        elevation: 4;
+
+        // The layout carries its own padding; adding it again here left an
+        // empty band under "Delete for Me".
+        property <length> menu-h: menu-layout.preferred-height;
+        property <length> top-limit: max(0px, root.content-top) + Spacing.sm;
+        property <length> bottom-limit: min(parent.height, root.content-bottom) - Spacing.sm;
+        property <length> desktop-height: max(0px, min(self.menu-h, self.bottom-limit - self.top-limit));
+        property <bool> has-bubble-anchor: root.has-bubble-anchor;
+        property <length> room-below: max(0px, self.bottom-limit - root.anchor-bottom - Spacing.sm);
+        property <length> room-above: max(0px, root.anchor-top - Spacing.sm - self.top-limit);
+        // A bubble that fills the viewport leaves no room on either side.
+        // Keep the menu usable at the top and its bottom edge clear of the
+        // bubble's lower fragment; the existing Flickable scrolls its body.
+        property <bool> cramped-bubble: self.has-bubble-anchor
+            && max(self.room-above, self.room-below) < 2 * Spacing.touch-target-min;
+        property <bool> flip-up: !root.preview-mobile
+            ? root.position-y + Spacing.sm + self.desktop-height > self.bottom-limit
+            : self.has-bubble-anchor
+                ? (self.cramped-bubble || (self.room-below < self.menu-h && self.room-above > self.room-below))
+                : root.position-y + Spacing.sm + self.menu-h > self.bottom-limit;
 
         x: max(Spacing.sm, min(root.position-x - Spacing.sm, parent.width - self.width - Spacing.md));
-        y: max(self.top-limit,
-               min(self.flip-up ? root.position-y - Spacing.sm - self.menu-h
-                                : root.position-y + Spacing.sm,
-                   self.bottom-limit - self.menu-h));
-        width: 304px;
-        height: self.menu-h;
-        background: Colors.surface;
-        border-radius: Spacing.radius-md;
-        border-width: 1px;
-        border-color: Colors.text-muted.with-alpha(0.2);
-        drop-shadow-blur: 12px;
-        drop-shadow-color: Colors.background.with-alpha(0.6);
-        drop-shadow-offset-y: 4px;
+        y: !root.preview-mobile
+            ? max(self.top-limit, min(
+                (self.flip-up ? root.position-y - Spacing.sm - self.height
+                    : root.position-y + Spacing.sm) + self.entrance-offset,
+                self.bottom-limit - self.height))
+            : max(self.top-limit, min(
+                (self.cramped-bubble ? self.top-limit : max(self.top-limit,
+                    min(self.flip-up
+                        ? (self.has-bubble-anchor ? root.anchor-top : root.position-y) - Spacing.sm - self.height
+                        : (self.has-bubble-anchor ? root.anchor-bottom : root.position-y) + Spacing.sm,
+                        self.bottom-limit - self.height))) + self.entrance-offset,
+                self.bottom-limit - self.height));
+        width: min(304px, parent.width - 2 * Spacing.md);
+        height: !root.preview-mobile ? self.desktop-height
+            : max(0px, min(self.menu-h, self.cramped-bubble
+                ? self.bottom-limit - self.top-limit - Spacing.touch-target-min
+                : self.has-bubble-anchor
+                    ? (self.flip-up ? self.room-above : self.room-below)
+                    : self.bottom-limit - self.top-limit));
+        border-radius: Spacing.radius-xl;
 
         // Block backdrop clicks on menu
         TouchArea { }
 
-        menu-layout := VerticalLayout {
-            padding: Spacing.sm;
-            spacing: 2px;
+        // Rows vanish the moment the menu is logically closed, as in
+        // chat_header_menu.slint: the card only fades, and no pointer, key,
+        // Tab focus or accessible default action may reach a fading row.
+        menu-scroll := Flickable {
+            visible: root.show;
+            width: 100%;
+            height: 100%;
+            viewport-height: menu-container.menu-h;
+            interactive: menu-container.menu-h > menu-container.height;
 
-            // Quick-reaction row. This is the whole point of opening on hold:
-            // reacting used to be reachable only from the hover action bar,
-            // which on a touch screen exists only while a finger is down — you
-            // had to guess where it would appear and hit it blind. The
-            // reactions pill below a bubble is `if has-reactions`, so it could
-            // not bootstrap the first reaction either.
-            HorizontalLayout {
-                spacing: 0px;
-                alignment: space-between;
-                padding-bottom: Spacing.xs;
+            menu-layout := VerticalLayout {
+                width: parent.width;
+                height: menu-container.menu-h;
+                padding: Spacing.sm;
+                spacing: Spacing.xxs;
 
-                for emoji in root.quick-reactions: QuickReaction {
-                    emoji: emoji;
+                if root.more-actions: MenuItem {
+                    nav-index: 0;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.chevron-left;
+                    label: "Back";
+                    clicked => { root.more-actions = false; root.focus-index = 0; menu-scroll.viewport-y = 0px; }
+                }
+
+                // Quick-reaction row. This is the whole point of opening on hold:
+                // reacting used to be reachable only from the hover action bar,
+                // which on a touch screen exists only while a finger is down — you
+                // had to guess where it would appear and hit it blind. The
+                // reactions pill below a bubble is `if has-reactions`, so it could
+                // not bootstrap the first reaction either.
+                if MessageMenuActions.react && !root.more-actions: HorizontalLayout {
+                    spacing: Spacing.none;
+                    alignment: space-between;
+                    padding-bottom: Spacing.xs;
+
+                    for emoji[index] in QuickReactions.emojis: QuickReaction {
+                        nav-index: index;
+                        focused-index: root.focus-index;
+                        keyboard-active: root.show && !root.preview-mobile;
+                        initial-focus: root.show && !root.preview-mobile && index == 0;
+                        focused(item-index, top, item-height) => { root.focus-index = item-index; }
+                        navigate(from, direction) => { root.move-focus(from, direction); }
+                        emoji: emoji;
+                        short-name: ["Like", "Love", "Haha", "Wow", "Sad", "Thanks"][index];
+                        shown: root.show;
+                        stagger-index: index;
+                        name: QuickReactions.names[index];
+                        clicked => {
+                            root.quick-react(root.sender-id, root.timestamp-ns, emoji);
+                            root.close();
+                        }
+                    }
+                }
+
+                if MessageMenuActions.resend && !root.more-actions: MenuItem {
+                    nav-index: root.resend-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.resend-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.rotate-ccw;
+                    label: "Resend";
                     clicked => {
-                        root.quick-react(root.sender-id, root.timestamp-ns, emoji);
+                        root.retry-clicked(root.message-id);
+                        root.close();
+                    }
+                }
+
+                if MessageMenuActions.react && root.more-actions: MenuItem {
+                    nav-index: root.reactions-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.reactions-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.smile;
+                    label: "More reactions";
+                    clicked => {
+                        root.more-reactions-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
+                }
+
+                if MessageMenuActions.info && root.more-actions: MenuItem {
+                    nav-index: root.info-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.info-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.clock;
+                    label: "Info";
+                    clicked => {
+                        root.info-clicked(root.message-id);
+                        root.close();
+                    }
+                }
+
+                if MessageMenuActions.reply && !root.more-actions: MenuItem {
+                    nav-index: root.reply-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.reply-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.reply;
+                    label: "Reply";
+                    clicked => {
+                        root.reply-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
+                }
+
+                if MessageMenuActions.reply && root.can-thread && root.more-actions: MenuItem {
+                    nav-index: root.thread-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.thread-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.message-circle;
+                    label: "Reply in thread";
+                    clicked => {
+                        root.thread-clicked(root.message-id);
+                        root.close();
+                    }
+                }
+
+                // The discoverable route into multi-select, for anyone who never
+                // finds the longer hold.
+                if root.can-select && root.more-actions: MenuItem {
+                    nav-index: root.select-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.select-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.check;
+                    label: "Select";
+                    clicked => {
+                        root.select-clicked(root.message-id);
+                        root.close();
+                    }
+                }
+
+                if MessageMenuActions.edit && !root.more-actions: MenuItem {
+                    nav-index: root.edit-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.edit-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.edit;
+                    label: "Edit";
+                    clicked => {
+                        root.edit-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
+                }
+
+                if MessageMenuActions.pin && root.more-actions: MenuItem {
+                    nav-index: root.pin-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.pin-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.pin;
+                    label: MessageMenuActions.pinned ? "Unpin" : "Pin";
+                    clicked => {
+                        root.pin-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
+                }
+
+                if MessageMenuActions.copy && !root.more-actions: MenuItem {
+                    nav-index: root.copy-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.copy-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.copy;
+                    label: "Copy";
+                    clicked => {
+                        root.copy-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
+                }
+
+                if MessageMenuActions.forward && !root.more-actions: MenuItem {
+                    nav-index: root.forward-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.forward-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.send;
+                    label: "Forward";
+                    clicked => {
+                        root.forward-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
+                }
+
+                if MessageMenuActions.download && root.more-actions: MenuItem {
+                    nav-index: root.download-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.download-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.download;
+                    label: "Download";
+                    clicked => {
+                        root.download-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
+                }
+
+                if root.more-page && !root.more-actions: MenuItem {
+                    nav-index: root.more-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.more-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.more-horizontal;
+                    label: "More";
+                    clicked => { root.more-actions = true; root.focus-index = 0; menu-scroll.viewport-y = 0px; }
+                }
+
+                if (MessageMenuActions.delete-for-me || MessageMenuActions.delete-for-everyone) && root.more-actions: MenuItem {
+                    nav-index: root.delete-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.delete-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.trash;
+                    label: "Delete";
+                    destructive: true;
+                    clicked => {
+                        root.delete-clicked(root.sender-id, root.timestamp-ns);
                         root.close();
                     }
                 }
             }
-
-            Rectangle {
-                height: 1px;
-                background: Colors.surface-hover;
-            }
-
-            MenuItem {
-                icon: Icons.smile;
-                label: "More reactions";
-                clicked => {
-                    root.more-reactions-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
-                }
-            }
-
-            MenuItem {
-                icon: Icons.reply;
-                label: "Reply";
-                clicked => {
-                    root.reply-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
-                }
-            }
-
-            MenuItem {
-                icon: Icons.message-circle;
-                label: "Reply in Thread";
-                clicked => {
-                    root.thread-clicked(root.message-id);
-                    root.close();
-                }
-            }
-
-            // The discoverable route into multi-select, for anyone who never
-            // finds the longer hold.
-            MenuItem {
-                icon: Icons.check;
-                label: "Select";
-                clicked => {
-                    root.select-clicked(root.message-id);
-                    root.close();
-                }
-            }
-
-            if root.is-own-message: MenuItem {
-                icon: Icons.edit;
-                label: "Edit";
-                clicked => {
-                    root.edit-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
-                }
-            }
-
-            MenuItem {
-                icon: Icons.pin;
-                label: root.is-pinned ? "Unpin" : "Pin";
-                clicked => {
-                    root.pin-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
-                }
-            }
-
-            MenuItem {
-                icon: Icons.send;
-                label: "Forward";
-                clicked => {
-                    root.forward-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
-                }
-            }
-
-            MenuItem {
-                icon: Icons.copy;
-                label: "Copy";
-                clicked => {
-                    root.copy-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
-                }
-            }
-
-            if root.has-attachments: MenuItem {
-                icon: Icons.download;
-                label: "Download";
-                clicked => {
-                    root.download-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
-                }
-            }
-
-            // Separator before delete actions
-            Rectangle {
-                height: 1px;
-                background: Colors.surface-hover;
-            }
-
-            if root.can-delete-for-everyone: MenuItem {
-                icon: Icons.trash;
-                label: "Delete for Everyone";
-                destructive: true;
-                clicked => {
-                    root.delete-everyone-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
-                }
-            }
-
-            MenuItem {
-                icon: Icons.trash;
-                label: "Delete for Me";
-                destructive: true;
-                clicked => {
-                    root.delete-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
-                }
-            }
         }
+    }
+
+    // The fade-out is presentation only: swallow taps until it is gone.
+    if !root.show: TouchArea {
+        width: 100%;
+        height: 100%;
     }
 }

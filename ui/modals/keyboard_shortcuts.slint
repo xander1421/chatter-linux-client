@@ -1,0 +1,164 @@
+import { GlassSurface } from "../components/glass_surface.slint";
+import { DismissButton } from "../components/dismiss_button.slint";
+import { Materials } from "../theme/materials.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+component ShortcutRow inherits HorizontalLayout {
+    in property <string> action;
+    in property <string> key;
+    height: 28px;
+    spacing: Spacing.md;
+
+    Text {
+        text: root.action;
+        color: Colors.text-primary;
+        font-size: Typography.sm;
+        horizontal-stretch: 1;
+        vertical-alignment: center;
+    }
+
+    Rectangle {
+        width: key-text.preferred-width + Spacing.md;
+        height: 24px;
+        border-radius: Spacing.radius-sm;
+        background: Colors.surface-hover;
+
+        key-text := Text {
+            text: root.key;
+            color: Colors.text-secondary;
+            font-size: Typography.xs;
+            font-weight: Typography.medium;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component KeyboardShortcutsDialog inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.shown ? "modal-overlay" : "";
+    in property <bool> shown;
+    // Appearance › Search shortcut: "k", "f" or "both".
+    in property <string> search-shortcut-pref: "both";
+    in property <bool> ai-enabled;
+    callback close();
+    background: Materials.scrim;
+    opacity: root.shown ? 1 : 0;
+    animate opacity { duration: Materials.menu-duration; easing: ease-out; }
+    visible: root.shown || root.opacity > 0;
+
+    TouchArea {
+        enabled: parent.shown;
+        clicked => { root.close(); }
+    }
+
+    GlassSurface {
+        material-level: 3;
+        elevation: 5;
+
+        width: min(420px, parent.width - 32px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        // Header, divider and padding plus the sections; the sections
+        // scroll when that does not fit.
+        height: min(Spacing.lg * 2 + Spacing.header-action-box + 1px + Spacing.md * 2
+            + sections.preferred-height, parent.height - 48px);
+        border-radius: Spacing.radius-sheet;
+        accessible-role: groupbox;
+        accessible-description: "Keyboard shortcuts";
+
+        TouchArea {} // block click-through
+
+        // Hidden the moment the dialog is logically closed: nothing in
+        // an invisible subtree is a pointer, key, Tab or accessible
+        // target while the shell and scrim finish their fade.
+        Rectangle {
+            visible: root.shown;
+            shortcuts-layout := VerticalLayout {
+                padding: Spacing.lg;
+                spacing: Spacing.md;
+
+                // Header
+                HorizontalLayout {
+                    height: Spacing.header-action-box;
+                    Text {
+                        text: "Keyboard shortcuts";
+                        color: Colors.text-primary;
+                        font-size: Typography.lg;
+                        font-weight: Typography.semibold;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+
+                    DismissButton {
+                        enabled: root.shown;
+                        clicked => { root.close(); }
+                    }
+                }
+
+                Rectangle { height: 1px; background: Colors.surface-hover; }
+
+                // Sections scroll under the fixed header: in a short window
+                // (800x600 desktop) everything after "Send" was cut off.
+                Flickable {
+                    vertical-stretch: 1;
+                    viewport-width: self.width;
+                    viewport-height: sections.preferred-height;
+                    sections := VerticalLayout {
+                        width: parent.width;
+                        spacing: Spacing.md;
+                        // Navigation section
+                        Text {
+                            text: "Navigation";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            font-weight: Typography.semibold;
+                        }
+
+                        // The combo Appearance › Search shortcut leaves bound.
+                        ShortcutRow {
+                            action: "Search";
+                            key: root.search-shortcut-pref == "k" ? "Ctrl + K"
+                                : root.search-shortcut-pref == "f" ? "Ctrl + F" : "Ctrl + K / Ctrl + F";
+                        }
+                        if root.ai-enabled: ShortcutRow { action: "Open AI chat"; key: "Ctrl + J"; }
+                        for shortcut in [
+                            { key: "Ctrl + Shift + F", action: "Search in chat" },
+                            { key: "Ctrl + ,", action: "Open settings" },
+                            { key: "Alt + ↓ / Ctrl + Tab", action: "Next chat" },
+                            { key: "Alt + ↑ / Ctrl + Shift + Tab", action: "Previous chat" },
+                            { key: "Ctrl + 0", action: "Saved messages" },
+                            { key: "↑ / ↓, Home / End", action: "Move in sidebar" },
+                            { key: "Enter / Space", action: "Open sidebar item" },
+                            { key: "Ctrl + /", action: "Show this dialog" },
+                            { key: "Escape", action: "Close modal or panel" },
+                        ]: ShortcutRow { action: shortcut.action; key: shortcut.key; }
+
+                        // Messages section
+                        Text {
+                            text: "Messages";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            font-weight: Typography.semibold;
+                        }
+
+                        for shortcut in [
+                            { key: "Enter", action: "Send" },
+                            { key: "Shift + Enter", action: "New line" },
+                            { key: "Ctrl + B / Ctrl + I", action: "Bold / italic" },
+                            { key: "Ctrl + Shift + X / M", action: "Strikethrough / code" },
+                            { key: "↑ (empty message box)", action: "Edit your last message" },
+                            { key: "Escape", action: "Cancel edit or reply" },
+                        ]: ShortcutRow { action: shortcut.action; key: shortcut.key; }
+
+                        Rectangle { height: Spacing.xs; }
+                    }
+                }
+            }
+        }
+    }
+}

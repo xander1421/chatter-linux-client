@@ -1,0 +1,36 @@
+import { MobileBottomNav } from "mobile_bottom_nav.slint";
+
+// The bottom dock also owns tab selection's local presentation state.
+export component AppBottomNavigation inherits MobileBottomNav {
+    in-out property <string> selected-tab;
+    in-out property <bool> mobile-show-chat;
+    in-out property <bool> sidebar-user-collapsed;
+    in-out property <bool> sidebar-collapsed;
+    in-out property <string> friends-modal-tab;
+    callback calls-tab-clicked();
+
+    active-tab: root.selected-tab;
+    tab-selected(tab) => {
+        if (tab == "chats") {
+            // Back to the list from wherever you are — this tab is
+            // what replaced the rail as always-available navigation.
+            root.selected-tab = "chats";
+            root.mobile-show-chat = false;
+            root.sidebar-user-collapsed = false;
+            root.sidebar-collapsed = false;
+        } else if (tab == "mesh") {
+            root.selected-tab = "mesh";
+            root.mobile-show-chat = false;
+        } else if (tab == "calls") {
+            root.selected-tab = "calls";
+            root.calls-tab-clicked();
+        } else if (tab == "contacts") {
+            // Land on the contacts list, not the add-by-code form
+            // (the default tab), as the desktop Friends row does.
+            root.friends-modal-tab = "friends";
+            root.selected-tab = "contacts";
+        } else if (tab == "profile") {
+            root.selected-tab = "profile";
+        }
+    }
+}

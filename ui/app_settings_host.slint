@@ -1,0 +1,216 @@
+import { SidebarPane } from "app_sidebar_pane.slint";
+import { SearchPane } from "app_search_pane.slint";
+import { ModalHostState } from "app_modal_host_state.slint";
+import { JarvisPane } from "app_jarvis_pane.slint";
+import { ChatPane } from "app_chat_pane.slint";
+import { AuthFlow } from "app_auth_flow.slint";
+import { SettingsPane } from "app_settings_pane.slint";
+import { Spacing } from "theme/spacing.slint";
+import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
+import { SettingsScreen, LocalAIProviderData, CatalogModelData } from "settings/settings_screen.slint";
+
+export component AppSettingsHost inherits Rectangle {
+    in property <bool> compact-layout;
+    in property <bool> is-mobile-platform;
+    in property <length> safe-area-bottom;
+    callback toggle-anon-mode();
+
+    background: transparent;
+
+    // Settings screen — pushed from the account menu (full-screen page, the
+    // tab bar hidden under it). z -1 rather than 0 because what Settings
+    // opens (Sessions, Link device, Recovery codes, ...) is declared above
+    // and has to draw over it.
+    if ModalHostState.settings-open: SettingsScreen {
+        z: -1;
+        width: parent.width;
+        height: parent.height;
+        bottom-inset: root.compact-layout ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
+        mobile-platform: root.is-mobile-platform;
+        shield-toggled => { root.toggle-anon-mode(); }
+        display-name: SidebarPane.user-display-name;
+        username: SettingsPane.settings-username;
+        session-count: SettingsPane.settings-session-count;
+        sessions: ModalHostState.sessions;
+        pending-links: ModalHostState.sessions-pending-links;
+        sessions-loaded: ModalHostState.sessions-loaded;
+        sessions-loading: ModalHostState.sessions-loading;
+        sessions-revoking: ModalHostState.sessions-revoking;
+        sessions-error: ModalHostState.sessions-error;
+        avatar: SidebarPane.user-avatar-source;
+        current-password <=> SettingsPane.settings-current-password;
+        new-password <=> SettingsPane.settings-new-password;
+        confirm-password <=> SettingsPane.settings-confirm-password;
+        password-changing: SettingsPane.settings-password-changing;
+        password-error: SettingsPane.settings-password-error;
+        read-receipts-enabled <=> SettingsPane.settings-read-receipts;
+        typing-indicators-enabled <=> SettingsPane.settings-typing-indicators;
+        notification-detail <=> SettingsPane.settings-notification-detail;
+        profile-visibility: SettingsPane.settings-profile-visibility;
+        profile-visibility-pending: SettingsPane.settings-profile-visibility-pending;
+        profile-visibility-busy: SettingsPane.settings-profile-visibility-busy;
+        profile-visibility-error: SettingsPane.settings-profile-visibility-error;
+        profile-visibility-pin <=> SettingsPane.settings-profile-visibility-pin;
+        search-shortcut <=> SearchPane.search-shortcut-pref;
+        identity-fingerprint: SettingsPane.settings-identity-fingerprint;
+        sealed-sender-unrestricted <=> SettingsPane.settings-sealed-sender-unrestricted;
+        username-discoverable <=> SettingsPane.settings-username-discoverable;
+        // Security (PIN / Backup)
+        change-pin-current <=> SettingsPane.settings-change-pin-current;
+        change-pin-new <=> SettingsPane.settings-change-pin-new;
+        change-pin-confirm <=> SettingsPane.settings-change-pin-confirm;
+        change-pin-loading: SettingsPane.settings-change-pin-loading;
+        change-pin-error: SettingsPane.settings-change-pin-error;
+        change-pin-success: SettingsPane.settings-change-pin-success;
+        backup-status: SettingsPane.settings-backup-status;
+        backup-retry-pin <=> SettingsPane.settings-backup-retry-pin;
+        backup-retry-loading: SettingsPane.settings-backup-retry-loading;
+        backup-retry-error: SettingsPane.settings-backup-retry-error;
+        // AI settings
+        local-ai-enabled <=> SettingsPane.settings-local-ai-enabled;
+        ai-prefer-cloud <=> SettingsPane.settings-ai-prefer-cloud;
+        cloud-ai-mode <=> SettingsPane.settings-cloud-ai-mode;
+        cloud-ai-api-key <=> SettingsPane.settings-cloud-ai-api-key;
+        cloud-ai-configured: SettingsPane.settings-cloud-ai-configured;
+        cloud-ai-status: SettingsPane.settings-cloud-ai-status;
+        cloud-ai-balance: SettingsPane.settings-cloud-ai-balance;
+        local-ai-model-id <=> SettingsPane.settings-local-ai-model-id;
+        local-ai-loading: SettingsPane.settings-local-ai-loading;
+        local-ai-status: SettingsPane.settings-local-ai-status;
+        local-ai-error: SettingsPane.settings-local-ai-error;
+        local-ai-hardware-summary: SettingsPane.settings-local-ai-hardware-summary;
+        local-ai-detecting: SettingsPane.settings-local-ai-detecting;
+        local-ai-providers: SettingsPane.settings-local-ai-providers;
+        local-ai-active-provider: SettingsPane.settings-local-ai-active-provider;
+        local-ai-models: SettingsPane.settings-local-ai-models;
+        local-ai-active-model: SettingsPane.settings-local-ai-active-model;
+        local-ai-catalog: SettingsPane.settings-local-ai-catalog;
+        // Delete-account confirmation
+        delete-password <=> SettingsPane.settings-delete-password;
+        delete-loading: SettingsPane.settings-delete-loading;
+        delete-error: SettingsPane.settings-delete-error;
+        recovery-regen-password <=> SettingsPane.settings-recovery-regen-password;
+        recovery-regen-loading: SettingsPane.settings-recovery-regen-loading;
+        recovery-regen-error: SettingsPane.settings-recovery-regen-error;
+        regenerate-recovery-codes(password) => {
+            SettingsPane.settings-regenerate-recovery-codes(password);
+        }
+
+        edit-profile-clicked => {
+            SettingsPane.settings-edit-profile();
+        }
+        change-password(current, new) => {
+            SettingsPane.settings-change-password(current, new);
+        }
+        view-sessions-clicked => {
+            ModalHostState.nav-push("sessions");
+        }
+        refresh-sessions => { SettingsPane.settings-view-sessions(); }
+        revoke-session(device-id) => { ModalHostState.revoke-session(device-id); }
+        cancel-pending-link(uuid) => { ModalHostState.cancel-pending-link(uuid); }
+        link-new-device => { AuthFlow.link-approve-open(); }
+        logout-clicked => {
+            SettingsPane.settings-logout();
+        }
+        delete-account-clicked => {
+            SettingsPane.settings-delete-account();
+        }
+        delete-account-confirmed(password) => {
+            SettingsPane.settings-delete-account-confirmed(password);
+        }
+        close-settings => {
+            ModalHostState.nav-close("settings");
+        }
+        open-licenses => {
+            ModalHostState.nav-push("licenses");
+        }
+        read-receipts-changed(value) => {
+            SettingsPane.settings-read-receipts-changed(value);
+        }
+        typing-indicators-changed(value) => {
+            SettingsPane.settings-typing-indicators-changed(value);
+        }
+        notification-detail-changed(value) => {
+            SettingsPane.settings-notification-detail-changed(value);
+        }
+        profile-visibility-selected(key) => {
+            SettingsPane.settings-profile-visibility-selected(key);
+        }
+        profile-visibility-confirmed(key, pin) => {
+            SettingsPane.settings-profile-visibility-confirmed(key, pin);
+        }
+        profile-visibility-cancelled => {
+            SettingsPane.settings-profile-visibility-cancelled();
+        }
+        search-shortcut-changed(value) => {
+            SettingsPane.settings-search-shortcut-changed(value);
+        }
+        copy-fingerprint-clicked => {
+            SettingsPane.settings-copy-fingerprint();
+        }
+        sealed-sender-changed(value) => {
+            SettingsPane.settings-sealed-sender-changed(value);
+        }
+        username-discoverable-changed(value) => {
+            SettingsPane.settings-username-discoverable-changed(value);
+        }
+        change-pin(current, new) => {
+            SettingsPane.settings-change-pin(current, new);
+        }
+        retry-backup(pin) => {
+            SettingsPane.settings-retry-backup(pin);
+        }
+        message-backup-status: SettingsPane.settings-message-backup-status;
+        message-backup-busy: SettingsPane.settings-message-backup-busy;
+        export-message-backup(passphrase) => {
+            SettingsPane.settings-export-message-backup(passphrase);
+        }
+        import-message-backup(passphrase) => {
+            SettingsPane.settings-import-message-backup(passphrase);
+        }
+        server-message-backup(pin) => {
+            SettingsPane.settings-server-message-backup(pin);
+        }
+        restore-message-backup(pin) => {
+            SettingsPane.settings-restore-message-backup(pin);
+        }
+        // AI callbacks
+        local-ai-enabled-changed(value) => {
+            SettingsPane.settings-local-ai-enabled-changed(value);
+        }
+        ai-prefer-cloud-changed(value) => {
+            SettingsPane.settings-ai-prefer-cloud-changed(value);
+        }
+        cloud-ai-mode-changed(mode) => {
+            SettingsPane.settings-cloud-ai-mode-changed(mode);
+        }
+        cloud-ai-api-key-changed(key) => {
+            SettingsPane.settings-cloud-ai-api-key-changed(key);
+        }
+        cloud-ai-refresh-quota => {
+            SettingsPane.settings-cloud-ai-refresh-quota();
+        }
+        local-ai-load-model(model-id) => {
+            SettingsPane.settings-local-ai-load-model(model-id);
+        }
+        local-ai-unload-model => {
+            SettingsPane.settings-local-ai-unload-model();
+        }
+        local-ai-refresh => {
+            SettingsPane.settings-local-ai-refresh();
+        }
+        local-ai-open-memory => {
+            ModalHostState.nav-push("jarvis-memory");
+            JarvisPane.jarvis-memory-refresh();
+        }
+        local-ai-select-provider(kind) => {
+            SettingsPane.settings-local-ai-select-provider(kind);
+        }
+        local-ai-select-model(model) => {
+            SettingsPane.settings-local-ai-select-model(model);
+        }
+        local-ai-download(tag) => {
+            SettingsPane.settings-local-ai-download(tag);
+        }
+    }
+}

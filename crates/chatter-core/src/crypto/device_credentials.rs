@@ -44,7 +44,12 @@ impl DeviceToken {
     /// Generate a new random device token.
     pub fn generate() -> Self {
         let mut token = [0u8; 32];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut token).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut token)
+                .expect("OS CSPRNG must not fail");
+        }
         Self { token }
     }
 
@@ -217,11 +222,10 @@ impl DeviceCredentials {
 /// 16-byte UAK (first 16 bytes of AES-GCM ciphertext)
 pub fn derive_uak(profile_key: &[u8; 32]) -> [u8; 16] {
     // Create AES-256-GCM cipher with profile key
-    let cipher = Aes256Gcm::new_from_slice(profile_key)
-        .expect("Profile key is always 32 bytes");
+    let cipher = Aes256Gcm::new_from_slice(profile_key).expect("Profile key is always 32 bytes");
 
     // Use 12-byte zero nonce (Signal's standard for UAK derivation)
-    let nonce = Nonce::from_slice(&[0u8; 12]);
+    let nonce = <&Nonce<_>>::try_from(&[0u8; 12][..]).expect("fixed cryptographic input length");
 
     // Encrypt 16 zero bytes to derive UAK
     let plaintext = [0u8; 16];
@@ -238,6 +242,41 @@ pub fn derive_uak(profile_key: &[u8; 32]) -> [u8; 16] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// libsignal's known-answer vectors for `ProfileKey::derive_access_key`
+    /// (rust/zkgroup/src/api/profiles/profile_key.rs `access_key_kat`, rev
+    /// 8fc2113). A mismatch means our UAK is not the one a Signal-style server
+    /// would derive from the same profile key.
+    #[test]
+    fn derive_uak_matches_libsignal_access_key_kat() {
+        let kat: [([u8; 32], [u8; 16]); 2] = [
+            (
+                [
+                    0xb9, 0x50, 0x42, 0xa2, 0xc2, 0xd9, 0xe5, 0xb3, 0xbb, 0x9, 0x30, 0xe, 0xe4,
+                    0x8, 0xa1, 0x72, 0xfa, 0xcd, 0x96, 0xe9, 0x1b, 0x50, 0x4e, 0x4, 0x3a, 0x5a,
+                    0x2, 0x3d, 0xc4, 0xcf, 0xf3, 0x59,
+                ],
+                [
+                    0x24, 0xfb, 0x96, 0xd4, 0xa5, 0xe3, 0x33, 0xe9, 0xd4, 0x45, 0x12, 0x5, 0xb9,
+                    0xe2, 0xfa, 0xed,
+                ],
+            ),
+            (
+                [
+                    0x26, 0x19, 0x7b, 0x17, 0xe5, 0xa2, 0xc3, 0x6d, 0x8c, 0x95, 0x18, 0xc3, 0x53,
+                    0x58, 0xf1, 0x23, 0xc4, 0x76, 0x0, 0xd, 0xb6, 0xda, 0x75, 0x65, 0xc0, 0xd4,
+                    0x1f, 0x66, 0x74, 0x46, 0x2c, 0x4d,
+                ],
+                [
+                    0xe8, 0x95, 0xc3, 0xc, 0xf7, 0x80, 0x75, 0x7d, 0x22, 0xf7, 0xa1, 0x79, 0x70,
+                    0x8b, 0x14, 0xa1,
+                ],
+            ),
+        ];
+        for (profile_key, access_key) in kat {
+            assert_eq!(derive_uak(&profile_key), access_key);
+        }
+    }
 
     #[test]
     fn test_device_token_generation() {
@@ -390,7 +429,10 @@ mod tests {
         let creds = DeviceCredentials::from_stored(7, [0xABu8; 32], [0xCDu8; 16]);
         let dbg = format!("{:?}", creds);
         assert!(dbg.contains("REDACTED"), "debug output: {dbg}");
-        assert!(dbg.contains("device_id"), "device_id should still be visible: {dbg}");
+        assert!(
+            dbg.contains("device_id"),
+            "device_id should still be visible: {dbg}"
+        );
         assert!(!dbg.contains("ab"), "auth_token bytes leaked: {dbg}");
         assert!(!dbg.contains("cd"), "uak bytes leaked: {dbg}");
     }

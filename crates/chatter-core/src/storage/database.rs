@@ -11,15 +11,15 @@ use crate::error::StorageError;
 use crate::storage::migrations::default_migrations;
 use parking_lot::{Condvar, Mutex, MutexGuard};
 use rusqlite::{Connection, OpenFlags};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use zeroize::Zeroizing;
 
 /// Number of reader connections in the pool.
-const READER_POOL_SIZE: usize = 4;
+const READER_POOL_SIZE: usize = 2;
 
 /// SQLCipher database connection pool.
 pub struct Database {
@@ -29,6 +29,11 @@ pub struct Database {
     readers: Arc<ReaderPool>,
     /// Path to database file.
     path: PathBuf,
+    /// One core consumer of committed message inserts, independent of UI events.
+    message_stores:
+        Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::domain::message::Message>>>,
+    /// Earliest retry time per owner for retained anonymous submissions.
+    pub(crate) retained_retry_due: Mutex<HashMap<String, Option<i64>>>,
 }
 
 /// Pool of read-only connections for concurrent database reads.
@@ -47,12 +52,12 @@ struct ReaderPool {
 }
 
 impl ReaderPool {
-    fn new(path: PathBuf, passphrase: String) -> Self {
+    fn new(path: PathBuf, passphrase: Zeroizing<String>) -> Self {
         Self {
             available: Mutex::new(VecDeque::with_capacity(READER_POOL_SIZE)),
             returned: Condvar::new(),
             path,
-            passphrase: Mutex::new(Zeroizing::new(passphrase)),
+            passphrase: Mutex::new(passphrase),
             count: AtomicUsize::new(0),
         }
     }
@@ -75,11 +80,16 @@ impl ReaderPool {
         // and both create a connection, exceeding the pool size.
         let current = self.count.load(Ordering::Relaxed);
         if current < READER_POOL_SIZE {
-            if self.count.compare_exchange(
-                current, current + 1, Ordering::AcqRel, Ordering::Relaxed,
-            ).is_ok() {
+            if self
+                .count
+                .compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
                 return match self.open_reader() {
-                    Ok(conn) => Ok(PooledReader { conn: Some(conn), pool: self }),
+                    Ok(conn) => Ok(PooledReader {
+                        conn: Some(conn),
+                        pool: self,
+                    }),
                     Err(e) => {
                         self.count.fetch_sub(1, Ordering::Relaxed);
                         Err(e)
@@ -94,7 +104,10 @@ impl ReaderPool {
         let start = std::time::Instant::now();
         loop {
             if let Some(conn) = available.pop_front() {
-                return Ok(PooledReader { conn: Some(conn), pool: self });
+                return Ok(PooledReader {
+                    conn: Some(conn),
+                    pool: self,
+                });
             }
             let elapsed = start.elapsed();
             if elapsed >= deadline {
@@ -124,17 +137,22 @@ impl ReaderPool {
             .map_err(|e| StorageError::Encryption(format!("Failed to set reader key: {}", e)))?;
         // Pin KDF params (see writer-side comment).
         conn.pragma_update(None, "cipher_compatibility", "4")
-            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e)))?;
+            .map_err(|e| {
+                StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e))
+            })?;
         conn.pragma_update(None, "kdf_iter", "256000")
             .map_err(|e| StorageError::Encryption(format!("Failed to pin kdf_iter: {}", e)))?;
         conn.pragma_update(None, "cipher_page_size", "4096")
-            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e)))?;
+            .map_err(|e| {
+                StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e))
+            })?;
 
         conn.execute_batch("SELECT count(*) FROM sqlite_master;")
             .map_err(|e| StorageError::Encryption(format!("Invalid reader key: {}", e)))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "busy_timeout", "5000")?;
-        conn.pragma_update(None, "cache_size", "-65536")?;
+        // A reader has its own page cache; keep each one to 8 MiB.
+        conn.pragma_update(None, "cache_size", "-8192")?;
         // mmap intentionally not set: SQLCipher ignores on encrypted DBs.
 
         Ok(conn)
@@ -166,6 +184,30 @@ impl Drop for PooledReader<'_> {
 }
 
 impl Database {
+    /// Replace the consumer when a new authenticated core session starts.
+    pub(crate) fn subscribe_message_stores(
+        &self,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<crate::domain::message::Message> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        *self.message_stores.lock() = Some(tx);
+        tracing::info!(database = ?self.path, database_instance = ?std::ptr::from_ref(self), "Committed message store consumer subscribed");
+        rx
+    }
+
+    pub(crate) fn announce_message_store(&self, message: &crate::domain::message::Message) {
+        match self.message_stores.lock().as_ref() {
+            Some(tx) if tx.send(message.clone()).is_err() => {
+                tracing::warn!(database = ?self.path, database_instance = ?std::ptr::from_ref(self), message_id = %message.id,
+                    "Committed message store consumer stopped");
+            }
+            None => {
+                tracing::warn!(database = ?self.path, database_instance = ?std::ptr::from_ref(self), message_id = %message.id,
+                    "Committed message store has no consumer");
+            }
+            Some(_) => {}
+        }
+    }
+
     /// Open an encrypted SQLCipher database.
     ///
     /// Creates the database file if it doesn't exist. The passphrase is used
@@ -190,8 +232,9 @@ impl Database {
 
         // Set SQLCipher encryption key
         // The passphrase must be set before any other operations
-        conn.pragma_update(None, "key", passphrase)
-            .map_err(|e| StorageError::Encryption(format!("Failed to set encryption key: {}", e)))?;
+        conn.pragma_update(None, "key", passphrase).map_err(|e| {
+            StorageError::Encryption(format!("Failed to set encryption key: {}", e))
+        })?;
 
         // SECURITY: pin SQLCipher KDF parameters so a future library bump
         // can't silently lower them. SQLCipher 4 defaults are PBKDF2-SHA512
@@ -199,11 +242,15 @@ impl Database {
         // explicitly so the values are part of our schema contract, not a
         // dependency-version contract.
         conn.pragma_update(None, "cipher_compatibility", "4")
-            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e)))?;
+            .map_err(|e| {
+                StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e))
+            })?;
         conn.pragma_update(None, "kdf_iter", "256000")
             .map_err(|e| StorageError::Encryption(format!("Failed to pin kdf_iter: {}", e)))?;
         conn.pragma_update(None, "cipher_page_size", "4096")
-            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e)))?;
+            .map_err(|e| {
+                StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e))
+            })?;
 
         // Verify the key is correct by selecting from sqlite_master
         // This works for both new and existing databases
@@ -227,10 +274,9 @@ impl Database {
         // Signal Desktop uses the same setting.
         conn.pragma_update(None, "synchronous", "NORMAL")?;
 
-        // Performance optimizations for large BLOB reads (attachments)
-        // cache_size: negative value = KB, so -65536 = 64MB cache (default is ~2MB)
-        // This significantly speeds up reading large attachments from SQLCipher
-        conn.pragma_update(None, "cache_size", "-65536")?;
+        // Negative cache_size values are KiB. Bound the writer's private
+        // SQLCipher page cache to 16 MiB; readers have separate 8 MiB caches.
+        conn.pragma_update(None, "cache_size", "-16384")?;
 
         // Intentionally NOT setting `mmap_size`: SQLCipher disables
         // mmap-based I/O on encrypted databases (see
@@ -242,10 +288,12 @@ impl Database {
         // Create reader pool for concurrent read access
         let readers = Arc::new(ReaderPool::new(
             path.to_path_buf(),
-            passphrase.to_string(),
+            Zeroizing::new(passphrase.to_string()),
         ));
 
         Ok(Self {
+            message_stores: Mutex::new(None),
+            retained_retry_due: Mutex::new(HashMap::new()),
             writer: Arc::new(Mutex::new(conn)),
             readers,
             path: path.to_path_buf(),
@@ -298,11 +346,15 @@ impl Database {
             .map_err(|e| StorageError::Encryption(format!("Failed to set reader key: {}", e)))?;
         // Pin KDF params (see writer-side comment).
         conn.pragma_update(None, "cipher_compatibility", "4")
-            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e)))?;
+            .map_err(|e| {
+                StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e))
+            })?;
         conn.pragma_update(None, "kdf_iter", "256000")
             .map_err(|e| StorageError::Encryption(format!("Failed to pin kdf_iter: {}", e)))?;
         conn.pragma_update(None, "cipher_page_size", "4096")
-            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e)))?;
+            .map_err(|e| {
+                StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e))
+            })?;
 
         // Verify the key
         conn.execute_batch("SELECT count(*) FROM sqlite_master;")
@@ -315,7 +367,7 @@ impl Database {
         // Performance optimizations for large BLOB streaming.
         // Intentionally NOT setting `mmap_size` - SQLCipher refuses mmap
         // on encrypted databases; see writer-side comment.
-        conn.pragma_update(None, "cache_size", "-65536")?; // 64MB cache
+        conn.pragma_update(None, "cache_size", "-8192")?; // 8 MiB reader cache
 
         Ok(conn)
     }
@@ -358,6 +410,11 @@ impl Database {
     pub fn run_migrations(&self) -> Result<(), StorageError> {
         let conn = self.connection()?;
         let runner = default_migrations();
-        runner.run(&conn)
+        runner.run(&conn)?;
+        drop(conn);
+        if let Err(error) = crate::storage::repositories::attachment_repo::AttachmentRepository::retry_pending_cleanup(self) {
+            tracing::warn!(%error, "pending attachment cleanup will be retried");
+        }
+        Ok(())
     }
 }

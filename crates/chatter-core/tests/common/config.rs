@@ -3,16 +3,24 @@
 //! Provides server configuration and macros for conditionally
 //! skipping tests when the server is not available.
 
-use std::time::Duration;
-
 /// Default server URL for integration tests.
-pub const SERVER_URL: &str = "http://localhost:50051";
-
-/// Connection timeout for tests.
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Request timeout for tests.
-pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// TLS became mandatory in `4bc9aa51`: the server will not start without
+/// `certs/server.crt` and answers a plaintext h2c connection by closing it
+/// (`tls: first record does not look like a TLS handshake`). This constant kept
+/// saying `http://`, so every proof built on `create_test_pool` — as opposed to
+/// the ChatterClient builder in validated.rs, which says `https://` — died with
+/// `Unavailable` before sending a byte.
+///
+/// That is OPEN-ITEMS §73: "client-side and pre-flight, Unavailable in 0.00s,
+/// server logs nothing". Six hypotheses were eliminated against it (concurrency
+/// level, tokio runtime flavour, server rejection, socket exhaustion, the
+/// non-streaming pool, registration count) and it looked load-sensitive because
+/// the affected proofs happen to be the ones that run late. The real error —
+/// `hyper::Error(Io, BrokenPipe)` under a `tonic::transport::Error` — was
+/// discarded by `NetworkError::from_status`, which maps Code::Unavailable to a
+/// unit variant, and no subscriber was installed on this path anyway. Both are
+/// fixed alongside this.
+pub const SERVER_URL: &str = "https://localhost:50051";
 
 /// Check if integration tests should be skipped.
 ///
@@ -28,7 +36,9 @@ pub fn should_skip_integration_tests() -> bool {
 /// Set `CHATTER_REQUIRE_SERVER=1` when the run is supposed to prove something.
 /// See [`skip_if_no_server`] for why that matters.
 pub fn require_server() -> bool {
-    std::env::var("CHATTER_REQUIRE_SERVER").map(|v| v == "1").unwrap_or(false)
+    std::env::var("CHATTER_REQUIRE_SERVER")
+        .map(|v| v == "1")
+        .unwrap_or(false)
 }
 
 /// Macro to skip tests when integration tests are not enabled.
@@ -66,7 +76,10 @@ pub fn require_server() -> bool {
 macro_rules! skip_if_no_server {
     () => {
         if $crate::common::should_skip_integration_tests() {
-            let test = std::thread::current().name().unwrap_or("<unknown>").to_string();
+            let test = std::thread::current()
+                .name()
+                .unwrap_or("<unknown>")
+                .to_string();
             if $crate::common::require_server() {
                 panic!(
                     "{test}: CHATTER_REQUIRE_SERVER=1 but INTEGRATION_TESTS is not 1.\n\

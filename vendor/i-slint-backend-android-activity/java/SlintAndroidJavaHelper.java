@@ -1,6 +1,8 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
+// cSpell:ignore Spannable tbstart tbend
+
 import java.util.concurrent.Callable;
 import java.util.concurrent.FutureTask;
 import android.view.ActionMode;
@@ -36,6 +38,14 @@ import android.widget.ImageView;
 import android.widget.PopupWindow;
 import android.view.inputmethod.BaseInputConnection;
 import android.os.Build;
+import android.os.Bundle;
+import android.os.SystemClock;
+import android.view.accessibility.AccessibilityManager;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeProvider;
+import android.view.accessibility.AccessibilityEvent;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 class InputHandle extends ImageView {
     private PopupWindow mPopupWindow;
@@ -119,7 +129,194 @@ class InputHandle extends ImageView {
     }
 }
 
+// The input host overlays the SurfaceView and supplies its virtual Slint children.
+// Queries happen only while Android's accessibility manager is active.
+class SlintNodeProvider extends AccessibilityNodeProvider {
+    private final View host;
+    private JSONArray nodes;
+    private long snapshotAt;
+    private int accessibilityFocus = View.NO_ID;
+
+    SlintNodeProvider(View host) {
+        this.host = host;
+    }
+
+    // One query fans out into a node per child (Android prefetches dozens).
+    // The cache window starts when the snapshot is ready: timed from its start,
+    // a snapshot slower than the window (S9, Android 10) was retaken for every
+    // node, the root query outlived uiautomator's timeout and TalkBack got none.
+    private JSONArray nodes() {
+        if (nodes == null || SystemClock.uptimeMillis() - snapshotAt > 100) {
+            try {
+                nodes = new JSONArray(SlintAndroidJavaHelper.accessibilityTree());
+            } catch (Exception ignored) {
+                nodes = new JSONArray();
+            }
+            snapshotAt = SystemClock.uptimeMillis();
+        }
+        return nodes;
+    }
+
+    @Override
+    public AccessibilityNodeInfo createAccessibilityNodeInfo(int id) {
+        JSONArray tree = nodes();
+        if (id == View.NO_ID) {
+            AccessibilityNodeInfo root = AccessibilityNodeInfo.obtain(host);
+            root.setClassName(View.class.getName());
+            root.setPackageName(host.getContext().getPackageName());
+            if (host.getParent() instanceof View) root.setParent((View) host.getParent());
+            root.setBoundsInParent(new Rect(host.getLeft(), host.getTop(), host.getRight(), host.getBottom()));
+            int[] location = new int[2];
+            host.getLocationOnScreen(location);
+            root.setBoundsInScreen(new Rect(location[0], location[1],
+                    location[0] + host.getWidth(), location[1] + host.getHeight()));
+            root.setVisibleToUser(host.isShown());
+            root.setEnabled(host.isEnabled());
+            for (int i = 0; i < tree.length(); i++) {
+                JSONObject child = tree.optJSONObject(i);
+                if (child != null && child.optInt("parent", -2) == -1) {
+                    root.addChild(host, child.optInt("id"));
+                }
+            }
+            return root;
+        }
+        JSONObject node = null;
+        for (int i = 0; i < tree.length(); i++) {
+            JSONObject candidate = tree.optJSONObject(i);
+            if (candidate != null && candidate.optInt("id", -1) == id) {
+                node = candidate;
+                break;
+            }
+        }
+        if (node == null) return null;
+
+        AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain(host, id);
+        info.setPackageName(host.getContext().getPackageName());
+        String role = node.optString("role");
+        info.setClassName("Button".equals(role) ? "android.widget.Button" :
+                "TextInput".equals(role) ? "android.widget.EditText" : "android.view.View");
+        int parent = node.optInt("parent", -1);
+        if (parent < 0) info.setParent(host);
+        else info.setParent(host, parent);
+        for (int i = 0; i < tree.length(); i++) {
+            JSONObject child = tree.optJSONObject(i);
+            if (child != null && child.optInt("parent", -2) == id) {
+                info.addChild(host, child.optInt("id"));
+            }
+        }
+        String label = node.isNull("label") ? "" : node.optString("label", "");
+        String description = node.isNull("description") ? "" : node.optString("description", "");
+        String value = node.isNull("value") ? "" : node.optString("value", "");
+        if ("Text".equals(role)) info.setText(label);
+        else if ("TextInput".equals(role)) {
+            // An edit field reads its contents; its name (or placeholder) is
+            // the hint, as a native EditText. Without this TalkBack could not
+            // read back what had been typed.
+            String hint = !label.isEmpty() ? label
+                    : node.isNull("placeholder") ? "" : node.optString("placeholder", "");
+            info.setText(value);
+            if (android.os.Build.VERSION.SDK_INT >= 26) info.setHintText(hint);
+            if (value.isEmpty() && !hint.isEmpty()) info.setContentDescription(hint);
+        }
+        else if (!label.isEmpty()) info.setContentDescription(label);
+        if (!description.isEmpty()) info.setContentDescription(
+                label.isEmpty() ? description : label + ", " + description);
+        Rect bounds = new Rect(node.optInt("left"), node.optInt("top"),
+                node.optInt("right"), node.optInt("bottom"));
+        Rect parentBounds = new Rect(bounds);
+        if (parent >= 0) {
+            for (int i = 0; i < tree.length(); i++) {
+                JSONObject candidate = tree.optJSONObject(i);
+                if (candidate != null && candidate.optInt("id", -1) == parent) {
+                    parentBounds.offset(-candidate.optInt("left"), -candidate.optInt("top"));
+                    break;
+                }
+            }
+        }
+        info.setBoundsInParent(parentBounds);
+        int[] location = new int[2];
+        host.getLocationOnScreen(location);
+        bounds.offset(location[0], location[1]);
+        info.setBoundsInScreen(bounds);
+        info.setVisibleToUser(node.optBoolean("visible", true));
+        info.setEnabled(node.optBoolean("enabled", true));
+        info.setCheckable(node.optBoolean("checkable"));
+        info.setChecked(node.optBoolean("checked"));
+        boolean clickable = node.optBoolean("clickable");
+        info.setFocusable(node.optBoolean("focusable", clickable || !label.isEmpty()));
+        info.setAccessibilityFocused(id == accessibilityFocus);
+        info.addAction(id == accessibilityFocus
+                ? AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS
+                : AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS);
+        info.setClickable(clickable);
+        if (clickable) info.addAction(AccessibilityNodeInfo.ACTION_CLICK);
+        if (node.optBoolean("long_clickable")) {
+            info.setLongClickable(true);
+            info.addAction(AccessibilityNodeInfo.ACTION_LONG_CLICK);
+        }
+        // A Flickable (accessibility.rs `scroller`): TalkBack scrolls it to
+        // reach rows that are off screen and so not in the tree.
+        if (node.optBoolean("scrollable")) {
+            info.setClassName("android.widget.ScrollView");
+            info.setScrollable(true);
+            if (node.optBoolean("scroll_forward")) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+            if (node.optBoolean("scroll_backward")) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+        }
+        return info;
+    }
+
+    @Override
+    public boolean performAction(int id, int action, Bundle arguments) {
+        if (id < 0) return false;
+        if (action == AccessibilityNodeInfo.ACTION_CLICK) {
+            SlintAndroidJavaHelper.accessibilityClick(id);
+            nodes = null;
+            return true;
+        }
+        if (action == AccessibilityNodeInfo.ACTION_LONG_CLICK) {
+            SlintAndroidJavaHelper.accessibilityLongClick(id);
+            nodes = null;
+            return true;
+        }
+        if (action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                || action == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) {
+            SlintAndroidJavaHelper.accessibilityScroll(id,
+                    action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD ? 1 : 0);
+            nodes = null;
+            sendFocusEvent(id, AccessibilityEvent.TYPE_VIEW_SCROLLED);
+            return true;
+        }
+        if (action == AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS) {
+            accessibilityFocus = id;
+            sendFocusEvent(id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
+            return true;
+        }
+        if (action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) {
+            if (accessibilityFocus != id) return false;
+            accessibilityFocus = View.NO_ID;
+            sendFocusEvent(id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED);
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public AccessibilityNodeInfo findFocus(int focus) {
+        return focus == AccessibilityNodeInfo.FOCUS_ACCESSIBILITY && accessibilityFocus != View.NO_ID
+                ? createAccessibilityNodeInfo(accessibilityFocus) : null;
+    }
+
+    private void sendFocusEvent(int id, int type) {
+        if (host.getParent() == null) return;
+        AccessibilityEvent event = AccessibilityEvent.obtain(type);
+        event.setSource(host, id);
+        event.setPackageName(host.getContext().getPackageName());
+        host.getParent().requestSendAccessibilityEvent(host, event);
+    }
+}
+
 class SlintInputView extends View {
+    private final AccessibilityNodeProvider mAccessibilityProvider = new SlintNodeProvider(this);
     private String mText = "";
     private int mCursorPosition = 0;
     private int mAnchorPosition = 0;
@@ -129,6 +326,12 @@ class SlintInputView extends View {
     private int mInBatch = 0;
     private boolean mPending = false;
     private SlintEditable mEditable;
+
+    @Override
+    public AccessibilityNodeProvider getAccessibilityNodeProvider() {
+        AccessibilityManager manager = (AccessibilityManager) getContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
+        return manager != null && manager.isEnabled() ? mAccessibilityProvider : null;
+    }
 
     public class SlintEditable extends SpannableStringBuilder {
         public SlintEditable() {
@@ -224,6 +427,7 @@ class SlintInputView extends View {
         super.onConfigurationChanged(newConfig);
         int currentNightMode = newConfig.uiMode & Configuration.UI_MODE_NIGHT_MASK;
         SlintAndroidJavaHelper.setNightMode(currentNightMode);
+        SlintAndroidJavaHelper.setFontScale(newConfig.fontScale);
     }
 
     private InputHandle mCursorHandle;
@@ -235,6 +439,7 @@ class SlintInputView extends View {
     public void setCursorPos(int left_x, int left_y, int right_x, int right_y, int cursor_height, int num_handles) {
         int handleHeight = 0;
         if (num_handles == 1) {
+            hideActionMenu(-1);
             if (mLeftHandle != null) {
                 mLeftHandle.hide();
             }
@@ -272,7 +477,7 @@ class SlintInputView extends View {
             if (mCursorHandle != null) {
                 mCursorHandle.hide();
             }
-            showActionMenu();
+            // A selection update (including an IME echo) is not a long-press.
         } else {
             if (mCursorHandle != null) {
                 handleHeight = mCursorHandle.getHeight();
@@ -307,6 +512,38 @@ class SlintInputView extends View {
     }
 
     private ActionMode mCurrentActionMode;
+    private String mSelectionText = "";
+
+    public void updateSelectionMenu(String text, boolean selected, int left, int top, int right, int bottom) {
+        if (!selected || !mSelectionText.equals(text)) {
+            hideActionMenu(-1);
+        }
+        mSelectionText = text;
+        selectionRect.set(left, top, right, bottom);
+        if (mCurrentActionMode != null) {
+            mCurrentActionMode.invalidateContentRect();
+        }
+    }
+
+    interface InsetFocusListener { void changed(boolean focused); }
+    InsetFocusListener insetFocusChanged;
+    Runnable insetDetached;
+
+    @Override
+    public void onWindowFocusChanged(boolean hasWindowFocus) {
+        super.onWindowFocusChanged(hasWindowFocus);
+        if (insetFocusChanged != null) insetFocusChanged.changed(hasWindowFocus);
+        if (!hasWindowFocus) {
+            setCursorPos(0, 0, 0, 0, 0, 0);
+        }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        if (insetDetached != null) insetDetached.run();
+        setCursorPos(0, 0, 0, 0, 0, 0);
+        super.onDetachedFromWindow();
+    }
 
     public void showActionMenu() {
         if (mCurrentActionMode != null) {
@@ -316,6 +553,7 @@ class SlintInputView extends View {
         ActionMode.Callback2 action = new ActionMode.Callback2() {
             @Override
             public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+                mode.setTag("slint-text-selection");
                 mode.setTitle(null);
                 mode.setSubtitle(null);
                 mode.setTitleOptionalHint(true);
@@ -363,6 +601,12 @@ class SlintInputView extends View {
 
             @Override
             public void onDestroyActionMode(ActionMode action) {
+                // Android can finish this itself (BACK, focus loss, menu action).
+                // Retaining the finished instance makes the next long-press call
+                // hide(0) on a dead toolbar instead of creating a new one.
+                if (mCurrentActionMode == action) {
+                    mCurrentActionMode = null;
+                }
             }
 
             // Introduced in API level 23
@@ -397,10 +641,17 @@ class SlintInputView extends View {
 public class SlintAndroidJavaHelper {
     Activity mActivity;
     SlintInputView mInputView;
+    InsetsRecovery mInsetsRecovery;
 
-    public SlintAndroidJavaHelper(Activity activity) {
+    public SlintAndroidJavaHelper(Activity activity, boolean nativeActivity) {
         this.mActivity = activity;
         this.mInputView = new SlintInputView(activity);
+        // GameActivity's SurfaceView owns the input connection. This helper is
+        // only an ActionMode host there, never a second focusable IME editor.
+        if (!nativeActivity) {
+            this.mInputView.setFocusable(false);
+            this.mInputView.setFocusableInTouchMode(false);
+        }
         this.mActivity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -408,36 +659,54 @@ public class SlintAndroidJavaHelper {
                         FrameLayout.LayoutParams.MATCH_PARENT);
                 mActivity.addContentView(mInputView, params);
                 mInputView.setVisibility(View.VISIBLE);
-            }
-        });
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            activity.getWindow().getDecorView().getRootView()
-                    .setWindowInsetsAnimationCallback(
+                mInputView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    View root = mActivity.getWindow().getDecorView().getRootView();
+                    mInsetsRecovery = new InsetsRecovery(new InsetsRecovery.Host() {
+                        public boolean ready() {
+                            return mInputView.isAttachedToWindow() && root.isAttachedToWindow() && root.hasWindowFocus();
+                        }
+                        public void requestInsets() { root.requestApplyInsets(); }
+                        public void postAfterLayout(Runnable action) { root.postOnAnimation(action); }
+                        public void publishCurrent() {
+                            WindowInsets current = root.getRootWindowInsets();
+                            if (current != null) dispatchInsets(current);
+                        }
+                        public void invalidateQueuedInsets(long sequence) { invalidateInsets(sequence); }
+                    });
+                    mInputView.insetFocusChanged = focused -> mInsetsRecovery.focusChanged(focused);
+                    mInputView.insetDetached = () -> mInsetsRecovery.detached();
+                    root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> mInsetsRecovery.returnToWindow());
+                    root.setOnApplyWindowInsetsListener((v, insets) -> {
+                        if (mInsetsRecovery.canPublish()) dispatchInsets(insets);
+                        return insets;
+                    });
+                    mInsetsRecovery.focusChanged(root.hasWindowFocus());
+                    // Attach the IME animation callback to the input view rather than the
+                    // decor root: some OEM ROMs fail to render the IME surface when an
+                    // animation callback is installed on the window's root view.
+                    mInputView.setWindowInsetsAnimationCallback(
                             new WindowInsetsAnimation.Callback(
                                     WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
                                 @Override
+                                public void onPrepare(WindowInsetsAnimation animation) {
+                                    mInsetsRecovery.prepare(animation);
+                                }
+                                @Override
+                                public void onEnd(WindowInsetsAnimation animation) {
+                                    mInsetsRecovery.end(animation);
+                                }
+                                @Override
                                 public WindowInsets onProgress(WindowInsets insets,
                                         java.util.List<WindowInsetsAnimation> runningAnimations) {
-                                    mActivity.runOnUiThread(new Runnable() {
-                                        @Override
-                                        public void run() {
-                                            Insets safeAreaInsets = insets.getInsets(WindowInsets.Type.systemBars());
-                                            Insets keyboardAreaInsets = insets.getInsets(WindowInsets.Type.ime());
-                                            Rect windowRect = get_view_rect();
-
-                                            SlintAndroidJavaHelper.setInsets(
-                                                    windowRect.top, windowRect.left,
-                                                    windowRect.bottom, windowRect.right,
-                                                    safeAreaInsets.top, safeAreaInsets.left,
-                                                    safeAreaInsets.bottom, safeAreaInsets.right,
-                                                    keyboardAreaInsets.top, keyboardAreaInsets.left,
-                                                    keyboardAreaInsets.bottom, keyboardAreaInsets.right);
-                                        }
-                                    });
+                                    if (mInsetsRecovery.progress(runningAnimations)) dispatchInsets(insets);
                                     return insets;
                                 }
                             });
-        } else {
+                }
+            }
+        });
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             activity.getWindow().getDecorView().getRootView().getViewTreeObserver()
                     .addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
                         @Override
@@ -480,7 +749,7 @@ public class SlintAndroidJavaHelper {
                                     }
 
                                     SlintAndroidJavaHelper.setInsets(
-                                            windowRect.top, windowRect.left,
+                                            InsetsRecovery.nextSequence(), 0, windowRect.top, windowRect.left,
                                             windowRect.bottom, windowRect.right,
                                             safeAreaRect.top, safeAreaRect.left,
                                             safeAreaRect.bottom, safeAreaRect.right,
@@ -491,6 +760,36 @@ public class SlintAndroidJavaHelper {
                         }
                     });
         }
+    }
+
+    private WindowInsets dispatchInsets(WindowInsets insets) {
+        Insets safeAreaInsets = insets.getInsets(WindowInsets.Type.systemBars());
+        Insets keyboardAreaInsets = insets.getInsets(WindowInsets.Type.ime());
+        Rect windowRect = get_view_rect();
+        SlintAndroidJavaHelper.setInsets(
+                InsetsRecovery.nextSequence(), 1, windowRect.top, windowRect.left,
+                windowRect.bottom, windowRect.right,
+                safeAreaInsets.top, safeAreaInsets.left,
+                safeAreaInsets.bottom, safeAreaInsets.right,
+                keyboardAreaInsets.top, keyboardAreaInsets.left,
+                keyboardAreaInsets.bottom, keyboardAreaInsets.right);
+        return insets;
+    }
+
+    public void window_focus_gained() {
+        mActivity.runOnUiThread(() -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mInsetsRecovery != null) {
+                mInsetsRecovery.regainedFocus();
+            }
+        });
+    }
+
+    public void reconcile_window_insets() {
+        mActivity.runOnUiThread(() -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mInsetsRecovery != null) {
+                mInsetsRecovery.returnToWindow();
+            }
+        });
     }
 
     public void show_keyboard() {
@@ -519,13 +818,23 @@ public class SlintAndroidJavaHelper {
     static public native void updateText(String text, int cursorPosition, int anchorPosition, int preeditStart,
             int preeditOffset);
 
+    static public native String accessibilityTree();
+
+    static public native void accessibilityClick(int id);
+    static public native void accessibilityLongClick(int id);
+    static public native void accessibilityScroll(int id, int forward);
+
     static public native void setNightMode(int nightMode);
+
+    static public native void setFontScale(float fontScale);
 
     static public native void moveCursorHandle(int id, int pos_x, int pos_y);
 
     static public native void popupMenuAction(int id);
 
-    static public native void setInsets(int window_top, int window_left, int window_bottom, int window_right,
+    static public native void invalidateInsets(long sequence);
+
+    static public native void setInsets(long sequence, int authoritative_geometry, int window_top, int window_left, int window_bottom, int window_right,
             int safe_area_top, int safe_area_left, int safe_area_bottom, int safe_area_right,
             int keyboard_top, int keyboard_left, int keyboard_bottom, int keyboard_right);
 
@@ -565,6 +874,10 @@ public class SlintAndroidJavaHelper {
     public int color_scheme() {
         int nightModeFlags = mActivity.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
         return nightModeFlags;
+    }
+
+    public float font_scale() {
+        return mActivity.getResources().getConfiguration().fontScale;
     }
 
     public int accent_color() {
@@ -610,6 +923,21 @@ public class SlintAndroidJavaHelper {
         }
     }
 
+    public void hide_action_menu() {
+        mActivity.runOnUiThread(() -> mInputView.setCursorPos(0, 0, 0, 0, 0, 0));
+    }
+
+    public void update_selection_menu(String text, boolean selected, int left_x, int left_y,
+            int right_x, int right_y, int cursor_height, boolean show_handles) {
+        mActivity.runOnUiThread(() -> {
+            mInputView.updateSelectionMenu(text, selected, Math.min(left_x, right_x),
+                    Math.min(left_y, right_y) - cursor_height, Math.max(left_x, right_x),
+                    Math.max(left_y, right_y));
+            mInputView.setCursorPos(left_x, left_y, right_x, right_y, cursor_height,
+                    show_handles ? 2 : 0);
+        });
+    }
+
     public void show_action_menu() {
         mActivity.runOnUiThread(new Runnable() {
             @Override
@@ -624,9 +952,12 @@ public class SlintAndroidJavaHelper {
             @Override
             public String call() throws Exception {
                 ClipboardManager clipboard = (ClipboardManager) mActivity.getSystemService(Context.CLIPBOARD_SERVICE);
-                if (clipboard.hasPrimaryClip()) {
-                    ClipData.Item item = clipboard.getPrimaryClip().getItemAt(0);
-                    return item.getText().toString();
+                ClipData clip = clipboard.getPrimaryClip();
+                if (clip != null && clip.getItemCount() > 0) {
+                    // Native paste accepts Android's text coercion (including
+                    // styled text), and an empty/non-text clip is harmless.
+                    CharSequence text = clip.getItemAt(0).coerceToText(mActivity);
+                    return text == null ? "" : text.toString();
                 }
                 return "";
             }
@@ -636,7 +967,7 @@ public class SlintAndroidJavaHelper {
         try {
             return future.get(); // Wait for the result and return it
         } catch (Exception e) {
-            e.printStackTrace();
+            System.err.println("Clipboard read failed");
             return "";
         }
     }

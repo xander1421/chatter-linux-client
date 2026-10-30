@@ -1,0 +1,218 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
+import { PendingAttachmentData } from "composer_types.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
+
+// Attachment cards sit between the controls and the reply row.
+export component ComposerAttachmentStrip inherits GlassSurface {
+    in property <length> row-padding;
+    in property <length> action-shell-height;
+    in property <length> attachment-band-height;
+    in property <length> raised-toolbar-height;
+    in property <length> attachment-chip-height;
+    in property <float> strip-reveal;
+    in property <bool> show-attachment-action;
+    in property <bool> disabled;
+    in property <[PendingAttachmentData]> pending-attachments;
+    callback remove-attachment(string);
+    callback attachment-clicked();
+    opacity: min(1, max(0, root.strip-reveal));
+    // One material with the reply chip and the action shells; the
+    // cards are wells inside it, not a second card style.
+    border-radius: Spacing.radius-chrome;
+    clip: true;
+    material-enabled: false;
+    background: Materials.opaque;
+    border-width: Materials.glass-edge-width;
+    border-color: Materials.glass-edge;
+
+    attachment-scroll := Flickable {
+        width: 100%;
+        height: 100%;
+        // The viewport is exactly the cards plus the add button, or
+        // the strip when that is wider: a strip that fits is centred
+        // in the gap, a longer one scrolls. The row was `start`-
+        // aligned (and the estimate below omitted the padding), so a
+        // single staged image sat hard left with dead space on the
+        // right (S9, RC88).
+        viewport-width: max(self.width, attachment-cards.preferred-width);
+        viewport-height: self.height;
+        interactive: true;
+
+        attachment-cards := HorizontalLayout {
+            width: attachment-scroll.viewport-width;
+            height: attachment-scroll.viewport-height;
+            padding-left: root.row-padding;
+            padding-right: root.row-padding;
+            padding-top: Spacing.sm;
+            padding-bottom: Spacing.sm;
+            spacing: Spacing.xs;
+            alignment: center;
+
+            // Pending attachment items: inset wells, concentric with
+            // the shell (radius-chrome-inner − chrome-inset).
+            for attachment in root.pending-attachments: Rectangle {
+                width: 180px;
+                height: root.attachment-chip-height;
+                background: Colors.inset;
+                border-radius: Spacing.radius-lg;
+                opacity: attachment.is-ready ? 1.0 : 0.7;
+
+                property <color> category-bg: attachment.category == "image" ? Colors.cat-image :
+                                              attachment.category == "video" ? Colors.cat-video :
+                                              attachment.category == "audio" ? Colors.cat-audio :
+                                              attachment.category == "document" ? Colors.cat-document :
+                                              attachment.category == "code" ? Colors.cat-code :
+                                              attachment.category == "archive" ? Colors.cat-archive :
+                                              Colors.text-muted;
+
+                property <string> category-emoji: attachment.category == "image" ? "\u{1F4F7}" :
+                                                  attachment.category == "video" ? "\u{1F3AC}\u{FE0F}" :
+                                                  attachment.category == "audio" ? "\u{1F3B5}\u{FE0F}" :
+                                                  attachment.category == "document" ? "\u{1F4C4}\u{FE0F}" :
+                                                  attachment.category == "code" ? "\u{1F4DD}\u{FE0F}" :
+                                                  attachment.category == "archive" ? "\u{1F4E6}\u{FE0F}" :
+                                                  "\u{1F4CE}\u{FE0F}";
+
+                HorizontalLayout {
+                    padding-left: root.row-padding;
+                    padding-right: 0px;
+                    spacing: Spacing.xs;
+
+                    // Icon or thumbnail with loading indicator
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        border-radius: Spacing.radius-sm;
+                        background: attachment.has-thumbnail ? transparent : category-bg.transparentize(0.8);
+                        clip: true;
+
+                        // Show thumbnail for images
+                        if attachment.has-thumbnail && attachment.is-ready: Image {
+                            width: 100%;
+                            height: 100%;
+                            source: attachment.thumbnail;
+                            image-fit: cover;
+                        }
+
+                        // Show icon for non-images when ready
+                        if !attachment.has-thumbnail && attachment.is-ready: Text {
+                            width: 100%;
+                            height: 100%;
+                            text: category-emoji;
+                            font-family: Typography.font-family-emoji;
+                            font-size: Typography.lg;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        // Loading indicator when not ready
+                        if !attachment.is-ready: Text {
+                            width: 100%;
+                            height: 100%;
+                            text: "\u{23F3}";  // Hourglass
+                            font-size: Typography.lg;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // File info
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        spacing: Spacing.xxs;
+
+                        Text {
+                            text: attachment.filename;
+                            color: Colors.text-primary;
+                            font-size: Typography.xs;
+                            overflow: elide;
+                        }
+                        HorizontalLayout {
+                            spacing: Spacing.xs;
+
+                            Text {
+                                text: attachment.is-ready ? attachment.size-display : "Encrypting...";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                overflow: elide;
+                            }
+                        }
+                    }
+
+                    // Remove button: the reply chip's dismiss, exactly.
+                    // A 48dp hit box, quiet at rest, error tint only
+                    // under the pointer — the filled pink disc was the
+                    // loudest thing in the composer.
+                    Rectangle {
+                        width: Spacing.touch-target-min;
+                        height: Spacing.touch-target-min;
+                        background: remove-touch.pressed ? Colors.error.transparentize(0.7)
+                            : remove-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
+                        border-radius: Spacing.radius-chrome-inner;
+                        accessible-role: button;
+                        accessible-label: "Remove attachment";
+                        accessible-action-default => { root.remove-attachment(attachment.id); }
+                        KeyFocus { border-radius: parent.border-radius; activate => { root.remove-attachment(attachment.id); } }
+
+                        Image {
+                            source: Icons.x;
+                            width: 18px;
+                            height: 18px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            colorize: remove-touch.has-hover ? Colors.error : Colors.text-secondary;
+                        }
+
+                        remove-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.remove-attachment(attachment.id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Add more: the same 48dp box as the remove control,
+            // centred in the row, with the bundled plus glyph.
+            VerticalLayout {
+                height: root.attachment-chip-height;
+                alignment: center;
+                Rectangle {
+                    width: Spacing.touch-target-min;
+                    height: Spacing.touch-target-min;
+                    background: add-more-touch.pressed ? Materials.pressed
+                        : add-more-touch.has-hover ? Materials.hover : Colors.inset;
+                    border-radius: Spacing.radius-chrome-inner;
+                    accessible-role: button;
+                    accessible-label: "Add attachment";
+                    accessible-action-default => { if !root.disabled { root.attachment-clicked(); } }
+                    KeyFocus { border-radius: parent.border-radius; activate => { if !root.disabled { root.attachment-clicked(); } } }
+
+                    Image {
+                        source: Icons.plus;
+                        width: 18px;
+                        height: 18px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: Colors.text-secondary;
+                    }
+
+                    add-more-touch := TouchArea {
+                        enabled: !root.disabled;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.attachment-clicked();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

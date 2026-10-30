@@ -17,6 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chatter_mesh::dedup::MessageDeduplicator;
 use chatter_mesh::fragment::FragmentAssembler;
 use chatter_mesh::ids::PeerId;
+use chatter_mesh_link::LinkId;
 use chatter_mesh_link::backpressure::{InboundAssembler, OutboundWriteBuffer};
 use chatter_mesh_link::duty::ScanDutyCycle;
 use chatter_mesh_link::fanout::LinkCandidate;
@@ -24,12 +25,17 @@ use chatter_mesh_link::guard::SelfBroadcastTracker;
 use chatter_mesh_link::planner::DirectedRelaySpool;
 use chatter_mesh_link::registry::{IngressRegistry, LinkStateStore, PeerRecord, PeerRegistry};
 use chatter_mesh_link::scheduler::ConnectionScheduler;
-use chatter_mesh_link::LinkId;
 use chatter_mesh_store::PeerSnapshot;
 use parking_lot::Mutex;
 
 use super::events::{MeshPeer, MeshStatus};
+use super::private_channel::PrivateChannel;
 use super::session::SessionManager;
+
+pub struct PendingGroupInvite {
+    pub state: PrivateChannel,
+    pub received_at: u64,
+}
 
 /// Milliseconds since the Unix epoch.
 ///
@@ -54,6 +60,15 @@ pub fn now_secs() -> u64 {
 
 /// The mutable half, behind the lock.
 pub struct LinkStateInner {
+    /// Chatter capability learned from encrypted, post-handshake hello frames.
+    pub chatter_hello: super::chatter_hello::HelloPeers,
+    /// Live transcript-bound proofs await an explicit trust decision in core.
+    pub pending_bindings: BTreeMap<PeerId, super::account_binding::BindingV1>,
+    /// Verified group states awaiting local consent; never persisted.
+    pub pending_group_invites: BTreeMap<String, PendingGroupInvite>,
+    /// Declined invitation epochs stay suppressed while a creator retries them.
+    pub declined_group_invites: BTreeMap<String, (u32, u64)>,
+    pub binding_offers: BTreeSet<PeerId>,
     pub links: LinkStateStore,
     pub peers: PeerRegistry,
     pub ingress: IngressRegistry,
@@ -66,6 +81,8 @@ pub struct LinkStateInner {
     pub self_broadcasts: SelfBroadcastTracker,
     pub spool: DirectedRelaySpool,
     pub sessions: SessionManager,
+    /// Our one-time prekeys and peers' verified bundles.
+    pub prekeys: super::prekeys::PrekeyState,
     /// Negotiated write ceiling per link. Not derivable from the link store:
     /// it is negotiated per connection and arrives on the `Connected` event.
     pub max_write: BTreeMap<LinkId, usize>,
@@ -77,9 +94,16 @@ pub struct LinkStateInner {
     pub connecting: BTreeSet<String>,
     /// Messages waiting for a Noise session to finish, keyed by peer.
     pub pending_dms: BTreeMap<PeerId, Vec<PendingDm>>,
+    /// Last XX opening sent for a DM awaiting a session; limits retries on a flapping link.
+    pub dm_handshake_at_ms: BTreeMap<PeerId, u64>,
+    /// Consecutive known-peer reopen attempts since the last successful Noise session.
+    pub known_peer_reopen_attempts: BTreeMap<PeerId, u8>,
     pub last_announce_ms: u64,
+    /// An announce was requested inside the floor and is owed at its expiry.
+    pub announce_deferred: bool,
     pub last_traffic_ms: u64,
     pub maintenance_cycle: u32,
+    pub last_router_maintenance_secs: Option<u64>,
     pub adapter_powered: bool,
     pub radio_running: bool,
     /// Whether the app is in the foreground. The duty cycle scans continuously
@@ -112,13 +136,23 @@ impl Default for LinkStateInner {
             self_broadcasts: SelfBroadcastTracker::new(),
             spool: DirectedRelaySpool::new(),
             sessions: SessionManager::new(),
+            chatter_hello: super::chatter_hello::HelloPeers::default(),
+            pending_bindings: BTreeMap::new(),
+            pending_group_invites: BTreeMap::new(),
+            declined_group_invites: BTreeMap::new(),
+            binding_offers: BTreeSet::new(),
+            prekeys: super::prekeys::PrekeyState::default(),
             max_write: BTreeMap::new(),
             address_of: BTreeMap::new(),
             connecting: BTreeSet::new(),
             pending_dms: BTreeMap::new(),
+            dm_handshake_at_ms: BTreeMap::new(),
+            known_peer_reopen_attempts: BTreeMap::new(),
             last_announce_ms: 0,
+            announce_deferred: false,
             last_traffic_ms: 0,
             maintenance_cycle: 0,
+            last_router_maintenance_secs: None,
             adapter_powered: true,
             radio_running: false,
             app_is_active: true,
@@ -234,9 +268,11 @@ impl MeshState {
             let mut peers: Vec<MeshPeer> = records
                 .into_iter()
                 .map(|record| MeshPeer {
+                    chatter_capable: state.chatter_hello.get(&record.peer).is_some(),
                     connected: !state.links.links_to(&record.peer).is_empty(),
                     reachable: state.peers.is_reachable(&record.peer, now),
                     verified: record.verified_nickname,
+                    account_verified: false,
                     has_session: state.sessions.has_session(&record.peer),
                     fingerprint: record
                         .noise_public_key
@@ -248,6 +284,7 @@ impl MeshState {
                     nickname: record.nickname,
                 })
                 .collect();
+            disambiguate_nicknames(&mut peers);
             // Deterministic order so the UI never re-sorts, and so two renders of
             // an unchanged mesh are identical.
             peers.sort_by(|a, b| a.peer.cmp(&b.peer));
@@ -420,6 +457,46 @@ mod tests {
     }
 
     #[test]
+    fn colliding_nicknames_use_stable_fingerprint_suffixes() {
+        let state = MeshState::new(peer("aaaaaaaaaaaaaaaa"));
+        let first = peer("1111111111111111");
+        let second = peer("2222222222222222");
+        state.with(|s| {
+            for (id, key) in [(&first, [1u8; 32]), (&second, [2u8; 32])] {
+                let announce = chatter_mesh::tlv::announce::AnnouncementPacket::new(
+                    "Alice".into(),
+                    key.to_vec(),
+                    vec![3; 32],
+                    None,
+                    None,
+                    None,
+                );
+                s.peers
+                    .upsert_verified_announce(id, &announce, true, now_millis());
+            }
+        });
+        let peers = state.peers();
+        assert_eq!(
+            peers[0].nickname,
+            format!(
+                "Alice#{}",
+                &chatter_mesh_noise::fingerprint_of(&[1; 32])[..4]
+            )
+        );
+        assert_eq!(
+            peers[1].nickname,
+            format!(
+                "Alice#{}",
+                &chatter_mesh_noise::fingerprint_of(&[2; 32])[..4]
+            )
+        );
+        state.with(|s| {
+            s.peers.remove(&second);
+        });
+        assert_eq!(state.peers()[0].nickname, "Alice");
+    }
+
+    #[test]
     fn a_fresh_state_knows_nothing() {
         let state = MeshState::new(peer("aaaaaaaaaaaaaaaa"));
         let other = peer("bbbbbbbbbbbbbbbb");
@@ -443,7 +520,10 @@ mod tests {
             inner.links.bind_if_unbound(&link, &other);
         });
         assert!(state.is_connected(&other));
-        assert!(!state.can_write_to(&other), "binding alone is not writability");
+        assert!(
+            !state.can_write_to(&other),
+            "binding alone is not writability"
+        );
 
         state.with(|inner| {
             inner.links.set_writable(&link, true);
@@ -518,5 +598,25 @@ mod tests {
         assert_eq!(state.dm_origin(&peer(&key)).as_deref(), Some("u4pruy"));
         assert_eq!(state.nickname(&peer(&key)).as_deref(), Some("wanderer"));
         assert!(state.knows_peer(&peer(&key)));
+    }
+}
+
+// A fingerprint belongs to the identity, so a collision suffix stays stable
+// when peer-list ordering changes.
+fn disambiguate_nicknames(peers: &mut [MeshPeer]) {
+    let mut counts = std::collections::BTreeMap::new();
+    for peer in peers.iter() {
+        *counts.entry(peer.nickname.clone()).or_insert(0usize) += 1;
+    }
+    for peer in peers {
+        if counts.get(&peer.nickname).copied().unwrap_or(0) > 1 {
+            let fingerprint = peer.fingerprint.as_deref().unwrap_or(peer.peer.as_str());
+            let suffix: String = fingerprint
+                .chars()
+                .filter(|c| c.is_ascii_hexdigit())
+                .take(4)
+                .collect();
+            peer.nickname = format!("{}#{}", peer.nickname, suffix.to_lowercase());
+        }
     }
 }

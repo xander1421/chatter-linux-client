@@ -3,12 +3,14 @@
 //! Data access for user, profile, device, and friendship entities.
 
 use crate::domain::ids::{DeviceId, UserId};
-use crate::domain::user::{Device, Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage, User};
+use crate::domain::user::{
+    Device, Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage, User,
+};
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
-use rusqlite::params;
 use rusqlite::OptionalExtension;
+use rusqlite::params;
 use std::sync::Arc;
 
 /// User data repository.
@@ -68,6 +70,18 @@ impl UserRepository {
         Ok(())
     }
 
+    /// Remember a complete handle learned from a successful exact lookup or
+    /// a decrypted username link. Other user fields stay untouched.
+    pub fn set_known_username(&self, user_id: &UserId, username: &str) -> Result<(), StorageError> {
+        self.ensure_user_exists(user_id)?;
+        let conn = self.db.connection()?;
+        conn.execute(
+            "UPDATE users SET username = ?1 WHERE id = ?2",
+            params![username, user_id.to_string()],
+        )?;
+        Ok(())
+    }
+
     /// Get a user by ID.
     pub fn get(&self, id: &UserId) -> Result<Option<User>, StorageError> {
         let conn = self.db.connection()?;
@@ -78,9 +92,10 @@ impl UserRepository {
 
         let result = stmt.query_row(params![id.to_string()], |row| {
             Ok(User {
-                id: row.get::<_, String>(0)?.parse().map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("Invalid UUID".into())
-                })?,
+                id: row
+                    .get::<_, String>(0)?
+                    .parse()
+                    .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
                 username: row.get(1)?,
                 svr_public_key: row.get(2)?,
                 last_active: parse_datetime(&row.get::<_, String>(3)?),
@@ -93,6 +108,109 @@ impl UserRepository {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Database(e)),
         }
+    }
+
+    /// Read this account's local override for a peer.
+    pub fn contact_name(&self, owner: &UserId, peer: &UserId) -> Result<Option<String>, StorageError> {
+        let conn = self.db.read_connection()?;
+        conn.query_row(
+            "SELECT name FROM contact_names WHERE owner_id = ?1 AND peer_id = ?2",
+            params![owner.to_string(), peer.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(StorageError::Database)
+    }
+
+    /// An empty name removes the local override. No profile or server row is changed.
+    pub fn set_contact_name(&self, owner: &UserId, peer: &UserId, name: &str) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        if name.is_empty() {
+            conn.execute(
+                "DELETE FROM contact_names WHERE owner_id = ?1 AND peer_id = ?2",
+                params![owner.to_string(), peer.to_string()],
+            )?;
+        } else {
+            conn.execute(
+                "INSERT INTO contact_names (owner_id, peer_id, name) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(owner_id, peer_id) DO UPDATE SET name = excluded.name",
+                params![owner.to_string(), peer.to_string(), name],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Batched local override, profile name, and username sources for display.
+    /// The owner key keeps overrides isolated between accounts on this device.
+    pub fn display_name_sources(
+        &self,
+        owner: Option<&UserId>,
+        ids: &[UserId],
+    ) -> Result<std::collections::HashMap<UserId, (Option<String>, Option<String>, Option<String>)>, StorageError>
+    {
+        let mut out = std::collections::HashMap::with_capacity(ids.len());
+        let conn = self.db.read_connection()?;
+        for chunk in ids.chunks(500) {
+            let values = vec!["(?)"; chunk.len()].join(",");
+            let mut stmt = conn.prepare(&format!(
+                "WITH ids(id) AS (VALUES {values}) \
+                 SELECT ids.id, n.name, p.display_name, u.username FROM ids \
+                 LEFT JOIN contact_names n ON n.owner_id = ? AND n.peer_id = ids.id \
+                 LEFT JOIN profiles p ON p.user_id = ids.id \
+                 LEFT JOIN users u ON u.id = ids.id"
+            ))?;
+            let mut keys: Vec<String> = chunk.iter().map(|id| id.to_string()).collect();
+            keys.push(owner.map(ToString::to_string).unwrap_or_default());
+            let rows = stmt.query_map(rusqlite::params_from_iter(keys.iter()), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, contact_name, display_name, username) = row?;
+                if let Ok(id) = id.parse::<UserId>() {
+                    out.insert(id, (contact_name, display_name, username));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Handles and decrypted profile photos for a roster page, in one read per
+    /// chunk. Missing directory/profile rows remain missing in the result.
+    pub fn roster_profile_sources(
+        &self,
+        ids: &[UserId],
+    ) -> Result<std::collections::HashMap<UserId, (Option<String>, Option<Vec<u8>>)>, StorageError> {
+        let mut out = std::collections::HashMap::with_capacity(ids.len());
+        let conn = self.db.read_connection()?;
+        for chunk in ids.chunks(500) {
+            let values = vec!["(?)"; chunk.len()].join(",");
+            let mut stmt = conn.prepare(&format!(
+                "WITH ids(id) AS (VALUES {values}) \
+                 SELECT ids.id, u.username, p.avatar_bytes FROM ids \
+                 LEFT JOIN users u ON u.id = ids.id \
+                 LEFT JOIN profiles p ON p.user_id = ids.id"
+            ))?;
+            let keys: Vec<String> = chunk.iter().map(ToString::to_string).collect();
+            let rows = stmt.query_map(rusqlite::params_from_iter(keys.iter()), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, username, avatar) = row?;
+                if let Ok(id) = id.parse::<UserId>() {
+                    out.insert(id, (username, avatar));
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Count total number of users in the database.
@@ -100,33 +218,6 @@ impl UserRepository {
         let conn = self.db.connection()?;
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
         Ok(count as u64)
-    }
-
-    /// Get a user by username.
-    pub fn get_by_username(&self, username: &str) -> Result<Option<User>, StorageError> {
-        let conn = self.db.connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, username, svr_public_key, last_active, created_at
-             FROM users WHERE username = ?1",
-        )?;
-
-        let result = stmt.query_row(params![username], |row| {
-            Ok(User {
-                id: row.get::<_, String>(0)?.parse().map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("Invalid UUID".into())
-                })?,
-                username: row.get(1)?,
-                svr_public_key: row.get(2)?,
-                last_active: parse_datetime(&row.get::<_, String>(3)?),
-                created_at: parse_datetime(&row.get::<_, String>(4)?),
-            })
-        });
-
-        match result {
-            Ok(user) => Ok(Some(user)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
-        }
     }
 
     /// Update an existing user.
@@ -182,9 +273,10 @@ impl UserRepository {
             });
 
             Ok(Profile {
-                user_id: row.get::<_, String>(0)?.parse().map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("Invalid UUID".into())
-                })?,
+                user_id: row
+                    .get::<_, String>(0)?
+                    .parse()
+                    .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
                 display_name: row.get(1)?,
                 avatar_bytes: row.get(2)?,
                 status_message,
@@ -199,9 +291,28 @@ impl UserRepository {
         }
     }
 
-    /// Insert or update a user's profile.
-    pub fn upsert_profile(&self, profile: &Profile) -> Result<(), StorageError> {
+    /// Insert or update a user's profile. `true` when the write changed what
+    /// any screen shows for this user — name, status text, or avatar (an
+    /// avatar of `None` keeps the stored one, so it changes nothing) — or the
+    /// user had no profile yet. Every writer gets the answer, so a writer that
+    /// changes a friend's name can say so (`UserProfileUpdated`): a silent
+    /// write left rows painted earlier showing the old name.
+    pub fn upsert_profile(&self, profile: &Profile) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
+        let before: Option<(String, Option<String>, Option<Vec<u8>>)> = match conn.query_row(
+            "SELECT display_name, status_text, avatar_bytes FROM profiles WHERE user_id = ?1",
+            params![profile.user_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ) {
+            Ok(row) => Some(row),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(StorageError::Database(e)),
+        };
+        let changed = before.map_or(true, |(name, status, avatar)| {
+            name != profile.display_name
+                || status.as_deref() != profile.status_message.as_ref().map(|s| s.text.as_str())
+                || (profile.avatar_bytes.is_some() && avatar != profile.avatar_bytes)
+        });
         let (status_text, status_emoji, status_expires_at) = match &profile.status_message {
             Some(msg) => (
                 Some(msg.text.clone()),
@@ -233,7 +344,7 @@ impl UserRepository {
                 presence_to_i32(profile.presence),
             ],
         )?;
-        Ok(())
+        Ok(changed)
     }
 
     /// Update only a user's presence.
@@ -280,56 +391,6 @@ impl UserRepository {
     // Device operations
     // ========================================================================
 
-    /// Insert a new device.
-    pub fn insert_device(&self, device: &Device) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        conn.execute(
-            "INSERT INTO devices (id, user_id, name, registration_id, created_at, last_seen)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                device.id.as_u32(),
-                device.user_id.to_string(),
-                device.name,
-                device.registration_id,
-                device.created_at.to_rfc3339(),
-                device.last_seen.to_rfc3339(),
-            ],
-        )?;
-        Ok(())
-    }
-
-    /// Get a specific device.
-    pub fn get_device(
-        &self,
-        user_id: &UserId,
-        device_id: DeviceId,
-    ) -> Result<Option<Device>, StorageError> {
-        let conn = self.db.connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, user_id, name, registration_id, created_at, last_seen
-             FROM devices WHERE user_id = ?1 AND id = ?2",
-        )?;
-
-        let result = stmt.query_row(params![user_id.to_string(), device_id.as_u32()], |row| {
-            Ok(Device {
-                id: DeviceId::new(row.get(0)?),
-                user_id: row.get::<_, String>(1)?.parse().map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("Invalid UUID".into())
-                })?,
-                name: row.get(2)?,
-                registration_id: row.get(3)?,
-                created_at: parse_datetime(&row.get::<_, String>(4)?),
-                last_seen: parse_datetime(&row.get::<_, String>(5)?),
-            })
-        });
-
-        match result {
-            Ok(device) => Ok(Some(device)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
-        }
-    }
-
     /// List all devices for a user.
     pub fn list_devices(&self, user_id: &UserId) -> Result<Vec<Device>, StorageError> {
         let conn = self.db.connection()?;
@@ -344,9 +405,10 @@ impl UserRepository {
         while let Some(row) = rows.next()? {
             devices.push(Device {
                 id: DeviceId::new(row.get(0)?),
-                user_id: row.get::<_, String>(1)?.parse().map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("Invalid UUID".into())
-                })?,
+                user_id: row
+                    .get::<_, String>(1)?
+                    .parse()
+                    .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
                 name: row.get(2)?,
                 registration_id: row.get(3)?,
                 created_at: parse_datetime(&row.get::<_, String>(4)?),
@@ -355,22 +417,6 @@ impl UserRepository {
         }
 
         Ok(devices)
-    }
-
-    /// Delete a device.
-    pub fn delete_device(&self, user_id: &UserId, device_id: DeviceId) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        let rows = conn.execute(
-            "DELETE FROM devices WHERE user_id = ?1 AND id = ?2",
-            params![user_id.to_string(), device_id.as_u32()],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!(
-                "Device {} for user {}",
-                device_id, user_id
-            )));
-        }
-        Ok(())
     }
 
     // ========================================================================
@@ -405,9 +451,8 @@ impl UserRepository {
              FROM friendships WHERE user_id = ?1 AND friend_id = ?2",
         )?;
 
-        let result = stmt.query_row(
-            params![user_id.to_string(), friend_id.to_string()],
-            |row| {
+        let result =
+            stmt.query_row(params![user_id.to_string(), friend_id.to_string()], |row| {
                 Ok(Friendship {
                     requester_id: row.get::<_, String>(0)?.parse().map_err(|_| {
                         rusqlite::Error::InvalidParameterName("Invalid UUID".into())
@@ -418,8 +463,7 @@ impl UserRepository {
                     status: friendship_status_from_i32(row.get(2)?),
                     created_at: parse_datetime(&row.get::<_, String>(3)?),
                 })
-            },
-        );
+            });
 
         match result {
             Ok(friendship) => Ok(Some(friendship)),
@@ -452,6 +496,91 @@ impl UserRepository {
             )
             .optional()?;
         Ok(status.map(friendship_status_from_i32) == Some(FriendshipStatus::Blocked))
+    }
+
+    /// Start an interval only on a transition to blocked. Repeated syncs keep its original start.
+    pub fn start_block_interval(&self, owner: &UserId, peer: &UserId) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "INSERT INTO user_block_intervals (owner_id, peer_id, started_at_ns)
+             SELECT ?1, ?2, ?3 WHERE NOT EXISTS (
+                 SELECT 1 FROM user_block_intervals
+                 WHERE owner_id = ?1 AND peer_id = ?2 AND ended_at_ns IS NULL)",
+            params![owner.to_string(), peer.to_string(), Utc::now().timestamp_nanos_opt()
+                .ok_or_else(|| StorageError::InvalidData("block timestamp out of range".into()))?],
+        )?;
+        Ok(())
+    }
+
+    pub fn end_block_interval(&self, owner: &UserId, peer: &UserId) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "UPDATE user_block_intervals SET ended_at_ns = ?3
+             WHERE owner_id = ?1 AND peer_id = ?2 AND ended_at_ns IS NULL",
+            params![owner.to_string(), peer.to_string(), Utc::now().timestamp_nanos_opt()
+                .ok_or_else(|| StorageError::InvalidData("unblock timestamp out of range".into()))?],
+        )?;
+        Ok(())
+    }
+
+    pub fn was_blocked_at(&self, owner: &UserId, peer: &UserId, sent_at_ns: u64) -> Result<bool, StorageError> {
+        let Ok(sent_at_ns) = i64::try_from(sent_at_ns) else { return Ok(false); };
+        let conn = self.db.read_connection()?;
+        let exists: i64 = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM user_block_intervals
+             WHERE owner_id = ?1 AND peer_id = ?2 AND started_at_ns <= ?3
+               AND (ended_at_ns IS NULL OR ?3 < ended_at_ns))",
+            params![owner.to_string(), peer.to_string(), sent_at_ns],
+            |row| row.get(0),
+        )?;
+        Ok(exists != 0)
+    }
+
+    /// Everyone `user_id` has blocked, in the same orientation [`Self::is_blocked`]
+    /// reads (`user_id = us, friend_id = them`).
+    pub fn list_blocked_by(&self, user_id: &UserId) -> Result<Vec<UserId>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT friend_id FROM friendships WHERE user_id = ?1 AND status = ?2 ORDER BY created_at",
+        )?;
+        let ids = stmt
+            .query_map(
+                params![
+                    user_id.to_string(),
+                    friendship_status_to_i32(FriendshipStatus::Blocked)
+                ],
+                |row| row.get::<_, String>(0),
+            )?
+            .filter_map(|r| r.ok()?.parse().ok())
+            .collect();
+        Ok(ids)
+    }
+
+    /// Record `user_id → friend_id` as accepted, leaving a block alone. The
+    /// server keeps a blocked friend in `ListFriends` (a block keeps the
+    /// friendship, Signal-style), so a friends refresh that overwrote the row
+    /// lifted every block it saw. Only the status changes, so the row's
+    /// profile key survives.
+    pub fn accept_friendship_unless_blocked(
+        &self,
+        user_id: &UserId,
+        friend_id: &UserId,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "INSERT INTO friendships (user_id, friend_id, status, created_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(user_id, friend_id) DO UPDATE SET status = excluded.status
+             WHERE friendships.status != ?5",
+            params![
+                user_id.to_string(),
+                friend_id.to_string(),
+                friendship_status_to_i32(FriendshipStatus::Accepted),
+                Utc::now().to_rfc3339(),
+                friendship_status_to_i32(FriendshipStatus::Blocked),
+            ],
+        )?;
+        Ok(())
     }
 
     /// Update a friendship status.
@@ -491,12 +620,14 @@ impl UserRepository {
 
         while let Some(row) = rows.next()? {
             friendships.push(Friendship {
-                requester_id: row.get::<_, String>(0)?.parse().map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("Invalid UUID".into())
-                })?,
-                addressee_id: row.get::<_, String>(1)?.parse().map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("Invalid UUID".into())
-                })?,
+                requester_id: row
+                    .get::<_, String>(0)?
+                    .parse()
+                    .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
+                addressee_id: row
+                    .get::<_, String>(1)?
+                    .parse()
+                    .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
                 status: friendship_status_from_i32(row.get(2)?),
                 created_at: parse_datetime(&row.get::<_, String>(3)?),
             });
@@ -529,58 +660,55 @@ impl UserRepository {
     // Profile key sharing operations
     // ========================================================================
 
-    /// Get a friend's profile key for decrypting their encrypted display_name.
+    /// Get a peer's profile key for decrypting their encrypted profile
+    /// (display name, status, avatar).
     ///
-    /// Returns None if we don't have their profile key yet.
+    /// Held per peer, not per friendship (Signal keeps it on the recipient):
+    /// a channel co-member who is not a friend shares theirs too. Returns None
+    /// if we don't have their profile key yet.
     pub fn get_friend_profile_key(
         &self,
         user_id: &UserId,
         friend_id: &UserId,
     ) -> Result<Option<[u8; 32]>, StorageError> {
         let conn = self.db.connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT friend_profile_key FROM friendships WHERE user_id = ?1 AND friend_id = ?2",
-        )?;
-
-        let result: Result<Option<Vec<u8>>, _> = stmt.query_row(
+        let result: Result<Vec<u8>, _> = conn.query_row(
+            "SELECT profile_key FROM peer_profile_keys WHERE user_id = ?1 AND peer_id = ?2",
             params![user_id.to_string(), friend_id.to_string()],
             |row| row.get(0),
         );
 
         match result {
-            Ok(Some(key_bytes)) if key_bytes.len() == 32 => {
-                let mut key = [0u8; 32];
-                key.copy_from_slice(&key_bytes);
-                Ok(Some(key))
-            }
-            Ok(_) => Ok(None), // No key or wrong size
+            Ok(key_bytes) => Ok(<[u8; 32]>::try_from(key_bytes.as_slice()).ok()),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Database(e)),
         }
     }
 
-    /// Store a friend's profile key received from an E2E message.
+    /// Store a peer's profile key received from an E2E message.
     ///
-    /// This key allows us to decrypt their encrypted display_name.
+    /// Callers pass only a key the peer delivered themselves (sealed-sender
+    /// authenticated as that peer) — the same rule as Signal's
+    /// `handleDataMessage`, which stores a message's profile key against its
+    /// sender and nobody else — so a different key is the peer's rotated one
+    /// and replaces ours. Returns whether the stored key CHANGED (none
+    /// before, or a different one) — the caller's cue to re-fetch the peer's
+    /// profile, which it could not decrypt (or decrypted with a stale key)
+    /// until now.
     pub fn set_friend_profile_key(
         &self,
         user_id: &UserId,
         friend_id: &UserId,
         key: &[u8; 32],
-    ) -> Result<(), StorageError> {
+    ) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
-        let rows = conn.execute(
-            "UPDATE friendships SET friend_profile_key = ?1 WHERE user_id = ?2 AND friend_id = ?3",
-            params![key.as_slice(), user_id.to_string(), friend_id.to_string()],
+        let changed = conn.execute(
+            "INSERT INTO peer_profile_keys (user_id, peer_id, profile_key) VALUES (?1, ?2, ?3) \
+             ON CONFLICT (user_id, peer_id) DO UPDATE SET profile_key = excluded.profile_key \
+             WHERE profile_key IS NOT excluded.profile_key",
+            params![user_id.to_string(), friend_id.to_string(), key.as_slice()],
         )?;
-
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!(
-                "Friendship {} -> {}",
-                user_id, friend_id
-            )));
-        }
-        Ok(())
+        Ok(changed > 0)
     }
 
     /// Check if profile sharing is enabled for a friendship.
@@ -596,10 +724,10 @@ impl UserRepository {
             "SELECT profile_sharing FROM friendships WHERE user_id = ?1 AND friend_id = ?2",
         )?;
 
-        let result: Result<i32, _> = stmt.query_row(
-            params![user_id.to_string(), friend_id.to_string()],
-            |row| row.get(0),
-        );
+        let result: Result<i32, _> = stmt
+            .query_row(params![user_id.to_string(), friend_id.to_string()], |row| {
+                row.get(0)
+            });
 
         match result {
             Ok(value) => Ok(value != 0),
@@ -704,12 +832,98 @@ mod tests {
         }
     }
 
+    /// A friends refresh must neither lift a block nor drop the profile key.
+    #[test]
+    fn accept_friendship_keeps_block_and_profile_key() {
+        let (_d, repo) = setup();
+        let me = UserId::new();
+        let them = UserId::new();
+        repo.ensure_user_exists(&me).unwrap();
+        repo.ensure_user_exists(&them).unwrap();
+        repo.accept_friendship_unless_blocked(&me, &them).unwrap();
+        assert!(repo.set_friend_profile_key(&me, &them, &[7; 32]).unwrap());
+
+        repo.update_friendship(&friendship(me, them, FriendshipStatus::Blocked))
+            .unwrap();
+        repo.accept_friendship_unless_blocked(&me, &them).unwrap();
+        assert!(
+            repo.is_blocked(&me, &them).unwrap(),
+            "refresh lifted the block"
+        );
+
+        // Unblock flips the status back; the key is still there.
+        repo.update_friendship(&friendship(me, them, FriendshipStatus::Accepted))
+            .unwrap();
+        assert!(!repo.is_blocked(&me, &them).unwrap());
+        assert_eq!(
+            repo.get_friend_profile_key(&me, &them).unwrap(),
+            Some([7; 32])
+        );
+    }
+
+    /// `set_friend_profile_key` reports a change only when the stored key
+    /// actually changed — the trigger for re-fetching the friend's profile.
+    #[test]
+    fn set_friend_profile_key_reports_only_real_changes() {
+        let (_d, repo) = setup();
+        let me = UserId::new();
+        let them = UserId::new();
+        repo.ensure_user_exists(&me).unwrap();
+        repo.ensure_user_exists(&them).unwrap();
+        repo.insert_friendship(&friendship(me, them, FriendshipStatus::Accepted))
+            .unwrap();
+
+        assert!(
+            repo.set_friend_profile_key(&me, &them, &[1; 32]).unwrap(),
+            "first key"
+        );
+        assert!(
+            !repo.set_friend_profile_key(&me, &them, &[1; 32]).unwrap(),
+            "same key"
+        );
+        assert!(
+            repo.set_friend_profile_key(&me, &them, &[2; 32]).unwrap(),
+            "rotated key"
+        );
+        assert_eq!(
+            repo.get_friend_profile_key(&me, &them).unwrap(),
+            Some([2; 32])
+        );
+        // A channel co-member with no friendship row still gets theirs kept.
+        let member = UserId::new();
+        assert!(repo.set_friend_profile_key(&me, &member, &[3; 32]).unwrap());
+        assert_eq!(
+            repo.get_friend_profile_key(&me, &member).unwrap(),
+            Some([3; 32])
+        );
+    }
+
     /// The durable read that client-side block enforcement stands on.
     ///
     /// `UserService::block_user` writes exactly this row. If the read cannot
     /// see it, every incoming message from a blocked sender is delivered —
     /// which is the state the in-memory `blocked_users` set leaves the client
     /// in, and why `is_profile_user_blocked` reports false for server blocks.
+    /// The Blocked tab lists server blocks from this read: only our own
+    /// blocks, never theirs on us, never accepted friends.
+    #[test]
+    fn list_blocked_by_returns_only_our_blocks() {
+        let (_d, repo) = setup();
+        let (me, blocked, friend, blocker) =
+            (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        for u in [me, blocked, friend, blocker] {
+            repo.ensure_user_exists(&u).unwrap();
+        }
+        repo.insert_friendship(&friendship(me, blocked, FriendshipStatus::Blocked))
+            .unwrap();
+        repo.insert_friendship(&friendship(me, friend, FriendshipStatus::Accepted))
+            .unwrap();
+        repo.insert_friendship(&friendship(blocker, me, FriendshipStatus::Blocked))
+            .unwrap();
+
+        assert_eq!(repo.list_blocked_by(&me).unwrap(), vec![blocked]);
+    }
+
     #[test]
     fn a_block_written_to_friendships_is_visible_to_is_blocked() {
         let (_d, repo) = setup();
@@ -746,9 +960,18 @@ mod tests {
         repo.insert_friendship(&friendship(me, pending, FriendshipStatus::Pending))
             .unwrap();
 
-        assert!(!repo.is_blocked(&me, &stranger).unwrap(), "no row is not a block");
-        assert!(!repo.is_blocked(&me, &friend).unwrap(), "Accepted is not Blocked");
-        assert!(!repo.is_blocked(&me, &pending).unwrap(), "Pending is not Blocked");
+        assert!(
+            !repo.is_blocked(&me, &stranger).unwrap(),
+            "no row is not a block"
+        );
+        assert!(
+            !repo.is_blocked(&me, &friend).unwrap(),
+            "Accepted is not Blocked"
+        );
+        assert!(
+            !repo.is_blocked(&me, &pending).unwrap(),
+            "Pending is not Blocked"
+        );
     }
 
     /// A block is one-directional. `list_friends` matches either column
@@ -817,7 +1040,8 @@ mod tests {
         })
         .unwrap();
 
-        repo.set_presence(&them, PresenceStatus::Online, None).unwrap();
+        repo.set_presence(&them, PresenceStatus::Online, None)
+            .unwrap();
 
         let stored = repo.get_profile(&them).unwrap().expect("profile row");
         assert_eq!(
@@ -845,7 +1069,8 @@ mod tests {
         let (_d, repo) = setup();
         let stranger = UserId::new();
 
-        repo.set_presence(&stranger, PresenceStatus::Online, None).unwrap();
+        repo.set_presence(&stranger, PresenceStatus::Online, None)
+            .unwrap();
 
         assert!(
             repo.get_profile(&stranger).unwrap().is_none(),

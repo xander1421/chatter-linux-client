@@ -1,6 +1,6 @@
 //! Proto/domain type conversions for channels.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 use crate::util::time::TimestampNanos;
 
@@ -34,7 +34,9 @@ pub fn proto_to_domain_channel(proto: &chat_v1::Channel) -> Result<Channel, Chan
     let config = proto_config_to_domain(proto.config.as_ref());
 
     // Convert timestamp (proto uses nanos)
-    let created_at = TimestampNanos::from_nanos(proto.created_at).to_datetime().unwrap_or_else(Utc::now);
+    let created_at = TimestampNanos::from_nanos(proto.created_at)
+        .to_datetime()
+        .unwrap_or_else(Utc::now);
 
     Ok(Channel {
         id,
@@ -75,15 +77,10 @@ pub fn proto_channel_type_to_domain(proto_type: i32) -> ChannelType {
 }
 
 /// Convert domain ChannelType to proto ChannelType.
-///
-/// `ChannelType::DirectMessage` has no server-side channel type anymore
-/// (DMs are channel-free); this arm is unreachable in practice since no
-/// client code path creates/updates a DM channel. Mapped to `ChannelPrivate`
-/// defensively rather than panicking.
 pub fn domain_channel_type_to_proto(channel_type: ChannelType) -> chat_v1::ChannelType {
     match channel_type {
         ChannelType::Public => chat_v1::ChannelType::ChannelPublic,
-        ChannelType::Private | ChannelType::DirectMessage => chat_v1::ChannelType::ChannelPrivate,
+        ChannelType::Private => chat_v1::ChannelType::ChannelPrivate,
         ChannelType::SavedMessages => chat_v1::ChannelType::SavedMessages,
     }
 }
@@ -127,7 +124,6 @@ pub fn domain_config_to_proto(config: &ChannelConfig) -> chat_v1::channel::Confi
         // Proto requires 0 < max_members <= 10000; None means "no user-set limit" → cap at max.
         max_members: config.max_members.unwrap_or(10000),
         encrypted: config.require_encryption,
-        password_hash: String::new(),
         friends_only: false,
     }
 }
@@ -163,7 +159,9 @@ pub fn proto_to_domain_membership(
         .map_err(|_| ChannelError::InvalidInput("invalid user ID in member".to_string()))?;
 
     let role = proto_role_to_domain(proto.role);
-    let joined_at = TimestampNanos::from_nanos(proto.joined_at).to_datetime().unwrap_or_else(Utc::now);
+    let joined_at = TimestampNanos::from_nanos(proto.joined_at)
+        .to_datetime()
+        .unwrap_or_else(Utc::now);
 
     Ok(Membership {
         channel_id: *channel_id,
@@ -172,9 +170,16 @@ pub fn proto_to_domain_membership(
         joined_at,
         last_read_message_id: None, // Not in proto
         is_muted: proto.muted,
-        muted_until: None,                              // Not in proto (ban_expires_at is for bans, not mutes)
+        muted_until: mute_expiry(proto),
         notification_preference: NotificationPreference::All, // Not in proto
     })
+}
+
+/// A member's timed-mute end; `None` when unmuted or muted until lifted.
+pub fn mute_expiry(proto: &chat_v1::channel::ChannelMember) -> Option<DateTime<Utc>> {
+    (proto.muted && proto.mute_expires_at != 0)
+        .then(|| TimestampNanos::from_nanos(proto.mute_expires_at).to_datetime())
+        .flatten()
 }
 
 /// Convert proto ChannelRole (i32) to domain MemberRole.
@@ -221,10 +226,6 @@ mod tests {
             domain_channel_type_to_proto(ChannelType::Private),
             chat_v1::ChannelType::ChannelPrivate
         );
-        assert_eq!(
-            domain_channel_type_to_proto(ChannelType::DirectMessage),
-            chat_v1::ChannelType::ChannelPrivate
-        );
     }
 
     #[test]
@@ -245,7 +246,10 @@ mod tests {
 
     #[test]
     fn test_domain_role_to_proto() {
-        assert_eq!(domain_role_to_proto(MemberRole::Member), ChannelRole::Member);
+        assert_eq!(
+            domain_role_to_proto(MemberRole::Member),
+            ChannelRole::Member
+        );
         assert_eq!(
             domain_role_to_proto(MemberRole::Moderator),
             ChannelRole::Moderator
@@ -270,10 +274,11 @@ mod tests {
 
     #[test]
     fn test_channel_type_roundtrip() {
-        // DirectMessage is intentionally excluded: it has no server-side
-        // proto counterpart anymore (DMs are channel-free), so it does not
-        // round-trip.
-        for ct in [ChannelType::Public, ChannelType::Private] {
+        for ct in [
+            ChannelType::Public,
+            ChannelType::Private,
+            ChannelType::SavedMessages,
+        ] {
             let proto = domain_channel_type_to_proto(ct);
             let back = proto_channel_type_to_domain(proto as i32);
             assert_eq!(back, ct);
@@ -328,7 +333,6 @@ mod tests {
             }),
             max_members: 100,
             encrypted: true,
-            password_hash: String::new(),
             friends_only: false,
         };
 
@@ -373,7 +377,6 @@ mod tests {
                 ttl: None,
                 max_members: 100,
                 encrypted: false,
-                password_hash: String::new(),
                 friends_only: false,
             }),
             owner_id: "00000000-0000-0000-0000-000000000002".to_string(),

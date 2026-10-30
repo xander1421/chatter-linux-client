@@ -36,15 +36,44 @@ impl KeyStore {
             "SELECT registration_id, identity_key_pair FROM local_identity WHERE id = 1",
         )?;
 
-        let result: Result<(u32, Vec<u8>), _> = stmt.query_row([], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        });
+        let result: Result<(u32, Vec<u8>), _> =
+            stmt.query_row([], |row| Ok((row.get(0)?, row.get(1)?)));
 
         match result {
             Ok(data) => Ok(Some(data)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Database(e)),
         }
+    }
+
+    /// Current account/device for the device-local mesh Signal path. These
+    /// settings are read together with the same SQLCipher connection.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_local_account_device(&self) -> Result<Option<(String, u32)>, StorageError> {
+        use rusqlite::OptionalExtension;
+        let conn = self.db.read_connection()?;
+        let user: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT CAST(value AS BLOB) FROM settings WHERE key='auth.current_user_id'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let device: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT CAST(value AS BLOB) FROM settings WHERE key='auth.current_device_id'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let (Some(user), Some(device)) = (user, device) else {
+            return Ok(None);
+        };
+        let user: String = serde_json::from_slice(&user)
+            .map_err(|_| StorageError::InvalidData("invalid current account".into()))?;
+        let device: u32 = serde_json::from_slice(&device)
+            .map_err(|_| StorageError::InvalidData("invalid current device".into()))?;
+        Ok(Some((user, device)))
     }
 
     /// Set the local identity.
@@ -65,6 +94,21 @@ impl KeyStore {
             params![registration_id, identity_key_pair, now],
         )?;
 
+        Ok(())
+    }
+
+    /// Re-linking a device that still holds this same identity (its session
+    /// was revoked): keep the keypair, take the new registration id that the
+    /// fresh prekeys were generated under. Errors if no identity row exists.
+    pub fn update_local_registration_id(&self, registration_id: u32) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE local_identity SET registration_id = ?1 WHERE id = 1",
+            params![registration_id],
+        )?;
+        if rows != 1 {
+            return Err(StorageError::InvalidData("no local identity to update".into()));
+        }
         Ok(())
     }
 
@@ -145,9 +189,9 @@ impl KeyStore {
             result.ok()
         };
 
-        let key_changed = existing.as_ref().is_some_and(|existing_key| {
-            existing_key.as_slice() != identity_key
-        });
+        let key_changed = existing
+            .as_ref()
+            .is_some_and(|existing_key| existing_key.as_slice() != identity_key);
 
         conn.execute(
             "INSERT INTO remote_identities (address, identity_key, first_seen_at, updated_at)
@@ -558,16 +602,36 @@ impl KeyStore {
     ///
     /// This is NOT how sessions are invalidated — identity changes and peer
     /// device-roster changes ARCHIVE via `SessionRecord::archive_current_state`
-    /// so in-transit messages under the old ratchet still decrypt. The one
-    /// production use is the convergence rollback in `services/signal/actor.rs`:
-    /// removing a candidate session that did not exist before the attempt.
+    /// so in-transit messages under the old ratchet still decrypt. No
+    /// production caller: the live proofs (`tests/validated.rs`) use it to
+    /// simulate a device that lost its session.
     pub fn delete_session(&self, address: &str) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
-        let rows_affected = conn.execute(
-            "DELETE FROM sessions WHERE address = ?1",
-            params![address],
-        )?;
+        let rows_affected =
+            conn.execute("DELETE FROM sessions WHERE address = ?1", params![address])?;
         Ok(rows_affected > 0)
+    }
+
+    /// Mesh sessions are local-only and can be destroyed on account removal.
+    /// The online ratchets have a different address format and are untouched.
+    pub fn delete_mesh_sessions(&self, owner: Option<&str>) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        match owner {
+            Some(owner) => {
+                let prefix = format!("mesh:{owner}:");
+                conn.execute(
+                    "DELETE FROM sessions WHERE substr(address, 1, length(?1)) = ?1",
+                    params![prefix],
+                )?;
+            }
+            None => {
+                conn.execute(
+                    "DELETE FROM sessions WHERE substr(address, 1, 5) = 'mesh:'",
+                    [],
+                )?;
+            }
+        }
+        Ok(())
     }
 
     // `delete_sessions_for_user` is deliberately GONE. It was the §12 defect:
@@ -578,14 +642,31 @@ impl KeyStore {
     // `SessionRecord::archive_current_state`. If bulk deletion seems needed
     // again, it almost certainly wants to be an archive.
 
+    /// Peers whose ratchets must be rebound when our local device is replaced.
+    pub fn session_peer_ids(&self) -> Result<Vec<String>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT substr(address, 1, instr(address, ':') - 1)
+             FROM sessions WHERE instr(address, ':') > 1
+               AND substr(address, 1, 5) <> 'mesh:' ORDER BY 1",
+        )?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StorageError::Database)
+    }
+
     /// List all sessions for a user (all devices) as `(address, record)` pairs.
     ///
     /// Address format is "user_id:device_id", so we match on "user_id:%". Used
     /// to archive every device session when the account's identity key changes.
-    pub fn list_sessions_for_user(&self, user_id: &str) -> Result<Vec<(String, Vec<u8>)>, StorageError> {
+    pub fn list_sessions_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<(String, Vec<u8>)>, StorageError> {
         let conn = self.db.connection()?;
         let pattern = format!("{}:%", user_id);
-        let mut stmt = conn.prepare("SELECT address, record FROM sessions WHERE address LIKE ?1")?;
+        let mut stmt =
+            conn.prepare("SELECT address, record FROM sessions WHERE address LIKE ?1")?;
         let rows = stmt.query_map(params![pattern], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
         })?;
@@ -615,9 +696,8 @@ impl KeyStore {
         );
 
         let conn = self.db.connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT record FROM sender_keys WHERE sender = ?1 AND distribution_id = ?2",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT record FROM sender_keys WHERE sender = ?1 AND distribution_id = ?2")?;
 
         let result: Result<Vec<u8>, _> =
             stmt.query_row(params![sender, distribution_id], |row| row.get(0));
@@ -754,7 +834,10 @@ impl KeyStore {
 
     /// Increment message count for a sender key.
     /// Returns the new message count.
-    pub fn increment_sender_key_message_count(&self, channel_id: &str) -> Result<i64, StorageError> {
+    pub fn increment_sender_key_message_count(
+        &self,
+        channel_id: &str,
+    ) -> Result<i64, StorageError> {
         let conn = self.db.connection()?;
         let now = Utc::now().to_rfc3339();
 
@@ -765,18 +848,23 @@ impl KeyStore {
             params![channel_id, now],
         )?;
 
-        let count: i64 = conn.query_row(
-            "SELECT message_count FROM sender_key_metadata WHERE channel_id = ?1",
-            params![channel_id],
-            |row| row.get(0),
-        ).unwrap_or(0);
+        let count: i64 = conn
+            .query_row(
+                "SELECT message_count FROM sender_key_metadata WHERE channel_id = ?1",
+                params![channel_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
 
         Ok(count)
     }
 
     /// Check if a sender key needs rotation based on age or message count.
-    /// Returns (needs_rotation, reason) where reason is "age", "messages", or empty.
-    pub fn should_rotate_sender_key(&self, channel_id: &str) -> Result<(bool, &'static str), StorageError> {
+    /// Returns (needs_rotation, reason); missing or invalid metadata rotates.
+    pub fn should_rotate_sender_key(
+        &self,
+        channel_id: &str,
+    ) -> Result<(bool, &'static str), StorageError> {
         let conn = self.db.connection()?;
 
         let result: Result<(String, i64), _> = conn.query_row(
@@ -792,19 +880,21 @@ impl KeyStore {
                     return Ok((true, "messages"));
                 }
 
-                // Check age
-                if let Ok(created_at) = chrono::DateTime::parse_from_rfc3339(&created_at_str) {
-                    let age = Utc::now().signed_duration_since(created_at.with_timezone(&Utc));
-                    if age.num_seconds() >= Self::SENDER_KEY_MAX_AGE_SECS {
-                        return Ok((true, "age"));
-                    }
+                // Unreadable age cannot prove the key is within its lifetime.
+                let Ok(created_at) = chrono::DateTime::parse_from_rfc3339(&created_at_str) else {
+                    return Ok((true, "invalid age"));
+                };
+                let age = Utc::now().signed_duration_since(created_at.with_timezone(&Utc));
+                if age.num_seconds() >= Self::SENDER_KEY_MAX_AGE_SECS {
+                    return Ok((true, "age"));
                 }
 
                 Ok((false, ""))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
-                // No metadata means no key exists, so no rotation needed
-                Ok((false, ""))
+                // The sender-key record can outlive a failed metadata insert.
+                // Rotation is safe even when no sender-key record exists yet.
+                Ok((true, "metadata missing"))
             }
             Err(e) => Err(StorageError::Database(e)),
         }
@@ -812,7 +902,10 @@ impl KeyStore {
 
     /// Get sender key metadata for a channel.
     /// Returns (created_at, message_count) or None if not found.
-    pub fn get_sender_key_metadata(&self, channel_id: &str) -> Result<Option<(String, i64)>, StorageError> {
+    pub fn get_sender_key_metadata(
+        &self,
+        channel_id: &str,
+    ) -> Result<Option<(String, i64)>, StorageError> {
         let conn = self.db.connection()?;
 
         let result: Result<(String, i64), _> = conn.query_row(
@@ -1033,5 +1126,172 @@ impl KeyStore {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Database(e)),
         }
+    }
+}
+
+impl KeyStore {
+    /// Internal receive CAS read; callers use fixed schema identifiers only.
+    pub(crate) fn receive_read(
+        &self,
+        table: &'static str,
+        key: &str,
+        column: &'static str,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        let conn = self.db.connection()?;
+        Self::receive_read_with_conn(&conn, table, key, column)
+    }
+    fn receive_read_with_conn(
+        conn: &rusqlite::Connection,
+        table: &str,
+        key: &str,
+        column: &str,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        use rusqlite::OptionalExtension;
+        let key_column = match (table, column) {
+            ("sessions", "record") | ("remote_identities", "identity_key") => "address",
+            ("settings", "CAST(value AS BLOB)") if key == "auth.current_user_id" => "key",
+            ("prekeys" | "signed_prekeys" | "kyber_prekeys", "record")
+            | ("local_identity", "identity_key_pair" | "CAST(registration_id AS BLOB)") => "id",
+            _ => {
+                return Err(StorageError::InvalidData(
+                    "invalid receive observation".into(),
+                ));
+            }
+        };
+        Ok(conn
+            .query_row(
+                &format!("SELECT {column} FROM {table} WHERE {key_column}=?1"),
+                [key],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+    pub fn receive_artifact(
+        &self,
+        key: &crate::storage::receive_artifact::ReceiveKey,
+        digest: &[u8],
+    ) -> Result<Option<crate::storage::receive_artifact::ReceiveArtifact>, StorageError> {
+        let conn = self.db.connection()?;
+        Self::check_receive_binding(&conn, key)?;
+        crate::storage::receive_artifact::load(&conn, key, digest)
+    }
+    pub fn pending_receive_artifacts(
+        &self,
+        account: &str,
+        device: u32,
+        limit: usize,
+    ) -> Result<Vec<crate::storage::receive_artifact::ReceiveArtifact>, StorageError> {
+        let conn = self.db.connection()?;
+        crate::storage::receive_artifact::list_pending(&conn, account, device, limit)
+    }
+    fn check_receive_binding(
+        conn: &rusqlite::Connection,
+        key: &crate::storage::receive_artifact::ReceiveKey,
+    ) -> Result<(), StorageError> {
+        key.validate()?;
+        let account: String = conn.query_row(
+            "SELECT value FROM settings WHERE key=?1",
+            [crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID],
+            |r| r.get(0),
+        )?;
+        let device: String = conn.query_row(
+            "SELECT value FROM settings WHERE key=?1",
+            [crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID],
+            |r| r.get(0),
+        )?;
+        if serde_json::from_str::<String>(&account).ok().as_deref()
+            != Some(key.local_account.as_str())
+            || serde_json::from_str::<u32>(&device).ok() != Some(key.local_device)
+        {
+            return Err(StorageError::InvalidData(
+                "receive account/device changed".into(),
+            ));
+        }
+        Ok(())
+    }
+    /// Caller must have observed upstream ACK success for this exact binding.
+    pub fn acknowledge_receive_artifact(
+        &self,
+        key: &crate::storage::receive_artifact::ReceiveKey,
+        digest: &[u8],
+    ) -> Result<(), StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        crate::storage::receive_artifact::mark_acknowledged(&tx, key, digest)?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub(crate) fn check_receive_capacity(&self) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        crate::storage::receive_artifact::check_capacity(&conn)
+    }
+    pub(crate) fn receive_kyber_used(
+        &self,
+        kyber: u32,
+        ec: u32,
+        base: &[u8],
+    ) -> Result<bool, StorageError> {
+        Ok(self.db.connection()?.query_row("SELECT EXISTS(SELECT 1 FROM kyber_prekey_usage WHERE kyber_prekey_id=?1 AND ec_prekey_id=?2 AND base_key=?3)",params![kyber,ec,base],|r|r.get(0))?)
+    }
+    /// Commit every libsignal receive mutation and authenticated artifact together.
+    /// Never call public KeyStore writers while holding this connection guard.
+    pub(crate) fn commit_receive(
+        &self,
+        key: &crate::storage::receive_artifact::ReceiveKey,
+        changes: &crate::storage::receive_artifact::ReceiveChanges,
+        artifact: Option<&crate::storage::receive_artifact::ReceiveArtifact>,
+    ) -> Result<Option<crate::storage::receive_artifact::ReceiveArtifact>, StorageError> {
+        use crate::storage::receive_artifact;
+        key.validate()?;
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        Self::check_receive_binding(&tx, key)?;
+        if let Some(a) = artifact {
+            if let Some(existing) = receive_artifact::load(&tx, key, &a.digest)? {
+                return Ok(Some(existing));
+            }
+        }
+        if artifact.is_some() {
+            receive_artifact::check_capacity(&tx)?;
+            receive_artifact::reclaim_acknowledged(&tx)?;
+        }
+        for observed in &changes.observed {
+            if Self::receive_read_with_conn(&tx, observed.table, &observed.key, observed.column)?
+                != observed.value
+            {
+                return Err(StorageError::InvalidData(
+                    "Signal receive base state changed before commit".into(),
+                ));
+            }
+        }
+        let now = Utc::now().to_rfc3339();
+        for (address, identity) in &changes.identities {
+            tx.execute("INSERT INTO remote_identities(address,identity_key,first_seen_at,updated_at) VALUES(?1,?2,?3,?3) ON CONFLICT(address) DO UPDATE SET identity_key=excluded.identity_key,updated_at=excluded.updated_at",params![address,identity,now])?;
+        }
+        for (id, record) in &changes.signed {
+            tx.execute("INSERT INTO signed_prekeys(id,record,created_at) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET record=excluded.record,created_at=excluded.created_at",params![id,record,now])?;
+        }
+        for (id, record) in &changes.kyber {
+            tx.execute("INSERT INTO kyber_prekeys(id,record,created_at) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET record=excluded.record,created_at=excluded.created_at",params![id,record,now])?;
+        }
+        for (kyber, ec, base) in &changes.usage {
+            // Unique key is authoritative: never ignore reused base-key usage.
+            tx.execute("INSERT INTO kyber_prekey_usage(kyber_prekey_id,ec_prekey_id,base_key,used_at) VALUES(?1,?2,?3,?4)",params![kyber,ec,base,now])?;
+        }
+        for (id, record) in &changes.prekeys {
+            if let Some(record) = record {
+                tx.execute("INSERT INTO prekeys(id,record,created_at) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET record=excluded.record,created_at=excluded.created_at",params![id,record,now])?;
+            } else {
+                tx.execute("DELETE FROM prekeys WHERE id=?1", [id])?;
+            }
+        }
+        for (address, record) in &changes.sessions {
+            tx.execute("INSERT INTO sessions(address,record,updated_at) VALUES(?1,?2,?3) ON CONFLICT(address) DO UPDATE SET record=excluded.record,updated_at=excluded.updated_at",params![address,record,now])?;
+        }
+        if let Some(a) = artifact {
+            receive_artifact::insert(&tx, a)?;
+        }
+        tx.commit()?;
+        Ok(artifact.cloned())
     }
 }

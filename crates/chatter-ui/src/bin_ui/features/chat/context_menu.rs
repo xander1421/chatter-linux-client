@@ -1,11 +1,13 @@
 //! Context menu callback for messages.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::UserId;
+use chatter_core::domain::message::MessageMenu;
 use chatter_core::state::ActiveConversation;
 
 use crate::MainWindow;
@@ -13,10 +15,12 @@ use crate::MainWindow;
 /// Wire more-clicked callback to show context menu.
 /// Uses Signal-style (sender_id, timestamp_ns) for message identification.
 pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    wire_message_info(window, ui_ctx);
     let ui_ctx = Arc::clone(ui_ctx);
     let weak_window = window.as_weak();
+    let request_serial = Arc::new(AtomicU64::new(0));
 
-    window.on_more_clicked(move |sender_id: SharedString, timestamp_ns: SharedString, click_x: f32, click_y: f32| {
+    window.global::<crate::ChatPane>().on_more_clicked(move |sender_id: SharedString, timestamp_ns: SharedString, click_x: f32, click_y: f32| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
         let ui_ctx = Arc::clone(&ui_ctx);
@@ -24,14 +28,25 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let menu_x = click_x;
         let menu_y = click_y;
 
-        let conversation = ui_ctx.chat_state().active_conversation();
+        let conversation = ui_ctx.active_conversation();
         if matches!(conversation, ActiveConversation::None) {
             return;
         }
+        let serial = request_serial.fetch_add(1, Ordering::SeqCst) + 1;
+        let request_serial = request_serial.clone();
+        // The menu is for this session and conversation: a lookup that
+        // finishes after a sign-out or another conversation opened must not
+        // publish a menu (whose Edit would then key the new conversation
+        // with the old author/clock).
+        let owner =
+            crate::bin_ui::features::history_owner::HistoryOwner::capture(&ui_ctx, conversation);
 
         let handle = ui_ctx.conversation(conversation);
 
         tokio::spawn(async move {
+            if !owner.is_current() {
+                return;
+            }
             let target_sender_id: UserId = match sender_id_str.parse() {
                 Ok(id) => id,
                 Err(e) => {
@@ -47,75 +62,35 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            let is_own_message = match handle.is_own_message(&target_sender_id, target_sent_timestamp) {
-                Ok(v) => v,
+            let menu = match handle.message_menu(&target_sender_id, target_sent_timestamp) {
+                Ok(menu) => menu,
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to look up message for context menu");
+                    crate::run_history_ui!(weak, owner, |w| {
+                        if request_serial.load(Ordering::SeqCst) == serial {
+                            w.set_toast_message("Message actions are unavailable right now.".into());
+                            w.set_toast_variant("error".into());
+                            w.set_toast_visible(true);
+                        }
+                    });
                     return;
                 }
             };
 
-            // Capability decision (DM-any vs own-only) lives in core.
-            let can_delete_for_everyone = handle
-                .can_delete_for_everyone(&target_sender_id, target_sent_timestamp)
-                .unwrap_or(is_own_message);
-
-            if conversation.is_anon() {
-                // Anon conversations: get pin state and attachments from UI model
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        let (is_pinned, has_attachments) = find_message_ui_state(
-                            &w, &sender_id_str, &timestamp_ns_str,
-                        );
-                        set_context_menu(&w, sender_id_str, timestamp_ns_str, is_own_message, can_delete_for_everyone, is_pinned, has_attachments, menu_x, menu_y);
-                    }
-                });
-            } else {
-                // DM/Channel: get pin state and attachments from service data
-                let msg = match handle.conversation() {
-                    ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
-                        match ui_ctx.get_message_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
-                            Some(msg) => msg,
-                            None => {
-                                tracing::error!("Message not found for context menu");
-                                return;
-                            }
-                        }
-                    }
-                    _ => return,
-                };
-
-                let is_pinned = msg.is_pinned;
-                let has_attachments = !msg.attachments.is_empty();
-
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        set_context_menu(&w, sender_id_str, timestamp_ns_str, is_own_message, can_delete_for_everyone, is_pinned, has_attachments, menu_x, menu_y);
-                    }
-                });
-            }
+            crate::run_history_ui!(weak, owner, |w| {
+                if request_serial.load(Ordering::SeqCst) == serial {
+                    set_context_menu(&w, sender_id_str, timestamp_ns_str, menu, menu_x, menu_y);
+                }
+            });
         });
     });
-}
-
-/// Find pin state and attachment info from the UI message model.
-fn find_message_ui_state(w: &MainWindow, sender_id: &str, timestamp_ns: &str) -> (bool, bool) {
-    let model = w.get_messages();
-    for i in 0..model.row_count() {
-        if let Some(m) = model.row_data(i) {
-            if m.sender_id.as_str() == sender_id && m.timestamp_ns.as_str() == timestamp_ns {
-                return (m.is_pinned, m.has_attachments);
-            }
-        }
-    }
-    (false, false)
 }
 
 /// Resolve the message id for a (sender_id, timestamp_ns) pair from the UI
 /// model. The menu is keyed Signal-style, but "Reply in Thread" and "Select"
 /// are keyed by message id, so the menu has to carry both.
 fn find_message_id(w: &MainWindow, sender_id: &str, timestamp_ns: &str) -> String {
-    let model = w.get_messages();
+    let model = w.global::<crate::ChatPane>().get_messages();
     for i in 0..model.row_count() {
         if let Some(m) = model.row_data(i) {
             if m.sender_id.as_str() == sender_id && m.timestamp_ns.as_str() == timestamp_ns {
@@ -127,25 +102,77 @@ fn find_message_id(w: &MainWindow, sender_id: &str, timestamp_ns: &str) -> Strin
 }
 
 /// Set all context menu properties on the window.
+///
+/// Flags come from [`MessageMenu`] and are written before the menu is shown.
+/// The window bools stay in sync for anything that still reads them; the menu
+/// itself renders `MessageMenuActions`.
 fn set_context_menu(
     w: &MainWindow,
     sender_id: String,
     timestamp_ns: String,
-    is_own_message: bool,
-    can_delete_for_everyone: bool,
-    is_pinned: bool,
-    has_attachments: bool,
+    menu: MessageMenu,
     menu_x: f32,
     menu_y: f32,
 ) {
-    w.set_context_menu_message_id(find_message_id(w, &sender_id, &timestamp_ns).into());
-    w.set_context_menu_sender_id(sender_id.into());
-    w.set_context_menu_timestamp_ns(timestamp_ns.into());
-    w.set_context_menu_is_own_message(is_own_message);
-    w.set_context_menu_can_delete_for_everyone(can_delete_for_everyone);
-    w.set_context_menu_is_pinned(is_pinned);
-    w.set_context_menu_has_attachments(has_attachments);
-    w.set_context_menu_x(menu_x);
-    w.set_context_menu_y(menu_y);
-    w.set_context_menu_visible(true);
+    let actions = menu.actions;
+    let flags = w.global::<crate::MessageMenuActions>();
+    flags.set_resend(actions.resend);
+    flags.set_react(actions.react);
+    flags.set_reply(actions.reply);
+    flags.set_edit(actions.edit);
+    flags.set_pin(actions.pin);
+    flags.set_pinned(menu.pinned);
+    flags.set_delete_for_everyone(actions.delete_for_everyone);
+    flags.set_delete_for_me(actions.delete_for_me);
+    flags.set_forward(actions.forward);
+    flags.set_copy(actions.copy);
+    flags.set_download(actions.download);
+    flags.set_info(actions.info);
+    flags.set_select(actions.select);
+
+    w.global::<crate::ChatPane>()
+        .set_context_menu_message_id(find_message_id(w, &sender_id, &timestamp_ns).into());
+    w.global::<crate::ChatPane>()
+        .set_context_menu_sender_id(sender_id.into());
+    w.global::<crate::ChatPane>()
+        .set_context_menu_timestamp_ns(timestamp_ns.into());
+    w.global::<crate::ChatPane>().set_context_menu_x(menu_x);
+    w.global::<crate::ChatPane>().set_context_menu_y(menu_y);
+    w.global::<crate::ChatPane>().set_context_menu_visible(true);
+}
+
+fn wire_message_info(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let client = ui_ctx.clone();
+    window.global::<crate::MessageInfo>().on_open(move |id| {
+        let Ok(message_id) = id.parse() else { return };
+        let Some(window) = weak.upgrade() else { return };
+        let info = window.global::<crate::MessageInfo>();
+        info.set_message_id(id.clone());
+        info.set_details("Loading delivery details…".into());
+        super::super::back::push(&window, "message-info");
+        let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(
+            &client,
+            client.active_conversation(),
+        );
+        let client = client.clone();
+        let weak = weak.clone();
+        tokio::task::spawn_blocking(move || {
+            let details = match client.message_receipt_info(message_id) {
+                Ok(details) => details,
+                Err(error) => {
+                    tracing::warn!(%error, "Could not load message delivery details");
+                    "Could not load delivery details.".to_owned()
+                }
+            };
+            crate::run_history_ui!(weak, owner, |w| {
+                let info = w.global::<crate::MessageInfo>();
+                if w.get_active_modal().as_str() == "message-info"
+                    && info.get_message_id() == id
+                {
+                    info.set_details(details.into());
+                }
+            });
+        });
+    });
 }

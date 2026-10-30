@@ -9,9 +9,7 @@
 //! anon-DM-only bug where raw JSON was stored as `MessageContent::Text`).
 
 use crate::domain::ids::{ChannelId, MessageId};
-use crate::domain::message::{
-    ConversationType, Message, MessageContent, MixedContent,
-};
+use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent};
 use crate::domain::{AttachmentId, UserId};
 use crate::inbox::handlers::base_anon::QuoteContext;
 use crate::util::time::TimestampNanos;
@@ -27,13 +25,12 @@ pub(crate) fn message_content_from_text_and_attachments(
     attachment_ids: &[AttachmentId],
 ) -> MessageContent {
     match (!text.is_empty(), !attachment_ids.is_empty()) {
-        (true, true) => MessageContent::Mixed(MixedContent::new(
-            text.to_string(),
-            attachment_ids.to_vec(),
-        )),
-        (false, true) => MessageContent::Mixed(MixedContent::attachments_only(
-            attachment_ids.to_vec(),
-        )),
+        (true, true) => {
+            MessageContent::Mixed(MixedContent::new(text.to_string(), attachment_ids.to_vec()))
+        }
+        (false, true) => {
+            MessageContent::Mixed(MixedContent::attachments_only(attachment_ids.to_vec()))
+        }
         _ => MessageContent::Text(text.to_string()),
     }
 }
@@ -89,19 +86,20 @@ pub(crate) fn build_anon_message(
         .to_datetime()
         .unwrap_or_else(chrono::Utc::now);
 
-    let (reply_to, reply_to_author_id, reply_to_text, reply_to_thumbnail, reply_to_thumbnail_mime) = match quote {
-        Some(q) => (
-            q.reply_to,
-            q.reply_to_author_id,
-            q.reply_to_text,
-            q.reply_to_thumbnail,
-            q.reply_to_thumbnail_mime,
-        ),
-        None => (None, None, None, None, None),
-    };
+    let (reply_to, reply_to_author_id, reply_to_text, reply_to_thumbnail, reply_to_thumbnail_mime) =
+        match quote {
+            Some(q) => (
+                q.reply_to,
+                q.reply_to_author_id,
+                q.reply_to_text,
+                q.reply_to_thumbnail,
+                q.reply_to_thumbnail_mime,
+            ),
+            None => (None, None, None, None, None),
+        };
 
     Message {
-        id: MessageId::new(),
+        id: MessageId::from_secret_sender_timestamp(&conversation_id, &sender_id, sent_at),
         conversation_id,
         conversation_type,
         sender_id: Some(sender_id),
@@ -128,5 +126,6 @@ pub(crate) fn build_anon_message(
         mentioned_integrations: Vec::new(),
         targets_ai_bot: false,
         delivery_status: String::new(),
+        failure_reason: None,
     }
 }

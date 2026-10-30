@@ -15,37 +15,58 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_go_to_register(window);
     wire_go_to_login(window);
     wire_go_to_recovery(window);
-    wire_go_to_link_device(window);
+    wire_go_to_link_device(window, ui_ctx);
     wire_continue_without_account(window, ui_ctx);
     wire_welcome(window);
+}
+
+fn clear_auth_secrets(window: &MainWindow) {
+    let auth = window.global::<crate::AuthFlow>();
+    auth.set_login_password("".into());
+    auth.set_login_pin("".into());
+    auth.set_register_password("".into());
+    auth.set_register_confirm_password("".into());
+    auth.set_register_pin("".into());
+    auth.set_recovery_code("".into());
+    auth.set_recovery_new_password("".into());
+    auth.set_recovery_confirm_password("".into());
+    auth.set_recovery_new_pin("".into());
 }
 
 /// Welcome page (shown after first registration): all three buttons land in
 /// the main view, two of them with a modal already open.
 fn wire_welcome(window: &MainWindow) {
     let weak = window.as_weak();
-    window.on_welcome_get_started(move || {
-        if let Some(w) = weak.upgrade() {
-            w.set_current_view("main".into());
-        }
-    });
+    window
+        .global::<crate::AuthFlow>()
+        .on_welcome_get_started(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_current_view("main".into());
+            }
+        });
 
     let weak = window.as_weak();
-    window.on_welcome_add_friends(move || {
-        if let Some(w) = weak.upgrade() {
-            w.set_current_view("main".into());
-            w.set_friends_modal_tab("find".into());
-            w.set_active_modal("friends".into());
-        }
-    });
+    window
+        .global::<crate::AuthFlow>()
+        .on_welcome_add_friends(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_current_view("main".into());
+                w.global::<crate::ModalHostState>()
+                    .set_friends_modal_tab("find".into());
+                w.global::<crate::SidebarPane>()
+                    .set_active_tab("contacts".into());
+            }
+        });
 
     let weak = window.as_weak();
-    window.on_welcome_browse_channels(move || {
-        if let Some(w) = weak.upgrade() {
-            w.set_current_view("main".into());
-            w.set_active_modal("create-channel".into());
-        }
-    });
+    window
+        .global::<crate::AuthFlow>()
+        .on_welcome_browse_channels(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_current_view("main".into());
+                crate::bin_ui::features::back::push(&w, "create-channel");
+            }
+        });
 }
 
 /// Enter the main view with no account.
@@ -64,62 +85,95 @@ fn wire_continue_without_account(window: &MainWindow, ui_ctx: &Arc<ChatterClient
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
-    window.on_continue_without_account(move || {
-        let Some(w) = weak_window.upgrade() else { return };
+    window
+        .global::<crate::AuthFlow>()
+        .on_continue_without_account(move || {
+            let Some(w) = weak_window.upgrade() else {
+                return;
+            };
 
-        if !ui_ctx.has_account_free_surfaces() {
-            // Nothing to go to. Say so where the user is looking instead of
-            // moving them to an empty room.
-            tracing::warn!("continue-without-account: no account-free surfaces are up");
-            w.set_account_free_surfaces(false);
-            return;
-        }
+            if !ui_ctx.has_account_free_surfaces() {
+                // Nothing to go to. Say so where the user is looking instead of
+                // moving them to an empty room.
+                tracing::warn!("continue-without-account: no account-free surfaces are up");
+                w.set_account_free_surfaces(false);
+                return;
+            }
 
-        tracing::info!("entering the main view with no account (mesh only)");
-        w.set_is_signed_in(false);
-        w.set_current_view("main".into());
-    });
+            tracing::info!("entering the main view with no account (mesh only)");
+            w.global::<crate::AuthFlow>().set_is_signed_in(false);
+            w.set_current_view("main".into());
+        });
 }
 
-fn wire_go_to_link_device(window: &MainWindow) {
+fn wire_go_to_link_device(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    window.on_go_to_link_device(move || {
-        if let Some(w) = weak_window.upgrade() {
-            w.set_current_view("link-device".into());
-            w.set_link_device_error("".into());
-            w.set_link_device_url("".into());
-            w.set_link_device_status("Tap \"Generate QR\" to start.".into());
-            w.set_link_device_active(false);
-        }
-    });
+    let ui_ctx = ui_ctx.clone();
+    window
+        .global::<crate::AuthFlow>()
+        .on_go_to_link_device(move || {
+            if let Some(w) = weak_window.upgrade() {
+                clear_auth_secrets(&w);
+                w.set_current_view("link-device".into());
+                match ui_ctx.link_device_has_local_identity() {
+                    Ok(has_identity) => {
+                        w.global::<crate::AuthFlow>()
+                            .set_link_device_has_local_identity(has_identity);
+                        w.global::<crate::AuthFlow>()
+                            .set_link_device_error("".into());
+                    }
+                    Err(error) => {
+                        w.global::<crate::AuthFlow>()
+                            .set_link_device_has_local_identity(false);
+                        tracing::warn!("Could not check local identity before linking: {error}");
+                        w.global::<crate::AuthFlow>().set_link_device_error(
+                            "Could not check this device's saved identity. Try again.".into(),
+                        );
+                    }
+                }
+                w.global::<crate::AuthFlow>().set_link_device_url("".into());
+                w.global::<crate::AuthFlow>().set_link_device_qr(slint::Image::default());
+                w.global::<crate::AuthFlow>()
+                    .set_link_device_status("Tap \"Generate QR\" to start.".into());
+                w.global::<crate::AuthFlow>().set_link_device_active(false);
+            }
+        });
 }
 
 fn wire_go_to_register(window: &MainWindow) {
     let weak_window = window.as_weak();
 
-    window.on_go_to_register(move || {
-        if let Some(w) = weak_window.upgrade() {
-            w.set_current_view("register".into());
-            // Clear register form
-            w.set_register_display_name("".into());
-            w.set_register_username("".into());
-            w.set_register_password("".into());
-            w.set_register_confirm_password("".into());
-            w.set_register_error("".into());
-        }
-    });
+    window
+        .global::<crate::AuthFlow>()
+        .on_go_to_register(move || {
+            if let Some(w) = weak_window.upgrade() {
+                clear_auth_secrets(&w);
+                w.set_current_view("register".into());
+                // Clear register form
+                w.global::<crate::AuthFlow>()
+                    .set_register_display_name("".into());
+                w.global::<crate::AuthFlow>()
+                    .set_register_username("".into());
+                w.global::<crate::AuthFlow>()
+                    .set_register_password("".into());
+                w.global::<crate::AuthFlow>()
+                    .set_register_confirm_password("".into());
+                w.global::<crate::AuthFlow>().set_register_error("".into());
+            }
+        });
 }
 
 fn wire_go_to_login(window: &MainWindow) {
     let weak_window = window.as_weak();
 
-    window.on_go_to_login(move || {
+    window.global::<crate::AuthFlow>().on_go_to_login(move || {
         if let Some(w) = weak_window.upgrade() {
             w.set_current_view("login".into());
+            clear_auth_secrets(&w);
             // Clear login form
-            w.set_login_username("".into());
-            w.set_login_password("".into());
-            w.set_login_error("".into());
+            w.global::<crate::AuthFlow>().set_login_username("".into());
+            w.global::<crate::AuthFlow>().set_login_password("".into());
+            w.global::<crate::AuthFlow>().set_login_error("".into());
         }
     });
 }
@@ -127,18 +181,25 @@ fn wire_go_to_login(window: &MainWindow) {
 fn wire_go_to_recovery(window: &MainWindow) {
     let weak_window = window.as_weak();
 
-    window.on_go_to_recovery(move || {
-        if let Some(w) = weak_window.upgrade() {
-            w.set_current_view("recovery".into());
-            // Clear recovery form
-            w.set_recovery_username("".into());
-            w.set_recovery_code("".into());
-            w.set_recovery_new_password("".into());
-            w.set_recovery_confirm_password("".into());
-            w.set_recovery_new_pin("".into());
-            w.set_recovery_error("".into());
-            w.set_recovery_success("".into());
-        }
-    });
+    window
+        .global::<crate::AuthFlow>()
+        .on_go_to_recovery(move || {
+            if let Some(w) = weak_window.upgrade() {
+                clear_auth_secrets(&w);
+                w.set_current_view("recovery".into());
+                // Clear recovery form
+                w.global::<crate::AuthFlow>()
+                    .set_recovery_username("".into());
+                w.global::<crate::AuthFlow>().set_recovery_code("".into());
+                w.global::<crate::AuthFlow>()
+                    .set_recovery_new_password("".into());
+                w.global::<crate::AuthFlow>()
+                    .set_recovery_confirm_password("".into());
+                w.global::<crate::AuthFlow>()
+                    .set_recovery_new_pin("".into());
+                w.global::<crate::AuthFlow>().set_recovery_error("".into());
+                w.global::<crate::AuthFlow>()
+                    .set_recovery_success("".into());
+            }
+        });
 }
-

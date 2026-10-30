@@ -205,11 +205,11 @@ mod tests {
             created_at: 0,
             kind: 20000,
             tags: vec![
-                vec![],                                   // empty tag
-                vec!["g".into()],                         // name with no value
-                vec!["g".into(), "dr5rsj7".into()],       // the real one
+                vec![],                             // empty tag
+                vec!["g".into()],                   // name with no value
+                vec!["g".into(), "dr5rsj7".into()], // the real one
                 vec!["n".into(), "alice".into()],
-                vec!["g".into(), "dr5".into()],           // repeated name
+                vec!["g".into(), "dr5".into()], // repeated name
             ],
             content: String::new(),
             sig: None,

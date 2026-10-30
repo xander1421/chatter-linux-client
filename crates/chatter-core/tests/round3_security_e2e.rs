@@ -6,16 +6,19 @@
 //!
 //! Coverage:
 //!   - Finding #1 + #2: `ChannelRepository::get_membership` distinguishes
-//!     current members from non-members. The gate in
-//!     `services/gateway/routing.rs` consults exactly this primitive
-//!     (`process_sender_key_request`). The cleartext SKDM-install path
+//!     current members from non-members. The sender-key request gate
+//!     (`may_hold_sender_key`, `services/message/group.rs`) consults exactly
+//!     this primitive; cleartext requests are refused. The cleartext SKDM-install path
 //!     (`process_sender_key_distribution`) was removed in the H4 fix —
 //!     SKDMs now install only over the authenticated sealed-sender path
 //!     (`services/gateway/decryption.rs`).
 //!   - Finding #3 + #6: `ConversationKey::is_established` +
-//!     `their_ephemeral_public` together act as the bootstrap idempotency
-//!     marker AND the replay guard, exactly as
-//!     `mailbox/dm/bootstrap.rs::handle_incoming_bootstrap_inner` uses them.
+//!     `their_ephemeral_public` are the bootstrap idempotency marker. Replay
+//!     and forgery are stopped below the app layer: a bootstrap is accepted
+//!     only from Double-Ratchet plaintext under the sender's pinned identity
+//!     (libsignal rejects replayed ciphertexts), so
+//!     `handle_incoming_bootstrap_inner` accepts a new ephemeral from that
+//!     authenticated peer as a re-bootstrap (F53).
 //!   - Finding #4: `EphemeralCallKey::generate` + `generate_group_call_key`
 //!     are random per draw (covered by unit tests in
 //!     `crypto/call_key_provider.rs`; not re-tested here).
@@ -29,16 +32,14 @@ use std::sync::Arc;
 
 use chatter_core::crypto::SignalStore;
 use chatter_core::domain::ids::{ChannelId, UserId};
-use chatter_core::domain::{Channel, ChannelType, Membership, MemberRole, NotificationPreference};
+use chatter_core::domain::{Channel, ChannelType, MemberRole, Membership, NotificationPreference};
 use chatter_core::mailbox::dm::ConversationKey;
 use chatter_core::storage::repositories::channel_repo::ChannelRepository;
 use chatter_core::storage::{Database, KeyStore};
 
 use chrono::Utc;
-use libsignal_protocol::{
-    DeviceId, Direction, IdentityKeyPair, IdentityKeyStore, ProtocolAddress,
-};
-use rand::{rngs::StdRng, SeedableRng};
+use libsignal_protocol::{DeviceId, Direction, IdentityKeyPair, IdentityKeyStore, ProtocolAddress};
+use rand::{SeedableRng, rngs::StdRng};
 use tempfile::NamedTempFile;
 
 // ============================================================================
@@ -78,7 +79,7 @@ fn make_membership(channel_id: ChannelId, user_id: UserId) -> Membership {
 // #1 + #2 — channel-membership gate primitive
 // ============================================================================
 
-/// `process_sender_key_request` calls `channel_repo.get_membership(channel,
+/// `may_hold_sender_key` calls `channel_repo.get_membership(channel,
 /// peer)` and rejects when it returns `Ok(None)`. (The cleartext
 /// `process_sender_key_distribution` path was removed in the H4 fix.)
 /// Lock that primitive's behavior here.
@@ -91,7 +92,8 @@ fn round3_finding_1_2_membership_gate_distinguishes_member_from_non_member() {
     let mallory = UserId::new();
 
     repo.insert(&make_channel(channel_id)).unwrap();
-    repo.insert_membership(&make_membership(channel_id, alice)).unwrap();
+    repo.insert_membership(&make_membership(channel_id, alice))
+        .unwrap();
 
     // Member → Some
     let alice_m = repo.get_membership(&channel_id, &alice).unwrap();
@@ -117,8 +119,10 @@ fn round3_finding_2_membership_gate_drops_after_kick() {
     let bob = UserId::new();
 
     repo.insert(&make_channel(channel_id)).unwrap();
-    repo.insert_membership(&make_membership(channel_id, alice)).unwrap();
-    repo.insert_membership(&make_membership(channel_id, bob)).unwrap();
+    repo.insert_membership(&make_membership(channel_id, alice))
+        .unwrap();
+    repo.insert_membership(&make_membership(channel_id, bob))
+        .unwrap();
 
     // Bob in: gate would respond to his SenderKeyRequest.
     assert!(repo.get_membership(&channel_id, &bob).unwrap().is_some());
@@ -140,15 +144,15 @@ fn round3_finding_2_membership_gate_drops_after_kick() {
 // #3 + #6 — bootstrap idempotency + replay-guard primitive
 // ============================================================================
 
-/// `handle_incoming_bootstrap_inner` accepts a re-delivery of the same
-/// bootstrap envelope (idempotent) but rejects a different ephemeral against
-/// an established conversation.
+/// `handle_incoming_bootstrap_inner` treats a re-delivery of the same
+/// ephemeral as idempotent; a different ephemeral from the authenticated peer
+/// is a re-bootstrap that replaces the conversation secret.
 ///
-/// At the data-layer the guard is two checks against `ConversationKey`:
+/// Both rely on two `ConversationKey` properties:
 ///   1. `is_established()` returns true once the shared secret is derived,
-///   2. `their_ephemeral_public` matches the redelivered ephemeral.
+///   2. `their_ephemeral_public` records the ephemeral it was derived from.
 ///
-/// These tests pin those two properties so the gate logic can rely on them.
+/// These tests pin those two properties.
 #[test]
 fn round3_finding_3_6_unestablished_key_accepts_first_bootstrap() {
     let mut key = ConversationKey::new();
@@ -214,7 +218,7 @@ fn round3_finding_3_6_different_ephemeral_against_established_key_is_a_replay_si
 
 #[test]
 fn round3_finding_4_call_keys_are_random_per_draw() {
-    use chatter_core::crypto::call_key_provider::{generate_group_call_key, EphemeralCallKey};
+    use chatter_core::crypto::call_key_provider::{EphemeralCallKey, generate_group_call_key};
 
     // Two ephemeral call keys must differ - covered by the unit test in
     // crypto/call_key_provider.rs but re-asserted here as a public-API

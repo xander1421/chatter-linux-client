@@ -1,6 +1,7 @@
 //! Audio recorder.
 //!
-//! Voice message recording using cpal for audio input and hound for WAV encoding.
+//! Voice message capture using cpal. Desktop can save WAV; Android encodes
+//! the captured PCM with its native AAC codec.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
@@ -32,7 +33,7 @@ pub enum RecordingState {
 
 /// Audio recorder for voice messages.
 ///
-/// Uses cpal for microphone input and hound for WAV encoding.
+/// Uses cpal for microphone input and retains PCM for platform encoding.
 pub struct AudioRecorder {
     /// Input device.
     device: Device,
@@ -43,13 +44,16 @@ pub struct AudioRecorder {
     /// Current recording state.
     state: RecordingState,
     /// Sample buffer shared with recording callback.
-    samples: Arc<Mutex<Vec<f32>>>,
+    samples: Arc<Mutex<Vec<i16>>>,
     /// Sample rate of the recording.
     sample_rate: u32,
     /// Number of channels.
     channels: u16,
     /// When recording started (for duration tracking).
     start_time: Option<Instant>,
+    /// Next interleaved input sample to include in the live meter.
+    meter_cursor: usize,
+    meter_decay: f32,
 }
 
 impl AudioRecorder {
@@ -59,18 +63,23 @@ impl AudioRecorder {
     ///
     /// Returns an error if no input device is available.
     pub fn new() -> Result<Self, MediaError> {
+        if crate::system::null_audio() {
+            return Err(MediaError::RecordingError(
+                "audio devices disabled (CHATTER_NULL_AUDIO)".to_string(),
+            ));
+        }
         let host = cpal::default_host();
 
         let device = host.default_input_device().ok_or_else(|| {
             MediaError::RecordingError("no audio input device available".to_string())
         })?;
 
-        let supported_config = device
-            .default_input_config()
-            .map_err(|e| MediaError::RecordingError(format!("failed to get input config: {}", e)))?;
+        let supported_config = device.default_input_config().map_err(|e| {
+            MediaError::RecordingError(format!("failed to get input config: {}", e))
+        })?;
 
         let config: StreamConfig = supported_config.config();
-        let sample_rate = config.sample_rate.0;
+        let sample_rate = config.sample_rate;
         let channels = config.channels;
 
         Ok(Self {
@@ -82,6 +91,8 @@ impl AudioRecorder {
             sample_rate,
             channels,
             start_time: None,
+            meter_cursor: 0,
+            meter_decay: 0.0,
         })
     }
 
@@ -102,14 +113,15 @@ impl AudioRecorder {
             let mut samples = self.samples.lock().unwrap();
             samples.clear();
         }
+        self.meter_cursor = 0;
+        self.meter_decay = 0.0;
 
         let samples_clone = Arc::clone(&self.samples);
 
         // Get supported sample format
-        let supported_config = self
-            .device
-            .default_input_config()
-            .map_err(|e| MediaError::RecordingError(format!("failed to get input config: {}", e)))?;
+        let supported_config = self.device.default_input_config().map_err(|e| {
+            MediaError::RecordingError(format!("failed to get input config: {}", e))
+        })?;
 
         let err_fn = |err| {
             tracing::error!("Recording stream error: {}", err);
@@ -129,7 +141,7 @@ impl AudioRecorder {
             _ => {
                 return Err(MediaError::RecordingError(
                     "unsupported sample format".to_string(),
-                ))
+                ));
             }
         };
 
@@ -145,25 +157,56 @@ impl AudioRecorder {
         Ok(())
     }
 
+    /// Read the input captured since the previous meter frame. This runs on
+    /// the recording worker, never on the UI or CPAL callback thread.
+    pub fn take_live_level(&mut self) -> u8 {
+        let samples = self.samples.lock().unwrap();
+        let fresh = &samples[self.meter_cursor.min(samples.len())..];
+        let level = if fresh.is_empty() {
+            0.0
+        } else {
+            let energy = fresh.iter().map(|sample| {
+                let normalized = *sample as f32 / 32768.0;
+                normalized * normalized
+            }).sum::<f32>();
+            let rms = (energy / fresh.len() as f32).sqrt();
+            let peak = fresh
+                .iter()
+                .fold(0.0_f32, |peak, sample| peak.max((*sample as f32 / 32768.0).abs()));
+            // Android microphone speech can sit far below digital full scale.
+            // Compress the range before quantizing to 0..100 so quiet words
+            // still move the bars; true silence remains zero.
+            ((rms * 0.78 + peak * 0.22) * 8.0).sqrt().clamp(0.0, 1.0)
+        };
+        self.meter_cursor = samples.len();
+        self.meter_decay = level.max(self.meter_decay * 0.72);
+        (self.meter_decay * 100.0).round() as u8
+    }
+
     /// Builds an input stream for a specific sample type.
     fn build_input_stream<T>(
         &self,
-        samples: Arc<Mutex<Vec<f32>>>,
-        err_fn: impl Fn(cpal::StreamError) + Send + 'static,
+        samples: Arc<Mutex<Vec<i16>>>,
+        err_fn: impl Fn(cpal::Error) + Send + 'static,
     ) -> Result<Stream, MediaError>
     where
         T: cpal::SizedSample,
         f32: cpal::FromSample<T>,
     {
+        // Bound memory even if the recording worker is temporarily delayed.
+        let max_samples = self.sample_rate as usize
+            * self.channels as usize
+            * crate::services::voice_recording::MAX_RECORDING_SECONDS as usize;
         self.device
             .build_input_stream(
-                &self.config,
+                self.config,
                 move |data: &[T], _: &cpal::InputCallbackInfo| {
                     let mut samples = samples.lock().unwrap();
-                    for &sample in data {
-                        // Convert to f32 for storage using cpal's FromSample trait
+                    let remaining = max_samples.saturating_sub(samples.len());
+                    for &sample in data.iter().take(remaining) {
+                        // Keep the encoded PCM format as the only full recording buffer.
                         let f32_sample: f32 = cpal::Sample::from_sample(sample);
-                        samples.push(f32_sample);
+                        samples.push((f32_sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16);
                     }
                 },
                 err_fn,
@@ -214,7 +257,9 @@ impl AudioRecorder {
         match &self.state {
             RecordingState::Stopped { .. } => {}
             RecordingState::Idle => {
-                return Err(MediaError::RecordingError("no recording to save".to_string()));
+                return Err(MediaError::RecordingError(
+                    "no recording to save".to_string(),
+                ));
             }
             RecordingState::Recording { .. } => {
                 return Err(MediaError::RecordingError(
@@ -238,11 +283,8 @@ impl AudioRecorder {
         let mut writer = WavWriter::create(path, spec)
             .map_err(|e| MediaError::RecordingError(format!("failed to create WAV file: {}", e)))?;
 
-        // Convert f32 samples to i16 for WAV encoding
         for &sample in samples.iter() {
-            let clamped = sample.clamp(-1.0, 1.0);
-            let i16_sample = (clamped * i16::MAX as f32) as i16;
-            writer.write_sample(i16_sample).map_err(|e| {
+            writer.write_sample(sample).map_err(|e| {
                 MediaError::RecordingError(format!("failed to write sample: {}", e))
             })?;
         }
@@ -252,6 +294,25 @@ impl AudioRecorder {
             .map_err(|e| MediaError::RecordingError(format!("failed to finalize WAV: {}", e)))?;
 
         Ok(())
+    }
+
+    /// Move captured PCM to the platform encoder after stopping the stream.
+    pub fn take_pcm_i16(&mut self) -> Vec<i16> {
+        std::mem::take(&mut *self.samples.lock().unwrap())
+    }
+
+    /// Count captured interleaved samples without copying the recording.
+    pub fn sample_count(&self) -> usize {
+        self.samples.lock().unwrap().len()
+    }
+
+    /// Calculate the sent waveform from the canonical PCM buffer.
+    pub fn waveform_i16(&self) -> Vec<u8> {
+        let samples = self.samples.lock().unwrap();
+        crate::media::waveform::waveform_from_pcm(
+            &samples,
+            self.sample_rate as usize * self.channels as usize,
+        )
     }
 
     /// Cancels the current recording and discards samples.

@@ -6,7 +6,6 @@
 //! message size inference attacks. All messages within a bucket appear
 //! identical in size to the server.
 
-
 use crate::error::ContentError;
 
 /// Minimum padded content size for NDSS privacy.
@@ -66,7 +65,10 @@ impl ContentEncoder {
     /// Returns `ContentError::ContentTooLarge` if content exceeds 64KB.
     pub fn pad(content: &[u8]) -> Result<Vec<u8>, ContentError> {
         if content.len() > MAX_CONTENT_SIZE {
-            return Err(ContentError::ContentTooLarge(content.len(), MAX_CONTENT_SIZE));
+            return Err(ContentError::ContentTooLarge(
+                content.len(),
+                MAX_CONTENT_SIZE,
+            ));
         }
 
         let padded_size = Self::padded_size(content.len());
@@ -82,7 +84,12 @@ impl ContentEncoder {
         // Fill remaining with random bytes (not zeros)
         let padding_start = LENGTH_PREFIX_SIZE + content.len();
         if padding_start < padded_size {
-            {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut padded[padding_start..]).expect("OS CSPRNG must not fail");}
+            {
+                use rand::TryRngCore;
+                rand::rngs::OsRng
+                    .try_fill_bytes(&mut padded[padding_start..])
+                    .expect("OS CSPRNG must not fail");
+            }
         }
 
         Ok(padded)
@@ -323,11 +330,7 @@ mod tests {
             let content: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
             let padded = ContentEncoder::pad(&content).expect("pad should succeed");
             let unpadded = ContentEncoder::unpad(&padded).expect("unpad should succeed");
-            assert_eq!(
-                unpadded, content,
-                "roundtrip failed for size {}",
-                size
-            );
+            assert_eq!(unpadded, content, "roundtrip failed for size {}", size);
         }
     }
 

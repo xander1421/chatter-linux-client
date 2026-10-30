@@ -2,13 +2,13 @@
 //!
 //! Tests real-time event streams for messages, channels, users, and presence.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
-use std::time::Duration;
 use chatter_core::network::grpc::{ChannelClient, MessageClient, UserClient};
 use chatter_core::proto::chat_v1::{
-    message::content::Type as ContentType, message::Content, ChannelType, UserPresence,
+    ChannelType, UserPresence, message::Content, message::content::Type as ContentType,
 };
+use std::time::Duration;
 use tokio_stream::StreamExt;
 
 use common::*;
@@ -22,7 +22,7 @@ async fn test_message_stream_establishment() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create a channel first
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -33,10 +33,9 @@ async fn test_message_stream_establishment() {
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
             None,
             None,
-            None,
+            Some(membership::genesis(&user, true).1),
         )
         .await
         .expect("Failed to create channel");
@@ -64,7 +63,10 @@ async fn test_message_stream_establishment() {
     let mut stream = stream_result.unwrap();
     let first_event = tokio::time::timeout(Duration::from_secs(5), stream.next()).await;
 
-    assert!(first_event.is_ok(), "Should receive initial stream event within timeout");
+    assert!(
+        first_event.is_ok(),
+        "Should receive initial stream event within timeout"
+    );
 }
 
 #[tokio::test]
@@ -72,7 +74,7 @@ async fn test_message_stream_receives_new_messages() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create channel
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -83,10 +85,9 @@ async fn test_message_stream_receives_new_messages() {
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
             None,
             None,
-            None,
+            Some(membership::genesis(&user, true).1),
         )
         .await
         .expect("Failed to create channel");
@@ -150,7 +151,6 @@ async fn test_message_stream_receives_new_messages() {
                 None,
                 false,
                 None,
-                None, // crypto_options
                 vec![],
                 false,
                 vec![],
@@ -182,7 +182,10 @@ async fn test_channel_event_stream() {
     // Start streaming all channel events
     let stream_result = channel_client.stream_channel_events(None).await;
 
-    assert!(stream_result.is_ok(), "Should establish channel event stream");
+    assert!(
+        stream_result.is_ok(),
+        "Should establish channel event stream"
+    );
 
     // Verify we can receive from the stream
     let mut stream = stream_result.unwrap();
@@ -202,7 +205,7 @@ async fn test_channel_event_stream_specific_channel() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create a channel using a separate scope to ensure stream is dropped
     let channel_id = {
@@ -214,10 +217,9 @@ async fn test_channel_event_stream_specific_channel() {
                 &channel_name,
                 ChannelType::ChannelPublic,
                 None,
-                vec![],
                 None,
                 None,
-                None,
+                Some(membership::genesis(&user, true).1),
             )
             .await
             .expect("Failed to create channel");
@@ -243,7 +245,10 @@ async fn test_channel_event_stream_specific_channel() {
         .stream_channel_events(Some(&channel_id))
         .await;
 
-    assert!(stream_result.is_ok(), "Should establish channel-specific event stream");
+    assert!(
+        stream_result.is_ok(),
+        "Should establish channel-specific event stream"
+    );
 }
 
 // ============================================================================
@@ -302,7 +307,7 @@ async fn test_stream_reconnection() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create channel
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -313,10 +318,9 @@ async fn test_stream_reconnection() {
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
             None,
             None,
-            None,
+            Some(membership::genesis(&user, true).1),
         )
         .await
         .expect("Failed to create channel");
@@ -359,7 +363,7 @@ async fn test_multiple_channel_streams() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create two channels using a separate scope
     let channel_ids = {
@@ -374,10 +378,9 @@ async fn test_multiple_channel_streams() {
                     &channel_name,
                     ChannelType::ChannelPublic,
                     None,
-                    vec![],
                     None,
                     None,
-                    None,
+                    Some(membership::genesis(&user, true).1),
                 )
                 .await
                 .expect("Failed to create channel");
@@ -419,7 +422,7 @@ async fn test_message_stream_with_cursor() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create channel
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -430,10 +433,9 @@ async fn test_message_stream_with_cursor() {
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
             None,
             None,
-            None,
+            Some(membership::genesis(&user, true).1),
         )
         .await
         .expect("Failed to create channel");
@@ -467,7 +469,6 @@ async fn test_message_stream_with_cursor() {
                 None,
                 false,
                 None,
-                None, // crypto_options
                 vec![],
                 false,
                 vec![],

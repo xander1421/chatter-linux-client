@@ -149,14 +149,10 @@ fn check_windows_debugger() -> DebuggerStatus {
 
     // Method 2: CheckRemoteDebuggerPresent - checks for remote debugger
     // SAFETY: Passing valid pointer to current process handle
-    let mut is_remote_present = windows::Win32::Foundation::BOOL::from(false);
-    let current_process = unsafe {
-        windows::Win32::System::Threading::GetCurrentProcess()
-    };
+    let mut is_remote_present = windows::core::BOOL::from(false);
+    let current_process = unsafe { windows::Win32::System::Threading::GetCurrentProcess() };
 
-    let result = unsafe {
-        CheckRemoteDebuggerPresent(current_process, &mut is_remote_present)
-    };
+    let result = unsafe { CheckRemoteDebuggerPresent(current_process, &mut is_remote_present) };
 
     if result.is_ok() && is_remote_present.as_bool() {
         tracing::warn!(

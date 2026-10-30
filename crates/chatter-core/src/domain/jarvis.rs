@@ -4,11 +4,11 @@
 //! Jarvis remembers conversations, learns facts about users and topics,
 //! and tracks entity relationships for context-aware responses.
 
-use std::fmt;
 use chrono::{DateTime, Utc};
+use std::fmt;
 use uuid::Uuid;
 
-use super::{ChannelId, UserId, AnonDmId, AnonGroupId};
+use super::{AnonDmId, AnonGroupId, ChannelId, UserId};
 
 // ============================================================================
 // Identifiers
@@ -373,17 +373,6 @@ pub struct JarvisContext {
 }
 
 impl JarvisContext {
-    /// Create a "no active conversation" context, suitable for global
-    /// Jarvis prompts (e.g. a side panel that's not scoped to any chat).
-    /// The empty `context_id` signals to the service that there's no
-    /// conversation history to consult.
-    pub fn none() -> Self {
-        Self {
-            context_type: ContextType::Channel,
-            context_id: String::new(),
-        }
-    }
-
     /// The conversation kind this context refers to, for AI policy decisions.
     ///
     /// Maps onto [`crate::domain::message::ConversationType`] so
@@ -439,14 +428,6 @@ impl JarvisContext {
             context_id: uuid::Uuid::nil().to_string(),
         }
     }
-
-    /// Create from raw parts.
-    pub fn from_parts(context_type: ContextType, context_id: String) -> Self {
-        Self {
-            context_type,
-            context_id,
-        }
-    }
 }
 
 // ============================================================================
@@ -476,11 +457,7 @@ pub struct JarvisConversation {
 
 impl JarvisConversation {
     /// Create a new conversation entry.
-    pub fn new(
-        context: &JarvisContext,
-        role: Role,
-        content: String,
-    ) -> Self {
+    pub fn new(context: &JarvisContext, role: Role, content: String) -> Self {
         let now = Utc::now();
         Self {
             id: JarvisConversationId::new(),
@@ -502,17 +479,6 @@ impl JarvisConversation {
     /// Create an assistant message.
     pub fn assistant_message(context: &JarvisContext, content: String) -> Self {
         Self::new(context, Role::Assistant, content)
-    }
-
-    /// Create a system message.
-    pub fn system_message(context: &JarvisContext, content: String) -> Self {
-        Self::new(context, Role::System, content)
-    }
-
-    /// Add metadata to the entry.
-    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
-        self.metadata_json = Some(metadata.to_string());
-        self
     }
 
     /// Add author ID to metadata.
@@ -577,26 +543,6 @@ impl JarvisFact {
         }
     }
 
-    /// Create a new fact about a topic.
-    pub fn about_topic(topic: &str, predicate: &str, object: &str) -> Self {
-        let now = Utc::now();
-        Self {
-            id: JarvisFactId::new(),
-            subject_type: SubjectType::Topic,
-            subject_id: topic.to_string(),
-            predicate: predicate.to_string(),
-            object: object.to_string(),
-            confidence: 1.0,
-            source_context_id: None,
-            last_reinforced_at: now,
-            decay_rate: 0.01,
-            created_at: now,
-            valid_from: Some(now),
-            valid_until: None,
-            superseded_by: None,
-        }
-    }
-
     /// Set the source context.
     pub fn with_source(mut self, context_id: &str) -> Self {
         self.source_context_id = Some(context_id.to_string());
@@ -609,27 +555,10 @@ impl JarvisFact {
         self
     }
 
-    /// Set custom decay rate.
-    pub fn with_decay_rate(mut self, rate: f64) -> Self {
-        self.decay_rate = rate.clamp(0.0, 1.0);
-        self
-    }
-
     /// Calculate current confidence after decay.
     pub fn decayed_confidence(&self) -> f64 {
         let days_since = (Utc::now() - self.last_reinforced_at).num_days() as f64;
         (self.confidence * (-self.decay_rate * days_since).exp()).max(0.0)
-    }
-
-    /// Check if this fact should be pruned (confidence too low).
-    pub fn should_prune(&self) -> bool {
-        self.decayed_confidence() < 0.1
-    }
-
-    /// Reinforce this fact (boost confidence).
-    pub fn reinforce(&mut self) {
-        self.confidence = (self.confidence + 0.2).min(1.0);
-        self.last_reinforced_at = Utc::now();
     }
 }
 
@@ -654,27 +583,7 @@ pub struct JarvisSummary {
     pub created_at: DateTime<Utc>,
 }
 
-impl JarvisSummary {
-    /// Create a new summary.
-    pub fn new(
-        context: &JarvisContext,
-        summary: String,
-        message_range_start: u64,
-        message_range_end: u64,
-        message_count: u32,
-    ) -> Self {
-        Self {
-            id: JarvisSummaryId::new(),
-            context_type: context.context_type,
-            context_id: context.context_id.clone(),
-            summary,
-            message_range_start,
-            message_range_end,
-            message_count,
-            created_at: Utc::now(),
-        }
-    }
-}
+impl JarvisSummary {}
 
 /// An entity in the knowledge graph.
 #[derive(Debug, Clone)]
@@ -719,34 +628,6 @@ impl JarvisEntity {
             created_at: now,
         }
     }
-
-    /// Add aliases.
-    pub fn with_aliases(mut self, aliases: Vec<String>) -> Self {
-        if !aliases.is_empty() {
-            self.aliases_json = Some(serde_json::to_string(&aliases).unwrap_or_default());
-        }
-        self
-    }
-
-    /// Add properties.
-    pub fn with_properties(mut self, props: serde_json::Value) -> Self {
-        self.properties_json = Some(props.to_string());
-        self
-    }
-
-    /// Get aliases as vector.
-    pub fn aliases(&self) -> Vec<String> {
-        self.aliases_json
-            .as_ref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_default()
-    }
-
-    /// Record a new mention.
-    pub fn record_mention(&mut self) {
-        self.last_seen_at = Utc::now();
-        self.mention_count += 1;
-    }
 }
 
 /// A relationship between entities.
@@ -788,14 +669,6 @@ impl JarvisRelationship {
             context_count: 1,
             created_at: now,
         }
-    }
-
-    /// Record observation of this relationship.
-    pub fn record_observation(&mut self) {
-        self.last_seen_at = Utc::now();
-        self.context_count += 1;
-        // Boost strength with observations
-        self.strength = (self.strength + 0.1).min(1.0);
     }
 }
 
@@ -846,11 +719,6 @@ pub struct EntityKnowledge {
 }
 
 impl EntityKnowledge {
-    /// Format as a user-friendly summary string.
-    pub fn to_summary(&self) -> String {
-        self.to_context_string()
-    }
-
     /// Format as context string for LLM.
     pub fn to_context_string(&self) -> String {
         let mut parts = Vec::new();
@@ -932,28 +800,6 @@ mod tests {
         let ctx = JarvisContext::channel(channel_id);
         assert_eq!(ctx.context_type, ContextType::Channel);
         assert_eq!(ctx.context_id, channel_id.to_string());
-    }
-
-    #[test]
-    fn test_jarvis_fact_decay() {
-        let fact = JarvisFact::about_user(
-            &UserId::new(),
-            "works_on",
-            "Rust project",
-        );
-        // Fresh fact should have confidence ~1.0
-        assert!(fact.decayed_confidence() > 0.99);
-        assert!(!fact.should_prune());
-    }
-
-    #[test]
-    fn test_jarvis_entity_aliases() {
-        let entity = JarvisEntity::new(EntityType::Person, "John Smith".to_string())
-            .with_aliases(vec!["John".to_string(), "JS".to_string()]);
-
-        let aliases = entity.aliases();
-        assert_eq!(aliases.len(), 2);
-        assert!(aliases.contains(&"John".to_string()));
     }
 
     #[test]

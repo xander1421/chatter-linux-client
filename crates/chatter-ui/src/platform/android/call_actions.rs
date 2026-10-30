@@ -1,28 +1,31 @@
-//! Incoming-call notification actions (Accept / Decline) bridged from the
-//! `CallActionReceiver` BroadcastReceiver back into the Rust call layer.
+//! Incoming-call notification actions authenticated before side effects.
 //!
-//! The notification's action buttons fire PendingIntent broadcasts; the Kotlin
-//! receiver forwards them here via `nativeOnCallAction(call_id, accept)`. We
-//! run the accept/decline on the shared tokio runtime (the JNI thread has no
-//! runtime context) and dismiss the ring notification.
-//!
-//! Decline is fully headless. Accept connects the call (audio goes live
-//! immediately); the receiver separately brings the activity forward so the
-//! in-app active-call screen can render.
+//! Accept stays an activity PendingIntent for Android 14+ foregrounding;
+//! Decline stays a nonexported headless receiver. Both consume a call/action
+//! capability before cancellation. Body/full-screen open use separate one-shot
+//! capabilities before changing the UI. Core call/session checks still apply.
 
-use std::sync::{Arc, OnceLock};
+use slint::ComponentHandle;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use chatter_core::client::ChatterClient;
 use jni::objects::{JClass, JString};
-use jni::sys::jboolean;
-use jni::JNIEnv;
 
 /// Set once at startup so notification-action callbacks can reach the client.
 static CALL_CLIENT: OnceLock<Arc<ChatterClient>> = OnceLock::new();
 
 /// Window handle for routing a notification "Accept" through the in-app accept
 /// flow (connect + render the active-call screen) once MainActivity foregrounds.
-static MAIN_WINDOW: OnceLock<slint::Weak<crate::MainWindow>> = OnceLock::new();
+#[derive(Default)]
+struct CallWindow {
+    window: Option<slint::Weak<crate::MainWindow>>,
+    pending_accept: Option<String>,
+}
+
+static MAIN_WINDOW: Mutex<CallWindow> = Mutex::new(CallWindow {
+    window: None,
+    pending_accept: None,
+});
 
 /// Register the client used to accept/decline calls from notification actions.
 pub fn register_call_client(client: Arc<ChatterClient>) {
@@ -32,7 +35,40 @@ pub fn register_call_client(client: Arc<ChatterClient>) {
 /// Register the main window so the Accept activity-intent can drive the in-app
 /// accept handler.
 pub fn register_main_window(window: slint::Weak<crate::MainWindow>) {
-    let _ = MAIN_WINDOW.set(window);
+    let pending = {
+        let mut state = MAIN_WINDOW.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.window = Some(window.clone());
+        state.pending_accept.clone()
+    };
+    if let Some(call_id) = pending {
+        dispatch_accept(window, call_id);
+    }
+}
+
+/// The registered main window, for other JNI entry points that must reach the
+/// UI (upgrade it only inside `slint::invoke_from_event_loop`).
+pub(crate) fn main_window() -> Option<slint::Weak<crate::MainWindow>> {
+    MAIN_WINDOW.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).window.clone()
+}
+
+fn dispatch_accept(weak: slint::Weak<crate::MainWindow>, call_id: String) {
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            let should_accept = {
+                let mut state = MAIN_WINDOW.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                if state.pending_accept.as_deref() == Some(call_id.as_str()) {
+                    state.pending_accept = None;
+                    true
+                } else {
+                    false
+                }
+            };
+            if should_accept {
+                w.global::<crate::CallView>()
+                    .invoke_accept_incoming_call(call_id.into());
+            }
+        }
+    });
 }
 
 /// JNI entry point: MainActivity received an Accept activity-intent (the app is
@@ -40,71 +76,141 @@ pub fn register_main_window(window: slint::Weak<crate::MainWindow>) {
 /// call and paints the active-call screen, same as the in-app Accept button.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_chatter_client_MainActivity_nativeAcceptIncomingCall(
-    mut env: JNIEnv,
+    mut env: jni::EnvUnowned<'_>,
     _class: JClass,
     call_id: JString,
+    capability: JString,
 ) {
-    let call_id: String = match env.get_string(&call_id) {
-        Ok(s) => s.into(),
-        Err(e) => {
-            tracing::warn!(error = %e, "nativeAcceptIncomingCall: bad call_id");
-            return;
-        }
-    };
-    super::notifications::cancel_call_notification(&call_id);
+    env.with_env(|env| -> jni::errors::Result<_> {
+        Ok((|| {
+            let call_id: String = match (call_id).try_to_string(&env) {
+                Ok(s) => s.into(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "nativeAcceptIncomingCall: bad call_id");
+                    return;
+                }
+            };
+            let Ok(capability) = (capability).try_to_string(&env).map(String::from) else {
+                return;
+            };
+            if !super::notifications::consume_and_cancel_call_consent(
+                &call_id,
+                super::notifications::call_consent::ACCEPT,
+                &capability,
+            ) {
+                return;
+            }
 
-    let Some(weak) = MAIN_WINDOW.get().cloned() else {
-        tracing::warn!("nativeAcceptIncomingCall: window not registered");
-        return;
-    };
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(w) = weak.upgrade() {
-            w.invoke_accept_incoming_call(call_id.into());
-        }
-    });
+            let weak = {
+                let mut state = MAIN_WINDOW.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.pending_accept = Some(call_id.clone());
+                state.window.clone()
+            };
+            if let Some(weak) = weak {
+                dispatch_accept(weak, call_id);
+            }
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
-/// JNI entry point: `CallActionReceiver` calls this with the call_id and whether
-/// the user tapped Accept (`true`) or Decline (`false`).
+/// JNI entry point: `MainActivity.onNewIntent` when the ringing notification's
+/// body (not Accept/Decline) is tapped: show the ring screen again if Back hid
+/// it. A call that is no longer ringing (or another call) changes nothing.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_chatter_client_CallActionReceiver_nativeOnCallAction(
-    mut env: JNIEnv,
+pub extern "system" fn Java_com_chatter_client_MainActivity_nativeShowIncomingCall(
+    mut env: jni::EnvUnowned<'_>,
     _class: JClass,
     call_id: JString,
-    accept: jboolean,
+    action: JString,
+    capability: JString,
 ) {
-    let call_id: String = match env.get_string(&call_id) {
-        Ok(s) => s.into(),
-        Err(e) => {
-            tracing::warn!(error = %e, "nativeOnCallAction: bad call_id");
-            return;
-        }
-    };
-    let accept = accept != 0;
+    env.with_env(|env| -> jni::errors::Result<_> {
+        Ok((|| {
+            let call_id: String = match (call_id).try_to_string(&env) {
+                Ok(s) => s.into(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "nativeShowIncomingCall: bad call_id");
+                    return;
+                }
+            };
+            let Ok(action) = (action).try_to_string(&env).map(String::from) else {
+                return;
+            };
+            let Ok(capability) = (capability).try_to_string(&env).map(String::from) else {
+                return;
+            };
+            if !matches!(
+                action.as_str(),
+                super::notifications::call_consent::OPEN
+                    | super::notifications::call_consent::FULL_SCREEN
+            ) || !super::notifications::consume_call_consent(&call_id, &action, &capability)
+            {
+                return;
+            }
+            let Some(weak) = main_window() else {
+                return;
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    if w.global::<crate::CallView>().get_incoming_call_visible()
+                        && w.global::<crate::CallView>()
+                            .get_incoming_call_data()
+                            .call_id
+                            == call_id.as_str()
+                    {
+                        w.global::<crate::CallView>()
+                            .set_incoming_call_minimized(false);
+                    }
+                }
+            });
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
+}
 
-    // Dismiss the ring notification immediately on either action.
-    super::notifications::cancel_call_notification(&call_id);
+/// JNI entry point: authenticated, single-use headless Decline.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_CallActionReceiver_nativeOnCallAction(
+    mut env: jni::EnvUnowned<'_>,
+    _class: JClass,
+    call_id: JString,
+    capability: JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<_> {
+        Ok((|| {
+            let call_id: String = match (call_id).try_to_string(&env) {
+                Ok(s) => s.into(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "nativeOnCallAction: bad call_id");
+                    return;
+                }
+            };
+            let Ok(capability) = (capability).try_to_string(&env).map(String::from) else {
+                return;
+            };
+            if !super::notifications::consume_and_cancel_call_consent(
+                &call_id,
+                super::notifications::call_consent::DECLINE,
+                &capability,
+            ) {
+                return;
+            }
 
-    let Some(client) = CALL_CLIENT.get().cloned() else {
-        tracing::warn!("nativeOnCallAction: call client not registered");
-        return;
-    };
+            let Some(client) = CALL_CLIENT.get().cloned() else {
+                tracing::warn!("nativeOnCallAction: call client not registered");
+                return;
+            };
 
-    crate::rt_handle().spawn(async move {
-        let result = if accept {
-            // replaces_active = false: a notification accept assumes no other
-            // active call. The worker connects the room; audio goes live.
-            client
-                .accept_presented_incoming_call(&call_id, false)
-                .await
-                .map(|_| ())
-        } else {
-            client.decline_presented_incoming_call(&call_id).await
-        };
-        if let Err(e) = result {
-            tracing::warn!(error = %e, accept, call_id, "call notification action failed");
-        } else {
-            tracing::info!(accept, call_id, "call notification action handled");
-        }
-    });
+            crate::rt_handle().spawn(async move {
+                let result = client.decline_presented_incoming_call(&call_id).await;
+                if let Err(e) = result {
+                    tracing::warn!(error = %e, call_id, "call notification action failed");
+                } else {
+                    tracing::info!(call_id, "call notification action handled");
+                }
+            });
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }

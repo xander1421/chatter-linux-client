@@ -4,12 +4,13 @@
 //! account. UI side: log it and refresh the sessions/devices modal so
 //! the new entry appears without manual re-fetch.
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_core::client::ChatterClient;
 use crate::MainWindow;
+use chatter_core::client::ChatterClient;
 
 pub(super) fn handle_device_linked(
     window: &Weak<MainWindow>,
@@ -24,47 +25,27 @@ pub(super) fn handle_device_linked(
         tracing::info!(device = %label, "New device linked to account");
     }
 
-    // Always refresh on DeviceLinked — cheap (one ListDevices RPC) and
-    // means the sessions/devices modal shows the new entry without the
-    // user having to close + reopen it.
+    // Reuse the modal's owner/request-fenced loader rather than publishing
+    // asynchronous rows through a second, unfenced path.
     let weak = window.clone();
-    let ui_ctx = ui_ctx.clone();
-    crate::rt_handle().spawn(async move {
-        match ui_ctx.list_sessions().await {
-            Ok(sessions) => {
-                let slint_sessions: Vec<crate::SessionInfo> = sessions
-                    .into_iter()
-                    .map(|s| crate::SessionInfo {
-                        device_id: s.device_id as i32,
-                        device_info: s.device_info.into(),
-                        ip_address: s.ip_address.into(),
-                        last_used: s
-                            .last_used
-                            .with_timezone(&chrono::Local)
-                            .format("%Y-%m-%d %H:%M")
-                            .to_string()
-                            .into(),
-                        created_at: s
-                            .created_at
-                            .with_timezone(&chrono::Local)
-                            .format("%Y-%m-%d")
-                            .to_string()
-                            .into(),
-                        is_current: s.is_current,
-                    })
-                    .collect();
-                let count = slint_sessions.len() as i32;
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_sessions(slint::ModelRc::new(
-                            slint::VecModel::from(slint_sessions),
-                        ));
-                        w.set_settings_session_count(count);
-                    }
-                });
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to refresh sessions on DeviceLinked");
+    let client = ui_ctx.clone();
+    let owner = client.session_current_user_id();
+    let revision = client.auth_snapshot().session_revision;
+    let _ = slint::invoke_from_event_loop(move || {
+        if client.session_current_user_id() != owner
+            || client.auth_snapshot().session_revision != revision
+        {
+            return;
+        }
+        if let Some(w) = weak.upgrade() {
+            // The same visibility rule as the loader: gating on the Sessions
+            // modal alone missed Settings › Linked devices, which kept
+            // showing the old count after a link completed.
+            if crate::bin_ui::features::modals::sessions::sessions_visible(&w)
+                && !w.global::<crate::ModalHostState>().get_sessions_revoking()
+            {
+                w.global::<crate::SettingsPane>()
+                    .invoke_settings_view_sessions();
             }
         }
     });

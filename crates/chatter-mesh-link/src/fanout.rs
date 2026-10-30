@@ -301,7 +301,11 @@ pub fn select_links(req: &FanoutRequest<'_>) -> FanoutSelection {
             .filter(|link| link.role == role)
             .map(|link| link.id.clone())
             .collect();
-        selected.extend(deterministic_subset(&ids, subset_size(ids.len()), req.message_id));
+        selected.extend(deterministic_subset(
+            &ids,
+            subset_size(ids.len()),
+            req.message_id,
+        ));
     }
 
     FanoutSelection { links: selected }
@@ -383,7 +387,11 @@ pub fn deterministic_subset(ids: &[LinkId], k: usize, seed: &str) -> BTreeSet<Li
         .collect();
 
     scored.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0).then_with(|| lhs.1.cmp(rhs.1)));
-    scored.into_iter().take(k).map(|(_, id)| id.clone()).collect()
+    scored
+        .into_iter()
+        .take(k)
+        .map(|(_, id)| id.clone())
+        .collect()
 }
 
 fn is_blocked(link: &LinkCandidate, req: &FanoutRequest<'_>) -> bool {
@@ -674,7 +682,11 @@ mod tests {
         let links = eight_links();
         for packet_type in [MESSAGE, NOISE, MessageType::VoiceFrame as u8, 0x7F] {
             let selected = select_links(&FanoutRequest::new(&links, packet_type, "msg-1"));
-            assert_eq!(selected.len(), 4, "type {packet_type:#04x} must be subsetted");
+            assert_eq!(
+                selected.len(),
+                4,
+                "type {packet_type:#04x} must be subsetted"
+            );
         }
     }
 
@@ -940,7 +952,10 @@ mod tests {
         }
         let selected = select_links(&FanoutRequest::new(&links, MESSAGE, "msg-1"));
         // 3 central survivors -> subset_size(3) = 3; 0 peripheral survivors.
-        assert_eq!(ids(&selected), vec!["aaaa-write", "bbbb-write", "cccc-write"]);
+        assert_eq!(
+            ids(&selected),
+            vec!["aaaa-write", "bbbb-write", "cccc-write"]
+        );
     }
 
     // ---- deterministic_subset directly ---------------------------------

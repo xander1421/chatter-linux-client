@@ -1,6 +1,10 @@
 // ForwardMessageModal - Modal for forwarding messages to channels or DMs
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
+import { Icons } from "../theme/icons.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
@@ -12,12 +16,17 @@ import { Avatar } from "../components/avatar.slint";
 export struct ForwardTarget {
     id: string,
     name: string,
+    avatar-source: image,
+    is-anonymous: bool,
     target-type: string,  // "channel", "group", "dm", or "anon-dm"
 }
 
 export component ForwardMessageModal inherits Rectangle {
     in property <bool> show-modal: false;
     in property <string> message-preview: "";
+    in property <bool> contact-share: false;
+    in property <string> contact-name: "";
+    in property <image> contact-avatar;
     in-out property <string> search-text: "";
     in property <[ForwardTarget]> targets: [];
     in property <bool> loading: false;
@@ -39,8 +48,13 @@ export component ForwardMessageModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: "Forward Message";
+        title: root.contact-share ? "Share contact" : "Forward";
         modal-width: 480px;
+        // The list takes the spare height and the buttons stay pinned: sized
+        // to content, preview + search + a 300px list overran the 600px cap
+        // and the Forward button was cut off at the bottom of a phone sheet.
+        max-modal-height: 640px;
+        fill-height: true;
 
         close => {
             root.close();
@@ -55,7 +69,23 @@ export component ForwardMessageModal inherits Rectangle {
                 background: Colors.surface-hover;
                 border-radius: Spacing.radius-md;
 
-                VerticalLayout {
+                if root.contact-share: HorizontalLayout {
+                    padding: Spacing.md;
+                    spacing: Spacing.md;
+
+                    Avatar { size: 48px; name: root.contact-name; source: root.contact-avatar; }
+                    Text {
+                        text: root.contact-name;
+                        vertical-alignment: center;
+                        color: Colors.text-primary;
+                        font-size: Typography.base;
+                        font-weight: Typography.semibold;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                }
+
+                if !root.contact-share: VerticalLayout {
                     padding: Spacing.md;
 
                     Text {
@@ -87,13 +117,10 @@ export component ForwardMessageModal inherits Rectangle {
 
             // Target list (scrollable)
             Rectangle {
-                min-height: 200px;
-                max-height: 300px;
+                min-height: 160px;
                 vertical-stretch: 1;
                 background: Colors.surface;
                 border-radius: Spacing.radius-md;
-                border-width: 1px;
-                border-color: Colors.text-muted.with-alpha(0.2);
 
                 Flickable {
                     viewport-height: target-list.preferred-height;
@@ -106,19 +133,48 @@ export component ForwardMessageModal inherits Rectangle {
                             // Note: Search filtering is done in Rust before passing to UI
                             property <bool> is-selected: root.selected-target-id == target.id;
 
-                            height: 48px;
-                            background: is-selected ? Colors.primary.with-alpha(0.2) : target-touch.has-hover ? Colors.surface-hover : transparent;
+                            height: 48px * Appearance.text-grow;
+                            background: is-selected ? Colors.tint-strong : target-touch.pressed ? Materials.pressed : target-touch.has-hover ? Materials.hover : transparent;
                             border-radius: Spacing.radius-md;
+                            transform-scale-x: target-touch.pressed ? 97% : 100%;
+                            transform-scale-y: target-touch.pressed ? 94% : 100%;
+                            animate transform-scale-x { duration: target-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                            animate transform-scale-y { duration: target-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                            animate background { duration: Materials.motion-quick; easing: Materials.glide; }
+                            accessible-role: list-item;
+                            accessible-label: target.name;
+                            accessible-item-selected: is-selected;
+                            accessible-action-default => { root.selected-target-id = target.id; }
+                            KeyFocus { border-radius: parent.border-radius; activate => { root.selected-target-id = target.id; } }
 
                             HorizontalLayout {
                                 padding-left: Spacing.sm;
                                 padding-right: Spacing.sm;
+                                // Row is 48px; 8px top/bottom leaves exactly the
+                                // 32px avatar, so it and the name are centred.
+                                padding-top: Spacing.sm;
+                                padding-bottom: Spacing.sm;
                                 spacing: Spacing.sm;
 
                                 // Avatar
-                                Avatar {
+                                // Saved messages wears its bookmark, as in the chat list.
+                                if target.target-type == "saved_messages": Rectangle {
+                                    width: 32px;
+                                    height: 32px;
+                                    border-radius: 16px;
+                                    background: Colors.primary.with-alpha(0.2);
+                                    Image {
+                                        source: Icons.bookmark;
+                                        width: 16px;
+                                        height: 16px;
+                                        colorize: Colors.primary;
+                                    }
+                                }
+                                if target.target-type != "saved_messages": Avatar {
                                     size: 32px;
-                                    fallback-text: target.name;
+                                    name: target.name;
+                                    source: target.avatar-source;
+                                    anonymous: target.is-anonymous;
                                 }
 
                                 // Name and type
@@ -127,6 +183,7 @@ export component ForwardMessageModal inherits Rectangle {
                                     alignment: center;
 
                                     Text {
+                                        accessible-role: none;
                                         text: target.name;
                                         color: Colors.text-primary;
                                         font-size: Typography.sm;
@@ -135,21 +192,24 @@ export component ForwardMessageModal inherits Rectangle {
                                     }
                                 }
 
-                                // Type badge
-                                Rectangle {
-                                    width: type-text.width + Spacing.sm * 2;
-                                    height: 20px;
-                                    background: target.target-type == "channel" || target.target-type == "group" ? Colors.primary.with-alpha(0.2) : Colors.success.with-alpha(0.2);
-                                    border-radius: Spacing.radius-sm;
+                                // Type badge (none for Saved Messages: it is not a DM)
+                                if target.target-type != "saved_messages": VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: type-text.width + Spacing.sm * 2;
+                                        height: 20px;
+                                        background: target.target-type == "channel" || target.target-type == "group" || target.target-type == "anon_group" ? Colors.primary.with-alpha(0.2) : Colors.success.with-alpha(0.2);
+                                        border-radius: Spacing.radius-sm;
 
-                                    type-text := Text {
-                                        x: Spacing.sm;
-                                        text: target.target-type == "channel" ? "#channel" : target.target-type == "group" ? "#group" : "DM";
-                                        color: target.target-type == "channel" || target.target-type == "group" ? Colors.primary : Colors.success;
-                                        font-size: Typography.xs;
-                                        font-weight: Typography.medium;
-                                        vertical-alignment: center;
-                                        height: 100%;
+                                        type-text := Text {
+                                            x: Spacing.sm;
+                                            text: target.target-type == "channel" ? "Channel" : target.target-type == "group" || target.target-type == "anon_group" ? "Group" : target.is-anonymous ? "Secret" : "DM";
+                                            color: target.target-type == "channel" || target.target-type == "group" || target.target-type == "anon_group" ? Colors.primary : Colors.success;
+                                            font-size: Typography.xs;
+                                            font-weight: Typography.medium;
+                                            vertical-alignment: center;
+                                            height: 100%;
+                                        }
                                     }
                                 }
 
@@ -158,17 +218,17 @@ export component ForwardMessageModal inherits Rectangle {
                                     width: 20px;
                                     height: 20px;
                                     border-radius: 10px;
-                                    background: Colors.primary;
+                                    background: Colors.action-fill;
 
-                                    // Checkmark using Unicode
-                                    Text {
-                                        text: "\u{2713}";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.xs;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
+                                    // The bundled check, as components/checkbox.slint
+                                    // draws it; a text ✓ is a tofu risk.
+                                    Image {
+                                        source: Icons.check;
+                                        width: 12px;
+                                        height: 12px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: Colors.on-action;
                                     }
                                 }
                             }
@@ -203,9 +263,9 @@ export component ForwardMessageModal inherits Rectangle {
                     }
                 }
 
-                // Forward button
+                // Confirm button
                 Button {
-                    text: root.loading ? "" : "Forward";
+                    text: root.loading ? "" : root.contact-share ? "Share" : "Forward";
                     variant: "primary";
                     disabled: root.selected-target-id == "" || root.loading;
                     loading: root.loading;

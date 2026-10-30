@@ -1,0 +1,61 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+export component ProfileStatusPicker inherits VerticalLayout {
+    in property <string> status-mode;
+    callback change-status(string);
+    padding-left: Spacing.md;
+    padding-right: Spacing.md;
+    spacing: Spacing.sm;
+
+    Text {
+        text: "STATUS";
+        color: Colors.text-muted;
+        font-size: Typography.xs2;
+        font-weight: Typography.bold;
+        letter-spacing: 0.5px;
+    }
+
+    HorizontalLayout {
+        spacing: Spacing.xs;
+        for opt in [
+            { mode: "auto", label: "Auto", dot: Colors.online },
+            { mode: "online", label: "Online", dot: Colors.online },
+            { mode: "away", label: "Away", dot: Colors.away },
+            { mode: "dnd", label: "DND", dot: Colors.dnd },
+            { mode: "invisible", label: "Invisible", dot: Colors.text-muted },
+        ]: Rectangle {
+            height: Spacing.button-height;
+            horizontal-stretch: 1;
+            border-radius: 6px;
+            border-width: root.status-mode == opt.mode ? Spacing.stroke : 0px;
+            border-color: Colors.primary;
+            background: status-touch.has-hover ? Colors.surface-hover : transparent;
+            // A choice of one: a radio that says which status it sets.
+            accessible-role: radio-button;
+            accessible-label: opt.mode == "dnd" ? "Do not disturb" : opt.label;
+            accessible-checkable: true;
+            accessible-checked: root.status-mode == opt.mode;
+            accessible-action-default => { root.change-status(opt.mode); }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.change-status(opt.mode); } }
+            status-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.change-status(opt.mode); }
+            }
+            HorizontalLayout {
+                alignment: center;
+                spacing: Spacing.xs;
+                VerticalLayout { alignment: center;
+                    Rectangle { width: 8px; height: 8px; border-radius: 4px; background: opt.dot; }
+                }
+                Text {
+                    text: opt.label;
+                    vertical-alignment: center;
+                    color: root.status-mode == opt.mode ? Colors.text-primary : Colors.text-muted;
+                    font-size: Typography.xs;
+                }
+            }
+        }
+    }
+}

@@ -68,8 +68,4 @@ pub enum SystemError {
     /// Invalid URL format.
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
-
-    /// Autostart operation failed.
-    #[error("Autostart error: {0}")]
-    Autostart(String),
 }

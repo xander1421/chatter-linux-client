@@ -21,9 +21,7 @@ use slint::ComponentHandle;
 
 use chatter_core::client::ChatterClient;
 use chatter_core::prelude::SecretString;
-use chatter_core::services::link_device_service::{
-    LinkDeviceError, PendingDeviceLink,
-};
+use chatter_core::services::link_device_service::PendingDeviceLink;
 
 use crate::MainWindow;
 
@@ -42,148 +40,218 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_paste(window, ui_ctx, pending.clone());
     wire_close(window, pending.clone());
     wire_submit(window, ui_ctx, pending);
+    #[cfg(target_os = "android")]
+    wire_scan(window);
 }
 
-fn wire_open(window: &MainWindow, pending: PendingSlot) {
+/// "Scan QR code": the decoded text goes into the link field and through
+/// `link-approve-paste-changed`, the same parse → preview → verification-code
+/// → password gate as a pasted link. Nothing is approved by the scan itself.
+#[cfg(target_os = "android")]
+fn wire_scan(window: &MainWindow) {
+    use crate::platform::android::{permissions, qr_scanner};
+
     let weak = window.as_weak();
-    window.on_link_approve_open(move || {
+    window.global::<crate::AuthFlow>().on_link_approve_scan(move || {
         if let Some(w) = weak.upgrade() {
-            reset(&w, &pending);
-            w.set_active_modal("link-device-approve".into());
-        }
-    });
-}
-
-fn wire_close(window: &MainWindow, pending: PendingSlot) {
-    let weak = window.as_weak();
-    window.on_link_approve_close(move || {
-        if let Some(w) = weak.upgrade() {
-            reset(&w, &pending);
-        }
-    });
-}
-
-fn wire_paste(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, pending: PendingSlot) {
-    let weak = window.as_weak();
-    let ui_ctx = ui_ctx.clone();
-    window.on_link_approve_paste_changed(move |text: slint::SharedString| {
-        let Some(w) = weak.upgrade() else { return };
-        let s = text.to_string();
-        if s.is_empty() {
-            *pending.lock().unwrap() = None;
-            w.set_link_approve_preview_ready(false);
-            w.set_link_approve_preview_name("".into());
-            w.set_link_approve_preview_server("".into());
-            w.set_link_approve_verification_code("".into());
-            w.set_link_approve_error("".into());
-            return;
-        }
-        match ui_ctx.prepare_link_from_url(&s) {
-            Ok(preview) => {
-                w.set_link_approve_preview_ready(true);
-                w.set_link_approve_preview_name(
-                    preview.device_name().unwrap_or_default().into(),
+            w.global::<crate::AuthFlow>().set_link_approve_error("".into());
+            if !permissions::has(permissions::CAMERA) {
+                w.global::<crate::AuthFlow>().set_link_approve_status(
+                    "Chatter uses the camera only to read the QR code on your new device.".into(),
                 );
-                w.set_link_approve_preview_server(
-                    preview.server_url().unwrap_or_default().into(),
-                );
-                w.set_link_approve_verification_code(
-                    preview.verification_code().into(),
-                );
-                w.set_link_approve_error("".into());
-                *pending.lock().unwrap() = Some(preview);
-            }
-            Err(e) => {
-                *pending.lock().unwrap() = None;
-                w.set_link_approve_preview_ready(false);
-                w.set_link_approve_verification_code("".into());
-                // Only show error once user has typed something substantial.
-                if s.len() > 16 {
-                    w.set_link_approve_error(format!("{e}").into());
-                } else {
-                    w.set_link_approve_error("".into());
-                }
             }
         }
-    });
-}
-
-fn wire_submit(
-    window: &MainWindow,
-    ui_ctx: &Arc<ChatterClient>,
-    pending: PendingSlot,
-) {
-    let weak = window.as_weak();
-    let ui_ctx = ui_ctx.clone();
-
-    window.on_link_approve_submit(move |password: slint::SharedString| {
         let weak = weak.clone();
-        let ui_ctx = ui_ctx.clone();
-        let password = password.to_string();
-        let pending = pending.clone();
-
-        // Consume the pending link. If it's already been taken (double-
-        // submit, or paste was never successful), bail with a clear error.
-        let token = match pending.lock().unwrap().take() {
-            Some(t) => t,
-            None => {
-                if let Some(w) = weak.upgrade() {
-                    w.set_link_approve_error(
-                        "Paste a link URL first.".into(),
-                    );
-                }
-                return;
-            }
-        };
-
-        if let Some(w) = weak.upgrade() {
-            w.set_link_approve_busy(true);
-            w.set_link_approve_error("".into());
-            w.set_link_approve_status("Authorizing…".into());
-        }
-
         crate::rt_handle().spawn(async move {
-            let secret = SecretString::new(password);
-            let result = ui_ctx.approve_link(token, secret).await;
-            let weak_for_ui = weak.clone();
+            let outcome = qr_scanner::scan().await;
             let _ = slint::invoke_from_event_loop(move || {
-                let Some(w) = weak_for_ui.upgrade() else { return };
-                w.set_link_approve_busy(false);
-                match result {
-                    Ok(approved) => {
-                        let name = approved
-                            .device_name
-                            .unwrap_or_else(|| "the new device".to_string());
-                        w.set_link_approve_status(
-                            format!("Linked {name}.").into(),
-                        );
-                        w.set_link_approve_password("".into());
-                        // Leave modal open briefly so user sees confirmation;
-                        // they tap close to dismiss.
+                let Some(w) = weak.upgrade() else { return };
+                w.global::<crate::AuthFlow>().set_link_approve_status("".into());
+                match outcome {
+                    qr_scanner::ScanOutcome::Scanned(text) => {
+                        w.global::<crate::AuthFlow>().set_link_approve_url(text.clone().into());
+                        w.global::<crate::AuthFlow>().invoke_link_approve_paste_changed(text.into());
                     }
-                    Err(LinkDeviceError::ReauthFailed) => {
-                        w.set_link_approve_status("".into());
-                        w.set_link_approve_error("Wrong password or PIN.".into());
-                    }
-                    Err(e) => {
-                        w.set_link_approve_status("".into());
-                        w.set_link_approve_error(format!("{e}").into());
-                    }
+                    qr_scanner::ScanOutcome::Cancelled => {}
+                    qr_scanner::ScanOutcome::CameraDenied => w.global::<crate::AuthFlow>().set_link_approve_error(
+                        "Camera access is off. Paste the link instead, or allow the camera for Chatter in system settings."
+                            .into(),
+                    ),
                 }
             });
         });
     });
 }
 
+fn wire_open(window: &MainWindow, pending: PendingSlot) {
+    let weak = window.as_weak();
+    window
+        .global::<crate::AuthFlow>()
+        .on_link_approve_open(move || {
+            if let Some(w) = weak.upgrade() {
+                reset(&w, &pending);
+                crate::bin_ui::features::back::push(&w, "link-device-approve");
+            }
+        });
+}
+
+fn wire_close(window: &MainWindow, pending: PendingSlot) {
+    let weak = window.as_weak();
+    window
+        .global::<crate::AuthFlow>()
+        .on_link_approve_close(move || {
+            if let Some(w) = weak.upgrade() {
+                reset(&w, &pending);
+            }
+        });
+}
+
+fn wire_paste(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, pending: PendingSlot) {
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    window
+        .global::<crate::AuthFlow>()
+        .on_link_approve_paste_changed(move |text: slint::SharedString| {
+            let Some(w) = weak.upgrade() else { return };
+            let s = text.to_string();
+            if s.is_empty() {
+                *pending.lock().unwrap() = None;
+                w.global::<crate::AuthFlow>()
+                    .set_link_approve_preview_ready(false);
+                w.global::<crate::AuthFlow>()
+                    .set_link_approve_preview_name("".into());
+                w.global::<crate::AuthFlow>()
+                    .set_link_approve_preview_server("".into());
+                w.global::<crate::AuthFlow>()
+                    .set_link_approve_verification_code("".into());
+                w.global::<crate::AuthFlow>()
+                    .set_link_approve_error("".into());
+                return;
+            }
+            match ui_ctx.prepare_link_from_url(&s) {
+                Ok(preview) => {
+                    w.global::<crate::AuthFlow>()
+                        .set_link_approve_preview_ready(true);
+                    w.global::<crate::AuthFlow>().set_link_approve_preview_name(
+                        preview.device_name().unwrap_or_default().into(),
+                    );
+                    w.global::<crate::AuthFlow>()
+                        .set_link_approve_preview_server(
+                            preview.server_url().unwrap_or_default().into(),
+                        );
+                    w.global::<crate::AuthFlow>()
+                        .set_link_approve_verification_code(preview.verification_code().into());
+                    w.global::<crate::AuthFlow>()
+                        .set_link_approve_error("".into());
+                    *pending.lock().unwrap() = Some(preview);
+                }
+                Err(e) => {
+                    *pending.lock().unwrap() = None;
+                    w.global::<crate::AuthFlow>()
+                        .set_link_approve_preview_ready(false);
+                    w.global::<crate::AuthFlow>()
+                        .set_link_approve_verification_code("".into());
+                    // Only show error once user has typed something substantial.
+                    if s.len() > 16 {
+                        w.global::<crate::AuthFlow>()
+                            .set_link_approve_error(e.user_message().into());
+                    } else {
+                        w.global::<crate::AuthFlow>()
+                            .set_link_approve_error("".into());
+                    }
+                }
+            }
+        });
+}
+
+fn wire_submit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, pending: PendingSlot) {
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+
+    window.global::<crate::AuthFlow>().on_link_approve_submit(
+        move |password: slint::SharedString| {
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            let password = password.to_string();
+            let pending = pending.clone();
+
+            // Consume the pending link. If it's already been taken (double-
+            // submit, or paste was never successful), bail with a clear error.
+            let token = match pending.lock().unwrap().take() {
+                Some(t) => t,
+                None => {
+                    if let Some(w) = weak.upgrade() {
+                        w.global::<crate::AuthFlow>()
+                            .set_link_approve_error("Paste a link URL first.".into());
+                    }
+                    return;
+                }
+            };
+
+            if let Some(w) = weak.upgrade() {
+                w.global::<crate::AuthFlow>().set_link_approve_busy(true);
+                w.global::<crate::AuthFlow>()
+                    .set_link_approve_error("".into());
+                w.global::<crate::AuthFlow>()
+                    .set_link_approve_status("Authorizing…".into());
+            }
+
+            crate::rt_handle().spawn(async move {
+                let secret = SecretString::new(password);
+                let result = ui_ctx.approve_link(token, secret).await;
+                let weak_for_ui = weak.clone();
+                let pending_for_ui = pending.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak_for_ui.upgrade() else {
+                        return;
+                    };
+                    w.global::<crate::AuthFlow>().set_link_approve_busy(false);
+                    match result {
+                        Ok(approved) => {
+                            let name = approved
+                                .device_name
+                                .unwrap_or_else(|| "the new device".to_string());
+                            // Close and confirm with a toast — the app's pattern
+                            // for a finished modal action (create-channel,
+                            // forward). Leaving it open on "Linked …" read as
+                            // stuck (§138). `close` is a no-op if the user
+                            // already left the dialog.
+                            reset(&w, &pending_for_ui);
+                            crate::bin_ui::features::back::close(&w, "link-device-approve");
+                            w.set_toast_message(format!("Linked {name}.").into());
+                            w.set_toast_variant("success".into());
+                            w.set_toast_visible(true);
+                        }
+                        Err(e) => {
+                            w.global::<crate::AuthFlow>()
+                                .set_link_approve_status("".into());
+                            w.global::<crate::AuthFlow>()
+                                .set_link_approve_error(e.user_message().into());
+                        }
+                    }
+                });
+            });
+        },
+    );
+}
+
 fn reset(w: &MainWindow, pending: &PendingSlot) {
     *pending.lock().unwrap() = None;
-    w.set_link_approve_url("".into());
-    w.set_link_approve_password("".into());
-    w.set_link_approve_preview_ready(false);
-    w.set_link_approve_preview_name("".into());
-    w.set_link_approve_preview_server("".into());
-    w.set_link_approve_verification_code("".into());
-    w.set_link_approve_error("".into());
-    w.set_link_approve_status("".into());
-    w.set_link_approve_busy(false);
+    w.global::<crate::AuthFlow>()
+        .set_link_approve_url("".into());
+    w.global::<crate::AuthFlow>()
+        .set_link_approve_password("".into());
+    w.global::<crate::AuthFlow>()
+        .set_link_approve_preview_ready(false);
+    w.global::<crate::AuthFlow>()
+        .set_link_approve_preview_name("".into());
+    w.global::<crate::AuthFlow>()
+        .set_link_approve_preview_server("".into());
+    w.global::<crate::AuthFlow>()
+        .set_link_approve_verification_code("".into());
+    w.global::<crate::AuthFlow>()
+        .set_link_approve_error("".into());
+    w.global::<crate::AuthFlow>()
+        .set_link_approve_status("".into());
+    w.global::<crate::AuthFlow>().set_link_approve_busy(false);
 }

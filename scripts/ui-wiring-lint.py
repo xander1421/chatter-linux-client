@@ -12,11 +12,10 @@ a mouse button the device does not have (E). Every one of those shipped here.
 
 
   A) DANGLING MainWindow callback surface.
-     Every `callback NAME` declared on the exported `MainWindow` (ui/main.slint)
+     Every `callback NAME` declared on the exported `MainWindow` (ui/app.slint)
      is the Rust-facing surface: Slint generates an `on_NAME` / `invoke_NAME`
-     for it. If NO `.on_NAME(` handler exists anywhere in the Rust and the
-     callback isn't a pure `<=> app.x` forward that another element handles,
-     the button/toggle fires into the void. We report every MainWindow callback
+     for it. If NO `.on_NAME(` handler exists anywhere in the Rust, the
+     button/toggle fires into the void. We report every MainWindow callback
      with no Rust `.on_` handler so the ledger can triage each as
      handled-in-Slint vs genuinely dead.
 
@@ -103,20 +102,15 @@ def all_rust_files():
 
 # ---- A) MainWindow callback surface -----------------------------------------
 
-CB_RE = re.compile(r"^\s*callback\s+([A-Za-z0-9_\-]+)\s*(<=>|\(|;)")
+# Top-level declarations only (4-space indent): MainWindow is the only
+# component in app.slint.
+CB_RE = re.compile(r"^    callback\s+([A-Za-z0-9_\-]+)\s*(\(|;)")
 
 
 def mainwindow_callbacks():
-    """Return list of (name, forwarded_bool) declared on MainWindow."""
-    text = read(os.path.join(UI_DIR, "main.slint"))
-    out = []
-    for line in text.splitlines():
-        m = CB_RE.match(line)
-        if m:
-            name = snake(m.group(1))
-            forwarded = "<=>" in line
-            out.append((name, forwarded))
-    return out
+    """Return the callback names declared on MainWindow."""
+    text = read(os.path.join(UI_DIR, "app.slint"))
+    return [snake(m.group(1)) for m in map(CB_RE.match, text.splitlines()) if m]
 
 
 # ---- B) Rust handler bodies --------------------------------------------------
@@ -405,7 +399,8 @@ def dead_callbacks(slint_texts, rust_text):
 #
 # The rule: any TouchArea that tests `PointerEventButton.right` must ALSO have a
 # touch path — it is a `HoldArea`, or it arms a hold timer (`... .running =
-# true`) on pointer-down. A new row component that copies only the right-click
+# true`) on pointer-down, directly or through component-local helpers, and
+# its expiry reaches the same menu action. A row that copies only right-click
 # branch fails here.
 # =============================================================================
 
@@ -438,13 +433,105 @@ def enclosing_touch_block(text: str, idx: int):
     return None
 
 
-# Arming a Timer is the shape every hold path in this tree uses.
-TIMER_ARM_RE = re.compile(r"\.running\s*=\s*true|running\s*:\s*true")
+def slint_code(text):
+    """Mask comments and strings without moving braces or source locations."""
+    tokens = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"', re.S)
+    return tokens.sub(lambda m: re.sub(r'[^\n]', ' ', m.group()), text)
+
+
+def enclosing_component(text, idx):
+    depth = 0
+    for i in range(idx - 1, -1, -1):
+        if text[i] == '}':
+            depth += 1
+        elif text[i] == '{':
+            if depth:
+                depth -= 1
+            else:
+                head = text[text.rfind('\n', 0, i) + 1:i]
+                if re.search(r'\bcomponent\s+[\w-]+(?:\s+inherits\s+[\w-]+)?\s*$', head):
+                    return balanced_block(text, i)
+    return ''
+
+
+ROOT_CALL_RE = re.compile(r'\broot\.([\w-]+)\s*\(')
+
+
+def helper_hold_path(text, idx, body):
+    """Resolve component-local press helpers to a timer and the menu action.
+
+    Only calls from a pointer-down branch count. Timer expiry must reach an
+    action also reachable from the right-click branch; an unrelated timer or
+    an uncalled helper does not establish a touch menu path.
+    """
+    scope = enclosing_component(text, idx)
+    functions = {}
+    for m in re.finditer(r'\bfunction\s+([\w-]+)\s*\([^)]*\)\s*(?:->\s*[\w<>-]+\s*)?\{', scope):
+        functions[m.group(1)] = balanced_block(scope, m.end() - 1)
+
+    def expand(code, visited=None):
+        visited = set() if visited is None else visited
+        result = code
+        for name in ROOT_CALL_RE.findall(code):
+            if name in functions and name not in visited:
+                visited.add(name)
+                result += '\n' + expand(functions[name], visited)
+        return result
+
+    def branches(code, guards=()):
+        # Balanced braces keep nested ifs separate; carry outer guards so a
+        # down test nested inside a right-button guard cannot look touchable.
+        cursor = 0
+        pattern = re.compile(r'\bif\s*([^{};]+)\{')
+        while (m := pattern.search(code, cursor)):
+            inner = balanced_block(code, m.end() - 1)
+            conditions = guards + (m.group(1),)
+            # Do not attribute a nested, separately guarded call to its parent.
+            direct = inner
+            nested = list(pattern.finditer(inner))
+            spans = []
+            end = 0
+            for child in nested:
+                if child.start() < end:
+                    continue
+                child_body = balanced_block(inner, child.end() - 1)
+                end = child.end() + len(child_body) + 1
+                spans.append((child.start(), end))
+            for start, end in reversed(spans):
+                direct = direct[:start] + ' ' * (end - start) + direct[end:]
+            yield conditions, direct
+            yield from branches(inner, conditions)
+            cursor = m.end() + len(inner) + 1
+
+    handler = re.search(r'\bpointer-event\s*\([^)]*\)\s*=>\s*\{', body)
+    if not handler:
+        return False
+    pointer = balanced_block(body, handler.end() - 1)
+    down, right = [], []
+    for guards, code in branches(pointer):
+        condition = ' '.join(guards)
+        if re.search(r'\b\w+\.kind\s*==\s*PointerEventKind\.down\b', condition) and RIGHT_BTN not in condition:
+            down.append(expand(code))
+        if re.search(r'\b\w+\.button\s*==\s*PointerEventButton\.right\b', condition):
+            right.append(expand(code))
+    menu_calls = set(ROOT_CALL_RE.findall('\n'.join(right))) - functions.keys()
+    armed = set(re.findall(r'\b([\w-]+)\.running\s*=\s*true\b', '\n'.join(down)))
+    for m in re.finditer(r'\b([\w-]+)\s*:=\s*Timer\s*\{', scope):
+        if m.group(1) not in armed:
+            continue
+        timer = balanced_block(scope, m.end() - 1)
+        triggered = re.search(r'\btriggered\s*=>\s*\{', timer)
+        if triggered:
+            action = expand(balanced_block(timer, triggered.end() - 1))
+            if menu_calls & set(ROOT_CALL_RE.findall(action)):
+                return True
+    return False
 
 
 def right_click_only_areas(slint_texts):
     out = []
     for path, text in slint_texts.items():
+        text = slint_code(text)
         rel = os.path.relpath(path, ROOT)
         seen = set()
         for m in re.finditer(re.escape(RIGHT_BTN), text):
@@ -459,7 +546,7 @@ def right_click_only_areas(slint_texts):
             seen.add(line)
             if kind == "HoldArea":
                 continue                      # HoldArea IS the touch path
-            if TIMER_ARM_RE.search(body):
+            if helper_hold_path(text, m.start(), body):
                 continue                      # rolls its own hold timer
             out.append((rel, line, "TouchArea with right-click and no hold path"))
     return out
@@ -489,9 +576,9 @@ def main():
     # A) MainWindow surface
     mw = mainwindow_callbacks()
     no_handler = []
-    for name, forwarded in mw:
+    for name in mw:
         if name not in handler_class:
-            no_handler.append((name, forwarded))
+            no_handler.append(name)
 
     all_stubs = sorted([n for n, c in handler_class.items() if c == "STUB"])
     stubs = [n for n in all_stubs if n not in KNOWN_INTENTIONAL_STUBS]
@@ -519,7 +606,7 @@ def main():
         print(json.dumps({
             "mainwindow_callbacks": len(mw),
             "rust_handlers": len(handler_class),
-            "mainwindow_no_rust_handler": [n for n, _ in no_handler],
+            "mainwindow_no_rust_handler": no_handler,
             "stub_handlers": stubs,
             "local_only_handlers": local_only,
             "fn_ref_handlers": fn_refs,
@@ -542,9 +629,8 @@ def main():
         print(f"[A] MainWindow callbacks with NO Rust .on_ handler: {len(no_handler)}")
         print("    (each is either handled purely in Slint, or a dead wire —")
         print("     triage in the ledger)")
-        for name, fwd in sorted(no_handler):
-            tag = "forward<=>" if fwd else "declared"
-            print(f"      - {name}  [{tag}]")
+        for name in sorted(no_handler):
+            print(f"      - {name}")
         print()
         print(f"[B] LOCAL-ONLY handlers (never touch core ctx — eyeball): {len(local_only)}")
         for n in local_only:

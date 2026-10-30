@@ -1,56 +1,45 @@
 //! Media handling layer.
 //!
 //! Image, audio, video processing and playback.
-//! Uses GStreamer for cross-platform video:
-//! - Desktop: Linux, Windows, macOS
-//! - Mobile: Android, iOS (via GStreamer SDK)
-//! - Hardware acceleration on all platforms
+//! GStreamer provides desktop decoding and audio playback. Android playback
+//! and thumbnail extraction use the platform media service through the UI.
 
 pub mod audio_player;
+pub mod album;
 pub mod audio_recorder;
-pub mod code_preview;
 pub mod decoder;
-pub mod embed;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(all(
+    feature = "desktop-native",
+    not(any(target_os = "android", target_os = "ios"))
+))]
 pub mod file_picker;
 pub mod gif;
 pub mod image_processor;
-pub mod mime_detector;
-pub mod pdf_viewer;
-pub mod thumbnail_cache;
 pub mod video_playback;
-pub mod video_player;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 pub mod video_processor;
-pub mod video_recorder;
-#[cfg(feature = "desktop-media")]
+#[cfg(target_os = "android")]
+pub mod video_processor_android;
 pub mod waveform;
 
-// Re-exports for convenient access
 pub use audio_player::{AudioPlayer, PlaybackState};
 pub use audio_recorder::{AudioRecorder, RecordingState};
-pub use code_preview::{HighlightedLine, HighlightedSpan};
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(all(
+    feature = "desktop-native",
+    not(any(target_os = "android", target_os = "ios"))
+))]
 pub use file_picker::{FileFilter, FilePicker, FilePickerConfig};
-pub use gif::{GifCache, GifClient, GifPicker, GifResult};
-pub use image_processor::{ImageProcessor, DEFAULT_THUMBNAIL_SIZE};
-pub use mime_detector::MimeDetector;
-pub use pdf_viewer::PdfViewer;
-pub use thumbnail_cache::ThumbnailCache;
+pub use image_processor::{DEFAULT_THUMBNAIL_SIZE, ImageProcessor};
 pub use video_playback::{
-    format_duration, PlayerState, SharedPlayerState,
-    VideoPlayer as InAppVideoPlayer,
+    PlayerState, SharedPlayerState, VideoPlayer as InAppVideoPlayer, format_duration,
 };
-pub use video_player::VideoPlayer;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 pub use video_processor::{
-    extract_video_thumbnail, extract_video_thumbnail_from_memory,
-    get_video_dimensions, get_video_dimensions_from_memory,
-    get_video_duration, get_video_duration_from_memory,
+    extract_video_thumbnail, extract_video_thumbnail_from_memory, get_video_dimensions,
+    get_video_dimensions_from_memory, get_video_duration, get_video_duration_from_memory,
 };
-pub use video_recorder::VideoRecorder;
-#[cfg(feature = "desktop-media")]
-pub use waveform::{extract_waveform, extract_waveform_from_memory, WAVEFORM_BAR_COUNT};
-
-// Embed extractors
-pub use embed::{LinkPreviewGenerator, PreviewFetcher, UrlUnfurler, YouTubeExtractor};
+#[cfg(target_os = "android")]
+pub use video_processor_android::{
+    VideoMetadata, analyze_video, register_video_metadata_extractor,
+};
+pub use waveform::{WAVEFORM_BAR_COUNT, extract_waveform, extract_waveform_from_memory};

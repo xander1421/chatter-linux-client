@@ -117,7 +117,7 @@ impl FileFilter {
     /// Filter for all files (no restriction).
     #[must_use]
     pub fn all() -> Self {
-        Self::new("All Files", vec!["*"])
+        Self::new("All files", vec!["*"])
     }
 }
 
@@ -161,8 +161,16 @@ fn dialogs_available() -> bool {
         return false;
     }
     if cfg!(target_os = "linux") {
-        return std::env::var_os("DISPLAY").is_some()
-            || std::env::var_os("WAYLAND_DISPLAY").is_some();
+        let x11 = std::env::var_os("DISPLAY").is_some();
+        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+        // GTK honours GDK_BACKEND strictly: naming a backend whose display is
+        // absent makes gtk_init fail, and rfd's dialog future then never
+        // resolves, leaving every later pick waiting behind it.
+        return match std::env::var("GDK_BACKEND").ok().as_deref() {
+            Some("wayland") => wayland,
+            Some("x11") => x11,
+            _ => x11 || wayland,
+        };
     }
     true
 }
@@ -181,7 +189,10 @@ impl FilePicker {
             .pick_file()
             .await
             .map(|f| f.path().to_path_buf());
-        tracing::info!(picked = result.is_some(), "[file_picker] pick_file returned");
+        tracing::info!(
+            picked = result.is_some(),
+            "[file_picker] pick_file returned"
+        );
         result
     }
 
@@ -234,8 +245,17 @@ impl FilePicker {
             dialog = dialog.set_title(title);
         }
 
+        // Callers pass a suggested file (`downloads/photo.jpg`), not only a
+        // folder: split it so the name is prefilled and the folder opened.
         if let Some(path) = &config.default_path {
-            dialog = dialog.set_directory(path);
+            match (path.is_dir(), path.parent(), path.file_name()) {
+                (false, Some(dir), Some(name)) => {
+                    dialog = dialog
+                        .set_directory(dir)
+                        .set_file_name(name.to_string_lossy());
+                }
+                _ => dialog = dialog.set_directory(path),
+            }
         }
 
         for filter in &config.filters {
@@ -283,11 +303,11 @@ mod tests {
     #[test]
     fn test_config_builder() {
         let config = FilePickerConfig::new()
-            .with_title("Select File")
+            .with_title("Select file")
             .with_filter(FileFilter::images())
             .with_multiple(true);
 
-        assert_eq!(config.title, Some("Select File".to_string()));
+        assert_eq!(config.title, Some("Select file".to_string()));
         assert!(config.multiple);
         assert_eq!(config.filters.len(), 1);
     }
@@ -307,9 +327,21 @@ mod headless_tests {
 
     #[tokio::test]
     async fn pickers_resolve_to_cancelled_when_headless() {
-        assert!(FilePicker::pick_file(FilePickerConfig::new()).await.is_none());
-        assert!(FilePicker::pick_files(FilePickerConfig::new()).await.is_empty());
+        assert!(
+            FilePicker::pick_file(FilePickerConfig::new())
+                .await
+                .is_none()
+        );
+        assert!(
+            FilePicker::pick_files(FilePickerConfig::new())
+                .await
+                .is_empty()
+        );
         assert!(FilePicker::pick_folder(None).await.is_none());
-        assert!(FilePicker::save_file(FilePickerConfig::new()).await.is_none());
+        assert!(
+            FilePicker::save_file(FilePickerConfig::new())
+                .await
+                .is_none()
+        );
     }
 }

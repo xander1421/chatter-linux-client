@@ -185,13 +185,20 @@ pub enum MessageType {
     NostrCarrier = 0x28,
     /// One signed push-to-talk burst. Ephemeral broadcast, never gossip-synced.
     VoiceFrame = 0x29,
+    /// Upstream identity-free presence. Known to the decoder and relayed, but
+    /// not consumed until rotating identities are implemented here.
+    AnnounceV2 = 0x2C,
     /// Metadata for a chunked file transfer: size, chunking, whole-file digest.
     /// Signed. See [`crate::tlv::file_stream`].
-    FileManifest = 0x2A,
+    FileManifest = 0xE0,
     /// One chunk of a chunked file transfer. Signed, individually.
-    FileChunk = 0x2B,
+    FileChunk = 0xE1,
     /// Receiver-driven request for chunks that never arrived. Signed.
-    FileChunkRequest = 0x2C,
+    FileChunkRequest = 0xE2,
+    /// Chatter versioned, signed open-channel text.
+    ChannelMessage = 0xE3,
+    /// Versioned opaque Signal-over-mesh carrier. Account data is inside Signal.
+    ChatterCarrier = 0xE4,
 }
 
 impl MessageType {
@@ -213,17 +220,14 @@ impl MessageType {
             0x27 => Self::Pong,
             0x28 => Self::NostrCarrier,
             0x29 => Self::VoiceFrame,
-            // 0x2A and beyond are unused by bitchat today, and claiming them is
-            // a risk worth stating rather than hiding: **if upstream bitchat
-            // later defines 0x2A, two different protocols share a tag.** The
-            // mitigation is that an unrecognised type is relayed rather than
-            // rejected, and each of these payloads is signature-verified and
-            // structurally validated before it does anything, so a collision
-            // degrades to "peers ignore each other's version" instead of
-            // mis-parsing. Revisit the tag choice before calling this stable.
-            0x2A => Self::FileManifest,
-            0x2B => Self::FileChunk,
-            0x2C => Self::FileChunkRequest,
+            0x2C => Self::AnnounceV2,
+            // Chatter extension range. These are not allocated by upstream;
+            // unknown types are carried as opaque packets by its flood relay.
+            0xE0 => Self::FileManifest,
+            0xE1 => Self::FileChunk,
+            0xE2 => Self::FileChunkRequest,
+            0xE3 => Self::ChannelMessage,
+            0xE4 => Self::ChatterCarrier,
             _ => return None,
         })
     }
@@ -324,8 +328,7 @@ mod tests {
         }
         assert_eq!(MessageType::from_u8(0x00), None);
         assert_eq!(MessageType::from_u8(0xFE), None);
-        // The next tag after ours. Named so that the day bitchat defines it, the
-        // collision recorded on `from_u8` is one grep away.
+        // Upstream's next unallocated tag.
         assert_eq!(MessageType::from_u8(0x2D), None);
     }
 

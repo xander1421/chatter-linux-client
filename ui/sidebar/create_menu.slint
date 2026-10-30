@@ -1,0 +1,242 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
+// Create menu — what the chat list's '+' opens (owner decision 2026-09-26).
+//
+// CreateMenu: the small popup of New Chat / New Channel / New Section. On a
+// phone it rises from the Chats tab's floating button, on a two-pane layout
+// it drops from the '+' in the sidebar header; `card-x` / `card-y` place it.
+//
+// NewChatPicker: New Chat's friend list. Picking a friend opens the DM.
+//
+// Both are pushed on the modal stack (app.slint), so Back and the backdrop
+// close them like any other layer.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Modal } from "../components/modal.slint";
+import { Avatar } from "../components/avatar.slint";
+import { MenuRow } from "../settings/account_menu.slint";
+import { FriendData } from "../modals/friends.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+import { Input } from "../components/input.slint";
+import { VirtualKeyboard } from "../components/modal_container.slint";
+
+export component CreateMenu inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
+    in property <length> card-x;
+    in property <length> card-y;
+    out property <length> card-width: 240px;
+    out property <length> card-height: menu.preferred-height;
+
+    callback close();
+    callback new-chat();
+    callback new-channel();
+    callback new-section();
+
+    property <bool> first-arrived: false;
+    property <bool> second-arrived: false;
+    property <bool> third-arrived: false;
+    Timer { interval: Appearance.reduce-motion ? 0ms : 24ms / Appearance.animation-speed; running: root.show && !root.first-arrived; triggered => { root.first-arrived = true; } }
+    Timer { interval: Appearance.reduce-motion ? 0ms : 62ms / Appearance.animation-speed; running: root.show && !root.second-arrived; triggered => { root.second-arrived = true; } }
+    Timer { interval: Appearance.reduce-motion ? 0ms : 100ms / Appearance.animation-speed; running: root.show && !root.third-arrived; triggered => { root.third-arrived = true; } }
+
+    // Logical close is immediate; the card settles back and the scrim fades
+    // before the host unmounts it. Nothing is a live target meanwhile.
+    in property <bool> show: true;
+    opacity: root.show ? 1 : 0;
+    animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+    visible: root.show || self.opacity > 0;
+    // The one scrim, like every other modal surface; taps outside the card
+    // close it and must not reach the list under it.
+    background: Materials.scrim;
+    TouchArea { enabled: root.show; clicked => { root.close(); } }
+
+    GlassSurface {
+        enter-distance: 0px;
+        shown: root.show;
+        // Keep the card attached to the control that opened it: the phone FAB
+        // is below the card, while the two-pane header action is above it.
+        transform-origin: { x: self.width - 24px, y: root.card-y > root.height / 2 ? self.height : 0px };
+        transform-scale-x: root.show ? 100% : 22%;
+        transform-scale-y: root.show ? 100% : 16%;
+        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+
+        material-level: 3;
+        elevation: 4;
+
+        x: root.card-x;
+        y: root.card-y;
+        width: root.card-width;
+        height: root.card-height;
+        border-radius: root.show ? Spacing.radius-xl : Spacing.fab-size / 2;
+        animate border-radius { duration: Materials.motion-standard; easing: Materials.spring; }
+        // Eat taps on the card's own padding.
+        TouchArea { }
+
+        // Rows are hidden the moment the menu is logically closed (no pointer,
+        // key, Tab focus or accessible default action reaches an invisible
+        // subtree) and every row action checks `show` besides: MenuRow's
+        // default action is unconditional.
+        Rectangle {
+            visible: root.show || root.opacity > 0;
+            menu := VerticalLayout {
+                padding-top: Spacing.xs;
+                padding-bottom: Spacing.xs;
+                MenuRow {
+                    icon: Icons.message-circle; label: "New chat";
+                    opacity: root.first-arrived ? 1 : 0;
+                    transform-scale-x: root.first-arrived ? 100% : 84%;
+                    transform-scale-y: root.first-arrived ? 100% : 84%;
+                    transform-origin: { x: self.width, y: self.height };
+                    animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+                    clicked => { if root.show && root.first-arrived { root.new-chat(); } }
+                }
+                // Channels do not exist in Shield mode (sidebar.slint hides them).
+                if !AnonMode.enabled: MenuRow {
+                    icon: Icons.megaphone; label: "New channel";
+                    opacity: root.second-arrived ? 1 : 0;
+                    transform-scale-x: root.second-arrived ? 100% : 84%;
+                    transform-scale-y: root.second-arrived ? 100% : 84%;
+                    transform-origin: { x: self.width, y: self.height };
+                    animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+                    clicked => { if root.show && root.second-arrived { root.new-channel(); } }
+                }
+                MenuRow {
+                    icon: Icons.folder; label: "New section";
+                    opacity: root.third-arrived ? 1 : 0;
+                    transform-scale-x: root.third-arrived ? 100% : 84%;
+                    transform-scale-y: root.third-arrived ? 100% : 84%;
+                    transform-origin: { x: self.width, y: self.height };
+                    animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+                    clicked => { if root.show && root.third-arrived { root.new-section(); } }
+                }
+            }
+        }
+    }
+
+    if !root.show: TouchArea {
+        width: 100%;
+        height: 100%;
+    }
+}
+
+export component NewChatPicker inherits Rectangle {
+    in property <bool> mobile-mode: false;
+    in property <[FriendData]> friends: [];
+    in-out property <string> query: "";
+
+    callback close();
+    callback pick(/* user-id */ string);
+    callback query-changed(string);
+    callback new-channel();
+    callback add-friend();
+
+    in property <bool> show: true;
+    modal := Modal {
+        show: root.show;
+        title: "New chat";
+        modal-width: 420px;
+        max-modal-height: 640px;
+        full-screen: root.mobile-mode;
+        fill-height: root.mobile-mode;
+        close => { root.close(); }
+
+        // A plain Rectangle hosts the Modal body and takes constraints from
+        // static children only; `if` children are dynamic, so without this
+        // layout the list counted as 0px tall and the card showed nothing.
+        VerticalLayout {
+            spacing: Spacing.sm;
+            Input {
+                placeholder: "Search contacts";
+                text <=> root.query;
+                edited(value) => { root.query-changed(value); }
+            }
+            if !AnonMode.enabled: MenuRow {
+                icon: Icons.megaphone;
+                label: "New channel";
+                clicked => { modal.release-focus(); root.new-channel(); }
+            }
+            MenuRow {
+                icon: Icons.user-plus;
+                label: "Add friend";
+                clicked => { modal.release-focus(); root.add-friend(); }
+            }
+
+            if root.friends.length == 0: Text {
+                text: root.query != "" ? "No contacts match “" + root.query + "”" : "No friends yet. Add one from Contacts.";
+                width: parent.width;
+                color: Colors.text-muted;
+                font-size: Typography.base;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+
+            if root.friends.length > 0: Flickable {
+                // A Flickable has no size of its own; bounded so a long list
+                // scrolls in here.
+                min-height: min(list.preferred-height, 480px);
+                viewport-height: list.preferred-height;
+                changed viewport-y => { if VirtualKeyboard.height > 0px { modal.release-focus(); } }
+                list := VerticalLayout {
+                    alignment: start;
+                    for friend in root.friends: Rectangle {
+                        height: root.mobile-mode ? Spacing.row-height-touch : 48px;
+                        background: row-touch.has-hover ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-md;
+                        accessible-role: button;
+                        accessible-label: friend.display-name;
+                        accessible-action-default => { if root.show { modal.release-focus(); root.pick(friend.user-id); } }
+                        KeyFocus { border-radius: parent.border-radius; activate => { if root.show { modal.release-focus(); root.pick(friend.user-id); } } }
+                        HorizontalLayout {
+                            padding: Spacing.sm;
+                            spacing: Spacing.sm;
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 0;
+                                Avatar {
+                                    size: root.mobile-mode ? Spacing.row-avatar-touch : 32px;
+                                    source: friend.avatar-source;
+                                    fallback-text: friend.initials;
+                                    name: friend.display-name;
+                                }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: Spacing.xxs;
+                                Text {
+                                    text: friend.display-name;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.base;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: friend.last-seen-label;
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                        row-touch := TouchArea { mouse-cursor: pointer; clicked => { modal.release-focus(); root.pick(friend.user-id); } }
+                    }
+                }
+            }
+        }
+    }
+}

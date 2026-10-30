@@ -55,63 +55,9 @@ const CALL_KEY_INFO_PREFIX: &[u8] = b"call-encryption:";
 /// Info string for ephemeral DH-based call key derivation (Signal-style).
 const EPHEMERAL_CALL_INFO: &[u8] = b"Chatter_Calling_EphemeralDH_SRTPKey_KDF";
 
-/// Derive a shared secret from identity keys using X25519 ECDH.
-///
-/// Signal identity keys use Curve25519 (X25519) keys with a 0x05 type prefix.
-/// The public key bytes are already in Montgomery form, so no conversion is needed.
-///
-/// # Arguments
-/// * `our_identity` - Our identity key pair
-/// * `peer_identity` - Peer's identity public key
-///
-/// # Returns
-/// 32-byte ECDH shared secret.
-pub fn derive_call_shared_secret(
-    our_identity: &IdentityKeyPair,
-    peer_identity: &IdentityKey,
-) -> Result<[u8; 32], CryptoError> {
-    // Get our private key bytes and peer's public key bytes
-    let our_private_bytes = our_identity.private_key().serialize();
-    let peer_public_bytes = peer_identity.serialize();
-
-    // The identity key serialization includes a type byte prefix (0x05 for DJB/Curve25519)
-    // Skip the first byte to get the actual 32-byte X25519 public key
-    if peer_public_bytes.len() != 33 || peer_public_bytes[0] != 0x05 {
-        return Err(CryptoError::InvalidKeyFormat);
-    }
-    let peer_x25519_bytes: [u8; 32] = peer_public_bytes[1..33]
-        .try_into()
-        .map_err(|_| CryptoError::InvalidKeyFormat)?;
-
-    // Signal public keys are already X25519 (Curve25519 in Montgomery form)
-    // No conversion needed - use them directly
-    let peer_x25519_public = X25519PublicKey::from(peer_x25519_bytes);
-
-    // Signal private keys are already clamped scalars suitable for X25519
-    let our_x25519_private: [u8; 32] = our_private_bytes[..32]
-        .try_into()
-        .map_err(|_| CryptoError::InvalidKeyFormat)?;
-    let our_private = X25519PrivateKey::from(our_x25519_private);
-
-    // Compute ECDH shared secret
-    let shared_secret = our_private.diffie_hellman(&peer_x25519_public);
-
-    // RFC 7748 §6.1: reject low-order peer keys that collapse ECDH to a
-    // constant. Without this gate a peer (or the server) can force a
-    // predictable call key with a low-order identity key.
-    if !shared_secret.was_contributory() {
-        return Err(CryptoError::KeyDerivationFailed(
-            "non-contributory ECDH (low-order public key)".into(),
-        ));
-    }
-
-    Ok(*shared_secret.as_bytes())
-}
-
 /// Derives a 32-byte call encryption key from a shared secret.
 ///
-/// For DM calls, the shared_secret comes from ECDH(our_identity, peer_identity).
-/// For group calls, the shared_secret comes from the sender key chain.
+/// The root of a call's ratchet chain (`CallKeyState::new`).
 ///
 /// # Arguments
 /// * `shared_secret` - 32-byte ECDH shared secret or sender key
@@ -119,10 +65,7 @@ pub fn derive_call_shared_secret(
 ///
 /// # Returns
 /// 32-byte AES-256 key suitable for LiveKit E2EE.
-pub fn derive_call_key(
-    shared_secret: &[u8; 32],
-    call_id: &str,
-) -> Result<[u8; 32], CryptoError> {
+pub fn derive_call_key(shared_secret: &[u8; 32], call_id: &str) -> Result<[u8; 32], CryptoError> {
     let hkdf = Hkdf::<Sha256>::new(Some(CALL_KEY_SALT), shared_secret);
 
     // Combine prefix with call_id for info parameter
@@ -284,83 +227,6 @@ pub fn derive_call_key_ephemeral(
 }
 
 // =============================================================================
-// Anonymous DM Call Key Derivation (Hybrid)
-// =============================================================================
-
-/// HKDF salt for anonymous call key derivation.
-const ANON_CALL_KEY_SALT: &[u8] = b"ChatterAnonCallKey-v1";
-
-/// Derive the final call encryption key for anonymous DM calls.
-///
-/// Mixes the Signal session ECDH shared secret with a per-call random
-/// contribution, producing a key that is:
-/// - Bound to the Signal identity keys (MITM protection)
-/// - Unique per call (random contribution)
-/// - Deterministic given the same inputs (both sides derive same key)
-///
-/// Final key = HKDF(
-///     salt: "ChatterAnonCallKey-v1",
-///     ikm: signal_shared_secret || random_contribution,
-///     info: "anon-call:" || room_name
-/// )
-///
-/// # Arguments
-/// * `signal_shared` - 32-byte ECDH shared secret from Signal identity keys
-/// * `random_contribution` - 32-byte random value from the call offer
-/// * `room_name` - The call room name (deterministic context binding)
-///
-/// # Returns
-/// 32-byte AES-256 key for LiveKit E2EE.
-pub fn derive_anon_call_key(
-    signal_shared: &[u8; 32],
-    random_contribution: &[u8; 32],
-    room_name: &str,
-) -> Result<[u8; 32], CryptoError> {
-    // Concatenate both key materials
-    let mut ikm = [0u8; 64];
-    ikm[..32].copy_from_slice(signal_shared);
-    ikm[32..].copy_from_slice(random_contribution);
-
-    let hkdf = Hkdf::<Sha256>::new(Some(ANON_CALL_KEY_SALT), &ikm);
-
-    let info = format!("anon-call:{}", room_name);
-    let mut call_key = [0u8; 32];
-    hkdf.expand(info.as_bytes(), &mut call_key)
-        .map_err(|_| CryptoError::KeyDerivationFailed("Anon call HKDF expand failed".into()))?;
-
-    Ok(call_key)
-}
-
-/// Derive the final call encryption key with optional post-quantum contribution.
-///
-/// Extends `derive_anon_call_key` with an optional Kyber shared secret.
-/// When PQ is available: HKDF(signal || random || kyber, room_name)
-/// When PQ is not available: falls back to HKDF(signal || random, room_name)
-pub fn derive_anon_call_key_hybrid(
-    signal_shared: &[u8; 32],
-    random_contribution: &[u8; 32],
-    pq_shared: Option<&[u8]>,
-    room_name: &str,
-) -> Result<[u8; 32], CryptoError> {
-    // Concatenate all key materials
-    let mut ikm = Vec::with_capacity(64 + pq_shared.map(|s| s.len()).unwrap_or(0));
-    ikm.extend_from_slice(signal_shared);
-    ikm.extend_from_slice(random_contribution);
-    if let Some(pq) = pq_shared {
-        ikm.extend_from_slice(pq);
-    }
-
-    let hkdf = Hkdf::<Sha256>::new(Some(ANON_CALL_KEY_SALT), &ikm);
-
-    let info = format!("anon-call:{}", room_name);
-    let mut call_key = [0u8; 32];
-    hkdf.expand(info.as_bytes(), &mut call_key)
-        .map_err(|_| CryptoError::KeyDerivationFailed("Hybrid anon call HKDF expand failed".into()))?;
-
-    Ok(call_key)
-}
-
-// =============================================================================
 // Group Call Key Generation
 // =============================================================================
 
@@ -398,16 +264,44 @@ pub fn generate_group_call_key() -> [u8; 32] {
 ///
 /// Automatically zeroizes the encryption key when dropped to prevent
 /// key material from lingering in memory after the call ends.
-#[derive(ZeroizeOnDrop)]
+// Staged media installation candidates retain the same zeroizing drop behavior.
+#[derive(Clone, ZeroizeOnDrop)]
 pub struct CallKeyState {
     /// Current encryption key (zeroized on drop).
     #[zeroize(drop)]
     current_key: [u8; 32],
     /// Call ID this key is for.
     call_id: String,
-    /// Key epoch (increments on ratchet).
+    /// Chain position: the epoch of `current_key` (= LiveKit key index).
+    /// Advanced by [`ratchet`](Self::ratchet) every 30 s and by one extra
+    /// step at each rotation.
     epoch: u32,
+    /// Rotation generation: the epoch the newest key from OUTSIDE the chain
+    /// (a rotation, on a leave or a join) was issued at; 0 for the
+    /// root key. Separate from `epoch` so ratchet advancement never makes a
+    /// newer rotation look stale: a key is new iff it was issued after
+    /// `anchor`, wherever our own ratchet has got to since.
+    anchor: u32,
 }
+
+/// How far ahead of our chain position a key from outside it may be issued.
+/// Every participant's position is the wall-clock epoch, or the newest
+/// rotation's until the clock passes it (`call_worker::ratchet_to`). A
+/// rotation is issued at the rotator's position + 1; add one for a 30 s
+/// boundary the rotator crossed first, and one for an earlier rotation still
+/// in flight to us. Anything further ahead is not a key any honest
+/// participant sends — and adopting it would let the sender outrun every
+/// later rotation.
+pub const MAX_ADOPT_LEAD: u32 = 3;
+
+/// How far ahead a joiner's FIRST key may be issued — the key that takes it
+/// off the ring's root chain, on which it stands at the wall-clock epoch.
+/// Every join and leave rotates the call one position ahead and the clock
+/// takes back one position per 30 s, so a call with churn runs ahead of the
+/// clock. 20 is ten minutes of rotations outrunning it. The bound is what a
+/// key authority that later leaves can pin a joiner ahead by: the next
+/// rotations are then refused until they pass it — delayed, not prevented.
+pub const MAX_JOIN_LEAD: u32 = 20;
 
 impl CallKeyState {
     /// Create a new key state for a call.
@@ -421,6 +315,7 @@ impl CallKeyState {
             current_key,
             call_id: call_id.to_string(),
             epoch: 0,
+            anchor: 0,
         })
     }
 
@@ -439,20 +334,65 @@ impl CallKeyState {
         self.epoch
     }
 
+    /// Generation of the newest key adopted or rotated in from outside the
+    /// chain; 0 while only the starting key is held.
+    pub fn anchor(&self) -> u32 {
+        self.anchor
+    }
+
     /// Get the call ID.
     pub fn call_id(&self) -> &str {
         &self.call_id
     }
 
-    /// Replace the current key with a new random key (for member-leave rotation).
+    /// Rotate to a fresh `key` (member-leave rotation): it becomes the
+    /// chain's key one position ahead, and the rotation's generation.
+    /// Unlike [`ratchet`](Self::ratchet) the key is not derived from the old
+    /// chain, so a departed member cannot follow. Returns the epoch the key
+    /// is issued at — what the other participants are sent.
+    pub fn rotate(&mut self, key: [u8; 32]) -> Result<u32, CryptoError> {
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or_else(|| CryptoError::KeyDerivationFailed("call key epoch exhausted".into()))?;
+        self.current_key = key;
+        self.epoch = epoch;
+        self.anchor = epoch;
+        Ok(epoch)
+    }
+
+    /// Adopt `key`, issued by the call's rotator at `epoch` (its rotation on
+    /// a leave or a join), so we hold the chain it holds.
     ///
-    /// Unlike `ratchet()` which derives deterministically from the current key,
-    /// this replaces the key entirely. The departed member cannot derive the
-    /// new key since it's randomly generated. The caller must redistribute
-    /// the new key to remaining participants.
-    pub fn reset(&mut self, new_key: [u8; 32]) {
-        self.current_key = new_key;
-        self.epoch += 1;
+    /// Returns false — and changes nothing — when the key is not newer than
+    /// the last one adopted (`epoch <= anchor`: a replay, or a rotation
+    /// superseded by a later one) or is issued further ahead of our position
+    /// than [`MAX_ADOPT_LEAD`] ([`MAX_JOIN_LEAD`] for the first key adopted).
+    ///
+    /// A key issued at or behind our position is NOT stale: our ratchet
+    /// simply crossed a boundary before it arrived. It is ratcheted forward
+    /// to our position — the same HKDF steps its sender took — so a rotation
+    /// that arrives late still replaces the chain the departed member can
+    /// derive. A key ahead of us moves us up to its epoch.
+    pub fn adopt(&mut self, key: [u8; 32], epoch: u32) -> Result<bool, CryptoError> {
+        let lead = if self.anchor == 0 {
+            MAX_JOIN_LEAD
+        } else {
+            MAX_ADOPT_LEAD
+        };
+        if epoch <= self.anchor || epoch > self.epoch.saturating_add(lead) {
+            return Ok(false);
+        }
+        let mut current = key;
+        let mut at = epoch;
+        while at < self.epoch {
+            at += 1;
+            current = self.derive_at(&current, at)?;
+        }
+        self.current_key = current;
+        self.epoch = at;
+        self.anchor = epoch;
+        Ok(true)
     }
 
     /// Ratchet the key forward (for long-running calls).
@@ -461,14 +401,9 @@ impl CallKeyState {
     /// forward secrecy within the call. Even if the current key
     /// is compromised, previous keys cannot be derived.
     pub fn ratchet(&mut self) -> Result<(), CryptoError> {
-        self.epoch += 1;
-
-        let info = format!("{}:epoch:{}", self.call_id, self.epoch);
-        let hkdf = Hkdf::<Sha256>::new(Some(CALL_KEY_SALT), &self.current_key);
-
-        hkdf.expand(info.as_bytes(), &mut self.current_key)
-            .map_err(|_| CryptoError::KeyDerivationFailed("Key ratchet failed".into()))?;
-
+        let next = self.next_epoch()?;
+        self.current_key = self.derive_at(&self.current_key, next)?;
+        self.epoch = next;
         Ok(())
     }
 
@@ -480,13 +415,22 @@ impl CallKeyState {
     /// HKDF derivation — so installing it now and re-installing it on the next
     /// tick is idempotent.
     pub fn peek_next_key(&self) -> Result<[u8; 32], CryptoError> {
-        let next_epoch = self.epoch + 1;
-        let info = format!("{}:epoch:{}", self.call_id, next_epoch);
-        let hkdf = Hkdf::<Sha256>::new(Some(CALL_KEY_SALT), &self.current_key);
+        self.derive_at(&self.current_key, self.next_epoch()?)
+    }
 
+    fn next_epoch(&self) -> Result<u32, CryptoError> {
+        self.epoch
+            .checked_add(1)
+            .ok_or_else(|| CryptoError::KeyDerivationFailed("call key epoch exhausted".into()))
+    }
+
+    /// The chain step to `epoch`: HKDF of the previous epoch's `key`.
+    fn derive_at(&self, key: &[u8; 32], epoch: u32) -> Result<[u8; 32], CryptoError> {
+        let info = format!("{}:epoch:{}", self.call_id, epoch);
+        let hkdf = Hkdf::<Sha256>::new(Some(CALL_KEY_SALT), key);
         let mut next = [0u8; 32];
         hkdf.expand(info.as_bytes(), &mut next)
-            .map_err(|_| CryptoError::KeyDerivationFailed("Key peek failed".into()))?;
+            .map_err(|_| CryptoError::KeyDerivationFailed("Key ratchet failed".into()))?;
         Ok(next)
     }
 }
@@ -608,36 +552,6 @@ mod tests {
         assert_eq!(key_vec.as_slice(), state.current_key());
     }
 
-    #[test]
-    fn test_derive_call_shared_secret() {
-        // Generate two identity key pairs
-        let mut rng = rand::rng();
-        let alice_identity = IdentityKeyPair::generate(&mut rng);
-        let bob_identity = IdentityKeyPair::generate(&mut rng);
-
-        // Debug: print the key format
-        let alice_public = alice_identity.identity_key();
-        let alice_serialized = alice_public.serialize();
-        println!("Alice identity key serialized: {:?}", alice_serialized);
-        println!("Length: {}, First byte: 0x{:02x}", alice_serialized.len(), alice_serialized[0]);
-
-        // Try to derive shared secret
-        let result = derive_call_shared_secret(&alice_identity, bob_identity.identity_key());
-
-        match &result {
-            Ok(secret) => println!("Success! Secret: {:?}", &secret[..8]),
-            Err(e) => println!("Error: {:?}", e),
-        }
-
-        assert!(result.is_ok(), "derive_call_shared_secret should succeed");
-
-        // Verify both parties derive the same secret
-        let alice_to_bob = derive_call_shared_secret(&alice_identity, bob_identity.identity_key()).unwrap();
-        let bob_to_alice = derive_call_shared_secret(&bob_identity, alice_identity.identity_key()).unwrap();
-
-        assert_eq!(alice_to_bob, bob_to_alice, "Both parties should derive the same shared secret");
-    }
-
     // =========================================================================
     // Ephemeral Key Exchange Tests (Signal-style PFS)
     // =========================================================================
@@ -699,7 +613,8 @@ mod tests {
             callee_identity.identity_key(),
             call_id,
             true,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Callee derives key (we_are_caller = false)
         let callee_key = derive_call_key_ephemeral(
@@ -708,10 +623,14 @@ mod tests {
             caller_identity.identity_key(),
             call_id,
             false,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Both should derive the same call key
-        assert_eq!(caller_key, callee_key, "Both parties should derive same call key");
+        assert_eq!(
+            caller_key, callee_key,
+            "Both parties should derive same call key"
+        );
     }
 
     #[test]
@@ -723,26 +642,32 @@ mod tests {
         // Call 1
         let caller_eph1 = EphemeralCallKey::generate();
         let callee_eph1 = EphemeralCallKey::generate();
-        let shared1 = caller_eph1.diffie_hellman(&callee_eph1.public_key_bytes()).unwrap();
+        let shared1 = caller_eph1
+            .diffie_hellman(&callee_eph1.public_key_bytes())
+            .unwrap();
         let key1 = derive_call_key_ephemeral(
             &shared1,
             &caller_identity,
             callee_identity.identity_key(),
             "call-1",
             true,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Call 2 (different ephemeral keys)
         let caller_eph2 = EphemeralCallKey::generate();
         let callee_eph2 = EphemeralCallKey::generate();
-        let shared2 = caller_eph2.diffie_hellman(&callee_eph2.public_key_bytes()).unwrap();
+        let shared2 = caller_eph2
+            .diffie_hellman(&callee_eph2.public_key_bytes())
+            .unwrap();
         let key2 = derive_call_key_ephemeral(
             &shared2,
             &caller_identity,
             callee_identity.identity_key(),
             "call-2",
             true,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Different calls should have different keys (PFS)
         assert_ne!(key1, key2, "Different calls should have different keys");
@@ -780,7 +705,7 @@ mod tests {
 
         // Reset with a new random key
         let new_key = [42u8; 32];
-        state.reset(new_key);
+        assert!(state.adopt(new_key, 2).unwrap());
         assert_eq!(state.epoch(), 2);
         assert_ne!(*state.current_key(), initial_key);
         assert_ne!(*state.current_key(), ratcheted_key);
@@ -794,7 +719,7 @@ mod tests {
 
     #[test]
     fn test_key_state_reset_breaks_chain() {
-        // Verify that reset() produces a key the old chain can't derive
+        // Verify that adopt() produces a key the old chain can't derive
         let shared_secret = [1u8; 32];
         let mut state_a = CallKeyState::new(&shared_secret, "test-call").unwrap();
         let mut state_b = CallKeyState::new(&shared_secret, "test-call").unwrap();
@@ -804,11 +729,120 @@ mod tests {
 
         // A resets with new key (member left), B continues ratcheting (departed member)
         let new_key = generate_group_call_key();
-        state_a.reset(new_key);
+        assert!(state_a.adopt(new_key, 1).unwrap());
         state_b.ratchet().unwrap();
 
         // Keys must differ — departed member can't derive the rotated key
         assert_ne!(state_a.current_key(), state_b.current_key());
+    }
+
+    /// Two participants on the same chain, ratcheted to `epoch`.
+    fn synced_pair(epoch: u32) -> (CallKeyState, CallKeyState) {
+        let mut a = CallKeyState::new(&[7u8; 32], "call").unwrap();
+        let mut b = CallKeyState::new(&[7u8; 32], "call").unwrap();
+        for _ in 0..epoch {
+            a.ratchet().unwrap();
+            b.ratchet().unwrap();
+        }
+        (a, b)
+    }
+
+    #[test]
+    fn rotation_arriving_after_receivers_ratchet_is_adopted_at_its_position() {
+        let (mut rotator, mut receiver) = synced_pair(5);
+        let key = generate_group_call_key();
+        let issued = rotator.rotate(key).unwrap();
+        assert_eq!(issued, 6);
+
+        // Both cross a boundary before the rotation reaches the receiver;
+        // the receiver crosses one more.
+        rotator.ratchet().unwrap();
+        receiver.ratchet().unwrap();
+        receiver.ratchet().unwrap();
+        assert_eq!(receiver.epoch(), 7);
+
+        assert!(
+            receiver.adopt(key, issued).unwrap(),
+            "a late rotation is not stale"
+        );
+        assert_eq!(receiver.epoch(), 7);
+        assert_eq!(
+            receiver.current_key(),
+            rotator.current_key(),
+            "same chain as the rotator"
+        );
+    }
+
+    #[test]
+    fn rotation_ahead_of_receiver_moves_it_up() {
+        let (mut rotator, mut receiver) = synced_pair(5);
+        let key = generate_group_call_key();
+        let issued = rotator.rotate(key).unwrap();
+        assert!(receiver.adopt(key, issued).unwrap());
+        assert_eq!(receiver.epoch(), 6);
+        assert_eq!(receiver.current_key(), rotator.current_key());
+        rotator.ratchet().unwrap();
+        receiver.ratchet().unwrap();
+        assert_eq!(receiver.current_key(), rotator.current_key());
+    }
+
+    #[test]
+    fn replayed_or_superseded_rotation_is_refused() {
+        let (mut rotator, mut receiver) = synced_pair(5);
+        let first = generate_group_call_key();
+        let first_at = rotator.rotate(first).unwrap();
+        let second = generate_group_call_key();
+        let second_at = rotator.rotate(second).unwrap();
+        assert!(
+            second_at > first_at,
+            "two rotations in one 30 s window stay ordered"
+        );
+
+        assert!(receiver.adopt(second, second_at).unwrap());
+        let held = *receiver.current_key();
+        assert!(
+            !receiver.adopt(first, first_at).unwrap(),
+            "superseded rotation arrives late"
+        );
+        assert!(!receiver.adopt(second, second_at).unwrap(), "replay");
+        assert_eq!(*receiver.current_key(), held);
+        assert!(
+            !receiver.adopt(generate_group_call_key(), 0).unwrap(),
+            "epoch 0 is the root"
+        );
+    }
+
+    #[test]
+    fn far_future_key_is_refused() {
+        let (_, mut receiver) = synced_pair(5);
+        let held = *receiver.current_key();
+        assert!(!receiver.adopt([9u8; 32], 5 + MAX_JOIN_LEAD + 1).unwrap());
+        assert!(!receiver.adopt([9u8; 32], u32::MAX).unwrap());
+        assert_eq!(receiver.epoch(), 5);
+        assert_eq!(*receiver.current_key(), held);
+        assert!(
+            receiver.adopt([9u8; 32], 5 + MAX_JOIN_LEAD).unwrap(),
+            "a joiner's first key: edge of the window"
+        );
+
+        // Once keyed, the window is the rotation lead.
+        let at = receiver.epoch();
+        assert!(!receiver.adopt([8u8; 32], at + MAX_ADOPT_LEAD + 1).unwrap());
+        assert!(receiver.adopt([8u8; 32], at + MAX_ADOPT_LEAD).unwrap());
+    }
+
+    #[test]
+    fn epoch_never_overflows() {
+        let mut state = CallKeyState::new(&[1u8; 32], "call").unwrap();
+        state.epoch = u32::MAX - 1;
+        state.anchor = u32::MAX - 2;
+        assert!(state.adopt([2u8; 32], u32::MAX).unwrap());
+        assert_eq!(state.epoch(), u32::MAX);
+        assert!(state.ratchet().is_err());
+        assert!(state.peek_next_key().is_err());
+        assert!(state.rotate([3u8; 32]).is_err());
+        assert_eq!(state.epoch(), u32::MAX);
+        assert_eq!(*state.current_key(), [2u8; 32]);
     }
 
     #[test]

@@ -42,10 +42,7 @@ impl<B: LocalAIBackend> ModelManager<B> {
             .into_iter()
             .find(|m| m.name == model_name)
             .ok_or_else(|| {
-                BackendError::ModelNotFound(format!(
-                    "Model {} not found after pull",
-                    model_name
-                ))
+                BackendError::ModelNotFound(format!("Model {} not found after pull", model_name))
             })
     }
 

@@ -12,19 +12,43 @@ import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 
 export component AnonModePinModal inherits Rectangle {
     in property <bool> show-modal: false;
     in-out property <string> pin: "";
     in property <string> error: "";
     in property <bool> verifying: false;
+    property <int> shake-step: 0;
+    changed error => {
+        if (self.error != "" && !Appearance.reduce-motion) {
+            self.shake-step = 1;
+            shake-timer.running = true;
+        } else {
+            self.shake-step = 0;
+            shake-timer.running = false;
+        }
+    }
+    shake-timer := Timer {
+        interval: Appearance.reduce-motion ? 1ms : Materials.feedback-duration;
+        running: false;
+        triggered => {
+            if (root.shake-step < 5) {
+                root.shake-step += 1;
+            } else {
+                root.shake-step = 0;
+                self.running = false;
+            }
+        }
+    }
 
     callback close();
     callback submit(string);
 
     Modal {
         show: root.show-modal;
-        title: "Enter PIN to enable Anon Mode";
+        title: "Enter PIN to enable Shield";
         modal-width: 420px;
 
         close => { root.close(); }
@@ -33,25 +57,48 @@ export component AnonModePinModal inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
-                text: "Anon Mode hides server-friend DMs and public channels — only your anonymous DMs and groups remain visible. Enter your PIN to enable.";
+                width: parent.width;
+                text: "Shield hides your channels and Saved messages and shows your anonymous DMs. Your DMs with friends stay, and are sent through anonymous mailboxes instead of the server. Your network location is hidden behind Tor — if Tor can't be reached you will be told. Enter your PIN to enable. On a device checking online, wrong attempts can delete your key backup.";
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
             }
 
-            Input {
-                placeholder: "PIN";
-                password: true;
-                text <=> root.pin;
-                disabled: root.verifying;
-                accepted(value) => {
-                    if (value != "" && !root.verifying) {
-                        root.submit(value);
+            Rectangle {
+                height: Spacing.button-height;
+                x: root.shake-step == 1 || root.shake-step == 3 ? -7px
+                    : root.shake-step == 2 || root.shake-step == 4 ? 7px : 0px;
+                animate x { duration: Materials.feedback-duration; easing: Materials.spring; }
+                Input {
+                    width: 100%;
+                    placeholder: "PIN";
+                    password: true;
+                    text <=> root.pin;
+                    disabled: root.verifying;
+                    error: root.error != "";
+                    accepted(value) => {
+                        if (value != "" && !root.verifying) {
+                            root.submit(value);
+                        }
                     }
                 }
             }
 
+            HorizontalLayout {
+                alignment: center;
+                spacing: Spacing.sm;
+                for index in [0, 1, 2, 3, 4, 5, 6, 7]: Rectangle {
+                    width: root.pin.character-count > index ? 9px : 7px;
+                    height: self.width;
+                    border-radius: self.width / 2;
+                    background: root.pin.character-count > index ? Colors.primary : Colors.border;
+                    animate width { duration: Materials.motion-quick; easing: Materials.spring; }
+                    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                }
+            }
+
             if root.error != "": Text {
+                width: parent.width;
                 text: root.error;
                 color: Colors.error;
                 font-size: Typography.sm;

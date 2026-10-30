@@ -1,0 +1,24 @@
+[package]
+name = "chatter-ui-slint"
+version = "0.1.0"
+edition = "2024"
+authors = ["xander1421"]
+description = "Generated Slint components for the Chatter client"
+license = "GPL-3.0"
+rust-version = "1.99"
+
+# No handwritten logic lives here. Test the components through chatter-ui's
+# headless integration suites, without compiling the generated tree again.
+[lib]
+test = false
+bench = false
+doctest = false
+
+[dependencies]
+slint = { version = "=1.17.1", default-features = false, features = ["std", "compat-1-2"] }
+
+[build-dependencies]
+slint-build = "1.17.1"
+
+[features]
+ui-test-debug = []

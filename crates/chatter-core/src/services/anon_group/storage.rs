@@ -20,15 +20,44 @@ impl AnonGroupService {
         sent_at: u64,
     ) -> Result<AnonGroupMessageId, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        let mut message = Message::new_text(channel_id, ConversationType::AnonGroup, sender_id, String::new(), sent_at);
+        // A post can reach us before the owner's roster admits its sender.
+        // Place that sender's join notice immediately before the earliest held
+        // post, while retaining the roster timestamp as the notice identity.
+        let display_at = match &system_content {
+            SystemMessage::UserJoined(user) => self
+                .held_posts
+                .earliest_post_timestamp(group_id, user)
+                .map_or(sent_at, |post_at| sent_at.min(post_at.saturating_sub(1))),
+            _ => sent_at,
+        };
+        let mut message = Message::new_text(
+            channel_id,
+            ConversationType::AnonGroup,
+            sender_id,
+            String::new(),
+            display_at,
+        );
+        // Names are snapshots of local roster state and can change between
+        // application and replay. Keep them out of the identity preimage.
+        let notice = match &system_content {
+            SystemMessage::UserJoined(user) => format!("joined:{user}"),
+            SystemMessage::AnonGroupUserLeft { .. } => "left".to_string(),
+            SystemMessage::UserRemoved { removed, .. } => format!("removed:{removed}"),
+            SystemMessage::SelfRemoved { .. } => "self-removed".to_string(),
+            SystemMessage::Undelivered { sent_at, .. } => format!("undelivered:{sent_at}"),
+            other => format!("{other:?}"),
+        };
         message.content = MessageContent::System(system_content);
+        let identity = format!("secret-system:{channel_id}:{sender_id:?}:{sent_at}:{notice}");
+        message.id = MessageId(uuid::Uuid::new_v5(&uuid::Uuid::nil(), identity.as_bytes()));
 
         let msg_id_str = message.id.to_string();
-        self.message_service.message_repo.insert(&message)?;
+        self.message_service
+            .message_repo
+            .insert_or_ignore(&message)?;
         tracing::debug!(
-            "Stored system message {} in group {} at {}",
+            "Stored system message {} in group at {}",
             msg_id_str,
-            group_id,
             sent_at
         );
         Ok(AnonGroupMessageId::from_string(msg_id_str))
@@ -59,11 +88,12 @@ impl AnonGroupService {
             quote,
         );
         let msg_id_str = message.id.to_string();
-        self.message_service.message_repo.insert(&message)?;
+        self.message_service
+            .message_repo
+            .insert_or_ignore(&message)?;
         tracing::debug!(
-            "Stored message {} in group {} with sent_at={}",
+            "Stored message {} in group with sent_at={}",
             msg_id_str,
-            group_id,
             sent_at
         );
         Ok(AnonGroupMessageId::from_string(msg_id_str))
@@ -78,10 +108,8 @@ impl AnonGroupService {
         sent_at: u64,
     ) -> Result<AnonGroupMessageId, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        let content = crate::services::anon_shared::message_content_from_text_and_attachments(
-            text,
-            &[],
-        );
+        let content =
+            crate::services::anon_shared::message_content_from_text_and_attachments(text, &[]);
         let message = crate::services::anon_shared::build_anon_message(
             channel_id,
             ConversationType::AnonGroup,
@@ -92,11 +120,12 @@ impl AnonGroupService {
             None,
         );
         let msg_id_str = message.id.to_string();
-        self.message_service.message_repo.insert(&message)?;
+        self.message_service
+            .message_repo
+            .insert_or_ignore(&message)?;
         tracing::debug!(
-            "Stored text message {} in group {} with sent_at={}",
+            "Stored text message {} in group with sent_at={}",
             msg_id_str,
-            group_id,
             sent_at
         );
         Ok(AnonGroupMessageId::from_string(msg_id_str))
@@ -130,11 +159,12 @@ impl AnonGroupService {
             quote,
         );
         let msg_id_str = message.id.to_string();
-        self.message_service.message_repo.insert(&message)?;
+        self.message_service
+            .message_repo
+            .insert_or_ignore(&message)?;
         tracing::debug!(
-            "Stored message {} in group {} with sent_at={}, attachments={}",
+            "Stored message {} in group with sent_at={}, attachments={}",
             msg_id_str,
-            group_id,
             sent_at,
             attachment_ids.len()
         );
@@ -171,7 +201,9 @@ impl AnonGroupService {
             quote,
         );
         let msg_id_str = message.id.to_string();
-        self.message_service.message_repo.insert(&message)?;
+        self.message_service
+            .message_repo
+            .insert_or_ignore(&message)?;
         Ok(AnonGroupMessageId::from_string(msg_id_str))
     }
 
@@ -182,18 +214,24 @@ impl AnonGroupService {
         sent_timestamp: u64,
     ) -> Result<Option<Message>, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        Ok(self.message_service.message_repo.get_by_conversation_timestamp(&channel_id, sent_timestamp)?)
+        Ok(self
+            .message_service
+            .message_repo
+            .get_by_conversation_timestamp(&channel_id, sent_timestamp)?)
     }
 
-    /// Create attachment records from pointers.
+    /// Create attachment records from pointers, marked as a secret chat's so
+    /// their downloads go over Tor only.
     ///
-    /// Returns the list of created attachment IDs for storing in the message.
+    /// Returns the list of created attachment IDs for storing in the message;
+    /// an error when any origin could not be persisted.
     pub fn create_attachments_from_pointers(
         &self,
         pointers: &[crate::proto::content_v1::AttachmentPointer],
-    ) -> Vec<AttachmentId> {
-        let attachment_service = AttachmentService::new_local(self.attachment_repo.clone());
-        attachment_service.create_from_pointers(pointers)
+    ) -> Result<Vec<AttachmentId>, crate::error::StorageError> {
+        AttachmentService::new_local(self.attachment_repo.clone())
+            .for_secret_chat()
+            .create_from_pointers(pointers)
     }
 
     /// Get a message by sender ID and timestamp (Signal-style lookup).
@@ -221,10 +259,34 @@ impl AnonGroupService {
         timestamp_ns: u64,
     ) -> Result<bool, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
+        crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+            self.message_service.database.clone(),
+        )
+        .queue_anon_group_delete(
+            sender_id,
+            timestamp_ns,
+            channel_id,
+            crate::util::time::TimestampNanos::now().as_u64(),
+        )?;
+        if self
+            .message_service
+            .message_repo
+            .get_by_reaction_scope(
+                &crate::domain::reaction::ReactionScope::new(
+                    channel_id,
+                    ConversationType::AnonGroup,
+                ),
+                sender_id,
+                timestamp_ns,
+            )?
+            .is_none()
+        {
+            return Ok(false);
+        }
         Ok(self
             .message_service
             .message_repo
-            .mark_deleted_by_sender_timestamp(&channel_id, sender_id, timestamp_ns)?)
+            .mark_deleted_anon_group_by_sender_timestamp(&channel_id, sender_id, timestamp_ns)?)
     }
 
     /// Get messages for a group with pagination.
@@ -238,9 +300,7 @@ impl AnonGroupService {
     ) -> Result<Vec<Message>, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
         // Convert DateTime cursor to sent_at nanos for the unified repo
-        let before_sent_at = before.and_then(|dt| {
-            dt.timestamp_nanos_opt().map(|ns| ns as u64)
-        });
+        let before_sent_at = before.and_then(|dt| dt.timestamp_nanos_opt().map(|ns| ns as u64));
         Ok(self.message_service.message_repo.list_for_conversation(
             &channel_id,
             &ConversationType::AnonGroup,
@@ -259,23 +319,23 @@ impl AnonGroupService {
         limit: i32,
     ) -> Result<Vec<Message>, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        let before_sent_at = before.and_then(|dt| {
-            dt.timestamp_nanos_opt().map(|ns| ns as u64)
-        });
-        Ok(self.message_service.message_repo.list_for_conversation_asc(
-            &channel_id,
-            &ConversationType::AnonGroup,
-            before_sent_at,
-            limit as u32,
-        )?)
+        let before_sent_at = before.and_then(|dt| dt.timestamp_nanos_opt().map(|ns| ns as u64));
+        Ok(self
+            .message_service
+            .message_repo
+            .list_for_conversation_asc(
+                &channel_id,
+                &ConversationType::AnonGroup,
+                before_sent_at,
+                limit as u32,
+            )?)
     }
 
     /// Get a single message by ID.
-    pub fn get_message(
-        &self,
-        id: &AnonGroupMessageId,
-    ) -> Result<Option<Message>, AnonGroupError> {
-        let msg_id: MessageId = id.as_str().parse()
+    pub fn get_message(&self, id: &AnonGroupMessageId) -> Result<Option<Message>, AnonGroupError> {
+        let msg_id: MessageId = id
+            .as_str()
+            .parse()
             .map_err(|_| AnonGroupError::InvalidData(format!("invalid message id: {}", id)))?;
         Ok(self.message_service.message_repo.get(&msg_id)?)
     }
@@ -286,19 +346,19 @@ impl AnonGroupService {
         group_id: &AnonGroupId,
     ) -> Result<Option<Message>, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        Ok(self.message_service.message_repo.get_latest_for_conversation(
-            &channel_id,
-            &ConversationType::AnonGroup,
-        )?)
+        Ok(self
+            .message_service
+            .message_repo
+            .get_latest_for_conversation(&channel_id, &ConversationType::AnonGroup)?)
     }
 
     /// Get the message count for a group.
     pub fn get_message_count(&self, group_id: &AnonGroupId) -> Result<i64, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        Ok(self.message_service.message_repo.count_in_conversation(
-            &channel_id,
-            &ConversationType::AnonGroup,
-        )?)
+        Ok(self
+            .message_service
+            .message_repo
+            .count_in_conversation(&channel_id, &ConversationType::AnonGroup)?)
     }
 
     /// Set pin state for a message by group_id and sent_at timestamp.
@@ -309,51 +369,31 @@ impl AnonGroupService {
         pinned: bool,
     ) -> Result<bool, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        Ok(self.message_service.message_repo.set_pinned_by_timestamp(&channel_id, &ConversationType::AnonGroup, sent_timestamp, pinned)?)
+        Ok(self.message_service.message_repo.set_pinned_by_timestamp(
+            &channel_id,
+            &ConversationType::AnonGroup,
+            sent_timestamp,
+            pinned,
+        )?)
     }
 
     /// List all pinned messages for a group.
     pub fn list_pinned(&self, group_id: &AnonGroupId) -> Result<Vec<Message>, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        Ok(self.message_service.message_repo.list_pinned_for_conversation(
-            &channel_id,
-            &ConversationType::AnonGroup,
-        )?)
+        Ok(self
+            .message_service
+            .message_repo
+            .list_pinned_for_conversation(&channel_id, &ConversationType::AnonGroup)?)
     }
 
     /// Delete a message (soft delete).
     pub fn delete_message(&self, id: &AnonGroupMessageId) -> Result<(), AnonGroupError> {
-        let msg_id: MessageId = id.as_str().parse()
+        let msg_id: MessageId = id
+            .as_str()
+            .parse()
             .map_err(|_| AnonGroupError::InvalidData(format!("invalid message id: {}", id)))?;
         self.message_service.message_repo.delete(&msg_id)?;
         Ok(())
-    }
-
-    /// Update message text (for handling edits from peer).
-    ///
-    /// Only updates if sender_id matches the message author (security).
-    /// Returns `Ok(true)` if a message was updated, `Ok(false)` if message not found
-    /// or sender doesn't match author.
-    pub fn update_message_text_by_sender(
-        &self,
-        group_id: &AnonGroupId,
-        sender_id: &UserId,
-        sent_timestamp: u64,
-        new_text: &str,
-    ) -> Result<bool, AnonGroupError> {
-        let channel_id: ChannelId = (*group_id).into();
-        // Verify sender matches message author before updating
-        if let Some(msg) = self.message_service.message_repo
-            .get_by_conversation_sender_timestamp(&channel_id, sender_id, sent_timestamp)?
-        {
-            if msg.sender_id.as_ref() != Some(sender_id) {
-                return Ok(false);
-            }
-            Ok(self.message_service.message_repo
-                .update_text_by_timestamp(&channel_id, &ConversationType::AnonGroup, sent_timestamp, new_text)?)
-        } else {
-            Ok(false)
-        }
     }
 
     /// Add a reaction to a message in the DB.
@@ -361,15 +401,24 @@ impl AnonGroupService {
     /// Uses (sender_id, sent_at_ns) to identify the target message (Signal-style).
     pub fn add_reaction(
         &self,
-        _group_id: &AnonGroupId,
+        group_id: &AnonGroupId,
         sender_id: &UserId,
         sent_at_ns: u64,
         reactor_id: &UserId,
         emoji: &str,
     ) -> Result<bool, AnonGroupError> {
         let current_user_id = self.current_user_id()?;
-        Ok(self.message_service.message_repo
-            .add_reaction(sender_id, sent_at_ns, reactor_id, &current_user_id, emoji)?)
+        Ok(self.message_service.message_repo.add_reaction(
+            &crate::domain::reaction::ReactionScope::new(
+                (*group_id).into(),
+                ConversationType::AnonGroup,
+            ),
+            sender_id,
+            sent_at_ns,
+            reactor_id,
+            &current_user_id,
+            emoji,
+        )?)
     }
 
     /// Remove a reaction from a message in the DB.
@@ -377,15 +426,24 @@ impl AnonGroupService {
     /// Uses (sender_id, sent_at_ns) to identify the target message (Signal-style).
     pub fn remove_reaction(
         &self,
-        _group_id: &AnonGroupId,
+        group_id: &AnonGroupId,
         sender_id: &UserId,
         sent_at_ns: u64,
         reactor_id: &UserId,
         emoji: &str,
     ) -> Result<bool, AnonGroupError> {
         let current_user_id = self.current_user_id()?;
-        Ok(self.message_service.message_repo
-            .remove_reaction(sender_id, sent_at_ns, reactor_id, &current_user_id, emoji)?)
+        Ok(self.message_service.message_repo.remove_reaction(
+            &crate::domain::reaction::ReactionScope::new(
+                (*group_id).into(),
+                ConversationType::AnonGroup,
+            ),
+            sender_id,
+            sent_at_ns,
+            reactor_id,
+            &current_user_id,
+            emoji,
+        )?)
     }
 
     /// Get all reaction counts for a group's messages.
@@ -396,7 +454,9 @@ impl AnonGroupService {
         group_id: &AnonGroupId,
     ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        Ok(self.message_service.message_repo.get_reaction_counts_for_conversation(&channel_id, &ConversationType::AnonGroup)?)
+        Ok(self
+            .message_service
+            .message_repo
+            .get_reaction_counts_for_conversation(&channel_id, &ConversationType::AnonGroup)?)
     }
-
 }

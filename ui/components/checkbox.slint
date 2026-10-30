@@ -1,0 +1,87 @@
+// A compact checkbox visual inside the shared minimum hit target.
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
+
+export component Checkbox inherits Rectangle {
+    in-out property <bool> checked: false;
+    in property <bool> enabled: true;
+    in property <string> label;
+    callback toggled(bool);
+    property <float> mark-progress: checked ? 1 : 0;
+    animate mark-progress { duration: Materials.motion-standard; easing: Materials.glide; }
+    width: Spacing.touch-target-min;
+    height: Spacing.touch-target-min;
+    accessible-role: checkbox;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        if root.enabled { root.checked = !root.checked; root.toggled(root.checked); }
+    }
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.checked = !root.checked;
+                root.toggled(root.checked);
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    box := Rectangle {
+        width: Spacing.switch-thumb;
+        height: touch.pressed ? Spacing.switch-thumb - Spacing.xxs : Spacing.switch-thumb;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: Spacing.radius-sm;
+        border-width: Spacing.stroke;
+        border-color: keys.has-focus && Appearance.keyboard-focus-visible ? Colors.focus-ring : root.checked ? Colors.action-fill : Colors.text-muted;
+        background: root.checked ? (touch.pressed ? Colors.action-active : Colors.action-fill)
+            : touch.pressed || touch.has-hover ? Colors.surface-hover : transparent;
+        opacity: root.enabled ? 1 : 0.38;
+        animate height { duration: Materials.motion-quick; easing: Materials.spring; }
+        animate background { duration: Materials.motion-quick; easing: Materials.glide; }
+        // Two strokes grow in sequence. Keeping them mounted lets a reversal
+        // erase the mark along the same path.
+        Path {
+            width: parent.width;
+            height: parent.height;
+            viewbox-width: 20;
+            viewbox-height: 20;
+            stroke: Colors.on-action;
+            stroke-width: 2px;
+            MoveTo { x: 4; y: 10; }
+            LineTo {
+                x: 4 + 4 * min(1, root.mark-progress * 2);
+                y: 10 + 4 * min(1, root.mark-progress * 2);
+            }
+        }
+        Path {
+            width: parent.width;
+            height: parent.height;
+            viewbox-width: 20;
+            viewbox-height: 20;
+            stroke: Colors.on-action;
+            stroke-width: 2px;
+            MoveTo { x: 8; y: 14; }
+            LineTo {
+                x: 8 + 8 * max(0, root.mark-progress * 2 - 1);
+                y: 14 - 8 * max(0, root.mark-progress * 2 - 1);
+            }
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if root.enabled { root.checked = !root.checked; root.toggled(root.checked); }
+        }
+    }
+}

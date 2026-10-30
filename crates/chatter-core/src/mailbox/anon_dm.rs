@@ -98,8 +98,9 @@ impl AnonDmPoller {
         let mailbox_id = hex::encode(mailbox.public_key);
 
         // Sign challenge with private key
-        let signing_key = SigningKey::from_keypair_bytes(&mailbox.private_key)
-            .map_err(|e| MailboxError::KeyDerivationFailed(format!("Invalid signing key: {}", e)))?;
+        let signing_key = SigningKey::from_keypair_bytes(&mailbox.private_key).map_err(|e| {
+            MailboxError::KeyDerivationFailed(format!("Invalid signing key: {}", e))
+        })?;
         let signature = signing_key.sign(&challenge);
 
         // Poll mailbox with signed challenge
@@ -152,45 +153,6 @@ impl AnonDmPoller {
         })
     }
 
-    /// Poll all anonymous DM mailboxes.
-    pub async fn poll_all(
-        &self,
-        client: &mut AnonymousMailboxClient,
-    ) -> Result<Vec<AnonDmPollResult>, MailboxError> {
-        let mailbox_keys = self.get_active_mailbox_keys()?;
-
-        tracing::trace!(
-            mailbox_count = mailbox_keys.len(),
-            "[ANON_DM_POLLER] Polling all anonymous DM mailboxes"
-        );
-
-        let mut results = Vec::with_capacity(mailbox_keys.len());
-
-        for (conversation_id, _, _) in &mailbox_keys {
-            match self.poll_mailbox(conversation_id, client, None).await {
-                Ok(result) => {
-                    if result.has_messages() {
-                        tracing::debug!(
-                            conversation_id = %conversation_id,
-                            messages = result.message_count(),
-                            "Received anonymous DM messages"
-                        );
-                    }
-                    results.push(result);
-                }
-                Err(e) => {
-                    tracing::debug!(
-                        conversation_id = %conversation_id,
-                        error = %e,
-                        "Failed to poll anonymous DM mailbox"
-                    );
-                }
-            }
-        }
-
-        Ok(results)
-    }
-
     /// Acknowledge messages in an anonymous DM mailbox.
     pub async fn acknowledge_messages(
         &self,
@@ -218,16 +180,17 @@ impl AnonDmPoller {
         let challenge = challenge_response.challenge;
 
         // Sign challenge with private key
-        let signing_key = SigningKey::from_keypair_bytes(&mailbox.private_key)
-            .map_err(|e| MailboxError::KeyDerivationFailed(format!("Invalid signing key: {}", e)))?;
+        let signing_key = SigningKey::from_keypair_bytes(&mailbox.private_key).map_err(|e| {
+            MailboxError::KeyDerivationFailed(format!("Invalid signing key: {}", e))
+        })?;
         let signature = signing_key.sign(&challenge);
 
         // Acknowledge messages
         let ack_response = client
             .acknowledge_messages(
                 mailbox.public_key.to_vec(),
-                signature.to_bytes().to_vec(),  // challenge_signature
-                challenge,                       // challenge
+                signature.to_bytes().to_vec(), // challenge_signature
+                challenge,                     // challenge
                 message_ids.clone(),
             )
             .await

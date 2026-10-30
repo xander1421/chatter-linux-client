@@ -3,9 +3,9 @@
 //! PreKey generation, storage, and bundle creation for PQXDH key exchange.
 
 use libsignal_protocol::{
-    kem, DeviceId, GenericSignedPreKey, IdentityKey, IdentityKeyPair, KeyPair, KyberPreKeyId,
+    DeviceId, GenericSignedPreKey, IdentityKey, IdentityKeyPair, KeyPair, KyberPreKeyId,
     KyberPreKeyRecord, PreKeyBundle, PreKeyId, PreKeyRecord, SignedPreKeyId, SignedPreKeyRecord,
-    Timestamp,
+    Timestamp, kem,
 };
 use rand::{CryptoRng, Rng};
 use std::sync::Arc;
@@ -55,7 +55,12 @@ impl PreKeyManager {
 
         // Store in database
         self.key_store
-            .save_prekey(id, &record.serialize().map_err(|e| CryptoError::Protocol(e.to_string()))?)
+            .save_prekey(
+                id,
+                &record
+                    .serialize()
+                    .map_err(|e| CryptoError::Protocol(e.to_string()))?,
+            )
             .map_err(CryptoError::Storage)?;
 
         Ok(record)
@@ -131,7 +136,9 @@ impl PreKeyManager {
         self.key_store
             .save_signed_prekey(
                 id,
-                &record.serialize().map_err(|e| CryptoError::Protocol(e.to_string()))?,
+                &record
+                    .serialize()
+                    .map_err(|e| CryptoError::Protocol(e.to_string()))?,
             )
             .map_err(CryptoError::Storage)?;
 
@@ -149,15 +156,20 @@ impl PreKeyManager {
     ) -> Result<KyberPreKeyRecord, CryptoError> {
         // Generate Kyber key pair using libsignal's built-in method
         // This uses OsRng internally and signs with the identity key
-        let record =
-            KyberPreKeyRecord::generate(kem::KeyType::Kyber1024, KyberPreKeyId::from(id), identity_key_pair.private_key())
-                .map_err(|e| CryptoError::Protocol(e.to_string()))?;
+        let record = KyberPreKeyRecord::generate(
+            kem::KeyType::Kyber1024,
+            KyberPreKeyId::from(id),
+            identity_key_pair.private_key(),
+        )
+        .map_err(|e| CryptoError::Protocol(e.to_string()))?;
 
         // Store in database
         self.key_store
             .save_kyber_prekey(
                 id,
-                &record.serialize().map_err(|e| CryptoError::Protocol(e.to_string()))?,
+                &record
+                    .serialize()
+                    .map_err(|e| CryptoError::Protocol(e.to_string()))?,
             )
             .map_err(CryptoError::Storage)?;
 
@@ -189,7 +201,9 @@ impl PreKeyManager {
         let pre_key_option = match prekey {
             Some(pk) => {
                 let id = pk.id().map_err(|e| CryptoError::Protocol(e.to_string()))?;
-                let public_key = pk.public_key().map_err(|e| CryptoError::Protocol(e.to_string()))?;
+                let public_key = pk
+                    .public_key()
+                    .map_err(|e| CryptoError::Protocol(e.to_string()))?;
                 Some((id, public_key))
             }
             None => None,
@@ -239,9 +253,7 @@ impl PreKeyManager {
 
     /// Get the count of available one-time prekeys.
     pub fn get_prekey_count(&self) -> Result<u32, CryptoError> {
-        self.key_store
-            .count_prekeys()
-            .map_err(CryptoError::Storage)
+        self.key_store.count_prekeys().map_err(CryptoError::Storage)
     }
 
     /// Get the next available prekey ID.

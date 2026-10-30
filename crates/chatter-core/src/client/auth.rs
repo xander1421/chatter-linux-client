@@ -1,58 +1,148 @@
 //! Authentication high-level API (login, registration, recovery, PINs).
 
-#![allow(unused_imports)]
-
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use parking_lot::Mutex;
-use tokio::task::JoinHandle;
-
-use crate::app::context::{AppContext, ContextError};
-use crate::app::core_services::CoreServices;
-use crate::domain::attachment::Attachment;
-use crate::domain::channel::{Channel, ChannelType};
-use crate::domain::message::{ConversationType, Message};
-use crate::error::NetworkError;
-use crate::events::{DomainEvent, EventBus};
-use crate::services::auth_service::{AuthError, LoginResult};
+use super::{ChatterClient, ClientError, RecoveryResult};
+use crate::services::auth_service::{LoginResult, PendingRecoveryCodes};
 use crate::services::key_recovery::KeyRecoveryNeed;
 use crate::storage::repositories::settings_repo::keys;
-use crate::inbox::DeviceInboxProvider;
-use crate::mailbox::group::GroupFanout;
-use crate::proto::content_v1::AttachmentPointer;
-use crate::services::ai_service::AIService;
-use crate::services::anon_dm::AnonDmService;
-use crate::services::anon_group::AnonGroupService;
-use crate::services::attachment::AttachmentService;
-use crate::services::auth_service::AuthService;
-#[cfg(feature = "media")]
-use crate::services::call_worker::CallWorkerHandle;
-use crate::services::channel::ChannelService;
-use crate::services::dm_bootstrap_service::DmBootstrapService;
-use crate::services::gateway::outgoing::{
-    OwnedOutgoingServices, OutgoingIntent, QuoteIntent, SendError, SendResult,
-    route_outgoing_owned,
-};
-use crate::services::ai::LocalAIService;
-use crate::services::mailbox_manager::MailboxManager;
-use crate::services::message::MessageService;
-use crate::services::pin_service::PinService;
-use crate::services::session_service::{SessionError, SessionService};
-use crate::services::signal_service::SignalService;
-use crate::services::section_service::SectionService;
-use crate::services::user::UserService;
-use crate::services::conversation::ConversationHandle;
-use crate::state::{
-    ActiveConversation, AuthState, ChatState, MessageState, OfflineState,
-    PrivacyState, UserState,
-};
-use crate::state::chat_state::PendingAttachment;
-use crate::storage::settings_keys;
-use crate::system::Directories;
-use super::{ChatterClient, ClientError, RecoveryResult};
+
+impl ClientError {
+    /// Text for the login/register screen, without the `auth error:` /
+    /// `login failed:` chain `Display` produces for logs.
+    #[must_use]
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::Auth(e) => e.user_message(),
+            Self::Validation(_) | Self::IdentityRecoveryRequired(_) | Self::CallEnded => {
+                self.to_string()
+            }
+            Self::Connection(crate::error::NetworkError::Unauthenticated) => {
+                "Wrong password.".to_string()
+            }
+            Self::Connection(_) | Self::NotConnected => {
+                "Couldn't reach the server. Try again.".to_string()
+            }
+            _ => "Something went wrong. Try again.".to_string(),
+        }
+    }
+}
 
 impl ChatterClient {
+    /// Codes issued to this device that the user has not confirmed saving.
+    /// The settings database is encrypted at rest; callers must never log them.
+    pub fn unacknowledged_recovery_codes(
+        &self,
+    ) -> Result<Option<PendingRecoveryCodes>, ClientError> {
+        let Some((user_id, _)) = self.current_user() else {
+            return Ok(None);
+        };
+        self.auth()
+            .settings_repo
+            .get(&keys::unacknowledged_recovery_codes_key(user_id))
+            .map_err(|e| ClientError::Auth(e.into()))
+    }
+
+    /// Forget the locally retained codes after the user confirms saving them.
+    pub fn acknowledge_recovery_codes(&self) -> Result<(), ClientError> {
+        let (user_id, _) = self.current_user().ok_or(ClientError::Auth(
+            crate::services::auth_service::AuthError::NotLoggedIn,
+        ))?;
+        self.auth()
+            .settings_repo
+            .delete(&keys::unacknowledged_recovery_codes_key(user_id))
+            .map(|_| ())
+            .map_err(|e| ClientError::Auth(e.into()))
+    }
+
+    pub(super) fn install_session_recovery(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        self.auth()
+            .auth_interceptor
+            .on_session_ended(Arc::new(move |generation| {
+                let Some(client) = weak.upgrade() else { return };
+                // This task is deliberately outside session tasks: teardown aborts
+                // those tasks and must not abort itself before clearing credentials.
+                tokio::spawn(async move {
+                    let _lifecycle = client.auth_lifecycle_lock.lock().await;
+                    if client.auth().auth_interceptor.generation() != generation {
+                        return;
+                    }
+                    // Flush existing drafts/recovery before advancing the revision;
+                    // the explicit logout path intentionally deletes these instead.
+                    {
+                        let (drafts, _) = client.composer_drafts_for_session();
+                        client.persist_composer_drafts(&drafts);
+                    }
+                    client.persist_composer_recovery();
+                    client.auth_state().invalidate_session();
+                    let teardown_revision = client.auth_state().get().session_revision;
+                    if let Err(error) = client.auth().end_session() {
+                        tracing::error!(%error, "could not persist ended session");
+                    }
+                    client.shutdown_session(teardown_revision, true).await;
+                    client
+                        .auth_state()
+                        .set_session_ended_if_current(teardown_revision);
+                });
+            }));
+
+        // The server's dedicated "device unlinked" answer, and nothing else
+        // (network/grpc/interceptors.rs DEVICE_UNLINKED_MESSAGE). Signal-Desktop
+        // `unlinkAndDisconnect` (background.preload.ts): stop, delete this
+        // device's credentials, keys and sessions at once, keep the history
+        // until the device is linked again (storage/unlink.rs).
+        let weak = Arc::downgrade(self);
+        self.auth()
+            .auth_interceptor
+            .on_device_unlinked(Arc::new(move |generation| {
+                let Some(client) = weak.upgrade() else { return };
+                tokio::spawn(async move {
+                    let _lifecycle = client.auth_lifecycle_lock.lock().await;
+                    if client.auth().auth_interceptor.generation() != generation {
+                        return;
+                    }
+                    let Some((former_owner, _)) = client.auth().current_user() else {
+                        tracing::error!("device unlinked, but no account is recorded on it");
+                        return;
+                    };
+                    tracing::warn!("this device was unlinked from the account; deleting its keys");
+                    // Drafts are history, which an unlink keeps.
+                    {
+                        let (drafts, _) = client.composer_drafts_for_session();
+                        client.persist_composer_drafts(&drafts);
+                    }
+                    client.persist_composer_recovery();
+                    client.auth_state().invalidate_session();
+                    let teardown_revision = client.auth_state().get().session_revision;
+                    // Stop authenticating before teardown, as the ended-session
+                    // path does; there is nothing left to tell the server.
+                    client.auth().auth_interceptor.clear();
+                    client.shutdown_session(teardown_revision, false).await;
+                    // Keys go after every session task has stopped, so none
+                    // can write a prekey or session back.
+                    if let Err(error) = client.auth().forget_unlinked_device(former_owner) {
+                        tracing::error!(%error, "could not delete the unlinked device's keys");
+                    }
+                    #[cfg(feature = "mesh")]
+                    if let Err(error) = client.mesh().remove_account_bindings(former_owner) {
+                        tracing::error!(%error, "could not remove the unlinked account's mesh bindings");
+                    }
+                    client
+                        .auth_state()
+                        .set_device_unlinked_if_current(teardown_revision);
+                });
+            }));
+    }
+
+    /// Text for the sign-in screen when this install was unlinked by another
+    /// device of its account and has not been linked or signed in since.
+    pub fn device_unlinked_notice(&self) -> Option<String> {
+        self.auth()
+            .unlinked_account()
+            .map(|_| crate::state::auth_state::DEVICE_UNLINKED_NOTICE.to_string())
+    }
+
     /// Ensure the gRPC pool is connected before running an auth RPC.
     ///
     /// Called from [`Self::login`] and [`Self::register`]. The startup
@@ -61,7 +151,7 @@ impl ChatterClient {
     /// itself), leaving the connection state at `Disconnected`. Without
     /// this self-heal, every auth RPC bounces with "Not connected to
     /// server" until the user manually retries `connect()`.
-    async fn ensure_connected_for_auth(self: &Arc<Self>) -> Result<(), ClientError> {
+    async fn ensure_connected_for_auth(&self) -> Result<(), ClientError> {
         if self.is_connected() {
             return Ok(());
         }
@@ -90,13 +180,35 @@ impl ChatterClient {
         device_name: &str,
         pin: Option<&str>,
     ) -> Result<LoginResult, ClientError> {
+        let _lifecycle = self.auth_lifecycle_lock.lock().await;
+        if self.started.load(std::sync::atomic::Ordering::SeqCst)
+            || (self.auth_state().is_logged_in()
+                && *self.authed_notif_session.lock()
+                    == Some(self.auth_state().get().session_revision))
+        {
+            return Err(ClientError::AlreadyStarted);
+        }
         // If startup `connect()` failed (or hasn't run yet), the gRPC
         // pool will reject auth RPCs with "Not connected to server".
         // Self-heal here so callers don't have to remember to retry —
         // common UX hazard when the user fixes the server URL after
         // initial offline boot.
         self.ensure_connected_for_auth().await?;
-        let mut result = self.auth().do_login(username, password, device_name, pin).await?;
+        // Every derivation below (login lookup hash, SVR salt, the stored
+        // SVR_SALT_USERNAME) must see the nickname registration used, not
+        // the `@nick.1234` handle the app displays.
+        let username = crate::crypto::auth_crypto::login_nickname(username);
+        // A priced login (server proof of work) takes seconds on a phone;
+        // the login screen shows `AuthStateData::login_verifying` meanwhile.
+        let auth_state = self.auth_state().clone();
+        let login = self
+            .auth()
+            .do_login(username, password, device_name, pin, &move || {
+                auth_state.set_login_verifying(true)
+            })
+            .await;
+        self.auth_state().set_login_verifying(false);
+        let mut result = login?;
         self.auth_state().set_logged_in(
             result.user_id,
             result.device_id,
@@ -114,7 +226,9 @@ impl ChatterClient {
                 // Nothing to attempt. Left as NoPinProvided so the caller is
                 // told to ask for the PIN rather than being handed a working
                 // -looking session with no keys.
-                None => tracing::warn!("no local identity and no PIN supplied — cannot restore keys"),
+                None => {
+                    tracing::warn!("no local identity and no PIN supplied — cannot restore keys")
+                }
             }
         }
 
@@ -139,10 +253,62 @@ impl ChatterClient {
         // holds the private half of.
         if result.keys_restored || self.key_republish_pending() {
             self.republish_identity_keys().await?;
+        } else {
+            // The server issued this login a device id it holds no bundle for
+            // (every login gets a new one). Without this, a Log Out -> Log In
+            // left peers encrypting to the previous, signed-out device and
+            // every incoming DM was delivered to nobody. Failing the login is
+            // better than reporting success for an unreachable device.
+            let mut auth_client = self
+                .auth()
+                .try_auth_client()
+                .ok_or(ClientError::NotConnected)?;
+            self.signal()
+                .publish_device_bundle(&mut auth_client)
+                .await
+                .map_err(|e| {
+                    ClientError::Validation(format!("failed to publish this device's keys: {e}"))
+                })?;
         }
 
+        // Our name, bio and avatar live on the server encrypted with our
+        // profile key. A new device has none of them locally — the avatar
+        // showed as initials while friends saw the photo — so restore them now
+        // that the profile key is in place. Best-effort: a failed fetch must
+        // not fail a login that otherwise worked.
+        match self.users().get_user_profile(&result.user_id).await {
+            Ok(profile) => {
+                result.display_name = profile.display_name;
+                self.auth_state().set_logged_in(
+                    result.user_id,
+                    result.device_id,
+                    result.display_name.clone(),
+                );
+            }
+            Err(e) => tracing::warn!(error = %e, "login: own profile restore failed"),
+        }
+
+        self.name_this_device(device_name).await;
         self.start().await?;
         Ok(result)
+    }
+
+    /// Give this device its name on the server, encrypted to the account
+    /// identity key (Signal's encryptDeviceName). The server creates the
+    /// device row unnamed — it may not read the name, so it cannot write it.
+    /// Best-effort: an unnamed device is labelled by its platform string.
+    async fn name_this_device(&self, device_name: &str) {
+        let Some(mut auth_client) = self.auth().try_auth_client() else {
+            tracing::warn!("no auth client; this device stays unnamed");
+            return;
+        };
+        if let Err(e) = self
+            .devices()
+            .name_this_device(&mut auth_client, device_name)
+            .await
+        {
+            tracing::warn!(error = %e, "could not set this device's encrypted name");
+        }
     }
 
     /// Accept a NEW Signal identity key after key recovery has been ruled out.
@@ -190,7 +356,9 @@ impl ChatterClient {
 
         self.republish_identity_keys().await?;
 
-        tracing::warn!("minted and published a NEW identity key — every contact's safety number has changed");
+        tracing::warn!(
+            "minted and published a NEW identity key — every contact's safety number has changed"
+        );
         Ok(())
     }
 
@@ -263,20 +431,30 @@ impl ChatterClient {
         avatar: Option<&[u8]>,
         pin: Option<&str>,
     ) -> Result<LoginResult, ClientError> {
+        let _lifecycle = self.auth_lifecycle_lock.lock().await;
+        if self.started.load(std::sync::atomic::Ordering::SeqCst)
+            || (self.auth_state().is_logged_in()
+                && *self.authed_notif_session.lock()
+                    == Some(self.auth_state().get().session_revision))
+        {
+            return Err(ClientError::AlreadyStarted);
+        }
         if let Some(p) = pin {
             crate::crypto::svr::validate_pin(p)
                 .map_err(|e| ClientError::Validation(e.to_string()))?;
         }
         // Self-heal a stale Disconnected state (see `login` for context).
         self.ensure_connected_for_auth().await?;
-        let result = self.auth().do_register(
-            username, password, display_name, device_name, avatar, pin,
-        ).await?;
+        let result = self
+            .auth()
+            .do_register(username, password, display_name, device_name, avatar, pin)
+            .await?;
         self.auth_state().set_logged_in(
             result.user_id,
             result.device_id,
             result.display_name.clone(),
         );
+        self.name_this_device(device_name).await;
 
         // Create SVR backup after successful registration (non-blocking on failure)
         if let Some(p) = pin {
@@ -334,11 +512,23 @@ impl ChatterClient {
         new_password: &str,
         new_pin: &str,
     ) -> Result<RecoveryResult, ClientError> {
-        let mut auth_client = self.auth().try_auth_client()
+        // A signed-out start no longer connects at boot (`startup_connect`).
+        self.ensure_connected_for_auth().await?;
+        let mut auth_client = self
+            .auth()
+            .try_auth_client()
             .ok_or_else(|| ClientError::NotConnected)?;
+        // Same keying as `login`: the bare nickname, whatever form was typed.
+        let username = crate::crypto::auth_crypto::login_nickname(username);
         let remaining_codes = self
             .auth()
-            .use_recovery_code(&mut auth_client, username, recovery_code, new_password, new_pin)
+            .use_recovery_code(
+                &mut auth_client,
+                username,
+                recovery_code,
+                new_password,
+                new_pin,
+            )
             .await
             .map_err(ClientError::Auth)?;
 
@@ -379,13 +569,33 @@ impl ChatterClient {
     /// # Arguments
     ///
     /// * `password` - The user's current password (will be hashed before sending)
-    pub async fn regenerate_recovery_codes(&self, password: &str) -> Result<Vec<String>, ClientError> {
-        let mut auth_client = self.auth().try_auth_client()
+    pub async fn regenerate_recovery_codes(
+        &self,
+        password: &str,
+    ) -> Result<Vec<String>, ClientError> {
+        let mut auth_client = self
+            .auth()
+            .try_auth_client()
             .ok_or_else(|| ClientError::NotConnected)?;
-        self.auth()
+        let codes = self
+            .auth()
             .regenerate_recovery_codes(&mut auth_client, password)
             .await
-            .map_err(ClientError::Auth)
+            .map_err(ClientError::Auth)?;
+        let (user_id, _) = self.current_user().ok_or(ClientError::Auth(
+            crate::services::auth_service::AuthError::NotLoggedIn,
+        ))?;
+        self.auth()
+            .settings_repo
+            .set(
+                &keys::unacknowledged_recovery_codes_key(user_id),
+                &PendingRecoveryCodes {
+                    codes: codes.clone(),
+                    regenerated: true,
+                },
+            )
+            .map_err(|e| ClientError::Auth(e.into()))?;
+        Ok(codes)
     }
 
     /// Create an SVR encrypted backup after registration.
@@ -395,23 +605,56 @@ impl ChatterClient {
     /// not block on backup upload.
     async fn perform_svr_backup(&self, pin: &str, username: &str) {
         match self.svr_backup().backup_from_pin(pin, username).await {
-            Ok(version) => tracing::info!(version, "SVR backup created successfully after registration"),
+            Ok(version) => tracing::info!(
+                version,
+                "SVR backup created successfully after registration"
+            ),
             Err(e) => tracing::warn!("SVR backup failed (non-fatal): {}", e),
         }
     }
 
-    /// Retry SVR backup creation if it failed during registration.
-    ///
-    /// Delegates to `SvrBackupService::retry_from_credentials` which reads
-    /// the locally-stored profile_key and uploads it under a PIN-derived
-    /// SVR secret. Caller must have already password-re-auth-gated the user.
-    pub async fn retry_svr_backup(
-        &self,
-        pin: &str,
-        username: &str,
-    ) -> Result<(), ClientError> {
+    /// The username every PIN derivation is salted with: exactly what was
+    /// typed at register/login (`keys::SVR_SALT_USERNAME`). Not the display
+    /// name and not the `.discriminator` handle — a different salt derives a
+    /// different secret, and a backup written under it cannot be restored.
+    pub(super) fn svr_salt_username(&self) -> Result<String, ClientError> {
+        self.signal()
+            .settings_repo
+            .get_string(keys::SVR_SALT_USERNAME)
+            .map_err(|e| ClientError::Validation(format!("failed to read login username: {e}")))?
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                ClientError::Validation(
+                    "no stored login username — log out and log in once, then retry".into(),
+                )
+            })
+    }
+
+    /// Whether the server holds a key backup for this account.
+    pub async fn has_key_backup(&self) -> Result<bool, ClientError> {
         self.svr_backup()
-            .retry_from_credentials(pin, username)
+            .has_key_backup()
+            .await
+            .map_err(|e| ClientError::Validation(format!("backup status check failed: {e}")))
+    }
+
+    /// Create the SVR key backup if registration failed to upload it.
+    ///
+    /// Gated on the local PIN fingerprint, and refuses when a backup already
+    /// exists: the upload is an unconditional replace, so without both checks
+    /// anyone holding the unlocked device could re-key the backup to a PIN of
+    /// their choosing.
+    pub async fn retry_svr_backup(&self, pin: &str) -> Result<(), ClientError> {
+        let verification = self.link_device().verify_pin(pin);
+        if verification != crate::services::link_device_service::PinVerification::Match {
+            return Err(ClientError::Validation(verification.message().into()));
+        }
+        if self.has_key_backup().await? {
+            return Ok(());
+        }
+        let username = self.svr_salt_username()?;
+        self.svr_backup()
+            .retry_from_credentials(pin, &username)
             .await
             .map_err(|e| ClientError::Validation(format!("SVR backup upload failed: {}", e)))?;
         tracing::info!("SVR backup retry succeeded");
@@ -431,21 +674,18 @@ impl ChatterClient {
     /// * `old_pin` - Current PIN.
     /// * `new_pin` - New PIN (must differ from `old_pin`).
     /// * `username` - Plaintext username (salt for Argon2id derivation).
-    pub async fn change_pin(
-        &self,
-        old_pin: &str,
-        new_pin: &str,
-        username: &str,
-    ) -> Result<(), ClientError> {
+    pub async fn change_pin(&self, old_pin: &str, new_pin: &str) -> Result<(), ClientError> {
         use crate::crypto::svr::{
-            derive_registration_lock, derive_svr_secret, validate_pin, validate_pin_shape, SvrKeypair,
+            SvrKeypair, derive_registration_lock, derive_svr_secret, validate_pin,
+            validate_pin_shape,
         };
         use zeroize::Zeroize;
 
         // Old PIN is the EXISTING one being verified — shape-only, or a user
         // whose current PIN is now blocklisted could never change it (§10).
         // The NEW PIN is being chosen, so it gets full strength validation.
-        validate_pin_shape(old_pin).map_err(|e| ClientError::Validation(format!("old PIN: {e}")))?;
+        validate_pin_shape(old_pin)
+            .map_err(|e| ClientError::Validation(format!("old PIN: {e}")))?;
         validate_pin(new_pin).map_err(|e| ClientError::Validation(format!("new PIN: {e}")))?;
         if old_pin == new_pin {
             return Err(ClientError::Validation(
@@ -453,10 +693,29 @@ impl ChatterClient {
             ));
         }
 
+        let username = self.svr_salt_username()?;
+        let username = username.as_str();
+        // The handle the re-encrypted backup carries, so a restore after this
+        // PIN change still recovers it (§117).
+        let full_username = self
+            .svr_backup()
+            .local_full_username()
+            .map_err(|e| ClientError::Validation(e.to_string()))?;
+
         // 2. Get identity keypair from signal store (private 32 bytes + public 33 bytes)
-        let mut private_bytes = self.signal().actor.get_identity_private_key().await
-            .map_err(|e| ClientError::Validation(format!("failed to get identity private key: {}", e)))?;
-        let public_bytes_33 = self.signal().actor.get_identity_public_key().await
+        let mut private_bytes = self
+            .signal()
+            .actor
+            .get_identity_private_key()
+            .await
+            .map_err(|e| {
+                ClientError::Validation(format!("failed to get identity private key: {}", e))
+            })?;
+        let public_bytes_33 = self
+            .signal()
+            .actor
+            .get_identity_public_key()
+            .await
             .map_err(|e| {
                 private_bytes.zeroize();
                 ClientError::Validation(format!("failed to get identity public key: {}", e))
@@ -476,11 +735,16 @@ impl ChatterClient {
             }
             Ok(_) => {
                 identity_keypair.zeroize();
-                return Err(ClientError::Validation("profile key not found or invalid length".into()));
+                return Err(ClientError::Validation(
+                    "profile key not found or invalid length".into(),
+                ));
             }
             Err(e) => {
                 identity_keypair.zeroize();
-                return Err(ClientError::Validation(format!("failed to read profile key: {}", e)));
+                return Err(ClientError::Validation(format!(
+                    "failed to read profile key: {}",
+                    e
+                )));
             }
         };
 
@@ -527,22 +791,35 @@ impl ChatterClient {
                 &new_svr_secret,
                 &identity_keypair,
                 &profile_key,
+                &full_username,
                 &new_reg_lock,
                 &new_svr_public_key,
             )
             .await;
 
         let final_result = match &result {
-            Err(crate::services::svr_backup_service::SvrBackupError::BackupNotFound)
-            | Err(crate::services::svr_backup_service::SvrBackupError::Network(
-                crate::error::NetworkError::NotFound(_),
-            )) => {
-                // No existing backup — create one with the new PIN instead
+            // NOT_FOUND means the account has no backup at all, so there is
+            // nothing to re-encrypt: create one under the new PIN. A wrong
+            // old PIN is the distinct WrongPin (§114) and is refused below.
+            Err(crate::services::svr_backup_service::SvrBackupError::BackupNotFound) => {
                 tracing::info!("No existing SVR backup found, creating new backup with new PIN");
                 self.svr_backup()
-                    .create_and_upload_backup(&new_svr_secret, &identity_keypair, &profile_key)
+                    .create_and_upload_backup(
+                        &new_svr_secret,
+                        &identity_keypair,
+                        &profile_key,
+                        &full_username,
+                    )
                     .await
                     .map(|_| ())
+            }
+            Err(crate::services::svr_backup_service::SvrBackupError::WrongPin) => {
+                old_svr_secret.zeroize();
+                new_svr_secret.zeroize();
+                identity_keypair.zeroize();
+                profile_key.zeroize();
+                new_reg_lock.zeroize();
+                return Err(ClientError::Validation("Current PIN is incorrect".into()));
             }
             _ => result.map(|_| ()),
         };
@@ -590,12 +867,7 @@ impl ChatterClient {
     /// is not advisory: `login` turns it into an error, because a device with
     /// no identity key cannot send or receive anything and reporting success
     /// is what made the loss invisible.
-    async fn attempt_svr_restore(
-        &self,
-        pin: &str,
-        username: &str,
-        result: &mut LoginResult,
-    ) {
+    async fn attempt_svr_restore(&self, pin: &str, username: &str, result: &mut LoginResult) {
         use crate::crypto::svr::derive_svr_secret;
         use zeroize::Zeroize;
 
@@ -627,11 +899,17 @@ impl ChatterClient {
         };
 
         // 3. Fetch and decrypt backup from server
-        let restore_result = match self.svr_backup().fetch_and_restore_backup(&svr_secret).await {
+        let restore_result = match self
+            .svr_backup()
+            .fetch_and_restore_backup(&svr_secret)
+            .await
+        {
             Ok(r) => r,
             Err(crate::services::svr_backup_service::SvrBackupError::BackupDestroyed) => {
                 svr_secret.zeroize();
-                tracing::error!("SVR backup permanently destroyed (too many failed PIN attempts). User must re-register PIN.");
+                tracing::error!(
+                    "SVR backup permanently destroyed (too many failed PIN attempts). User must re-register PIN."
+                );
                 result.key_recovery = Some(KeyRecoveryNeed::BackupDestroyed);
                 return;
             }
@@ -640,25 +918,7 @@ impl ChatterClient {
                 // Classify rather than collapse. Which failure this was decides
                 // whether the user retypes a PIN, waits, or accepts losing
                 // their conversations — see `key_recovery::classify_restore_failure`.
-                let mut need = crate::services::key_recovery::classify_restore_failure(&e);
-                // A miss is ambiguous by construction — the backup id is
-                // PIN-derived, so "wrong PIN" and "no backup at all" both land
-                // here. `classify_restore_failure` takes the cautious reading
-                // (never authorise minting on a typo); ask the server, which is
-                // the only party that can actually tell, before settling.
-                if need == KeyRecoveryNeed::WrongPin {
-                    match self.svr_backup().has_key_backup().await {
-                        Ok(false) => need = KeyRecoveryNeed::NoBackup,
-                        Ok(true) => {}
-                        // Unknown: keep the cautious reading rather than
-                        // upgrading a network blip into permission to destroy
-                        // the user's identity key.
-                        Err(probe_err) => tracing::warn!(
-                            "could not determine whether a key backup exists: {}",
-                            probe_err
-                        ),
-                    }
-                }
+                let need = crate::services::key_recovery::classify_restore_failure(&e);
                 tracing::warn!(?need, "SVR restore failed: {}", e);
                 result.key_recovery = Some(need);
                 return;
@@ -670,7 +930,7 @@ impl ChatterClient {
         // 4. Hydrate identity keypair into local key store
         //    Reconstruct libsignal IdentityKeyPair from raw 32-byte private + 32-byte public
         let mut restored_keypair = restore_result.identity_keypair; // [u8; 64]
-        let mut restored_profile_key = restore_result.profile_key;  // [u8; 32]
+        let mut restored_profile_key = restore_result.profile_key; // [u8; 32]
 
         let hydrate_ok = (|| -> std::result::Result<(), String> {
             use libsignal_protocol::{IdentityKey, IdentityKeyPair, PrivateKey};
@@ -729,7 +989,18 @@ impl ChatterClient {
             return;
         }
 
-        // 6. Zeroize sensitive intermediates
+        // 6. Hydrate the account handle. It was written only at registration,
+        //    so a reinstall had none and showed no username (§117). Keys are
+        //    already restored, so a failure here does not undo them.
+        if let Err(e) = self
+            .signal()
+            .settings_repo
+            .set_string(keys::FULL_USERNAME, &restore_result.full_username)
+        {
+            tracing::warn!("SVR restore: failed to store username: {}", e);
+        }
+
+        // 7. Zeroize sensitive intermediates
         restored_keypair.zeroize();
         restored_profile_key.zeroize();
 
@@ -743,11 +1014,60 @@ impl ChatterClient {
     }
 
     /// Log out and shut down all background services.
+    /// Sign out: tell the server, wipe local credentials, and stop every
+    /// background loop. The teardown runs even if the first step fails, so a
+    /// signed-out client never keeps syncing and a later login can `start()`.
     pub async fn logout(&self) -> Result<(), ClientError> {
-        self.auth().do_logout().await?;
-        self.shutdown().await;
-        self.auth_state().set_logged_out();
+        let expected = self.auth_state().get().session_revision;
+        let _lifecycle = self.auth_lifecycle_lock.lock().await;
+        if self.auth_state().get().session_revision != expected {
+            return Ok(());
+        }
+        crate::system::messaging_background::set_signed_in(false);
+        // Invalidate queued UI work immediately, then retire the old call owner
+        // using its captured revision, before new credentials can be installed.
+        self.clear_composer_session();
+        let teardown_revision = self.auth_state().get().session_revision;
+        let handles = std::mem::take(&mut *self.tasks.lock());
+        for handle in &handles {
+            handle.abort();
+        }
+        for handle in handles {
+            let _ = handle.await;
+        }
+        let retired = self.authed_notif_session.lock().unwrap_or(expected);
+        self.stop_authed_notification_streams(retired).await;
+        #[cfg(feature = "media")]
+        if let Some(worker) = self.call_service().get() {
+            let actor_revision = worker
+                .incoming_presentation_state()
+                .session_revision()
+                .unwrap_or(expected);
+            if let Err(error) = worker.reset_presentation_session(actor_revision).await {
+                tracing::error!(%error, "call session reset failed during logout");
+            }
+            if self.auth_state().get().session_revision != teardown_revision {
+                return Ok(());
+            }
+            if let Some(signaling) = self.call_signaling.get() {
+                signaling.clear_call_session();
+            }
+        }
+        if self.auth_state().get().session_revision != teardown_revision {
+            return Ok(());
+        }
+        // Publish the final status while this session can still authenticate.
+        // Every older session publication has been stopped above, and the
+        // lifecycle lock excludes new publications until teardown completes.
+        self.set_presence_for_shutdown(crate::domain::user::PresenceStatus::Offline)
+            .await;
+        let result = self.auth().do_logout().await;
+        if self.auth_state().get().session_revision == teardown_revision {
+            self.shutdown_session(teardown_revision, false).await;
+            self.auth_state()
+                .set_logged_out_if_current(teardown_revision);
+        }
+        result?;
         Ok(())
     }
-
 }

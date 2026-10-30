@@ -653,9 +653,17 @@ mod tests {
             );
             assert!(with.is_directed_encrypted, "{msg_type:?} with recipient");
 
-            let without =
-                RelayInput::from_packet(&packet(msg_type, None), false, false, 4, HIGH_DEGREE_THRESHOLD);
-            assert!(!without.is_directed_encrypted, "{msg_type:?} without recipient");
+            let without = RelayInput::from_packet(
+                &packet(msg_type, None),
+                false,
+                false,
+                4,
+                HIGH_DEGREE_THRESHOLD,
+            );
+            assert!(
+                !without.is_directed_encrypted,
+                "{msg_type:?} without recipient"
+            );
         }
 
         // Types outside that set never take the directed path.

@@ -70,8 +70,7 @@ impl PrivateMessagePacket {
         }
 
         Ok(Self {
-            message_id: message_id
-                .ok_or(MeshError::MissingField("private_message.message_id"))?,
+            message_id: message_id.ok_or(MeshError::MissingField("private_message.message_id"))?,
             content: content.ok_or(MeshError::MissingField("private_message.content"))?,
         })
     }

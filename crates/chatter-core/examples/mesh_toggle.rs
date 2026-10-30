@@ -23,8 +23,8 @@
 //! Reads the database the client uses, so the client should not be running — two
 //! writers on one SQLCipher file is not a thing to arrange casually.
 
-use chatter_core::storage::repositories::settings_repo::{SettingsRepository, keys};
 use chatter_core::storage::Database;
+use chatter_core::storage::repositories::settings_repo::{SettingsRepository, keys};
 use chatter_core::system::directories::Directories;
 use std::sync::Arc;
 

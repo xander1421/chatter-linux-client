@@ -5,14 +5,13 @@
 use std::sync::Arc;
 use tokio_stream::StreamExt;
 
-use crate::crypto::auth_crypto::hash_password;
-
-use crate::error::{NetworkError, StorageError};
+use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::account_deletion_event::Status as DeletionStatus;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::services::auth_service::{AuthError, prove_password};
+use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 
 /// Account management errors.
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +35,25 @@ pub enum AccountError {
     /// Storage operation failed.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+
+    /// Password-proof cryptography failed.
+    #[error("crypto error: {0}")]
+    Crypto(#[from] CryptoError),
+}
+
+impl From<AuthError> for AccountError {
+    fn from(e: AuthError) -> Self {
+        match e {
+            AuthError::InvalidCredentials | AuthError::Network(NetworkError::Unauthenticated) => {
+                AccountError::InvalidPassword
+            }
+            AuthError::Network(n) => AccountError::Network(n),
+            AuthError::Crypto(c) => AccountError::Crypto(c),
+            AuthError::Storage(s) => AccountError::Storage(s),
+            AuthError::NotLoggedIn => AccountError::NotLoggedIn,
+            other => AccountError::Crypto(CryptoError::Protocol(other.to_string())),
+        }
+    }
 }
 
 /// Account management service.
@@ -76,44 +94,6 @@ impl AccountService {
             .is_some()
     }
 
-    /// Change the current user's password.
-    ///
-    /// Orchestrates:
-    /// 1. Login state verification
-    /// 2. Password hashing (SHA256 - server expects pre-hashed)
-    /// 3. Server password change request
-    ///
-    /// # Arguments
-    ///
-    /// * `auth_client` - Mutable reference to auth client for server communication
-    /// * `current_password` - Current password for verification
-    /// * `new_password` - New password to set
-    pub async fn change_password(
-        &self,
-        auth_client: &mut AuthClient,
-        current_password: &str,
-        new_password: &str,
-    ) -> Result<(), AccountError> {
-        // Check is logged in
-        if !self.is_logged_in() {
-            return Err(AccountError::NotLoggedIn);
-        }
-
-        let current_hash = hash_password(current_password);
-        let new_hash = hash_password(new_password);
-
-        // Call server to change password
-        auth_client
-            .change_password(current_hash.as_slice(), new_hash.as_slice())
-            .await
-            .map_err(|e| match &e {
-                NetworkError::Unauthenticated => AccountError::InvalidPassword,
-                _ => AccountError::Network(e),
-            })?;
-
-        Ok(())
-    }
-
     /// Delete the current user's account.
     ///
     /// This is an irreversible operation that:
@@ -136,11 +116,12 @@ impl AccountService {
             return Err(AccountError::NotLoggedIn);
         }
 
-        let password_hash = hash_password(password);
+        // A fresh OPAQUE proof of the password, spent by DeleteAccount.
+        let proof = prove_password(auth_client, password).await?;
 
         // Call server to delete account - returns event stream
         let stream = auth_client
-            .delete_account(password_hash.as_slice())
+            .delete_account(proof)
             .await
             .map_err(|e| match &e {
                 NetworkError::Unauthenticated => AccountError::InvalidPassword,
@@ -187,17 +168,6 @@ impl AccountService {
     }
 
     // ==================== Simplified Wrappers ====================
-
-    /// Simplified wrapper for change_password that creates the client internally.
-    pub async fn change_pwd(
-        &self,
-        current_password: &str,
-        new_password: &str,
-    ) -> Result<(), AccountError> {
-        let mut auth_client = self.auth_client();
-        self.change_password(&mut auth_client, current_password, new_password)
-            .await
-    }
 
     /// Simplified wrapper for delete_account that creates the client internally.
     pub async fn delete_acct(&self, password: &str) -> Result<(), AccountError> {

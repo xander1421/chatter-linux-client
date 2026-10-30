@@ -8,9 +8,9 @@
 //! completed reassembly hands the caller a buffer to feed straight back into
 //! [`crate::codec::decode`], flags and compression intact.
 //!
-//! The assembler is deliberately bounded in three directions — concurrent
-//! streams, bytes per stream, and stream lifetime — because every one of those
-//! is attacker-controlled: fragments bypass the packet deduplicator, and a peer
+//! The assembler is deliberately bounded in four directions — concurrent
+//! streams, bytes per stream, total held bytes, and stream lifetime — because
+//! every one of those is attacker-controlled: fragments bypass the packet deduplicator, and a peer
 //! can open a stream by sending one piece of a message it never finishes.
 
 use std::collections::{BTreeMap, HashMap};
@@ -24,9 +24,16 @@ pub const DEFAULT_FRAGMENT_SIZE: usize = 469;
 
 /// `TransportConfig.bleMaxInFlightAssemblies`.
 pub const MAX_IN_FLIGHT_ASSEMBLIES: usize = 128;
+/// Device-wide ceiling for incomplete fragment payloads.
+pub const MAX_IN_FLIGHT_BYTES: usize = 8 * 1024 * 1024;
 
-/// `TransportConfig.bleFragmentLifetimeSeconds`, measured from the first
-/// fragment of a stream — not from the most recent one.
+/// Recently completed streams retained so a late relayed fragment cannot open
+/// a new, doomed assembly for a packet already delivered.
+const MAX_COMPLETED_STREAMS: usize = 1024;
+
+/// `TransportConfig.bleFragmentLifetimeSeconds`. We measure inactivity since
+/// the last new fragment so a slowly paced stream can finish; the reference
+/// peers expire 30 seconds after the first fragment instead.
 pub const FRAGMENT_LIFETIME_SECS: u64 = 30;
 
 /// `FileTransferLimits.maxPayloadBytes` — the reassembly ceiling for everything
@@ -58,7 +65,6 @@ pub const FRAGMENT_HEADER_LEN: usize = 13;
 
 /// `RequestSyncPacket.maxFragmentIdFilterCount` — the wire filter cannot name
 /// more streams than this in one request.
-pub const MAX_STALLED_STREAM_IDS: usize = 60;
 
 /// The fixed prefix every fragment payload carries.
 ///
@@ -201,6 +207,8 @@ struct StreamKey {
 struct Assembly {
     /// `total` from the fragment that opened the stream.
     total: u16,
+    /// Type of the packet being reassembled, for loss attribution.
+    original_type: u8,
     /// When the stream opened. Drives expiry.
     started_at: u64,
     /// Whether this stream reassembles a broadcast packet. Only broadcast
@@ -222,6 +230,8 @@ pub struct ExpiredStream {
     pub received: u16,
     /// `total` from the fragment that opened the stream.
     pub expected: u16,
+    /// Original message type carried by the fragments.
+    pub original_type: u8,
     /// Whether a targeted REQUEST_SYNC could have recovered it.
     pub is_broadcast: bool,
 }
@@ -230,6 +240,8 @@ pub struct ExpiredStream {
 #[derive(Clone, Debug, Default)]
 pub struct FragmentAssembler {
     streams: HashMap<StreamKey, Assembly>,
+    completed: HashMap<StreamKey, u64>,
+    held_bytes: usize,
 }
 
 impl FragmentAssembler {
@@ -249,6 +261,8 @@ impl FragmentAssembler {
     /// Drops every in-flight reassembly.
     pub fn clear(&mut self) {
         self.streams.clear();
+        self.completed.clear();
+        self.held_bytes = 0;
     }
 
     /// Takes one fragment, returning the reassembled original bytes once the
@@ -267,6 +281,16 @@ impl FragmentAssembler {
             sender: packet.sender_id,
             id: header.fragment_id,
         };
+        // Fragments bypass packet deduplication. Once a stream completes, a
+        // delayed copy of any index must not start another partial assembly and
+        // later report a packet loss that never occurred. The short retention
+        // also allows a sender to retry the same packet after the window.
+        if let Some(completed_at) = self.completed.get(&key).copied() {
+            if now_unix_secs.saturating_sub(completed_at) <= FRAGMENT_LIFETIME_SECS {
+                return Ok(None);
+            }
+            self.completed.remove(&key);
+        }
         // No recipient field at all also means broadcast, per
         // `BLEFragmentHeader.isBroadcastFragment`.
         let is_broadcast = packet
@@ -279,6 +303,7 @@ impl FragmentAssembler {
                 key,
                 Assembly {
                     total: header.total,
+                    original_type: header.original_type,
                     started_at: now_unix_secs,
                     is_broadcast,
                     last_fragment_at: now_unix_secs,
@@ -288,18 +313,41 @@ impl FragmentAssembler {
         }
 
         let limit = assembly_limit(header.original_type);
-        let held: usize = self
+        let (held, replaced) = self
             .streams
             .get(&key)
-            .map(|assembly| assembly.chunks.values().map(Vec::len).sum())
-            .unwrap_or(0);
-        let projected = held.saturating_add(chunk.len());
+            .map(|assembly| {
+                (
+                    assembly.chunks.values().map(Vec::len).sum::<usize>(),
+                    assembly.chunks.get(&header.index).map_or(0, Vec::len),
+                )
+            })
+            .unwrap_or((0, 0));
+        let projected = held.saturating_sub(replaced).saturating_add(chunk.len());
         if projected > limit {
-            self.streams.remove(&key);
+            self.remove_stream(&key);
             return Err(MeshError::LengthExceeded {
                 declared: projected,
                 max: limit,
             });
+        }
+
+        let added = chunk.len().saturating_sub(replaced);
+        while self.held_bytes.saturating_add(added) > MAX_IN_FLIGHT_BYTES {
+            let oldest = self
+                .streams
+                .iter()
+                .filter(|(candidate, _)| **candidate != key)
+                .min_by_key(|(_, assembly)| assembly.started_at)
+                .map(|(candidate, _)| *candidate);
+            let Some(oldest) = oldest else {
+                self.remove_stream(&key);
+                return Err(MeshError::LengthExceeded {
+                    declared: projected,
+                    max: MAX_IN_FLIGHT_BYTES,
+                });
+            };
+            self.remove_stream(&oldest);
         }
 
         let Some(assembly) = self.streams.get_mut(&key) else {
@@ -315,6 +363,10 @@ impl FragmentAssembler {
             .chunks
             .insert(header.index, chunk.to_vec())
             .is_none();
+        self.held_bytes = self
+            .held_bytes
+            .saturating_sub(replaced)
+            .saturating_add(chunk.len());
         if is_new_index {
             assembly.last_fragment_at = now_unix_secs;
         }
@@ -325,13 +377,23 @@ impl FragmentAssembler {
             return Ok(None);
         }
 
-        let mut reassembled = Vec::with_capacity(held + chunk.len());
+        let mut reassembled = Vec::with_capacity(projected);
         for index in 0..header.total {
             if let Some(piece) = assembly.chunks.get(&index) {
                 reassembled.extend_from_slice(piece);
             }
         }
-        self.streams.remove(&key);
+        self.remove_stream(&key);
+        self.completed.insert(key, now_unix_secs);
+        if self.completed.len() > MAX_COMPLETED_STREAMS
+            && let Some(oldest) = self
+                .completed
+                .iter()
+                .min_by_key(|(_, completed_at)| *completed_at)
+                .map(|(key, _)| *key)
+        {
+            self.completed.remove(&oldest);
+        }
         Ok(Some(reassembled))
     }
 
@@ -363,6 +425,9 @@ impl FragmentAssembler {
     /// is a link that dropped, or a peer that stopped. Those want opposite fixes,
     /// and a count of expired streams cannot tell them apart.
     pub fn evict_expired(&mut self, now_unix_secs: u64) -> Vec<ExpiredStream> {
+        self.completed.retain(|_, completed_at| {
+            now_unix_secs.saturating_sub(*completed_at) <= FRAGMENT_LIFETIME_SECS
+        });
         let mut expired = Vec::new();
         self.streams.retain(|key, assembly| {
             if now_unix_secs.saturating_sub(assembly.last_fragment_at) <= FRAGMENT_LIFETIME_SECS {
@@ -372,46 +437,25 @@ impl FragmentAssembler {
                 sender: key.sender,
                 received: assembly.chunks.len() as u16,
                 expected: assembly.total,
+                original_type: assembly.original_type,
                 is_broadcast: assembly.is_broadcast,
             });
             false
         });
+        self.held_bytes = self
+            .streams
+            .values()
+            .flat_map(|assembly| assembly.chunks.values())
+            .map(Vec::len)
+            .sum();
         expired
     }
 
-    /// Stream IDs of incomplete *broadcast* reassemblies that have seen no new
-    /// fragment for `stall_secs` — candidates for a targeted REQUEST_SYNC.
-    ///
-    /// Oldest stall first, capped at [`MAX_STALLED_STREAM_IDS`] because the wire
-    /// filter cannot carry more. Directed reassemblies are excluded: peers
-    /// archive only broadcast fragments for gossip sync, so a targeted request
-    /// could not recover them.
-    ///
-    /// The Swift also stamps each returned stream with a `lastResyncRequestAt`
-    /// so it is not re-requested within a retry window. That bookkeeping cannot
-    /// live here — the frozen signature takes `&self` — so spacing repeat
-    /// requests (`TransportConfig.bleFragmentResyncRetrySeconds`, 10 s) is the
-    /// caller's job.
-    pub fn stalled_stream_ids(&self, now_unix_secs: u64, stall_secs: u64) -> Vec<[u8; 8]> {
-        let mut candidates: Vec<(u64, StreamKey)> = self
-            .streams
-            .iter()
-            .filter(|(_, assembly)| {
-                assembly.is_broadcast
-                    && assembly.chunks.len() < assembly.total as usize
-                    && now_unix_secs.saturating_sub(assembly.last_fragment_at) >= stall_secs
-            })
-            .map(|(key, assembly)| (assembly.last_fragment_at, *key))
-            .collect();
-
-        // Oldest stall first; the key breaks ties so the result is deterministic
-        // (the Swift's dictionary order is not).
-        candidates.sort_unstable();
-        candidates
-            .into_iter()
-            .take(MAX_STALLED_STREAM_IDS)
-            .map(|(_, key)| key.id)
-            .collect()
+    fn remove_stream(&mut self, key: &StreamKey) {
+        if let Some(assembly) = self.streams.remove(key) {
+            let removed: usize = assembly.chunks.values().map(Vec::len).sum();
+            self.held_bytes = self.held_bytes.saturating_sub(removed);
+        }
     }
 
     /// Evicts the oldest reassembly when the in-flight cap is already reached.
@@ -425,7 +469,7 @@ impl FragmentAssembler {
             .map(|(key, assembly)| (assembly.started_at, *key))
             .min();
         if let Some((_, key)) = oldest {
-            self.streams.remove(&key);
+            self.remove_stream(&key);
         }
     }
 }
@@ -472,7 +516,11 @@ mod tests {
         )
     }
 
-    fn fragment_of(header: &FragmentHeader, chunk: &[u8], sender: [u8; SENDER_ID_LEN]) -> BitchatPacket {
+    fn fragment_of(
+        header: &FragmentHeader,
+        chunk: &[u8],
+        sender: [u8; SENDER_ID_LEN],
+    ) -> BitchatPacket {
         let mut payload = Vec::new();
         payload.extend_from_slice(&header.fragment_id);
         payload.extend_from_slice(&header.index.to_be_bytes());
@@ -517,13 +565,13 @@ mod tests {
     #[test]
     fn every_fragment_carries_the_stream_id_index_total_and_original_type() {
         let packet = original(1200);
-        let fragments =
-            plan_fragments(&packet, 300, [0xAB; 8]).expect("packet fragments");
+        let fragments = plan_fragments(&packet, 300, [0xAB; 8]).expect("packet fragments");
         let total = fragments.len() as u16;
         assert!(total > 1);
 
         for (i, fragment) in fragments.iter().enumerate() {
-            let (header, chunk) = FragmentHeader::parse(fragment).expect("planner emits valid headers");
+            let (header, chunk) =
+                FragmentHeader::parse(fragment).expect("planner emits valid headers");
             assert_eq!(header.fragment_id, [0xAB; 8]);
             assert_eq!(header.index, i as u16);
             assert_eq!(header.total, total);
@@ -537,10 +585,12 @@ mod tests {
     fn chunk_size_is_raised_to_the_minimum() {
         let packet = original(600);
         let tiny = plan_fragments(&packet, 1, [0x01; 8]).expect("packet fragments");
-        let floored = plan_fragments(&packet, MIN_FRAGMENT_CHUNK, [0x01; 8]).expect("packet fragments");
+        let floored =
+            plan_fragments(&packet, MIN_FRAGMENT_CHUNK, [0x01; 8]).expect("packet fragments");
         assert_eq!(tiny.len(), floored.len());
 
-        let zero = plan_fragments(&packet, 0, [0x01; 8]).expect("a zero request is floored, not fatal");
+        let zero =
+            plan_fragments(&packet, 0, [0x01; 8]).expect("a zero request is floored, not fatal");
         assert_eq!(zero.len(), floored.len());
     }
 
@@ -723,13 +773,11 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_fragments_neither_complete_nor_reset_the_stall_clock() {
+    fn duplicate_fragments_do_not_complete_the_stream() {
         let make = stream(0x02, 0xAA, 2);
         let mut assembler = FragmentAssembler::new();
         assert_eq!(assembler.accept(&make(0, b"aa"), 100).expect("ok"), None);
-        // A relayed duplicate at t=200 must not look like progress.
         assert_eq!(assembler.accept(&make(0, b"aa"), 200).expect("ok"), None);
-        assert_eq!(assembler.stalled_stream_ids(205, 5), vec![[0x02; 8]]);
         assert_eq!(
             assembler.accept(&make(1, b"bb"), 205).expect("ok"),
             Some(b"aabb".to_vec())
@@ -766,14 +814,19 @@ mod tests {
         let packet = fragment_of(&header, &huge, [0xAA; SENDER_ID_LEN]);
 
         let mut assembler = FragmentAssembler::new();
-        assert_eq!(assembler.accept(&packet, 1).expect("first piece fits"), None);
+        assert_eq!(
+            assembler.accept(&packet, 1).expect("first piece fits"),
+            None
+        );
 
         let second = fragment_of(
             &FragmentHeader { index: 1, ..header },
             &huge,
             [0xAA; SENDER_ID_LEN],
         );
-        let err = assembler.accept(&second, 1).expect_err("second piece overflows");
+        let err = assembler
+            .accept(&second, 1)
+            .expect_err("second piece overflows");
         assert!(matches!(
             err,
             MeshError::LengthExceeded {
@@ -790,7 +843,10 @@ mod tests {
             assembly_limit(MessageType::FileTransfer.as_u8()),
             MAX_FRAMED_FILE_BYTES
         );
-        assert_eq!(assembly_limit(MessageType::Message.as_u8()), MAX_REASSEMBLED_BYTES);
+        assert_eq!(
+            assembly_limit(MessageType::Message.as_u8()),
+            MAX_REASSEMBLED_BYTES
+        );
         // The signature width is part of that headroom; keep the two in step.
         assert_eq!(
             MAX_FRAMED_FILE_BYTES,
@@ -869,75 +925,6 @@ mod tests {
         assert_eq!(assembler.len(), 1, "exactly at the lifetime, still held");
         assembler.evict_expired(1_021 + FRAGMENT_LIFETIME_SECS);
         assert!(assembler.is_empty(), "a stream that stopped is dropped");
-    }
-
-    #[test]
-    fn stall_detection_covers_only_incomplete_broadcast_streams() {
-        let mut assembler = FragmentAssembler::new();
-
-        let broadcast = stream(0x06, 0xAA, 2);
-        assembler.accept(&broadcast(0, b"a"), 100).expect("ok");
-
-        let directed_header = FragmentHeader {
-            fragment_id: [0x07; 8],
-            index: 0,
-            total: 2,
-            original_type: MessageType::Message.as_u8(),
-        };
-        let mut directed = fragment_of(&directed_header, b"a", [0xAA; SENDER_ID_LEN]);
-        directed.recipient_id = Some([0x33; SENDER_ID_LEN]);
-        assembler.accept(&directed, 100).expect("ok");
-
-        // Not stalled yet.
-        assert!(assembler.stalled_stream_ids(104, 5).is_empty());
-        // Stalled: only the broadcast stream is recoverable by a resync.
-        assert_eq!(assembler.stalled_stream_ids(105, 5), vec![[0x06; 8]]);
-
-        // An explicit all-0xFF recipient counts as broadcast too.
-        let explicit_header = FragmentHeader {
-            fragment_id: [0x08; 8],
-            ..directed_header
-        };
-        let mut explicit = fragment_of(&explicit_header, b"a", [0xAA; SENDER_ID_LEN]);
-        explicit.recipient_id = Some(BROADCAST_RECIPIENT);
-        assembler.accept(&explicit, 100).expect("ok");
-        assert_eq!(
-            assembler.stalled_stream_ids(105, 5),
-            vec![[0x06; 8], [0x08; 8]]
-        );
-    }
-
-    #[test]
-    fn stalled_streams_are_ordered_oldest_first_and_capped() {
-        let mut assembler = FragmentAssembler::new();
-        for i in 0..(MAX_STALLED_STREAM_IDS as u64 + 5) {
-            let header = FragmentHeader {
-                fragment_id: i.to_be_bytes(),
-                index: 0,
-                total: 2,
-                original_type: MessageType::Message.as_u8(),
-            };
-            // Later i = later last_fragment_at = less stalled.
-            assembler
-                .accept(&fragment_of(&header, b"x", [0xAA; SENDER_ID_LEN]), 1_000 + i)
-                .expect("ok");
-        }
-
-        let stalled = assembler.stalled_stream_ids(2_000, 5);
-        assert_eq!(stalled.len(), MAX_STALLED_STREAM_IDS);
-        assert_eq!(stalled[0], 0u64.to_be_bytes(), "oldest stall first");
-        assert_eq!(stalled[MAX_STALLED_STREAM_IDS - 1], 59u64.to_be_bytes());
-    }
-
-    #[test]
-    fn completed_streams_never_appear_as_stalled() {
-        let make = stream(0x0A, 0xAA, 1);
-        let mut assembler = FragmentAssembler::new();
-        assert_eq!(
-            assembler.accept(&make(0, b"whole"), 10).expect("ok"),
-            Some(b"whole".to_vec())
-        );
-        assert!(assembler.stalled_stream_ids(1_000, 5).is_empty());
     }
 
     #[test]

@@ -3,32 +3,21 @@
 //! Provides device enumeration and audio frame capture for LiveKit publishing.
 
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 use livekit::webrtc::audio_frame::AudioFrame;
-use livekit::webrtc::audio_source::native::NativeAudioSource;
 use livekit::webrtc::audio_source::AudioSourceOptions;
+use livekit::webrtc::audio_source::native::NativeAudioSource;
 use tokio::sync::mpsc;
 
 use crate::error::CallError;
 
-/// Information about an available audio input device.
+/// Information about an available audio device (input or output).
 #[derive(Debug, Clone)]
 pub struct AudioDevice {
-    /// Device name for display.
-    pub name: String,
-    /// Internal device identifier.
-    pub id: String,
-    /// Whether this is the default device.
-    pub is_default: bool,
-}
-
-/// Information about an available audio output device.
-#[derive(Debug, Clone)]
-pub struct AudioOutputDevice {
     /// Device name for display.
     pub name: String,
     /// Internal device identifier.
@@ -78,16 +67,26 @@ impl AudioCapture {
 
     /// List available audio input devices (microphones).
     pub fn list_devices() -> Result<Vec<AudioDevice>, CallError> {
+        if crate::system::null_audio() {
+            return Ok(Vec::new());
+        }
         let host = cpal::default_host();
         let default_device = host.default_input_device();
-        let default_name = default_device.as_ref().and_then(|d| d.name().ok());
+        let default_name = default_device.as_ref().and_then(|d| {
+            d.description()
+                .map(|description| description.name().to_owned())
+                .ok()
+        });
 
         let mut devices = Vec::new();
 
         for device in host.input_devices().map_err(|e| {
             CallError::TrackPublishFailed(format!("Failed to enumerate audio devices: {}", e))
         })? {
-            if let Ok(name) = device.name() {
+            if let Ok(name) = device
+                .description()
+                .map(|description| description.name().to_owned())
+            {
                 let is_default = default_name.as_ref() == Some(&name);
                 devices.push(AudioDevice {
                     id: name.clone(),
@@ -101,19 +100,29 @@ impl AudioCapture {
     }
 
     /// List available audio output devices (speakers/headphones).
-    pub fn list_output_devices() -> Result<Vec<AudioOutputDevice>, CallError> {
+    pub fn list_output_devices() -> Result<Vec<AudioDevice>, CallError> {
+        if crate::system::null_audio() {
+            return Ok(Vec::new());
+        }
         let host = cpal::default_host();
         let default_device = host.default_output_device();
-        let default_name = default_device.as_ref().and_then(|d| d.name().ok());
+        let default_name = default_device.as_ref().and_then(|d| {
+            d.description()
+                .map(|description| description.name().to_owned())
+                .ok()
+        });
 
         let mut devices = Vec::new();
 
         for device in host.output_devices().map_err(|e| {
             CallError::TrackPublishFailed(format!("Failed to enumerate output devices: {}", e))
         })? {
-            if let Ok(name) = device.name() {
+            if let Ok(name) = device
+                .description()
+                .map(|description| description.name().to_owned())
+            {
                 let is_default = default_name.as_ref() == Some(&name);
-                devices.push(AudioOutputDevice {
+                devices.push(AudioDevice {
                     id: name.clone(),
                     name: name.clone(),
                     is_default,
@@ -126,14 +135,22 @@ impl AudioCapture {
 
     /// Get the default audio input device.
     pub fn default_device() -> Result<AudioDevice, CallError> {
+        if crate::system::null_audio() {
+            return Err(CallError::TrackPublishFailed(
+                "audio devices disabled (CHATTER_NULL_AUDIO)".to_string(),
+            ));
+        }
         let host = cpal::default_host();
         let device = host.default_input_device().ok_or_else(|| {
             CallError::TrackPublishFailed("No default audio input device".to_string())
         })?;
 
-        let name = device.name().map_err(|e| {
-            CallError::TrackPublishFailed(format!("Failed to get device name: {}", e))
-        })?;
+        let name = device
+            .description()
+            .map(|description| description.name().to_owned())
+            .map_err(|e| {
+                CallError::TrackPublishFailed(format!("Failed to get device name: {}", e))
+            })?;
 
         Ok(AudioDevice {
             id: name.clone(),
@@ -152,6 +169,26 @@ impl AudioCapture {
             ));
         }
 
+        if crate::system::null_audio() {
+            // A source LiveKit can publish, never fed by a microphone.
+            self.sample_rate = 48_000;
+            self.num_channels = 1;
+            self.device_name = "null".to_string();
+            let source = NativeAudioSource::new(
+                AudioSourceOptions {
+                    echo_cancellation: false,
+                    noise_suppression: false,
+                    auto_gain_control: false,
+                },
+                self.sample_rate,
+                self.num_channels,
+                50,
+            );
+            self.audio_source = Some(source.clone());
+            self.running.store(true, Ordering::SeqCst);
+            return Ok(source);
+        }
+
         let host = cpal::default_host();
 
         // Find the requested device or use default
@@ -160,7 +197,13 @@ impl AudioCapture {
                 .map_err(|e| {
                     CallError::TrackPublishFailed(format!("Failed to enumerate devices: {}", e))
                 })?
-                .find(|d| d.name().ok().as_deref() == Some(id))
+                .find(|d| {
+                    d.description()
+                        .map(|description| description.name().to_owned())
+                        .ok()
+                        .as_deref()
+                        == Some(id)
+                })
                 .ok_or_else(|| {
                     CallError::TrackPublishFailed(format!("Audio device not found: {}", id))
                 })?
@@ -170,15 +213,18 @@ impl AudioCapture {
             })?
         };
 
-        self.device_name = device.name().unwrap_or_default();
+        self.device_name = device
+            .description()
+            .map(|description| description.name().to_owned())
+            .unwrap_or_default();
         tracing::info!("Starting audio capture from device: {}", self.device_name);
 
         // Get supported config
-        let supported_config = device
-            .default_input_config()
-            .map_err(|e| CallError::TrackPublishFailed(format!("No supported audio config: {}", e)))?;
+        let supported_config = device.default_input_config().map_err(|e| {
+            CallError::TrackPublishFailed(format!("No supported audio config: {}", e))
+        })?;
 
-        self.sample_rate = supported_config.sample_rate().0;
+        self.sample_rate = supported_config.sample_rate();
         self.num_channels = supported_config.channels() as u32;
 
         tracing::info!(
@@ -204,6 +250,9 @@ impl AudioCapture {
         let (frame_tx, mut frame_rx) = mpsc::channel::<CapturedFrame>(64);
         let source_for_worker = audio_source.clone();
         tokio::spawn(async move {
+            let mut first_frame = true;
+            let mut first_non_silent = true;
+            let mut first_error = true;
             while let Some(captured) = frame_rx.recv().await {
                 let frame = AudioFrame {
                     data: Cow::Owned(captured.samples),
@@ -215,7 +264,26 @@ impl AudioCapture {
                     samples_per_channel: frame.data.len() as u32 / frame.num_channels,
                     ..frame
                 };
-                let _ = source_for_worker.capture_frame(&frame).await;
+                let non_silent = first_non_silent && frame.data.iter().any(|&s| s != 0);
+                match source_for_worker.capture_frame(&frame).await {
+                    Ok(()) => {
+                        if first_frame {
+                            tracing::info!("First microphone frame delivered to LiveKit");
+                            first_frame = false;
+                        }
+                        if non_silent {
+                            tracing::info!(
+                                "First non-silent microphone frame delivered to LiveKit"
+                            );
+                            first_non_silent = false;
+                        }
+                    }
+                    Err(error) if first_error => {
+                        tracing::warn!(%error, "Microphone frame delivery failed");
+                        first_error = false;
+                    }
+                    Err(_) => {}
+                }
             }
         });
 
@@ -231,14 +299,18 @@ impl AudioCapture {
             SampleFormat::F32 => {
                 let tx = frame_tx.clone();
                 device.build_input_stream(
-                    &stream_config,
+                    stream_config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
                         if running.load(Ordering::SeqCst) {
                             let samples: Vec<i16> = data
                                 .iter()
                                 .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
                                 .collect();
-                            let _ = tx.try_send(CapturedFrame { samples, sample_rate, num_channels });
+                            let _ = tx.try_send(CapturedFrame {
+                                samples,
+                                sample_rate,
+                                num_channels,
+                            });
                         }
                     },
                     err_fn,
@@ -248,11 +320,15 @@ impl AudioCapture {
             SampleFormat::I16 => {
                 let tx = frame_tx.clone();
                 device.build_input_stream(
-                    &stream_config,
+                    stream_config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
                         if running.load(Ordering::SeqCst) {
                             let samples = data.to_vec();
-                            let _ = tx.try_send(CapturedFrame { samples, sample_rate, num_channels });
+                            let _ = tx.try_send(CapturedFrame {
+                                samples,
+                                sample_rate,
+                                num_channels,
+                            });
                         }
                     },
                     err_fn,
@@ -266,12 +342,14 @@ impl AudioCapture {
                 )));
             }
         }
-        .map_err(|e| CallError::TrackPublishFailed(format!("Failed to build audio stream: {}", e)))?;
+        .map_err(|e| {
+            CallError::TrackPublishFailed(format!("Failed to build audio stream: {}", e))
+        })?;
 
         // Start the stream
-        stream
-            .play()
-            .map_err(|e| CallError::TrackPublishFailed(format!("Failed to start audio stream: {}", e)))?;
+        stream.play().map_err(|e| {
+            CallError::TrackPublishFailed(format!("Failed to start audio stream: {}", e))
+        })?;
 
         self.running.store(true, Ordering::SeqCst);
         self.stream = Some(stream);
@@ -356,19 +434,6 @@ mod tests {
     }
 
     #[test]
-    fn test_audio_output_device_creation() {
-        let device = AudioOutputDevice {
-            name: "Test Speakers".to_string(),
-            id: "test-speakers-456".to_string(),
-            is_default: false,
-        };
-
-        assert_eq!(device.name, "Test Speakers");
-        assert_eq!(device.id, "test-speakers-456");
-        assert!(!device.is_default);
-    }
-
-    #[test]
     fn test_audio_capture_new() {
         let capture = AudioCapture::new();
         assert!(!capture.is_running());
@@ -444,7 +509,10 @@ mod tests {
             }
             Err(e) => {
                 // May fail in CI/headless environments
-                eprintln!("list_output_devices failed (expected in headless env): {}", e);
+                eprintln!(
+                    "list_output_devices failed (expected in headless env): {}",
+                    e
+                );
             }
         }
     }
@@ -455,20 +523,6 @@ mod tests {
             name: "Test".to_string(),
             id: "id".to_string(),
             is_default: true,
-        };
-
-        let cloned = device.clone();
-        assert_eq!(device.name, cloned.name);
-        assert_eq!(device.id, cloned.id);
-        assert_eq!(device.is_default, cloned.is_default);
-    }
-
-    #[test]
-    fn test_audio_output_device_clone() {
-        let device = AudioOutputDevice {
-            name: "Test Output".to_string(),
-            id: "output-id".to_string(),
-            is_default: false,
         };
 
         let cloned = device.clone();

@@ -1,4 +1,5 @@
-// Sidebar — Neo 2.0
+import { Materials } from "../theme/materials.slint";
+// Sidebar — plain conversation content with shared chrome materials.
 //
 // Layout (top to bottom):
 //   1. Search bar — inset surface
@@ -6,32 +7,70 @@
 //   3. Bottom bar — glass surface
 //
 // Neo depth separation: sidebar surface is raised from background,
-// with right-edge highlight border. Internal elements use
+// with an explicit right-edge highlight. Internal elements use
 // inset (search, selected items) and glass (bottom bar) surfaces.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
-import { ChannelList, ChannelListItemData } from "channel_list.slint";
-import { DMList, DMListItemData } from "dm_list.slint";
-import { PrivateGroupList, PrivateGroupListItemData } from "private_group_list.slint";
-import { CustomSectionList, CustomSectionData, SectionConversationData } from "custom_section_list.slint";
-import { SectionContextMenu, SectionHeaderContextMenu } from "section_context_menu.slint";
-import { Avatar } from "../components/avatar.slint";
+import { ChatRow, ChatRowData } from "chat_list.slint";
+import { CustomSectionHeader, CustomSectionData, SidebarRowData } from "custom_section_list.slint";
+import { EmptyState } from "../components/empty_state.slint";
+import { ChatListSkeleton } from "../components/skeleton.slint";
+import { SidebarPane } from "../app_sidebar_pane.slint";
 import { TooltipArea } from "../components/tooltip.slint";
-import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 import { MeshList } from "../mesh/mesh_list.slint";
+import { ConversationKind } from "../chat/conversation_kind.slint";
+import { UpdateGlobal } from "../update/update_global.slint";
+import { UpdateBanner } from "update_banner.slint";
+import { SidebarFooter } from "sidebar_footer.slint";
+import { SidebarHeader } from "sidebar_header.slint";
+import { ActivityBell } from "../activity/activity_bell.slint";
 
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData }
+export { ChatRowData, CustomSectionData, SidebarRowData }
+
+
+// Bare Flickable named ListView so the compiler virtualizes its `for`, as in
+// chat/message_list.slint.
+component ListView inherits Flickable {
+    out property <length> visible-height: self.height;
+    out property <length> visible-width: self.width;
+    @children
+}
 
 export component Sidebar inherits Rectangle {
     // ── Properties: Data ──
-    in property <[ChannelListItemData]> channels: [];
-    in property <[DMListItemData]> dm-conversations: [];
-    in property <[PrivateGroupListItemData]> private-groups: [];
+    // The chat list, ordered by core (`ChatterClient::sidebar_rows`).
+    in property <[ChatRowData]> chat-rows: [];
+    in property <[ChatRowData]> archived-rows: [];
+    in property <bool> archive-open: false;
+    // Saved messages is the open conversation: its quick link is the
+    // selected row, as a chat row is.
+    in property <bool> saved-open: false;
+    in property <bool> chat-rows-loading: false;
     in property <[CustomSectionData]> custom-sections: [];
+    in property <[SidebarRowData]> flat-rows: [];
+    // What a screen reader says for the keyboard-focused row: the internal
+    // kind ("saved", "friends") was read out for the quick links.
+    pure function row-label(row: SidebarRowData) -> string {
+        if row.kind == "chat" || row.kind == "section-chat" || row.kind == "archived-chat" {
+            return row.chat.display-name;
+        }
+        if row.kind == "section-header" { return row.section.name; }
+        if row.kind == "saved" { return "Saved messages"; }
+        if row.kind == "friends" { return AnonMode.enabled ? "Add contact" : "Friends"; }
+        if row.kind == "calls" { return "Calls"; }
+        if row.kind == "requests" { return "Requests"; }
+        if row.kind == "search" { return "Search"; }
+        if row.kind == "archive-entry" { return "Archived chats"; }
+        if row.kind == "archive-back" { return "Back to chats"; }
+        return row.kind;
+    }
+    in-out property <int> focus-index: 0;
 
     // ── Properties: User profile ──
     in property <string> user-display-name: "User";
@@ -42,11 +81,21 @@ export component Sidebar inherits Rectangle {
     // ── Properties: State ──
     in-out property <bool> collapsed: false;
     in-out property <bool> hidden: false;
+    // The overlay animates from this row; the row stays in layout but its
+    // glass and label recede while the one native search input takes over.
+    in property <bool> search-overlay-open: false;
+    in property <string> active-tab: "chats";
+    // Compact (phone-width) layout: the panel IS the screen and the bottom tab
+    // bar carries Contacts, Calls and Profile. Not "is a phone": a tablet
+    // shows this panel beside the chat, with its own footer, like desktop.
     in property <bool> mobile-mode: false;
-    // The server is settled-unreachable. Shown as a dot on the settings button,
-    // mirroring how the anon-mode button carries its Tor dot, so the connection
-    // banner can be dismissed without the outage becoming invisible.
+    // Touch input: sizes the targets. Independent of `mobile-mode`, so a
+    // two-pane tablet keeps finger-sized rows.
+    in property <bool> touch: false;
+    // The server reachability fact drives the Activity bell and the compact
+    // rail settings dot, where the sidebar header is hidden.
     in property <bool> server-unreachable: false;
+    in property <string> connection-status: "connected";
     in property <length> mobile-width: 360px;
     // macOS unified titlebar: the traffic lights are drawn over this panel's
     // top-left corner (app.slint stopped reserving a row for them). Both are
@@ -59,8 +108,24 @@ export component Sidebar inherits Rectangle {
     in property <int> pending-message-requests: 0;
     in property <int> pending-group-invites: 0;
     in property <int> pending-channel-invites: 0;
+    // Badge on the Calls quick-link; same count the phone tab bar shows.
+    in property <int> missed-call-count: 0;
     property <int> total-pending-requests: root.pending-friend-requests
         + root.pending-message-requests + root.pending-group-invites + root.pending-channel-invites;
+    property <bool> requests-row-was-visible: false;
+    changed total-pending-requests => {
+        let now-visible = root.total-pending-requests > 0;
+        if (now-visible != root.requests-row-was-visible) {
+            // A row inserted above the visible conversations must not move
+            // the content already under the user's finger.
+            if (root.active-tab == "chats" && central-scroll.viewport-y < -((root.collapsed
+                    ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none)
+                    : root.top-row-height) + (root.mobile-mode ? Spacing.none : Spacing.sm))) {
+                central-scroll.viewport-y += now-visible ? -root.quick-link-height : root.quick-link-height;
+            }
+            root.requests-row-was-visible = now-visible;
+        }
+    }
 
     // ── Callbacks ──
     callback channel-selected(string);
@@ -71,6 +136,8 @@ export component Sidebar inherits Rectangle {
     callback create-channel-clicked();
     callback join-channel-clicked();
     callback friends-clicked();
+    callback add-friend-clicked();
+    callback calls-clicked();
     callback profile-clicked();
     callback friend-requests-clicked();
     callback message-requests-clicked();
@@ -78,15 +145,82 @@ export component Sidebar inherits Rectangle {
     callback channel-invites-clicked();
     callback toggle-collapsed();
     callback settings-clicked();
+    callback mesh-setup-clicked();
+    callback tab-selected(string);
     callback anon-mode-clicked();
     callback create-section-clicked();
+    // The two-pane '+' in the header row: opens New Chat / New Channel /
+    // New Section. On a phone the Chats tab's floating button does (app.slint).
+    callback create-clicked();
     callback section-toggle-expanded(/* section-id */ string);
-    callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ string);
+    callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ ConversationKind);
+    callback focus-composer();
+    callback focus-target(int, int, bool, bool, bool) -> int;
+    function focus-step(move-by: int) {
+        root.focus-index = root.focus-target(root.focus-index, move-by,
+            root.mobile-mode, AnonMode.enabled, root.total-pending-requests > 0);
+        if (move-by == -2) {
+            central-scroll.viewport-y = 0px;
+        } else if (move-by == 2) {
+            central-scroll.viewport-y = min(0px, central-scroll.height - central-scroll.viewport-height);
+        } else {
+            central-scroll.viewport-y = max(central-scroll.height - central-scroll.viewport-height,
+                min(0px, -(root.focus-index * Spacing.row-height-desktop)));
+        }
+    }
+    function open-focused() {
+        if (root.focus-index < 0 || root.focus-index >= root.flat-rows.length) { return; }
+        let entry = root.flat-rows[root.focus-index];
+        if (entry.kind == "saved") { root.saved-messages-clicked(); }
+        else if (entry.kind == "friends") { root.friends-clicked(); }
+        else if (entry.kind == "calls") { root.calls-clicked(); }
+        else if (entry.kind == "requests") {
+            root.message-requests-clicked(); root.group-invites-clicked();
+            root.channel-invites-clicked(); root.friend-requests-clicked();
+        }
+        else if (entry.kind == "archive-entry" || entry.kind == "archive-back") {
+            root.archive-view-changed(entry.kind == "archive-entry");
+        }
+        else if (entry.kind == "section-header") { root.section-toggle-expanded(entry.section.section-id); }
+        else if (entry.kind == "section-chat") {
+            root.section-conversation-selected(entry.chat.conversation-id, entry.chat.conversation-type);
+        }
+        else if (entry.kind == "chat" || entry.kind == "archived-chat") {
+            if (entry.chat.conversation-type == ConversationKind.channel || entry.chat.conversation-type == ConversationKind.saved-messages) {
+                root.channel-selected(entry.chat.conversation-id);
+            } else if (entry.chat.conversation-type == ConversationKind.anon-group) {
+                root.private-group-selected(entry.chat.conversation-id);
+            } else { root.dm-selected(entry.chat.conversation-id); }
+        }
+    }
+    function open-focused-menu() {
+        if (root.focus-index < 0 || root.focus-index >= root.flat-rows.length) { return; }
+        let entry = root.flat-rows[root.focus-index];
+        if (entry.kind == "section-header") {
+            SidebarPane.section-header-ctx-menu-section-id = entry.section.section-id;
+            SidebarPane.section-header-ctx-menu-sort-mode = entry.section.sort-mode;
+            SidebarPane.section-header-ctx-menu-x = root.width / 2;
+            SidebarPane.section-header-ctx-menu-y = root.height / 2;
+            SidebarPane.row-context-menu-open = false;
+            SidebarPane.section-context-menu-open = true;
+        }
+    }
     callback delete-section-clicked(/* section-id */ string);
     callback rename-section-clicked(/* section-id */ string);
-    callback move-to-section(/* conversation-id */ string, /* conversation-type */ string, /* section-id */ string);
+    callback move-to-section(/* conversation-id */ string, /* conversation-type */ ConversationKind, /* section-id */ string);
     callback remove-from-section(/* conversation-id */ string);
     callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
+    callback set-conversation-archived(/* conversation-id */ string, /* archived */ bool);
+    callback row-context-menu-opened(/* conversation-id */ string, /* kind */ ConversationKind);
+    callback set-conversation-muted(/* conversation-id */ string, /* kind */ ConversationKind, /* muted */ bool);
+    callback archive-view-changed(bool);
+    // Unarchiving the last chat leaves nothing to show: go back to the list.
+    private property <int> archived-count: root.archived-rows.length;
+    changed archived-count => {
+        if root.archive-open && root.archived-count == 0 { root.archive-view-changed(false); }
+    }
+    callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
+    callback leave-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
     callback move-section(/* section-id */ string, /* delta */ int);
     callback set-section-sort-mode(/* section-id */ string, /* mode */ string);
 
@@ -105,16 +239,33 @@ export component Sidebar inherits Rectangle {
     // a hole punched between them, which is the "huge space from Search to
     // Saved" complaint. 56px is the standard list row: same type, same tap
     // target, no cavern.
-    property <length> quick-link-height: root.mobile-mode ? 56px : 34px;
+    property <length> quick-link-height: (root.touch ? 56px : 34px) * Appearance.text-grow;
     // The panel's first row, pinned above the scroll. On desktop it takes the
     // shared header height so it and the conversation header beside it read as
     // one row across the seam — and on macOS that is the row the traffic
-    // lights are in. Mobile keeps the conversation-row geometry: there the
-    // panel IS the screen, so its first row belongs to the list.
-    property <length> top-row-height: root.mobile-mode ? Spacing.row-height-touch : Spacing.header-height;
-    property <length> quick-link-text-size: root.mobile-mode ? Typography.base : Typography.sm2;
-    property <brush> quick-link-text-color: root.mobile-mode ? Colors.text-primary : Colors.text-secondary;
-    property <length> quick-link-icon-size: root.mobile-mode ? 24px : 14px;
+    // lights are in. Mobile takes the quick-link height: there the panel IS
+    // the screen, and Search and Saved Messages read as two rows of one list
+    // (Signal: search bar, then Note to Self). At the conversation-row height
+    // plus the scroll's top padding they sat ~80dp apart (owner, 2026-09-26).
+    // A two-pane tablet sits beside a touch-height conversation header.
+    property <length> top-row-height: root.mobile-mode ? root.quick-link-height
+        : root.touch ? Spacing.header-height-touch : Spacing.header-height;
+    property <length> quick-link-text-size: root.touch ? Typography.base : Typography.sm2;
+    property <brush> quick-link-text-color: Colors.text-primary;
+    property <length> quick-link-icon-size: root.touch ? 24px : 14px;
+    // The header row's '+' and Shield on a touch two-pane: HeaderButton's
+    // 48px shell and 26px glyph were the biggest things in a panel whose own
+    // glyphs are 24px (quick links) and 18px (rail). Draw them at the
+    // footer's 36px with a 20px glyph; the 48px touch box is unchanged.
+    property <length> header-control-shell: root.touch ? (root.mobile-mode ? 36px : 28px) : Spacing.header-action-box;
+    property <length> header-control-glyph: root.touch ? (root.mobile-mode ? 20px : 16px) : Spacing.header-glyph;
+    // Quick-link icons sit in the conversation rows' avatar column: the same
+    // leading inset (ChatList's xs + the row's sm) and a slot as wide as a
+    // row's avatar ring, icon centred in it — so the lens, bookmark and the
+    // rest line up with the avatars and channel icons below, and the labels
+    // with the names.
+    property <length> quick-link-inset: Spacing.xs + Spacing.sm;
+    property <length> quick-link-slot: (root.touch ? Spacing.row-avatar-touch : Spacing.row-avatar-desktop) + 4px;
     // The expanded panel's footer row. 36px on touch, not the full 48px
     // minimum: the panel is capped at 45% of a phone's width, and three 48px
     // buttons plus the avatar and name overflowed it — which silently pushed
@@ -122,45 +273,25 @@ export component Sidebar inherits Rectangle {
     // expanded state. 36px is the largest that fits with the collapse control
     // still on screen; the rail's buttons, which have the whole width to
     // themselves, keep the full 48px.
-    property <length> footer-icon-size: root.mobile-mode ? 36px : 24px;
+    property <length> footer-icon-size: root.touch ? 36px : 24px;
     // One size for every button in the collapsed rail's bottom cluster, so the
     // container height below stays in step with them.
-    property <length> rail-icon-size: root.mobile-mode ? Spacing.touch-target-min : 32px;
+    property <length> rail-icon-size: root.touch ? Spacing.touch-target-min : 32px;
     // The visual plate inside a rail row. Smaller than the row so adjacent slots
     // do not touch; the row stays the touch target, the slot is what you see.
-    property <length> rail-slot-size: root.mobile-mode ? 44px : 32px;
+    property <length> rail-slot-size: root.touch ? 44px : 32px;
     property <length> rail-slot-radius: 12px;
-    property <brush> rail-slot-bg: Colors.surface-hover;
-    property <bool> rail-has-mesh: MeshGlobal.enabled && MeshGlobal.conversations.length > 0;
-    // AI, Mesh (conditional), expand, Settings, anon shield, profile.
-    property <int> rail-button-count: root.rail-has-mesh ? 6 : 5;
-    property <bool> channels-expanded: true;
-    property <bool> messages-expanded: true;
-
-    // Context menu state
-    property <bool> ctx-menu-show: false;
-    property <length> ctx-menu-x: 0;
-    property <length> ctx-menu-y: 0;
-    property <string> ctx-menu-conv-id: "";
-    property <string> ctx-menu-conv-type: "";
-    property <string> ctx-menu-current-section-id: "";
-    property <bool> ctx-menu-is-pinned: false;
-    // Private groups are the one list core does not order, so a pin there
-    // would set a flag nothing reads. Hide the entry rather than lie.
-    property <bool> ctx-menu-can-pin: true;
-
-    // Section header context menu state
-    property <bool> section-header-ctx-menu-show: false;
-    property <length> section-header-ctx-menu-x: 0;
-    property <length> section-header-ctx-menu-y: 0;
-    property <string> section-header-ctx-menu-section-id: "";
-    property <string> section-header-ctx-menu-sort-mode: "recent";
+    property <brush> rail-slot-bg: Colors.surface-control;
+    // Shield, AI, Chats, Activity, Mesh (when compiled), expand, Settings,
+    // profile. The Activity bell was added without counting it, so the rail
+    // footer was one slot short and the profile avatar hung off the bottom.
+    property <int> rail-button-count: MeshGlobal.enabled ? 8 : 7;
 
     // ── Sizing ──
     // Always a side panel, on every platform: collapsed to the icon rail or
     // expanded to the list, never a full-screen view that swaps the chat out.
-    // `mobile-mode` here means "touch input", and sizes the targets below; it
-    // does NOT change the layout.
+    // `touch` sizes the targets; `mobile-mode` (compact width) is what makes
+    // the expanded panel full-screen.
     // Expanded on touch, the panel takes the WHOLE screen. 240px is 58% of a
     // 411dp phone and 45% is not much better: at either width the panel is too
     // cramped to browse folders in and the chat behind it is too narrow to read,
@@ -169,7 +300,7 @@ export component Sidebar inherits Rectangle {
     // navigation always-available, which is why the panel does not have to.
     // `mobile-width` is fed the window width by app.slint.
     width: root.hidden ? Spacing.sidebar-width-hidden
-         : root.collapsed ? (root.mobile-mode ? 68px : Spacing.sidebar-width-collapsed)
+         : root.collapsed ? (root.touch ? 68px : Spacing.sidebar-width-collapsed)
          : root.mobile-mode ? root.mobile-width
          : Spacing.sidebar-width;
     visible: !root.hidden;
@@ -177,24 +308,40 @@ export component Sidebar inherits Rectangle {
     // In Anon Mode, slightly shift the surface tint toward primary so the
     // user has a constant visual cue the mode is active.
     // Same reasoning as the lists inside it: a phone shows this panel full
-    // screen, so it is the page and takes the page colour. Desktop keeps the
-    // raised-panel tone that separates it from the chat column beside it.
-    background: AnonMode.enabled ? Colors.primary.with-alpha(0.08)
-              : root.mobile-mode ? Colors.background
+    // screen, so it is the page: transparent, so the window's ambient wash
+    // (Materials.ambient) shows through. Desktop keeps the raised-panel tone
+    // that separates it from the chat column beside it.
+    // On touch layouts, let the page show through the rounded glass chrome.
+    // An opaque full-height backing fills the header/footer corner cutouts.
+    background: root.touch ? transparent
+              : AnonMode.enabled ? Colors.primary.with-alpha(0.08)
+              : root.mobile-mode ? transparent
               : Colors.surface;
+    // The pinned header and footer are chrome-radius glass flush with the
+    // panel's edges, so the panel's own corners must curve with them: square,
+    // the opaque surface filled the notch outside each rounded corner. Not
+    // on a phone, where the panel is the (transparent) page.
+    border-radius: root.mobile-mode ? Spacing.none : Spacing.radius-chrome;
     // No `border-width` here: this is a right-EDGE highlight in intent and
     // Slint's border draws all four sides. On a phone that traced a hairline
     // rectangle around the whole display; on desktop it now also ran a line
     // across the top of the title row, right under the traffic lights. The
     // edge is drawn explicitly below instead, on the one side that means
     // something. The shadow has nothing to cast onto on a phone either.
-    drop-shadow-blur: root.mobile-mode ? 0px : Spacing.neo-blur-md;
-    drop-shadow-offset-x: root.mobile-mode ? 0px : Spacing.neo-offset-md;
-    drop-shadow-color: Colors.neo-shadow;
 
-    animate width { duration: 200ms; easing: ease-out; }
+    // No animation on a phone: the list is full width there, and animating
+    // from the pre-resize width drew a half-width first frame at launch.
+    animate width { duration: root.mobile-mode ? 0ms : Materials.menu-duration; easing: ease-out; }
 
-    VerticalLayout {
+    in property <length> bottom-inset: 0px;
+    property <bool> update-banner-visible: UpdateGlobal.state == "available" || UpdateGlobal.state == "confirm-cellular" || UpdateGlobal.state == "downloading" || UpdateGlobal.state == "ready" || UpdateGlobal.state == "installing" || UpdateGlobal.state == "error";
+    property <length> update-banner-height: Spacing.button-height + Spacing.md;
+
+    Rectangle {
+        // Clip the list and glass chrome together. Child/backdrop painting must
+        // not fill the square corners outside the tablet panel silhouette.
+        border-radius: root.border-radius;
+        clip: true;
         // ════════════════════════════════════════
         // FIXED TOP ROW — the app's title row
         // ════════════════════════════════════════
@@ -202,77 +349,163 @@ export component Sidebar inherits Rectangle {
         // reasons: it is the row Telegram (and every native list app) keeps
         // pinned, and on macOS the traffic lights are painted over this corner,
         // so a row that scrolls would slide conversations under them.
-        if !root.collapsed: Rectangle {
-            horizontal-stretch: 1;
-            height: root.top-row-height;
-            background: search-touch.has-hover ? Colors.surface-hover : transparent;
-            accessible-role: button;
-            accessible-label: "Search";
-            HorizontalLayout {
-                // The traffic lights own the leading edge of this row on macOS
-                // (0px elsewhere), so the search entry starts after them.
-                padding-left: Spacing.sm + root.traffic-lights-width;
-                padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                VerticalLayout { alignment: center; horizontal-stretch: 0;
-                    Image { source: Icons.search; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; }
-                }
-                Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
-            }
-            search-touch := TouchArea { mouse-cursor: pointer; clicked => { root.search-clicked(); } }
-        }
-        // Collapsed to the rail, the panel is narrower than the traffic lights
-        // are wide, so nothing can share their row — the rail's slots start
-        // below them instead. Zero height off macOS.
-        if root.collapsed && root.traffic-lights-width > 0px: Rectangle {
-            height: root.titlebar-height;
-        }
 
         // ════════════════════════════════════════
         // SCROLLABLE CENTRAL CONTENT
         // ════════════════════════════════════════
-        Flickable {
-            vertical-stretch: 1;
-            viewport-height: central-layout.preferred-height;
+        central-scroll := ListView {
+            visible: root.active-tab != "mesh";
+            width: root.width;
+            height: root.height;
+            immediate-child-press: true;
 
-            central-layout := VerticalLayout {
-                padding-top: Spacing.sm;
-                padding-bottom: Spacing.md;
-
-                // QUICK LINKS (top navigation)
-
-                // Search's rail slot. The expanded row is pinned above the
-                // scroll; the rail has no room to pin anything, so here it is
-                // an ordinary slot at the head of the stack.
-                if root.collapsed: Rectangle {
+            for entry[idx] in root.flat-rows: VerticalLayout {
+                property <bool> roving-highlight: sidebar-keys.has-focus && Appearance.keyboard-focus-visible && root.focus-index == idx;
+                changed roving-highlight => {
+                    if (self.roving-highlight) {
+                        let top = self.absolute-position.y - central-scroll.absolute-position.y;
+                        if (top < root.top-row-height) {
+                            central-scroll.viewport-y = min(0px, central-scroll.viewport-y + root.top-row-height - top);
+                        } else if (top + self.height > central-scroll.height) {
+                            central-scroll.viewport-y = max(central-scroll.height - central-scroll.viewport-height,
+                                central-scroll.viewport-y - (top + self.height - central-scroll.height));
+                        }
+                    }
+                }
+                width: central-scroll.width;
+                height: self.preferred-height;
+                spacing: 0px;
+                // The pinned title and the floating footer stay outside the
+                // virtualized content; only their scroll clearance is a row.
+                padding-top: idx == 0
+                    ? (root.collapsed ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
+                        + (root.mobile-mode ? Spacing.none : Spacing.sm)
+                    : Spacing.none;
+                padding-bottom: entry.kind == "bottom"
+                    ? (root.mobile-mode
+                        ? root.bottom-inset + Spacing.fab-size + Spacing.xl + Spacing.md
+                            + (root.update-banner-visible ? root.update-banner-height + Spacing.md : Spacing.none)
+                        : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm + Spacing.lg + 13px + Spacing.sm : Spacing.button-height)
+                            + (root.update-banner-visible && !root.collapsed ? root.update-banner-height + Spacing.md : Spacing.none) + Spacing.md)
+                    : Spacing.none;
+                if entry.kind == "archive-entry" || entry.kind == "archive-back": Rectangle {
                     height: root.quick-link-height;
                     accessible-role: button;
+                    accessible-label: entry.kind == "archive-back" ? "Back to chats" : "Archived chats";
+                    accessible-action-default => { root.archive-view-changed(entry.kind == "archive-entry"); }
+                    border-width: archive-keys.has-focus || parent.roving-highlight ? 2px : 0px;
+                    border-color: Colors.focus-ring;
+                    archive-keys := FocusScope {
+                        width: 0px; height: 0px;
+                        focus-on-tab-navigation: false;
+                        key-pressed(event) => {
+                            if event.text == Key.Space || event.text == Key.Return {
+                                root.archive-view-changed(entry.kind == "archive-entry");
+                                return accept;
+                            }
+                            return reject;
+                        }
+                    }
+                    HorizontalLayout {
+                        padding-left: root.quick-link-inset;
+                        padding-right: Spacing.md;
+                        spacing: Spacing.sm;
+                        // Same centred icon slot as the Saved Messages row.
+                        VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                            HorizontalLayout { alignment: center; Image {
+                                source: entry.kind == "archive-back" ? Icons.chevron-left : Icons.folder;
+                                width: root.quick-link-icon-size;
+                                height: root.quick-link-icon-size;
+                                colorize: Colors.text-secondary;
+                            } }
+                        }
+                        Text {
+                            // Inside, the row titles the list it heads, as Telegram's
+                            // "Archived Chats" bar; its chevron is the way back.
+                            text: entry.kind == "archive-back" ? "Archived chats" : "Archived";
+                            font-weight: entry.kind == "archive-back" ? Typography.semibold : Typography.normal;
+                            color: Colors.text-primary;
+                            font-size: root.quick-link-text-size;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        if entry.kind == "archive-entry": Text {
+                            text: root.archived-rows.length;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            vertical-alignment: center;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.archive-view-changed(entry.kind == "archive-entry"); }
+                    }
+                }
+                if entry.kind == "archive-empty": Text {
+                    text: "No archived chats";
+                    color: Colors.text-muted;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    height: root.quick-link-height;
+                }
+                if entry.kind == "search" && root.collapsed: Rectangle {
+                    height: root.quick-link-height;
+                    opacity: root.search-overlay-open ? 0 : 1;
+                    animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                    accessible-role: button;
                     accessible-label: "Search";
+                    accessible-action-default => { root.search-clicked(); }
                     TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
                         tooltip-text: "Search"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: Icons.search; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
-                    TouchArea { mouse-cursor: pointer; clicked => { root.search-clicked(); } }
+                    TouchArea { enabled: !root.search-overlay-open; mouse-cursor: pointer; clicked => { root.search-clicked(); } }
                 }
 
-                if !AnonMode.enabled : Rectangle {
+
+                if entry.kind == "saved" && !AnonMode.enabled: Rectangle {
                     height: root.quick-link-height;
-                    background: saved-touch.has-hover ? Colors.surface-hover : transparent;
-                    accessible-role: button;
-                    accessible-label: "Saved Messages";
+                    property <bool> press-active: false;
+                    property <length> press-x: 0px;
+                    property <length> press-y: 0px;
+                    background: root.saved-open && !root.collapsed ? Colors.row-selected
+                        : self.press-active ? Colors.surface-control-hover
+                        : (!root.mobile-mode && saved-touch.has-hover) ? Colors.surface-hover : transparent;
+                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    accessible-role: list-item;
+                    accessible-label: "Saved messages";
+                    accessible-action-default => { root.saved-messages-clicked(); }
+                    border-width: parent.roving-highlight ? 2px : 0px;
+                    border-color: Colors.focus-ring;
                     if !root.collapsed: HorizontalLayout {
-                        padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Image { source: Icons.bookmark; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; }
+                        padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
+                        VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                            HorizontalLayout { alignment: center; Image { source: Icons.bookmark; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                         }
-                        Text { text: "Saved Messages"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
+                        Text { text: "Saved messages"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
-                        tooltip-text: "Saved Messages"; tooltip-enabled: true; placement: "right";
+                        tooltip-text: "Saved messages"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: Icons.bookmark; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
-                    saved-touch := TouchArea { clicked => { root.saved-messages-clicked(); } }
+                    saved-touch := TouchArea {
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down) {
+                                parent.press-x = self.mouse-x;
+                                parent.press-y = self.mouse-y;
+                                parent.press-active = true;
+                            } else if (event.kind == PointerEventKind.move
+                                && (abs(self.mouse-x - parent.press-x) > Spacing.sm
+                                    || abs(self.mouse-y - parent.press-y) > Spacing.sm)) {
+                                parent.press-active = false;
+                            } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                                parent.press-active = false;
+                            }
+                        }
+                        clicked => { root.saved-messages-clicked(); }
+                    }
                 }
 
                 // Visible in BOTH modes. In shield mode it's the entry to add an
@@ -282,25 +515,88 @@ export component Sidebar inherits Rectangle {
                 // Hidden on mobile: the bottom tab bar's Contacts tab opens the
                 // very same modal, and two permanent entry points to one screen
                 // is the duplication that made the phone layout read as two
-                // navigation systems running at once.
-                if !root.mobile-mode: Rectangle {
+                // navigation systems at once.
+
+                if entry.kind == "friends" && !root.mobile-mode: Rectangle {
                     height: root.quick-link-height;
-                    background: friends-touch.has-hover ? Colors.surface-hover : transparent;
-                    accessible-role: button;
-                    accessible-label: AnonMode.enabled ? "Add Contact" : "Friends";
+                    background: friends-touch.pressed ? Colors.surface-control-hover
+                        : friends-touch.has-hover ? Colors.surface-hover : transparent;
+                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    accessible-role: list-item;
+                    accessible-label: AnonMode.enabled ? "Add contact" : "Friends";
+                    accessible-action-default => { root.friends-clicked(); }
+                    border-width: parent.roving-highlight ? 2px : 0px;
+                    border-color: Colors.focus-ring;
                     if !root.collapsed: HorizontalLayout {
-                        padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; }
+                        padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
+                        VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                            HorizontalLayout { alignment: center; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                         }
-                        Text { text: AnonMode.enabled ? "Add Contact" : "Friends"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
+                        Text { text: AnonMode.enabled ? "Add contact" : "Friends"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
-                        tooltip-text: AnonMode.enabled ? "Add Contact" : "Friends"; tooltip-enabled: true; placement: "right";
+                        tooltip-text: AnonMode.enabled ? "Add contact" : "Friends"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
                     friends-touch := TouchArea { clicked => { root.friends-clicked(); } }
+                }
+
+                // Calls — the call history screen. On a phone the tab bar's
+                // Calls tab is the entry (hidden here for the same reason as
+                // Friends); on a two-pane tablet or desktop there is no tab
+                // bar, and this row is the only way in.
+
+                if entry.kind == "calls" && !root.mobile-mode: Rectangle {
+                    height: root.quick-link-height;
+                    background: calls-touch.pressed ? Colors.surface-control-hover
+                        : calls-touch.has-hover ? Colors.surface-hover : transparent;
+                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    accessible-role: list-item;
+                    accessible-label: root.missed-call-count > 0 ? "Calls, " + root.missed-call-count + " missed" : "Calls";
+                    border-width: parent.roving-highlight ? 2px : 0px;
+                    border-color: Colors.focus-ring;
+                    accessible-action-default => { root.calls-clicked(); }
+                    if !root.collapsed: HorizontalLayout {
+                        padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
+                        VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                            HorizontalLayout { alignment: center; Image { source: Icons.phone; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
+                        }
+                        Text { text: "Calls"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; horizontal-stretch: 1; }
+                        if root.missed-call-count > 0: VerticalLayout { alignment: center; horizontal-stretch: 0;
+                            Rectangle {
+                                width: self.height + (root.missed-call-count > 9 ? 4px : 0px);
+                                height: Spacing.badge-md;
+                                border-radius: self.height / 2;
+                                background: Colors.error-hover;
+                                Text {
+                                    text: root.missed-call-count > 9 ? "9+" : root.missed-call-count;
+                                    color: Colors.on-error;
+                                    font-size: Typography.xs2;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    width: 100%;
+                                    height: 100%;
+                                }
+                            }
+                        }
+                    }
+                    if root.collapsed: TooltipArea {
+                        width: 44px; x: (parent.width - self.width) / 2; height: 100%;
+                        tooltip-text: "Calls"; tooltip-enabled: true; placement: "right";
+                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle {
+                            width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                            Image { source: Icons.phone; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                            if root.missed-call-count > 0: Rectangle {
+                                x: parent.width - 8px; y: -2px;
+                                width: 12px; height: 12px; border-radius: 6px;
+                                border-width: 1px; border-color: Colors.surface;
+                                background: Colors.error;
+                            }
+                        } } }
+                    }
+                    calls-touch := TouchArea { mouse-cursor: pointer; clicked => { root.calls-clicked(); } }
                 }
 
                 // REQUESTS entry point — one calm row, not four competing
@@ -317,32 +613,49 @@ export component Sidebar inherits Rectangle {
                 // as tabs already built into the Friends modal's Requests
                 // tab (requests-sub-tab: received/sent/private/groups/
                 // channels) — nothing lost, just not all surfaced at once.
-                if root.total-pending-requests > 0: Rectangle {
+
+                if entry.kind == "requests" && root.total-pending-requests > 0: Rectangle {
                     height: root.quick-link-height;
-                    accessible-role: button;
+                    accessible-role: list-item;
                     accessible-label: root.total-pending-requests == 1 ? "1 request" : root.total-pending-requests + " requests";
-                    background: requests-touch.has-hover ? Colors.surface-hover : transparent;
+                    accessible-action-default => {
+                        root.message-requests-clicked();
+                        root.group-invites-clicked();
+                        root.channel-invites-clicked();
+                        root.friend-requests-clicked();
+                    }
+                    border-width: parent.roving-highlight ? 2px : 0px;
+                    border-color: Colors.focus-ring;
+                    background: requests-touch.pressed ? Colors.surface-control-hover
+                        : requests-touch.has-hover ? Colors.surface-hover : transparent;
+                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
 
                     if !root.collapsed: HorizontalLayout {
-                        padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Image { source: Icons.user-plus; width: 14px; height: 14px; colorize: Colors.text-secondary; }
+                        padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
+                        VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                            HorizontalLayout { alignment: center; Image { source: Icons.user-plus; width: 14px; height: 14px; colorize: Colors.text-secondary; } }
                         }
                         Text { text: "Requests"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; horizontal-stretch: 1; }
-                        Rectangle {
-                            width: root.total-pending-requests > 9 ? 22px : 18px;
-                            height: 18px;
-                            border-radius: 9px;
-                            background: Colors.error;
-                            Text {
-                                text: root.total-pending-requests > 9 ? "9+" : root.total-pending-requests;
-                                color: Colors.text-primary;
-                                font-size: Typography.xs2;
-                                font-weight: 700;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                                width: 100%;
-                                height: 100%;
+                        // Centred on the label's line; a fixed-height child of a
+                        // HorizontalLayout otherwise sits at the row's top.
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            if root.total-pending-requests > 0: Rectangle {
+                                width: self.height + (root.total-pending-requests > 9 ? 4px : 0px);
+                                height: Spacing.badge-md;
+                                border-radius: self.height / 2;
+                                background: Colors.error-hover;
+                                Text {
+                                    text: root.total-pending-requests > 9 ? "9+" : root.total-pending-requests;
+                                    color: Colors.on-error;
+                                    font-size: Typography.xs2;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    width: 100%;
+                                    height: 100%;
+                                }
                             }
                         }
                     }
@@ -352,7 +665,7 @@ export component Sidebar inherits Rectangle {
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
                             Image { source: Icons.user-plus; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
-                            Rectangle {
+                            if root.total-pending-requests > 0: Rectangle {
                                 x: parent.width - 8px; y: -2px;
                                 width: 12px; height: 12px; border-radius: 6px;
                                 border-width: 1px; border-color: Colors.surface;
@@ -364,208 +677,32 @@ export component Sidebar inherits Rectangle {
                     requests-touch := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
-                            // Fire every original callback so each request
-                            // type's own data refresh (its list, its badge
-                            // count) still happens exactly as before — this
-                            // consolidates the SIDEBAR ROW, not the
-                            // underlying refresh logic. See navigation.rs.
-                            root.friend-requests-clicked();
+                            // Refresh every request kind's list and badge,
+                            // then open Contacts › Requests. Only
+                            // friend-requests-clicked opens it (app.slint
+                            // picks the first non-empty sub-tab), so it must
+                            // fire on every tap — skipping it when only a
+                            // channel invite was pending made the row dead.
                             root.message-requests-clicked();
                             root.group-invites-clicked();
                             root.channel-invites-clicked();
+                            root.friend-requests-clicked();
                         }
                     }
                 }
 
-                // 4. MESSAGES SECTION — header label/expander only meaningful when expanded.
-                // In collapsed mode the row would render as 32px of empty space, so zero it.
-                Rectangle {
-                    // 42px, not 32, with the label pushed to the bottom of it.
-                    // A section header centred in its own box sits the same
-                    // distance from the group above as from the group it names,
-                    // so it binds to neither and the list reads as one long run
-                    // of rows. The extra space goes above the label only.
-                    // Telegram has no section headers — one flat run of
-                    // conversations, newest first. Grouping DMs apart from
-                    // channels is a desktop convenience that on a phone just
-                    // spends a row telling you what the next rows obviously
-                    // are, and the collapse chevrons hide conversations behind
-                    // a tap for no gain. Desktop keeps them.
-                    height: root.collapsed || root.mobile-mode ? 0px : 42px;
-                    if !root.collapsed && !root.mobile-mode: HorizontalLayout {
-                        padding-top: 10px;
-                        padding-left: 6px;
-                        padding-right: 4px;
-                        TouchArea {
-                            horizontal-stretch: 1;
-                            mouse-cursor: pointer;
-                            clicked => { root.messages-expanded = !root.messages-expanded; }
-                            HorizontalLayout {
-                                padding-left: 2px;
-                                spacing: 4px;
-                                alignment: start;
-                                VerticalLayout {
-                                    alignment: center;
-                                    horizontal-stretch: 0;
-                                    Image {
-                                        source: Icons.chevron-right;
-                                        width: 10px;
-                                        height: 10px;
-                                        colorize: Colors.text-muted;
-                                        transform-rotation: root.messages-expanded ? 90deg : 0deg;
-                                        animate transform-rotation { duration: 150ms; easing: ease-out; }
-                                    }
-                                }
-                                Text {
-                                    text: "Messages";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs2;
-                                    font-weight: 600;
-                                    letter-spacing: 0.5px;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-                        Rectangle {
-                            width: 28px;
-                            horizontal-stretch: 0;
+                // 4. CHATS — one list of every loose conversation, newest
+                // activity first, pinned first (Signal/Telegram). It used to be
+                // a "Messages" block above a "Channels" block, so a channel with
+                // newer activity never rose above a DM; creating a chat or a
+                // channel lives in the top row's Create menu (and the phone's
+                // floating button), not in per-block headers.
+                // Collapsed channel-action rail: new-channel / new-section.
 
-                            Rectangle {
-                                width: 24px;
-                                height: 24px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: Spacing.radius-sm;
-                                background: add-dm-touch.has-hover ? Colors.surface-hover : transparent;
-
-                                Image {
-                                    source: Icons.user-plus;
-                                    width: 14px;
-                                    height: 14px;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    colorize: add-dm-touch.has-hover ? Colors.text-primary : Colors.text-muted;
-                                }
-                            }
-
-                            add-dm-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.friends-clicked(); }
-                            }
-                        }
-                    }
-                }
-
-                if root.messages-expanded: DMList {
-                    vertical-stretch: 0;
-                    conversations: root.dm-conversations;
-                    collapsed: root.collapsed;
-                    mobile-mode: root.mobile-mode;
-                    show-header: false;
-                    conversation-selected(id) => { root.dm-selected(id); }
-                    add-friend-clicked => { root.friends-clicked(); }
-                    dm-context-menu-requested(id, pinned, x, y) => {
-                        root.ctx-menu-conv-id = id;
-                        root.ctx-menu-is-pinned = pinned;
-                        root.ctx-menu-can-pin = true;
-                        // Core's vocabulary, not the UI's: ConversationType
-                        // (domain/message.rs) has never accepted "dm", so this
-                        // menu silently no-oped on every DM.
-                        root.ctx-menu-conv-type = AnonMode.enabled ? "anon_dm" : "server_dm";
-                        root.ctx-menu-x = x;
-                        root.ctx-menu-y = y;
-                        root.ctx-menu-current-section-id = "";
-                        root.ctx-menu-show = true;
-                    }
-                }
-
-                // 5. CHANNELS SECTION — header zeroed in collapsed mode (collapsed action rail
-                // below at line 593+ provides the find/new/section buttons).
-                // Hidden entirely in Anon Mode — anon groups live below in a
-                // separate model so this filter only kills server channels.
-                if !AnonMode.enabled : Rectangle {
-                    // 42px, not 32, with the label pushed to the bottom of it.
-                    // A section header centred in its own box sits the same
-                    // distance from the group above as from the group it names,
-                    // so it binds to neither and the list reads as one long run
-                    // of rows. The extra space goes above the label only.
-                    // Telegram has no section headers — one flat run of
-                    // conversations, newest first. Grouping DMs apart from
-                    // channels is a desktop convenience that on a phone just
-                    // spends a row telling you what the next rows obviously
-                    // are, and the collapse chevrons hide conversations behind
-                    // a tap for no gain. Desktop keeps them.
-                    height: root.collapsed || root.mobile-mode ? 0px : 42px;
-                    if !root.collapsed && !root.mobile-mode: HorizontalLayout {
-                        padding-top: 10px;
-                        padding-left: 6px;
-                        padding-right: 4px;
-                        TouchArea {
-                            horizontal-stretch: 1;
-                            mouse-cursor: pointer;
-                            clicked => { root.channels-expanded = !root.channels-expanded; }
-                            HorizontalLayout {
-                                padding-left: 2px;
-                                spacing: 4px;
-                                alignment: start;
-                                VerticalLayout {
-                                    alignment: center;
-                                    horizontal-stretch: 0;
-                                    Image {
-                                        source: Icons.chevron-right;
-                                        width: 10px;
-                                        height: 10px;
-                                        colorize: Colors.text-muted;
-                                        transform-rotation: root.channels-expanded ? 90deg : 0deg;
-                                        animate transform-rotation { duration: 150ms; easing: ease-out; }
-                                    }
-                                }
-                                Text {
-                                    text: "Channels";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs2;
-                                    font-weight: 600;
-                                    letter-spacing: 0.5px;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-                        // "+" opens the Create-Channel modal (Create | Join tabs).
-                        Rectangle {
-                            width: 28px;
-                            horizontal-stretch: 0;
-
-                            Rectangle {
-                                width: 24px;
-                                height: 24px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: Spacing.radius-sm;
-                                background: create-ch-touch.has-hover ? Colors.surface-hover : transparent;
-
-                                Image {
-                                    source: Icons.plus;
-                                    width: 14px;
-                                    height: 14px;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    colorize: create-ch-touch.has-hover ? Colors.text-primary : Colors.text-muted;
-                                }
-                            }
-
-                            create-ch-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.create-channel-clicked(); }
-                            }
-                        }
-                    }
-                }
-
-                // Collapsed channel-action rail: find / new-channel / new-section
-                if root.collapsed && !AnonMode.enabled : VerticalLayout {
-                    spacing: 4px;
-                    padding-top: 4px;
-                    padding-bottom: 4px;
+                if entry.kind == "channel-actions" && root.collapsed && !AnonMode.enabled: VerticalLayout {
+                    spacing: Spacing.xs;
+                    padding-top: Spacing.xs;
+                    padding-bottom: Spacing.xs;
 
                     TooltipArea {
                         height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
@@ -573,6 +710,9 @@ export component Sidebar inherits Rectangle {
                         HorizontalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                             background: c-new-touch.has-hover ? Colors.surface-hover.brighter(0.6) : root.rail-slot-bg;
+                            accessible-role: button;
+                            accessible-label: "New channel";
+                            accessible-action-default => { root.create-channel-clicked(); }
                             Image { source: Icons.plus; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                                 colorize: c-new-touch.has-hover ? Colors.text-primary : Colors.text-muted; }
                             c-new-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-channel-clicked(); } }
@@ -585,6 +725,9 @@ export component Sidebar inherits Rectangle {
                         HorizontalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                             background: c-sec-touch.has-hover ? Colors.surface-hover.brighter(0.6) : root.rail-slot-bg;
+                            accessible-role: button;
+                            accessible-label: "New section";
+                            accessible-action-default => { root.create-section-clicked(); }
                             Image { source: Icons.folder; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                                 colorize: c-sec-touch.has-hover ? Colors.text-primary : Colors.text-muted; }
                             c-sec-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-section-clicked(); } }
@@ -592,378 +735,302 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
-                if root.channels-expanded && !AnonMode.enabled : ChannelList {
-                    vertical-stretch: 0;
-                    channels: root.channels;
-                    collapsed: root.collapsed;
-                    mobile-mode: root.mobile-mode;
-                    show-header: false;
-                    has-sibling-content: root.private-groups.length > 0;
-                    channel-selected(id) => { root.channel-selected(id); }
-                    channel-context-menu-requested(id, pinned, x, y) => {
-                        root.ctx-menu-conv-id = id;
-                        root.ctx-menu-conv-type = "channel";
-                        root.ctx-menu-x = x;
-                        root.ctx-menu-y = y;
-                        root.ctx-menu-current-section-id = "";
-                        root.ctx-menu-is-pinned = pinned;
-                        root.ctx-menu-can-pin = true;
-                        root.ctx-menu-show = true;
+
+                if entry.kind == "empty" && !root.collapsed && !root.chat-rows-loading: VerticalLayout {
+                    padding-top: Spacing.md;
+                    padding-bottom: Spacing.md;
+                    spacing: Spacing.xs;
+                    EmptyState {
+                        icon: Icons.message-circle;
+                        message: "No conversations";
+                        cta-text: "Add a friend";
+                        cta-clicked => { root.add-friend-clicked(); }
+                    }
+                    if !AnonMode.enabled: HorizontalLayout {
+                        height: Spacing.touch-target-min;
+                        alignment: center;
+                        Text {
+                            text: "Browse channels";
+                            accessible-role: button;
+                            accessible-label: "Browse channels";
+                            accessible-action-default => { root.join-channel-clicked(); }
+                            color: browse-touch.has-hover ? Colors.primary-hover : Colors.primary;
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                            browse-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.join-channel-clicked(); }
+                            }
+                        }
                     }
                 }
-
-                if root.channels-expanded && root.private-groups.length > 0: PrivateGroupList {
-                    vertical-stretch: 0;
-                    mobile-mode: root.mobile-mode;
-                    groups: root.private-groups;
-                    collapsed: root.collapsed;
-                    show-header: false;
-                    group-selected(id) => { root.private-group-selected(id); }
-                    group-context-menu-requested(id, x, y) => {
-                        root.ctx-menu-conv-id = id;
-                        root.ctx-menu-is-pinned = false;
-                        root.ctx-menu-can-pin = false;
-                        // A private group is an anon_group in core. "private_group" is not
-                        // a ConversationType and silently no-oped.
-                        root.ctx-menu-conv-type = "anon_group";
-                        root.ctx-menu-x = x;
-                        root.ctx-menu-y = y;
-                        root.ctx-menu-current-section-id = "";
-                        root.ctx-menu-show = true;
+                if entry.kind == "loading" && root.chat-rows-loading && root.chat-rows.length == 0 && !root.collapsed: VerticalLayout {
+                    spacing: Spacing.xxs;
+                    for placeholder in [0, 1, 2, 3, 4]: ChatListSkeleton { mobile-mode: root.touch; }
+                }
+                if entry.kind == "chat" || entry.kind == "archived-chat": Rectangle {
+                    height: (root.collapsed ? 48px : root.touch ? Spacing.row-height-touch : Spacing.row-height-desktop) + Spacing.xxs;
+                    chat-row := ChatRow {
+                        x: Spacing.xs;
+                        width: parent.width - 2 * Spacing.xs;
+                        data: entry.chat;
+                        collapsed: root.collapsed;
+                        mobile-mode: root.touch;
+                        keyboard-highlight: sidebar-keys.has-focus && Appearance.keyboard-focus-visible && root.focus-index == idx;
+                        clicked => {
+                            if entry.chat.conversation-type == ConversationKind.channel || entry.chat.conversation-type == ConversationKind.saved-messages {
+                                root.channel-selected(entry.chat.conversation-id);
+                            } else if entry.chat.conversation-type == ConversationKind.anon-group {
+                                root.private-group-selected(entry.chat.conversation-id);
+                            } else {
+                                root.dm-selected(entry.chat.conversation-id);
+                            }
+                        }
+                        pin-requested(pinned) => { root.set-conversation-pinned(entry.chat.conversation-id, pinned); }
+                        context-menu-requested(x, y) => {
+                            SidebarPane.ctx-menu-row = entry.chat;
+                            SidebarPane.ctx-menu-row-y = chat-row.absolute-position.y - root.absolute-position.y;
+                            SidebarPane.ctx-menu-conv-id = entry.chat.conversation-id;
+                            SidebarPane.ctx-menu-conv-type = entry.chat.conversation-type;
+                            SidebarPane.ctx-menu-is-pinned = entry.chat.is-pinned;
+                            SidebarPane.ctx-menu-is-archived = entry.kind == "archived-chat";
+                            SidebarPane.ctx-menu-can-leave = entry.chat.can-leave;
+                            SidebarPane.ctx-menu-can-delete-channel = entry.chat.can-delete;
+                            SidebarPane.ctx-menu-x = x;
+                            SidebarPane.ctx-menu-y = y;
+                            SidebarPane.ctx-menu-current-section-id = "";
+                            SidebarPane.section-context-menu-open = false;
+                            root.row-context-menu-opened(entry.chat.conversation-id, entry.chat.conversation-type);
+                            SidebarPane.row-context-menu-open = true;
+                        }
                     }
                 }
-
-                // 6. MESH — the public room, every joined geohash cell, and mesh
-                // DMs. A peer of the sections above, not a mode: same list, same
-                // item shape, distinguished by `ConversationType` on the Rust
-                // side exactly as anon DMs are. Present in both normal and anon
-                // mode — the mesh needs no server either way.
-                if MeshGlobal.enabled: MeshList {
-                    vertical-stretch: 0;
+                if entry.kind == "section-header": CustomSectionHeader {
+                    keyboard-highlight: parent.roving-highlight;
+                    section-id: entry.section.section-id;
+                    name: entry.section.name;
+                    icon-emoji: entry.section.icon-emoji;
+                    is-expanded: entry.section.is-expanded;
+                    unread-count: entry.section.unread-count;
                     collapsed: root.collapsed;
-                }
-
-                // 4b. CUSTOM SECTIONS (user-created, between Messages and Channels)
-                CustomSectionList {
-                    vertical-stretch: 0;
-                    sections: root.custom-sections;
-                    collapsed: root.collapsed;
-                    mobile-mode: root.mobile-mode;
-                    create-section-clicked => { root.create-section-clicked(); }
-                    section-toggle-expanded(id) => { root.section-toggle-expanded(id); }
-                    section-conversation-selected(conv-id, conv-type) => { root.section-conversation-selected(conv-id, conv-type); }
-                    delete-section-clicked(id) => { root.delete-section-clicked(id); }
-                    rename-section-clicked(id) => { root.rename-section-clicked(id); }
-                    section-conversation-context-menu-requested(conv-id, conv-type, section-id, pinned, x, y) => {
-                        root.ctx-menu-conv-id = conv-id;
-                        root.ctx-menu-conv-type = conv-type;
-                        root.ctx-menu-x = x;
-                        root.ctx-menu-y = y;
-                        root.ctx-menu-current-section-id = section-id;
-                        root.ctx-menu-is-pinned = pinned;
-                        root.ctx-menu-can-pin = conv-type != "anon_group";
-                        root.ctx-menu-show = true;
-                    }
-                    section-header-context-menu-requested(section-id, sort-mode, x, y) => {
-                        root.section-header-ctx-menu-section-id = section-id;
-                        root.section-header-ctx-menu-x = x;
-                        root.section-header-ctx-menu-y = y;
-                        // Carried up from the row rather than looked up: Slint
-                        // has no way to search a model from a callback body.
-                        root.section-header-ctx-menu-sort-mode = sort-mode;
-                        root.section-header-ctx-menu-show = true;
+                    mobile-mode: root.touch;
+                    toggle-expanded => { root.section-toggle-expanded(entry.section.section-id); }
+                    rename-clicked => { root.rename-section-clicked(entry.section.section-id); }
+                    delete-clicked => { root.delete-section-clicked(entry.section.section-id); }
+                    context-menu-requested(x, y) => {
+                        SidebarPane.section-header-ctx-menu-section-id = entry.section.section-id;
+                        SidebarPane.section-header-ctx-menu-x = x;
+                        SidebarPane.section-header-ctx-menu-y = y;
+                        SidebarPane.section-header-ctx-menu-sort-mode = entry.section.sort-mode;
+                        SidebarPane.row-context-menu-open = false;
+                        SidebarPane.section-context-menu-open = true;
                     }
                 }
+                if entry.kind == "section-chat": Rectangle {
+                    height: (root.collapsed ? 48px : root.touch ? Spacing.row-height-touch : Spacing.row-height-desktop) + Spacing.xxs;
+                    section-chat-row := ChatRow {
+                        x: Spacing.xs;
+                        width: parent.width - 2 * Spacing.xs;
+                        data: entry.chat;
+                        collapsed: root.collapsed;
+                        mobile-mode: root.touch;
+                        keyboard-highlight: sidebar-keys.has-focus && Appearance.keyboard-focus-visible && root.focus-index == idx;
+                        clicked => { root.section-conversation-selected(entry.chat.conversation-id, entry.chat.conversation-type); }
+                        pin-requested(pinned) => { root.set-conversation-pinned(entry.chat.conversation-id, pinned); }
+                        context-menu-requested(x, y) => {
+                            SidebarPane.ctx-menu-row = entry.chat;
+                            SidebarPane.ctx-menu-row-y = section-chat-row.absolute-position.y - root.absolute-position.y;
+                            SidebarPane.ctx-menu-conv-id = entry.chat.conversation-id;
+                            SidebarPane.ctx-menu-can-leave = entry.chat.can-leave;
+                            SidebarPane.ctx-menu-can-delete-channel = entry.chat.can-delete;
+                            SidebarPane.ctx-menu-conv-type = entry.chat.conversation-type;
+                            SidebarPane.ctx-menu-x = x;
+                            SidebarPane.ctx-menu-y = y;
+                            SidebarPane.ctx-menu-current-section-id = entry.section.section-id;
+                            SidebarPane.ctx-menu-is-pinned = entry.chat.is-pinned;
+                            SidebarPane.ctx-menu-is-archived = false;
+                            SidebarPane.section-context-menu-open = false;
+                            root.row-context-menu-opened(entry.chat.conversation-id, entry.chat.conversation-type);
+                            SidebarPane.row-context-menu-open = true;
+                        }
+                    }
+                }
+            }
+        }
+        if root.active-tab == "mesh" && MeshGlobal.enabled: Flickable {
+            width: root.width;
+            height: root.height;
+            viewport-height: mesh-content.preferred-height;
+            mesh-content := VerticalLayout {
+                padding-top: (root.collapsed ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
+                    + (root.mobile-mode ? Spacing.none : Spacing.sm);
+                padding-bottom: root.bottom-inset + Spacing.md;
+                MeshList {
+                    collapsed: root.collapsed;
+                    touch: root.touch;
+                    setup-requested => { root.mesh-setup-clicked(); }
+                }
+            }
+        }
+        if !root.collapsed && root.active-tab != "mesh": SidebarHeader {
+            panel-width: root.width;
+            top-row-height: root.top-row-height;
+            quick-link-inset: root.quick-link-inset;
+            quick-link-slot: root.quick-link-slot;
+            quick-link-icon-size: root.quick-link-icon-size;
+            quick-link-text-color: root.quick-link-text-color;
+            quick-link-text-size: root.quick-link-text-size;
+            traffic-lights-width: root.traffic-lights-width;
+            header-control-shell: root.header-control-shell;
+            header-control-glyph: root.header-control-glyph;
+            search-overlay-open: root.search-overlay-open;
+            server-unreachable: root.server-unreachable;
+            connection-status: root.connection-status;
+            mobile-mode: root.mobile-mode;
+            touch: root.touch;
+            search-clicked => { root.search-clicked(); }
+            create-clicked => { root.create-clicked(); }
+            anon-mode-clicked => { root.anon-mode-clicked(); }
+        }
 
-                Rectangle { vertical-stretch: 1; }
+        // Keep the list after the header and before the footer in Slint's
+        // source-order tab chain. Give it nonzero geometry for Slint's
+        // visibility check during Tab navigation; it only owns keys.
+        sidebar-keys := FocusScope {
+            x: 0px;
+            y: root.top-row-height;
+            width: 1px;
+            height: 1px;
+            focus-on-click: false;
+            enabled: !root.touch && root.active-tab == "chats" && !root.hidden;
+            changed has-focus => { if (self.has-focus) { root.focus-step(-2); } }
+            accessible-role: list;
+            accessible-label: root.flat-rows.length > root.focus-index && root.focus-index >= 0
+                ? root.row-label(root.flat-rows[root.focus-index])
+                : "Conversations";
+            key-pressed(event) => {
+                if (event.text == Key.UpArrow) { root.focus-step(-1); return accept; }
+                if (event.text == Key.DownArrow) { root.focus-step(1); return accept; }
+                if (event.text == Key.Home) { root.focus-step(-2); return accept; }
+                if (event.text == Key.End) { root.focus-step(2); return accept; }
+                if (event.text == Key.Return || event.text == Key.Space) { root.open-focused(); return accept; }
+                if (event.text == Key.Escape) { root.focus-composer(); return accept; }
+                if (event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift)) {
+                    root.open-focused-menu(); return accept;
+                }
+                return reject;
             }
         }
 
-        // 7. BOTTOM UTILITY BAR — Neo 2.0 glass surface.
+        // Pinned like SidebarHeader; without x/y a child of this Rectangle is centred.
+        if !root.collapsed && root.active-tab == "mesh": Rectangle {
+            property <length> action-box: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+            x: 0px;
+            y: 0px;
+            width: root.width;
+            height: root.top-row-height;
+            background: root.touch ? transparent : Colors.surface;
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                // Centre the action buttons in the row: a bare HorizontalLayout
+                // top-aligns a fixed-height child, which clipped the bell's
+                // -4px activity badge against the panel's clip bound. The chats
+                // header avoids this by centring its bell; match that here.
+                padding-top: (root.top-row-height - parent.action-box) / 2;
+                padding-bottom: (root.top-row-height - parent.action-box) / 2;
+                spacing: Spacing.sm;
+                // iOS large-title bar: actions only, the title is MeshList's.
+                Rectangle { horizontal-stretch: 1; }
+                ActivityBell { touch: root.touch; server-unreachable: root.server-unreachable;
+                    connection-status: root.connection-status; }
+                Rectangle {
+                    width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+                    height: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+                    border-radius: Spacing.radius-full;
+                    background: compose-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
+                    Image {
+                        source: Icons.plus; width: Spacing.header-glyph; height: Spacing.header-glyph;
+                        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        colorize: Colors.primary;
+                    }
+                    compose-touch := TouchArea {
+                        mouse-cursor: pointer; accessible-role: button; accessible-label: "New mesh conversation";
+                        clicked => { MeshGlobal.open-sheet("mesh-compose"); }
+                    }
+                }
+                Rectangle {
+                    width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+                    height: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+                    border-radius: Spacing.radius-full;
+                    background: setup-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
+                    Image {
+                        source: Icons.settings; width: Spacing.header-glyph; height: Spacing.header-glyph;
+                        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        colorize: Colors.text-secondary;
+                    }
+                    setup-touch := TouchArea {
+                        mouse-cursor: pointer; accessible-role: button; accessible-label: "Mesh settings";
+                        clicked => { MeshGlobal.open-setup(); }
+                    }
+                }
+            }
+        }
+
+        if !root.mobile-mode: SidebarFooter {
+            panel-width: root.width;
+            panel-height: root.height;
+            collapsed: root.collapsed;
+            touch: root.touch;
+            mesh-available: MeshGlobal.enabled;
+            active-tab: root.active-tab;
+            rail-button-count: root.rail-button-count;
+            rail-icon-size: root.rail-icon-size;
+            rail-slot-size: root.rail-slot-size;
+            rail-slot-radius: root.rail-slot-radius;
+            rail-slot-bg: root.rail-slot-bg;
+            footer-icon-size: root.footer-icon-size;
+            user-avatar-source: root.user-avatar-source;
+            user-initials: root.user-initials;
+            user-presence-status: root.user-presence-status;
+            user-display-name: root.user-display-name;
+            server-unreachable: root.server-unreachable;
+            profile-clicked => { root.profile-clicked(); }
+            settings-clicked => { root.settings-clicked(); }
+            // The host owns the state (SidebarPane.sidebar-collapsed); flipping
+            // `collapsed` here broke its binding and the chat never moved.
+            toggle-collapsed => { root.toggle-collapsed(); }
+            anon-mode-clicked => { root.anon-mode-clicked(); }
+            channel-selected(id) => { root.channel-selected(id); }
+            tab-selected(tab) => { root.tab-selected(tab); }
+        }
+
+        // 7. BOTTOM UTILITY BAR — shared chrome material.
         // Desktop only. On mobile its last occupant (the shield) moved up onto
         // the search row, and what remained was a translucent grey strip across
         // the foot of the list holding nothing — visible as a lighter rectangle
         // above the floating dock.
-        if !root.mobile-mode: Rectangle {
-            // Derived, not a magic number: this was hardcoded at 140px, which
-            // fit the three 32px buttons the rail used to have and silently
-            // clipped everything past them off the bottom of the screen once
-            // the cluster grew. 8px inter-item spacing + 8px padding-bottom,
-            // matching the layout below.
-            height: root.collapsed
-                ? root.rail-button-count * root.rail-icon-size
-                    + (root.rail-button-count - 1) * 8px + 16px
-                : 44px;
-            background: Colors.surface.with-alpha(0.85);
-            drop-shadow-blur: Spacing.neo-blur-sm;
-            drop-shadow-offset-y: -2px;
-            drop-shadow-color: Colors.neo-shadow;
 
-            // Top edge only — the one side that separates this strip from the
-            // list. The four-sided border it replaces doubled up against the
-            // panel's own left/right edges and closed a box around the footer.
-            Rectangle {
-                y: 0;
-                width: 100%;
-                height: 1px;
-                background: Colors.neo-highlight;
-            }
-
-            // Expanded view: Profile + Jarvis + Settings on same row
-            // No `alignment` — under any alignment other than stretch, Slint
-            // sizes every child to its PREFERRED width and ignores
-            // horizontal-stretch, so the display name pushed the icons past the
-            // right edge and the last one (collapse) was clipped away entirely.
-            // Stretching lets the name elide and keeps the buttons on screen.
-            if !root.collapsed: HorizontalLayout {
-                padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm;
-                // Profile moved to the bottom tab bar's rightmost tab on mobile,
-                // where it carries the user's avatar — a name-and-avatar strip
-                // wedged between the last conversation and the tab bar was
-                // neither a list row nor navigation, and read as leftover.
-                if !root.mobile-mode: TouchArea {
-                    horizontal-stretch: 1;
-                    mouse-cursor: pointer;
-                    clicked => { root.profile-clicked(); }
-                    HorizontalLayout {
-                        spacing: Spacing.sm; alignment: start;
-                        VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Avatar { size: 24px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
-                                presence-color: root.user-presence-status == "online" ? Colors.online : Colors.offline;
-                            }
-                        }
-                        Text { text: root.user-display-name; color: Colors.text-secondary; font-size: Typography.xs; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
-                    }
-                }
-                // Keeps the shield on the right edge now that nothing precedes it.
-                if root.mobile-mode: Rectangle { horizontal-stretch: 1; }
-                // Anon mode toggle — shield icon, glows when active
-                VerticalLayout { alignment: center; horizontal-stretch: 0;
-                    Rectangle {
-                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
-                        background: anon-touch.has-hover ? Colors.surface-hover : (AnonMode.enabled ? Colors.primary.with-alpha(0.15) : transparent);
-                        Image { source: Icons.shield; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                            colorize: AnonMode.enabled ? Colors.primary : Colors.text-muted; }
-                        // Tor status dot: green=connected, amber=connecting, red=error. Shield mode only.
-                        Rectangle {
-                            visible: AnonMode.enabled;
-                            width: 8px; height: 8px; border-radius: 4px;
-                            x: parent.width - self.width; y: 0;
-                            border-width: 1px; border-color: Colors.surface;
-                            background: TorStatus.state == 2 ? Colors.success
-                                : TorStatus.state == 3 ? Colors.error
-                                : Colors.warning;
-                        }
-                        anon-touch := TouchArea { clicked => { root.anon-mode-clicked(); } }
-                    }
-                }
-                // Settings lives in the bottom tab bar on mobile — this is the
-                // same destination, so keeping both is the duplication again.
-                if !root.mobile-mode: VerticalLayout { alignment: center; horizontal-stretch: 0;
-                    Rectangle {
-                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
-                        background: sett-touch.has-hover ? Colors.surface-hover : transparent;
-                        Image { source: Icons.settings; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                        if root.server-unreachable: Rectangle {
-                            x: parent.width - self.width - 1px; y: 1px;
-                            width: 7px; height: 7px; border-radius: 3.5px;
-                            border-width: 1px; border-color: Colors.surface;
-                            background: Colors.error;
-                            accessible-role: text;
-                            accessible-label: "Server unreachable";
-                        }
-                        sett-touch := TouchArea { clicked => { root.settings-clicked(); } }
-                    }
-                }
-                // Collapse back to the rail. The expanded panel needs its own
-                // copy: the rail's cluster only exists while collapsed, so
-                // without this, expanding was a one-way trip.
-                //
-                // There is no rail on mobile to collapse into — the list either
-                // is the screen or the conversation is — so the control has
-                // nothing to do there.
-                if !root.mobile-mode: VerticalLayout { alignment: center; horizontal-stretch: 0;
-                    Rectangle {
-                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
-                        background: collapse-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Collapse sidebar";
-                        Image { source: Icons.chevron-left; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                        collapse-touch := TouchArea { clicked => { root.collapsed = !root.collapsed; root.toggle-collapsed(); } }
-                    }
-                }
-            }
-
-            // Collapsed view: Vertical stack of icons
-            if root.collapsed: VerticalLayout {
-                alignment: end; spacing: 8px; padding-bottom: 8px;
-                TooltipArea {
-                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: AnonMode.enabled ? "Anon Mode (active) - tap to disable" : "Anon Mode";
-                    tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
-                        background: AnonMode.enabled ? Colors.primary.with-alpha(0.2) : root.rail-slot-bg;
-                        Image { source: Icons.shield; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                            colorize: AnonMode.enabled ? Colors.primary : Colors.text-secondary; }
-                        // Tor status dot: green=connected, amber=connecting, red=error. Shield mode only.
-                        Rectangle {
-                            visible: AnonMode.enabled;
-                            width: 10px; height: 10px; border-radius: 5px;
-                            x: parent.width - self.width - 2px; y: 2px;
-                            border-width: 1px; border-color: Colors.surface;
-                            background: TorStatus.state == 2 ? Colors.success
-                                : TorStatus.state == 3 ? Colors.error
-                                : Colors.warning;
-                        }
-                        TouchArea { clicked => { root.anon-mode-clicked(); } }
-                    } }
-                }
-                // Bottom cluster, in order: AI, Mesh, expand, Settings.
-                // The expand chevron lives here rather than in the panel header
-                // so the three things reached most often on a phone — the AI
-                // channel, the mesh room, and the full conversation list — sit
-                // together under the thumb.
-                TooltipArea {
-                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: "AI"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                        Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
-                        // The local AI channel's fixed id is the nil UUID
-                        // (chatter-core client/jarvis.rs jarvis_channel_id).
-                        TouchArea { clicked => { root.channel-selected("00000000-0000-0000-0000-000000000000"); } }
-                    } }
-                }
-
-                if root.rail-has-mesh: TooltipArea {
-                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: "Mesh"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                        Image { source: Icons.radio; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                            colorize: !MeshGlobal.radio-running ? Colors.warning
-                                : MeshGlobal.peer-count > 0 ? Colors.glow-cyan
-                                : Colors.text-secondary; }
-                        // First entry is the public room — the mesh list is
-                        // built with it at the head.
-                        TouchArea { clicked => { MeshGlobal.conversation-selected(MeshGlobal.conversations[0].id); } }
-                    } }
-                }
-
-                // A visible seam between "situational shortcuts" (Anon Mode,
-                // AI, Mesh — above) and "always there" navigation (expand,
-                // Settings, Profile — below). Six identical unlabeled slots
-                // in one unbroken stack read as one big undifferentiated
-                // block; a hairline plus extra breathing room lets the eye
-                // parse two small groups instead, without hiding anything.
-                Rectangle {
-                    height: 13px;
-                    Rectangle {
-                        y: parent.height / 2;
-                        width: root.rail-slot-size * 0.6;
-                        x: (parent.width - self.width) / 2;
-                        height: 1px;
-                        background: Colors.border;
-                    }
-                }
-
-                TooltipArea {
-                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: root.collapsed ? "Expand sidebar" : "Collapse sidebar"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                        Image { source: root.collapsed ? Icons.chevron-right : Icons.chevron-left; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                        TouchArea { clicked => { root.collapsed = !root.collapsed; root.toggle-collapsed(); } }
-                    } }
-                }
-
-                TooltipArea {
-                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Settings"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                        Image { source: Icons.settings; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
-                        if root.server-unreachable: Rectangle {
-                            x: parent.width - self.width - 1px; y: 1px;
-                            width: 7px; height: 7px; border-radius: 3.5px;
-                            border-width: 1px; border-color: Colors.surface;
-                            background: Colors.error;
-                            accessible-role: text;
-                            accessible-label: "Server unreachable";
-                        }
-                        TouchArea { clicked => { root.settings-clicked(); } }
-                    } }
-                }
-                TouchArea {
-                    height: root.rail-icon-size; clicked => { root.profile-clicked(); }
-                    HorizontalLayout { alignment: center;
-                        Avatar { size: 28px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
-                            presence-color: root.user-presence-status == "online" ? Colors.online : Colors.offline;
-                        }
-                    }
-                }
-
-            }
-        }
     }
 
     // Right edge — the seam against the chat column. Desktop only: on a phone
     // this panel is the whole screen and has no column beside it.
-    if !root.mobile-mode: Rectangle {
-        x: parent.width - 1px;
-        width: 1px;
-        height: 100%;
-        background: AnonMode.enabled ? Colors.primary.with-alpha(0.4) : Colors.neo-highlight;
+
+    if !root.mobile-mode && !root.collapsed && root.update-banner-visible: UpdateBanner {
+        x: Spacing.sm;
+        y: root.height - self.height - Spacing.button-height - Spacing.md;
+        width: root.width - Spacing.sm * 2;
+        height: root.update-banner-height;
     }
 
-    // Section context menu overlay (renders on top of all sidebar content)
-    SectionContextMenu {
-        show: root.ctx-menu-show;
-        position-x: root.ctx-menu-x;
-        position-y: root.ctx-menu-y;
-        conversation-id: root.ctx-menu-conv-id;
-        conversation-type: root.ctx-menu-conv-type;
-        current-section-id: root.ctx-menu-current-section-id;
-        is-pinned: root.ctx-menu-is-pinned;
-        can-pin: root.ctx-menu-can-pin;
-        mobile-mode: root.mobile-mode;
-        sections: root.custom-sections;
-
-        close => {
-            root.ctx-menu-show = false;
-        }
-        move-to-section(conv-id, conv-type, section-id) => {
-            root.move-to-section(conv-id, conv-type, section-id);
-        }
-        remove-from-section(conv-id) => {
-            root.remove-from-section(conv-id);
-        }
-        create-section-clicked => {
-            root.create-section-clicked();
-        }
-        set-pinned(conv-id, pinned) => {
-            root.set-conversation-pinned(conv-id, pinned);
-        }
+    // Keep an update notice above the phone's floating action area. Adding it
+    // to the scroll layout moved every conversation when update state arrived.
+    if root.mobile-mode && root.update-banner-visible: UpdateBanner {
+        x: Spacing.sm;
+        y: root.height - root.bottom-inset - Spacing.fab-size - Spacing.md * 2 - self.height;
+        width: root.width - Spacing.sm * 2;
+        height: root.update-banner-height;
     }
 
-    // Section header context menu overlay (right-click on section header)
-    SectionHeaderContextMenu {
-        show: root.section-header-ctx-menu-show;
-        position-x: root.section-header-ctx-menu-x;
-        position-y: root.section-header-ctx-menu-y;
-        section-id: root.section-header-ctx-menu-section-id;
-        section-sort-mode: root.section-header-ctx-menu-sort-mode;
-        mobile-mode: root.mobile-mode;
 
-        close => {
-            root.section-header-ctx-menu-show = false;
-        }
-        remove-section(section-id) => {
-            root.delete-section-clicked(section-id);
-        }
-        rename-section(section-id) => {
-            root.rename-section-clicked(section-id);
-        }
-        move-section(section-id, delta) => {
-            root.move-section(section-id, delta);
-        }
-        set-sort-mode(section-id, mode) => {
-            root.set-section-sort-mode(section-id, mode);
-        }
-    }
 }

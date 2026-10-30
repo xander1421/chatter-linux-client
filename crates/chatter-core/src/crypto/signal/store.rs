@@ -16,6 +16,10 @@ use uuid::Uuid;
 
 use crate::error::StorageError;
 use crate::storage::KeyStore;
+#[cfg(feature = "mesh")]
+use crate::storage::mesh_binding_store::MeshBindingStore;
+#[cfg(feature = "mesh")]
+use chatter_mesh::ids::PeerId;
 
 /// Result type for Signal Protocol operations.
 type Result<T> = std::result::Result<T, SignalProtocolError>;
@@ -43,17 +47,101 @@ impl std::error::Error for StorageCallbackError {}
 #[derive(Clone)]
 pub struct SignalStore {
     key_store: Arc<KeyStore>,
+    /// Mesh ratchets have a device-local address space per signed-in account.
+    /// Identity keys remain keyed by the ordinary account ID.
+    mesh_owner: Option<String>,
+    #[cfg(feature = "mesh")]
+    mesh_binding: Option<(Arc<MeshBindingStore>, PeerId)>,
 }
 
 impl SignalStore {
     /// Create a new SignalStore wrapping the given KeyStore.
     pub fn new(key_store: Arc<KeyStore>) -> Self {
-        Self { key_store }
+        Self {
+            key_store,
+            mesh_owner: None,
+            #[cfg(feature = "mesh")]
+            mesh_binding: None,
+        }
+    }
+
+    /// Use the same local identity key with independent mesh session records.
+    /// The caller must first check the peer's persisted Verified binding.
+    #[cfg(feature = "mesh")]
+    pub fn for_mesh(
+        key_store: Arc<KeyStore>,
+        binding_store: Arc<MeshBindingStore>,
+        owner: String,
+        peer: PeerId,
+    ) -> Self {
+        Self {
+            key_store,
+            mesh_owner: Some(owner),
+            mesh_binding: Some((binding_store, peer)),
+        }
+    }
+
+    #[cfg(feature = "mesh")]
+    fn mesh_pinned_identity(&self, address: &ProtocolAddress) -> Result<Option<IdentityKey>> {
+        let Some((bindings, peer)) = &self.mesh_binding else {
+            return Ok(None);
+        };
+        let Some(owner) = &self.mesh_owner else {
+            return Ok(None);
+        };
+        let Some((account, device, bytes)) = bindings
+            .verified_identity(owner, peer)
+            .map_err(storage_to_signal_error)?
+        else {
+            return Ok(None);
+        };
+        if address.name() != Uuid::from_bytes(account).to_string()
+            || address.device_id().to_string() != device.to_string()
+        {
+            return Ok(None);
+        }
+        if self
+            .key_store
+            .get_identity(address.name())
+            .map_err(storage_to_signal_error)?
+            .is_some_and(|online_key| online_key != bytes)
+        {
+            return Ok(None);
+        }
+        IdentityKey::try_from(bytes.as_slice())
+            .map(Some)
+            .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)
+    }
+
+    fn session_address(&self, address: &ProtocolAddress) -> String {
+        match &self.mesh_owner {
+            Some(owner) => format!("mesh:{owner}:{}:{}", address.name(), address.device_id()),
+            None => address_to_string(address),
+        }
+    }
+
+    fn is_local_account(&self, account: &str) -> Result<bool> {
+        let owner = self
+            .key_store
+            .receive_read("settings", "auth.current_user_id", "CAST(value AS BLOB)")
+            .map_err(storage_to_signal_error)?;
+        local_account_matches(owner.as_deref(), account)
     }
 
     /// Get the underlying KeyStore.
     pub fn key_store(&self) -> Arc<KeyStore> {
         self.key_store.clone()
+    }
+}
+
+// The persisted owner is the same account fence used at receive commit. A
+// malformed owner must not silently downgrade self identity to peer TOFU.
+fn local_account_matches(owner: Option<&[u8]>, account: &str) -> Result<bool> {
+    match owner {
+        None => Ok(false), // unregistered stores have no account identity yet
+        Some(bytes) => serde_json::from_slice::<String>(bytes)
+            .map(|owner| owner == account)
+            .map_err(|_| SignalProtocolError::InvalidProtobufEncoding),
     }
 }
 
@@ -117,6 +205,20 @@ impl IdentityKeyStore for SignalStore {
         // server-injected "ghost" device — fails is_trusted_identity and is
         // never encrypted to. (Sessions/prekeys/sender-keys remain per-device.)
         let account = address.name();
+        if self.mesh_owner.is_some() {
+            // A mesh bundle may never introduce or replace an account identity.
+            // Verification pins it before libsignal gets the bundle.
+            #[cfg(feature = "mesh")]
+            if self.mesh_pinned_identity(address)?.as_ref() != Some(identity) {
+                return Err(SignalProtocolError::UntrustedIdentity(address.clone()));
+            }
+            return Ok(IdentityChange::from_changed(false));
+        }
+        if self.is_local_account(account)?
+            && self.get_identity_key_pair().await?.identity_key() != identity
+        {
+            return Err(SignalProtocolError::UntrustedIdentity(address.clone()));
+        }
         let key_changed = self
             .key_store
             .save_identity(account, &identity.serialize())
@@ -159,6 +261,10 @@ impl IdentityKeyStore for SignalStore {
         identity: &IdentityKey,
         _direction: Direction,
     ) -> Result<bool> {
+        #[cfg(feature = "mesh")]
+        if self.mesh_owner.is_some() {
+            return Ok(self.mesh_pinned_identity(address)?.as_ref() == Some(identity));
+        }
         // Per-account keying (see save_identity): trust is evaluated against the
         // account's single pinned identity key, so a ghost device with a
         // divergent key is rejected regardless of its device id.
@@ -168,13 +274,19 @@ impl IdentityKeyStore for SignalStore {
         // server-injected device TOFU-trust and receive fan-out. Compiles
         // either way; guarded only by
         // `tests/round3_security_e2e.rs::ghost_device_with_divergent_identity_is_untrusted`.
+        // Provisioning and SVR restore share the account identity key. Use
+        // that local anchor even before the first self sync and even if a
+        // legacy remote self row was poisoned. Never trust a device's TOFU key.
+        if self.is_local_account(address.name())? {
+            return Ok(self.get_identity_key_pair().await?.identity_key() == identity);
+        }
         let stored_key = self
             .key_store
             .get_identity(address.name())
             .map_err(storage_to_signal_error)?;
 
         match stored_key {
-            None => Ok(true), // TOFU: first key seen for this account
+            None => Ok(self.mesh_owner.is_none()), // mesh never accepts TOFU
             Some(bytes) => {
                 let stored_identity = IdentityKey::try_from(bytes.as_slice())
                     .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
@@ -184,6 +296,13 @@ impl IdentityKeyStore for SignalStore {
     }
 
     async fn get_identity(&self, address: &ProtocolAddress) -> Result<Option<IdentityKey>> {
+        #[cfg(feature = "mesh")]
+        if self.mesh_owner.is_some() {
+            return self.mesh_pinned_identity(address);
+        }
+        if self.is_local_account(address.name())? {
+            return Ok(Some(*self.get_identity_key_pair().await?.identity_key()));
+        }
         let stored_key = self
             .key_store
             .get_identity(address.name())
@@ -208,6 +327,14 @@ impl IdentityKeyStore for SignalStore {
 impl PreKeyStore for SignalStore {
     async fn get_pre_key(&self, prekey_id: PreKeyId) -> Result<PreKeyRecord> {
         let id: u32 = prekey_id.into();
+        #[cfg(feature = "mesh")]
+        if let (Some(owner), Some((bindings, _))) = (&self.mesh_owner, &self.mesh_binding) {
+            let bytes = bindings
+                .mesh_prekey(owner, 1, id)
+                .map_err(storage_to_signal_error)?
+                .ok_or(SignalProtocolError::InvalidPreKeyId)?;
+            return PreKeyRecord::deserialize(&bytes);
+        }
         let record_bytes = self
             .key_store
             .get_prekey(id)
@@ -219,6 +346,12 @@ impl PreKeyStore for SignalStore {
 
     async fn save_pre_key(&mut self, prekey_id: PreKeyId, record: &PreKeyRecord) -> Result<()> {
         let id: u32 = prekey_id.into();
+        #[cfg(feature = "mesh")]
+        if let (Some(owner), Some((bindings, _))) = (&self.mesh_owner, &self.mesh_binding) {
+            return bindings
+                .save_mesh_prekey(owner, 1, id, &record.serialize()?)
+                .map_err(storage_to_signal_error);
+        }
         self.key_store
             .save_prekey(id, &record.serialize()?)
             .map_err(storage_to_signal_error)?;
@@ -227,6 +360,12 @@ impl PreKeyStore for SignalStore {
 
     async fn remove_pre_key(&mut self, prekey_id: PreKeyId) -> Result<()> {
         let id: u32 = prekey_id.into();
+        #[cfg(feature = "mesh")]
+        if let (Some(owner), Some((bindings, _))) = (&self.mesh_owner, &self.mesh_binding) {
+            return bindings
+                .consume_mesh_prekey(owner, id)
+                .map_err(storage_to_signal_error);
+        }
         self.key_store
             .remove_prekey(id)
             .map_err(storage_to_signal_error)?;
@@ -240,8 +379,19 @@ impl PreKeyStore for SignalStore {
 
 #[async_trait(?Send)]
 impl SignedPreKeyStore for SignalStore {
-    async fn get_signed_pre_key(&self, signed_prekey_id: SignedPreKeyId) -> Result<SignedPreKeyRecord> {
+    async fn get_signed_pre_key(
+        &self,
+        signed_prekey_id: SignedPreKeyId,
+    ) -> Result<SignedPreKeyRecord> {
         let id: u32 = signed_prekey_id.into();
+        #[cfg(feature = "mesh")]
+        if let (Some(owner), Some((bindings, _))) = (&self.mesh_owner, &self.mesh_binding) {
+            let bytes = bindings
+                .mesh_prekey(owner, 2, id)
+                .map_err(storage_to_signal_error)?
+                .ok_or(SignalProtocolError::InvalidSignedPreKeyId)?;
+            return SignedPreKeyRecord::deserialize(&bytes);
+        }
         let record_bytes = self
             .key_store
             .get_signed_prekey(id)
@@ -257,6 +407,12 @@ impl SignedPreKeyStore for SignalStore {
         record: &SignedPreKeyRecord,
     ) -> Result<()> {
         let id: u32 = signed_prekey_id.into();
+        #[cfg(feature = "mesh")]
+        if let (Some(owner), Some((bindings, _))) = (&self.mesh_owner, &self.mesh_binding) {
+            return bindings
+                .save_mesh_prekey(owner, 2, id, &record.serialize()?)
+                .map_err(storage_to_signal_error);
+        }
         self.key_store
             .save_signed_prekey(id, &record.serialize()?)
             .map_err(storage_to_signal_error)?;
@@ -272,6 +428,14 @@ impl SignedPreKeyStore for SignalStore {
 impl KyberPreKeyStore for SignalStore {
     async fn get_kyber_pre_key(&self, kyber_prekey_id: KyberPreKeyId) -> Result<KyberPreKeyRecord> {
         let id: u32 = kyber_prekey_id.into();
+        #[cfg(feature = "mesh")]
+        if let (Some(owner), Some((bindings, _))) = (&self.mesh_owner, &self.mesh_binding) {
+            let bytes = bindings
+                .mesh_prekey(owner, 3, id)
+                .map_err(storage_to_signal_error)?
+                .ok_or(SignalProtocolError::InvalidKyberPreKeyId)?;
+            return KyberPreKeyRecord::deserialize(&bytes);
+        }
         let record_bytes = self
             .key_store
             .get_kyber_prekey(id)
@@ -287,6 +451,12 @@ impl KyberPreKeyStore for SignalStore {
         record: &KyberPreKeyRecord,
     ) -> Result<()> {
         let id: u32 = kyber_prekey_id.into();
+        #[cfg(feature = "mesh")]
+        if let (Some(owner), Some((bindings, _))) = (&self.mesh_owner, &self.mesh_binding) {
+            return bindings
+                .save_mesh_prekey(owner, 3, id, &record.serialize()?)
+                .map_err(storage_to_signal_error);
+        }
         self.key_store
             .save_kyber_prekey(id, &record.serialize()?)
             .map_err(storage_to_signal_error)?;
@@ -302,6 +472,19 @@ impl KyberPreKeyStore for SignalStore {
         let kyber_id: u32 = kyber_prekey_id.into();
         let ec_id: u32 = ec_prekey_id.into();
 
+        #[cfg(feature = "mesh")]
+        if let (Some(owner), Some((bindings, _))) = (&self.mesh_owner, &self.mesh_binding) {
+            return bindings
+                .mark_mesh_kyber_used(owner, kyber_id, ec_id, &base_key.serialize())
+                .map_err(|e| match e {
+                    StorageError::InvalidData(_) => SignalProtocolError::InvalidMessage(
+                        CiphertextMessageType::PreKey,
+                        "reused base key".to_string(),
+                    ),
+                    other => storage_to_signal_error(other),
+                });
+        }
+
         self.key_store
             .mark_kyber_prekey_used(kyber_id, ec_id, &base_key.serialize())
             .map_err(|e| {
@@ -309,7 +492,7 @@ impl KyberPreKeyStore for SignalStore {
                 if let StorageError::InvalidData(_) = e {
                     SignalProtocolError::InvalidMessage(
                         CiphertextMessageType::PreKey,
-                        "reused base key",
+                        "reused base key".to_string(),
                     )
                 } else {
                     storage_to_signal_error(e)
@@ -326,7 +509,11 @@ impl KyberPreKeyStore for SignalStore {
 #[async_trait(?Send)]
 impl SessionStore for SignalStore {
     async fn load_session(&self, address: &ProtocolAddress) -> Result<Option<SessionRecord>> {
-        let address_str = address_to_string(address);
+        #[cfg(feature = "mesh")]
+        if self.mesh_owner.is_some() && self.mesh_pinned_identity(address)?.is_none() {
+            return Err(SignalProtocolError::UntrustedIdentity(address.clone()));
+        }
+        let address_str = self.session_address(address);
 
         let record_bytes = self
             .key_store
@@ -347,7 +534,11 @@ impl SessionStore for SignalStore {
         address: &ProtocolAddress,
         record: &SessionRecord,
     ) -> Result<()> {
-        let address_str = address_to_string(address);
+        #[cfg(feature = "mesh")]
+        if self.mesh_owner.is_some() && self.mesh_pinned_identity(address)?.is_none() {
+            return Err(SignalProtocolError::UntrustedIdentity(address.clone()));
+        }
+        let address_str = self.session_address(address);
         self.key_store
             .store_session(&address_str, &record.serialize()?)
             .map_err(storage_to_signal_error)?;
@@ -404,3 +595,202 @@ impl SenderKeyStore for SignalStore {
 // =============================================================================
 
 impl ProtocolStore for SignalStore {}
+
+/// Private write overlay for an exact sealed-envelope admission check. Both
+/// clones share the overlay, but no identity/session write reaches SQLite until
+/// commit. Kept inside the single-threaded Signal actor for the whole batch.
+#[derive(Clone)]
+pub(crate) struct StagedSignalStore {
+    base: SignalStore,
+    sessions: std::rc::Rc<std::cell::RefCell<Vec<(ProtocolAddress, SessionRecord)>>>,
+    identities: std::rc::Rc<std::cell::RefCell<Vec<(ProtocolAddress, IdentityKey)>>>,
+}
+impl StagedSignalStore {
+    pub(crate) fn new(base: SignalStore) -> Self {
+        Self {
+            base,
+            sessions: Default::default(),
+            identities: Default::default(),
+        }
+    }
+    /// Caller must already mark submission: a storage failure can leave a
+    /// partial local commit and must retain uncertainty. No ciphertext has been
+    /// deposited yet; the server still admits all devices in one transaction.
+    pub(crate) async fn commit(&mut self) -> Result<()> {
+        let identities = self.identities.borrow().clone();
+        let sessions = self.sessions.borrow().clone();
+        for (address, identity) in identities {
+            self.base.save_identity(&address, &identity).await?;
+        }
+        for (address, record) in sessions {
+            self.base.store_session(&address, &record).await?;
+        }
+        Ok(())
+    }
+}
+#[async_trait(?Send)]
+impl SessionStore for StagedSignalStore {
+    async fn load_session(&self, address: &ProtocolAddress) -> Result<Option<SessionRecord>> {
+        if let Some((_, record)) = self.sessions.borrow().iter().find(|(a, _)| a == address) {
+            return Ok(Some(record.clone()));
+        }
+        self.base.load_session(address).await
+    }
+    async fn store_session(
+        &mut self,
+        address: &ProtocolAddress,
+        record: &SessionRecord,
+    ) -> Result<()> {
+        // Serialize now too, so malformed staged state cannot be admitted.
+        record.serialize()?;
+        let mut sessions = self.sessions.borrow_mut();
+        if let Some((_, old)) = sessions.iter_mut().find(|(a, _)| a == address) {
+            *old = record.clone();
+        } else {
+            sessions.push((address.clone(), record.clone()));
+        }
+        Ok(())
+    }
+}
+#[async_trait(?Send)]
+impl IdentityKeyStore for StagedSignalStore {
+    async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair> {
+        self.base.get_identity_key_pair().await
+    }
+    async fn get_local_registration_id(&self) -> Result<u32> {
+        self.base.get_local_registration_id().await
+    }
+    async fn get_identity(&self, address: &ProtocolAddress) -> Result<Option<IdentityKey>> {
+        if let Some((_, identity)) = self
+            .identities
+            .borrow()
+            .iter()
+            .find(|(a, _)| a.name() == address.name())
+        {
+            return Ok(Some(*identity));
+        }
+        self.base.get_identity(address).await
+    }
+    async fn is_trusted_identity(
+        &self,
+        address: &ProtocolAddress,
+        identity: &IdentityKey,
+        direction: Direction,
+    ) -> Result<bool> {
+        if let Some((_, staged)) = self
+            .identities
+            .borrow()
+            .iter()
+            .find(|(a, _)| a.name() == address.name())
+        {
+            if staged != identity {
+                return Ok(false);
+            }
+        }
+        self.base
+            .is_trusted_identity(address, identity, direction)
+            .await
+    }
+    async fn save_identity(
+        &mut self,
+        address: &ProtocolAddress,
+        identity: &IdentityKey,
+    ) -> Result<IdentityChange> {
+        if self.base.is_local_account(address.name())?
+            && self.base.get_identity_key_pair().await?.identity_key() != identity
+        {
+            return Err(SignalProtocolError::UntrustedIdentity(address.clone()));
+        }
+        let changed = self
+            .get_identity(address)
+            .await?
+            .is_some_and(|old| old != *identity);
+        let mut identities = self.identities.borrow_mut();
+        if let Some((_, old)) = identities
+            .iter_mut()
+            .find(|(a, _)| a.name() == address.name())
+        {
+            *old = *identity;
+        } else {
+            identities.push((address.clone(), *identity));
+        }
+        Ok(IdentityChange::from_changed(changed))
+    }
+}
+
+#[path = "receive_store.rs"]
+pub(crate) mod receive;
+
+#[cfg(test)]
+mod own_identity_regressions {
+    use super::*;
+
+    #[tokio::test]
+    async fn own_devices_use_local_anchor_even_with_absent_or_poisoned_self_pin() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let db = Arc::new(crate::storage::Database::open(file.path(), "fixture").unwrap());
+        db.run_migrations().unwrap();
+        let own = crate::domain::ids::UserId::new().to_string();
+        crate::storage::SettingsRepository::new(db.clone())
+            .set_string("auth.current_user_id", &own)
+            .unwrap();
+        let keys = Arc::new(KeyStore::new(db));
+        let mut rng = rand::rng();
+        let local = IdentityKeyPair::generate(&mut rng);
+        let ghost = IdentityKeyPair::generate(&mut rng);
+        keys.set_local_identity(1, &local.serialize()).unwrap();
+        let mut store = SignalStore::new(keys.clone());
+        let linked =
+            ProtocolAddress::new(own.clone(), libsignal_protocol::DeviceId::new(2).unwrap());
+        assert!(
+            store
+                .is_trusted_identity(&linked, local.identity_key(), Direction::Receiving)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .is_trusted_identity(&linked, ghost.identity_key(), Direction::Receiving)
+                .await
+                .unwrap()
+        );
+        keys.save_identity(&own, &ghost.identity_key().serialize())
+            .unwrap();
+        assert_eq!(
+            store.get_identity(&linked).await.unwrap(),
+            Some(*local.identity_key())
+        );
+        assert!(
+            store
+                .save_identity(&linked, ghost.identity_key())
+                .await
+                .is_err()
+        );
+        // The CAS receive overlay must have exactly the same anchor.
+        let mut receive = super::receive::ReceiveStore::new(store);
+        assert!(
+            receive
+                .is_trusted_identity(&linked, local.identity_key(), Direction::Receiving)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !receive
+                .is_trusted_identity(&linked, ghost.identity_key(), Direction::Receiving)
+                .await
+                .unwrap()
+        );
+        assert!(
+            receive
+                .save_identity(&linked, ghost.identity_key())
+                .await
+                .is_err()
+        );
+        assert!(
+            receive
+                .save_identity(&linked, local.identity_key())
+                .await
+                .is_ok()
+        );
+    }
+}

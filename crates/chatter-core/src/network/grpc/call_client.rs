@@ -3,17 +3,18 @@
 //! Client for call service operations including creating, joining, ending,
 //! and leaving calls, as well as streaming call events.
 
+use crate::network::grpc::transport::GrpcTransport;
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    call_service_client::CallServiceClient, CallEvent, CallInfo, CallSettings, CallStatus,
-    CallType, CreateCallRequest, CreateCallResponse, EndCallRequest, GetActiveCallInChannelRequest,
-    GetActiveCallInChannelResponse, GetCallInfoRequest, JoinCallRequest, JoinCallResponse,
-    LeaveCallRequest, ListChannelCallsRequest, ListChannelCallsResponse, StreamCallEventsRequest,
+    CallEvent, CallInfo, CallSettings, CallStatus, CallType, CreateCallRequest, CreateCallResponse,
+    EndCallRequest, GetActiveCallInChannelRequest, GetActiveCallInChannelResponse,
+    GetCallInfoRequest, JoinCallRequest, JoinCallResponse, LeaveCallRequest,
+    ListChannelCallsRequest, ListChannelCallsResponse, StreamCallEventsRequest,
+    call_service_client::CallServiceClient,
 };
 
 /// Call service client wrapper.
@@ -239,7 +240,7 @@ impl CallClient {
         &mut self,
         call_ids: Vec<String>,
         channel_ids: Vec<String>,
-    ) -> Result<impl Stream<Item = Result<CallEvent, NetworkError>>, NetworkError> {
+    ) -> Result<impl Stream<Item = Result<CallEvent, NetworkError>> + use<>, NetworkError> {
         let request = StreamCallEventsRequest {
             call_ids,
             channel_ids,
@@ -349,8 +350,8 @@ mod tests {
 
     #[test]
     fn test_call_event_construction() {
-        use crate::proto::chat_v1::call_event::Data;
         use crate::proto::chat_v1::CallCreatedEvent;
+        use crate::proto::chat_v1::call_event::Data;
 
         let call_info = CallInfo {
             id: "call-123".to_string(),

@@ -5,13 +5,12 @@
 //! - Session establishment and reuse
 //! - Device revocation handling
 
-mod common;
-mod framework;
+use crate::{common, skip_if_no_server};
 
-use chatter_core::proto::chat_v1::{
-    get_pre_key_bundle_response, ChannelType, MessageSortDirection,
-};
 use chatter_core::network::grpc::{AuthClient, ChannelClient, MessageClient};
+use chatter_core::proto::chat_v1::{
+    ChannelType, MessageSortDirection, get_pre_key_bundle_response,
+};
 use common::*;
 use tokio_stream::StreamExt;
 
@@ -33,7 +32,9 @@ async fn test_e2e_multi_device_prekey_fetch() {
 
     // Alice fetches Bob's prekeys for all devices
     let mut alice_auth = AuthClient::new(alice_pool.channel(), alice_pool.auth_clone());
-    let response = alice_auth.get_pre_key_bundles_all_devices(&bob.user_id).await;
+    let response = alice_auth
+        .get_pre_key_bundles_all_devices(&bob.user_id)
+        .await;
 
     match response {
         Ok(resp) => {
@@ -48,15 +49,9 @@ async fn test_e2e_multi_device_prekey_fetch() {
                 }
                 get_pre_key_bundle_response::Result::Devices(list) => {
                     // Multiple devices
-                    assert!(
-                        !list.bundles.is_empty(),
-                        "Should have at least one device"
-                    );
+                    assert!(!list.bundles.is_empty(), "Should have at least one device");
                     // One of the bundles should be for Bob's known device
-                    let has_bobs_device = list
-                        .bundles
-                        .iter()
-                        .any(|b| b.device_id == bob.device_id);
+                    let has_bobs_device = list.bundles.iter().any(|b| b.device_id == bob.device_id);
                     assert!(has_bobs_device, "Should include Bob's current device");
                 }
             }
@@ -75,7 +70,7 @@ async fn test_e2e_session_establishment_with_prekey_bundle() {
 
     // Setup users
     let pool1 = assert_ok(create_test_pool().await);
-    let user1 = assert_ok(setup_authenticated_test(&pool1).await);
+    let _user1 = assert_ok(setup_authenticated_test(&pool1).await);
 
     let pool2 = assert_ok(create_test_pool().await);
     let user2 = assert_ok(setup_authenticated_test(&pool2).await);
@@ -114,10 +109,9 @@ async fn test_e2e_channel_message_reaches_device() {
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
-            None,
             Some("E2E multi-device test"),
             None,
+            Some(membership::genesis(&user, true).1),
         )
         .await
         .expect("Create channel");
@@ -144,7 +138,16 @@ async fn test_e2e_channel_message_reaches_device() {
 
     let message = assert_ok(
         msg_client
-            .send_message(&channel_id, content, None, false, None, None, vec![], false, vec![])
+            .send_message(
+                &channel_id,
+                content,
+                None,
+                false,
+                None,
+                vec![],
+                false,
+                vec![],
+            )
             .await,
     );
 

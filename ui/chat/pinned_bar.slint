@@ -1,15 +1,21 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // Pinned messages bar component
 //
 // Telegram-style always-visible bar for navigating pinned messages.
 // Shows between header and message list when there are pinned messages.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 
-export component PinnedBar inherits Rectangle {
+export component PinnedBar inherits GlassSurface {
     // Properties
     in property <string> message-preview: "";
+    in property <image> thumbnail;
     in property <int> current-index: 1;  // 1-based for display
     in property <int> total-count: 1;
     in property <bool> has-multiple: false;
@@ -23,44 +29,52 @@ export component PinnedBar inherits Rectangle {
     // Computed
     property <string> position-text: has-multiple ? "Pinned message \{current-index} of \{total-count}" : "Pinned message";
 
-    // Layout — Neo floating bar: raised surface with shadow
-    height: 40px;
-    background: Colors.surface;
-    border-width: 1px;
-    border-color: Colors.neo-highlight;
-    drop-shadow-blur: Spacing.neo-blur-md;
-    drop-shadow-offset-x: Spacing.neo-offset-sm;
-    drop-shadow-offset-y: Spacing.neo-offset-md;
-    drop-shadow-color: Colors.neo-shadow;
+    // One material for the pinned-message chrome.
+    height: Spacing.touch-target-min * Appearance.text-grow;
+    elevation: 0;
+    border-radius: Spacing.radius-chrome;
 
     // Main content
     HorizontalLayout {
         padding-left: Spacing.sm;
-        padding-right: Spacing.sm;
+        padding-right: Spacing.none;
         spacing: Spacing.sm;
-        alignment: start;
+        // No `alignment`: under `start` Slint ignores horizontal-stretch, so
+        // the preview never grew and the close button floated mid-row.
 
         // Navigation buttons on LEFT (only if multiple pinned)
+        // Fixed width: unsized, this layout stretched to half the bar and
+        // pushed the preview to the middle.
         if root.has-multiple: HorizontalLayout {
-            spacing: 2px;
-            alignment: center;
+            width: Spacing.touch-target-min * 2 + Spacing.xxs;
+            spacing: Spacing.xxs;
 
             // Up/prev button
             Rectangle {
-                width: 28px;
-                height: 28px;
-                background: prev-touch.has-hover ? Colors.surface-hover : transparent;
+                width: Spacing.touch-target-min;
+                height: Spacing.touch-target-min;
+                background: prev-touch.pressed ? Materials.pressed : prev-touch.has-hover ? Colors.surface-hover : transparent;
                 border-radius: Spacing.radius-sm;
+                transform-scale-x: prev-touch.pressed ? 90% : 100%;
+                transform-scale-y: prev-touch.pressed ? 90% : 100%;
+                animate transform-scale-x { duration: prev-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                animate transform-scale-y { duration: prev-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
 
-                Text {
-                    text: "\u{25B2}";  // Up triangle
-                    font-size: Typography.xxs;
-                    color: Colors.text-secondary;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                Image {
+                    source: Icons.chevron-right;
+                    width: Spacing.button-icon;
+                    height: Spacing.button-icon;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    transform-rotation: 270deg;
+                    colorize: Colors.text-secondary;
                 }
 
                 prev-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Previous pinned message";
+                    accessible-action-default => { root.prev-clicked(); }
+                    KeyFocus { activate => { root.prev-clicked(); } }
                     mouse-cursor: pointer;
                     clicked => {
                         root.prev-clicked();
@@ -70,20 +84,30 @@ export component PinnedBar inherits Rectangle {
 
             // Down/next button
             Rectangle {
-                width: 28px;
-                height: 28px;
-                background: next-touch.has-hover ? Colors.surface-hover : transparent;
+                width: Spacing.touch-target-min;
+                height: Spacing.touch-target-min;
+                background: next-touch.pressed ? Materials.pressed : next-touch.has-hover ? Colors.surface-hover : transparent;
                 border-radius: Spacing.radius-sm;
+                transform-scale-x: next-touch.pressed ? 90% : 100%;
+                transform-scale-y: next-touch.pressed ? 90% : 100%;
+                animate transform-scale-x { duration: next-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                animate transform-scale-y { duration: next-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
 
-                Text {
-                    text: "\u{25BC}";  // Down triangle
-                    font-size: Typography.xxs;
-                    color: Colors.text-secondary;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                Image {
+                    source: Icons.chevron-right;
+                    width: Spacing.button-icon;
+                    height: Spacing.button-icon;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    transform-rotation: 90deg;
+                    colorize: Colors.text-secondary;
                 }
 
                 next-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Next pinned message";
+                    accessible-action-default => { root.next-clicked(); }
+                    KeyFocus { activate => { root.next-clicked(); } }
                     mouse-cursor: pointer;
                     clicked => {
                         root.next-clicked();
@@ -96,17 +120,35 @@ export component PinnedBar inherits Rectangle {
         Rectangle {
             width: 3px;
             height: 24px;
+            y: (parent.height - self.height) / 2;
             background: Colors.primary;
             border-radius: 1.5px;
-            drop-shadow-blur: 4px;
-            drop-shadow-color: Colors.glow-primary;
+        }
+
+        if root.thumbnail.width > 0: Rectangle {
+            // Layouts own child positions: center the thumbnail inside a full-height cell.
+            vertical-stretch: 1;
+            width: 36px;
+            Rectangle {
+                width: 36px; height: 36px;
+                y: (parent.height - self.height) / 2;
+                border-radius: Spacing.radius-sm; clip: true;
+                Image { accessible-label: "Pinned message image"; source: root.thumbnail; width: 100%; height: 100%; image-fit: cover; }
+            }
+            TouchArea { clicked => { root.go-to-message(); } }
         }
 
         // Clickable content area (go to message)
         Rectangle {
             horizontal-stretch: 1;
+            background: bar-touch.pressed ? Materials.pressed : bar-touch.has-hover ? Materials.hover : transparent;
+            border-radius: Spacing.radius-sm;
 
             bar-touch := TouchArea {
+                accessible-role: button;
+                accessible-label: "Go to pinned message: " + root.message-preview;
+                accessible-action-default => { root.go-to-message(); }
+                KeyFocus { activate => { root.go-to-message(); } }
                 mouse-cursor: pointer;
                 clicked => {
                     root.go-to-message();
@@ -116,7 +158,7 @@ export component PinnedBar inherits Rectangle {
             // Content area
             VerticalLayout {
                 alignment: center;
-                spacing: 1px;
+                spacing: Spacing.xxs;
 
                 // Position text (small, muted)
                 Text {
@@ -137,19 +179,28 @@ export component PinnedBar inherits Rectangle {
             }
         }
 
-        // Close/dismiss button on RIGHT
+        // Close/dismiss button on RIGHT — a full 48dp box flush with the edge
         Rectangle {
-            width: 28px;
-            height: 28px;
-            background: dismiss-touch.has-hover ? Colors.surface-hover : transparent;
+            width: Spacing.touch-target-min;
+            height: Spacing.touch-target-min;
+            background: dismiss-touch.pressed ? Materials.pressed : dismiss-touch.has-hover ? Colors.surface-hover : transparent;
             border-radius: Spacing.radius-sm;
+            transform-scale-x: dismiss-touch.pressed ? 90% : 100%;
+            transform-scale-y: dismiss-touch.pressed ? 90% : 100%;
+            animate transform-scale-x { duration: dismiss-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+            animate transform-scale-y { duration: dismiss-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+            accessible-role: button;
+            accessible-label: "Hide pinned messages";
+            accessible-action-default => { root.dismiss-clicked(); }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.dismiss-clicked(); } }
 
-            Text {
-                text: "\u{00D7}";  // X mark
-                font-size: Typography.xs;
-                color: Colors.text-muted;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            Image {
+                source: Icons.x;
+                width: 16px;
+                height: 16px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                colorize: Colors.text-muted;
             }
 
             dismiss-touch := TouchArea {
@@ -161,11 +212,4 @@ export component PinnedBar inherits Rectangle {
         }
     }
 
-    // Bottom edge — neo highlight
-    Rectangle {
-        y: parent.height - 1px;
-        width: 100%;
-        height: 1px;
-        background: Colors.neo-highlight;
-    }
 }

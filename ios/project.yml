@@ -51,7 +51,7 @@ targets:
         # when CHATTER_SERVER_URL is set in the environment. An empty value is
         # fine — main.m then skips setenv and chatter-core falls back to its
         # own default (localhost, i.e. nothing on a phone).
-        # ponytail: one dev machine's IP, good enough until there is a staging
+        # one dev machine's IP, good enough until there is a staging
         # host; then this becomes a per-configuration setting.
         CHATTER_SERVER_URL: http://192.168.0.10:50051
         CODE_SIGN_STYLE: Automatic

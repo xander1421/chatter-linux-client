@@ -1,0 +1,192 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { AudioPlayer } from "audio_player.slint";
+
+export component MessageQuote inherits Rectangle {
+    in property <string> audio-elapsed;
+    in property <float> audio-progress;
+    in property <string> current-playing-attachment-id;
+    in property <bool> is-media-playing;
+    in property <bool> mobile;
+    in property <string> reply-to-attachment-id;
+    in property <string> reply-to-category;
+    in property <string> reply-to-duration;
+    in property <string> reply-to-filename;
+    in property <bool> reply-to-has-thumbnail;
+    in property <string> reply-to-message-id;
+    in property <bool> reply-to-not-found;
+    in property <string> reply-to-preview;
+    in property <string> reply-to-sender-name;
+    in property <image> reply-to-thumbnail;
+    in property <int> reply-to-thumbnail-height;
+    in property <int> reply-to-thumbnail-width;
+    in property <[int]> reply-to-waveform;
+    in property <length> text-max-width;
+    callback quote-clicked(string);
+    callback open-other-attachment(string);
+    callback audio-seek(string, float);
+
+    background: Colors.bubble-inset;
+    border-radius: 6px;
+    max-width: root.text-max-width;
+    height: quote-row.preferred-height + Spacing.xs;
+
+    // Tap the quote to jump to the original message.
+    // Suppressed when the parent is gone/unknown.
+    //
+    // Declared BEFORE quote-row so it sits on the bottom
+    // z-layer: the inline audio player's play/seek
+    // TouchAreas (inside quote-row, above this) consume
+    // their own clicks, while taps on text/thumbnail —
+    // which carry no TouchArea — fall through here to jump.
+    quote-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: "Go to quoted message from " + root.reply-to-sender-name;
+        accessible-enabled: !root.reply-to-not-found && root.reply-to-message-id != "";
+        accessible-action-default => {
+            if (!root.reply-to-not-found && root.reply-to-message-id != "") {
+                root.quote-clicked(root.reply-to-message-id);
+            }
+        }
+        mouse-cursor: (root.reply-to-not-found || root.reply-to-message-id == "") ? default : pointer;
+        clicked => {
+            if (!root.reply-to-not-found && root.reply-to-message-id != "") {
+                root.quote-clicked(root.reply-to-message-id);
+            }
+        }
+    }
+
+    // Compact Signal/Telegram-style quote: small media
+    // thumbnail on the LEFT, sender + label/player filling
+    // the right. A thin strip — no big block that leaves a
+    // wasted L-shape when the reply body is wide.
+    quote-row := HorizontalLayout {
+        padding: Spacing.xs;
+        spacing: Spacing.sm;
+        alignment: stretch;
+
+        // Accent bar
+        Rectangle {
+            width: 3px;
+            background: Colors.primary;
+            border-radius: 1.5px;
+        }
+
+        // Small media thumbnail on the LEFT (image/gif/video).
+        // Aspect-fit within a compact box so the whole preview
+        // shows without dominating the bubble.
+        if root.reply-to-category != "audio" && root.reply-to-has-thumbnail: Rectangle {
+            property <float> aspect: root.reply-to-thumbnail-width > 0 && root.reply-to-thumbnail-height > 0
+                ? root.reply-to-thumbnail-width / root.reply-to-thumbnail-height
+                : 1.4;
+            property <length> max-h: 60px;
+            property <length> max-w: 96px;
+            height: min(self.max-h, self.max-w / self.aspect);
+            width: self.height * self.aspect;
+            border-radius: 4px;
+            clip: true;
+
+            Image {
+                source: root.reply-to-thumbnail;
+                width: parent.width;
+                height: parent.height;
+                image-fit: cover;
+            }
+
+            // Video play badge (compact, centered).
+            if root.reply-to-category == "video": Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                border-radius: 10px;
+                background: Colors.overlay;
+                Image {
+                    width: 9px;
+                    height: 9px;
+                    source: Icons.play;
+                    colorize: Colors.text-primary;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+
+            // GIF chip — tiny corner tag.
+            if root.reply-to-category == "gif": Rectangle {
+                x: 2px;
+                y: 2px;
+                width: gif-label.preferred-width + 6px;
+                height: 13px;
+                border-radius: 3px;
+                background: Colors.action-fill;
+                gif-label := Text {
+                    text: "GIF";
+                    color: Colors.on-action;
+                    font-size: Typography.xxs;
+                    font-weight: Typography.semibold;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+        }
+
+        // Right column — sender name + label/player, fills
+        // the width beside the thumbnail (no empty gap).
+        VerticalLayout {
+            spacing: Spacing.xs;
+            horizontal-stretch: 1;
+            alignment: center;
+
+            Text {
+                text: root.reply-to-sender-name;
+                color: Colors.primary;
+                font-size: Typography.xs;
+                font-weight: Typography.semibold;
+                overflow: elide;
+            }
+
+            // Audio parent — the shared inline player (compact
+            // variant). Its play/seek TouchAreas sit above
+            // quote-touch so they consume their clicks; the rest
+            // of the quote still falls through to jump.
+            if root.reply-to-category == "audio": AudioPlayer {
+                mobile: root.mobile;
+                compact: true;
+                attachment-id: root.reply-to-attachment-id;
+                filename: root.reply-to-filename;
+                waveform: root.reply-to-waveform;
+                duration-display: root.reply-to-duration;
+                current-playing-attachment-id: root.current-playing-attachment-id;
+                is-media-playing: root.is-media-playing;
+                audio-progress: root.audio-progress;
+                audio-elapsed: root.audio-elapsed;
+
+                play-clicked(id) => { root.open-other-attachment(id); }
+                audio-seek(id, pos) => { root.audio-seek(id, pos); }
+            }
+
+            // Non-audio: one-line preview/label filling the
+            // right of the thumbnail. Guard the empty edge so
+            // the quote is never just a bare sender name.
+            if root.reply-to-category != "audio": Text {
+                text: root.reply-to-preview != ""
+                    ? root.reply-to-preview
+                    : (root.reply-to-category != "" ? "📎 Attachment" : "Message");
+                color: Colors.text-secondary;
+                font-size: Typography.xs;
+                overflow: elide;
+            }
+
+            // Signal-Desktop parity: warn when the original is gone.
+            if root.reply-to-not-found: Text {
+                text: "Original message not found";
+                color: Colors.warning;
+                font-size: Typography.xs;
+                font-italic: true;
+                overflow: elide;
+            }
+        }
+    }
+}

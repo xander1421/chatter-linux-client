@@ -2,7 +2,7 @@
 //!
 //! The button lives in the sidebar's bottom utility bar (see
 //! `ui/sidebar/sidebar.slint`'s `anon-mode-clicked` callback) and routes
-//! through the App's `toggle-anon-mode` callback. Logic:
+//! through the window's `toggle-anon-mode` callback. Logic:
 //!
 //! - If anon mode is currently OFF: open the PIN modal. On submit, call
 //!   `ChatterClient::verify_pin_for_anon_mode(pin)`. On success: flip the
@@ -41,7 +41,10 @@ fn wire_toggle(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if ui_ctx.anon_mode_enabled() {
                 // Leaving anon mode — no PIN gate.
                 ui_ctx.set_anon_mode_enabled(false);
+                w.invoke_refresh_screen_protection();
                 w.global::<AnonMode>().set_enabled(false);
+                w.global::<crate::ChatPane>()
+                    .set_composer_gifs_available(ui_ctx.gif_picker_available());
                 refresh_sidebar(&w, &ui_ctx);
                 tracing::info!("Anon Mode disabled");
             } else {
@@ -49,7 +52,7 @@ fn wire_toggle(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.set_anon_mode_pin("".into());
                 w.set_anon_mode_pin_error("".into());
                 w.set_anon_mode_verifying(false);
-                w.set_active_modal("anon-mode-pin".into());
+                crate::bin_ui::features::back::push(&w, "anon-mode-pin");
             }
         });
     });
@@ -66,56 +69,86 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         let _ = slint::invoke_from_event_loop(move || {
             let Some(w) = weak.upgrade() else { return };
+            if w.get_anon_mode_verifying() {
+                return;
+            }
             w.set_anon_mode_verifying(true);
             w.set_anon_mode_pin_error("".into());
 
-            // verify_pin is sync (local Argon2 fingerprint check) — run
-            // inline. Wrapping in spawn_blocking would just add overhead
-            // for a single HKDF / HMAC.
-            let ok = ui_ctx.verify_pin_for_anon_mode(&pin);
-            w.set_anon_mode_verifying(false);
+            tokio::spawn(async move {
+                let pin = zeroize::Zeroizing::new(pin);
+                let result = ui_ctx.verify_pin_for_anon_mode(&pin).await;
+                if let chatter_core::services::link_device_service::PinVerification::Error(
+                    category,
+                ) = result
+                {
+                    tracing::warn!(?category, "Shield PIN verification failed");
+                }
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    w.set_anon_mode_verifying(false);
+                    if w.get_active_modal() != "anon-mode-pin" {
+                        return;
+                    }
 
-            if ok {
-                ui_ctx.set_anon_mode_enabled(true);
-                w.global::<AnonMode>().set_enabled(true);
-                w.set_active_modal("none".into());
-                w.set_anon_mode_pin("".into());
-                refresh_sidebar(&w, &ui_ctx);
-                tracing::info!("Anon Mode enabled");
-            } else {
-                w.set_anon_mode_pin_error(
-                    "Incorrect PIN. Try again or sign in fresh if you've never set one.".into(),
-                );
-            }
+                    if result == chatter_core::services::link_device_service::PinVerification::Match
+                    {
+                        ui_ctx.set_anon_mode_enabled(true);
+                        #[cfg(target_os = "android")]
+                        crate::platform::android::activity::request_shield_background_network();
+                        w.invoke_refresh_screen_protection();
+                        w.global::<AnonMode>().set_enabled(true);
+                        w.global::<crate::ChatPane>()
+                            .set_composer_gifs_available(ui_ctx.gif_picker_available());
+                        crate::bin_ui::features::back::close(&w, "anon-mode-pin");
+                        w.set_anon_mode_pin("".into());
+                        close_hidden_conversation(&w, &ui_ctx);
+                        refresh_sidebar(&w, &ui_ctx);
+                        tracing::info!("Anon Mode enabled");
+                    } else {
+                        w.set_anon_mode_pin_error(result.message().into());
+                    }
+                });
+            });
         });
     });
 }
 
-/// Rebuild sidebar models so the anon-mode filter takes effect.
-///
-/// `refresh_dm_list` rebuilds the full DM model from core, which applies the
-/// `anon_mode_enabled()` filter internally.
-fn refresh_sidebar(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    crate::bin_ui::features::auth::initial_data::refresh_dm_list(window, ui_ctx);
+/// Screens pushed for the open conversation (its settings and invite, pinned
+/// list, header menu, a message's info or forward picker).
+const CONVERSATION_SCREENS: [&str; 6] = [
+    "channel-settings",
+    "invite-member",
+    "pinned-messages",
+    "chat-menu",
+    "message-info",
+    "forward-message",
+];
 
-    // Channels: rebuild from local cache. When anon mode is on, we want
-    // an empty list. When it flips back off, we want the cached server
-    // channels back. The cheapest path that handles both: call the same
-    // builder used at login.
-    rebuild_channels(window, ui_ctx);
-
-    crate::bin_ui::features::sidebar::refresh_selection(window, ui_ctx);
+/// Entering Shield hid the open conversation's row (a channel or Saved
+/// Messages, per core's `visible_in_mode`), but its header, messages and
+/// composer stayed on screen until another chat was opened. Close it and the
+/// screens pushed for it.
+fn close_hidden_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    if ui_ctx.active_conversation_visible_in_mode() {
+        return;
+    }
+    for screen in CONVERSATION_SCREENS {
+        crate::bin_ui::features::back::close(window, screen);
+    }
+    crate::bin_ui::features::sidebar::close_open_conversation(window, ui_ctx);
 }
 
-/// Mirror the channel-list build logic from `load_initial_data`, but
-/// synchronous on the UI thread (the data already lives in local
-/// storage). Anon Mode short-circuits to an empty list.
-fn rebuild_channels(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    // Sidebar-inclusion rule (Public/Private, anon-mode aware) lives in core.
-    let channel_list: Vec<crate::ChannelListItemData> = ui_ctx
-        .sidebar_channels()
-        .iter()
-        .map(|c| crate::bin_ui::converters::channel_to_slint(c, ui_ctx))
-        .collect();
-    window.set_channels(slint::ModelRc::new(slint::VecModel::from(channel_list)));
+/// Rebuild the chat list so the anon-mode filter takes effect: core's
+/// `sidebar_rows` applies `anon_mode_enabled()` to every kind. Contacts and
+/// the New Chat picker are mode-exclusive the same way (`friends_tab_entries`),
+/// and used to keep the other mode's rows: a refresh while in Shield painted
+/// its anon-peer list, and leaving Shield left "0 Friends" up until some
+/// later refresh happened to run.
+fn refresh_sidebar(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    crate::bin_ui::features::sidebar::refresh_chat_list(window, ui_ctx);
+    crate::bin_ui::features::auth::initial_data::refresh_friends_list_for_mode(
+        window.as_weak(),
+        ui_ctx.clone(),
+    );
 }

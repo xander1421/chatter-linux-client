@@ -6,16 +6,348 @@
 //! so the UI layer stays a thin presenter. It also owns the shortcut-preference
 //! value type so parsing/serialization lives in one place.
 
-use crate::services::quick_switcher::{arrange_entries, QuickSwitcherEntry};
+use crate::services::quick_switcher::QuickSwitcherEntry;
+use chrono::{DateTime, Utc};
+use chrono::{Datelike, TimeZone};
+use unicode_segmentation::UnicodeSegmentation;
 
-/// Filter conversation entries by a case-insensitive name substring, then apply
-/// the canonical quick-switcher ordering (unread-first, alphabetical, capped).
+impl crate::client::ChatterClient {
+    /// Resolve result labels from the same local record as secret-chat rows.
+    pub fn search_conversation_display_name(
+        &self,
+        conversation_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+    ) -> String {
+        #[cfg(feature = "mesh")]
+        if matches!(
+            conversation_type,
+            crate::domain::message::ConversationType::Mesh
+                | crate::domain::message::ConversationType::MeshDm
+        ) {
+            return self
+                .mesh_conversation_name(conversation_id)
+                .unwrap_or_else(|| "Mesh chat".to_string());
+        }
+        if *conversation_type == crate::domain::message::ConversationType::AnonDm {
+            let id = crate::domain::anon_dm::AnonDmId::from_uuid(*conversation_id.as_uuid());
+            if let Some(dm) = self.get_anon_dm_conversation(&id) {
+                return dm
+                    .peer_display_name
+                    .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+            }
+        }
+        self.conversation_display_name(conversation_id, conversation_type)
+    }
+
+    /// Keep the first query match inside the compact one-line result preview.
+    pub fn search_result_preview(&self, text: &str, query: &str) -> String {
+        let flat = self.plain_message_preview(text);
+        let grapheme_count = flat.graphemes(true).count();
+        if grapheme_count <= 100 {
+            return crate::domain::message::format_preview_body("", &flat, None);
+        }
+        let (_, matched, _, start, _) = preview_fragments(&flat, query);
+        let match_at = flat[..start as usize].graphemes(true).count();
+        let start = if matched.is_empty() || match_at < 70 {
+            0
+        } else {
+            match_at.saturating_sub(30)
+        };
+        let end = (start + 99).min(grapheme_count);
+        let body = format!(
+            "{}{}{}",
+            if start > 0 { "…" } else { "" },
+            flat.graphemes(true)
+                .skip(start)
+                .take(end - start)
+                .collect::<String>(),
+            if end < grapheme_count { "…" } else { "" }
+        );
+        crate::domain::message::format_preview_body("", &body, None)
+    }
+
+    /// Resolve search labels in one directory lookup, preserving the special
+    /// labels used by mesh, self messages and sealed-sender DMs.
+    pub fn search_sender_display_names(
+        &self,
+        messages: &[crate::domain::message::Message],
+    ) -> Vec<String> {
+        use crate::domain::message::ConversationType;
+        let mut names = self.message_sender_display_names(messages);
+        for (message, name) in messages.iter().zip(names.iter_mut()) {
+            #[cfg(feature = "mesh")]
+            if matches!(
+                message.conversation_type,
+                ConversationType::Mesh | ConversationType::MeshDm
+            ) {
+                *name = message
+                    .sender_id
+                    .as_ref()
+                    .map(|sender| {
+                        if *sender == self.mesh_local_user_id() {
+                            "You".to_string()
+                        } else {
+                            self.mesh_sender_display_name(sender)
+                                .unwrap_or_else(|| "Unknown peer".to_string())
+                        }
+                    })
+                    .unwrap_or_else(|| "Unknown peer".to_string());
+                continue;
+            }
+            if message.sender_id.is_some() && message.sender_id == self.session_current_user_id() {
+                *name = "You".to_string();
+            } else if message.sender_id.is_none()
+                && message.conversation_type == ConversationType::ServerDm
+            {
+                *name = self.conversation_display_name(
+                    &message.conversation_id,
+                    &message.conversation_type,
+                );
+            }
+        }
+        names
+    }
+}
+
+/// Split a preview at its first case-insensitive search term for inline styling.
+/// Iterate source character boundaries so Unicode case folding cannot create
+/// byte offsets into the original text.
+pub fn preview_fragments(preview: &str, query: &str) -> (String, String, String, i32, i32) {
+    let Some(term) = query.split_whitespace().next() else {
+        return (preview.to_owned(), String::new(), String::new(), 0, 0);
+    };
+    let folded = term.to_lowercase();
+    let width = term.chars().count();
+    let boundaries = preview
+        .char_indices()
+        .map(|(byte, _)| byte)
+        .chain(std::iter::once(preview.len()))
+        .collect::<Vec<_>>();
+    for start_index in 0..boundaries.len().saturating_sub(width) {
+        let start = boundaries[start_index];
+        let end = boundaries[start_index + width];
+        let candidate = &preview[start..end];
+        if if candidate.is_ascii() && folded.is_ascii() {
+            candidate.eq_ignore_ascii_case(&folded)
+        } else {
+            candidate.to_lowercase() == folded
+        } {
+            return (
+                preview[..start].to_owned(),
+                preview[start..end].to_owned(),
+                preview[end..].to_owned(),
+                start as i32,
+                end as i32,
+            );
+        }
+    }
+    (preview.to_owned(), String::new(), String::new(), 0, 0)
+}
+
+/// The searchable local content classes. Attachment metadata determines the
+/// class; callers must only supply documents visible in the current mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchCategory {
+    All,
+    Chats,
+    Messages,
+    Media,
+    Files,
+    Links,
+    Voice,
+}
+
+impl SearchCategory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Chats => "chats",
+            Self::Messages => "messages",
+            Self::Media => "media",
+            Self::Files => "files",
+            Self::Links => "links",
+            Self::Voice => "voice",
+        }
+    }
+
+    fn group_order(self) -> u8 {
+        match self {
+            Self::Chats => 0,
+            Self::Messages => 1,
+            Self::Media => 2,
+            Self::Files => 3,
+            Self::Links => 4,
+            Self::Voice => 5,
+            Self::All => 6,
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "chats" => Self::Chats,
+            "messages" => Self::Messages,
+            "media" => Self::Media,
+            "files" => Self::Files,
+            "links" => Self::Links,
+            "voice" => Self::Voice,
+            _ => Self::All,
+        }
+    }
+
+    pub fn from_message(mime: Option<&str>, has_waveform: bool, text: Option<&str>) -> Self {
+        if let Some(mime) = mime {
+            if mime.starts_with("image/") || mime.starts_with("video/") {
+                return Self::Media;
+            }
+            if mime.starts_with("audio/") && has_waveform {
+                return Self::Voice;
+            }
+            return Self::Files;
+        }
+        if text.is_some_and(|text| text.contains("https://") || text.contains("http://")) {
+            Self::Links
+        } else {
+            Self::Messages
+        }
+    }
+
+    pub fn from_shared_kind(kind: &str) -> Self {
+        match kind {
+            "photo" | "video" | "gif" => Self::Media,
+            "voice" => Self::Voice,
+            "link" => Self::Links,
+            _ => Self::Files,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchSort {
+    Relevance,
+    Newest,
+    Oldest,
+    Largest,
+}
+
+impl SearchSort {
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "newest" => Self::Newest,
+            "oldest" => Self::Oldest,
+            "largest" => Self::Largest,
+            _ => Self::Relevance,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchQuery {
+    pub text: String,
+    pub category: SearchCategory,
+    pub sort: SearchSort,
+    pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+    pub from: Option<String>,
+    pub in_chat: Option<String>,
+}
+
+impl SearchQuery {
+    pub fn from_controls(text: &str, category: &str, sort: &str, date: &str) -> Self {
+        let now = Utc::now();
+        let local_midnight = |day: chrono::NaiveDate| {
+            day.and_hms_opt(0, 0, 0)
+                .and_then(|time| chrono::Local.from_local_datetime(&time).earliest())
+                .map(|time| time.with_timezone(&Utc))
+        };
+        let mut until = None;
+        let since = match date {
+            "today" => local_midnight(chrono::Local::now().date_naive()),
+            "week" => Some(now - chrono::Duration::days(7)),
+            "month" => Some(now - chrono::Duration::days(30)),
+            "year" => chrono::NaiveDate::from_ymd_opt(chrono::Local::now().year(), 1, 1)
+                .and_then(local_midnight),
+            custom if custom.starts_with("custom:") => {
+                let (start, end) = custom
+                    .trim_start_matches("custom:")
+                    .split_once("..")
+                    .unwrap_or(("", ""));
+                match (
+                    chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d"),
+                    chrono::NaiveDate::parse_from_str(end, "%Y-%m-%d"),
+                ) {
+                    (Ok(start), Ok(end)) if start <= end => {
+                        until = end.succ_opt().and_then(local_midnight);
+                        local_midnight(start)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        Self {
+            text: text.to_string(),
+            category: SearchCategory::from_str(category),
+            sort: SearchSort::from_str(sort),
+            since,
+            until,
+            from: None,
+            in_chat: None,
+        }
+    }
+
+    /// Run over already visible, locally decrypted candidates. This method is
+    /// deliberately unaware of transport and cannot trigger network lookup.
+    pub fn apply<T: SearchDocument>(&self, documents: impl IntoIterator<Item = T>) -> Vec<T> {
+        let needle = self.text.trim().to_lowercase();
+        let mut out: Vec<T> = documents
+            .into_iter()
+            .filter(|doc| {
+                (self.category == SearchCategory::All || self.category == doc.category())
+                    && (needle.is_empty() || doc.search_text().to_lowercase().contains(&needle))
+                    && self.since.is_none_or(|date| doc.created_at() >= date)
+                    && self.until.is_none_or(|date| doc.created_at() < date)
+                    && self
+                        .from
+                        .as_ref()
+                        .is_none_or(|id| doc.sender_id() == Some(id.as_str()))
+                    && self.in_chat.as_ref().is_none_or(|id| doc.chat_id() == id)
+            })
+            .collect();
+        match self.sort {
+            SearchSort::Relevance => {} // Preserve the local FTS index's ranking.
+            SearchSort::Newest => out.sort_by_key(|doc| std::cmp::Reverse(doc.created_at())),
+            SearchSort::Oldest => out.sort_by_key(|doc| doc.created_at()),
+            SearchSort::Largest => out.sort_by_key(|doc| std::cmp::Reverse(doc.size_bytes())),
+        }
+        if self.category == SearchCategory::All {
+            // Stable grouping keeps the requested order within each section.
+            out.sort_by_key(|doc| doc.category().group_order());
+        }
+        out
+    }
+}
+
+pub trait SearchDocument {
+    fn category(&self) -> SearchCategory;
+    fn search_text(&self) -> &str;
+    fn created_at(&self) -> DateTime<Utc>;
+    fn size_bytes(&self) -> u64;
+    fn sender_id(&self) -> Option<&str>;
+    fn chat_id(&self) -> &str;
+}
+
+/// Filter conversation entries by a case-insensitive name substring, then
+/// order unread-first and alphabetically. Global search must not inherit the
+/// old quick-switcher's twenty-result navigation cap.
 ///
 /// An empty/whitespace query returns every entry, arranged (the palette's
 /// "recent conversations" empty state).
-pub fn filter_conversations(query: &str, entries: Vec<QuickSwitcherEntry>) -> Vec<QuickSwitcherEntry> {
+pub fn filter_conversations(
+    query: &str,
+    entries: Vec<QuickSwitcherEntry>,
+) -> Vec<QuickSwitcherEntry> {
     let needle = query.trim().to_lowercase();
-    let filtered = if needle.is_empty() {
+    let mut filtered = if needle.is_empty() {
         entries
     } else {
         entries
@@ -23,7 +355,12 @@ pub fn filter_conversations(query: &str, entries: Vec<QuickSwitcherEntry>) -> Ve
             .filter(|e| e.name.to_lowercase().contains(&needle))
             .collect()
     };
-    arrange_entries(filtered)
+    filtered.sort_by(|a, b| {
+        b.unread_count
+            .cmp(&a.unread_count)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    filtered
 }
 
 /// Which keyboard combo opens the unified search bar. User-selectable; persisted
@@ -64,6 +401,233 @@ impl SearchShortcut {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn preview_match_keeps_unicode_byte_offsets() {
+        let preview = "Café 🦊 message";
+        let (before, matched, after, start, end) = preview_fragments(preview, "🦊");
+        assert_eq!(
+            (before.as_str(), matched.as_str(), after.as_str()),
+            ("Café ", "🦊", " message")
+        );
+        assert_eq!(&preview[start as usize..end as usize], "🦊");
+        assert_eq!(preview_fragments(preview, "absent").1, "");
+    }
+
+    #[derive(Clone)]
+    struct Doc {
+        text: &'static str,
+        category: SearchCategory,
+        time: i64,
+        size: u64,
+        sender: &'static str,
+        chat: &'static str,
+    }
+    impl SearchDocument for Doc {
+        fn category(&self) -> SearchCategory {
+            self.category
+        }
+        fn search_text(&self) -> &str {
+            self.text
+        }
+        fn created_at(&self) -> DateTime<Utc> {
+            Utc.timestamp_opt(self.time, 0).unwrap()
+        }
+        fn size_bytes(&self) -> u64 {
+            self.size
+        }
+        fn sender_id(&self) -> Option<&str> {
+            Some(self.sender)
+        }
+        fn chat_id(&self) -> &str {
+            self.chat
+        }
+    }
+
+    #[test]
+    fn query_filters_category_date_sender_chat_and_sorts_size() {
+        let docs = vec![
+            Doc {
+                text: "holiday.jpg",
+                category: SearchCategory::Media,
+                time: 100,
+                size: 20,
+                sender: "alice",
+                chat: "trip",
+            },
+            Doc {
+                text: "holiday.mov",
+                category: SearchCategory::Media,
+                time: 200,
+                size: 200,
+                sender: "alice",
+                chat: "trip",
+            },
+            Doc {
+                text: "holiday.pdf",
+                category: SearchCategory::Files,
+                time: 150,
+                size: 300,
+                sender: "alice",
+                chat: "trip",
+            },
+            Doc {
+                text: "holiday.png",
+                category: SearchCategory::Media,
+                time: 250,
+                size: 400,
+                sender: "bob",
+                chat: "trip",
+            },
+        ];
+        let query = SearchQuery {
+            text: "HOLIDAY".into(),
+            category: SearchCategory::Media,
+            sort: SearchSort::Largest,
+            since: Some(Utc.timestamp_opt(99, 0).unwrap()),
+            until: Some(Utc.timestamp_opt(220, 0).unwrap()),
+            from: Some("alice".into()),
+            in_chat: Some("trip".into()),
+        };
+        let out = query.apply(docs);
+        assert_eq!(
+            out.iter().map(|doc| doc.text).collect::<Vec<_>>(),
+            ["holiday.mov", "holiday.jpg"]
+        );
+    }
+
+    #[test]
+    fn chronological_order_is_stable_for_equal_timestamps() {
+        let docs = vec![
+            Doc {
+                text: "first",
+                category: SearchCategory::Messages,
+                time: 10,
+                size: 0,
+                sender: "a",
+                chat: "c",
+            },
+            Doc {
+                text: "second",
+                category: SearchCategory::Messages,
+                time: 20,
+                size: 0,
+                sender: "a",
+                chat: "c",
+            },
+            Doc {
+                text: "third",
+                category: SearchCategory::Messages,
+                time: 20,
+                size: 0,
+                sender: "a",
+                chat: "c",
+            },
+        ];
+        let mut query = SearchQuery {
+            text: String::new(),
+            category: SearchCategory::All,
+            sort: SearchSort::Newest,
+            since: None,
+            until: None,
+            from: None,
+            in_chat: None,
+        };
+        assert_eq!(
+            query
+                .apply(docs.clone())
+                .iter()
+                .map(|d| d.text)
+                .collect::<Vec<_>>(),
+            ["second", "third", "first"]
+        );
+        query.sort = SearchSort::Oldest;
+        assert_eq!(
+            query.apply(docs).iter().map(|d| d.text).collect::<Vec<_>>(),
+            ["first", "second", "third"]
+        );
+    }
+
+    #[test]
+    fn all_results_group_kinds_without_losing_newest_order_inside_groups() {
+        let docs = vec![
+            Doc {
+                text: "photo",
+                category: SearchCategory::Media,
+                time: 40,
+                size: 1,
+                sender: "a",
+                chat: "c",
+            },
+            Doc {
+                text: "older text",
+                category: SearchCategory::Messages,
+                time: 10,
+                size: 0,
+                sender: "a",
+                chat: "c",
+            },
+            Doc {
+                text: "newer text",
+                category: SearchCategory::Messages,
+                time: 30,
+                size: 0,
+                sender: "a",
+                chat: "c",
+            },
+            Doc {
+                text: "report",
+                category: SearchCategory::Files,
+                time: 20,
+                size: 2,
+                sender: "a",
+                chat: "c",
+            },
+        ];
+        let query = SearchQuery {
+            text: String::new(),
+            category: SearchCategory::All,
+            sort: SearchSort::Newest,
+            since: None,
+            until: None,
+            from: None,
+            in_chat: None,
+        };
+        assert_eq!(
+            query.apply(docs).iter().map(|d| d.text).collect::<Vec<_>>(),
+            ["newer text", "older text", "photo", "report"]
+        );
+    }
+
+    #[test]
+    fn controls_parse_local_custom_range_and_attachment_kinds() {
+        let query = SearchQuery::from_controls(
+            "report",
+            "files",
+            "largest",
+            "custom:2026-10-01..2026-10-03",
+        );
+        assert_eq!(query.category, SearchCategory::Files);
+        assert_eq!(query.sort, SearchSort::Largest);
+        assert!(query.until.unwrap() > query.since.unwrap());
+        assert_eq!(
+            SearchCategory::from_message(Some("image/jpeg"), false, None),
+            SearchCategory::Media
+        );
+        assert_eq!(
+            SearchCategory::from_message(Some("audio/ogg"), true, None),
+            SearchCategory::Voice
+        );
+        assert_eq!(
+            SearchCategory::from_message(None, false, Some("see https://example.com")),
+            SearchCategory::Links
+        );
+        assert_eq!(
+            SearchCategory::from_shared_kind("file"),
+            SearchCategory::Files
+        );
+    }
 
     fn entry(name: &str, unread: i32) -> QuickSwitcherEntry {
         QuickSwitcherEntry {
@@ -72,6 +636,7 @@ mod tests {
             conv_type: "channel".into(),
             presence_status: String::new(),
             unread_count: unread,
+            private_channel: false,
         }
     }
 
@@ -87,6 +652,14 @@ mod tests {
         let out = filter_conversations("ET", vec![entry("Zeta", 0), entry("Alpha", 0)]);
         let names: Vec<&str> = out.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["Zeta"]);
+    }
+
+    #[test]
+    fn conversation_search_keeps_matches_beyond_old_palette_cap() {
+        let entries = (0..30)
+            .map(|index| entry(&format!("chat {index:02}"), 0))
+            .collect();
+        assert_eq!(filter_conversations("chat", entries).len(), 30);
     }
 
     #[test]

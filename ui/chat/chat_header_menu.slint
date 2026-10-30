@@ -1,0 +1,109 @@
+import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
+// The chat header's ⋯ menu: Video call, Conversation settings and, on a
+// regular DM, Start secret chat (owner,
+// 2026-10-05: video call moved out of the header row into this menu, voice
+// call stays in the row). Pushed on the modal stack as "chat-menu" (app.slint),
+// so Back and the backdrop close it like any other layer; it drops from the
+// top-right corner of the chat pane, under the header's ⋯.
+
+import { Spacing } from "../theme/spacing.slint";
+import { Icons } from "../theme/icons.slint";
+import { MenuRow } from "../settings/account_menu.slint";
+
+export component ChatHeaderMenu inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
+    in property <length> card-x;
+    in property <length> card-y;
+    in property <bool> show-video-call;
+    in property <bool> show-settings;
+    in property <bool> show-pinned;
+    // Regular DM only, when core can start a secret chat with the peer.
+    in property <bool> show-secret-chat;
+    in property <bool> show-disappearing;
+    // The header's add-member button drops out of a narrow (phone) row.
+    in property <bool> show-invite;
+    callback invite();
+    callback pinned();
+    callback search();
+    out property <length> card-width: min(288px, root.width - 2 * Spacing.sm);
+    out property <length> card-height: menu.preferred-height;
+
+    callback close();
+    callback video-call();
+    callback settings();
+    callback secret-chat();
+    callback disappearing();
+
+    // Logical close is immediate; the card settles back and the scrim fades
+    // before the host unmounts it. Nothing is a live target meanwhile.
+    in property <bool> show: true;
+    property <bool> entered: false;
+    property <float> menu-progress: 0;
+    animate menu-progress { duration: Materials.motion-standard; easing: Materials.spring; }
+    init => { if (Appearance.reduce-motion && root.show) { root.menu-progress = 1; } }
+    changed show => {
+        root.entered = false;
+        root.menu-progress = Appearance.reduce-motion && root.show ? 1 : 0;
+    }
+    Timer {
+        interval: 16ms;
+        running: root.show && !root.entered && !Appearance.reduce-motion;
+        triggered => { root.entered = true; root.menu-progress = 1; }
+    }
+    opacity: root.show ? 1 : 0;
+    animate opacity { duration: Materials.menu-duration; easing: Materials.glide; }
+    visible: root.show || self.opacity > 0;
+    // The one scrim, like every other modal surface.
+    background: Materials.scrim;
+    // Taps outside the card close it and must not reach the chat under it.
+    TouchArea { enabled: root.show; clicked => { root.close(); } }
+
+    menu-card := GlassSurface {
+        opacity: root.show ? 1 : 0;
+        animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+
+        material-level: 3;
+        elevation: 4;
+
+        // Keep the right edge at the ⋯ action while the card grows out of it.
+        x: root.card-x + root.card-width - self.width;
+        y: max(0px, root.card-y - 24px * (1 - root.menu-progress));
+        width: 44px + (root.card-width - 44px) * root.menu-progress;
+        height: 44px + (root.card-height - 44px) * root.menu-progress;
+        border-radius: Spacing.radius-xl;
+        // Eat taps on the card's own padding.
+        TouchArea { }
+
+        // Rows are hidden the moment the menu is logically closed (no pointer,
+        // key, Tab focus or accessible default action reaches an invisible
+        // subtree) and every row action checks `show` besides: MenuRow's
+        // default action is unconditional.
+        Rectangle {
+            visible: root.show;
+            width: 100%;
+            height: 100%;
+            clip: true;
+            menu := VerticalLayout {
+                padding-top: Spacing.xs;
+                padding-bottom: Spacing.xs;
+                MenuRow { icon: Icons.search; label: "Search in chat"; clicked => { if root.show { root.search(); } } }
+                if root.show-pinned: MenuRow { icon: Icons.pin; label: "Pinned messages"; clicked => { if root.show { root.pinned(); } } }
+                if root.show-video-call: MenuRow { icon: Icons.video; label: "Video call"; clicked => { if root.show { root.video-call(); } } }
+                if root.show-invite: MenuRow { icon: Icons.user-plus; label: "Add members"; clicked => { if root.show { root.invite(); } } }
+                if root.show-settings: MenuRow { icon: Icons.settings; label: "Conversation settings"; clicked => { if root.show { root.settings(); } } }
+                if root.show-secret-chat: MenuRow { icon: Icons.lock; label: "Start secret chat"; clicked => { if root.show { root.secret-chat(); } } }
+                if root.show-disappearing: MenuRow { icon: Icons.clock; label: "Disappearing messages"; clicked => { if root.show { root.disappearing(); } } }
+            }
+        }
+    }
+
+    if !root.show: TouchArea {
+        width: 100%;
+        height: 100%;
+    }
+}

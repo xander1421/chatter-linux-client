@@ -58,7 +58,7 @@ Windows still uses a separate vcpkg OpenSSL → collision.)
 Build without `livekit`/webrtc-sys → no BoringSSL → vcpkg OpenSSL is the only
 libcrypto → no collision. The project already has the feature set for this:
 
-- `desktop-media-no-livekit` and the `windows-cross` feature
+- `desktop-gstreamer` and the `windows-cross` feature
   (`crates/chatter-ui/Cargo.toml`) are GStreamer-only, no LiveKit.
 - CI change: build with a no-livekit feature set instead of default `desktop`.
 

@@ -4,14 +4,13 @@
 //! Fetches messages since the last sync timestamp for each channel.
 
 use std::sync::Arc;
+use futures::stream::{self, StreamExt};
 
-use crate::domain::ids::{ChannelId, UserId};
+use crate::domain::ids::ChannelId;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::chat_v1::MessageSortDirection;
-use crate::services::message::conversion::{conversation_type_for_channel, proto_to_domain_message_with_sender};
-use crate::storage::repositories::channel_repo::ChannelRepository;
+use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
 use crate::storage::repositories::settings_repo::SettingsRepository;
-use crate::storage::repositories::unified_message_repo::UnifiedMessageRepository;
 
 use super::channel_sync::SyncError;
 
@@ -20,9 +19,11 @@ const PAGE_SIZE: i32 = 50;
 /// Message sync handler.
 pub struct MessageSync {
     grpc_pool: Arc<GrpcClientPool>,
-    message_repo: Arc<UnifiedMessageRepository>,
     settings_repo: Arc<SettingsRepository>,
-    channel_repo: Arc<ChannelRepository>,
+    /// Shared decrypt → persist path: catch-up decrypts sender-key channel
+    /// messages exactly as live delivery does, instead of converting them
+    /// with `proto_content_to_domain`, which holds no key.
+    inbound: Arc<ChannelInbound>,
 }
 
 /// Result of a message sync operation for one channel.
@@ -43,97 +44,97 @@ pub struct FullMessageSyncResult {
     pub errors: Vec<String>,
 }
 
+impl FullMessageSyncResult {
+    fn record_channel(&mut self, result: MessageSyncResult, outcome: Result<(), SyncError>) {
+        // Persisted progress must reach SyncComplete even when this channel
+        // needs retry (including a later-page RPC failure). Only completion
+        // contributes to channels_synced; errors remain retry evidence.
+        self.total_fetched += result.fetched;
+        self.total_inserted += result.inserted;
+        match outcome {
+            Ok(()) => self.channels_synced += 1,
+            Err(e) => {
+                tracing::warn!(channel_id = %result.channel_id, error = %e,
+                    "Message sync failed for channel");
+                self.errors.push(format!("{}: {}", result.channel_id, e));
+            }
+        }
+    }
+}
+
 impl MessageSync {
     pub fn new(
         grpc_pool: Arc<GrpcClientPool>,
-        message_repo: Arc<UnifiedMessageRepository>,
         settings_repo: Arc<SettingsRepository>,
-        channel_repo: Arc<ChannelRepository>,
+        inbound: Arc<ChannelInbound>,
     ) -> Self {
         Self {
             grpc_pool,
-            message_repo,
             settings_repo,
-            channel_repo,
+            inbound,
         }
     }
 
-    /// Sync messages for a specific channel since the last sync.
-    ///
-    /// Uses `reference_time` to fetch only messages newer than our last sync.
-    /// Messages are inserted with `INSERT OR IGNORE` to avoid duplicates.
-    pub async fn sync_channel(&self, channel_id: &ChannelId) -> Result<MessageSyncResult, SyncError> {
+    // Keep progress separate from completion so callers can report already
+    // persisted rows even when an ingestion or later fetch fails.
+    async fn sync_channel_into(
+        &self,
+        channel_id: &ChannelId,
+        result: &mut MessageSyncResult,
+    ) -> Result<(), SyncError> {
         let channel_id_str = channel_id.to_string();
-        let sync_key = format!("sync:messages:{}:last_at", channel_id);
-        let last_sync = self.settings_repo.get::<u64>(&sync_key)
-            .ok()
-            .flatten();
+        let sync_key = format!("sync:messages:{}:last_at_ns", channel_id);
+        let last_sync = self.settings_repo.get::<u64>(&sync_key).ok().flatten();
 
-        let mut result = MessageSyncResult {
-            channel_id: channel_id_str.clone(),
-            ..Default::default()
-        };
-
+        // Capture the boundary before fetching, so messages arriving during
+        // pagination remain eligible on the next sync. The wire uses Unix ns.
+        let sync_started_ns = reference_time_ns(chrono::Utc::now())?;
         let mut page_token: Option<String> = None;
+        let mut incomplete = false;
 
         loop {
             let mut client = self.grpc_pool.message_client();
-            let response = client
+            let response = match client
                 .get_messages(
                     &channel_id_str,
                     PAGE_SIZE,
                     None, // thread_root_id
                     page_token.as_deref(),
                     MessageSortDirection::SortOldestFirst,
-                    None, // reference_message_id
+                    None,      // reference_message_id
                     last_sync, // reference_time — only fetch messages after this
                 )
                 .await
-                .map_err(|e| SyncError::Network(format!("channel {}: {}", channel_id, e)))?;
+            {
+                Ok(response) => response,
+                // Refused, not failed: we left or lost the channel after it
+                // was listed (the channel sync files that departure), or the
+                // server lists a channel it will not let us read. Retrying on
+                // every sync cannot help; the checkpoint stays where it was.
+                Err(e) if e.is_access_refused() => {
+                    tracing::info!(%channel_id, error = %e, "Channel messages refused; skipping");
+                    return Ok(());
+                }
+                Err(e) => return Err(SyncError::Network(format!("channel {}: {}", channel_id, e))),
+            };
 
             result.pages += 1;
             let page_count = response.messages.len();
             result.fetched += page_count;
 
-            // All messages in this page belong to `channel_id`; derive
-            // ConversationType once per page.
-            let conv_type = conversation_type_for_channel(&self.channel_repo, channel_id);
-
             for proto_msg in &response.messages {
-                // Parse sender ID
-                let sender_id: Option<UserId> = if proto_msg.author_id.is_empty() {
-                    None
-                } else {
-                    proto_msg.author_id.parse().ok()
-                };
-
-                // Convert proto to domain message using existing conversion
-                let message = match proto_to_domain_message_with_sender(proto_msg, sender_id, conv_type.clone()) {
-                    Ok(msg) => msg,
-                    Err(e) => {
-                        tracing::debug!(
-                            channel_id = %channel_id,
-                            error = %e,
-                            "Failed to convert synced message"
-                        );
-                        continue;
-                    }
-                };
-
-                // Insert (INSERT OR IGNORE handles duplicates)
-                match self.message_repo.insert(&message) {
-                    Ok(_) => {
-                        result.inserted += 1;
-                    }
-                    Err(e) => {
-                        tracing::debug!(
-                            channel_id = %channel_id,
-                            message_id = %message.id,
-                            error = %e,
-                            "Failed to insert synced message (may be duplicate)"
-                        );
-                    }
+                // Same decrypt → persist path the live stream uses, so a
+                // message read back from the server is as readable as one that
+                // arrived live. `live = false` retains our own history too;
+                // newly inserted rows announce once, whichever path wins.
+                // Existing rows and later encrypted stream duplicates stay silent.
+                let outcome = self.inbound.ingest(proto_msg, *channel_id, false).await;
+                if outcome == Ingested::Stored {
+                    result.inserted += 1;
                 }
+                // Hold the checkpoint, but finish this page and later pages so
+                // one stuck row cannot starve newer offline rows.
+                incomplete |= holds_checkpoint(outcome);
             }
 
             // Check for next page
@@ -143,9 +144,16 @@ impl MessageSync {
             page_token = Some(response.next_page_token.clone());
         }
 
-        // Update the per-channel sync timestamp
-        let now = chrono::Utc::now().timestamp_millis() as u64;
-        let _ = self.settings_repo.set(&sync_key, &now);
+        // Only a fully applied traversal can advance the durable boundary.
+        // Deferred sender-key rows are held in memory, so after a restart they
+        // must still be eligible for a server fetch.
+        if incomplete {
+            return Err(SyncError::Storage(format!(
+                "channel {}: message ingestion must be retried",
+                channel_id
+            )));
+        }
+        let _ = self.settings_repo.set(&sync_key, &sync_started_ns);
 
         if result.inserted > 0 {
             tracing::info!(
@@ -157,29 +165,24 @@ impl MessageSync {
             );
         }
 
-        Ok(result)
+        Ok(())
     }
 
     /// Sync messages for all given channels.
     pub async fn sync_all(&self, channel_ids: &[ChannelId]) -> FullMessageSyncResult {
         let mut full_result = FullMessageSyncResult::default();
-
-        for channel_id in channel_ids {
-            match self.sync_channel(channel_id).await {
-                Ok(result) => {
-                    full_result.channels_synced += 1;
-                    full_result.total_fetched += result.fetched;
-                    full_result.total_inserted += result.inserted;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        error = %e,
-                        "Message sync failed for channel"
-                    );
-                    full_result.errors.push(format!("{}: {}", channel_id, e));
-                }
-            }
+        let mut channels = stream::iter(channel_ids.iter().copied())
+            .map(|channel_id| async move {
+                let mut result = MessageSyncResult {
+                    channel_id: channel_id.to_string(),
+                    ..Default::default()
+                };
+                let outcome = self.sync_channel_into(&channel_id, &mut result).await;
+                (result, outcome)
+            })
+            .buffer_unordered(4);
+        while let Some((result, outcome)) = channels.next().await {
+            full_result.record_channel(result, outcome);
         }
 
         tracing::info!(
@@ -193,9 +196,84 @@ impl MessageSync {
         full_result
     }
 
-    /// Get the last sync timestamp for a channel.
-    pub fn last_synced_at(&self, channel_id: &ChannelId) -> Option<u64> {
-        let key = format!("sync:messages:{}:last_at", channel_id);
-        self.settings_repo.get::<u64>(&key).ok().flatten()
+}
+
+/// Whether this message must be fetched again, so the channel's checkpoint
+/// may not move past it. A row waiting for an SKDM or a retry can still be
+/// recovered; a message given up as a delivery issue cannot, and holding the
+/// checkpoint for it re-failed the channel's sync every cycle.
+pub(crate) fn holds_checkpoint(outcome: Ingested) -> bool {
+    match outcome {
+        Ingested::DeferredPendingSenderKey | Ingested::RetryableFailure => true,
+        Ingested::Stored | Ingested::OwnMessage | Ingested::Dropped | Ingested::DeliveryIssue => {
+            false
+        }
+    }
+}
+
+// Keep the persisted checkpoint and GetMessages.reference_time in one unit.
+fn reference_time_ns(now: chrono::DateTime<chrono::Utc>) -> Result<u64, SyncError> {
+    now.timestamp_nanos_opt()
+        .and_then(|ns| u64::try_from(ns).ok())
+        .ok_or_else(|| SyncError::Network("sync timestamp out of range".into()))
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::*;
+
+    #[test]
+    fn reference_time_round_trips_as_unix_nanoseconds() {
+        let now = chrono::DateTime::from_timestamp(1_800_000_000, 123_456_789).unwrap();
+        let reference = reference_time_ns(now).unwrap();
+        assert_eq!(reference, 1_800_000_000_123_456_789);
+        assert_eq!(
+            chrono::DateTime::from_timestamp_nanos(reference as i64),
+            now
+        );
+    }
+}
+
+#[cfg(test)]
+mod partial_progress_tests {
+    use super::*;
+    use crate::sync::sync_engine::SyncCycleResult;
+
+    #[test]
+    fn partial_persistence_counts_survive_ingestion_and_later_page_network_errors() {
+        for error in [
+            SyncError::Storage("ingestion pending".into()),
+            SyncError::Network("next page unavailable".into()),
+        ] {
+            let channel = ChannelId::new().to_string();
+            let mut full = FullMessageSyncResult::default();
+            full.record_channel(
+                MessageSyncResult {
+                    channel_id: channel.clone(),
+                    fetched: 50,
+                    inserted: 49,
+                    pages: 1,
+                },
+                Err(error),
+            );
+            assert_eq!(full.total_fetched, 50);
+            assert_eq!(
+                full.total_inserted, 49,
+                "stored rows must trigger aggregate refresh"
+            );
+            assert_eq!(full.channels_synced, 0, "partial channel is not complete");
+            assert_eq!(full.errors.len(), 1);
+            assert!(full.errors[0].starts_with(&channel));
+            let cycle = SyncCycleResult {
+                messages_failed: !full.errors.is_empty(),
+                messages: full,
+                ..Default::default()
+            };
+            assert!(
+                cycle.needs_retry(),
+                "refresh must not turn pending truth into success"
+            );
+            assert_eq!(cycle.messages.total_inserted, 49);
+        }
     }
 }

@@ -15,6 +15,7 @@
 pub mod context;
 pub mod core_services;
 pub mod infrastructure;
+mod server_endpoint;
 pub mod services;
 
 pub use context::{AppContext, ContextError};

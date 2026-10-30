@@ -1,197 +1,119 @@
-//! ECVRF-EDWARDS25519-SHA512-TAI verifier — byte-exact port of the Go server's
-//! VRF (`internal/services/keytransparency/crypto/vrf.go`, which wraps
-//! ProtonMail's `go-ecvrf`, itself implementing draft-irtf-cfrg-vrf-10 with the
-//! try-and-increment hash-to-curve). Suite string byte is `0x03`.
+//! KT query-privacy VRF verifier: ECVRF-EDWARDS25519-SHA512-TAI from RFC 9381,
+//! delegated to libsignal's `libsignal-keytrans` (`VrfPublicKey`, at the same
+//! pinned libsignal rev as the rest of the Signal stack). The Go server
+//! (`internal/services/keytransparency/crypto/vrf.go`) implements the prover to
+//! the same RFC and mirrors libsignal's structure.
 //!
-//! Only VERIFY is ported (the client never proves). Given the server's VRF
-//! PUBLIC key, an input `alpha` (a peer's `user_id`), and an 80-byte proof
-//! `gamma(32) || c(16) || s(32)`, [`vrf_verify`] returns the 32-byte VRF index
-//! (the first half of the 64-byte VRF output) iff the proof is valid, else
-//! `None`. The index is the sparse-Merkle tree leaf key the KT log commits under
-//! — so verifying the VRF proof binds the queried `user_id` to the exact leaf a
-//! KT inclusion proof is served for, WITHOUT the plaintext `user_id` being the
-//! linkable lookup key an auditor of the log can see.
+//! Given the server's VRF PUBLIC key, an input `alpha` (a peer's `user_id`), and
+//! an 80-byte proof `gamma(32) || c(16) || s(32)`, [`vrf_verify`] returns the
+//! 32-byte VRF index (the first half of the 64-byte VRF output) iff the proof is
+//! valid, else `None`. The index is the sparse-Merkle tree leaf key the KT log
+//! commits under — so verifying the VRF proof binds the queried `user_id` to the
+//! exact leaf a KT inclusion proof is served for, WITHOUT the plaintext
+//! `user_id` being the linkable lookup key an auditor of the log can see.
 //!
-//! Every byte format below mirrors `ecvrf.go`:
-//!   * `hash_to_curve_tai`: for ctr in 0..=255, SHA-512(0x03 || 0x01 || pk ||
-//!     alpha || ctr || 0x00), take the first 32 bytes, decompress as an Edwards
-//!     point; the first non-identity decode, multiplied by the cofactor (8), is H.
-//!   * `hash_points`: SHA-512(0x03 || 0x02 || P1 || P2 || ... || 0x00)[..16].
-//!   * challenge `c`: the 16 proof bytes zero-extended to a 32-byte little-endian
-//!     scalar.
-//!   * verify: U = s·B − c·Y, V = s·H − c·Gamma, accept iff
-//!     hash_points(H, Gamma, U, V) == proof[32..48].
-//!   * output (beta): SHA-512(0x03 || 0x03 || (8·Gamma) || 0x00); index = beta[..32].
-//!
-//! `curve25519-dalek`'s point compression / `CompressedEdwardsY::decompress`
-//! matches `filippo.io/edwards25519`'s `Bytes`/`SetBytes` (both accept the same
-//! non-canonical-but-valid encodings via a SqrtRatio decode), and its
-//! `mul_by_cofactor` is ×8 — so the curve arithmetic is byte-identical to the Go
-//! prover. Interop is proven against a LIVE server proof in the V37 validated
-//! test, and against fixed Go-generated vectors in the unit tests below.
+//! libsignal rejects small-order public keys and hashes the public key into the
+//! challenge (RFC 9381 §5.4.3, five points), which draft-10 did not.
 
-use curve25519_dalek::{
-    edwards::CompressedEdwardsY, edwards::EdwardsPoint, scalar::Scalar, traits::Identity,
-};
-use sha2::{Digest, Sha512};
-use subtle::ConstantTimeEq;
+use libsignal_keytrans::VrfPublicKey;
 
-/// ECVRF-EDWARDS25519-SHA512-TAI suite identifier octet.
-const SUITE: u8 = 0x03;
 /// Proof layout: gamma(32) || c(16) || s(32).
 const PROOF_SIZE: usize = 80;
-const GAMMA_LEN: usize = 32;
-const C_LEN: usize = 16;
-
-/// Decode a 32-byte compressed Edwards point, matching `filippo`'s `SetBytes`.
-fn decompress(bytes: &[u8]) -> Option<EdwardsPoint> {
-    let arr: [u8; 32] = bytes.try_into().ok()?;
-    CompressedEdwardsY(arr).decompress()
-}
-
-/// `ECVRF_hash_to_curve_try_and_increment` (draft-10 §5.4.1.1) for suite 0x03.
-/// Port of `hashToCurveTAI` in ecvrf.go.
-fn hash_to_curve_tai(pk: &[u8; 32], alpha: &[u8]) -> Option<EdwardsPoint> {
-    for ctr in 0u16..256 {
-        let mut h = Sha512::new();
-        h.update([SUITE, 0x01]);
-        h.update(pk);
-        h.update(alpha);
-        h.update([ctr as u8, 0x00]);
-        let digest = h.finalize();
-        if let Some(p) = decompress(&digest[..32]) {
-            if p != EdwardsPoint::identity() {
-                return Some(p.mul_by_cofactor());
-            }
-        }
-    }
-    None
-}
-
-/// `ECVRF_hash_points` (draft-10 §5.4.3): SHA-512(0x03 || 0x02 || P.. || 0x00),
-/// truncated to 16 bytes. Port of `hashPoints`.
-fn hash_points(points: &[&EdwardsPoint]) -> [u8; C_LEN] {
-    let mut h = Sha512::new();
-    h.update([SUITE, 0x02]);
-    for p in points {
-        h.update(p.compress().to_bytes());
-    }
-    h.update([0x00]);
-    let digest = h.finalize();
-    let mut c = [0u8; C_LEN];
-    c.copy_from_slice(&digest[..C_LEN]);
-    c
-}
-
-/// Zero-extend the 16-byte challenge to a canonical 32-byte little-endian scalar.
-/// Port of `cToScalar`. Always < L (value < 2^128), so the decode never fails.
-fn c_to_scalar(c: &[u8; C_LEN]) -> Scalar {
-    let mut raw = [0u8; 32];
-    raw[..C_LEN].copy_from_slice(c);
-    // Safe: 128-bit value is always a canonical scalar.
-    Option::<Scalar>::from(Scalar::from_canonical_bytes(raw)).expect("16-byte c is always canonical")
-}
-
-/// `ECVRF_proof_to_hash` (draft-10 §5.2): the 64-byte VRF output beta.
-/// Port of `proofToHash`.
-fn proof_to_hash(gamma: &EdwardsPoint) -> [u8; 64] {
-    let gamma_c = gamma.mul_by_cofactor();
-    let mut h = Sha512::new();
-    h.update([SUITE, 0x03]);
-    h.update(gamma_c.compress().to_bytes());
-    h.update([0x00]);
-    h.finalize().into()
-}
 
 /// Verify an ECVRF proof. Returns the 32-byte VRF index (first half of the VRF
 /// output) iff the proof is valid under `pk` for input `alpha`, else `None`.
-///
-/// Byte-exact port of `(*PublicKey).Verify` in ecvrf.go (draft-10 §5.3).
 pub fn vrf_verify(pk: &[u8; 32], alpha: &[u8], proof: &[u8]) -> Option<[u8; 32]> {
-    if proof.len() != PROOF_SIZE {
-        return None;
-    }
-
-    let y = decompress(pk)?;
-    let gamma = decompress(&proof[..GAMMA_LEN])?;
-    let mut c_bytes = [0u8; C_LEN];
-    c_bytes.copy_from_slice(&proof[GAMMA_LEN..GAMMA_LEN + C_LEN]);
-    let c = c_to_scalar(&c_bytes);
-    let s_bytes: [u8; 32] = proof[GAMMA_LEN + C_LEN..].try_into().ok()?;
-    // s must be a canonical scalar (< L), matching filippo's SetCanonicalBytes.
-    let s: Scalar = Option::from(Scalar::from_canonical_bytes(s_bytes))?;
-
-    let h = hash_to_curve_tai(pk, alpha)?;
-
-    // U = s·B − c·Y
-    let u = EdwardsPoint::mul_base(&s) - (&c * &y);
-    // V = s·H − c·Gamma
-    let v = (&s * &h) - (&c * &gamma);
-
-    // Accept iff the recomputed challenge equals the proof's challenge octets.
-    let c_prime = hash_points(&[&h, &gamma, &u, &v]);
-    if c_prime.ct_eq(&c_bytes).unwrap_u8() != 1 {
-        return None;
-    }
-
-    let beta = proof_to_hash(&gamma);
-    let mut index = [0u8; 32];
-    index.copy_from_slice(&beta[..32]);
-    Some(index)
+    let proof: &[u8; PROOF_SIZE] = proof.try_into().ok()?;
+    let key = VrfPublicKey::try_from(*pk).ok()?;
+    key.proof_to_hash(alpha, proof).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Fixed vectors generated by the Go server's crypto.VRFProve under the
-    // well-known dev VRF seed (SHA-256("chatter-dev-kt-vrf-v1")), for
-    // alpha = ASCII("11111111-1111-1111-1111-111111111111"). Proving byte-exact
-    // Go<->Rust interop OFFLINE (no server needed): if any byte format diverged
-    // (suite tag, hash-to-curve, challenge encoding, cofactor), verify would
-    // reject this known-good proof.
+    // Cross vector: generated by the Go server's crypto.VRFProve (RFC 9381)
+    // under the well-known dev VRF seed SHA-256("chatter-dev-kt-vrf-v1"), for
+    // alpha = ASCII("11111111-1111-1111-1111-111111111111"). The same constants
+    // are asserted on the Go side in vrf_rfc9381_test.go (TestVRF_DevCrossVector),
+    // so a byte-format divergence between prover and verifier fails one of them.
+    // INDEX is unchanged from the draft-10 era: the VRF output does not depend
+    // on the challenge, only the proof's c||s changed.
     const PK: &str = "48af975feaba33ea110d4ab0c8f7a38c5c7122db185ff9499b81e5e74da6ec47";
     const ALPHA: &str = "31313131313131312d313131312d313131312d313131312d313131313131313131313131";
-    const PROOF: &str = "fe86b3cbf108bb19e19a776fdd8b48dfd4d8cd2507aa747809598bd61506321822726b480154206185629fc947f86d117b1659f8da1a8f544f795c485f3b750aae9ae1b1c1b5bc641ed8e31f12b07c0d";
-    const OUTPUT: &str = "cfc93a22b1b48eb9f4d51092865f60290d27ce1b80b63991abdc50cfdd2898672f93bbeb62d1f5c9a9fa896dc1c4713293890c7208e494fc8335d145116c9487";
+    const PROOF: &str = "fe86b3cbf108bb19e19a776fdd8b48dfd4d8cd2507aa747809598bd615063218bbf63a5a3eb7cbbc23657d9c73dd79023c541c6fdc2c71f89bf901f02f76d028d6163b385c93ba207cb3cf1f72bc5b0f";
     const INDEX: &str = "cfc93a22b1b48eb9f4d51092865f60290d27ce1b80b63991abdc50cfdd289867";
 
-    fn pk() -> [u8; 32] {
-        hex::decode(PK).unwrap().try_into().unwrap()
+    // The draft-10 proof the previous go-ecvrf prover produced for the same
+    // input: same gamma, challenge over four points. It must no longer verify.
+    const DRAFT10_PROOF: &str = "fe86b3cbf108bb19e19a776fdd8b48dfd4d8cd2507aa747809598bd61506321822726b480154206185629fc947f86d117b1659f8da1a8f544f795c485f3b750aae9ae1b1c1b5bc641ed8e31f12b07c0d";
+
+    // RFC 9381 Appendix B.3, examples 16-18: (pk, alpha, pi, beta[..32]).
+    const RFC9381: [(&str, &str, &str, &str); 3] = [
+        (
+            "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+            "",
+            "8657106690b5526245a92b003bb079ccd1a92130477671f6fc01ad16f26f723f26f8a57ccaed74ee1b190bed1f479d9727d2d0f9b005a6e456a35d4fb0daab1268a1b0db10836d9826a528ca76567805",
+            "90cf1df3b703cce59e2a35b925d411164068269d7b2d29f3301c03dd757876ff",
+        ),
+        (
+            "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+            "72",
+            "f3141cd382dc42909d19ec5110469e4feae18300e94f304590abdced48aed5933bf0864a62558b3ed7f2fea45c92a465301b3bbf5e3e54ddf2d935be3b67926da3ef39226bbc355bdc9850112c8f4b02",
+            "eb4440665d3891d668e7e0fcaf587f1b4bd7fbfe99d0eb2211ccec90496310eb",
+        ),
+        (
+            "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+            "af82",
+            "9bc0f79119cc5604bf02d23b4caede71393cedfbb191434dd016d30177ccbf8096bb474e53895c362d8628ee9f9ea3c0e52c7a5c691b6c18c9979866568add7a2d41b00b05081ed0f58ee5e31b3a970e",
+            "645427e5d00c62a23fb703732fa5d892940935942101e456ecca7bb217c61c45",
+        ),
+    ];
+
+    fn key(h: &str) -> [u8; 32] {
+        hex::decode(h).unwrap().try_into().unwrap()
+    }
+
+    #[test]
+    fn rfc9381_vectors_verify() {
+        for (pk, alpha, pi, beta) in RFC9381 {
+            let idx = vrf_verify(
+                &key(pk),
+                &hex::decode(alpha).unwrap(),
+                &hex::decode(pi).unwrap(),
+            )
+            .expect("RFC 9381 vector must verify");
+            assert_eq!(hex::encode(idx), beta);
+        }
     }
 
     #[test]
     fn verifies_go_generated_proof_and_recovers_index() {
         let alpha = hex::decode(ALPHA).unwrap();
         let proof = hex::decode(PROOF).unwrap();
-        let idx = vrf_verify(&pk(), &alpha, &proof).expect("Go-generated proof must verify");
+        let idx = vrf_verify(&key(PK), &alpha, &proof).expect("Go-generated proof must verify");
         assert_eq!(hex::encode(idx), INDEX, "recovered index must match Go's");
-        // Index is the first 32 bytes of the full 64-byte VRF output.
-        assert_eq!(&hex::decode(OUTPUT).unwrap()[..32], idx.as_slice());
     }
 
     #[test]
-    fn rejects_tampered_proof_gamma() {
+    fn rejects_draft10_proof() {
         let alpha = hex::decode(ALPHA).unwrap();
-        let mut proof = hex::decode(PROOF).unwrap();
-        proof[0] ^= 0x01; // corrupt gamma
-        assert!(vrf_verify(&pk(), &alpha, &proof).is_none());
+        let proof = hex::decode(DRAFT10_PROOF).unwrap();
+        assert!(vrf_verify(&key(PK), &alpha, &proof).is_none());
     }
 
     #[test]
-    fn rejects_tampered_proof_challenge() {
+    fn rejects_any_bit_flip() {
         let alpha = hex::decode(ALPHA).unwrap();
-        let mut proof = hex::decode(PROOF).unwrap();
-        proof[40] ^= 0x80; // corrupt c
-        assert!(vrf_verify(&pk(), &alpha, &proof).is_none());
-    }
-
-    #[test]
-    fn rejects_tampered_proof_scalar() {
-        let alpha = hex::decode(ALPHA).unwrap();
-        let mut proof = hex::decode(PROOF).unwrap();
-        proof[70] ^= 0x01; // corrupt s
-        assert!(vrf_verify(&pk(), &alpha, &proof).is_none());
+        let proof = hex::decode(PROOF).unwrap();
+        for i in 0..proof.len() {
+            let mut bad = proof.clone();
+            bad[i] ^= 1;
+            assert!(
+                vrf_verify(&key(PK), &alpha, &bad).is_none(),
+                "byte {i} flipped"
+            );
+        }
     }
 
     #[test]
@@ -199,22 +121,29 @@ mod tests {
         let mut alpha = hex::decode(ALPHA).unwrap();
         alpha[0] ^= 0x01;
         let proof = hex::decode(PROOF).unwrap();
-        assert!(vrf_verify(&pk(), &alpha, &proof).is_none());
+        assert!(vrf_verify(&key(PK), &alpha, &proof).is_none());
     }
 
     #[test]
     fn rejects_wrong_public_key() {
         let alpha = hex::decode(ALPHA).unwrap();
         let proof = hex::decode(PROOF).unwrap();
-        let mut bad = pk();
+        let mut bad = key(PK);
         bad[0] ^= 0x01;
-        // Wrong pk either fails to decompress or yields a different challenge.
         assert!(vrf_verify(&bad, &alpha, &proof).is_none());
     }
 
     #[test]
+    fn rejects_small_order_public_key() {
+        // Identity point: small order, so libsignal refuses the key outright.
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        assert!(vrf_verify(&identity, b"x", &[0u8; 80]).is_none());
+    }
+
+    #[test]
     fn rejects_bad_length() {
-        assert!(vrf_verify(&pk(), b"x", &[0u8; 79]).is_none());
-        assert!(vrf_verify(&pk(), b"x", &[0u8; 81]).is_none());
+        assert!(vrf_verify(&key(PK), b"x", &[0u8; 79]).is_none());
+        assert!(vrf_verify(&key(PK), b"x", &[0u8; 81]).is_none());
     }
 }

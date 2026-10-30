@@ -2,6 +2,7 @@
 //!
 //! Migration infrastructure for schema evolution with version tracking.
 
+pub(crate) mod reaction_normalization;
 pub mod v001_initial;
 pub mod v002_users;
 pub mod v003_channels;
@@ -57,12 +58,79 @@ pub mod v055_temporal_facts;
 pub mod v056_mesh_identity;
 pub mod v057_mesh_store;
 pub mod v058_mesh_conversations;
-pub mod v059_mesh_favorites;
 mod v060_mesh_delivery;
 mod v061_mesh_exempt_sender_sent_at;
 mod v062_section_sort_mode;
 mod v063_pending_identity_changes;
 mod v064_shared_content;
+mod v065_sesame_tables;
+mod v066_messages_sent_at_index;
+mod v067_deleted_messages;
+mod v068_blocked_anon_peer_name;
+mod v069_peer_mailbox_device;
+mod v070_peer_device_mailboxes;
+mod v071_peer_device_asked;
+mod v072_peer_profile_keys;
+mod v073_former_channels;
+mod v074_message_receipts;
+mod v075_message_failure_reason;
+mod v076_own_device_send_targets;
+mod v077_pending_dm_messages;
+mod v078_send_log_and_pending_modifiers;
+mod v079_message_deletion_token;
+mod v080_pending_reactions_and_pins;
+mod v081_dm_mailbox_encryption_key;
+mod v082_verified_channel_membership;
+mod v083_mesh_sender_names;
+mod v084_scoped_reactions;
+mod v085_reaction_receive_journal;
+mod v086_channel_message_clocks;
+mod v087_single_reaction;
+mod v088_reaction_normalization;
+mod v089_pin_added_order;
+mod v090_delete_batch_retry;
+mod v092_saved_pin_watermark;
+mod v093_saved_sync_outbox;
+mod v094_anon_membership_order;
+mod v095_saved_delete_tombstones;
+mod v096_saved_delete_outbox;
+mod v097_dm_outbox;
+mod v098_dm_outbox_sealed_at;
+mod v099_dm_receive_tombstones;
+mod v100_drop_message_deletion_token;
+mod v101_attachment_secret_chat;
+mod v102_drop_call_room_tokens;
+mod v103_secret_chat_peer_device;
+mod v104_reaction_send_clocks;
+mod v105_drop_legacy_reaction_evidence;
+mod v106_drop_anon_group_legacy_lock;
+mod v107_drop_attachment_local_path;
+mod v108_drop_channel_message_clocks;
+mod v109_drop_mailbox_randomizer;
+mod v110_attachment_secret_chat_known;
+mod v111_secret_chat_request_state;
+mod v112_send_log_group_id;
+mod v113_mesh_account_binding;
+mod v114_mesh_signal;
+mod v115_mesh_signal_courier;
+mod v116_mesh_private_channels;
+mod v117_mesh_conversation_kinds;
+mod v118_read_horizons;
+mod v119_pending_anon_group_invites;
+mod v120_secret_receive_artifacts;
+mod v121_anon_group_departed_profiles;
+mod v122_secret_receive_control_kinds;
+mod v123_attachment_cleanup;
+mod v124_activity_center;
+mod v125_contact_names;
+mod v126_activity_outage_resolution;
+mod v127_shared_content_categories;
+mod v128_anon_group_invite_epoch;
+mod v129_pending_dm_retry;
+mod v130_timestamp_quote_key;
+mod v131_mesh_archive_packets;
+mod v140_activity_actor_names;
+mod v141_user_block_intervals;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -123,12 +191,40 @@ pub use v055_temporal_facts::V055TemporalFacts;
 pub use v056_mesh_identity::V056MeshIdentity;
 pub use v057_mesh_store::V057MeshStore;
 pub use v058_mesh_conversations::V058MeshConversations;
-pub use v059_mesh_favorites::V059MeshFavorites;
 pub use v060_mesh_delivery::V060MeshDelivery;
 pub use v061_mesh_exempt_sender_sent_at::V061MeshExemptSenderSentAt;
 pub use v062_section_sort_mode::V062SectionSortMode;
 pub use v063_pending_identity_changes::V063PendingIdentityChanges;
 pub use v064_shared_content::V064SharedContent;
+pub use v065_sesame_tables::V065SesameTables;
+pub use v066_messages_sent_at_index::V066MessagesSentAtIndex;
+pub use v067_deleted_messages::V067DeletedMessages;
+pub use v068_blocked_anon_peer_name::V068BlockedAnonPeerName;
+pub use v069_peer_mailbox_device::V069PeerMailboxDevice;
+pub use v070_peer_device_mailboxes::V070PeerDeviceMailboxes;
+pub use v071_peer_device_asked::V071PeerDeviceAsked;
+pub use v072_peer_profile_keys::V072PeerProfileKeys;
+pub use v073_former_channels::V073FormerChannels;
+pub use v074_message_receipts::V074MessageReceipts;
+pub use v075_message_failure_reason::V075MessageFailureReason;
+pub use v076_own_device_send_targets::V076OwnDeviceSendTargets;
+pub use v077_pending_dm_messages::V077PendingDmMessages;
+pub use v078_send_log_and_pending_modifiers::V078SendLogAndPendingModifiers;
+pub use v079_message_deletion_token::V079MessageDeletionToken;
+pub use v080_pending_reactions_and_pins::V080PendingReactionsAndPins;
+pub use v081_dm_mailbox_encryption_key::V081DmMailboxEncryptionKey;
+pub use v082_verified_channel_membership::V082VerifiedChannelMembership;
+pub use v083_mesh_sender_names::V083MeshSenderNames;
+pub use v084_scoped_reactions::V084ScopedReactions;
+pub use v085_reaction_receive_journal::V085ReactionReceiveJournal;
+pub use v086_channel_message_clocks::V086ChannelMessageClocks;
+pub use v087_single_reaction::V087SingleReaction;
+pub use v088_reaction_normalization::V088ReactionNormalization;
+pub use v089_pin_added_order::V089PinAddedOrder;
+pub use v090_delete_batch_retry::V090DeleteBatchRetry;
+pub use v092_saved_pin_watermark::V092SavedPinWatermark;
+pub use v093_saved_sync_outbox::V093SavedSyncOutbox;
+use v094_anon_membership_order::V094AnonMembershipOrder;
 
 /// Trait for database migrations.
 ///
@@ -146,6 +242,12 @@ pub trait Migration {
     ///
     /// Can contain multiple statements separated by semicolons.
     fn up(&self) -> &'static str;
+
+    /// Apply SQL and any serialized-data updates in the runner's transaction.
+    fn apply(&self, conn: &Connection) -> Result<(), StorageError> {
+        conn.execute_batch(self.up())?;
+        Ok(())
+    }
 
     /// SQL to revert this migration (optional).
     ///
@@ -181,8 +283,16 @@ impl MigrationRunner {
 
     /// Run all pending migrations.
     ///
-    /// Creates the schema_version table if it doesn't exist, then applies
-    /// any migrations with version > current version in order.
+    /// Creates the schema_version table if it doesn't exist, then applies every
+    /// registered migration that is not already recorded as applied.
+    ///
+    /// The check is set membership, NOT `version > MAX(version)`. A high-water
+    /// mark silently skips any migration whose number is below it: with 8, 14
+    /// and 43 free in the sequence, adding a `v043_*` would have been applied on
+    /// a fresh install and never on an existing one, and the two databases would
+    /// diverge with nothing reporting it. The same watermark also made the
+    /// version numbers of the registered set load-bearing in a way nobody
+    /// declared.
     pub fn run(&self, conn: &Connection) -> Result<(), StorageError> {
         // Create schema_version table if not exists
         conn.execute(
@@ -194,14 +304,16 @@ impl MigrationRunner {
             [],
         )?;
 
-        // Get current version
-        let current_version: u32 = conn
-            .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM schema_version",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        // Which versions are already applied. A failure here must NOT be
+        // swallowed: this used to be `.unwrap_or(0)`, which turns any read error
+        // -- a locked database, a wrong passphrase, a corrupt page -- into
+        // "nothing has been applied" and replays every migration from v001 over
+        // a populated database.
+        let mut stmt = conn.prepare("SELECT version FROM schema_version")?;
+        let applied: std::collections::HashSet<u32> = stmt
+            .query_map([], |row| row.get::<_, u32>(0))?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
 
         // Sort migrations by version
         let mut sorted_migrations: Vec<_> = self.migrations.iter().collect();
@@ -210,12 +322,12 @@ impl MigrationRunner {
         // Apply pending migrations
         for migration in sorted_migrations {
             let version = migration.version();
-            if version > current_version {
+            if !applied.contains(&version) {
                 // Execute migration in a transaction
                 let tx = conn.unchecked_transaction()?;
 
                 // Execute the up SQL
-                tx.execute_batch(migration.up())?;
+                migration.apply(&tx)?;
 
                 // Record migration in schema_version
                 let now = Utc::now().to_rfc3339();
@@ -304,10 +416,77 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V056MeshIdentity)
         .register(V057MeshStore)
         .register(V058MeshConversations)
-        .register(V059MeshFavorites)
         .register(V060MeshDelivery)
         .register(V061MeshExemptSenderSentAt)
         .register(V062SectionSortMode)
         .register(V063PendingIdentityChanges)
         .register(V064SharedContent)
+        .register(V065SesameTables)
+        .register(V066MessagesSentAtIndex)
+        .register(V067DeletedMessages)
+        .register(V068BlockedAnonPeerName)
+        .register(V069PeerMailboxDevice)
+        .register(V070PeerDeviceMailboxes)
+        .register(V071PeerDeviceAsked)
+        .register(V072PeerProfileKeys)
+        .register(V073FormerChannels)
+        .register(V074MessageReceipts)
+        .register(V075MessageFailureReason)
+        .register(V076OwnDeviceSendTargets)
+        .register(V077PendingDmMessages)
+        .register(V078SendLogAndPendingModifiers)
+        .register(V079MessageDeletionToken)
+        .register(V080PendingReactionsAndPins)
+        .register(V081DmMailboxEncryptionKey)
+        .register(V082VerifiedChannelMembership)
+        .register(V083MeshSenderNames)
+        .register(V084ScopedReactions)
+        .register(V085ReactionReceiveJournal)
+        .register(V086ChannelMessageClocks)
+        .register(V087SingleReaction)
+        .register(V088ReactionNormalization)
+        .register(V089PinAddedOrder)
+        .register(V090DeleteBatchRetry)
+        .register(V092SavedPinWatermark)
+        .register(V093SavedSyncOutbox)
+        .register(V094AnonMembershipOrder)
+        .register(v095_saved_delete_tombstones::V095SavedDeleteTombstones)
+        .register(v096_saved_delete_outbox::V096SavedDeleteOutbox)
+        .register(v097_dm_outbox::V097DmOutbox)
+        .register(v098_dm_outbox_sealed_at::V098DmOutboxSealedAt)
+        .register(v099_dm_receive_tombstones::V099DmReceiveTombstones)
+        .register(v100_drop_message_deletion_token::V100DropMessageDeletionToken)
+        .register(v101_attachment_secret_chat::V101AttachmentSecretChat)
+        .register(v102_drop_call_room_tokens::V102DropCallRoomTokens)
+        .register(v103_secret_chat_peer_device::V103SecretChatPeerDevice)
+        .register(v104_reaction_send_clocks::V104ReactionSendClocks)
+        .register(v105_drop_legacy_reaction_evidence::V105DropLegacyReactionEvidence)
+        .register(v106_drop_anon_group_legacy_lock::V106DropAnonGroupLegacyLock)
+        .register(v107_drop_attachment_local_path::V107DropAttachmentLocalPath)
+        .register(v108_drop_channel_message_clocks::V108DropChannelMessageClocks)
+        .register(v109_drop_mailbox_randomizer::V109DropMailboxRandomizer)
+        .register(v110_attachment_secret_chat_known::V110AttachmentSecretChatKnown)
+        .register(v111_secret_chat_request_state::V111SecretChatRequestState)
+        .register(v112_send_log_group_id::V112SendLogGroupId)
+        .register(v113_mesh_account_binding::V113MeshAccountBinding)
+        .register(v114_mesh_signal::V114MeshSignal)
+        .register(v115_mesh_signal_courier::V115MeshSignalCourier)
+        .register(v119_pending_anon_group_invites::V119PendingAnonGroupInvites)
+        .register(v116_mesh_private_channels::V116MeshPrivateChannels)
+        .register(v117_mesh_conversation_kinds::V117MeshConversationKinds)
+        .register(v118_read_horizons::V118ReadHorizons)
+        .register(v120_secret_receive_artifacts::V120SecretReceiveArtifacts)
+        .register(v121_anon_group_departed_profiles::V121AnonGroupDepartedProfiles)
+        .register(v122_secret_receive_control_kinds::V122SecretReceiveControlKinds)
+        .register(v123_attachment_cleanup::V123AttachmentCleanup)
+        .register(v124_activity_center::V124ActivityCenter)
+        .register(v125_contact_names::V125ContactNames)
+        .register(v126_activity_outage_resolution::V126ActivityOutageResolution)
+        .register(v127_shared_content_categories::V127SharedContentCategories)
+        .register(v128_anon_group_invite_epoch::V128AnonGroupInviteEpoch)
+        .register(v129_pending_dm_retry::V129PendingDmRetry)
+        .register(v130_timestamp_quote_key::V130TimestampQuoteKey)
+        .register(v131_mesh_archive_packets::V131MeshArchivePackets)
+        .register(v140_activity_actor_names::V140ActivityActorNames)
+        .register(v141_user_block_intervals::V141UserBlockIntervals)
 }

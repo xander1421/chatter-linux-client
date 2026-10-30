@@ -5,22 +5,19 @@
 
 use std::sync::Arc;
 
-use crate::domain::jarvis::{
-    EntityKnowledge, JarvisContext, JarvisEntity, JarvisEntityId, JarvisEntityMention,
-    JarvisFact, JarvisRelationship,
-};
 use crate::domain::UserId;
+use crate::domain::jarvis::{
+    EntityKnowledge, JarvisContext, JarvisEntity, JarvisEntityId, JarvisEntityMention, JarvisFact,
+    JarvisRelationship,
+};
 use crate::services::ai::SampleParams;
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
-
-use crate::events::EventBus;
-use crate::inbox::handlers::DomainEvent;
 
 use super::context_builder::ContextBuilder;
 use super::engine::SharedJarvisEngine;
 use super::entity_extractor::{EntityExtractor, ExtractedEntity};
-use super::fact_extractor::FactExtractor;
 use super::error::JarvisError;
+use super::fact_extractor::FactExtractor;
 use super::memory_manager::{CompressionConfig, MemoryManager, MemoryStats};
 
 /// Supplies live app state (channel names, friends) for the system prompt.
@@ -38,8 +35,6 @@ pub struct JarvisService {
     graph_repo: Arc<JarvisGraphRepository>,
     /// Inference engine (active provider or in-process actor).
     ai: SharedJarvisEngine,
-    /// Event bus for emitting events.
-    event_bus: EventBus,
     /// Entity extractor.
     extractor: EntityExtractor,
     /// LLM fact extractor (background write path).
@@ -50,6 +45,8 @@ pub struct JarvisService {
     memory_manager: MemoryManager,
     /// App-context bridge (channels, friends) for grounded answers.
     app_context: Option<AppContextFn>,
+    /// One compression at a time; a turn that finds it held skips.
+    compress_lock: tokio::sync::Mutex<()>,
 }
 
 impl JarvisService {
@@ -58,24 +55,25 @@ impl JarvisService {
         memory_repo: Arc<JarvisMemoryRepository>,
         graph_repo: Arc<JarvisGraphRepository>,
         ai: SharedJarvisEngine,
-        event_bus: EventBus,
         semantic: Option<Arc<crate::services::semantic_search::SemanticSearchService>>,
     ) -> Self {
         let extractor = EntityExtractor::new(ai.clone());
         let fact_extractor = Arc::new(FactExtractor::new(ai.clone(), memory_repo.clone()));
-        let context_builder = ContextBuilder::new(memory_repo.clone(), graph_repo.clone(), semantic);
-        let memory_manager = MemoryManager::new(memory_repo.clone(), graph_repo.clone(), ai.clone());
+        let context_builder =
+            ContextBuilder::new(memory_repo.clone(), graph_repo.clone(), semantic);
+        let memory_manager =
+            MemoryManager::new(memory_repo.clone(), graph_repo.clone(), ai.clone());
 
         Self {
             memory_repo,
             graph_repo,
             ai,
-            event_bus,
             extractor,
             fact_extractor,
             context_builder,
             memory_manager,
             app_context: None,
+            compress_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -89,97 +87,6 @@ impl JarvisService {
     // Main API
     // ========================================================================
 
-    /// Process user input to detect and handle Jarvis commands.
-    ///
-    /// Returns true if the input was handled as a Jarvis command, false otherwise.
-    /// This allows the UI to simply check if Jarvis handled the input.
-    ///
-    /// Handles:
-    /// - `/ask <question>` - Direct Jarvis query
-    /// - `@Jarvis <message>` or `@jarvis <message>` - Mention-based query
-    /// - `/jarvis <command>` - Various Jarvis commands (stats, clear, etc.)
-    pub async fn process_input(
-        &self,
-        text: &str,
-        context: &JarvisContext,
-        author_id: Option<&UserId>,
-    ) -> Result<bool, JarvisError> {
-        // Check for /ask command
-        if let Some(query) = text.strip_prefix("/ask ") {
-            let response = self.ask(context, query, author_id).await?;
-            
-            // Emit event for UI to display response
-            self.event_bus.emit_domain(DomainEvent::JarvisResponse {
-                text: response,
-                context_id: context.context_id.clone(),
-            });
-            
-            tracing::info!("Jarvis handled /ask command");
-            return Ok(true);
-        }
-
-        // Check for @Jarvis or @jarvis mention
-        if text.starts_with("@Jarvis ") || text.starts_with("@jarvis ") {
-            let query = text.trim_start_matches("@Jarvis ")
-                .trim_start_matches("@jarvis ")
-                .trim();
-            if !query.is_empty() {
-                let response = self.ask(context, query, author_id).await?;
-                
-                // Emit event for UI to display response
-                self.event_bus.emit_domain(DomainEvent::JarvisResponse {
-                    text: response,
-                    context_id: context.context_id.clone(),
-                });
-                
-                tracing::info!("Jarvis handled @mention");
-                return Ok(true);
-            }
-        }
-
-        // Check for /jarvis commands
-        if text.starts_with("/jarvis") {
-            if let Some(cmd) = text.strip_prefix("/jarvis ") {
-                match cmd {
-                    "stats" => {
-                        let stats = self.memory_manager.get_stats(context)?;
-                        
-                        // Emit JarvisStats event
-                        self.event_bus.emit_domain(DomainEvent::JarvisStats {
-                            stats: format!(
-                                "Memory Stats:\n- Conversations: {}\n- Facts: {}\n- Entities: {}",
-                                stats.conversation_count,
-                                stats.fact_count,
-                                stats.entity_count
-                            ),
-                        });
-                        
-                        tracing::info!("Jarvis handled stats command");
-                        return Ok(true);
-                    }
-                    "clear" => {
-                        self.memory_manager.clear_context(context)?;
-                        
-                        // Emit JarvisCleared event
-                        self.event_bus.emit_domain(DomainEvent::JarvisCleared {
-                            context_id: context.context_id.clone(),
-                        });
-                        
-                        tracing::info!("Jarvis handled clear command");
-                        return Ok(true);
-                    }
-                    _ => {
-                        // Unknown jarvis command, let it through as regular message
-                        return Ok(false);
-                    }
-                }
-            }
-        }
-
-        // Not a Jarvis command
-        Ok(false)
-    }
-
     /// Ask Jarvis a question with full context.
     ///
     /// Retrieves relevant context from memory and the knowledge graph,
@@ -190,8 +97,13 @@ impl JarvisService {
         query: &str,
         author_id: Option<&UserId>,
     ) -> Result<String, JarvisError> {
-        self.ask_in(context, query, author_id, crate::ai_policy::policy::Silo::Local)
-            .await
+        self.ask_in(
+            context,
+            query,
+            author_id,
+            crate::ai_policy::policy::Silo::Local,
+        )
+        .await
     }
 
     /// Ask, running in an explicitly chosen silo.
@@ -215,7 +127,8 @@ impl JarvisService {
         // 2. Store the user's query + write-path fact harvest: regex fast-path
         //    synchronously (deterministic, free), LLM extraction+consolidation
         //    in the background so the reply is never delayed.
-        self.memory_manager.store_user_message(context, query, author_id)?;
+        self.memory_manager
+            .store_user_message(context, query, author_id)?;
         if let Some(user_id) = author_id {
             let _ = self.extract_user_facts(user_id, query, context);
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -301,7 +214,8 @@ impl JarvisService {
         let response = response.trim().to_string();
 
         // 5. Store the response
-        self.memory_manager.store_assistant_message(context, &response)?;
+        self.memory_manager
+            .store_assistant_message(context, &response)?;
 
         // 6. Extract and store entities from the response (background)
         let _ = self.observe_message(context, &response, None, None).await;
@@ -426,19 +340,19 @@ Summary:"#,
     // Memory Management
     // ========================================================================
 
-    /// Compress old conversations into summaries if needed.
-    pub async fn compress_memory(
-        &self,
-        context: &JarvisContext,
-    ) -> Result<bool, JarvisError> {
-        let config = CompressionConfig::default();
-        let summary = self.memory_manager.compress_if_needed(context, &config).await?;
+    /// Compress old conversations into a summary once the context's stored
+    /// history passes the builder's window. Returns whether a summary was
+    /// written. A compression already running for any context makes this a
+    /// no-op rather than a second LLM call over the same rows.
+    pub async fn compress_memory(&self, context: &JarvisContext) -> Result<bool, JarvisError> {
+        let Ok(_guard) = self.compress_lock.try_lock() else {
+            return Ok(false);
+        };
+        let summary = self
+            .memory_manager
+            .compress_if_needed(context, &CompressionConfig::default())
+            .await?;
         Ok(summary.is_some())
-    }
-
-    /// Apply decay to facts and prune low-confidence ones.
-    pub fn apply_fact_decay(&self, threshold: f64) -> Result<u32, JarvisError> {
-        self.memory_manager.apply_decay(threshold)
     }
 
     /// Get memory statistics for a context.
@@ -446,16 +360,20 @@ Summary:"#,
         self.memory_manager.get_stats(context)
     }
 
+    /// Delete a context's conversation history and summaries. Returns the
+    /// number of turns deleted.
+    pub fn clear_memory(&self, context: &JarvisContext) -> Result<u32, JarvisError> {
+        self.memory_manager.clear_context(context)
+    }
+
+    /// Apply decay to facts and prune low-confidence ones.
+    pub fn apply_fact_decay(&self, threshold: f64) -> Result<u32, JarvisError> {
+        self.memory_manager.apply_decay(threshold)
+    }
+
     // ========================================================================
     // Knowledge Graph
     // ========================================================================
-
-    /// Search for entities by name.
-    pub fn search_entities(&self, query: &str, limit: u32) -> Result<Vec<JarvisEntity>, JarvisError> {
-        self.graph_repo
-            .search_entities(query, limit)
-            .map_err(JarvisError::from)
-    }
 
     /// Get the top mentioned entities.
     pub fn get_top_entities(&self, limit: u32) -> Result<Vec<JarvisEntity>, JarvisError> {
@@ -500,11 +418,8 @@ Summary:"#,
             let entity_id = self.graph_repo.upsert_entity(&entity)?;
 
             // Record the mention
-            let mention = JarvisEntityMention::new(
-                entity_id.clone(),
-                context,
-                message_id.map(String::from),
-            );
+            let mention =
+                JarvisEntityMention::new(entity_id.clone(), context, message_id.map(String::from));
             self.graph_repo.insert_mention(&mention)?;
 
             entity_ids.push(entity_id);
@@ -563,7 +478,9 @@ Summary:"#,
         }
 
         if lowercase.contains("i'm interested in") || lowercase.contains("i like") {
-            if let Some(interest) = Self::extract_after_phrase(message, &["interested in", "i like"]) {
+            if let Some(interest) =
+                Self::extract_after_phrase(message, &["interested in", "i like"])
+            {
                 let fact = JarvisFact::about_user(user_id, "interested_in", &interest)
                     .with_source(&context.context_id);
                 self.memory_repo.upsert_fact(&fact)?;
@@ -572,8 +489,8 @@ Summary:"#,
 
         if lowercase.contains("i use") || lowercase.contains("i prefer") {
             if let Some(tool) = Self::extract_after_phrase(message, &["i use", "i prefer"]) {
-                let fact = JarvisFact::about_user(user_id, "uses", &tool)
-                    .with_source(&context.context_id);
+                let fact =
+                    JarvisFact::about_user(user_id, "uses", &tool).with_source(&context.context_id);
                 self.memory_repo.upsert_fact(&fact)?;
             }
         }
@@ -591,10 +508,7 @@ Summary:"#,
                 let rest = &text[start..];
 
                 // Extract until end of sentence or specific delimiter
-                let extracted = rest
-                    .split(['.', ',', '!', '?'])
-                    .next()?
-                    .trim();
+                let extracted = rest.split(['.', ',', '!', '?']).next()?.trim();
 
                 if !extracted.is_empty() && extracted.len() < 100 {
                     return Some(extracted.to_string());

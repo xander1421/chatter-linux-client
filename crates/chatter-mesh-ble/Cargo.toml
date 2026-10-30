@@ -6,7 +6,7 @@ authors = ["xander1421"]
 description = "BlueZ implementation of MeshLink for the bitchat mesh (Linux only)"
 license = "GPL-3.0"
 repository = "https://github.com/xander1421/chatter"
-rust-version = "1.85"
+rust-version = "1.99"
 
 [lib]
 name = "chatter_mesh_ble"

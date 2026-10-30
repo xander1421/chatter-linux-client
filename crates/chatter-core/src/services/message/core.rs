@@ -4,7 +4,6 @@
 
 use std::path::Path;
 
-use crate::domain::ephemeral::MessageTTL;
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId};
 use crate::domain::message::{Message, MessageContent};
 use crate::mailbox::group::GroupFanout;
@@ -14,17 +13,90 @@ use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1;
 use crate::proto::content_v1::AttachmentPointer;
 use crate::services::attachment::AttachmentService;
-use crate::services::current_user::CurrentUserProvider;
 
 use super::{MessageError, MessageService};
 
+/// A send that may or may not have landed and is not resent on its own: the
+/// user's retry decides. Carried by `MessageError::DmError`.
+pub(crate) const DELIVERY_UNCONFIRMED: &str = "Delivery unconfirmed";
+pub(crate) const SHIELD_WAITING_FOR_TOKENS: &str =
+    "Shield is getting ready — will send automatically";
+pub(crate) const BOOTSTRAP_TIMED_OUT: &str = "Secure channel setup timed out. Tap Retry";
+
+impl MessageError {
+    /// User-facing label for a send that did not land.
+    ///
+    /// `None` is a transient failure: the bubble reads "not sent · retry".
+    /// `Some` is the short reason shown after "not sent · ". Size refusals
+    /// cannot be retried unchanged. Unknown failures are not guessed to be
+    /// transient.
+    pub fn permanent_send_failure_reason(&self) -> Option<&'static str> {
+        use crate::error::NetworkError;
+        match self {
+            Self::Network(NetworkError::RequestNotSent(_)) => Some("Message not submitted"),
+            Self::Network(e) if e.is_retryable() || e.is_transport_error() => None,
+            Self::Network(NetworkError::MismatchedDevices { .. }) => None,
+            // SpiceDB down answers PermissionDenied. That is a delivery miss,
+            // not a rule the user broke.
+            Self::Network(NetworkError::PermissionDenied) => Some("Not delivered"),
+            Self::ShieldNotReady => Some(SHIELD_WAITING_FOR_TOKENS),
+            Self::NotAuthor => Some("Not allowed"),
+            Self::Network(NetworkError::InvalidRequest(reason))
+                if reason.contains("too large") => Some("Message too long"),
+            Self::InvalidContent(reason) if reason.contains("too large") => {
+                Some("Message too long")
+            }
+            Self::Network(NetworkError::InvalidRequest(_))
+            | Self::InvalidContent(_)
+            | Self::InvalidMessage(_) => Some("Message rejected"),
+            Self::NotLoggedIn | Self::Network(NetworkError::Unauthenticated) => {
+                Some("Sign in required")
+            }
+            Self::DmError(reason) if reason.as_str() == DELIVERY_UNCONFIRMED => {
+                Some(DELIVERY_UNCONFIRMED)
+            }
+            Self::RecipientIdentityChanged { .. } => Some("Identity changed"),
+            Self::RecipientKeyUnverified { .. } => Some("Key not verified"),
+            Self::MembershipNotVerified { .. } => Some("Membership not verified"),
+            Self::ChannelNotFound(_) | Self::Network(NetworkError::NotFound(_)) => {
+                Some("Conversation unavailable")
+            }
+            _ => Some("Cannot send message"),
+        }
+    }
+}
+
+fn update_retry_status(
+    db: &crate::storage::database::Database,
+    id: &MessageId,
+    status: &str,
+    reason: Option<&str>,
+) -> Result<(), crate::error::StorageError> {
+    let conn = db.connection()?;
+    conn.execute("UPDATE messages SET delivery_status=CASE WHEN delivery_status IN ('sent','delivered','read') THEN delivery_status ELSE ?2 END, failure_reason=CASE WHEN delivery_status IN ('sent','delivered','read') OR ?2='sent' THEN NULL ELSE ?3 END WHERE id=?1", rusqlite::params![id.to_string(), status, reason])?;
+    Ok(())
+}
+
 impl MessageService {
+    /// Change retry progress without overwriting a concurrently arriving receipt.
+    pub(crate) fn finish_retry_row(
+        &self,
+        id: &MessageId,
+        status: &str,
+        reason: Option<&str>,
+    ) -> Result<Message, MessageError> {
+        update_retry_status(&self.database, id, status, reason)?;
+        self.message_repo
+            .get(id)?
+            .ok_or(MessageError::MessageNotFound(*id))
+    }
+
     /// Send a message to a channel.
     ///
-    /// Encrypts with sender keys if channel requires encryption. When
-    /// `group_fanout` is provided and channel is encrypted, the message
-    /// will be delivered to member mailboxes IN ADDITION to the channel-based
-    /// delivery. This provides traffic analysis resistance per NDSS '21 paper.
+    /// Encrypts with sender keys if channel requires encryption. Channel
+    /// sends go to the server channel only: `group_fanout` is accepted but
+    /// not used here (a second pairwise copy double-stored the message, see
+    /// below); pairwise group-mailbox fan-out is the anon-group path.
     #[allow(clippy::too_many_arguments)]
     pub async fn send_message(
         &self,
@@ -40,6 +112,7 @@ impl MessageService {
         mentioned_integrations: Vec<IntegrationId>,
         targets_ai_bot: bool,
         quote: Option<&crate::services::gateway::QuoteIntent>,
+        sent_at: u64,
     ) -> Result<Message, MessageError> {
         // Check logged in
         let sender_id = self.settings_repo.current_user_id()?;
@@ -56,13 +129,25 @@ impl MessageService {
         // never sees plaintext on encrypted channels anyway, and unencrypted
         // channels only ever ship text.
         let content = chat_v1::message::Content {
-            r#type: Some(chat_v1::message::content::Type::Text(trimmed_text.to_string())),
+            r#type: Some(chat_v1::message::content::Type::Text(
+                trimmed_text.to_string(),
+            )),
         };
 
-        // Get encryption settings from channel config
-        let (is_dm, require_encryption) = self
-            .get_channel_encryption_settings(channel_id, channel_client)
+        let require_encryption = self
+            .channel_requires_encryption(channel_id, channel_client)
             .await?;
+
+        // Sender-key channel: every key decision reads the VERIFIED membership.
+        // No verified state, a failed verification or a fork blocks the send
+        // before anything is encrypted; otherwise the state stamps the
+        // DataMessage for the receivers' fork / staleness cross-check.
+        let group_state = if require_encryption {
+            self.sync_channel_state_if_behind(channel_id);
+            Some(self.group_gate().for_distribution(channel_id)?)
+        } else {
+            None
+        };
 
         // Disappearing messages: READ this conversation's configured timer (the
         // channel's `default_ttl_seconds`, written by `set_disappearing_timer`)
@@ -84,13 +169,19 @@ impl MessageService {
         // pairwise `content_v1::DataMessage` proto so attachment pointers
         // (CDN key + per-blob AES key) travel with the message and receivers
         // can actually download + decrypt the blob.
+        // The devices this send is for. Recorded before encryption so a later
+        // failure still has an original recipient set, and a resend cannot
+        // grow it. Receipts use the same rows.
+        self.snapshot_channel_receipt_targets(*channel_id, sent_at, auth_client, channel_client)
+            .await?;
+
         let plaintext_bytes = {
             use prost::Message as _;
-            let dm = crate::proto::content_v1::DataMessage {
+            let mut dm = crate::proto::content_v1::DataMessage {
                 body: trimmed_text.to_string(),
                 attachments: attachment_pointers.clone(),
                 channel_id: channel_id.to_string(),
-                timestamp: crate::util::time::TimestampNanos::now().as_u64(),
+                timestamp: sent_at,
                 mentioned_integrations: mentioned_integrations
                     .iter()
                     .map(|id| id.to_string())
@@ -112,6 +203,10 @@ impl MessageService {
                 ephemeral_ttl_seconds: disappearing_ttl_secs.unwrap_or(0),
                 ..Default::default()
             };
+            if let Some(state) = &group_state {
+                super::group::stamp_group_data_message(&mut dm, state);
+                dm.profile_key = self.group_profile_key(state);
+            }
             let wrap = crate::proto::content_v1::Content {
                 timestamp: dm.timestamp,
                 content: Some(crate::proto::content_v1::content::Content::DataMessage(dm)),
@@ -120,18 +215,27 @@ impl MessageService {
             wrap.encode_to_vec()
         };
 
-        let (content_to_send, skdm_opt) = self.prepare_encrypted_content(
-            auth_client,
-            channel_id,
-            &plaintext_bytes,
-            content,
-            is_dm,
-            require_encryption,
-        ).await?;
+        // Sender-key channel: members who lack our current key get it BEFORE
+        // this message is encrypted, or they can never read it.
+        if require_encryption {
+            self.distribute_sender_key_to_new_members(channel_id)
+                .await?;
+        }
+
+        let (content_to_send, skdm_opt) = self
+            .prepare_encrypted_content(
+                channel_id,
+                &plaintext_bytes,
+                content,
+                require_encryption,
+                sent_at,
+            )
+            .await?;
 
         // If a new sender key was created, distribute SKDM to channel members
         if let Some(skdm) = skdm_opt {
-            self.distribute_sender_key(auth_client, message_client, channel_id, &skdm).await?;
+            self.distribute_sender_key(auth_client, message_client, channel_id, &skdm)
+                .await?;
         }
 
         // Call server
@@ -145,46 +249,40 @@ impl MessageService {
         let (ephemeral, ephemeral_ttl) = match disappearing_ttl_secs {
             Some(secs) => (
                 true,
-                Some(prost_types::Duration { seconds: i64::from(secs), nanos: 0 }),
+                Some(prost_types::Duration {
+                    seconds: i64::from(secs),
+                    nanos: 0,
+                }),
             ),
             None => (false, None),
         };
-        let proto_message = message_client
-            .send_message(
-                &channel_id.to_string(),
-                content_to_send.clone(),
-                thread_id.map(|id| id.to_string()).as_deref(),
-                ephemeral,
-                ephemeral_ttl,
-                None,  // crypto_options
-                mentioned_integrations.iter().map(|id| id.to_string()).collect(),
-                targets_ai_bot,
-                attachment_ids.iter().map(|id| id.to_string()).collect(),
-            )
-            .await?;
+        crate::services::gateway::submission::mark_submission_started()?;
+        let request = chat_v1::SendMessageRequest {
+            channel_id: channel_id.to_string(),
+            content: Some(content_to_send.clone()),
+            parent_id: thread_id.map(ToString::to_string).unwrap_or_default(),
+            ephemeral,
+            ephemeral_ttl,
+            client_request_id: uuid::Uuid::new_v4().to_string(),
+            mentioned_integrations: mentioned_integrations
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            targets_ai_bot,
+            mentioned_file_ids: attachment_ids.iter().map(ToString::to_string).collect(),
+        };
+        let request = super::channel_send::retain_channel_request(
+            request,
+            group_state.as_ref().map(|state| state.state_hash.to_vec()),
+        )?;
+        let proto_message = message_client.send_prepared_message(request).await?;
+        super::channel_send::retain_channel_response(&proto_message)?;
+        crate::services::gateway::submission::bind_original_row(proto_message.id.clone())?;
         tracing::info!(
             channel_id = %channel_id,
             message_id = %proto_message.id,
             "[SEND_MESSAGE] Server API success, message_id={}", proto_message.id
         );
-
-        // Signal-style multi-device self-sync for DMs: the channel send above
-        // delivers ONE ciphertext (encrypted for recipient's primary device).
-        // Every other device that needs to see this message — recipient's other
-        // devices + our own linked devices — gets its own sealed-sender copy
-        // addressed directly via pairwise endpoint.
-        if is_dm {
-            if let Err(e) = self
-                .fanout_dm_sync_copies(auth_client, message_client, channel_id, trimmed_text.as_bytes())
-                .await
-            {
-                tracing::warn!(
-                    channel_id = %channel_id,
-                    error = %e,
-                    "DM multi-device sync fanout failed (primary delivery still succeeded)"
-                );
-            }
-        }
 
         // Server-managed channels: delivery happens via server → device inbox fanout
         // only. Pairwise group-mailbox fanout is reserved for anon groups (which go
@@ -198,9 +296,28 @@ impl MessageService {
         // Convert to domain message and preserve attachment IDs.
         // Derive ConversationType from the channel row so identified
         // channels don't get mistagged as AnonGroup.
-        let conv_type = super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
-        let mut message = proto_to_domain_message(&proto_message, sender_id, conv_type)?;
+        let conv_type =
+            super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
+        let mut message = super::conversion::proto_to_outgoing_channel_message(
+            &proto_message,
+            sender_id,
+            conv_type,
+            sent_at,
+            require_encryption,
+        )?;
         message.attachments = attachment_ids;
+        if !require_encryption && !super::channel_send::has_channel_queue() {
+            crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
+                self.database.clone(),
+            )
+            .bind_send_timestamp(
+                *channel_id,
+                message.conversation_type.clone(),
+                sender_id,
+                sent_at,
+                message.sent_at,
+            )?;
+        }
 
         // IMPORTANT: Check if server returned a different channel_id
         if message.conversation_id != *channel_id {
@@ -216,6 +333,12 @@ impl MessageService {
         // For sent messages, store original plaintext locally (not encrypted server response)
         message.content = MessageContent::Text(trimmed_text.to_string());
 
+        // The durable queue checkpoints the accepted response, then replaces
+        // its parked bubble without colliding with author/timestamp dedupe.
+        if super::channel_send::has_channel_queue() {
+            return Ok(message);
+        }
+
         // Store locally
         tracing::info!(
             channel_id = %message.conversation_id,
@@ -223,7 +346,12 @@ impl MessageService {
             text_len = trimmed_text.len(),
             "[SEND_MESSAGE] Storing message locally"
         );
-        self.message_repo.insert_outgoing(&message)?;
+        self.message_repo.insert_or_ignore(&message)?;
+        if let Some(stored) = self.message_repo.get(&message.id)? {
+            message.delivery_status = stored.delivery_status;
+        }
+        self.sync_channel_receipt_targets(*channel_id, message.sent_at, auth_client)
+            .await;
         tracing::info!(
             channel_id = %channel_id,
             message_id = %message.id,
@@ -250,124 +378,6 @@ impl MessageService {
         Ok(message)
     }
 
-    /// Fan a DM message out to every device that needs a sync copy.
-    ///
-    /// Signal-style multi-device: the primary channel send addresses the
-    /// recipient's primary device only. This helper delivers the same
-    /// plaintext (sealed-sender encrypted per device) to:
-    ///
-    /// * recipient's non-primary devices
-    /// * our own linked devices other than this one
-    ///
-    /// Failures here do not abort the outer send — the primary device already
-    /// got the message via the channel path; sync is best-effort.
-    async fn fanout_dm_sync_copies(
-        &self,
-        auth_client: &mut AuthClient,
-        message_client: &mut MessageClient,
-        channel_id: &ChannelId,
-        plaintext: &[u8],
-    ) -> Result<(), MessageError> {
-        use crate::proto::chat_v1::SealedSenderMessage;
-        use crate::storage::repositories::settings_repo::keys;
-
-        let our_user_id = self.settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(MessageError::Storage)?
-            .ok_or(MessageError::NotLoggedIn)?;
-        let our_device_id = self.settings_repo
-            .get::<u32>(keys::CURRENT_DEVICE_ID)
-            .map_err(MessageError::Storage)?
-            .ok_or(MessageError::NotLoggedIn)?;
-
-        // Find the DM peer (the other channel member).
-        let members = self.channel_repo.list_members(channel_id).unwrap_or_default();
-        let recipient_id = members
-            .iter()
-            .find(|m| m.user_id.to_string() != our_user_id)
-            .map(|m| m.user_id.to_string());
-
-        let timestamp = crate::util::time::TimestampNanos::now().as_u64();
-        let server_key_id = self.signal_service.get_server_key_id();
-
-        // Recipient fanout: EVERY device, including primary. The channel
-        // SendMessage stores the sealed copy server-side (history) but delivers
-        // it only over the ServerDm stream, which can't decrypt sealed sender —
-        // so live delivery for the recipient's primary device must go through
-        // the device-inbox path here (the gateway decrypts + stores locally).
-        if let Some(rid) = recipient_id {
-            match self.signal_service
-                .encrypt_message_all_devices(auth_client, &rid, plaintext)
-                .await
-            {
-                Ok(ciphertexts) => {
-                    for (device_id, sealed_bytes) in ciphertexts {
-                        let sealed_message = SealedSenderMessage {
-                            sealed_body: sealed_bytes,
-                            server_key_id,
-                            timestamp,
-                        };
-                        if let Err(e) = message_client
-                            .send_sealed_message(&rid, device_id, sealed_message)
-                            .await
-                        {
-                            tracing::warn!(
-                                recipient = %rid,
-                                device_id,
-                                error = %e,
-                                "DM sync: failed to deliver to recipient device"
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        recipient = %rid,
-                        error = %e,
-                        "DM sync: failed to encrypt for recipient's other devices"
-                    );
-                }
-            }
-        }
-
-        // Self fanout: every own device EXCEPT this one.
-        match self.signal_service
-            .encrypt_message_all_devices(auth_client, &our_user_id, plaintext)
-            .await
-        {
-            Ok(ciphertexts) => {
-                for (device_id, sealed_bytes) in ciphertexts {
-                    if device_id == our_device_id {
-                        continue;
-                    }
-                    let sealed_message = SealedSenderMessage {
-                        sealed_body: sealed_bytes,
-                        server_key_id,
-                        timestamp,
-                    };
-                    if let Err(e) = message_client
-                        .send_sealed_message(&our_user_id, device_id, sealed_message)
-                        .await
-                    {
-                        tracing::warn!(
-                            device_id,
-                            error = %e,
-                            "DM sync: failed to deliver to own other device"
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "DM sync: failed to encrypt for our own other devices"
-                );
-            }
-        }
-
-        Ok(())
-    }
-
     /// Send a message to a channel (simplified API - no client params).
     ///
     /// This is the preferred method - uses internal gRPC clients.
@@ -388,25 +398,220 @@ impl MessageService {
         targets_ai_bot: bool,
         quote: Option<&crate::services::gateway::QuoteIntent>,
     ) -> Result<Message, MessageError> {
+        // Text-only real channels have a durable predeposit queue. Other
+        // transports and attachment preparation retain their existing owner.
+        if attachment_ids.is_empty()
+            && attachment_pointers.is_empty()
+            && self.channel_repo.get(channel_id)?.is_some_and(|channel| {
+                matches!(
+                    channel.channel_type,
+                    crate::domain::channel::ChannelType::Public
+                        | crate::domain::channel::ChannelType::Private
+                )
+            })
+        {
+            return self
+                .send_durable_channel_text(
+                    channel_id,
+                    text,
+                    thread_id,
+                    mentioned_integrations,
+                    targets_ai_bot,
+                    quote,
+                )
+                .await;
+        }
         let mut message_client = self.message_client();
         let mut auth_client = self.auth_client();
         let mut channel_client = self.channel_client();
 
-        self.send_message(
-            &mut message_client,
-            &mut auth_client,
-            &mut channel_client,
-            group_fanout,
-            channel_id,
-            text,
-            attachment_ids,
-            attachment_pointers,
-            thread_id,
-            mentioned_integrations,
-            targets_ai_bot,
-            quote,
+        // One clock for the receipt snapshot inside `send_message` and, if
+        // that send fails, the stored bubble. A retry looks recipients up by it.
+        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            self.send_message(
+                &mut message_client,
+                &mut auth_client,
+                &mut channel_client,
+                group_fanout,
+                channel_id,
+                text,
+                attachment_ids.clone(),
+                attachment_pointers,
+                thread_id,
+                mentioned_integrations.clone(),
+                targets_ai_bot,
+                quote,
+                sent_at,
+            ),
         )
         .await
+        .unwrap_or_else(|_| Err(MessageError::Network(crate::error::NetworkError::Timeout)));
+        match result {
+            Ok(message) => Ok(message),
+            Err(error) => {
+                let mut message = Message::new_text(
+                    *channel_id,
+                    super::conversion::conversation_type_for_channel(
+                        &self.channel_repo,
+                        channel_id,
+                    ),
+                    Some(self.settings_repo.current_user_id()?),
+                    text.to_string(),
+                    sent_at,
+                );
+                message.attachments = attachment_ids;
+                message.thread_id = thread_id.copied();
+                message.mentioned_integrations = mentioned_integrations;
+                message.targets_ai_bot = targets_ai_bot;
+                message.delivery_status = "failed".into();
+                message.failure_reason = error.permanent_send_failure_reason().map(str::to_owned);
+                self.message_repo.insert_outgoing(&message)?;
+                tracing::warn!(error = %error, message_id = %message.id, "Channel send stored as failed");
+                Ok(message)
+            }
+        }
+    }
+
+    /// Retry a stored channel send.
+    ///
+    /// A public channel (and Saved Messages) is a new send: the post is
+    /// world-readable, or it has no other recipient. A private channel is not.
+    /// Posting it again would hand it to whoever is a member now, including
+    /// someone who joined after the original attempt, and a new sender-key
+    /// ciphertext is readable by anyone holding the current key. That retry
+    /// is pairwise, and only to devices recorded for this `sent_at` that are
+    /// still members. A stored failure label does not block either path.
+    pub(crate) async fn retry_channel_message(
+        &self,
+        id: &MessageId,
+    ) -> Result<Message, MessageError> {
+        let mut failed = self
+            .message_repo
+            .get(id)?
+            .ok_or(MessageError::MessageNotFound(*id))?;
+        if failed.conversation_type != crate::domain::message::ConversationType::Channel
+            || failed.sender_id != Some(self.settings_repo.current_user_id()?)
+            || failed.delivery_status != "failed"
+            || failed.is_deleted
+        {
+            return Err(MessageError::InvalidContent(
+                "message cannot be retried".into(),
+            ));
+        }
+        if let Some(queued) = self.durable_channel_retry(&failed)? {
+            return Ok(queued);
+        }
+        let pointers = self.pointers_for_resend(&failed.attachments)?;
+        let quote = match (failed.reply_to_author_id, failed.reply_to) {
+            (Some(author), Some(parent)) => self.message_repo.get(&parent)?.map(|parent| {
+                crate::services::gateway::QuoteIntent {
+                    target_author_id: author,
+                    target_timestamp: parent.sent_at,
+                    target_preview: failed.reply_to_text.clone(),
+                }
+            }),
+            _ => None,
+        };
+        let channel = self.channel_repo.get(&failed.conversation_id)?;
+        let fresh_send = channel.as_ref().is_some_and(|c| {
+            matches!(
+                c.channel_type,
+                crate::domain::channel::ChannelType::Public
+                    | crate::domain::channel::ChannelType::SavedMessages
+            )
+        });
+        if !fresh_send {
+            return self.retry_private_channel_message(&mut failed).await;
+        }
+        // New post, new clock. The failed row is replaced when the server
+        // assigns a different id.
+        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
+        // `send_message` marks its actual delivery boundary after preparation.
+        let result = self
+            .send_message(
+                &mut self.message_client(),
+                &mut self.auth_client(),
+                &mut self.channel_client(),
+                None,
+                &failed.conversation_id,
+                failed.as_text().unwrap_or(""),
+                failed.attachments.clone(),
+                pointers,
+                failed.thread_id.as_ref(),
+                failed.mentioned_integrations.clone(),
+                failed.targets_ai_bot,
+                quote.as_ref(),
+                sent_at,
+            )
+            .await;
+        match result {
+            Ok(mut sent) => {
+                if let Some(quote) = quote {
+                    sent = self
+                        .persist_outgoing_reply_context(sent, &quote)
+                        .map_err(|(_, e)| e)?;
+                }
+                if sent.id != *id {
+                    self.message_repo.delete(id)?;
+                }
+                Ok(sent)
+            }
+            Err(error) => {
+                // Preserve old-row receipts, but they do not confirm this fresh
+                // public post. Its durable claim stays unresolved on error.
+                self.finish_retry_row(&failed.id, "failed", error.permanent_send_failure_reason())?;
+                Err(error)
+            }
+        }
+    }
+
+    /// Pairwise retry of one private channel message. Does not re-snapshot:
+    /// a second snapshot would add devices the original send never had.
+    async fn retry_private_channel_message(
+        &self,
+        failed: &mut Message,
+    ) -> Result<Message, MessageError> {
+        match self.resend_stored_channel_message(failed).await {
+            Ok(_) => self.finish_retry_row(&failed.id, "sent", None),
+            Err(error) => {
+                let current = self.finish_retry_row(
+                    &failed.id,
+                    "failed",
+                    error.permanent_send_failure_reason(),
+                )?;
+                if matches!(
+                    current.delivery_status.as_str(),
+                    "sent" | "delivered" | "read"
+                ) {
+                    return Ok(current);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Pointers for a resend: every attachment must already be uploaded
+    /// (`Attachment::to_pointer`, which keeps the voice-note flag), so its
+    /// ciphertext is never uploaded again.
+    pub(crate) fn pointers_for_resend(
+        &self,
+        attachment_ids: &[AttachmentId],
+    ) -> Result<Vec<crate::proto::content_v1::AttachmentPointer>, MessageError> {
+        attachment_ids
+            .iter()
+            .map(|id| {
+                self.attachment_repo
+                    .get(id)?
+                    .and_then(|attachment| attachment.to_pointer())
+                    .ok_or_else(|| {
+                        MessageError::InvalidContent(format!(
+                            "attachment {id} can no longer be sent"
+                        ))
+                    })
+            })
+            .collect()
     }
 
     /// Send a message with file attachments (high-level API).
@@ -438,7 +643,8 @@ impl MessageService {
         quote: Option<&crate::services::gateway::QuoteIntent>,
     ) -> Result<Message, MessageError> {
         // Upload attachments with encryption
-        let attachment_service = AttachmentService::new(self.attachment_repo.clone(), self.grpc_pool.clone());
+        let attachment_service =
+            AttachmentService::new(self.attachment_repo.clone(), self.grpc_pool.clone());
         let mut attachment_ids = Vec::with_capacity(file_paths.len());
         let mut attachment_pointers = Vec::with_capacity(file_paths.len());
 
@@ -530,12 +736,10 @@ impl MessageService {
         content: crate::proto::content_v1::Content,
         _group_fanout: Option<&GroupFanout>,
     ) -> Result<(), MessageError> {
-        use prost::Message as ProstMessage;
-
         let _ = self.settings_repo.current_user_id()?;
 
-        let plaintext = content.encode_to_vec();
-        self.fanout_control_to_device_inboxes(auth_client, channel_id, &plaintext).await
+        self.fanout_control_to_device_inboxes(auth_client, channel_id, &content)
+            .await
     }
 
     /// Send control content to a channel (simplified API — no client params).
@@ -561,25 +765,28 @@ impl MessageService {
     }
 
     /// Encrypt pre-serialized control content per (member, device) and ship
-    /// each ciphertext through the device inbox with an anonymous credential.
+    /// each ciphertext through the device inbox, UAK-authorized like a 1:1 DM.
+    /// Channel members already know each other, so this spends no anonymous
+    /// mailbox token (OPEN-ITEMS §120).
     ///
     /// Skips our own current device (we already applied the change locally)
     /// but fans to our own linked devices for Signal-style multi-device sync.
+    ///
+    /// Every deposit is logged in the send log, so a member device that
+    /// cannot decrypt its copy gets these exact bytes again on its
+    /// `DecryptionErrorMessage` (`dm_resend.rs`, OPEN-ITEMS §5).
     async fn fanout_control_to_device_inboxes(
         &self,
         auth_client: &mut AuthClient,
         channel_id: &ChannelId,
-        plaintext: &[u8],
+        content: &crate::proto::content_v1::Content,
     ) -> Result<(), MessageError> {
-        use crate::proto::chat_v1::SealedSenderMessage;
         use crate::storage::repositories::settings_repo::keys;
+        use prost::Message as _;
 
-        let our_user_id = self.settings_repo
+        let our_user_id = self
+            .settings_repo
             .get_string(keys::CURRENT_USER_ID)
-            .map_err(MessageError::Storage)?
-            .ok_or(MessageError::NotLoggedIn)?;
-        let our_device_id = self.settings_repo
-            .get::<u32>(keys::CURRENT_DEVICE_ID)
             .map_err(MessageError::Storage)?
             .ok_or(MessageError::NotLoggedIn)?;
 
@@ -588,7 +795,8 @@ impl MessageService {
         // materialised a local channel row has an empty cache — which silently
         // dropped reactions/pins/edits/typing before. The server list is the
         // source of truth; fall back to the cache only if the RPC failed.
-        let mut members: Vec<crate::domain::UserId> = self.refresh_channel_members(channel_id).await;
+        let mut members: Vec<crate::domain::UserId> =
+            self.refresh_channel_members(channel_id).await;
         if members.is_empty() {
             members = self
                 .channel_repo
@@ -602,79 +810,38 @@ impl MessageService {
             return Ok(());
         }
 
-        let timestamp = crate::util::time::TimestampNanos::now().as_u64();
-        let server_key_id = self.signal_service.get_server_key_id();
-        let token_manager = self.token_manager.clone();
-        let mut anon_client = self.grpc_pool.anonymous_message_client();
-
-        let mut success = 0u32;
+        let plaintext = content.encode_to_vec();
+        let mut message_client = self.message_client();
+        let mut success = 0usize;
         let mut errors = 0u32;
+        let mut deposits = Vec::new();
 
         for member_uid in &members {
             let member_id = member_uid.to_string();
             let is_self = member_id == our_user_id;
 
-            let ciphertexts = match self.signal_service
-                .encrypt_message_all_devices(auth_client, &member_id, plaintext)
-                .await
-            {
-                Ok(cts) => cts,
-                Err(e) => {
-                    errors += 1;
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        member_id = %member_id,
-                        error = %e,
-                        "Failed to encrypt control content for member"
-                    );
-                    continue;
-                }
-            };
-
-            for (device_id, sealed_bytes) in ciphertexts {
-                if is_self && device_id == our_device_id {
-                    continue;
-                }
-
-                let token = match self.get_or_request_token_for_skdm(&token_manager, &member_id).await {
-                    Some(t) => t,
-                    None => {
-                        errors += 1;
-                        continue;
-                    }
-                };
-
-                let sealed_message = SealedSenderMessage {
-                    sealed_body: sealed_bytes,
-                    server_key_id,
-                    timestamp,
-                };
-
-                match anon_client
-                    .send_with_anonymous_credential(
-                        &member_id,
-                        device_id,
-                        sealed_message,
-                        &token.public_key,
-                        &token.signature,
-                        token.randomizer.as_deref(),
-                    )
-                    .await
-                {
-                    Ok(_) => success += 1,
-                    Err(e) => {
-                        errors += 1;
-                        tracing::warn!(
-                            channel_id = %channel_id,
-                            member_id = %member_id,
-                            device_id,
-                            error = %e,
-                            "Failed to deliver control content to device"
-                        );
-                    }
-                }
+            let outcome = self
+                .deposit_sealed_to_all_devices(
+                    auth_client,
+                    &mut message_client,
+                    &member_id,
+                    &plaintext,
+                    Some(channel_id.as_bytes()),
+                )
+                .await;
+            deposits.extend(
+                outcome
+                    .deposits
+                    .iter()
+                    .map(|&(device, server_ts)| (*member_uid, device, server_ts)),
+            );
+            success += outcome.delivered;
+            if outcome.delivered == 0 && !is_self {
+                errors += 1;
             }
         }
+
+        self.record_pairwise_send(content, &deposits, Some(channel_id.as_bytes()));
 
         tracing::debug!(
             channel_id = %channel_id,
@@ -716,151 +883,29 @@ impl MessageService {
             }
         };
 
-        let mut ids = Vec::with_capacity(members.len());
-        for pb_member in &members {
-            let user_id = match pb_member.user_id.parse::<crate::domain::UserId>() {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
-            ids.push(user_id);
-            // Best-effort cache upsert (no-op / FK-ignored if no local channel row).
-            let membership = crate::domain::channel::Membership {
-                channel_id: *channel_id,
-                user_id,
-                role: crate::domain::channel::MemberRole::Member,
-                notification_preference: crate::domain::channel::NotificationPreference::All,
-                joined_at: chrono::Utc::now(),
-                last_read_message_id: None,
-                is_muted: false,
-                muted_until: None,
-            };
-            let _ = self.channel_repo.insert_or_ignore_membership(&membership);
-        }
-        ids
-    }
-
-    /// Send an ephemeral (self-destructing) message to a channel.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn send_ephemeral_message(
-        &self,
-        message_client: &mut MessageClient,
-        channel_id: &ChannelId,
-        text: &str,
-        ttl: MessageTTL,
-        attachment_ids: Vec<AttachmentId>,
-        thread_id: Option<&MessageId>,
-    ) -> Result<Message, MessageError> {
-        // Check logged in
-        let sender_id = self.settings_repo.current_user_id()?;
-
-        // Validate content - must have text or attachments
-        let trimmed_text = text.trim();
-        if trimmed_text.is_empty() && attachment_ids.is_empty() {
-            return Err(MessageError::InvalidContent(
-                "message must have text or attachments".to_string(),
-            ));
-        }
-
-        // Build proto content
-        let content = chat_v1::message::Content {
-            r#type: Some(chat_v1::message::content::Type::Text(trimmed_text.to_string())),
-        };
-
-        // Convert TTL to prost Duration
-        let ephemeral_ttl = Some(prost_types::Duration {
-            seconds: ttl.as_secs() as i64,
-            nanos: 0,
-        });
-
-        // Call server with ephemeral flag
-        let proto_message = message_client
-            .send_message(
-                &channel_id.to_string(),
-                content,
-                thread_id.map(|id| id.to_string()).as_deref(),
-                true,          // ephemeral = true
-                ephemeral_ttl, // TTL duration
-                None,          // crypto_options
-                Vec::new(),    // mentioned_integrations (not typically used with ephemeral)
-                false,         // targets_ai_bot
-                attachment_ids.iter().map(|id| id.to_string()).collect(),
-            )
-            .await?;
-
-        // Convert to domain message and preserve attachment IDs
-        let conv_type = super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
-        let mut message = proto_to_domain_message(&proto_message, sender_id, conv_type)?;
-        message.attachments = attachment_ids;
-
-        // IMPORTANT: Ensure channel_id matches (server might return different format)
-        if message.conversation_id != *channel_id {
-            tracing::warn!(
-                input_channel_id = %channel_id,
-                server_channel_id = %message.conversation_id,
-                "[SEND_EPHEMERAL] CHANNEL_ID MISMATCH! Server returned different channel_id"
-            );
-            message.conversation_id = *channel_id;
-        }
-
-        // Store locally
-        self.message_repo.insert_outgoing(&message)?;
-
-        Ok(message)
-    }
-
-    /// Edit a message in a channel.
-    pub async fn edit_message(
-        &self,
-        channel_id: &ChannelId,
-        message_id: &MessageId,
-        new_text: &str,
-    ) -> Result<Message, MessageError> {
-        // Check logged in
-        let current_user = self.settings_repo.current_user_id()?;
-
-        // Validate new content
-        let trimmed_text = new_text.trim();
-        if trimmed_text.is_empty() {
-            return Err(MessageError::InvalidContent(
-                "message content cannot be empty".to_string(),
-            ));
-        }
-
-        // Get existing message from local DB
-        let existing = self
-            .message_repo
-            .get(message_id)?
-            .ok_or_else(|| MessageError::MessageNotFound(*message_id))?;
-
-        // Verify sender matches current user (only if sender_id is known)
-        if let Some(sender_id) = existing.sender_id {
-            if sender_id != current_user {
-                return Err(MessageError::NotAuthor);
+        let memberships = match members
+            .iter()
+            .map(|proto| {
+                crate::services::channel::converters::proto_to_domain_membership(channel_id, proto)
+            })
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(memberships) => memberships,
+            Err(e) => {
+                tracing::debug!(channel_id = %channel_id, error = %e, "Member refresh skipped (roster did not convert)");
+                return Vec::new();
             }
-        }
-
-        // Build proto content
-        let content = chat_v1::message::Content {
-            r#type: Some(chat_v1::message::content::Type::Text(trimmed_text.to_string())),
         };
-
-        // Call server
-        let mut message_client = self.message_client();
-        let proto_message = message_client
-            .edit_message(&message_id.to_string(), &channel_id.to_string(), content)
-            .await?;
-
-        // Convert to domain message (use server response for consistency)
-        let conv_type = super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
-        let mut updated_message = proto_to_domain_message(&proto_message, current_user, conv_type)?;
-
-        // Mark edited locally (in case server didn't set it)
-        updated_message.mark_edited();
-
-        // Update local storage
-        self.message_repo.update(&updated_message)?;
-
-        Ok(updated_message)
+        // Full list: drop departed members. A missing local channel row fails
+        // the insert (FK) and rolls the replace back; fan-out still uses the
+        // server ids below.
+        if let Err(e) = self
+            .channel_repo
+            .replace_memberships(channel_id, &memberships)
+        {
+            tracing::debug!(channel_id = %channel_id, error = %e, "Member refresh did not update local roster");
+        }
+        memberships.into_iter().map(|m| m.user_id).collect()
     }
 
     /// Delete a message from a channel.
@@ -885,7 +930,7 @@ impl MessageService {
             }
         }
 
-        // Call server
+        // Call server: SpiceDB authorizes us as the message's author.
         let mut message_client = self.message_client();
         message_client
             .delete_message(&message_id.to_string(), &channel_id.to_string())
@@ -899,12 +944,49 @@ impl MessageService {
         Ok(())
     }
 
+    /// Authorize and prepare the entire local selection before one server RPC.
+    /// The local soft-delete is one SQLite statement after server commit.
+    pub async fn delete_messages(
+        &self,
+        channel_id: &ChannelId,
+        message_ids: &[MessageId],
+    ) -> Result<(), MessageError> {
+        if message_ids.is_empty() {
+            return Ok(());
+        }
+        let current_user = self.settings_repo.current_user_id()?;
+        let mut seen = std::collections::HashSet::new();
+        let mut targets = Vec::with_capacity(message_ids.len());
+        for id in message_ids {
+            if !seen.insert(*id) {
+                continue;
+            }
+            let existing = self
+                .message_repo
+                .get(id)?
+                .ok_or_else(|| MessageError::MessageNotFound(*id))?;
+            if existing.conversation_id != *channel_id {
+                return Err(MessageError::NotAuthor);
+            }
+            if existing
+                .sender_id
+                .is_some_and(|sender| sender != current_user)
+            {
+                return Err(MessageError::NotAuthor);
+            }
+            targets.push((id.to_string(), channel_id.to_string()));
+        }
+        self.message_client().delete_messages(targets).await?;
+        self.message_repo.soft_delete_batch(message_ids)?;
+        Ok(())
+    }
+
     /// Build the Signal-style wire `Quote` for an outgoing reply so the
     /// RECEIVER's reply bubble renders. Author + id come straight from the
     /// intent (canonical, works even if the parent isn't local); preview text
     /// and the thumbnail are best-effort from the locally-resolved parent.
     /// Returns `None` when there is no quote.
-    fn build_wire_quote(
+    pub(super) fn build_wire_quote(
         &self,
         quote: Option<&crate::services::gateway::QuoteIntent>,
     ) -> Option<crate::proto::content_v1::Quote> {
@@ -933,12 +1015,14 @@ impl MessageService {
                     .map(|m| crate::services::gateway::shared::message_reply_preview(m, &atts))
             })
             .unwrap_or_default();
-        Some(crate::services::gateway::shared::build_quote_with_attachments(
-            &quote.target_author_id.to_string(),
-            quote.target_timestamp,
-            &preview,
-            crate::services::gateway::shared::build_quoted_attachments(&atts),
-        ))
+        Some(
+            crate::services::gateway::shared::build_quote_with_attachments(
+                &quote.target_author_id.to_string(),
+                quote.target_timestamp,
+                &preview,
+                crate::services::gateway::shared::build_quoted_attachments(&atts),
+            ),
+        )
     }
 
     /// Patch an already-stored outgoing message with reply-quote context.
@@ -962,6 +1046,26 @@ impl MessageService {
             .get_by_sender_timestamp(&quote.target_author_id, quote.target_timestamp)
             .ok()
             .flatten();
+        self.fill_reply_context(&mut message, quote, original);
+        match self.message_repo.update(&message) {
+            Ok(()) => Ok(message),
+            Err(e) => Err((message, e)),
+        }
+    }
+
+    /// Set the reply-quote fields on `message` from `quote` and `original`,
+    /// the quoted parent as the caller resolved it locally (`None` when it is
+    /// not stored: the parent id then derives from the quote timestamp).
+    /// Preview text prefers `quote.target_preview`, then the parent's own
+    /// preview; the parent's first attachment supplies the thumbnail. Does
+    /// not touch storage: `persist_outgoing_reply_context` updates a stored
+    /// row, `save_message` fills the row before its insert.
+    pub(crate) fn fill_reply_context(
+        &self,
+        message: &mut Message,
+        quote: &crate::services::gateway::QuoteIntent,
+        original: Option<Message>,
+    ) {
         let original_attachments: Vec<_> = original
             .as_ref()
             .map(|m| {
@@ -971,16 +1075,18 @@ impl MessageService {
                     .collect()
             })
             .unwrap_or_default();
-        let reply_to_id = original
-            .as_ref()
-            .map(|m| m.id)
-            .unwrap_or_else(|| crate::domain::ids::MessageId::from_timestamp(quote.target_timestamp));
+        let reply_to_id = original.as_ref().map(|m| m.id).unwrap_or_else(|| {
+            crate::domain::ids::MessageId::from_timestamp(quote.target_timestamp)
+        });
         let reply_to_text = quote
             .target_preview
             .clone()
             .or_else(|| {
                 original.as_ref().map(|m| {
-                    crate::services::gateway::shared::message_reply_preview(m, &original_attachments)
+                    crate::services::gateway::shared::message_reply_preview(
+                        m,
+                        &original_attachments,
+                    )
                 })
             })
             .filter(|t| !t.is_empty());
@@ -1000,96 +1106,49 @@ impl MessageService {
         message.reply_to_text = reply_to_text;
         message.reply_to_thumbnail = reply_thumb;
         message.reply_to_thumbnail_mime = reply_thumb_mime;
-
-        match self.message_repo.update(&message) {
-            Ok(()) => Ok(message),
-            Err(e) => Err((message, e)),
-        }
     }
 
     /// Helper to encrypt content based on channel type.
     pub(crate) async fn prepare_encrypted_content(
         &self,
-        auth_client: &mut AuthClient,
         channel_id: &ChannelId,
         plaintext: &[u8],
         original_content: chat_v1::message::Content,
-        is_dm: bool,
         require_encryption: bool,
-    ) -> Result<(chat_v1::message::Content, Option<crate::proto::content_v1::SenderKeyDistribution>), MessageError> {
-        // DM: Use sealed sender (pairwise encryption)
-        // Multi-device: encrypt for ALL recipient devices, send primary ciphertext
-        // Server handles device routing via channel subscription
-        if is_dm {
-            // Resolve the peer from channel membership. A ServerDm channel_id is
-            // a deterministic v5 UUID, NOT the peer's user_id — encrypting to the
-            // channel_id fetches a prekey bundle for a non-user and fails. The
-            // recipient is the sole member that isn't us.
-            let our_user_id = self.settings_repo.current_user_id()?;
-            let recipient_id = self
-                .channel_repo
-                .list_members(channel_id)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|m| m.user_id)
-                .find(|uid| *uid != our_user_id);
-            if let Some(recipient_id) = recipient_id {
-                // Encrypt for ALL recipient devices (Signal multi-device)
-                match self.signal_service.encrypt_message_all_devices(
-                    auth_client,
-                    &recipient_id.to_string(),
-                    plaintext
-                ).await {
-                    Ok(device_ciphertexts) => {
-                        // For channel DMs, server handles device addressing
-                        // Use primary device (1) ciphertext, fallback to first available
-                        let primary_ciphertext = device_ciphertexts.get(&1)
-                            .or_else(|| device_ciphertexts.values().next())
-                            .cloned();
-
-                        if let Some(ciphertext) = primary_ciphertext {
-                            tracing::debug!(
-                                recipient = %recipient_id,
-                                device_count = device_ciphertexts.len(),
-                                "Channel DM encrypted for devices"
-                            );
-
-                            let encrypted_content = chat_v1::message::Content {
-                                r#type: Some(chat_v1::message::content::Type::SealedSender(
-                                    chat_v1::SealedSenderMessage {
-                                        sealed_body: ciphertext,
-                                        server_key_id: self.signal_service.get_server_key_id(),
-                                        timestamp: crate::util::time::TimestampNanos::now().as_u64(),
-                                    }
-                                )),
-                            };
-                            return Ok((encrypted_content, None));
-                        }
-                        // Fail closed: never downgrade a DM to cleartext.
-                        return Err(MessageError::EncryptionFailed(
-                            "DM encryption produced no ciphertexts".into(),
-                        ));
-                    },
-                    Err(e) => {
-                        return Err(MessageError::EncryptionFailed(format!(
-                            "DM encryption failed: {}", e
-                        )));
-                    }
-                }
-            }
-            // No peer membership synced for this DM — fail closed rather than
-            // encrypt to the wrong identity.
-            return Err(MessageError::EncryptionFailed(
-                "DM recipient could not be resolved for encryption".into(),
-            ));
-        }
-
+        sent_at: u64,
+    ) -> Result<
+        (
+            chat_v1::message::Content,
+            Option<crate::proto::content_v1::SenderKeyDistribution>,
+        ),
+        MessageError,
+    > {
         // Encrypted channel: Use sender keys (group encryption)
         if require_encryption {
-            match self.signal_service.encrypt_for_group(channel_id, plaintext).await {
-                Ok((group_encrypted, skdm_opt)) => {
+            // A locally blocked rotation is definite preparation refusal.
+            if self
+                .signal_service
+                .is_channel_send_blocked(channel_id)
+                .map_err(|e| MessageError::EncryptionFailed(e.to_string()))?
+            {
+                return Err(MessageError::EncryptionFailed(
+                    "channel key rotation pending".into(),
+                ));
+            }
+            crate::services::gateway::submission::mark_submission_started()?;
+            match self
+                .signal_service
+                .encrypt_for_group(channel_id, plaintext)
+                .await
+            {
+                Ok((mut group_encrypted, skdm_opt)) => {
                     use prost::Message;
-                    // Serialize GroupEncrypted proto and pack into EncryptedData
+                    // encrypt_for_group stamps a later now(). The envelope
+                    // timestamp is outside the sender-key ciphertext, and it
+                    // is the clock a recipient names in a DecryptionErrorMessage
+                    // when it cannot decrypt. It has to be the same sender
+                    // clock as the DataMessage and the local row (`sent_at`).
+                    group_encrypted.timestamp = sent_at;
                     let group_bytes = group_encrypted.encode_to_vec();
 
                     let encrypted_content = chat_v1::message::Content {
@@ -1099,22 +1158,23 @@ impl MessageService {
                                 ciphertext: group_bytes,
                                 // Mark as sender key message in associated_data
                                 associated_data: b"sender_key".to_vec(),
-                            }
+                            },
                         )),
                     };
                     return Ok((encrypted_content, skdm_opt));
-                },
+                }
                 Err(e) => {
                     // Fail closed: an encryption-required channel must never
                     // downgrade to cleartext.
                     return Err(MessageError::EncryptionFailed(format!(
-                        "Group encryption failed for channel {}: {}", channel_id, e
+                        "Group encryption failed for channel {}: {}",
+                        channel_id, e
                     )));
                 }
             }
         }
 
-        // FAIL CLOSED (F14a): we are about to ship PLAINTEXT on a non-DM,
+        // FAIL CLOSED (F14a): we are about to ship PLAINTEXT on a
         // non-encrypted channel. That is only legitimate for an explicitly
         // PUBLIC channel (world-readable by design). A PRIVATE/group channel
         // must never leave the client in cleartext — if one reached here with
@@ -1145,4 +1205,101 @@ impl MessageService {
 }
 
 // Re-export proto conversion functions from conversion module
-pub use super::conversion::{proto_to_domain_message, proto_to_domain_message_with_sender, proto_content_to_domain};
+pub use super::conversion::{
+    proto_content_to_domain, proto_to_domain_message, proto_to_domain_message_with_sender,
+};
+
+#[cfg(test)]
+mod send_failure_tests {
+    use super::MessageError;
+    use crate::error::NetworkError;
+
+    #[test]
+    fn only_transient_send_failures_offer_retry() {
+        for error in [
+            NetworkError::Timeout,
+            NetworkError::Unavailable,
+            NetworkError::RateLimited,
+            NetworkError::ConnectionFailed("offline".into()),
+        ] {
+            assert_eq!(
+                MessageError::Network(error).permanent_send_failure_reason(),
+                None
+            );
+        }
+        for error in [
+            NetworkError::PermissionDenied,
+            NetworkError::InvalidRequest("message too large".into()),
+            NetworkError::Unauthenticated,
+            NetworkError::Unknown("unclassified".into()),
+        ] {
+            assert!(
+                MessageError::Network(error)
+                    .permanent_send_failure_reason()
+                    .is_some()
+            );
+        }
+        assert!(
+            MessageError::InvalidContent("too large".into())
+                .permanent_send_failure_reason()
+                .is_some()
+        );
+        assert_eq!(
+            MessageError::Network(NetworkError::PermissionDenied).permanent_send_failure_reason(),
+            Some("Not delivered"),
+        );
+        assert_eq!(
+            MessageError::NotAuthor.permanent_send_failure_reason(),
+            Some("Not allowed")
+        );
+    }
+}
+
+#[cfg(test)]
+mod retry_receipt_tests {
+    use super::*;
+    #[test]
+    fn late_original_receipt_survives_retry_failure_and_bootstrap_completion() {
+        use crate::domain::message::ConversationType;
+        use crate::storage::repositories::UnifiedMessageRepository;
+        let dir = tempfile::tempdir().unwrap();
+        let db = std::sync::Arc::new(
+            crate::storage::database::Database::open(&dir.path().join("receipt.db"), "test-only")
+                .unwrap(),
+        );
+        db.run_migrations()
+            .expect("migrate throwaway test database");
+        let repo = UnifiedMessageRepository::new(db.clone());
+        for kind in [
+            ConversationType::Channel,
+            ConversationType::ServerDm,
+            ConversationType::AnonGroup,
+        ] {
+            let mut row = Message::new_text(
+                ChannelId::new(),
+                kind,
+                Some(crate::domain::ids::UserId::new()),
+                "original".into(),
+                7,
+            );
+            row.delivery_status = "failed".into();
+            repo.insert_outgoing(&row).unwrap();
+            update_retry_status(&db, &row.id, "sending", None).unwrap();
+            // Receipt arrives while the original retry awaits its response.
+            db.connection()
+                .unwrap()
+                .execute(
+                    "UPDATE messages SET delivery_status='delivered' WHERE id=?1",
+                    rusqlite::params![row.id.to_string()],
+                )
+                .unwrap();
+            update_retry_status(&db, &row.id, "failed", Some("lost response")).unwrap();
+            update_retry_status(&db, &row.id, "sending", Some("bootstrap pending")).unwrap();
+            update_retry_status(&db, &row.id, "sent", None).unwrap();
+            let retained = repo.get(&row.id).unwrap().unwrap();
+            assert_eq!(retained.delivery_status, "delivered");
+            assert_eq!(retained.failure_reason, None);
+            assert_eq!(retained.as_text(), Some("original"));
+        }
+    }
+}

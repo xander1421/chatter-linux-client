@@ -8,9 +8,9 @@
 use std::fmt;
 use std::str::FromStr;
 
+use crate::domain::UserId;
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
-use crate::domain::UserId;
 use crate::proto::content_v1::{self, AttachmentPointer, Content, receipt_message, typing_message};
 
 use super::DomainEvent;
@@ -109,11 +109,13 @@ pub fn build_message_from_content(
         .and_then(|dm| dm.quote.as_ref())
         .map(|q| MessageId::from_timestamp(q.id));
 
-    let reply_to_author_id = data_msg
-        .and_then(|dm| dm.quote.as_ref())
-        .and_then(|q| {
-            if q.author_aci.is_empty() { None } else { UserId::from_str(&q.author_aci).ok() }
-        });
+    let reply_to_author_id = data_msg.and_then(|dm| dm.quote.as_ref()).and_then(|q| {
+        if q.author_aci.is_empty() {
+            None
+        } else {
+            UserId::from_str(&q.author_aci).ok()
+        }
+    });
 
     let reply_to_text = data_msg
         .and_then(|dm| dm.quote.as_ref())
@@ -132,7 +134,8 @@ pub fn build_message_from_content(
 
     let attachments: Vec<AttachmentId> = data_msg
         .map(|dm| {
-            dm.attachments.iter()
+            dm.attachments
+                .iter()
                 .filter(|ptr| !ptr.cdn_key.is_empty())
                 .map(|ptr| AttachmentId::from_cdn_key(&ptr.cdn_key))
                 .collect()
@@ -167,6 +170,7 @@ pub fn build_message_from_content(
         mentioned_integrations: Vec::new(),
         targets_ai_bot: false,
         delivery_status: String::new(),
+        failure_reason: None,
     }
 }
 
@@ -212,12 +216,21 @@ pub trait AnonInboxBackend {
     fn label(&self) -> &'static str;
 
     /// Default: false. DM overrides to check its block list.
-    fn is_sender_blocked(&self, _sender_id: &UserId) -> bool { false }
+    fn is_sender_blocked(&self, _sender_id: &UserId) -> bool {
+        false
+    }
 
     /// Default: false. DM overrides to check per-conversation blocking.
-    fn is_conversation_blocked(&self, _id: &Self::Id) -> bool { false }
+    fn is_conversation_blocked(&self, _id: &Self::Id) -> bool {
+        false
+    }
 
-    fn create_attachment_records(&self, pointers: &[AttachmentPointer]) -> Vec<AttachmentId>;
+    /// Persist the pointers' rows; an error means the envelope is retained,
+    /// never stored with attachments whose origin was not recorded.
+    fn create_attachment_records(
+        &self,
+        pointers: &[AttachmentPointer],
+    ) -> Result<Vec<AttachmentId>, crate::error::StorageError>;
 
     fn store_data_message(
         &self,
@@ -229,9 +242,32 @@ pub trait AnonInboxBackend {
         quote: Option<QuoteContext>,
     ) -> Result<String, String>;
 
+    /// A replayed secret post must not create a second UI delivery event.
+    fn has_data_message(
+        &self,
+        _id: &Self::Id,
+        _sender: &UserId,
+        _sent_at: u64,
+    ) -> Result<bool, crate::error::StorageError> {
+        Ok(false)
+    }
+
     fn delete_message(&self, id: &Self::Id, sender: &UserId, ts: u64) -> Result<bool, String>;
 
-    fn update_message_text(&self, id: &Self::Id, sender: &UserId, ts: u64, text: &str) -> Result<bool, String>;
+    /// Apply `sender`'s edit of its own message sent at `target_ts` in `id`,
+    /// through the one edit choke point
+    /// ([`MessageService::apply_channel_edit`](crate::services::message::MessageService::apply_channel_edit)):
+    /// author only, ordered and dated by `edit_ts`, Signal's 48h, held until
+    /// the message arrives. `sender` is the one the mailbox authenticated.
+    /// Returns the edited message when it changed.
+    fn apply_edit(
+        &self,
+        id: &Self::Id,
+        sender: &UserId,
+        target_ts: u64,
+        text: &str,
+        edit_ts: u64,
+    ) -> Result<Option<Message>, String>;
 
     /// Returns `true` if the reaction was newly inserted, `false` if it
     /// was already present (per the unified-reactions UNIQUE constraint).
@@ -239,26 +275,56 @@ pub trait AnonInboxBackend {
     /// UI doesn't double-count when the same reaction arrives twice (e.g.
     /// snapshot + delta from the same poll cycle).
     fn add_reaction(
-        &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
-        reactor: &UserId, emoji: &str,
+        &self,
+        id: &Self::Id,
+        target_sender: &UserId,
+        target_ts_ns: u64,
+        reactor: &UserId,
+        emoji: &str,
     ) -> Result<bool, String>;
 
     /// Returns `true` if a reaction was actually removed.
     fn remove_reaction(
-        &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
-        reactor: &UserId, emoji: &str,
+        &self,
+        id: &Self::Id,
+        target_sender: &UserId,
+        target_ts_ns: u64,
+        reactor: &UserId,
+        emoji: &str,
     ) -> Result<bool, String>;
+
+    /// Durable exact-scope admission for an authenticated anonymous transport.
+    #[allow(clippy::too_many_arguments)]
+    fn receive_reaction(
+        &self,
+        id: &Self::Id,
+        author: &UserId,
+        target_ts: u64,
+        reactor: &UserId,
+        emoji: &str,
+        remove: bool,
+        action_ts: u64,
+    ) -> Result<bool, crate::error::StorageError>;
 
     fn set_pinned(&self, id: &Self::Id, ts: u64, pinned: bool) -> Result<(), String>;
 
     fn get_message_id_by_timestamp(&self, id: &Self::Id, ts: u64) -> Option<MessageId>;
 
     /// Default: no-op. DM overrides to persist read/delivered status to its table.
-    fn persist_delivery_status(&self, _id: &Self::Id, _timestamps: &[u64], _status: &str) {}
+    fn persist_delivery_status(
+        &self,
+        _id: &Self::Id,
+        _timestamps: &[u64],
+        _status: &str,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 
     /// Whether receipts should emit `MessagesRead` / `MessagesDelivered` events.
     /// Default: true. Group overrides to suppress (receipts are debug-only there).
-    fn emit_receipts(&self) -> bool { true }
+    fn emit_receipts(&self) -> bool {
+        true
+    }
 }
 
 // ============================================================================
@@ -272,6 +338,8 @@ pub enum CommonDispatchOutcome {
     /// Content type not handled here. Caller must dispatch per-service logic
     /// (e.g. calls, profile updates, group management).
     NotHandled,
+    /// Persistent admission/application failed; caller must retain the envelope.
+    Failed(crate::error::StorageError),
     /// Content intentionally dropped (blocked sender, blocked conversation).
     Dropped,
 }
@@ -291,7 +359,6 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
 
     if backend.is_sender_blocked(sender_id) {
         tracing::info!(
-            sender_id = %sender_id,
             id = %id,
             label = backend.label(),
             "Dropped content from blocked sender"
@@ -314,25 +381,43 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
         Some(ContentKind::DataMessage(data_msg)) => {
             // Delete-for-everyone wrapped inside DataMessage
             if let Some(delete) = &data_msg.delete {
+                if delete.target_call_id.is_some()
+                    || delete.destination_user_id.is_some()
+                    || !delete
+                        .target_author_aci
+                        .as_deref()
+                        .is_some_and(|author| author.parse::<UserId>().ok() == Some(*sender_id))
+                {
+                    return CommonDispatchOutcome::Dropped;
+                }
+                // Announce only a delete that removed a row: the backend
+                // matches (sender, timestamp), so a member naming someone
+                // else's message deletes nothing and must not blank it on
+                // screen either.
                 match backend.delete_message(id, sender_id, delete.target_sent_timestamp) {
-                    Ok(true) => tracing::info!(
-                        timestamp = delete.target_sent_timestamp,
-                        sender_id = %sender_id,
-                        id = %id,
-                        "Deleted message (delete-for-everyone)"
-                    ),
+                    Ok(true) => {
+                        tracing::info!(
+                            timestamp = delete.target_sent_timestamp,
+                            id = %id,
+                            "Deleted message (delete-for-everyone)"
+                        );
+                        events.push(DomainEvent::MessageDeleted {
+                            message_id: MessageId::from_timestamp(delete.target_sent_timestamp),
+                            author_id: *sender_id,
+                            channel_id: Some(channel_id),
+                            target_sent_timestamp: delete.target_sent_timestamp,
+                        });
+                    }
                     Ok(false) => tracing::debug!(
                         timestamp = delete.target_sent_timestamp,
                         "Delete target not found"
                     ),
-                    Err(e) => tracing::warn!(error = %e, "Failed to delete message"),
+                    Err(e) => {
+                        return CommonDispatchOutcome::Failed(
+                            crate::error::StorageError::InvalidData(e),
+                        );
+                    }
                 }
-                events.push(DomainEvent::MessageDeleted {
-                    message_id: MessageId::from_timestamp(delete.target_sent_timestamp),
-                    author_id: *sender_id,
-                    channel_id: Some(channel_id),
-                    target_sent_timestamp: delete.target_sent_timestamp,
-                });
                 return CommonDispatchOutcome::Handled(events);
             }
 
@@ -342,8 +427,17 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                 return CommonDispatchOutcome::Handled(events);
             }
 
+            match backend.has_data_message(id, sender_id, inner_content.timestamp) {
+                Ok(true) => return CommonDispatchOutcome::Handled(events),
+                Ok(false) => {}
+                Err(error) => return CommonDispatchOutcome::Failed(error),
+            }
+
             let attachment_ids = if has_attachments {
-                backend.create_attachment_records(&data_msg.attachments)
+                match backend.create_attachment_records(&data_msg.attachments) {
+                    Ok(ids) => ids,
+                    Err(e) => return CommonDispatchOutcome::Failed(e),
+                }
             } else {
                 Vec::new()
             };
@@ -352,7 +446,12 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
             let quote = QuoteContext::from_content(inner_content);
 
             match backend.store_data_message(
-                id, sender_id, &data_msg.body, &attachment_ids, sent_at, quote,
+                id,
+                sender_id,
+                &data_msg.body,
+                &attachment_ids,
+                sent_at,
+                quote,
             ) {
                 Ok(message_id_str) => {
                     tracing::info!(
@@ -377,6 +476,7 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                     events.push(DomainEvent::TypingStopped {
                         channel_id,
                         user_id: *sender_id,
+                        timestamp: sent_at,
                     });
                 }
                 Err(e) => {
@@ -393,57 +493,53 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
 
         Some(ContentKind::Typing(typing)) => {
             let started = typing.action == typing_message::Action::Started as i32;
+            let (user_id, timestamp) = (*sender_id, typing.timestamp);
             let event = if started {
-                DomainEvent::TypingStarted { channel_id, user_id: *sender_id }
+                DomainEvent::TypingStarted {
+                    channel_id,
+                    user_id,
+                    timestamp,
+                }
             } else {
-                DomainEvent::TypingStopped { channel_id, user_id: *sender_id }
+                DomainEvent::TypingStopped {
+                    channel_id,
+                    user_id,
+                    timestamp,
+                }
             };
             events.push(event);
             CommonDispatchOutcome::Handled(events)
         }
 
         Some(ContentKind::Reaction(reaction)) => {
-            let target_sender: UserId = reaction.target_author_aci.parse().unwrap_or(*sender_id);
+            let Ok(target_sender) = reaction.target_author_aci.parse::<UserId>() else {
+                tracing::warn!("Rejected invalid anonymous reaction author");
+                return CommonDispatchOutcome::Handled(events);
+            };
             let sent_at_ns = reaction.target_sent_timestamp;
 
-            // Storage is the dedup gate: only emit the UI delta when the
-            // unified-reactions row was actually changed. Repeats of the
-            // same reaction (snapshot + delta, or replay across polls)
-            // become no-ops here instead of double-counting in the UI.
-            let changed = if reaction.remove {
-                match backend.remove_reaction(id, &target_sender, sent_at_ns, sender_id, &reaction.emoji) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::warn!(id = %id, error = %e, "Failed to remove reaction");
-                        false
-                    }
-                }
-            } else {
-                match backend.add_reaction(id, &target_sender, sent_at_ns, sender_id, &reaction.emoji) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::warn!(id = %id, error = %e, "Failed to add reaction");
-                        false
-                    }
-                }
+            // Admission can apply a batch of pending actors/emojis. Emit only
+            // persisted snapshot identity, never an invented incoming-actor delta.
+            let changed = match backend.receive_reaction(
+                id,
+                &target_sender,
+                sent_at_ns,
+                sender_id,
+                &reaction.emoji,
+                reaction.remove,
+                reaction.timestamp,
+            ) {
+                Ok(changed) => changed,
+                Err(error) => return CommonDispatchOutcome::Failed(error),
             };
             if changed {
-                let event = if reaction.remove {
-                    DomainEvent::ReactionRemoved {
-                        sender_id: target_sender,
-                        sent_at_ns,
-                        reactor_id: *sender_id,
-                        emoji: reaction.emoji.clone(),
-                        timestamp: reaction.target_sent_timestamp,
-                    }
-                } else {
-                    DomainEvent::ReactionAdded {
-                        sender_id: target_sender,
-                        sent_at_ns,
-                        reactor_id: *sender_id,
-                        emoji: reaction.emoji.clone(),
-                        timestamp: reaction.target_sent_timestamp,
-                    }
+                let event = DomainEvent::ReactionSnapshotChanged {
+                    scope: crate::domain::reaction::ReactionScope::new(
+                        (*id).into(),
+                        backend.conversation_type(),
+                    ),
+                    sender_id: target_sender,
+                    sent_at_ns,
                 };
                 events.push(event);
             }
@@ -452,7 +548,12 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
 
         Some(ContentKind::Receipt(receipt)) => {
             if receipt.r#type == receipt_message::Type::Read as i32 {
-                backend.persist_delivery_status(id, &receipt.timestamps, "read");
+                if let Err(error) = backend.persist_delivery_status(id, &receipt.timestamps, "read")
+                {
+                    return CommonDispatchOutcome::Failed(crate::error::StorageError::InvalidData(
+                        error,
+                    ));
+                }
                 if backend.emit_receipts() {
                     events.push(DomainEvent::MessagesRead {
                         reader_id: *sender_id,
@@ -462,7 +563,13 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                     });
                 }
             } else if receipt.r#type == receipt_message::Type::Delivery as i32 {
-                backend.persist_delivery_status(id, &receipt.timestamps, "delivered");
+                if let Err(error) =
+                    backend.persist_delivery_status(id, &receipt.timestamps, "delivered")
+                {
+                    return CommonDispatchOutcome::Failed(crate::error::StorageError::InvalidData(
+                        error,
+                    ));
+                }
                 if backend.emit_receipts() {
                     events.push(DomainEvent::MessagesDelivered {
                         recipient_id: *sender_id,
@@ -488,6 +595,7 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                     message_id,
                     unpinner_id: *sender_id,
                     channel_id,
+                    conversation_type: backend.conversation_type(),
                     target_sent_timestamp: pin.target_sent_timestamp,
                 });
             } else {
@@ -495,6 +603,7 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                     message_id,
                     pinner_id: *sender_id,
                     channel_id,
+                    conversation_type: backend.conversation_type(),
                     target_sent_timestamp: pin.target_sent_timestamp,
                 });
             }
@@ -503,27 +612,414 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
 
         Some(ContentKind::Edit(edit)) => {
             let target_timestamp = edit.target_sent_timestamp;
-            let new_text = edit.data_message.as_ref().map(|dm| dm.body.clone()).unwrap_or_default();
-            match backend.update_message_text(id, sender_id, target_timestamp, &new_text) {
-                Ok(true) => {
+            let (new_text, edit_ts) = edit
+                .data_message
+                .as_ref()
+                .map(|dm| (dm.body.as_str(), dm.timestamp))
+                .unwrap_or_default();
+            // A mailbox carries no server receive time: the edit's own
+            // timestamp measures the 48h window.
+            match backend.apply_edit(id, sender_id, target_timestamp, new_text, edit_ts) {
+                Ok(Some(edited)) => {
                     events.push(DomainEvent::MessageEdited {
-                        message_id: MessageId::from_timestamp(target_timestamp),
-                        new_content: MessageContent::Text(new_text),
+                        message_id: edited.id,
+                        new_content: edited.content,
                         channel_id,
                         conversation_type: backend.conversation_type(),
+                        author_id: *sender_id,
                         target_sent_timestamp: target_timestamp,
                     });
                 }
-                Ok(false) => tracing::debug!(
+                Ok(None) => tracing::debug!(
                     id = %id,
                     target_timestamp,
-                    "Edit ignored: message not found or sender not author"
+                    "Edit held for its message, refused, or already shown"
                 ),
-                Err(e) => tracing::warn!(id = %id, error = %e, "Failed to update message text"),
+                Err(e) => {
+                    return CommonDispatchOutcome::Failed(crate::error::StorageError::InvalidData(
+                        e,
+                    ));
+                }
             }
             CommonDispatchOutcome::Handled(events)
         }
 
         _ => CommonDispatchOutcome::NotHandled,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::anon_group::AnonGroupId;
+
+    /// Backend whose delete reports whether a row matched.
+    struct DeleteOnly {
+        row_matched: bool,
+    }
+
+    impl AnonInboxBackend for DeleteOnly {
+        type Id = AnonGroupId;
+        fn conversation_type(&self) -> ConversationType {
+            ConversationType::AnonGroup
+        }
+        fn label(&self) -> &'static str {
+            "test"
+        }
+        fn create_attachment_records(
+            &self,
+            _: &[AttachmentPointer],
+        ) -> Result<Vec<AttachmentId>, crate::error::StorageError> {
+            Ok(vec![])
+        }
+        fn store_data_message(
+            &self,
+            _: &AnonGroupId,
+            _: &UserId,
+            _: &str,
+            _: &[AttachmentId],
+            _: u64,
+            _: Option<QuoteContext>,
+        ) -> Result<String, String> {
+            unreachable!()
+        }
+        fn delete_message(&self, _: &AnonGroupId, _: &UserId, _: u64) -> Result<bool, String> {
+            Ok(self.row_matched)
+        }
+        fn apply_edit(
+            &self,
+            _: &AnonGroupId,
+            _: &UserId,
+            _: u64,
+            _: &str,
+            _: u64,
+        ) -> Result<Option<Message>, String> {
+            unreachable!()
+        }
+        fn add_reaction(
+            &self,
+            _: &AnonGroupId,
+            _: &UserId,
+            _: u64,
+            _: &UserId,
+            _: &str,
+        ) -> Result<bool, String> {
+            unreachable!()
+        }
+        fn remove_reaction(
+            &self,
+            _: &AnonGroupId,
+            _: &UserId,
+            _: u64,
+            _: &UserId,
+            _: &str,
+        ) -> Result<bool, String> {
+            unreachable!()
+        }
+        fn receive_reaction(
+            &self,
+            _: &Self::Id,
+            _: &UserId,
+            _: u64,
+            _: &UserId,
+            _: &str,
+            _: bool,
+            _: u64,
+        ) -> Result<bool, crate::error::StorageError> {
+            unreachable!()
+        }
+        fn set_pinned(&self, _: &AnonGroupId, _: u64, _: bool) -> Result<(), String> {
+            unreachable!()
+        }
+        fn get_message_id_by_timestamp(&self, _: &AnonGroupId, _: u64) -> Option<MessageId> {
+            None
+        }
+    }
+
+    fn delete_events(row_matched: bool) -> usize {
+        let sender = UserId::new();
+        let wire = crate::services::gateway::builders::build_targeted_delete_content(
+            42,
+            Some(&sender.to_string()),
+            None,
+        );
+        let content =
+            <Content as prost::Message>::decode(prost::Message::encode_to_vec(&wire).as_slice())
+                .unwrap();
+        match dispatch_common_content(
+            &AnonGroupId::new(),
+            &sender,
+            &content,
+            &DeleteOnly { row_matched },
+        ) {
+            CommonDispatchOutcome::Handled(events) => events
+                .iter()
+                .filter(|e| matches!(e, DomainEvent::MessageDeleted { .. }))
+                .count(),
+            _ => panic!("delete must be handled"),
+        }
+    }
+
+    #[test]
+    fn delete_is_announced_only_when_a_row_was_deleted() {
+        assert_eq!(delete_events(true), 1);
+        // A member naming someone else's timestamp deletes nothing.
+        assert_eq!(delete_events(false), 0);
+    }
+
+    #[test]
+    fn group_delete_rejects_forged_or_missing_author_even_when_sender_row_exists() {
+        let sender = UserId::new();
+        for author in [Some(UserId::new().to_string()), None] {
+            let wire = crate::services::gateway::builders::build_targeted_delete_content(
+                42,
+                author.as_deref(),
+                None,
+            );
+            let bytes = prost::Message::encode_to_vec(&wire);
+            let content = <Content as prost::Message>::decode(bytes.as_slice()).unwrap();
+            assert!(matches!(
+                dispatch_common_content(
+                    &AnonGroupId::new(),
+                    &sender,
+                    &content,
+                    &DeleteOnly { row_matched: true }
+                ),
+                CommonDispatchOutcome::Dropped
+            ));
+        }
+    }
+
+    /// An anonymous-group edit goes through the one edit choke point: held
+    /// until its message arrives, author only, ordered by the edit's own
+    /// time, within 48h, and a re-delivery announces nothing.
+    #[tokio::test]
+    async fn anon_group_edits_follow_the_edit_rules() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let groups = client.anon_groups();
+        let (group, author, stranger) = (AnonGroupId::new(), UserId::new(), UserId::new());
+        let sent = 1_700_000_000_000_000_000u64;
+        let window = crate::services::message::MessageService::EDIT_MAX_AGE_NS;
+        let edit = |by: &UserId, body: &str, edit_ts: u64| {
+            let content = Content {
+                content: Some(content_v1::content::Content::Edit(
+                    content_v1::EditMessage {
+                        target_sent_timestamp: sent,
+                        data_message: Some(content_v1::DataMessage {
+                            body: body.into(),
+                            timestamp: edit_ts,
+                            ..Default::default()
+                        }),
+                    },
+                )),
+                ..Default::default()
+            };
+            match dispatch_common_content(&group, by, &content, groups.as_ref()) {
+                CommonDispatchOutcome::Handled(events) => events
+                    .iter()
+                    .filter(|e| matches!(e, DomainEvent::MessageEdited { .. }))
+                    .count(),
+                _ => panic!("an edit is handled"),
+            }
+        };
+        let stored = || {
+            client
+                .messages()
+                .message_repo
+                .get_by_sender_timestamp(&author, sent)
+                .unwrap()
+                .unwrap()
+        };
+
+        assert_eq!(edit(&author, "early", sent + 10), 0, "held for its message");
+        groups
+            .store_data_message(&group, &author, "original", &[], sent, None)
+            .unwrap();
+        assert_eq!(stored().content, MessageContent::Text("early".into()));
+
+        assert_eq!(edit(&author, "newer", sent + 30), 1);
+        assert_eq!(
+            edit(&author, "older", sent + 20),
+            0,
+            "older than the edit shown"
+        );
+        assert_eq!(edit(&author, "newer", sent + 30), 0, "re-delivered");
+        assert_eq!(edit(&stranger, "hijack", sent + 40), 0, "not the author");
+        assert_eq!(edit(&author, "late", sent + window + 1), 0, "past 48h");
+        let m = stored();
+        assert_eq!(m.content, MessageContent::Text("newer".into()));
+        assert_eq!(
+            m.edited_at,
+            Some(chrono::DateTime::from_timestamp_nanos((sent + 30) as i64))
+        );
+    }
+}
+
+#[cfg(test)]
+mod reaction_receive_tests {
+    use super::*;
+    use crate::domain::anon_dm::{AnonDm, AnonDmStatus};
+    use crate::domain::anon_group::{AnonGroup, AnonGroupMember, AnonGroupRole};
+    use crate::domain::reaction::ReactionScope;
+    #[tokio::test]
+    async fn actual_anonymous_handlers_hold_early_reactions_and_surface_storage_failure() {
+        static MOCK: std::sync::Once = std::sync::Once::new();
+        MOCK.call_once(|| {
+            keyring::set_default_store(crate::system::keyring::test_credential_store())
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        let own = UserId::new();
+        let actor = UserId::new();
+        let author = UserId::new();
+        let timestamp = 100;
+        client
+            .messages()
+            .settings_repo
+            .set("auth.current_user_id", &own.to_string())
+            .unwrap();
+        let dm_service = client.anon_dms();
+        let groups = client.anon_groups();
+        let mut dm = AnonDm::new_initiated(actor);
+        dm.status = AnonDmStatus::Active;
+        dm.peer_mailbox_pk = Some([1; 32]);
+        dm_service.anon_dm_repo.insert_conversation(&dm).unwrap();
+        let group = AnonGroup::new_as_owner("fixture group".into(), own);
+        groups.anon_group_repo.insert_group(&group).unwrap();
+        groups
+            .anon_group_repo
+            .add_member(&AnonGroupMember::new(
+                group.id,
+                actor,
+                AnonGroupRole::Member,
+            ))
+            .unwrap();
+        let content = Content {
+            content: Some(content_v1::content::Content::Reaction(
+                content_v1::Reaction {
+                    emoji: "👍".into(),
+                    target_author_aci: author.to_string(),
+                    target_sent_timestamp: timestamp,
+                    timestamp: 10,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        assert!(
+            dm_service
+                .process_incoming_content(&dm.id, &actor, &content)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            groups
+                .process_incoming_content(&group.id, &actor, &content)
+                .unwrap()
+                .is_empty()
+        );
+        let scope_dm = ReactionScope::new(dm.id.into(), ConversationType::AnonDm);
+        let scope_group = ReactionScope::new(group.id.into(), ConversationType::AnonGroup);
+        for scope in [&scope_dm, &scope_group] {
+            client
+                .messages()
+                .store_message_local(&Message::new_text(
+                    scope.id,
+                    scope.kind.clone(),
+                    Some(author),
+                    "same author and timestamp".into(),
+                    timestamp,
+                ))
+                .unwrap();
+            assert_eq!(
+                client
+                    .messages()
+                    .message_repo
+                    .get_reactions(scope, &author, timestamp)
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        assert!(
+            dm_service
+                .process_incoming_content(&dm.id, &actor, &content)
+                .unwrap()
+                .is_empty(),
+            "duplicate does not increment"
+        );
+        let mut remove = content.clone();
+        if let Some(content_v1::content::Content::Reaction(r)) = &mut remove.content {
+            r.remove = true;
+            r.timestamp = 20;
+        }
+        dm_service
+            .process_incoming_content(&dm.id, &actor, &remove)
+            .unwrap();
+        assert!(
+            client
+                .messages()
+                .message_repo
+                .get_reactions(&scope_dm, &author, timestamp)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            client
+                .messages()
+                .message_repo
+                .get_reactions(&scope_group, &author, timestamp)
+                .unwrap()
+                .len(),
+            1
+        );
+        client.messages().settings_repo.database().connection().unwrap().execute_batch("CREATE TRIGGER fail_anon_projection BEFORE UPDATE OF reaction_counts_blob ON messages BEGIN SELECT RAISE(ABORT,'injected anonymous projection failure'); END;").unwrap();
+        assert!(matches!(
+            groups.process_incoming_content(&group.id, &actor, &remove),
+            Err(crate::services::anon_group::AnonGroupError::Storage(_))
+        ));
+        assert_eq!(
+            client
+                .messages()
+                .message_repo
+                .get_reactions(&scope_group, &author, timestamp)
+                .unwrap()
+                .len(),
+            1
+        );
+        client
+            .messages()
+            .settings_repo
+            .database()
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_anon_projection")
+            .unwrap();
+        groups
+            .process_incoming_content(&group.id, &actor, &remove)
+            .unwrap();
+        assert!(
+            client
+                .messages()
+                .message_repo
+                .get_by_reaction_scope(&scope_group, &author, timestamp)
+                .unwrap()
+                .unwrap()
+                .reaction_counts
+                .is_empty()
+        );
     }
 }

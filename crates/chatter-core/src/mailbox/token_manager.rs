@@ -1,4 +1,4 @@
-//! Token manager for blind-signed mailbox and call room tokens.
+//! Token manager for blind-signed mailbox tokens.
 //!
 //! Manages the full lifecycle of Chaum blind signature tokens:
 //! - Fetching server's RSA public key
@@ -6,24 +6,25 @@
 //! - Blinding keys for server signing
 //! - Unblinding signatures to create usable tokens
 //! - Storing tokens securely in SQLCipher
-//! - Tracking daily quota
 //!
-//! Supports two token types:
-//! - **Mailbox tokens**: For creating ephemeral mailboxes (10/day quota)
-//! - **Call room tokens**: For joining anonymous call rooms (5/day quota)
+//! Tokens create ephemeral mailboxes and pay for anonymous sends, drawn from a
+//! server-owned daily budget (the server is the only quota authority; see
+//! `grant_error`).
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::proto::mailbox_v1::GetBlindSignaturePublicKeyResponse;
 use chrono::Utc;
 use ed25519_dalek::{SigningKey, VerifyingKey};
+use prost::Message;
+use rusqlite::OptionalExtension;
 use uuid::Uuid;
 
 use crate::error::MailboxError;
-use crate::mailbox::blind_signature::{
-    blind_key, unblind, BlindingSecret, MessageRandomizer, ServerPublicKey,
-};
-use crate::network::grpc::MailboxClient;
+use crate::mailbox::blind_signature::{blind_key, unblind, BlindingSecret, ServerPublicKey};
+use crate::network::grpc::{AnonymousKtClient, MailboxClient};
+use crate::storage::repositories::SettingsRepository;
 use crate::storage::Database;
 
 /// Default number of mailbox tokens to request at once.
@@ -32,11 +33,8 @@ pub const DEFAULT_TOKEN_REQUEST_COUNT: u32 = 5;
 /// Request more mailbox tokens when below this threshold.
 pub const MIN_TOKEN_THRESHOLD: u32 = 2;
 
-/// Default number of call room tokens to request at once.
-pub const DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT: u32 = 3;
-
-/// Request more call room tokens when below this threshold.
-pub const MIN_CALL_ROOM_TOKEN_THRESHOLD: u32 = 1;
+/// Most tokens one GetMailboxTokens request may ask for (proto `lte: 10`).
+pub const MAX_TOKENS_PER_REQUEST: u32 = 10;
 
 /// A ready-to-use mailbox token.
 ///
@@ -51,44 +49,24 @@ pub struct MailboxToken {
     pub private_key: Vec<u8>,
     /// Unblinded RSA signature over the public key.
     pub signature: Vec<u8>,
-    /// Message randomizer for signature verification.
-    pub randomizer: Option<Vec<u8>>,
 }
 
-/// Quota status for token requests.
-#[derive(Debug, Clone)]
-pub struct QuotaStatus {
-    /// Remaining tokens that can be requested today.
-    pub remaining: u32,
-    /// When the quota resets (Unix timestamp milliseconds).
-    pub resets_at: u64,
-}
-
-/// A ready-to-use call room token.
-///
-/// Contains the ephemeral Ed25519 keypair and its blind signature.
-/// The signature proves the right to join/create an anonymous call room.
-#[derive(Clone)]
-pub struct CallRoomToken {
-    /// Unique token identifier.
-    pub id: String,
-    /// Ed25519 public key (32 bytes).
-    pub public_key: Vec<u8>,
-    /// Ed25519 private key (64 bytes) for signing challenges.
-    pub private_key: Vec<u8>,
-    /// Unblinded RSA signature over the public key.
-    pub signature: Vec<u8>,
-    /// Message randomizer for signature verification.
-    pub randomizer: Option<Vec<u8>>,
-}
-
-/// Quota status for call room token requests.
-#[derive(Debug, Clone)]
-pub struct CallRoomQuotaStatus {
-    /// Remaining tokens that can be requested today.
-    pub remaining: u32,
-    /// When the quota resets (Unix timestamp nanoseconds).
-    pub resets_at: u64,
+/// Map a GetMailboxTokens failure. The server is the only authority on the
+/// daily token budget; it answers ResourceExhausted once that budget is
+/// spent. The client used to keep its own counter with a hard-coded ceiling
+/// against a server budget of 48 + 2/conversation, so the two disagreed
+/// (OPEN-ITEMS §120).
+fn grant_error(e: crate::error::NetworkError) -> MailboxError {
+    match e {
+        crate::error::NetworkError::RateLimited => {
+            tracing::warn!("TokenManager: server reports daily token quota exhausted");
+            MailboxError::QuotaExhausted
+        }
+        e => {
+            tracing::error!("TokenManager: get_mailbox_tokens failed: {}", e);
+            MailboxError::Network(e.to_string())
+        }
+    }
 }
 
 /// Token manager for blind-signed mailbox tokens.
@@ -118,9 +96,11 @@ impl TokenManager {
     /// # Arguments
     ///
     /// * `client` - MailboxClient for server communication
+    /// * `kt` - anonymous KT client for the manifest's consistency proof
     pub async fn refresh_server_key(
         &self,
         client: &mut MailboxClient,
+        kt: &mut AnonymousKtClient,
     ) -> Result<ServerPublicKey, MailboxError> {
         tracing::info!("TokenManager: refresh_server_key called");
 
@@ -138,68 +118,74 @@ impl TokenManager {
         }
 
         // Fetch new key from server with timeout to prevent hangs
-        tracing::info!("TokenManager: calling get_blind_signature_public_key RPC...");
-        let response = tokio::time::timeout(
-            Duration::from_secs(10),
-            client.get_blind_signature_public_key(),
+        let settings = SettingsRepository::new(self.db.clone());
+        let (response, server_key) = ServerPublicKey::fetch_manifest(
+            || async {
+                tracing::info!("TokenManager: calling get_blind_signature_public_key RPC...");
+                let response = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    client.get_blind_signature_public_key(),
+                )
+                .await
+                .map_err(|_| {
+                    tracing::error!("get_blind_signature_public_key timed out after 10s");
+                    MailboxError::Network("RPC timeout".to_string())
+                })?
+                .map_err(|e| {
+                    tracing::error!("get_blind_signature_public_key failed: {}", e);
+                    MailboxError::Network(e.to_string())
+                })?;
+                tracing::info!("Got blind signature public key from server");
+                Ok(response)
+            },
+            &settings,
+            |old, new| kt.get_consistency_proof(old, new),
         )
-        .await
-        .map_err(|_| {
-            tracing::error!("get_blind_signature_public_key timed out after 10s");
-            MailboxError::Network("RPC timeout".to_string())
-        })?
-        .map_err(|e| {
-            tracing::error!("get_blind_signature_public_key failed: {}", e);
-            MailboxError::Network(e.to_string())
-        })?;
-        tracing::info!("Got blind signature public key from server");
-
-        // Parse and validate the key
-        let server_key = ServerPublicKey::from_der(
-            &response.public_key,
-            response.key_id.clone(),
-            response.valid_until,
-        )?;
-
-        // Store in database
+        .await?;
+        // Only authenticated keys populate the token-expiry join table.
         self.store_server_key(&response.key_id, &response.public_key, response.valid_until)?;
-
+        if let Some(next) = &response.next_key {
+            self.store_server_key(&next.key_id, &next.public_key, next.valid_until)?;
+        }
+        let conn = self
+            .db
+            .connection()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('mailbox.signed_key_manifest', ?1, ?2)",
+            rusqlite::params![hex::encode(response.encode_to_vec()), Utc::now().to_rfc3339()])
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
         Ok(server_key)
     }
 
-    /// Get the cached server public key if available and valid.
+    /// Cached DER/expiry rows are never a source of trust; verify the signed
+    /// manifest again on every load and use its authenticated activation times.
     pub fn get_cached_server_key(&self) -> Result<Option<ServerPublicKey>, MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        // valid_until is stored in nanoseconds (per proto spec). Treat a key
-        // within CACHE_REFRESH_LEAD of expiry as stale so we re-fetch and adopt
-        // the server's freshly-rotated key DURING the overlap window — otherwise
-        // we'd keep minting tokens under the old key right up to its expiry and
-        // they'd die seconds later. The server rotates well before expiry, so the
-        // new key already exists (and our fetch triggers rotation if it doesn't).
-        const CACHE_REFRESH_LEAD_NANOS: i64 = 3_600 * 1_000_000_000; // 1 hour
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as i64)
-            .unwrap_or(0);
-        let stale_threshold = now_nanos + CACHE_REFRESH_LEAD_NANOS;
-
-        let result: Option<(String, Vec<u8>, i64)> = conn
+        let conn = self
+            .db
+            .connection()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let encoded: Option<String> = conn
             .query_row(
-                "SELECT key_id, public_key_der, valid_until FROM mailbox_server_keys
-                 WHERE valid_until > ?1 ORDER BY valid_until DESC LIMIT 1",
-                rusqlite::params![stale_threshold],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                "SELECT value FROM settings WHERE key = 'mailbox.signed_key_manifest'",
+                [],
+                |r| r.get(0),
             )
-            .ok();
-
-        match result {
-            Some((key_id, der, valid_until)) => {
-                let key = ServerPublicKey::from_der(&der, key_id, valid_until as u64)?;
-                Ok(Some(key))
-            }
-            None => Ok(None),
-        }
+            .optional()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let Some(encoded) = encoded else {
+            return Ok(None);
+        };
+        let manifest = hex::decode(encoded)
+            .ok()
+            .and_then(|b| GetBlindSignaturePublicKeyResponse::decode(b.as_slice()).ok());
+        let key = manifest
+            .as_ref()
+            .and_then(|m| ServerPublicKey::from_manifest(m).ok());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(u64::MAX);
+        Ok(key.filter(|k| k.valid_until.saturating_sub(now) > 3_600_000_000_000))
     }
 
     /// Store a server public key in the database.
@@ -209,7 +195,10 @@ impl TokenManager {
         public_key_der: &[u8],
         valid_until: u64,
     ) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let conn = self
+            .db
+            .connection()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
 
         conn.execute(
@@ -230,6 +219,7 @@ impl TokenManager {
     /// # Arguments
     ///
     /// * `client` - MailboxClient for server communication
+    /// * `kt` - anonymous KT client (see [`Self::refresh_server_key`])
     /// * `count` - Number of tokens to request
     ///
     /// # Returns
@@ -238,27 +228,23 @@ impl TokenManager {
     pub async fn request_tokens(
         &self,
         client: &mut MailboxClient,
+        kt: &mut AnonymousKtClient,
         count: u32,
     ) -> Result<u32, MailboxError> {
         tracing::info!("TokenManager: request_tokens called, count={}", count);
 
-        // Check quota
-        tracing::info!("TokenManager: resetting quota if needed...");
-        self.reset_quota_if_needed()?;
-        tracing::info!("TokenManager: getting quota status...");
-        let quota = self.get_quota_status()?;
-        tracing::info!("TokenManager: quota remaining={}", quota.remaining);
-        if quota.remaining == 0 {
-            tracing::warn!("TokenManager: quota exhausted!");
-            return Err(MailboxError::QuotaExhausted);
-        }
-
-        let request_count = count.min(quota.remaining);
+        // No local quota gate: the server owns the daily budget (it clamps the
+        // count to what is left and answers ResourceExhausted at zero). A local
+        // mirror disagreed with it — see `grant_error`. The request itself is
+        // capped at 10 (mailbox.proto GetMailboxTokensRequest.count `lte: 10`); a
+        // larger count is rejected outright, so callers get at most 10 and
+        // loop for more (`top_up`).
+        let request_count = count.min(MAX_TOKENS_PER_REQUEST);
         tracing::info!("TokenManager: will request {} tokens", request_count);
 
         // Get/refresh server key
         tracing::info!("TokenManager: refreshing server key...");
-        let server_key = self.refresh_server_key(client).await?;
+        let server_key = self.refresh_server_key(client, kt).await?;
         tracing::info!("TokenManager: got server key, generating keypairs...");
 
         // Generate ephemeral keypairs and blind them
@@ -269,7 +255,12 @@ impl TokenManager {
             // Generate Ed25519 keypair
             // Use raw random bytes to avoid rand_core version conflicts
             let mut secret_bytes = [0u8; 32];
-            {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut secret_bytes).expect("OS CSPRNG must not fail");}
+            {
+                use rand::TryRngCore;
+                rand::rngs::OsRng
+                    .try_fill_bytes(&mut secret_bytes)
+                    .expect("OS CSPRNG must not fail");
+            }
             let signing_key = SigningKey::from_bytes(&secret_bytes);
             let verifying_key = VerifyingKey::from(&signing_key);
 
@@ -288,7 +279,10 @@ impl TokenManager {
             ));
         }
 
-        tracing::info!("TokenManager: generated {} keypairs, storing pending blinds...", pending_ops.len());
+        tracing::info!(
+            "TokenManager: generated {} keypairs, storing pending blinds...",
+            pending_ops.len()
+        );
 
         // Store pending blinds
         for (id, pub_key, priv_key, op) in &pending_ops {
@@ -298,7 +292,6 @@ impl TokenManager {
                 priv_key,
                 &op.blinded_message,
                 &op.secret,
-                &op.randomizer,
                 &server_key.key_id,
             )?;
         }
@@ -306,23 +299,25 @@ impl TokenManager {
         tracing::info!("TokenManager: requesting signatures from server...");
         // Request signatures from server
         let response = client
-            .get_mailbox_tokens(request_count as i32, blinded_keys)
+            .get_mailbox_tokens(
+                request_count as i32,
+                blinded_keys,
+                server_key.key_id.clone(),
+            )
             .await
-            .map_err(|e| {
-                tracing::error!("TokenManager: get_mailbox_tokens failed: {}", e);
-                MailboxError::Network(e.to_string())
-            })?;
-        tracing::info!("TokenManager: got {} signatures from server", response.blinded_signatures.len());
-
-        // Update quota from response
-        self.update_quota(response.remaining_quota as u32, response.quota_resets_at)?;
+            .map_err(grant_error)?;
+        tracing::info!(
+            "TokenManager: got {} signatures from server, server quota remaining={}",
+            response.blinded_signatures.len(),
+            response.remaining_quota
+        );
 
         // Process each signature
         let mut success_count = 0;
         for (i, blinded_sig) in response.blinded_signatures.iter().enumerate() {
             if let Some((id, pub_key, priv_key, op)) = pending_ops.get(i) {
                 // Unblind the signature
-                match unblind(&server_key, blinded_sig, &op.secret, &op.randomizer, pub_key) {
+                match unblind(&server_key, blinded_sig, op, pub_key) {
                     Ok(signature) => {
                         // Store ready token
                         if self
@@ -331,7 +326,6 @@ impl TokenManager {
                                 pub_key,
                                 priv_key,
                                 &signature,
-                                &op.randomizer,
                                 &server_key.key_id,
                             )
                             .is_ok()
@@ -348,7 +342,16 @@ impl TokenManager {
             }
         }
 
-        tracing::info!("TokenManager: request_tokens complete, got {} tokens", success_count);
+        // The server clamps the grant to the remaining budget; blinds past the
+        // returned signatures will never be signed.
+        for (id, ..) in pending_ops.iter().skip(response.blinded_signatures.len()) {
+            let _ = self.delete_pending_blind(id);
+        }
+
+        tracing::info!(
+            "TokenManager: request_tokens complete, got {} tokens",
+            success_count
+        );
         Ok(success_count)
     }
 
@@ -361,24 +364,24 @@ impl TokenManager {
         ephemeral_sk: &[u8],
         blinded_message: &[u8],
         secret: &BlindingSecret,
-        randomizer: &MessageRandomizer,
         server_key_id: &str,
     ) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let conn = self
+            .db
+            .connection()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
-        let randomizer_bytes = randomizer.as_bytes().map(|b| b.to_vec());
 
         conn.execute(
             "INSERT INTO mailbox_pending_blinds
-             (id, ephemeral_public_key, ephemeral_private_key, blinded_message, blinding_secret, message_randomizer, server_key_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (id, ephemeral_public_key, ephemeral_private_key, blinded_message, blinding_secret, server_key_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 id,
                 ephemeral_pk,
                 ephemeral_sk,
                 blinded_message,
                 secret.as_bytes(),
-                randomizer_bytes,
                 server_key_id,
                 now
             ],
@@ -390,7 +393,10 @@ impl TokenManager {
 
     /// Delete a pending blinding operation.
     fn delete_pending_blind(&self, id: &str) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let conn = self
+            .db
+            .connection()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
         conn.execute("DELETE FROM mailbox_pending_blinds WHERE id = ?1", [id])
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
@@ -405,23 +411,23 @@ impl TokenManager {
         ephemeral_pk: &[u8],
         ephemeral_sk: &[u8],
         signature: &[u8],
-        randomizer: &MessageRandomizer,
         server_key_id: &str,
     ) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let conn = self
+            .db
+            .connection()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
-        let randomizer_bytes = randomizer.as_bytes().map(|b| b.to_vec());
 
         conn.execute(
             "INSERT INTO mailbox_tokens
-             (id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer, server_key_id, created_at, used_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
+             (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at, used_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
             rusqlite::params![
                 id,
                 ephemeral_pk,
                 ephemeral_sk,
                 signature,
-                randomizer_bytes,
                 server_key_id,
                 now
             ],
@@ -436,24 +442,26 @@ impl TokenManager {
     /// Returns the oldest unused token or None if no tokens available.
     #[allow(clippy::type_complexity)]
     pub fn get_available_token(&self) -> Result<Option<MailboxToken>, MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let conn = self
+            .db
+            .connection()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
-        let result: Option<(String, Vec<u8>, Vec<u8>, Vec<u8>, Option<Vec<u8>>)> = conn
+        let result: Option<(String, Vec<u8>, Vec<u8>, Vec<u8>)> = conn
             .query_row(
-                "SELECT id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer
+                "SELECT id, ephemeral_public_key, ephemeral_private_key, signature
                  FROM mailbox_tokens WHERE used_at IS NULL ORDER BY created_at ASC LIMIT 1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .ok();
 
         match result {
-            Some((id, public_key, private_key, signature, randomizer)) => Ok(Some(MailboxToken {
+            Some((id, public_key, private_key, signature)) => Ok(Some(MailboxToken {
                 id,
                 public_key,
                 private_key,
                 signature,
-                randomizer,
             })),
             None => Ok(None),
         }
@@ -468,7 +476,10 @@ impl TokenManager {
     /// credential it has seen before, so a race would manifest as a
     /// `permission_denied: credential already used` error.
     pub fn claim_available_token(&self) -> Result<Option<MailboxToken>, MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let conn = self
+            .db
+            .connection()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
         // Signing-key validity is stored in nanoseconds. Only claim tokens whose
         // signing key is STILL currently valid: the server verifies anonymous
@@ -491,7 +502,7 @@ impl TokenManager {
                  ORDER BY t.created_at ASC \
                  LIMIT 1 \
              ) \
-             RETURNING id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer",
+             RETURNING id, ephemeral_public_key, ephemeral_private_key, signature",
             rusqlite::params![now, now_nanos],
             |row| {
                 Ok((
@@ -499,22 +510,38 @@ impl TokenManager {
                     row.get::<_, Vec<u8>>(1)?,
                     row.get::<_, Vec<u8>>(2)?,
                     row.get::<_, Vec<u8>>(3)?,
-                    row.get::<_, Option<Vec<u8>>>(4)?,
                 ))
             },
         );
 
         match result {
-            Ok((id, public_key, private_key, signature, randomizer)) => Ok(Some(MailboxToken {
+            Ok((id, public_key, private_key, signature)) => Ok(Some(MailboxToken {
                 id,
                 public_key,
                 private_key,
                 signature,
-                randomizer,
             })),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(MailboxError::Storage(e.to_string())),
         }
+    }
+
+    /// Claim a token from the pre-fetched batch, and ONLY from it.
+    ///
+    /// The one way a send spends a mailbox token. It never asks the server
+    /// for more: an authenticated `GetMailboxTokens` followed a moment later
+    /// by the anonymous open that spends its output links the two in time,
+    /// which is exactly what the blind signature exists to prevent (NDSS'21
+    /// §VI-F). The batch is refilled on its own jittered schedule, decoupled
+    /// from sends (`CoreServices::spawn_token_refill`); an empty batch fails
+    /// the send with `NoTokensAvailable`.
+    pub fn claim_prefetched_token(&self) -> Result<MailboxToken, MailboxError> {
+        self.claim_available_token()?.ok_or_else(|| {
+            tracing::warn!(
+                "TokenManager: pre-fetched token batch is empty; refusing to request-then-spend"
+            );
+            MailboxError::NoTokensAvailable
+        })
     }
 
     /// Mark a token as used.
@@ -523,7 +550,10 @@ impl TokenManager {
     ///
     /// * `token_id` - ID of the token to mark as used
     pub fn mark_token_used(&self, token_id: &str) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let conn = self
+            .db
+            .connection()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
 
         let rows = conn
@@ -540,521 +570,31 @@ impl TokenManager {
         Ok(())
     }
 
-    /// Count available (unused) tokens.
+    /// Count claimable tokens: unused, under a signing key that is still
+    /// valid — the same filter as `claim_available_token`. Counting dead
+    /// tokens would let the refill think the batch is full while every
+    /// claim comes back empty.
     pub fn available_token_count(&self) -> Result<u32, MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM mailbox_tokens WHERE used_at IS NULL",
-                [],
-                |row| row.get(0),
-            )
+        let conn = self
+            .db
+            .connection()
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(count as u32)
-    }
-
-    /// Get current quota status.
-    pub fn get_quota_status(&self) -> Result<QuotaStatus, MailboxError> {
-        tracing::info!("TokenManager: get_quota_status - acquiring connection...");
-        let result: Option<(i64, i64)> = {
-            let conn = self.db.connection().map_err(|e| {
-                tracing::error!("TokenManager: get_quota_status - failed to get connection: {}", e);
-                MailboxError::Storage(e.to_string())
-            })?;
-            tracing::info!("TokenManager: get_quota_status - connection acquired, querying...");
-
-            conn.query_row(
-                "SELECT tokens_used_today, quota_resets_at FROM mailbox_quota WHERE id = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .ok()
-            // conn is dropped here, releasing the lock
-        };
-        tracing::info!("TokenManager: get_quota_status - query complete, result={:?}", result.is_some());
-
-        match result {
-            Some((used_today, resets_at)) => {
-                // Default quota: 10 tokens per day (typical server limit)
-                let max_quota = 10u32;
-                let remaining = max_quota.saturating_sub(used_today as u32);
-                Ok(QuotaStatus {
-                    remaining,
-                    resets_at: resets_at as u64,
-                })
-            }
-            None => {
-                // No quota record yet - initialize with full quota (nanoseconds)
-                let tomorrow_midnight = self.next_midnight_nanos();
-                tracing::info!("TokenManager: initializing quota...");
-                self.initialize_quota(tomorrow_midnight)?;
-                tracing::info!("TokenManager: quota initialized");
-                Ok(QuotaStatus {
-                    remaining: 10,
-                    resets_at: tomorrow_midnight,
-                })
-            }
-        }
-    }
-
-    /// Reset quota if the reset time has passed.
-    pub fn reset_quota_if_needed(&self) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        // quota_resets_at is stored in nanoseconds (per proto spec)
         let now_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as i64)
             .unwrap_or(0);
 
-        let result: Option<i64> = conn
-            .query_row(
-                "SELECT quota_resets_at FROM mailbox_quota WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .ok();
-
-        if let Some(resets_at) = result {
-            if now_nanos >= resets_at {
-                let tomorrow_midnight = self.next_midnight_nanos();
-                let now = Utc::now().to_rfc3339();
-
-                conn.execute(
-                    "UPDATE mailbox_quota SET tokens_used_today = 0, quota_resets_at = ?1, last_updated = ?2 WHERE id = 1",
-                    rusqlite::params![tomorrow_midnight as i64, now],
-                )
-                .map_err(|e| MailboxError::Storage(e.to_string()))?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Initialize quota tracking table.
-    fn initialize_quota(&self, resets_at: u64) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-
-        conn.execute(
-            "INSERT OR IGNORE INTO mailbox_quota (id, tokens_used_today, quota_resets_at, last_updated)
-             VALUES (1, 0, ?1, ?2)",
-            rusqlite::params![resets_at as i64, now],
-        )
-        .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Update quota from server response.
-    fn update_quota(&self, remaining: u32, resets_at: u64) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-
-        // Server returns remaining, we need to store used (10 - remaining for max quota 10)
-        let max_quota = 10u32;
-        let used = max_quota.saturating_sub(remaining);
-
-        conn.execute(
-            "INSERT OR REPLACE INTO mailbox_quota (id, tokens_used_today, quota_resets_at, last_updated)
-             VALUES (1, ?1, ?2, ?3)",
-            rusqlite::params![used as i64, resets_at as i64, now],
-        )
-        .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Calculate next midnight UTC in nanoseconds (consistent with proto spec).
-    fn next_midnight_nanos(&self) -> u64 {
-        use chrono::{Duration, Timelike};
-        let now = Utc::now();
-        let tomorrow = now + Duration::days(1);
-        let midnight = tomorrow
-            .with_hour(0)
-            .and_then(|t| t.with_minute(0))
-            .and_then(|t| t.with_second(0))
-            .and_then(|t| t.with_nanosecond(0))
-            .unwrap_or(tomorrow);
-        midnight.timestamp_nanos_opt().unwrap_or(0) as u64
-    }
-
-    // ========================================================================
-    // Call Room Token Methods
-    // ========================================================================
-
-    /// Request new call room tokens from the server.
-    ///
-    /// Uses the same blind signature infrastructure as mailbox tokens,
-    /// but with separate storage tables and quota tracking.
-    ///
-    /// # Arguments
-    ///
-    /// * `client` - MailboxClient for server communication
-    /// * `count` - Number of tokens to request
-    ///
-    /// # Returns
-    ///
-    /// The number of tokens successfully acquired.
-    pub async fn request_call_room_tokens(
-        &self,
-        client: &mut MailboxClient,
-        count: u32,
-    ) -> Result<u32, MailboxError> {
-        tracing::info!("TokenManager: request_call_room_tokens called, count={}", count);
-
-        // Check quota
-        self.reset_call_room_quota_if_needed()?;
-        let quota = self.get_call_room_quota_status()?;
-        if quota.remaining == 0 {
-            tracing::warn!("TokenManager: call room quota exhausted!");
-            return Err(MailboxError::QuotaExhausted);
-        }
-
-        let request_count = count.min(quota.remaining);
-        tracing::info!("TokenManager: will request {} call room tokens", request_count);
-
-        // Get/refresh server key (shared with mailbox tokens)
-        let server_key = self.refresh_server_key(client).await?;
-
-        // Generate ephemeral keypairs and blind them
-        let mut blinded_keys = Vec::with_capacity(request_count as usize);
-        let mut pending_ops = Vec::with_capacity(request_count as usize);
-
-        for _ in 0..request_count {
-            let mut secret_bytes = [0u8; 32];
-            {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut secret_bytes).expect("OS CSPRNG must not fail");}
-            let signing_key = SigningKey::from_bytes(&secret_bytes);
-            let verifying_key = VerifyingKey::from(&signing_key);
-
-            let public_key_bytes = verifying_key.to_bytes().to_vec();
-            let private_key_bytes = signing_key.to_keypair_bytes().to_vec();
-
-            let blinding_op = blind_key(&server_key, &public_key_bytes)?;
-
-            blinded_keys.push(blinding_op.blinded_message.clone());
-            pending_ops.push((
-                Uuid::new_v4().to_string(),
-                public_key_bytes,
-                private_key_bytes,
-                blinding_op,
-            ));
-        }
-
-        // Store pending blinds in call_room_pending_blinds table
-        for (id, pub_key, priv_key, op) in &pending_ops {
-            self.store_call_room_pending_blind(
-                id,
-                pub_key,
-                priv_key,
-                &op.blinded_message,
-                &op.secret,
-                &op.randomizer,
-                &server_key.key_id,
-            )?;
-        }
-
-        // Request signatures from server
-        let response = client
-            .get_mailbox_tokens(request_count as i32, blinded_keys)
-            .await
-            .map_err(|e| {
-                tracing::error!("TokenManager: get_mailbox_tokens (call room) failed: {}", e);
-                MailboxError::Network(e.to_string())
-            })?;
-
-        // Update call room quota
-        self.update_call_room_quota(response.remaining_quota as u32, response.quota_resets_at)?;
-
-        // Process each signature
-        let mut success_count = 0;
-        for (i, blinded_sig) in response.blinded_signatures.iter().enumerate() {
-            if let Some((id, pub_key, priv_key, op)) = pending_ops.get(i) {
-                match unblind(&server_key, blinded_sig, &op.secret, &op.randomizer, pub_key) {
-                    Ok(signature) => {
-                        if self
-                            .store_call_room_ready_token(
-                                id,
-                                pub_key,
-                                priv_key,
-                                &signature,
-                                &op.randomizer,
-                                &server_key.key_id,
-                            )
-                            .is_ok()
-                        {
-                            let _ = self.delete_call_room_pending_blind(id);
-                            success_count += 1;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to unblind call room signature: {}", e);
-                    }
-                }
-            }
-        }
-
-        tracing::info!("TokenManager: request_call_room_tokens complete, got {} tokens", success_count);
-        Ok(success_count)
-    }
-
-    /// Store a pending call room blinding operation.
-    #[allow(clippy::too_many_arguments)]
-    fn store_call_room_pending_blind(
-        &self,
-        id: &str,
-        ephemeral_pk: &[u8],
-        ephemeral_sk: &[u8],
-        blinded_message: &[u8],
-        secret: &BlindingSecret,
-        randomizer: &MessageRandomizer,
-        server_key_id: &str,
-    ) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-        let randomizer_bytes = randomizer.as_bytes().map(|b| b.to_vec());
-
-        conn.execute(
-            "INSERT INTO call_room_pending_blinds
-             (id, ephemeral_public_key, ephemeral_private_key, blinded_message, blinding_secret, message_randomizer, server_key_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            rusqlite::params![
-                id,
-                ephemeral_pk,
-                ephemeral_sk,
-                blinded_message,
-                secret.as_bytes(),
-                randomizer_bytes,
-                server_key_id,
-                now
-            ],
-        )
-        .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Delete a pending call room blinding operation.
-    fn delete_call_room_pending_blind(&self, id: &str) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        conn.execute("DELETE FROM call_room_pending_blinds WHERE id = ?1", [id])
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Store a ready-to-use call room token.
-    fn store_call_room_ready_token(
-        &self,
-        id: &str,
-        ephemeral_pk: &[u8],
-        ephemeral_sk: &[u8],
-        signature: &[u8],
-        randomizer: &MessageRandomizer,
-        server_key_id: &str,
-    ) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-        let randomizer_bytes = randomizer.as_bytes().map(|b| b.to_vec());
-
-        conn.execute(
-            "INSERT INTO call_room_tokens
-             (id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer, server_key_id, created_at, used_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
-            rusqlite::params![
-                id,
-                ephemeral_pk,
-                ephemeral_sk,
-                signature,
-                randomizer_bytes,
-                server_key_id,
-                now
-            ],
-        )
-        .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Get an available (unused) call room token.
-    ///
-    /// Returns the oldest unused token or None if no tokens available.
-    pub fn get_available_call_room_token(&self) -> Result<Option<CallRoomToken>, MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        let result: Option<(String, Vec<u8>, Vec<u8>, Vec<u8>, Option<Vec<u8>>)> = conn
-            .query_row(
-                "SELECT id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer
-                 FROM call_room_tokens WHERE used_at IS NULL ORDER BY created_at ASC LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-            )
-            .ok();
-
-        match result {
-            Some((id, public_key, private_key, signature, randomizer)) => Ok(Some(CallRoomToken {
-                id,
-                public_key,
-                private_key,
-                signature,
-                randomizer,
-            })),
-            None => Ok(None),
-        }
-    }
-
-    /// Mark a call room token as used.
-    pub fn mark_call_room_token_used(&self, token_id: &str) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-
-        let rows = conn
-            .execute(
-                "UPDATE call_room_tokens SET used_at = ?1 WHERE id = ?2 AND used_at IS NULL",
-                rusqlite::params![now, token_id],
-            )
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        if rows == 0 {
-            return Err(MailboxError::TokenNotFound(token_id.to_string()));
-        }
-
-        Ok(())
-    }
-
-    /// Count available (unused) call room tokens.
-    pub fn available_call_room_token_count(&self) -> Result<u32, MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM call_room_tokens WHERE used_at IS NULL",
-                [],
+                "SELECT COUNT(*) FROM mailbox_tokens t \
+                 JOIN mailbox_server_keys k ON k.key_id = t.server_key_id \
+                 WHERE t.used_at IS NULL AND k.valid_until > ?1",
+                [now_nanos],
                 |row| row.get(0),
             )
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
         Ok(count as u32)
-    }
-
-    /// Get current call room quota status.
-    pub fn get_call_room_quota_status(&self) -> Result<CallRoomQuotaStatus, MailboxError> {
-        let result: Option<(i64, i64)> = {
-            let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-            conn.query_row(
-                "SELECT tokens_used_today, quota_resets_at FROM call_room_quota WHERE id = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .ok()
-        };
-
-        match result {
-            Some((used_today, resets_at)) => {
-                // Call room quota: 5 tokens per day
-                let max_quota = 5u32;
-                let remaining = max_quota.saturating_sub(used_today as u32);
-                Ok(CallRoomQuotaStatus {
-                    remaining,
-                    resets_at: resets_at as u64,
-                })
-            }
-            None => {
-                let tomorrow_midnight = self.next_midnight_nanos();
-                self.initialize_call_room_quota(tomorrow_midnight)?;
-                Ok(CallRoomQuotaStatus {
-                    remaining: 5,
-                    resets_at: tomorrow_midnight,
-                })
-            }
-        }
-    }
-
-    /// Reset call room quota if the reset time has passed.
-    pub fn reset_call_room_quota_if_needed(&self) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as i64)
-            .unwrap_or(0);
-
-        let result: Option<i64> = conn
-            .query_row(
-                "SELECT quota_resets_at FROM call_room_quota WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .ok();
-
-        if let Some(resets_at) = result {
-            if now_nanos >= resets_at {
-                let tomorrow_midnight = self.next_midnight_nanos();
-                let now = Utc::now().to_rfc3339();
-
-                conn.execute(
-                    "UPDATE call_room_quota SET tokens_used_today = 0, quota_resets_at = ?1, last_updated = ?2 WHERE id = 1",
-                    rusqlite::params![tomorrow_midnight as i64, now],
-                )
-                .map_err(|e| MailboxError::Storage(e.to_string()))?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Initialize call room quota tracking.
-    fn initialize_call_room_quota(&self, resets_at: u64) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-
-        conn.execute(
-            "INSERT OR IGNORE INTO call_room_quota (id, tokens_used_today, quota_resets_at, last_updated)
-             VALUES (1, 0, ?1, ?2)",
-            rusqlite::params![resets_at as i64, now],
-        )
-        .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Update call room quota from server response.
-    fn update_call_room_quota(&self, remaining: u32, resets_at: u64) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-
-        let max_quota = 5u32;
-        let used = max_quota.saturating_sub(remaining);
-
-        conn.execute(
-            "INSERT OR REPLACE INTO call_room_quota (id, tokens_used_today, quota_resets_at, last_updated)
-             VALUES (1, ?1, ?2, ?3)",
-            rusqlite::params![used as i64, resets_at as i64, now],
-        )
-        .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Ensure we have enough call room tokens available.
-    ///
-    /// Requests more tokens if below the minimum threshold.
-    pub async fn ensure_call_room_tokens_available(
-        &self,
-        client: &mut MailboxClient,
-    ) -> Result<(), MailboxError> {
-        let count = self.available_call_room_token_count()?;
-        if count < MIN_CALL_ROOM_TOKEN_THRESHOLD {
-            let needed = DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT.saturating_sub(count);
-            if needed > 0 {
-                self.request_call_room_tokens(client, needed).await?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -1063,13 +603,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_quota_status_structure() {
-        let quota = QuotaStatus {
-            remaining: 5,
-            resets_at: 1234567890000,
-        };
-        assert_eq!(quota.remaining, 5);
-        assert_eq!(quota.resets_at, 1234567890000);
+    fn test_grant_error_maps_exhaustion() {
+        assert!(matches!(
+            grant_error(crate::error::NetworkError::RateLimited),
+            MailboxError::QuotaExhausted
+        ));
+        assert!(matches!(
+            grant_error(crate::error::NetworkError::Unavailable),
+            MailboxError::Network(_)
+        ));
     }
 
     #[test]
@@ -1079,13 +621,55 @@ mod tests {
             public_key: vec![0u8; 32],
             private_key: vec![0u8; 64],
             signature: vec![0u8; 256],
-            randomizer: Some(vec![0u8; 32]),
         };
         assert_eq!(token.id, "test-id");
         assert_eq!(token.public_key.len(), 32);
         assert_eq!(token.private_key.len(), 64);
         assert_eq!(token.signature.len(), 256);
-        assert!(token.randomizer.is_some());
+    }
+
+    fn test_db() -> Arc<Database> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(Database::open(&dir.path().join("tokens.db"), "testpass").expect("open"));
+        db.run_migrations().expect("migrations");
+        crate::test_tempdir::hold(dir);
+        db
+    }
+
+    #[test]
+    fn unsigned_or_corrupted_cache_is_never_used_for_blinding() {
+        let tm = TokenManager::new(test_db());
+        tm.store_server_key("unsigned", b"untrusted DER", i64::MAX as u64)
+            .unwrap();
+        assert!(tm.get_cached_server_key().unwrap().is_none());
+        let conn = tm.db.connection().unwrap();
+        conn.execute("INSERT INTO settings (key, value, updated_at) VALUES ('mailbox.signed_key_manifest', 'corrupt', 'now')", []).unwrap();
+        drop(conn);
+        assert!(tm.get_cached_server_key().unwrap().is_none());
+    }
+
+    #[test]
+    fn cached_manifest_is_reverified_with_its_kt_proof() {
+        use crate::mailbox::blind_signature::tests::kt_manifest_vector;
+        let Some(m) = kt_manifest_vector() else {
+            return;
+        };
+        let tm = TokenManager::new(test_db());
+        let cache = |m: &GetBlindSignaturePublicKeyResponse| {
+            tm.db.connection().unwrap().execute(
+                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('mailbox.signed_key_manifest', ?1, 'now')",
+                [hex::encode(m.encode_to_vec())],
+            ).unwrap();
+        };
+        cache(&m);
+        assert_eq!(
+            tm.get_cached_server_key().unwrap().unwrap().key_id,
+            "vector-current"
+        );
+        let mut stripped = m.clone();
+        stripped.kt_proof = None;
+        cache(&stripped);
+        assert!(tm.get_cached_server_key().unwrap().is_none());
     }
 
     #[test]

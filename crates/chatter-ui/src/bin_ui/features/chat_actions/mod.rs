@@ -14,28 +14,31 @@
 
 use std::sync::Arc;
 
-use chatter_core::client::ChatterClient;
 use crate::MainWindow;
+use chatter_core::client::ChatterClient;
 
 mod attachment_view;
 mod audio_seek;
 mod code_preview;
+mod links;
+pub(crate) mod media_viewer;
 mod message_actions;
 mod pdf_preview;
 mod timers;
 mod transfer_status;
 mod video_player;
 
-
 /// Wire message action callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    message_actions::wire_message_clicked(window);
-    message_actions::wire_quote_clicked(window);
+    links::wire(window, ui_ctx);
+    media_viewer::wire(window, ui_ctx);
+    message_actions::wire_message_clicked(window, ui_ctx);
+    message_actions::wire_quote_clicked(window, ui_ctx);
     message_actions::wire_reply_clicked(window, ui_ctx);
     message_actions::wire_cancel_reply(window);
-    message_actions::wire_react_clicked(window);
+    message_actions::wire_react_clicked(window, ui_ctx);
     message_actions::wire_thread_clicked(window, ui_ctx);
-    message_actions::wire_close_image_viewer(window);
+    message_actions::wire_close_image_viewer(window, ui_ctx);
     attachment_view::wire_view_attachment(window, ui_ctx);
     audio_seek::wire_audio_seek(window);
     code_preview::wire_code_preview_callbacks(window);

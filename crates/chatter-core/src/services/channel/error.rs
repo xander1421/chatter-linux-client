@@ -48,6 +48,52 @@ impl From<CurrentUserError> for ChannelError {
     }
 }
 
+impl From<super::membership_log::LogError> for ChannelError {
+    fn from(err: super::membership_log::LogError) -> Self {
+        use super::membership_log::LogError;
+        use super::verified_state::VerifyError;
+        match err {
+            LogError::Network(e) => Self::Network(e),
+            LogError::Storage(e) => Self::Storage(e),
+            LogError::Intent(VerifyError::NotPermitted(_)) => Self::NotAuthorized,
+            LogError::Intent(e) => Self::InvalidInput(e.to_string()),
+            other => Self::InvalidInput(other.to_string()),
+        }
+    }
+}
+
+impl ChannelError {
+    /// Text for a toast or status line; the `Display` chain
+    /// ("network error: invalid request: precondition failed: ...") is for logs.
+    ///
+    /// The server's reason for a refused request (already a member, banned,
+    /// ...) arrives as the last `": "`-separated segment of an `InvalidRequest`.
+    #[must_use]
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::NotLoggedIn => "You're signed out.".to_string(),
+            Self::NotAuthorized | Self::Network(NetworkError::PermissionDenied) => {
+                "You don't have permission to do that.".to_string()
+            }
+            Self::ChannelNotFound(_) => "Channel not found.".to_string(),
+            Self::InvalidInput(m) | Self::Network(NetworkError::InvalidRequest(m)) => {
+                let reason = m.rsplit(": ").next().unwrap_or(m);
+                let mut c = reason.chars();
+                c.next()
+                    .map(|f| f.to_uppercase().chain(c).collect::<String>() + ".")
+                    .unwrap_or_else(|| "Something went wrong. Try again.".to_string())
+            }
+            Self::Network(NetworkError::RateLimited) => {
+                "Too many requests. Try again later.".to_string()
+            }
+            Self::Network(_) => "Couldn't reach the server. Try again.".to_string(),
+            Self::Storage(_) | Self::SenderKeyRotationFailed(_) => {
+                "Something went wrong. Try again.".to_string()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,5 +112,27 @@ mod tests {
 
         let err = ChannelError::NotAuthorized;
         assert!(err.to_string().contains("not authorized"));
+    }
+
+    #[test]
+    fn user_message_carries_the_servers_reason() {
+        // AlreadyExists / FailedPrecondition as NetworkError::from_status builds them.
+        let err = ChannelError::Network(NetworkError::InvalidRequest(
+            "already exists: user is already a member of this channel".to_string(),
+        ));
+        assert_eq!(
+            err.user_message(),
+            "User is already a member of this channel."
+        );
+
+        let err = ChannelError::Network(NetworkError::InvalidRequest(
+            "precondition failed: user is banned from this channel".to_string(),
+        ));
+        assert_eq!(err.user_message(), "User is banned from this channel.");
+
+        assert_eq!(
+            ChannelError::Network(NetworkError::Unavailable).user_message(),
+            "Couldn't reach the server. Try again."
+        );
     }
 }

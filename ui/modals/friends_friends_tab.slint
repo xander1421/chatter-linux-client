@@ -1,0 +1,278 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Avatar } from "../components/avatar.slint";
+import { FriendData } from "friends_data.slint";
+
+export component FriendsTab inherits VerticalLayout {
+    in property <bool> mobile-mode;
+    in property <bool> private-mode;
+    in property <length> bottom-inset;
+    in property <length> row-height;
+    in property <length> row-avatar;
+    in property <length> row-name-size;
+    in property <length> row-sub-size;
+    in property <[FriendData]> friends;
+    callback view-profile(string);
+    callback start-dm(string);
+    vertical-stretch: 1;
+    spacing: Spacing.sm;
+
+    // Friends count header
+    Text {
+        z: 1;
+        text: root.friends.length + (root.private-mode ? (root.friends.length == 1 ? " private contact" : " private contacts") : (root.friends.length == 1 ? " Friend" : " Friends"));
+        color: Colors.text-secondary;
+        font-size: Typography.xs;
+        font-weight: Typography.medium;
+    }
+
+    if root.friends.length == 0: Rectangle {
+        vertical-stretch: 1;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: Spacing.sm;
+
+            // Use the app's own icon, like every other empty state (§112u).
+            HorizontalLayout {
+                alignment: center;
+                Image {
+                    source: Icons.users;
+                    width: 40px;
+                    height: 40px;
+                    colorize: Colors.text-muted;
+                }
+            }
+
+            Text {
+                text: root.private-mode ? "No private contacts yet" : "No friends yet";
+                color: Colors.text-muted;
+                font-size: Typography.base;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: root.private-mode ? "Share your private code to start a secret chat" : "Use the Add friend tab to connect";
+                color: Colors.text-muted;
+                font-size: Typography.sm;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
+    if root.friends.length > 0: Rectangle {
+        vertical-stretch: 1;
+        property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+        scroll-friends-list := Flickable {
+            property <length> chrome-inset: parent.chrome-inset;
+            width: parent.width;
+            y: root.mobile-mode ? -parent.chrome-inset : 0px;
+            height: root.mobile-mode ? root.height : parent.height;
+
+            viewport-height: friends-list.preferred-height;
+
+            friends-list := VerticalLayout {
+                padding-top: root.mobile-mode ? scroll-friends-list.chrome-inset : Spacing.none;
+                padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
+                // Rows stack from the TOP. A VerticalLayout with no
+                // alignment distributes its leftover space around
+                // fixed-height children, so one friend in a
+                // full-screen list sank to the bottom of the
+                // viewport with the gap above it.
+                alignment: start;
+                spacing: Spacing.xs;
+
+                for friend in root.friends: Rectangle {
+                    height: root.row-height;
+                    // One screen-reader stop per contact; Message and More
+                    // stay their own.
+                    accessible-role: button;
+                    accessible-label: friend.display-name
+                        + (friend.custom-status != "" ? ", " + friend.custom-status
+                            : !friend.is-anon && friend.last-seen-label != "" ? ", " + friend.last-seen-label : "");
+                    accessible-action-default => {
+                        if (friend.is-anon) {
+                            root.start-dm(friend.user-id);
+                        } else {
+                            root.view-profile(friend.user-id);
+                        }
+                    }
+                    background: friend-touch.has-hover ? Colors.surface-hover : transparent;
+                    border-radius: Spacing.radius-md;
+
+                    // Keep the row target behind its explicit actions so Message
+                    // and More receive taps on both mouse and touch screens.
+                    friend-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if (friend.is-anon) {
+                                root.start-dm(friend.user-id);
+                            } else {
+                                root.view-profile(friend.user-id);
+                            }
+                        }
+                    }
+                    KeyFocus {
+                        border-radius: parent.border-radius;
+                        activate => {
+                            if (friend.is-anon) {
+                                root.start-dm(friend.user-id);
+                            } else {
+                                root.view-profile(friend.user-id);
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        padding: Spacing.sm;
+                        spacing: Spacing.sm;
+
+                        Avatar {
+                            size: root.row-avatar;
+                            // `source` was never bound, so every
+                            // contact fell back to text even when
+                            // FriendData carried a decoded avatar.
+                            source: friend.avatar-source;
+                            // Initials, not the whole name: Avatar
+                            // renders this INSIDE the circle, so a
+                            // display name clipped to "xande".
+                            fallback-text: friend.initials;
+                            alt-name: friend.display-name;
+                            show-presence: !friend.is-anon;
+                            presence-color: friend.presence-status == "online" ? Colors.online
+                            : friend.presence-status == "away" ? Colors.away
+                            : friend.presence-status == "dnd" ? Colors.dnd
+                            : Colors.offline;
+                        }
+
+                        info := VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: root.mobile-mode ? Spacing.xs : Spacing.xxs;
+
+                            Text {
+                                text: friend.display-name;
+                                color: Colors.text-primary;
+                                font-size: root.row-name-size;
+                                font-weight: Typography.medium;
+                                overflow: elide;
+                            }
+
+                            // A custom status, else "online" / "last seen …"
+                            // as Telegram's contact list (the dot alone did
+                            // not say when an away friend was last there).
+                            property <string> subtitle: friend.custom-status != "" ? friend.custom-status
+                                : friend.is-anon ? "" : friend.last-seen-label;
+                            if info.subtitle != "": Text {
+                                text: info.subtitle;
+                                color: Colors.text-muted;
+                                font-size: root.row-sub-size;
+                                overflow: elide;
+                            }
+                        }
+
+                        // No stretch: sharing the row's slack with
+                        // the name, the centred icons drifted with
+                        // the name's length. Fixed, they form one
+                        // right-hand column.
+                        // Centred on the name: fixed 44px buttons in
+                        // a HorizontalLayout otherwise sit at its top.
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            HorizontalLayout {
+                                spacing: Spacing.xs;
+                                alignment: center;
+                                horizontal-stretch: 0;
+
+                                // Message button
+                                Rectangle {
+                                    width: 44px;
+                                    height: 44px;
+                                    border-radius: Spacing.radius-sm;
+                                    background: msg-touch.has-hover ? Colors.surface : transparent;
+                                    accessible-role: button;
+                                    accessible-label: "Message " + friend.display-name;
+                                    accessible-action-default => { root.start-dm(friend.user-id); }
+                                    KeyFocus { border-radius: parent.border-radius; activate => { root.start-dm(friend.user-id); } }
+
+                                    Image {
+                                        source: Icons.message-circle;
+                                        colorize: Colors.text-secondary;
+                                        width: 18px;
+                                        height: 18px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                    }
+
+                                    msg-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.start-dm(friend.user-id);
+                                        }
+                                    }
+                                }
+
+                                // More options: the profile, where Remove
+                                // Friend and Block live behind a confirm.
+                                Rectangle {
+                                    width: 44px;
+                                    height: 44px;
+                                    border-radius: Spacing.radius-sm;
+                                    background: more-touch.has-hover ? Colors.surface : transparent;
+                                    accessible-role: button;
+                                    accessible-label: friend.is-anon ? "Message " + friend.display-name : "View profile of " + friend.display-name;
+                                    accessible-action-default => {
+                                        if (friend.is-anon) {
+                                            root.start-dm(friend.user-id);
+                                        } else {
+                                            root.view-profile(friend.user-id);
+                                        }
+                                    }
+                                    KeyFocus {
+                                        border-radius: parent.border-radius;
+                                        activate => {
+                                            if (friend.is-anon) {
+                                                root.start-dm(friend.user-id);
+                                            } else {
+                                                root.view-profile(friend.user-id);
+                                            }
+                                        }
+                                    }
+
+                                    // Icons.more-vertical, not U+22EE:
+                                    // Inter has no vertical-ellipsis glyph
+                                    // and the fallback drew a notdef box.
+                                    Image {
+                                        source: Icons.more-vertical;
+                                        colorize: Colors.text-secondary;
+                                        width: 16px;
+                                        height: 16px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                    }
+
+                                    more-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            if (friend.is-anon) {
+                                                root.start-dm(friend.user-id);
+                                            } else {
+                                                root.view-profile(friend.user-id);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                }
+            }
+
+        }
+    }
+}

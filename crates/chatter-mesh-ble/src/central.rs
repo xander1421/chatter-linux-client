@@ -29,6 +29,7 @@
 //! less produces a link the mesh will happily plan writes onto and the stack will
 //! silently drop.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
@@ -149,7 +150,10 @@ fn discovery_filter(_service: Uuid) -> DiscoveryFilter {
 /// filter while a discovery session is running, and the duty cycle starts and
 /// stops discovery constantly.
 pub(crate) async fn configure_discovery(adapter: &Adapter, service: Uuid) -> Result<(), LinkError> {
-    adapter.set_discovery_filter(discovery_filter(service)).await.map_err(|err| error::classify_adapter(&err))
+    adapter
+        .set_discovery_filter(discovery_filter(service))
+        .await
+        .map_err(|err| error::classify_adapter(&err))
 }
 
 /// A running scan. Dropping it stops discovery.
@@ -179,11 +183,23 @@ impl core::fmt::Debug for Scan {
 /// task. The adapter is taken by value because the discovery stream borrows it
 /// for its whole life and the two have to live in the same place.
 pub(crate) async fn start_scan(
-    adapter: Adapter, service: Uuid, shared: Arc<Shared>,
+    adapter: Adapter,
+    service: Uuid,
+    shared: Arc<Shared>,
 ) -> Result<Scan, LinkError> {
     let (ready_tx, ready_rx) = oneshot::channel();
 
     let task = tokio::spawn(async move {
+        // bluer replays every cached BlueZ device at the start of each scan.
+        // Its old RSSI can still be present after an Android private address
+        // rotates, so only a later property change proves a known address is
+        // being advertised now. Newly created device objects are not skipped.
+        let mut cached = adapter
+            .device_addresses()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<HashSet<_>>();
         let discovery = match adapter.discover_devices_with_changes().await {
             Ok(discovery) => {
                 if ready_tx.send(Ok(())).is_err() {
@@ -207,6 +223,9 @@ pub(crate) async fn start_scan(
             let AdapterEvent::DeviceAdded(address) = event else {
                 continue;
             };
+            if cached.remove(&address) {
+                continue;
+            }
             let Ok(device) = adapter.device(address) else {
                 continue;
             };
@@ -219,10 +238,9 @@ pub(crate) async fn start_scan(
                 continue;
             }
 
-            // `None` means BlueZ knows this device but is not currently seeing
-            // it — a stale object from a previous session, replayed to us when
-            // discovery started. Reporting it would send the scheduler chasing a
-            // peer that is not there.
+            // Even after discarding the initial cache replay, a device can
+            // lose its RSSI before we read it. Without one there is no useful
+            // signal measurement for the scheduler.
             let Ok(Some(rssi)) = device.rssi().await else {
                 continue;
             };
@@ -241,20 +259,30 @@ pub(crate) async fn start_scan(
                 .and_then(|data| data.get(&service).cloned())
                 .and_then(|bytes| <[u8; 8]>::try_from(bytes.as_slice()).ok());
 
-            shared.emit(LinkEvent::Discovered { address: address.to_string(), rssi, peer });
+            shared.emit(LinkEvent::Discovered {
+                address: address.to_string(),
+                rssi,
+                peer,
+            });
         }
     });
 
     match ready_rx.await {
         Ok(Ok(())) => Ok(Scan { task }),
         Ok(Err(err)) => Err(err),
-        Err(_) => Err(LinkError::Backend("discovery task ended before it started".to_string())),
+        Err(_) => Err(LinkError::Backend(
+            "discovery task ended before it started".to_string(),
+        )),
     }
 }
 
 /// Connect outward and bring the link all the way up to writable.
 pub(crate) async fn connect(
-    adapter: &Adapter, shared: &Arc<Shared>, address: &str, service: Uuid, characteristic: Uuid,
+    adapter: &Adapter,
+    shared: &Arc<Shared>,
+    address: &str,
+    service: Uuid,
+    characteristic: Uuid,
 ) -> Result<LinkId, LinkError> {
     let peer: Address = address
         .parse()
@@ -267,7 +295,9 @@ pub(crate) async fn connect(
         return Ok(existing);
     }
 
-    let device = adapter.device(peer).map_err(|err| error::classify_connect(address, &err))?;
+    let device = adapter
+        .device(peer)
+        .map_err(|err| error::classify_connect(address, &err))?;
 
     // Which step is outstanding, for the timeout branch to report. A single
     // bound covers four of them and they fail for unrelated reasons; naming the
@@ -278,7 +308,13 @@ pub(crate) async fn connect(
     let opened_here = Arc::new(AtomicBool::new(false));
     let outcome = timeout(
         CONNECT_TIMEOUT,
-        establish(&device, service, characteristic, Arc::clone(&stage), Arc::clone(&opened_here)),
+        establish(
+            &device,
+            service,
+            characteristic,
+            Arc::clone(&stage),
+            Arc::clone(&opened_here),
+        ),
     )
     .await;
     let (writer, reader) = match outcome {
@@ -325,8 +361,13 @@ pub(crate) async fn connect(
     // the controller without an error.
     let max_write = writer.mtu();
 
-    let link =
-        shared.open_link(LinkRole::Central, adapter.name(), address, max_write, Some(Arc::new(writer)));
+    let link = shared.open_link(
+        LinkRole::Central,
+        adapter.name(),
+        address,
+        max_write,
+        Some(Arc::new(writer)),
+    );
 
     tokio::spawn(session(shared.clone(), address.to_string(), device, reader));
 
@@ -335,7 +376,10 @@ pub(crate) async fn connect(
 
 /// Everything between "we have a device object" and "we can write to it".
 async fn establish(
-    device: &Device, service: Uuid, characteristic: Uuid, stage: Arc<AtomicU8>,
+    device: &Device,
+    service: Uuid,
+    characteristic: Uuid,
+    stage: Arc<AtomicU8>,
     opened_here: Arc<AtomicBool>,
 ) -> Result<(CharacteristicWriter, CharacteristicReader), LinkError> {
     let address = device.address().to_string();
@@ -343,7 +387,10 @@ async fn establish(
     // Each step records itself before starting, so whichever one is outstanding
     // when the caller's clock expires is the one it names.
     stage.store(ConnectStage::Acl as u8, Ordering::Relaxed);
-    let connected = device.is_connected().await.map_err(|err| error::classify_connect(&address, &err))?;
+    let connected = device
+        .is_connected()
+        .await
+        .map_err(|err| error::classify_connect(&address, &err))?;
     if !connected {
         // Only now do we own this ACL, and only an ACL we opened may we close.
         // A device already connected is one the *peer* dialled: BLE has a single
@@ -354,7 +401,10 @@ async fn establish(
         // enter `address_of`, and an advert whose scan response has not arrived
         // yet carries no peer id for the policy layer to recognise.
         opened_here.store(true, Ordering::Relaxed);
-        device.connect().await.map_err(|err| error::classify_connect(&address, &err))?;
+        device
+            .connect()
+            .await
+            .map_err(|err| error::classify_connect(&address, &err))?;
     }
 
     stage.store(ConnectStage::ServiceDiscovery as u8, Ordering::Relaxed);
@@ -364,30 +414,43 @@ async fn establish(
     // socket is what forces BlueZ to finish the MTU exchange, so the MTU the
     // notify socket reports afterwards is the settled one.
     stage.store(ConnectStage::WriteSocket as u8, Ordering::Relaxed);
-    let writer = characteristic.write_io().await.map_err(|err| error::classify_connect(&address, &err))?;
+    let writer = characteristic
+        .write_io()
+        .await
+        .map_err(|err| error::classify_connect(&address, &err))?;
 
     stage.store(ConnectStage::NotifySocket as u8, Ordering::Relaxed);
-    let reader = characteristic.notify_io().await.map_err(|err| error::classify_connect(&address, &err))?;
+    let reader = characteristic
+        .notify_io()
+        .await
+        .map_err(|err| error::classify_connect(&address, &err))?;
 
     Ok((writer, reader))
 }
 
 /// Walk the peer's GATT database for the mesh characteristic.
 async fn find_characteristic(
-    device: &Device, service: Uuid, characteristic: Uuid,
+    device: &Device,
+    service: Uuid,
+    characteristic: Uuid,
 ) -> Result<RemoteCharacteristic, LinkError> {
     let address = device.address().to_string();
 
     // Waits for BlueZ to finish resolving services, which is the slow part of a
     // first connection to an unbonded peer.
-    let services = device.services().await.map_err(|err| error::classify_connect(&address, &err))?;
+    let services = device
+        .services()
+        .await
+        .map_err(|err| error::classify_connect(&address, &err))?;
 
     for candidate in services {
         if !matches!(candidate.uuid().await, Ok(uuid) if uuid == service) {
             continue;
         }
-        let characteristics =
-            candidate.characteristics().await.map_err(|err| error::classify_connect(&address, &err))?;
+        let characteristics = candidate
+            .characteristics()
+            .await
+            .map_err(|err| error::classify_connect(&address, &err))?;
         for found in characteristics {
             if matches!(found.uuid().await, Ok(uuid) if uuid == characteristic) {
                 return Ok(found);
@@ -397,7 +460,10 @@ async fn find_characteristic(
 
     // The peer advertised the mesh service but does not serve it. Not our link to
     // keep, and not a fault of the adapter.
-    Err(error::connect_failed(&address, "peer does not expose the mesh characteristic"))
+    Err(error::connect_failed(
+        &address,
+        "peer does not expose the mesh characteristic",
+    ))
 }
 
 /// Pump one central link's inbound notifications until the link dies.
@@ -406,7 +472,12 @@ async fn find_characteristic(
 /// notification socket closing, and BlueZ reporting the device disconnected. On
 /// a clean teardown they arrive together; when the peer drops out of range, which
 /// of them lands first is not predictable.
-async fn session(shared: Arc<Shared>, address: String, device: Device, reader: CharacteristicReader) {
+async fn session(
+    shared: Arc<Shared>,
+    address: String,
+    device: Device,
+    reader: CharacteristicReader,
+) {
     let mut events: BoxStream<'_, DeviceEvent> = match device.events().await {
         Ok(events) => events.boxed(),
         // We can still serve the link from its socket alone; we just lose the
@@ -468,7 +539,10 @@ mod tests {
         // that relaxation do nothing.
         let filter = discovery_filter(service());
         assert_eq!(filter.rssi, Some(RSSI_FLOOR));
-        assert_eq!(filter.pathloss, None, "BlueZ rejects a filter that sets both rssi and pathloss");
+        assert_eq!(
+            filter.pathloss, None,
+            "BlueZ rejects a filter that sets both rssi and pathloss"
+        );
     }
 
     #[test]

@@ -555,11 +555,7 @@ mod tests {
         }
         // ...and the same filter must be reproducible from that prefix alone,
         // which is what makes a since-cursor exact.
-        let reencoded = build_filter(
-            ids.get(..params.included).unwrap_or_default(),
-            24,
-            0.01,
-        );
+        let reencoded = build_filter(ids.get(..params.included).unwrap_or_default(), 24, 0.01);
         assert_eq!(reencoded.data, params.data);
     }
 
@@ -799,7 +795,10 @@ mod tests {
 
     #[test]
     fn normalize_drops_duplicates_and_clamps_into_range() {
-        assert_eq!(normalize_mapped_values(&[1, 1, 2, 2, 3], 100), vec![1, 2, 3]);
+        assert_eq!(
+            normalize_mapped_values(&[1, 1, 2, 2, 3], 100),
+            vec![1, 2, 3]
+        );
         assert_eq!(normalize_mapped_values(&[5, 200], 100), vec![5, 99]);
         assert_eq!(normalize_mapped_values(&[0, 1], 100), vec![1]);
         assert!(normalize_mapped_values(&[1, 2], 1).is_empty());

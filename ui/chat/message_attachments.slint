@@ -1,0 +1,595 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { AudioPlayer } from "audio_player.slint";
+import { HoldArea } from "../components/hold_area.slint";
+import { MessageAttachmentData } from "types.slint";
+import { MessageFooter } from "message_footer.slint";
+
+struct AlbumRect { x: length, y: length, width: length, height: length }
+
+export component MessageAttachments inherits VerticalLayout {
+    in property <[MessageAttachmentData]> attachments;
+    in property <[int]> standalone-attachment-indices;
+    in property <string> audio-elapsed;
+    in property <float> audio-progress;
+    in property <length> bubble-height;
+    in property <length> bubble-width;
+    in property <length> bubble-x;
+    in property <length> bubble-y;
+    in property <string> current-playing-attachment-id;
+    in property <bool> is-media-playing;
+    in property <length> message-width;
+    in property <bool> mobile;
+    in property <bool> swipe-active;
+    in property <length> text-max-width;
+    in property <bool> edge-to-edge: false;
+    in property <length> media-width: 0px;
+    in property <bool> overlay-stamp: false;
+    in property <string> timestamp;
+    in property <string> timestamp-ns;
+    in property <string> sender-id;
+    in property <string> message-id;
+    in property <string> delivery-status;
+    in property <string> failure-reason;
+    in property <bool> is-own;
+    in property <bool> is-edited;
+    in property <bool> disappearing;
+    in property <bool> is-pinned;
+    in property <bool> mesh-delivery;
+    callback begin-swipe(length, length);
+    callback move-swipe(length, length);
+    callback end-swipe(bool);
+    callback open-image(string, length, length, length, length);
+    callback open-other-attachment(string);
+    callback request-menu(length, length, length, length, length, length);
+    callback audio-seek(string, float);
+    callback message-clicked(string);
+
+    property <int> album-count: root.attachments.length > 0 ? root.attachments[0].album-count : 0;
+    pure function album-rect(index: int, count: int, width: length, gap: length) -> AlbumRect {
+        if (count == 2) {
+            let side = (width - gap) / 2;
+            return { x: index * (side + gap), y: 0px, width: side, height: side };
+        }
+        if (count == 3) {
+            let height = width * 0.75;
+            let left = (width - gap) * 0.6;
+            let right = width - gap - left;
+            return index == 0
+                ? { x: 0px, y: 0px, width: left, height: height }
+                : { x: left + gap, y: (index - 1) * ((height - gap) / 2 + gap), width: right, height: (height - gap) / 2 };
+        }
+        let side = (width - gap) / 2;
+        let row = Math.floor(index / 2);
+        let is-last-odd = count > 4 && Math.mod(count, 2) == 1 && index == min(count, 10) - 1;
+        return { x: Math.mod(index, 2) * (side + gap), y: row * (side + gap),
+            width: is-last-odd ? width : side, height: side };
+    }
+
+    spacing: root.edge-to-edge ? 0px : Spacing.sm;
+
+    if root.album-count >= 2: album := Rectangle {
+        width: root.media-width;
+        property <AlbumRect> last-tile: root.album-rect(min(root.album-count, 10) - 1, min(root.album-count, 10), self.width, Spacing.xxs);
+        height: self.last-tile.y + self.last-tile.height;
+        background: Colors.bubble-inset;
+        clip: true;
+
+        for attachment in root.attachments: Rectangle {
+            property <bool> in-album: attachment.album-index >= 0 && attachment.album-index < 10;
+            property <AlbumRect> tile: root.album-rect(attachment.album-index, min(root.album-count, 10), album.width, Spacing.xxs);
+            visible: self.in-album;
+            x: self.in-album ? self.tile.x : 0px;
+            y: self.in-album ? self.tile.y : 0px;
+            width: self.in-album ? self.tile.width : 0px;
+            height: self.in-album ? self.tile.height : 0px;
+            background: Colors.surface-hover;
+            clip: true;
+
+            if attachment.has-thumbnail: Image {
+                width: 100%; height: 100%; source: attachment.thumbnail; image-fit: cover;
+            }
+            if !attachment.has-thumbnail: Image {
+                width: 32px; height: 32px;
+                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                source: attachment.is-video ? Icons.play : Icons.image;
+                colorize: Colors.text-muted;
+            }
+            if attachment.is-video: Image {
+                width: 28px; height: 28px;
+                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                source: Icons.play; colorize: Colors.text-primary;
+            }
+            if attachment.is-uploading || attachment.is-downloading || attachment.is-download-failed: Rectangle {
+                width: 100%; height: 100%; background: Colors.overlay;
+                Text {
+                    width: 100%; height: 100%;
+                    text: attachment.is-download-failed ? "Download failed" : Math.round(attachment.progress * 100) + "%";
+                    color: Colors.text-primary; font-size: Typography.sm;
+                    horizontal-alignment: center; vertical-alignment: center;
+                }
+            }
+            if root.album-count > 10 && attachment.album-index == 9: Rectangle {
+                width: 100%; height: 100%; background: Colors.overlay;
+                Text {
+                    width: 100%; height: 100%; text: "+" + (root.album-count - 10);
+                    color: Colors.text-primary; font-size: Typography.lg;
+                    font-weight: Typography.semibold;
+                    horizontal-alignment: center; vertical-alignment: center;
+                }
+            }
+            HoldArea {
+                enabled-for-touch: root.mobile;
+                mouse-cursor: pointer;
+                gesture-down(x, y) => { root.begin-swipe(x, y); }
+                gesture-moved(x, y) => { root.move-swipe(x, y); }
+                gesture-ended(cancelled) => { root.end-swipe(cancelled); }
+                // Without these TalkBack had no way to open a photo.
+                accessible-role: button;
+                accessible-label: "Open photo " + attachment.filename;
+                accessible-action-default => {
+                    root.open-image(attachment.id,
+                        self.absolute-position.x, self.absolute-position.y,
+                        self.width, self.height);
+                }
+                clicked => {
+                    if (self.hold-fired || root.swipe-active) { return; }
+                    root.open-image(attachment.id,
+                        self.absolute-position.x, self.absolute-position.y,
+                        self.width, self.height);
+                }
+                held => {
+                    root.request-menu(self.anchor-x, self.anchor-y,
+                        root.bubble-y, root.bubble-y + root.bubble-height,
+                        root.bubble-x, root.bubble-x + root.bubble-width);
+                }
+            }
+        }
+
+        if root.overlay-stamp: Rectangle {
+            width: album-stamp-content.preferred-width + Spacing.sm * 2;
+            height: album-stamp-content.preferred-height + Spacing.xs * 2;
+            x: parent.width - self.width - Spacing.sm;
+            y: parent.height - self.height - Spacing.sm;
+            border-radius: Spacing.radius-full;
+            background: #00000073;
+            album-stamp-content := MessageFooter {
+                x: Spacing.sm; y: Spacing.xs;
+                width: self.preferred-width; height: self.preferred-height;
+                has-reactions: false; overlay-media: true;
+                delivery-status: root.delivery-status; failure-reason: root.failure-reason;
+                is-edited: root.is-edited; is-own: root.is-own; disappearing: root.disappearing;
+                is-pinned: root.is-pinned; mesh-delivery: root.mesh-delivery;
+                message-id: root.message-id; mobile: root.mobile;
+                sender-id: root.sender-id; timestamp: root.timestamp;
+                timestamp-ns: root.timestamp-ns;
+                message-clicked(a0) => { root.message-clicked(a0); }
+            }
+        }
+    }
+
+    for index in root.standalone-attachment-indices: HorizontalLayout {
+        property <MessageAttachmentData> attachment: root.attachments[index];
+        padding: root.edge-to-edge && root.album-count >= 2 ? Spacing.sm : 0px;
+        // Let the media set the bubble's preferred width. The
+        // row may grow with a wider caption, where image and
+        // video attachments stay centered.
+        max-width: root.edge-to-edge ? root.media-width : root.text-max-width;
+        alignment: root.edge-to-edge ? start : attachment.is-image || attachment.category == "video" ? center : start;
+
+        // Image attachments
+        if attachment.is-image: Rectangle {
+            property <float> aspect-ratio: attachment.width > 0 ? attachment.width / max(1, attachment.height) : 1.5;
+            property <length> max-w: min(280px, root.message-width * 0.7 - Spacing.md);
+            property <length> max-h: 380px;
+            property <length> calc-w: min(max-w, max-h * aspect-ratio);
+            property <length> calc-h: min(max-h, calc-w / aspect-ratio);
+
+            // Reserve the final geometry from stored dimensions before
+            // the thumbnail is decoded, so rows above the viewport do
+            // not grow and pull the opening anchor away from the end.
+            width: root.edge-to-edge ? root.media-width : attachment.width > 0 && attachment.height > 0 ? max(100px, calc-w) : 180px;
+            height: attachment.width > 0 && attachment.height > 0 ? max(60px, calc-h) : 140px;
+            background: Colors.bubble-inset;
+            border-radius: root.edge-to-edge ? 0px : Spacing.radius-sm;
+            clip: true;
+
+            if attachment.has-thumbnail: Image {
+                width: 100%;
+                height: 100%;
+                source: attachment.thumbnail;
+                image-fit: root.edge-to-edge ? cover : contain;
+            }
+
+            if !attachment.has-thumbnail: Rectangle {
+                width: 100%;
+                height: 100%;
+                background: Colors.surface-hover;
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: Spacing.xs;
+
+                    Image {
+                        width: 32px;
+                        height: 32px;
+                        source: Icons.image;
+                        colorize: Colors.text-muted;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: attachment.filename;
+                        color: Colors.text-secondary;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            // Progress overlay
+            if attachment.is-uploading || attachment.is-downloading: Rectangle {
+                width: 100%;
+                height: 100%;
+                background: Colors.overlay;
+                accessible-role: progress-indicator;
+                accessible-label: attachment.is-uploading ? "Uploading " + attachment.filename : "Downloading " + attachment.filename;
+                accessible-value: Math.round(attachment.progress * 100) + " percent";
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: Spacing.sm;
+
+                    Text {
+                        text: attachment.is-uploading ? "Uploading..." : "Downloading...";
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: 80%;
+                        height: 4px;
+                        background: Colors.surface-hover;
+                        border-radius: 2px;
+
+                        Rectangle {
+                            width: parent.width * attachment.progress;
+                            height: 100%;
+                            background: Colors.primary;
+                            border-radius: 2px;
+                        }
+                    }
+                }
+            }
+
+            if attachment.is-download-failed: Rectangle {
+                width: 100%;
+                height: 100%;
+                background: Colors.overlay;
+
+                Text {
+                    width: parent.width - Spacing.md;
+                    height: parent.height;
+                    text: "Download failed · tap to retry";
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
+            img-touch := HoldArea {
+                enabled-for-touch: root.mobile;
+                mouse-cursor: pointer;
+                gesture-down(x, y) => { root.begin-swipe(x, y); }
+                gesture-moved(x, y) => { root.move-swipe(x, y); }
+                gesture-ended(cancelled) => { root.end-swipe(cancelled); }
+                // Without these TalkBack had no way to open a photo.
+                accessible-role: button;
+                accessible-label: "Open photo " + attachment.filename;
+                accessible-action-default => {
+                    root.open-image(attachment.id,
+                        self.absolute-position.x, self.absolute-position.y,
+                        self.width, self.height);
+                }
+                clicked => {
+                    if (self.hold-fired || root.swipe-active) { return; }
+                    root.open-image(attachment.id,
+                        self.absolute-position.x, self.absolute-position.y,
+                        self.width, self.height);
+                }
+                held => {
+                    root.request-menu(self.anchor-x, self.anchor-y,
+                        root.bubble-y, root.bubble-y + root.bubble-height,
+                        root.bubble-x, root.bubble-x + root.bubble-width);
+                }
+            }
+
+            if root.overlay-stamp: media-stamp := Rectangle {
+                width: stamp-content.preferred-width + Spacing.sm * 2;
+                height: stamp-content.preferred-height + Spacing.xs * 2;
+                x: parent.width - self.width - Spacing.sm;
+                y: parent.height - self.height - Spacing.sm;
+                border-radius: Spacing.radius-full;
+                background: #00000073;
+
+                stamp-content := MessageFooter {
+                    x: Spacing.sm;
+                    y: Spacing.xs;
+                    width: self.preferred-width;
+                    height: self.preferred-height;
+                    has-reactions: false;
+                    overlay-media: true;
+                    delivery-status: root.delivery-status;
+                    failure-reason: root.failure-reason;
+                    is-edited: root.is-edited;
+                    disappearing: root.disappearing;
+                    is-own: root.is-own;
+                    is-pinned: root.is-pinned;
+                    mesh-delivery: root.mesh-delivery;
+                    message-id: root.message-id;
+                    mobile: root.mobile;
+                    sender-id: root.sender-id;
+                    timestamp: root.timestamp;
+                    timestamp-ns: root.timestamp-ns;
+                    message-clicked(a0) => { root.message-clicked(a0); }
+                }
+            }
+        }
+
+        // Audio attachments — shared inline player
+        if attachment.category == "audio": AudioPlayer {
+            mobile: root.mobile;
+            attachment-id: attachment.id;
+            filename: attachment.filename;
+            waveform: attachment.waveform;
+            duration-display: attachment.duration-display;
+            is-download-failed: attachment.is-download-failed;
+            current-playing-attachment-id: root.current-playing-attachment-id;
+            is-media-playing: root.is-media-playing;
+            audio-progress: root.audio-progress;
+            audio-elapsed: root.audio-elapsed;
+
+            play-clicked(id) => { root.open-other-attachment(id); }
+            audio-seek(id, pos) => { root.audio-seek(id, pos); }
+            more-clicked(x, y) => {
+                root.request-menu(x, y,
+                    root.bubble-y, root.bubble-y + root.bubble-height,
+                    root.bubble-x, root.bubble-x + root.bubble-width);
+            }
+        }
+
+        // Video attachments
+        if attachment.category == "video": Rectangle {
+            property <float> aspect-ratio: attachment.width > 0 ? attachment.width / max(1, attachment.height) : 1.6;
+            property <length> max-w: min(280px, root.message-width * 0.7 - Spacing.md);
+            property <length> max-h: 220px;
+            property <length> calc-w: min(max-w, max-h * aspect-ratio);
+            property <length> calc-h: min(max-h, calc-w / aspect-ratio);
+
+            width: attachment.width > 0 && attachment.height > 0 ? max(160px, calc-w) : 260px;
+            height: attachment.width > 0 && attachment.height > 0 ? max(100px, calc-h) : 160px;
+            background: Colors.bubble-inset;
+            border-radius: Spacing.radius-sm;
+            clip: true;
+
+            if attachment.has-thumbnail: Image {
+                width: 100%;
+                height: 100%;
+                source: attachment.thumbnail;
+                image-fit: contain;
+            }
+
+            // No thumbnail: the play button IS the icon, stacked
+            // above the filename rather than floated over it.
+            // Previously this branch centred icon+name+size in
+            // the tile and the overlay below centred a 56px
+            // opaque circle on the same point, so the one thing
+            // identifying the file — its name — was underneath
+            // the button. A video with no thumbnail is exactly
+            // the case where the name is all the user has.
+            if !attachment.has-thumbnail: VerticalLayout {
+                alignment: center;
+                spacing: Spacing.xs;
+
+                // Wrapped: a Rectangle has no alignment of its
+                // own, so the row centres it.
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 56px;
+                        height: 56px;
+                        border-radius: 28px;
+                        background: video-touch.has-hover ? Colors.primary : Colors.primary.transparentize(0.2);
+
+                        Image {
+                            width: 24px;
+                            height: 24px;
+                            source: Icons.play;
+                            colorize: Colors.text-primary;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                }
+                Text {
+                    text: attachment.filename;
+                    color: Colors.text-secondary;
+                    font-size: Typography.xs;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    text: attachment.size-display;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    horizontal-alignment: center;
+                }
+            }
+
+            // Play button overlay — only over a thumbnail, where
+            // there is a picture to float it on. Without one it
+            // is drawn inline above, by the branch just above.
+            if attachment.has-thumbnail: Rectangle {
+                x: (parent.width - 56px) / 2;
+                y: (parent.height - 56px) / 2;
+                width: 56px;
+                height: 56px;
+                border-radius: 28px;
+                background: video-touch.has-hover ? Colors.primary : Colors.primary.transparentize(0.2);
+
+                Image {
+                    width: 24px;
+                    height: 24px;
+                    source: Icons.play;
+                    colorize: Colors.text-primary;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+
+            if attachment.is-download-failed: Rectangle {
+                width: 100%;
+                height: 100%;
+                background: Colors.overlay;
+
+                Text {
+                    width: parent.width - Spacing.md;
+                    height: parent.height;
+                    text: "Download failed · tap to retry";
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
+            video-touch := HoldArea {
+                enabled-for-touch: root.mobile;
+                mouse-cursor: pointer;
+                gesture-down(x, y) => { root.begin-swipe(x, y); }
+                gesture-moved(x, y) => { root.move-swipe(x, y); }
+                gesture-ended(cancelled) => { root.end-swipe(cancelled); }
+                accessible-role: button;
+                accessible-label: "Play video " + attachment.filename;
+                accessible-action-default => { root.open-other-attachment(attachment.id); }
+                clicked => {
+                    if (self.hold-fired || root.swipe-active) { return; }
+                    root.open-other-attachment(attachment.id);
+                }
+                held => {
+                    root.request-menu(self.anchor-x, self.anchor-y,
+                        root.bubble-y, root.bubble-y + root.bubble-height,
+                        root.bubble-x, root.bubble-x + root.bubble-width);
+                }
+            }
+        }
+
+        // File attachments
+        if !attachment.is-image && attachment.category != "audio" && attachment.category != "video": Rectangle {
+            width: min(240px, root.message-width * 0.7 - Spacing.md);
+            height: 52px;
+            background: Colors.bubble-inset;
+            border-radius: Spacing.radius-md;
+
+            HorizontalLayout {
+                padding: Spacing.sm;
+                spacing: Spacing.sm;
+
+                Rectangle {
+                    width: 36px;
+                    height: 36px;
+                    border-radius: Spacing.radius-sm;
+                    background: Colors.primary.transparentize(0.85);
+
+                    Image {
+                        width: 18px;
+                        height: 18px;
+                        source: Icons.file;
+                        colorize: Colors.primary;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: Spacing.xxs;
+
+                    Text {
+                        text: attachment.filename;
+                        color: Colors.text-primary;
+                        font-size: Typography.xs;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: attachment.is-download-failed ? "Download failed · tap to retry" : attachment.size-display;
+                        color: attachment.is-download-failed ? Colors.primary : Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+                }
+
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    background: file-touch.has-hover ? Colors.surface-hover : transparent;
+                    border-radius: Spacing.radius-sm;
+
+                    Image {
+                        width: 14px;
+                        height: 14px;
+                        source: Icons.download;
+                        colorize: Colors.primary;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+            }
+
+            // Progress bar
+            if attachment.is-uploading || attachment.is-downloading: Rectangle {
+                y: parent.height - 3px;
+                width: parent.width;
+                height: 3px;
+                background: Colors.surface-hover;
+                border-radius: 1.5px;
+                accessible-role: progress-indicator;
+                accessible-label: attachment.is-uploading ? "Upload progress" : "Download progress";
+                accessible-value: Math.round(attachment.progress * 100) + " percent";
+
+                Rectangle {
+                    width: parent.width * attachment.progress;
+                    height: 100%;
+                    background: Colors.primary;
+                    border-radius: 1.5px;
+                }
+            }
+
+            file-touch := HoldArea {
+                enabled-for-touch: root.mobile;
+                mouse-cursor: pointer;
+                gesture-down(x, y) => { root.begin-swipe(x, y); }
+                gesture-moved(x, y) => { root.move-swipe(x, y); }
+                gesture-ended(cancelled) => { root.end-swipe(cancelled); }
+                accessible-role: button;
+                accessible-label: "Open file " + attachment.filename;
+                accessible-action-default => { root.open-other-attachment(attachment.id); }
+                clicked => {
+                    if (self.hold-fired || root.swipe-active) { return; }
+                    root.open-other-attachment(attachment.id);
+                }
+                held => {
+                    root.request-menu(self.anchor-x, self.anchor-y,
+                        root.bubble-y, root.bubble-y + root.bubble-height,
+                        root.bubble-x, root.bubble-x + root.bubble-width);
+                }
+            }
+        }
+    }
+}

@@ -7,12 +7,24 @@ use tokio::sync::broadcast;
 use crate::domain::ids::UserId;
 use crate::state::store::Store;
 
+/// Shown on the sign-in screen of a device the account unlinked.
+pub(crate) const DEVICE_UNLINKED_NOTICE: &str =
+    "This device was unlinked. Link it to your account again to continue messaging.";
+
 /// Authentication state data.
 ///
 /// Tracks the current user's authentication status, identity,
 /// and any pending login operations.
 #[derive(Clone, Debug, Default)]
 pub struct AuthStateData {
+    /// Changes whenever a login or sign-out invalidates pending UI work.
+    pub session_revision: u64,
+    /// Requires explicit reauthentication; persisted device and local data remain.
+    pub session_ended: bool,
+    /// The server said another device of the account unlinked this one. Set
+    /// together with `session_ended`; this device's keys are gone, its
+    /// history stays until it is linked again (`storage::unlink`).
+    pub device_unlinked: bool,
     /// Currently logged in user ID, if any.
     pub current_user_id: Option<UserId>,
     /// Current device ID (1 = primary, 2-127 = linked devices).
@@ -23,6 +35,10 @@ pub struct AuthStateData {
     pub is_logging_in: bool,
     /// Login error message, if the last login attempt failed.
     pub login_error: Option<String>,
+    /// The login in flight is solving the server's proof of work (an account
+    /// with recent failed attempts; server OPEN-ITEMS §133). Seconds of
+    /// work on a phone, so the login screen says so instead of looking stuck.
+    pub login_verifying: bool,
 }
 
 /// Reactive authentication state manager.
@@ -73,6 +89,15 @@ impl AuthState {
         self.store.get()
     }
 
+    /// Read just the session revision without cloning the whole state.
+    ///
+    /// Hot paths that only guard against a session change (e.g. per-attachment
+    /// history resolution) use this instead of `get().session_revision`.
+    #[must_use]
+    pub fn session_revision(&self) -> u64 {
+        self.store.with(|s| s.session_revision)
+    }
+
     /// Subscribe to authentication state changes.
     ///
     /// The receiver will receive Arc-wrapped state snapshots (zero-copy sharing).
@@ -87,12 +112,21 @@ impl AuthState {
     /// Clears any login errors and sets the user identity.
     pub fn set_logged_in(&self, user_id: UserId, device_id: u32, display_name: String) {
         self.store.update(|state| {
+            state.session_revision = state.session_revision.wrapping_add(1);
+            state.session_ended = false;
+            state.device_unlinked = false;
             state.current_user_id = Some(user_id);
             state.device_id = Some(device_id);
             state.display_name = Some(display_name);
             state.is_logging_in = false;
             state.login_error = None;
+            state.login_verifying = false;
         });
+    }
+
+    /// Mark the in-flight login as solving (or done solving) a proof of work.
+    pub fn set_login_verifying(&self, verifying: bool) {
+        self.store.update(|state| state.login_verifying = verifying);
     }
 
     /// Update state after logout.
@@ -100,6 +134,9 @@ impl AuthState {
     /// Clears all user identity information.
     pub fn set_logged_out(&self) {
         self.store.update(|state| {
+            state.session_revision = state.session_revision.wrapping_add(1);
+            state.session_ended = false;
+            state.device_unlinked = false;
             state.current_user_id = None;
             state.device_id = None;
             state.display_name = None;
@@ -108,33 +145,79 @@ impl AuthState {
         });
     }
 
-    /// Set whether a login operation is in progress.
-    ///
-    /// UI can use this to show loading indicators.
-    pub fn set_logging_in(&self, is_logging_in: bool) {
+    /// Invalidate pending work before asynchronous sign-out teardown begins.
+    pub fn invalidate_session(&self) {
         self.store.update(|state| {
-            state.is_logging_in = is_logging_in;
-            if is_logging_in {
-                // Clear previous error when starting new login attempt
-                state.login_error = None;
+            state.session_revision = state.session_revision.wrapping_add(1);
+        });
+    }
+
+    pub fn update_display_name_if_current(&self, revision: u64, user: UserId, name: String) {
+        self.store.update(|state| {
+            if state.session_revision == revision && state.current_user_id == Some(user) {
+                state.display_name = Some(name);
             }
         });
     }
 
-    /// Set a login error message.
-    ///
-    /// Also clears `is_logging_in` since the operation has completed (with error).
-    pub fn set_login_error(&self, error: Option<String>) {
+    /// A user ID alone cannot fence A -> B -> A or a fresh login of A.
+    pub fn session_is_current(&self, revision: u64) -> bool {
+        let state = self.get();
+        state.current_user_id.is_some() && state.session_revision == revision
+    }
+
+    pub fn set_logged_out_if_current(&self, revision: u64) -> bool {
+        let mut cleared = false;
         self.store.update(|state| {
-            state.login_error = error;
-            state.is_logging_in = false;
+            if state.session_revision == revision {
+                state.session_revision = state.session_revision.wrapping_add(1);
+                state.session_ended = false;
+                state.device_unlinked = false;
+                state.current_user_id = None;
+                state.device_id = None;
+                state.display_name = None;
+                state.is_logging_in = false;
+                cleared = true;
+            }
+        });
+        cleared
+    }
+
+    pub(crate) fn set_session_ended_if_current(&self, revision: u64) {
+        self.store.update(|state| {
+            if state.session_revision == revision {
+                state.session_revision = state.session_revision.wrapping_add(1);
+                state.current_user_id = None;
+                state.is_logging_in = false;
+                state.login_verifying = false;
+                state.session_ended = true;
+                state.login_error = Some("Your session ended. Sign in again to continue.".into());
+            }
+        });
+    }
+
+    /// Like `set_session_ended_if_current`, for a device the account
+    /// unlinked. The copy follows Signal-Desktop's "Unlinked" banner
+    /// (`icu:unlinked`, `icu:unlinkedWarning`).
+    pub(crate) fn set_device_unlinked_if_current(&self, revision: u64) {
+        self.store.update(|state| {
+            if state.session_revision == revision {
+                state.session_revision = state.session_revision.wrapping_add(1);
+                state.current_user_id = None;
+                state.device_id = None;
+                state.is_logging_in = false;
+                state.login_verifying = false;
+                state.session_ended = true;
+                state.device_unlinked = true;
+                state.login_error = Some(DEVICE_UNLINKED_NOTICE.into());
+            }
         });
     }
 
     /// Quick check if user is currently logged in.
     #[must_use]
     pub fn is_logged_in(&self) -> bool {
-        self.store.get().current_user_id.is_some()
+        self.store.with(|s| s.current_user_id.is_some())
     }
 }
 
@@ -195,42 +278,6 @@ mod tests {
         assert!(data.current_user_id.is_none());
         assert!(data.device_id.is_none());
         assert!(data.display_name.is_none());
-    }
-
-    #[test]
-    fn test_auth_state_logging_in_progress() {
-        let state = AuthState::new();
-
-        state.set_logging_in(true);
-        assert!(state.get().is_logging_in);
-
-        state.set_logging_in(false);
-        assert!(!state.get().is_logging_in);
-    }
-
-    #[test]
-    fn test_auth_state_login_error_clears_logging_in() {
-        let state = AuthState::new();
-
-        state.set_logging_in(true);
-        state.set_login_error(Some("Invalid password".to_string()));
-
-        let data = state.get();
-        assert!(!data.is_logging_in);
-        assert_eq!(data.login_error, Some("Invalid password".to_string()));
-    }
-
-    #[test]
-    fn test_auth_state_new_login_clears_error() {
-        let state = AuthState::new();
-
-        // Set an error
-        state.set_login_error(Some("Previous error".to_string()));
-        assert!(state.get().login_error.is_some());
-
-        // Start new login attempt
-        state.set_logging_in(true);
-        assert!(state.get().login_error.is_none());
     }
 
     #[tokio::test]

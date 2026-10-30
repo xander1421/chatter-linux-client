@@ -1,22 +1,21 @@
 //! Domain event handlers for calls.
 //!
-//! Handles call key answer and group call key events.
+//! Handles call key answer events.
 
 use std::sync::Arc;
 
 use slint::ComponentHandle;
 
+use crate::MainWindow;
 use chatter_core::client::ChatterClient;
 use chatter_core::client::events::CallKeyEvent;
-use crate::MainWindow;
 
 use super::key_exchange::handle_call_key_answer;
 
 /// Wire call key answer handler to process incoming answer events.
 ///
 /// Subscribes to the typed [`CallKeyEvent`] stream from [`ChatterClient`]
-/// and completes the ephemeral key exchange for the caller (via core),
-/// or updates the group-call encryption key.
+/// and completes the ephemeral key exchange for the caller (via core).
 pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let mut event_rx = ui_ctx.subscribe_call_key_events();
@@ -27,7 +26,10 @@ pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             let event = match event_rx.recv().await {
                 Ok(event) => event,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(dropped_count = n, "Call key event receiver lagged, continuing");
+                    tracing::warn!(
+                        dropped_count = n,
+                        "Call key event receiver lagged, continuing"
+                    );
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -52,37 +54,12 @@ pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                             ephemeral_public_key,
                             call_id,
                             peer_id,
-                        ).await;
+                        )
+                        .await;
                     }
-                }
-                CallKeyEvent::GroupKeyReceived {
-                    call_id,
-                    sender_id: _,
-                    key_material,
-                    key_epoch,
-                    channel_id: _,
-                } => {
-                    tracing::info!(
-                        call_id = %call_id,
-                        key_epoch = key_epoch,
-                        "Processing group call key update"
-                    );
-
-                    let ctx = ui_ctx.clone();
-                    let key = key_material.to_vec();
-                    tokio::spawn(async move {
-                        if ctx.call_set_encryption_key(key).await {
-                            tracing::info!(
-                                call_id = %call_id,
-                                key_epoch = key_epoch,
-                                "Group call key updated"
-                            );
-                        } else {
-                            tracing::error!("Failed to update group call key");
-                        }
-                    });
                 }
             }
         }
-    }).unwrap();
+    })
+    .unwrap();
 }

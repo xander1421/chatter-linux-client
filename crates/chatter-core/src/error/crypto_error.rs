@@ -125,6 +125,20 @@ pub enum CryptoError {
         attribution: IdentityChangeSource,
     },
 
+    /// The server answered the peer's Key Transparency lookup with "no entry".
+    ///
+    /// Every identity key is logged in the same transaction that stores it
+    /// (server `keytransparency.AppendLeafTx`, on registration, device linking
+    /// and republish), so a peer with a prekey bundle always has an entry. This
+    /// answer is a server choosing to skip KT for that peer — the TOFU downgrade
+    /// a MITM needs — and the session is refused. Retrying cannot help until the
+    /// server proves the key.
+    #[error("{peer_id} has no Key Transparency entry; refusing to trust its identity key")]
+    NotInTransparencyLog {
+        /// Peer account id that was looked up.
+        peer_id: String,
+    },
+
     /// Session not found for the given address.
     #[error("session not found for {0}")]
     SessionNotFound(String),
@@ -181,6 +195,10 @@ pub enum CryptoError {
         ciphertext: Vec<u8>,
         /// Underlying libsignal error string.
         reason: String,
+        /// The sealed-sender layer's group id (Signal's USMC `groupId`): the
+        /// channel a pairwise channel control belongs to, so the failure is
+        /// shown there rather than in a DM with the sender.
+        group_id: Option<Vec<u8>>,
     },
 
     /// Encryption operation failed.
@@ -237,10 +255,6 @@ pub enum CryptoError {
     /// Attachment digest verification failed.
     #[error("attachment digest mismatch")]
     AttachmentDigestMismatch,
-
-    /// Incremental MAC verification failed at a specific chunk.
-    #[error("incremental MAC mismatch at chunk {chunk_index}")]
-    IncrementalMacMismatch { chunk_index: usize },
 
     /// Attachment exceeds maximum allowed size.
     #[error("attachment too large: {size} bytes exceeds {max} byte limit")]

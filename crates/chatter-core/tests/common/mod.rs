@@ -20,10 +20,40 @@ compile_error!(
 
 pub mod assertions;
 pub mod config;
+
+/// Keep a test client off the OS keyring. Without the opt-out marker beside
+/// its database, every client a test builds asks Secret Service for a fresh
+/// passphrase entry — a desktop prompt on a developer machine, a hang in CI.
+///
+/// Also keeps every client in the process off the microphone and speakers
+/// (`CHATTER_NULL_AUDIO`): call and voice tests drive the real audio stack.
+pub fn headless(base_dir: &std::path::Path) {
+    static NULL_AUDIO: std::sync::Once = std::sync::Once::new();
+    NULL_AUDIO.call_once(|| {
+        // SAFETY: edition 2024 marks set_var unsafe because a concurrent
+        // getenv is UB. One write, made before this test builds its client;
+        // the make targets also set it in the environment, so a parallel
+        // test never reads it mid-write there.
+        unsafe { std::env::set_var(chatter_core::system::NULL_AUDIO_ENV, "1") };
+    });
+    let db_path = chatter_core::system::Directories::with_base_dir(base_dir.to_path_buf())
+        .expect("create test directories")
+        .database_path();
+    let db_dir = db_path.parent().expect("database path has a parent");
+    std::fs::write(
+        db_dir.join(chatter_core::system::keyring::NO_KEYRING_MARKER),
+        b"",
+    )
+    .expect("write no-keyring marker");
+}
+
 pub mod fixtures;
+pub mod groups;
+pub mod membership;
 
 // Re-export commonly used items
 pub use assertions::*;
 pub use config::*;
 pub use fixtures::*;
-
+#[allow(unused_imports)] // used only by tests/validated.rs
+pub use groups::*;

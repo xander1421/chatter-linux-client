@@ -1,11 +1,23 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
+import { VoiceRecording } from "voice_recording.slint";
+import { LiquidComposerSilhouette, DropletNeck } from "composer_geometry.slint";
+import { ComposerFormatToolbar } from "composer_format_toolbar.slint";
+import { ComposerReplyPreview } from "composer_reply_preview.slint";
+import { ComposerAttachmentStrip } from "composer_attachment_strip.slint";
+import { ComposerRecordingPanel } from "composer_recording_panel.slint";
+import { ComposerEditBar } from "composer_edit_bar.slint";
+import { ComposerEmojiButton, ComposerAttachButton } from "composer_action_buttons.slint";
 // Message composer component
 //
 // Enhanced message input with attachment, emoji, GIF buttons, and @ mention detection.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 
 // Markdown wrapping for the formatting toolbar. Implemented in Rust
@@ -13,42 +25,147 @@ import { MeshGlobal } from "../mesh/mesh_global.slint";
 export global TextFormat {
     // (text, format-type, sel-start-byte, sel-end-byte) -> new text
     pure callback wrap(string, string, int, int) -> string;
+    pure callback replace(string, string, int, int) -> string;
+    pure callback byte-length(string) -> int;
+    pure callback mention-query(string) -> string;
 }
 
-// Pending attachment data for the attachment tray
-export struct PendingAttachmentData {
-    id: string,
-    filename: string,
-    size-display: string,
-    category: string,   // "image", "video", "audio", "document", "code", "archive", "other"
-    is-ready: bool,
-    has-thumbnail: bool,
-    thumbnail: image,
-}
+import { PendingAttachmentData } from "composer_types.slint";
+export { PendingAttachmentData }
 
-export component MessageComposer inherits Rectangle {
+export component MessageComposer inherits GlassSurface {
+    in property <string> composer-scope: "main";
+    in property <string> thread-root-id: "";
+    property <bool> recording-here: VoiceRecording.active && VoiceRecording.owner == root.composer-scope;
+    material-enabled: false;
+    background: transparent;
+    material-level: 2;
+    elevation: 3;
+    border-radius: Spacing.radius-chrome;
+    border-width: 0px;
+    border-color: Materials.glass-edge;
+
+    in property <bool> collapsed: false;
+    // Collapsed but still holding its height, so the list above does not
+    // slide when message selection hides the composer.
+    in property <bool> keep-height: false;
+    in property <bool> keyboard-open: false;
+    visible: !root.collapsed;
+    clip: root.recording-here;
+    property <float> recording-reveal: root.recording-here ? 1 : 0;
+    animate recording-reveal {
+        duration: Appearance.reduce-motion ? 0ms : Materials.motion-standard;
+        easing: Materials.spring;
+    }
+    in property <bool> picker-open: false;
+    in property <int> attachment-prepare-serial;
+    in property <int> attachment-restore-serial;
+    in property <int> caret-end-seq;
+    // Caret only: drafts are restored through this serial too, and taking
+    // focus here opened the keyboard whenever a thread was opened.
+    changed caret-end-seq => {
+        text-input.set-selection-offsets(2147483647, 2147483647);
+    }
+    private property <bool> attachment-suspended: false;
+    private property <string> attachment-draft;
+    changed attachment-prepare-serial => {
+        root.suspend-input();
+        root.attachment-draft = root.text;
+        root.attachment-suspended = true;
+        root.input-dismissed();
+    }
+    changed attachment-restore-serial => {
+        if root.attachment-suspended && root.text == root.attachment-draft && !root.collapsed {
+            root.restore-input();
+        }
+        root.attachment-suspended = false;
+    }
+    private property <bool> input-ever-focused: false;
+    private property <int> saved-anchor;
+    private property <int> saved-cursor;
+    private property <string> saved-preedit;
+    private property <string> settled-text;
+    private property <bool> suspending-input: false;
+    function suspend-input() {
+        root.suspending-input = true;
+        root.saved-anchor = text-input.anchor-position-byte-offset;
+        root.saved-cursor = text-input.cursor-position-byte-offset;
+        if !root.input-ever-focused {
+            root.saved-cursor = TextFormat.byte-length(root.text);
+            root.saved-anchor = root.saved-cursor;
+        }
+        // Snapshot before FocusOut: Android commits preedit there, desktop
+        // drops it. Assign the same settled text afterward on both platforms,
+        // avoiding both loss and a second Android commit.
+        root.saved-preedit = text-input.preedit-text;
+        if root.saved-preedit != "" {
+            root.settled-text = TextFormat.replace(root.text, root.saved-preedit, root.saved-cursor, root.saved-cursor);
+            root.saved-cursor += TextFormat.byte-length(root.saved-preedit);
+            root.saved-anchor = root.saved-cursor;
+        }
+        text-input.clear-focus();
+        if root.saved-preedit != "" { root.text = root.settled-text; }
+        root.suspending-input = false;
+    }
+    callback input-dismissed();
+    callback keyboard-requested();
+    changed collapsed => {
+        if root.collapsed {
+            root.suspend-input();
+            root.input-focused();
+            root.input-dismissed();
+        }
+    }
+    public function restore-input() {
+        text-input.focus();
+        text-input.set-selection-offsets(root.saved-anchor, root.saved-cursor);
+    }
+    // A user-selected reply goes straight into typing. On Android focus sends
+    // InputMethodRequest::Enable through the same path as tapping TextInput.
+    public function focus-reply-input() {
+        if !root.collapsed {
+            // Android Back can hide the IME while the TextInput keeps focus.
+            // A repeated focus() then sends no Enable request, so cycle focus
+            // only for that hidden-keyboard case.
+            if root.mobile && !root.keyboard-open && text-input.has-focus {
+                text-input.clear-focus();
+            }
+            text-input.focus();
+        }
+    }
+    public function insert-emoji(emoji: string) {
+        root.text = TextFormat.replace(root.text, emoji, root.saved-anchor, root.saved-cursor);
+        root.saved-cursor = min(root.saved-anchor, root.saved-cursor) + TextFormat.byte-length(emoji);
+        root.saved-anchor = root.saved-cursor;
+        text-input.set-selection-offsets(root.saved-anchor, root.saved-cursor);
+    }
+    function start-recording() {
+        root.suspend-input();
+        root.input-focused();
+        VoiceRecording.owner = root.composer-scope;
+        VoiceRecording.thread-root = root.thread-root-id;
+        VoiceRecording.start();
+    }
     // Properties
     in property <string> placeholder: "Type a message...";
     in-out property <string> text: "";
     in property <bool> disabled: false;
     in property <[PendingAttachmentData]> pending-attachments: [];
 
-    // What the last send is doing, or "" when nothing is in flight.
-    //
-    // Sending clears the composer immediately and the message does not appear
-    // until the round trip finishes — which for attachments is a 10s + 30s-per-
-    // file budget. Between those two moments the app showed nothing at all: an
-    // emptied composer, an unchanged conversation, and no indication anything
-    // was happening. People re-tapped send, or gave up and assumed it failed.
-    //
-    // A line, not a modal or a disabled composer: the send is already detached
-    // from the input by then, so there is no reason to stop the user writing the
-    // next message while this one is on its way.
-    in property <string> send-status: "";
-
     // Edit mode properties
     in-out property <bool> is-editing: false;
     in-out property <string> edit-message-id: "";
+
+    // Entering edit (or retargeting it to another message) prefills `text`
+    // from Rust; left alone the caret stays wherever it was, usually
+    // mid-string (§112j). Put it at the end, where editing starts. The
+    // offset is clamped to the text length.
+    changed edit-message-id => {
+        if (root.edit-message-id != "") {
+            text-input.focus();
+            text-input.set-selection-offsets(2147483647, 2147483647);
+        }
+    }
 
     // Reply mode properties
     in property <bool> is-replying: false;
@@ -58,20 +175,178 @@ export component MessageComposer inherits Rectangle {
     in property <image> reply-thumbnail;
 
     // Computed properties
-    property <bool> can-send: text != "" || pending-attachments.length > 0;
+    // Text the IME is still composing counts as text. Without the preedit term a
+    // single word that the keyboard has not committed yet leaves can-send false,
+    // so the send button is disabled and the word cannot be sent at all
+    // (OPEN-ITEMS §112c).
+    property <bool> can-send: text != "" || text-input.preedit-text != "" || pending-attachments.length > 0;
+    // Keep one native input alive across the inline/raised transition. Preedit
+    // participates without being committed; attachments also raise the controls.
+    // A reply raises them too; its preview gets a separate row below them.
+    property <bool> raised-actions: text != "" || text-input.preedit-text != "" || root.has-attachments || root.is-replying;
+    // A damped neck spring pulls the droplets upward against gravity. Keeping
+    // velocity across target changes lets a send reverse the same moving drop.
+    // One tick is a tenth of the shared quick duration, including speed scale.
+    // A draft can already be present when this component is created. Start at
+    // its settled position; `changed raised-actions` only handles later edits.
+    private property <float> lift-progress: 0;
+    private property <float> lift-velocity: 0;
+    init => { root.lift-progress = root.raised-actions ? 1 : 0; }
+    property <float> lift-geometry: min(1.08, max(0, root.lift-progress));
+    // The contour can overshoot; hit targets and the field stop at their
+    // aligned endpoints so the neck never pulls a glyph across the input.
+    property <float> lift-layout: min(1, max(0, root.lift-progress));
+    // The hit boxes follow the clamped layout; only the visual droplets bob
+    // above their landing point as the shared spring crosses its target.
+    property <length> droplet-bob: -max(0, root.lift-progress - 1) * 60px
+        + max(0, -root.lift-progress) * 20px;
+    changed raised-actions => {
+        if Appearance.reduce-motion {
+            root.lift-progress = root.raised-actions ? 1 : 0;
+            root.lift-velocity = 0;
+            lift-timer.running = false;
+        } else {
+            lift-timer.running = true;
+        }
+    }
+    lift-timer := Timer {
+        interval: Materials.motion-quick / 10;
+        running: false;
+        triggered => {
+            if Appearance.reduce-motion {
+                root.lift-progress = root.raised-actions ? 1 : 0;
+                root.lift-velocity = 0;
+                self.running = false;
+                return;
+            }
+            // Tension starts the rise slowly, gravity pulls it back from the
+            // crest, and damping leaves one small oscillation before rest.
+            root.lift-velocity = (root.lift-velocity
+                + ((root.raised-actions ? 1 : 0) - root.lift-progress)
+                    * (root.raised-actions ? 0.12 : 0.16)) * 0.65;
+            root.lift-progress += root.lift-velocity;
+            if max(root.lift-velocity, -root.lift-velocity) < 0.002
+                && max(root.lift-progress - (root.raised-actions ? 1 : 0),
+                    (root.raised-actions ? 1 : 0) - root.lift-progress) < 0.002 {
+                root.lift-progress = root.raised-actions ? 1 : 0;
+                root.lift-velocity = 0;
+                self.running = false;
+            }
+        }
+    }
+    property <float> reply-reveal: is-replying ? 1 : 0;
+    animate reply-reveal {
+        duration: Materials.motion-standard;
+        easing: Materials.spring;
+    }
+    property <float> strip-reveal: has-attachments ? 1 : 0;
+    animate strip-reveal {
+        duration: Materials.motion-standard;
+        easing: Materials.spring;
+    }
+    property <bool> show-attachment-action: !root.is-editing && (MeshGlobal.active-id == "" || (MeshGlobal.active-kind != "dm" && MeshGlobal.active-kind != "private-channel"));
+    property <bool> show-terminal-action: root.can-send || (!root.is-editing && MeshGlobal.active-id == "");
+    property <length> action-shell-height: Spacing.touch-target-min + row-padding * 2;
+    property <length> attachment-chip-height: Spacing.touch-target-min;
+    property <length> attachment-band-height: attachment-chip-height + Spacing.sm * 2;
+    // Raised controls, attachment strip, then reply preview each own a row;
+    // the reply stays directly above the input even with files attached.
+    property <length> reply-row-height: is-replying ? max(action-shell-height, 48px * Appearance.text-grow) : 0px;
+    property <length> raised-toolbar-height: lift-layout
+        * (action-shell-height + Spacing.xs
+            + (has-attachments ? attachment-band-height + Spacing.xs : 0px)
+            + (is-replying ? reply-row-height + Spacing.xs : 0px));
+    // The host already pads by the measured composer height, including the
+    // attachment and reply rows. Add only the circle row as it lifts.
+    out property <length> list-clearance-extra: (root.collapsed && !root.keep-height) || root.recording-here
+        ? 0px : lift-layout * (Spacing.touch-target-min + Spacing.xs);
+    property <length> lower-terminal-width: show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px;
+    // Reserve the inline terminal only when a mic actually occupies it. In
+    // rooms without voice recording, Send claims its width as lift advances.
+    property <length> inline-terminal-width: !root.is-editing && MeshGlobal.active-id == ""
+        ? Spacing.touch-target-min + Spacing.xs : 0px;
+    property <length> trailing-actions-width: (show-attachment-action ? Spacing.touch-target-min + Spacing.xs : 0px)
+        + inline-terminal-width;
+
+    // What actually gets sent. `TextInput.text` EXCLUDES the preedit -- the text
+    // the input method is still composing -- so sending `text` silently drops
+    // whatever the keyboard had in flight and leaves it behind in the box.
+    // Measured on a Galaxy S9: typing "hello-ui-test" and pressing send
+    // delivered "hello-ui-" and left "test" in the composer. The preedit is
+    // spliced in at the caret (`composed-text`), not appended.
+    property <string> outgoing-text: root.composed-text;
+
+    // `text` with the input method's in-flight composition spliced in at the
+    // caret (the byte offset the preedit is drawn at). The host mirrors these
+    // so it can settle a composition this element may no longer be alive to
+    // settle itself: a conversation switch retargets `text`, and leaving the
+    // chat destroys this TextInput without a FocusOut.
+    out property <bool> composing: text-input.preedit-text != "";
+    out property <string> composed-text: TextFormat.replace(root.text, text-input.preedit-text,
+        text-input.cursor-position-byte-offset, text-input.cursor-position-byte-offset);
+
+    // Clearing `text` alone does NOT clear the preedit: the composition belongs
+    // to the input method, and Slint keeps rendering it. After a send that means
+    // the composing word stays in the box and would be prepended to the NEXT
+    // message. Dropping focus is the only handle Slint gives us to make the IME
+    // finish composing; re-focusing immediately keeps the keyboard up so a user
+    // can send several messages in a row.
+    function reset-after-send() {
+        root.text = "";
+        root.reset-composition();
+    }
+
+    // Make the input method finish composing. Dropping focus is the only handle
+    // Slint gives us for that; re-focusing immediately keeps the keyboard up.
+    //
+    // Only with a composition to finish. On Android the focus drop sends
+    // InputMethodRequest::Disable (a real hideSoftInput) and the re-focus an
+    // Enable (showSoftInput), so the keyboard closed and reopened on every
+    // send — and there was never anything to end: the Android backend commits
+    // the composition on the send tap's pointer-down and never hands Slint a
+    // pre-edit, so `preedit-text` is always empty there. A live pre-edit
+    // (desktop CJK with Enter) still takes the cycle.
+    function reset-composition() {
+        if text-input.preedit-text == "" { return; }
+        text-input.clear-focus();
+        text-input.focus();
+    }
     property <bool> has-attachments: pending-attachments.length > 0;
 
-    // Line height and sizing constants
-    property <length> line-height: 22px;
     // The input row's floor, and with it the height of the emoji / attach /
     // send boxes beside it: those are touch targets, so the floor is the touch
     // minimum. A shorter row was what made them 36dp on a phone.
     property <length> min-input-height: Spacing.touch-target-min;
-    // ~18 lines. Beyond this the message list above would collapse to nothing.
-    // Past this cap, the inner Rectangle clips and the cursor stays in view.
-    property <length> max-input-height: 400px;
+    // The host supplies the chat pane after IME/system insets. Leave room for
+    // history even on a short landscape pane, and stop growing at six lines.
+    in property <length> available-pane-height: 800px;
+    property <length> input-line-height: line-measure.preferred-height;
+    property <length> max-input-height: root.mobile
+        ? max(min-input-height, min(input-line-height * 6 + padding-vertical,
+            available-pane-height * 0.4 - edit-bar-height
+                - format-bar-height - raised-toolbar-height - row-padding * 2))
+        // Desktop: 400px, but never more than half the pane — in an 800x600
+        // window a long draft grew over two thirds of it and hid the chat.
+        : max(min-input-height, min(400px, available-pane-height * 0.5));
     property <length> padding-vertical: Spacing.sm * 2;
-
+    function reveal-cursor() {
+        // Native geometry shapes the full input and follows the actual IME
+        // selection endpoint, including selection-only composition updates.
+        root.caret-top = text-input.y + text-input.visual-cursor-y;
+        if root.caret-top + input-scroll.viewport-y < 0px {
+            input-scroll.viewport-y = -root.caret-top;
+        } else if root.caret-top + text-input.visual-cursor-height + input-scroll.viewport-y > input-scroll.height {
+            input-scroll.viewport-y = input-scroll.height - root.caret-top - text-input.visual-cursor-height;
+        }
+        input-scroll.viewport-y = min(0px, max(input-scroll.height - input-scroll.viewport-height,
+            input-scroll.viewport-y));
+    }
+    private property <length> caret-top;
+    line-measure := Text {
+        visible: false;
+        text: "Mg";
+        font-size: Typography.base;
+    }
     // Use the TextInput's actual `preferred-height` (recomputed by Slint's
     // text shaper from the wrapped layout) instead of guessing from
     // character count — guess undercounts when words don't break and the
@@ -81,22 +356,15 @@ export component MessageComposer inherits Rectangle {
         min(max-input-height, text-input.preferred-height + padding-vertical)
     );
 
-    // Attachment tray height
-    property <length> attachment-tray-height: has-attachments ? 72px : 0px;
-
-    // Edit bar height
-    property <length> edit-bar-height: is-editing ? 36px : 0px;
-    
-    // Reply bar height
-    property <length> reply-bar-height: is-replying ? 48px : 0px;
-
-    // Ghost-writing AI suggestion (UI-only placeholder — backend wires later)
-    in property <string> ghost-text: "";
-    in property <bool> ghost-writing-enabled: false;
+    // Bar heights. Each bar is drawn at exactly this height, and the bars
+    // hold text, so they grow with the text size.
+    property <length> edit-bar-height: is-editing ? Spacing.touch-target-min * Appearance.text-grow : 0px;
 
     // Callbacks
-    callback send(string);
+    // Only clear the native draft/composition once core accepts ownership.
+    callback send(string) -> bool;
     callback send-edit(string, string);  // (message_id, new_text)
+    callback edit-last-requested();
     callback cancel-edit();
     callback cancel-reply();
     callback attachment-clicked();
@@ -104,12 +372,12 @@ export component MessageComposer inherits Rectangle {
     // Text paste is handled by TextInput itself (this doesn't consume the key).
     callback paste-image();
     callback emoji-clicked();
-    callback gif-clicked();
+    // The text field took focus: the emoji / GIF panel gives way to the
+    // keyboard, the way Signal toggles between the two.
+    callback input-focused();
     callback mention-triggered(string);
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
-    callback process-text(string) -> string;  // Insert word breaks for wrapping
-    callback accept-ghost-text();  // Accept the AI suggestion (e.g. Tab key)
 
     // Wrap the current selection (or insert markers at the cursor) with the
     // markdown for `fmt`, then re-select the inner text. Byte offsets captured
@@ -147,9 +415,10 @@ export component MessageComposer inherits Rectangle {
     // A selection is the one trigger that can never land in that window: it
     // takes a deliberate drag or long-press that ENDS before the bar appears,
     // and typing collapses a selection rather than making one. The composer's
-    // height is now invariant across the whole tap-then-type sequence. It is
-    // also what the bar is for — with nothing selected the buttons wrap an
-    // empty range.
+    // formatting bar stays absent across the tap-then-type sequence. The
+    // populated-text action row below now deliberately changes geometry on the
+    // first character without replacing the input or changing its focus.
+    // With nothing selected the formatting buttons would wrap an empty range.
     property <bool> show-formatting:
         text-input.anchor-position-byte-offset != text-input.cursor-position-byte-offset;
 
@@ -166,582 +435,203 @@ export component MessageComposer inherits Rectangle {
     // 48px touch target, so the row is already tall enough to breathe on its own
     // — 16px on top of it made the composer 65px for one line of text and left
     // the screen looking bottom-heavy. The buttons are untouched.
-    property <length> row-padding: Spacing.xs;
+    // The same inset on all four sides of the row, so the field and the
+    // buttons are concentric with the shell (Spacing.radius-chrome-inner).
+    property <length> row-padding: Spacing.chrome-inset;
 
     // Layout - dynamic height based on content (includes Bento Box when expanded)
-    height: content-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + row-padding * 2 + 1px;
-    animate height { duration: 150ms; easing: ease-out; }
+    property <length> recording-height: max(80px, Spacing.touch-target-min + row-padding * 2);
+    height: root.collapsed && !root.keep-height ? 0px : root.recording-here ? recording-height : content-height + raised-toolbar-height + edit-bar-height + format-bar-height + row-padding * 2;
+    // Action/input positions change immediately with text/preedit on every
+    // platform. Settle the shell with them so the focused native field remains
+    // inside its bounds between consecutive key events.
     // "Touch input", plumbed from ChatLayout.
     in property <bool> mobile: false;
+    in property <bool> enter-sends: true;
 
-    // On a phone the composer spans the full width against a black page, so a
-    // lifted fill with a border on all four sides draws a visible rectangle
-    // with seams down the left and right edges of the screen. Edge-to-edge it
-    // takes the page colour and keeps only the top hairline below, which is
-    // the one edge that actually separates it from the messages. Desktop keeps
-    // the bordered card — there it sits inside a column and the border is what
-    // gives it its shape.
-    background: root.mobile ? Colors.background : Colors.surface;
-    border-width: root.mobile ? 0px : 1px;
-    border-color: Colors.neo-highlight;
-
-    // Neo top edge — highlight border replaces flat divider
-    Rectangle {
-        y: 0;
-        width: 100%;
-        height: 1px;
-        background: Colors.neo-highlight-strong;
+    // Accessories retain their own material when the raised main row is transparent.
+    accessory-surface := GlassSurface {
+        // Slint centers fixed-size children by default. Anchor the accessory
+        // material to its indicators, or an edit paints a full-width empty bar
+        // behind the raised action row instead of behind the edit indicator.
+        y: 0px;
+        visible: root.raised-actions && !root.recording-here && self.height > 0px;
+        width: root.width;
+        height: root.edit-bar-height + root.format-bar-height;
+        material-level: root.material-level;
+        material-tint: Materials.chat-chrome;
+        darkening: Materials.chat-darkening;
+        elevation: root.elevation;
+        backdrop-paused: root.backdrop-paused;
     }
 
-    VerticalLayout {
+    idle-composer := VerticalLayout {
         // 100% width for proper text wrapping in children
         width: 100%;
-        padding-top: 1px;
+        opacity: min(1, max(0, 1 - root.recording-reveal));
 
         // Edit mode indicator bar
-        if root.is-editing: Rectangle {
+        if root.is-editing: ComposerEditBar {
             width: 100%;
-            height: 36px;
-            background: Colors.primary.transparentize(0.9);
-
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                spacing: Spacing.sm;
-                alignment: space-between;
-
-                HorizontalLayout {
-                    spacing: Spacing.sm;
-                    alignment: start;
-
-                    Text {
-                        text: "\u{270F}";  // Pencil emoji
-                        font-family: Typography.font-family-emoji;
-                        font-size: Typography.base;
-                        vertical-alignment: center;
-                    }
-
-                    Text {
-                        text: "Editing message";
-                        color: Colors.primary;
-                        font-size: Typography.sm;
-                        font-weight: 500;
-                        vertical-alignment: center;
-                    }
-                }
-
-                // Cancel button
-                Rectangle {
-                    width: 24px;
-                    height: 24px;
-                    background: cancel-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
-                    border-radius: Spacing.radius-sm;
-                    accessible-role: button;
-                    accessible-label: "Cancel edit";
-
-                    Text {
-                        text: "\u{00D7}";  // X mark
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    cancel-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.cancel-edit();
-                        }
-                    }
-                }
-            }
-        }
-
-        // Reply mode indicator bar
-        if root.is-replying: Rectangle {
-            width: 100%;
-            height: 48px;
-            background: Colors.primary.transparentize(0.95);
-
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                spacing: Spacing.sm;
-                alignment: space-between;
-
-                HorizontalLayout {
-                    spacing: Spacing.sm;
-                    alignment: start;
-
-                    // Reply accent bar
-                    Rectangle {
-                        width: 4px;
-                        height: parent.height - Spacing.sm * 2;
-                        y: Spacing.sm;
-                        background: Colors.primary;
-                        border-radius: 2px;
-                    }
-
-                    // Thumbnail preview for image replies
-                    if root.reply-has-thumbnail: Rectangle {
-                        width: 36px;
-                        height: 36px;
-                        border-radius: Spacing.radius-sm;
-                        clip: true;
-                        background: Colors.surface-hover;
-
-                        Image {
-                            width: 100%;
-                            height: 100%;
-                            source: root.reply-thumbnail;
-                            image-fit: cover;
-                        }
-                    }
-
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 2px;
-
-                        Text {
-                            text: "Reply to " + root.reply-to-sender;
-                            color: Colors.primary;
-                            font-size: Typography.sm;
-                            font-weight: 600;
-                            overflow: elide;
-                        }
-
-                        Text {
-                            text: root.reply-to-preview;
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            overflow: elide;
-                        }
-                    }
-                }
-
-                // Cancel reply button
-                Rectangle {
-                    width: 24px;
-                    height: 24px;
-                    background: cancel-reply-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
-                    border-radius: Spacing.radius-sm;
-                    accessible-role: button;
-                    accessible-label: "Cancel reply";
-
-                    Text {
-                        text: "\u{00D7}";  // X mark
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    cancel-reply-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.cancel-reply();
-                        }
-                    }
-                }
-            }
+            height: root.edit-bar-height;
+            cancel-edit => { root.reset-composition(); root.cancel-edit(); }
         }
 
         // Formatting toolbar (toggled)
-        if root.show-formatting: Rectangle {
+        if root.show-formatting: ComposerFormatToolbar {
             width: 100%;
             height: root.format-bar-height;
-            background: Colors.background;
-
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                spacing: 2px;
-                alignment: start;
-
-                // Bold button
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 44px;
-                        height: 44px;
-                        border-radius: Spacing.radius-sm;
-                        background: fmt-bold-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Bold";
-
-                        Text {
-                            text: "B";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: Typography.bold;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        fmt-bold-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.apply-format("bold"); }
-                        }
-                    }
-                }
-
-                // Italic button
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 44px;
-                        height: 44px;
-                        border-radius: Spacing.radius-sm;
-                        background: fmt-italic-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Italic";
-
-                        Text {
-                            text: "I";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-italic: true;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        fmt-italic-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.apply-format("italic"); }
-                        }
-                    }
-                }
-
-                // Strikethrough button
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 44px;
-                        height: 44px;
-                        border-radius: Spacing.radius-sm;
-                        background: fmt-strike-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Strikethrough";
-
-                        Text {
-                            text: "S";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        // Strikethrough line
-                        Rectangle {
-                            width: 10px;
-                            height: 1px;
-                            x: (parent.width - self.width) / 2;
-                            y: parent.height / 2;
-                            background: Colors.text-secondary;
-                        }
-
-                        fmt-strike-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.apply-format("strikethrough"); }
-                        }
-                    }
-                }
-
-                // Code button
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 44px;
-                        height: 44px;
-                        border-radius: Spacing.radius-sm;
-                        background: fmt-code-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Inline code";
-
-                        Text {
-                            text: "</>";
-                            color: Colors.text-secondary;
-                            font-size: Typography.xxs;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        fmt-code-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.apply-format("code"); }
-                        }
-                    }
-                }
-
-                // Separator
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 1px;
-                        height: 20px;
-                        background: Colors.text-muted.with-alpha(0.2);
-                    }
-                }
-
-                // Code block button
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 44px;
-                        height: 44px;
-                        border-radius: Spacing.radius-sm;
-                        background: fmt-codeblock-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Code block";
-
-                        Text {
-                            text: "```";
-                            color: Colors.text-secondary;
-                            font-size: Typography.xxs;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        fmt-codeblock-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.apply-format("codeblock"); }
-                        }
-                    }
-                }
-            }
+            apply-format(fmt) => { root.apply-format(fmt); }
         }
 
-        // In-flight send. Sits above the input so it reads as a property of the
-        // conversation, and disappears the moment the message lands or fails —
-        // failure additionally raises the error toast.
-        if root.send-status != "": Rectangle {
+        // Populated actions have compact shells with transparent space between them.
+        // Absolute geometry changes neither the native input nor focus/selection.
+        Rectangle {
             width: 100%;
-            height: 28px;
-            background: Colors.background;
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                spacing: Spacing.sm;
-                alignment: start;
-                Text {
-                    text: root.send-status;
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                }
+            height: root.content-height + root.raised-toolbar-height + root.row-padding * 2;
+            property <length> action-y: root.row-padding + (root.content-height - Spacing.touch-target-min) / 2
+                + root.lift-layout * ((root.action-shell-height - Spacing.touch-target-min) / 2
+                    - root.row-padding - (root.content-height - Spacing.touch-target-min) / 2);
+            property <length> lower-action-y: root.row-padding + root.raised-toolbar-height + root.content-height - Spacing.touch-target-min;
+
+            // One bar surface; the circles and their temporary bridges sit above
+            // it without adding another backdrop capture.
+            GlassSurface {
+                x: 0px;
+                y: root.raised-toolbar-height;
+                width: parent.width;
+                height: parent.height - self.y;
+                border-radius: Spacing.radius-chrome;
+                material-level: root.material-level;
+                material-tint: Materials.chat-chrome;
+                darkening: Materials.chat-darkening;
+                elevation: root.elevation;
+                backdrop-paused: root.backdrop-paused;
+                visible: !root.recording-here;
             }
-        }
-
-        // Attachment tray (shown when there are pending attachments)
-        if root.has-attachments: Rectangle {
-            width: 100%;
-            height: 72px;
-            background: Colors.background;
-
-            Flickable {
-                width: 100%;
-                height: 100%;
-                // Calculate content width: each attachment is 180px + spacing, plus add button 56px
-                viewport-width: max(self.width, (180px + Spacing.sm) * root.pending-attachments.length + 56px + Spacing.md + Spacing.sm);
-                viewport-height: self.height;
-                interactive: true;
-
-                HorizontalLayout {
-                    padding: Spacing.sm;
-                    padding-left: Spacing.md;
-                    spacing: Spacing.sm;
-                    alignment: start;
-
-                    // Pending attachment items — Neo convex cards
-                    for attachment in root.pending-attachments: Rectangle {
-                        width: 180px;
-                        height: 56px;
-                        background: Colors.surface;
-                        border-radius: Spacing.radius-md;
-                        border-width: 1px;
-                        border-color: Colors.neo-highlight;
-                        drop-shadow-blur: Spacing.neo-blur-sm;
-                        drop-shadow-offset-x: Spacing.neo-offset-sm;
-                        drop-shadow-offset-y: Spacing.neo-offset-sm;
-                        drop-shadow-color: Colors.neo-shadow;
-                        opacity: attachment.is-ready ? 1.0 : 0.7;
-
-                        property <color> category-bg: attachment.category == "image" ? Colors.cat-image :
-                                                      attachment.category == "video" ? Colors.cat-video :
-                                                      attachment.category == "audio" ? Colors.cat-audio :
-                                                      attachment.category == "document" ? Colors.cat-document :
-                                                      attachment.category == "code" ? Colors.cat-code :
-                                                      attachment.category == "archive" ? Colors.cat-archive :
-                                                      Colors.text-muted;
-
-                        property <string> category-emoji: attachment.category == "image" ? "\u{1F5BC}\u{FE0F}" :
-                                                          attachment.category == "video" ? "\u{1F3AC}\u{FE0F}" :
-                                                          attachment.category == "audio" ? "\u{1F3B5}\u{FE0F}" :
-                                                          attachment.category == "document" ? "\u{1F4C4}\u{FE0F}" :
-                                                          attachment.category == "code" ? "\u{1F4DD}\u{FE0F}" :
-                                                          attachment.category == "archive" ? "\u{1F4E6}\u{FE0F}" :
-                                                          "\u{1F4CE}\u{FE0F}";
-
-                        HorizontalLayout {
-                            padding: Spacing.sm;
-                            spacing: Spacing.sm;
-
-                            // Icon or thumbnail with loading indicator
-                            Rectangle {
-                                width: 40px;
-                                height: 40px;
-                                border-radius: Spacing.radius-sm;
-                                background: attachment.has-thumbnail ? transparent : category-bg.transparentize(0.8);
-                                clip: true;
-
-                                // Show thumbnail for images
-                                if attachment.has-thumbnail && attachment.is-ready: Image {
-                                    width: 100%;
-                                    height: 100%;
-                                    source: attachment.thumbnail;
-                                    image-fit: cover;
-                                }
-
-                                // Show icon for non-images when ready
-                                if !attachment.has-thumbnail && attachment.is-ready: Text {
-                                    width: 100%;
-                                    height: 100%;
-                                    text: category-emoji;
-                                    font-family: Typography.font-family-emoji;
-                                    font-size: Typography.lg;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-
-                                // Loading indicator when not ready
-                                if !attachment.is-ready: Text {
-                                    width: 100%;
-                                    height: 100%;
-                                    text: "\u{23F3}";  // Hourglass
-                                    font-size: Typography.lg;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            // File info
-                            VerticalLayout {
-                                horizontal-stretch: 1;
-                                alignment: center;
-                                spacing: 2px;
-
-                                Text {
-                                    text: attachment.filename;
-                                    color: Colors.text-primary;
-                                    font-size: Typography.xs;
-                                    overflow: elide;
-                                }
-                                HorizontalLayout {
-                                    spacing: 4px;
-
-                                    Text {
-                                        text: attachment.is-ready ? attachment.size-display : "Encrypting...";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                    }
-                                }
-                            }
-
-                            // Remove button
-                            Rectangle {
-                                width: 24px;
-                                height: 24px;
-                                background: remove-touch.has-hover ? Colors.error.transparentize(0.7) : Colors.error.transparentize(0.9);
-                                border-radius: Spacing.radius-full;
-                                accessible-role: button;
-                                accessible-label: "Remove attachment";
-
-                                Text {
-                                    width: 100%;
-                                    height: 100%;
-                                    text: "\u{00D7}";
-                                    font-size: Typography.xs;
-                                    color: Colors.error;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-
-                                remove-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.remove-attachment(attachment.id);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Add more button — Neo dashed outline
-                    Rectangle {
-                        width: 56px;
-                        height: 56px;
-                        background: add-more-touch.has-hover ? Colors.surface-hover : Colors.neo-inset-bg;
-                        border-width: 1px;
-                        border-color: add-more-touch.has-hover ? Colors.neo-highlight-strong : Colors.neo-inset-shadow;
-                        border-radius: Spacing.radius-md;
-                        accessible-role: button;
-                        accessible-label: "Add attachment";
-
-                        Text {
-                            width: 100%;
-                            height: 100%;
-                            text: "+";
-                            font-size: Typography.xxl;
-                            color: Colors.text-muted;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        add-more-touch := TouchArea {
-                            enabled: !root.disabled;
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.attachment-clicked();
-                            }
-                        }
-                    }
-                }
+            composer-silhouette := LiquidComposerSilhouette {
+                width: parent.width;
+                height: parent.height;
+                rise: root.lift-geometry;
+                velocity: root.lift-velocity;
+                field-top: root.raised-toolbar-height / 1px;
+                trailing-drop: root.show-attachment-action;
+                visible: !root.recording-here;
             }
-        }
 
-        // Main input area - using HorizontalLayout for proper width distribution
-        HorizontalLayout {
-            width: 100%;
-            height: root.content-height + root.row-padding * 2;
-            padding-left: Spacing.md;
-            padding-right: Spacing.md;
-            padding-top: root.row-padding;
-            padding-bottom: root.row-padding;
-            // 4px between the field and the three 48px buttons. At 8px the gaps
-            // read as part of the buttons, which are already the widest thing in
-            // the row; the width goes to the field instead.
-            spacing: Spacing.xs;
-            alignment: stretch;
+            DropletNeck {
+                x: root.row-padding * (1 - root.lift-layout);
+                height: parent.height;
+                rise: root.lift-geometry;
+                field-top: root.raised-toolbar-height / 1px;
+                circle-bottom: (parent.action-y + root.droplet-bob + Spacing.touch-target-min) / 1px;
+                visible: !root.recording-here;
+            }
+            if root.show-attachment-action: DropletNeck {
+                x: parent.width - root.row-padding * (1 - root.lift-layout)
+                    - Spacing.touch-target-min - (1 - root.lift-layout) * root.inline-terminal-width;
+                height: parent.height;
+                rise: root.lift-geometry;
+                field-top: root.raised-toolbar-height / 1px;
+                circle-bottom: (parent.action-y + root.droplet-bob + Spacing.touch-target-min) / 1px;
+                visible: !root.recording-here;
+            }
 
-            // Text input area — Neo inset (concave, pressed into surface).
-            // min-width: 0 lets it shrink below its content's preferred width so
-            // the fixed-size emoji/attach/send buttons always stay on-screen
-            // (otherwise a long word / placeholder pushes Send past the edge).
+            // Reply preview directly above the field, beneath the raised
+            // action circles. Its own row remains reserved during the lift.
+            if root.is-replying: ComposerReplyPreview {
+                x: root.row-padding;
+                y: root.action-shell-height + Spacing.xs
+                    + (root.has-attachments ? root.attachment-band-height + Spacing.xs : 0px);
+                width: max(0px, parent.width - root.row-padding * 2);
+                height: min(root.reply-row-height,
+                    max(0px, root.raised-toolbar-height - self.y - Spacing.xs));
+                row-padding: root.row-padding;
+                action-shell-height: root.action-shell-height;
+                attachment-band-height: root.attachment-band-height;
+                raised-toolbar-height: root.raised-toolbar-height;
+                reply-row-height: root.reply-row-height;
+                reply-reveal: root.reply-reveal;
+                has-attachments: root.has-attachments;
+                reply-has-thumbnail: root.reply-has-thumbnail;
+                reply-thumbnail: root.reply-thumbnail;
+                reply-to-sender: root.reply-to-sender;
+                reply-to-preview: root.reply-to-preview;
+                material-level: root.material-level;
+                elevation: root.elevation;
+                backdrop-paused: root.backdrop-paused;
+                cancel-reply => { root.cancel-reply(); }
+            }
+
+            // Attachment cards sit between the controls and the reply row.
+            if root.has-attachments: ComposerAttachmentStrip {
+                x: Spacing.touch-target-min + root.row-padding * 2 + Spacing.xs;
+                y: root.action-shell-height + Spacing.xs;
+                width: max(0px, parent.width - (root.show-attachment-action ? root.action-shell-height : 0px) - self.x - Spacing.xs);
+                height: min(root.attachment-band-height,
+                    max(0px, root.raised-toolbar-height - self.y - Spacing.xs));
+                row-padding: root.row-padding;
+                action-shell-height: root.action-shell-height;
+                attachment-band-height: root.attachment-band-height;
+                raised-toolbar-height: root.raised-toolbar-height;
+                attachment-chip-height: root.attachment-chip-height;
+                strip-reveal: root.strip-reveal;
+                show-attachment-action: root.show-attachment-action;
+                disabled: root.disabled;
+                pending-attachments: root.pending-attachments;
+                material-level: root.material-level;
+                elevation: root.elevation;
+                backdrop-paused: root.backdrop-paused;
+                remove-attachment(id) => { root.remove-attachment(id); }
+                attachment-clicked => { root.attachment-clicked(); }
+            }
+
+            ComposerEmojiButton {
+                x: root.row-padding * (1 - root.lift-layout);
+                y: parent.action-y + root.droplet-bob;
+                lift-layout: root.lift-layout;
+                picker-open: root.picker-open;
+                mobile: root.mobile;
+                disabled: root.disabled;
+                surface-material-level: root.material-level;
+                surface-backdrop-paused: root.backdrop-paused;
+                suspend-input => { root.suspend-input(); }
+                restore-input => { root.restore-input(); }
+                keyboard-requested => { root.keyboard-requested(); }
+                emoji-clicked => { root.emoji-clicked(); }
+            }
+
+            // One native input below the toolbar beside Send; compact inline when empty.
             Rectangle {
-                horizontal-stretch: 1;
-                min-width: 0px;
+                x: root.row-padding + (1 - root.lift-layout) * (Spacing.touch-target-min + Spacing.xs);
+                y: root.row-padding + root.raised-toolbar-height;
+                width: parent.width - root.row-padding * 2
+                    - (root.lift-layout * root.lower-terminal-width
+                        + (1 - root.lift-layout) * (Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width + Spacing.xs));
                 height: root.content-height;
-                background: Colors.neo-inset-bg;
-                border-radius: Spacing.radius-lg;
-                border-width: 1px;
-                border-color: text-input.has-focus ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+                // A brighter inset over the one sampled composer surface. The
+                // native TextInput stays mounted while controls lift and settle.
+                background: Appearance.glass-effects
+                    ? (Appearance.dark ? #ffffff11 : #ffffff6d)
+                    : Colors.inset;
+                // Concentric with the shell: radius-chrome − chrome-inset.
+                border-radius: Spacing.radius-chrome-inner;
+                // The glass shell supplies the resting silhouette. Keep a
+                // physical-pixel focus cue without a second permanent rim.
+                border-width: text-input.has-focus ? 1phx : 0px;
+                border-color: Colors.primary;
                 opacity: root.disabled ? 0.5 : 1.0;
                 clip: true;
-                accessible-role: AccessibleRole.text-input;
-                accessible-label: "Message input";
 
-                // Placeholder text (shown when empty, fades on focus)
-                if root.text == "": Text {
+                // Placeholder text (shown when empty, fades on focus).
+                //
+                // `root.text` EXCLUDES the preedit, so while the input method is
+                // composing a word — which on Android is the whole time you are
+                // typing one — text is still "" and the placeholder stayed drawn
+                // UNDERNEATH the composing characters: "as" overlapping
+                // "ype a message...". That overlap is what reads as the text
+                // flashing (OPEN-ITEMS §112n).
+                if root.text == "" && text-input.preedit-text == "": Text {
                     x: Spacing.md;
                     y: (parent.height - self.preferred-height) / 2;
                     width: parent.width - Spacing.md * 2;
@@ -750,161 +640,182 @@ export component MessageComposer inherits Rectangle {
                     font-size: Typography.base;
                     wrap: word-wrap;
                     opacity: text-input.has-focus ? 0.5 : 1.0;
-                    animate opacity { duration: 150ms; }
+                    animate opacity { duration: Materials.feedback-duration; }
                 }
 
-                // Text input — raw TextInput. A previous swap to std-widgets
-                // `TextEdit` (a ScrollView wrapper) intercepted pointer
-                // events on desktop, leaving the field unclickable.
-                text-input := TextInput {
-                    x: Spacing.md;
-                    // Centred while the row is at its floor, top-anchored once the
-                    // text grows past it — otherwise the first line would sit
-                    // Spacing.sm above the placeholder it replaces.
-                    y: max(Spacing.sm, (parent.height - self.preferred-height) / 2);
-                    width: parent.width - Spacing.md * 2;
-                    height: parent.height - Spacing.sm * 2;
-                    color: Colors.text-primary;
-                    font-size: Typography.base;
-                    text <=> root.text;
-                    enabled: !root.disabled;
-                    wrap: word-wrap;
-                    single-line: false;
-
-                    key-pressed(event) => {
-                        if (event.text == "\n" && !event.modifiers.shift) {
-                            if (root.can-send) {
-                                if (root.is-editing) {
-                                    root.send-edit(root.edit-message-id, root.text);
-                                } else {
-                                    root.send(root.text);
-                                }
-                                root.text = "";
-                            }
-                            return accept;
-                        }
-                        if (event.text == Key.Tab && root.ghost-writing-enabled && root.ghost-text != "") {
-                            root.accept-ghost-text();
-                            return accept;
-                        }
-                        if (event.text == "v" && (event.modifiers.control || event.modifiers.meta)) {
-                            // Attach clipboard image if present; TextInput still
-                            // handles text paste (we don't consume the event).
-                            root.paste-image();
-                            return reject;
-                        }
-                        return reject;
-                    }
-
-                    edited => {
-                        if (self.text != "") {
-                            root.check-mention-trigger(self.text);
-                        }
-                        root.typing-changed(self.text != "");
-                    }
-                }
-
-                // Ghost-writing overlay — low-contrast italicized AI suggestion
-                if root.ghost-writing-enabled && root.ghost-text != "" && root.text != "": Text {
+                // Keep raw TextInput: no std TextEdit/ScrollView focus wrapper.
+                // Noninteractive Flickable forwards desktop pointer/selection
+                // events unchanged (pinned core items/flickable.rs). Mobile may
+                // pan long drafts; cursor movement follows in both modes.
+                input-scroll := Flickable {
                     x: Spacing.md;
                     y: Spacing.sm;
                     width: parent.width - Spacing.md * 2;
-                    text: root.text + root.ghost-text;
-                    color: Colors.text-muted.with-alpha(0.4);
-                    font-size: Typography.base;
-                    font-italic: true;
-                    font-weight: Typography.light;
-                    wrap: word-wrap;
-                    opacity: 0.8;
+                    height: parent.height - Spacing.sm * 2;
+                    viewport-width: self.width;
+                    viewport-height: max(self.height, text-input.preferred-height);
+                    interactive: root.mobile;
+                    changed height => { root.reveal-cursor(); }
+                    changed viewport-height => { root.reveal-cursor(); }
+                    text-input := TextInput {
+                        // The field itself is the accessible node: TalkBack reads
+                        // what was typed (Android bridge maps value → text).
+                        accessible-label: "Message input";
+                        x: 0px;
+                        // Centred while the row is at its floor, top-anchored once the
+                        // text grows past it — otherwise the first line would sit
+                        // Spacing.sm above the placeholder it replaces.
+                        y: max(0px, (input-scroll.height - self.preferred-height) / 2);
+                        width: input-scroll.width;
+                        height: max(input-scroll.height, self.preferred-height);
+                        page-height: input-scroll.height;
+                        changed visual-cursor-y => { root.reveal-cursor(); }
+                        changed visual-cursor-height => { root.reveal-cursor(); }
+                        changed y => { root.reveal-cursor(); }
+                        color: Colors.text-primary;
+                        font-size: Typography.base;
+                        text <=> root.text;
+                        enabled: !root.disabled && !root.collapsed && !root.recording-here;
+                        wrap: word-wrap;
+                        single-line: false;
 
-                    animate opacity { duration: 200ms; easing: ease-in-out; }
-                }
-            }
+                        changed has-focus => {
+                            if self.has-focus { root.input-ever-focused = true; }
+                            if self.has-focus && !root.suspending-input {
+                                root.input-focused();
+                            }
+                        }
 
-            // Emoji & GIF button (unified — pickers toggle via tabs inside).
-            // 48px, not 36px: measured on a phone the old box was a 36dp target,
-            // under the 48dp minimum. The icon keeps its size; only the box grows.
-            Rectangle {
-                width: Spacing.touch-target-min;
-                height: Spacing.touch-target-min;
-                background: emoji-touch.has-hover ? Colors.surface-hover : transparent;
-                border-radius: Spacing.radius-sm;
-                opacity: root.disabled ? 0.5 : 1.0;
-                accessible-role: button;
-                accessible-label: "Emoji & GIF picker";
+                        key-pressed(event) => {
+                            if (event.text == Key.UpArrow && !root.mobile
+                                && root.text == "" && self.preedit-text == ""
+                                && !root.is-editing && !root.is-replying
+                                && root.pending-attachments.length == 0) {
+                                root.edit-last-requested();
+                                return accept;
+                            }
+                            // Escape backs out of an edit or a reply, like the bar's ×.
+                            if (event.text == Key.Escape && self.preedit-text == "") {
+                                if (TextFormat.mention-query(self.text) != "") {
+                                    root.mention-triggered("");
+                                    return accept;
+                                }
+                                if (root.is-editing) {
+                                    root.reset-composition();
+                                    root.cancel-edit();
+                                    return accept;
+                                }
+                                if (root.is-replying) {
+                                    root.cancel-reply();
+                                    return accept;
+                                }
+                            }
+                            // Wide tablet and desktop keyboards send with Enter;
+                            // Shift+Enter remains a newline. Phone keyboards keep
+                            // Enter for multi-line messages and use the send button.
+                            if (event.text == "\n" && !event.modifiers.shift && root.enter-sends) {
+                                if (root.can-send && !root.recording-here) {
+                                    if (root.is-editing) {
+                                        root.send-edit(root.edit-message-id, root.outgoing-text);
+                                        root.reset-after-send();
+                                    } else {
+                                        if root.send(root.outgoing-text) { root.reset-after-send(); }
+                                    }
+                                }
+                                return accept;
+                            }
+                            // Telegram Desktop's formatting keys, as the toolbar does.
+                            if (event.modifiers.control || event.modifiers.meta) {
+                                if (!event.modifiers.shift && (event.text == "b" || event.text == "B")) { root.apply-format("bold"); return accept; }
+                                if (!event.modifiers.shift && (event.text == "i" || event.text == "I")) { root.apply-format("italic"); return accept; }
+                                if (event.modifiers.shift && (event.text == "x" || event.text == "X")) { root.apply-format("strikethrough"); return accept; }
+                                if (event.modifiers.shift && (event.text == "m" || event.text == "M")) { root.apply-format("code"); return accept; }
+                            }
+                            if (event.text == "v" && (event.modifiers.control || event.modifiers.meta)) {
+                                // Attach clipboard image if present; TextInput still
+                                // handles text paste (we don't consume the event).
+                                root.paste-image();
+                                return reject;
+                            }
+                            return reject;
+                        }
 
-                Image {
-                    source: Icons.smile;
-                    width: 20px;
-                    height: 20px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: emoji-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
-                }
-
-                emoji-touch := TouchArea {
-                    enabled: !root.disabled;
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.emoji-clicked();
+                        edited => {
+                            if (self.text != "") {
+                                root.check-mention-trigger(self.text);
+                            } else {
+                                root.mention-triggered("");
+                            }
+                            root.typing-changed(self.text != "");
+                        }
                     }
                 }
             }
 
-            // Attachment button.
-            //
-            // Present in the mesh room and in a cell, absent in a mesh DM. The
-            // bitchat protocol does carry file transfer (`FileTransfer = 0x22`,
-            // plus our streamed chunking on top), so hiding it everywhere in the
-            // mesh — as this did while the feature was unimplemented — now
-            // withholds something that works.
-            //
-            // A mesh DM is the exception and stays without it: a file packet is
-            // cleartext, every mesh DM is Noise-sealed, and core refuses a
-            // directed file for exactly that reason. Offering the button there
-            // would be an offer the transport declines.
-            if MeshGlobal.active-id == "" || MeshGlobal.active-kind != "dm": Rectangle {
+            if root.show-attachment-action: ComposerAttachButton {
+                x: parent.width - root.row-padding * (1 - root.lift-layout) - Spacing.touch-target-min
+                    - (1 - root.lift-layout) * root.inline-terminal-width;
+                y: parent.action-y + root.droplet-bob;
+                lift-layout: root.lift-layout;
+                disabled: root.disabled;
+                surface-material-level: root.material-level;
+                surface-backdrop-paused: root.backdrop-paused;
+                attachment-clicked => { root.attachment-clicked(); }
+            }
+
+            // Tap starts recording. The recording bar owns Cancel and Send;
+            // lifting a finger never sends or discards the voice note.
+            if !root.is-editing && MeshGlobal.active-id == "": Rectangle {
+                x: parent.width - root.row-padding - Spacing.touch-target-min;
+                // Stay beside the field while the attachment droplet lands.
+                y: parent.lower-action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
-                background: attachment-touch.has-hover ? Colors.surface-hover : transparent;
-                border-radius: Spacing.radius-sm;
-                opacity: root.disabled ? 0.5 : 1.0;
+                // On the fall, wait for Send to vanish before revealing the mic.
+                opacity: (root.raised-actions && !root.can-send ? 1
+                    : min(1, max(0, (0.4 - root.lift-layout) / 0.4)))
+                    * (root.disabled ? 0.5 : 1);
                 accessible-role: button;
-                accessible-label: "Attach file";
-
+                accessible-label: "Record voice message";
+                accessible-enabled: !root.disabled && !root.can-send;
+                accessible-action-default => { if !root.disabled && !root.can-send { root.start-recording(); } }
+                KeyFocus { enabled: !root.disabled && !root.can-send; border-radius: self.height / 2; activate => { root.start-recording(); } }
                 Image {
-                    source: Icons.paperclip;
+                    source: Icons.mic;
                     width: 20px;
                     height: 20px;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    colorize: attachment-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
+                    colorize: Colors.text-secondary;
                 }
-
-                attachment-touch := TouchArea {
-                    enabled: !root.disabled;
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.attachment-clicked();
-                    }
+                TouchArea {
+                    enabled: !root.disabled && !root.can-send;
+                    clicked => { root.start-recording(); }
                 }
             }
 
-            // Send button — Neo convex with glow on hover
-            if root.can-send: Rectangle {
+            // Send stays at the normal bottom action position beside the native field.
+            if root.can-send || (!root.raised-actions && root.lift-layout > 0): Rectangle {
+                x: parent.width - root.row-padding - Spacing.touch-target-min;
+                y: parent.lower-action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
-                background: send-touch.has-hover ? Colors.primary-hover : Colors.primary;
-                border-radius: Spacing.radius-md;
-                border-width: 1px;
-                border-color: Colors.neo-highlight-strong;
-                drop-shadow-blur: send-touch.has-hover ? Spacing.neo-blur-md : Spacing.neo-blur-sm;
-                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                drop-shadow-color: send-touch.has-hover ? Colors.glow-primary : Colors.neo-shadow;
-                opacity: root.disabled ? 0.5 : 1.0;
+                background: send-touch.has-hover ? Colors.action-hover : Colors.action-fill;
+                border-radius: Spacing.radius-chrome-inner;
+                // The two glyphs share a landing slot. Leave a small blank beat
+                // between them instead of painting both at half alpha.
+                opacity: min(1, max(0, (root.lift-layout - 0.45) / 0.55))
+                    * (root.disabled ? 0.5 : 1);
                 accessible-role: button;
                 accessible-label: "Send message";
+                accessible-action-default => {
+                    if (root.is-editing) {
+                        root.send-edit(root.edit-message-id, root.outgoing-text);
+                        root.reset-after-send();
+                    } else {
+                        if root.send(root.outgoing-text) { root.reset-after-send(); }
+                    }
+                }
 
                 // SVG, not a glyph: "\u{27A4}" has no coverage in the Android
                 // system font and rendered as a tofu box on device.
@@ -917,19 +828,19 @@ export component MessageComposer inherits Rectangle {
                     height: 20px;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    colorize: Colors.text-primary;
+                    colorize: Colors.on-action;
                 }
 
                 send-touch := TouchArea {
-                    enabled: !root.disabled && root.can-send;
+                    enabled: !root.disabled && root.can-send && !root.recording-here;
                     mouse-cursor: pointer;
                     clicked => {
                         if (root.is-editing) {
-                            root.send-edit(root.edit-message-id, root.text);
+                            root.send-edit(root.edit-message-id, root.outgoing-text);
+                            root.reset-after-send();
                         } else {
-                            root.send(root.text);
+                            if root.send(root.outgoing-text) { root.reset-after-send(); }
                         }
-                        root.text = "";
                     }
                 }
             }
@@ -939,12 +850,17 @@ export component MessageComposer inherits Rectangle {
     // Internal function to check for @ mention trigger
     // Called when text is edited
     function check-mention-trigger(t: string) {
-        // Simple implementation: check if there's an @ near the end
-        // A more sophisticated implementation would track cursor position
-        // For now, we'll emit mention-triggered if text contains @
-        // and there's content after it (no space before the @'s content)
-
-        // This is a basic heuristic - in practice, you'd want cursor position tracking
-        // to properly detect when user types @
+        root.mention-triggered(TextFormat.mention-query(t));
     }
+    ComposerRecordingPanel {
+        recording-here: root.recording-here;
+        width: parent.width;
+        height: parent.height;
+        recording-reveal: root.recording-reveal;
+        row-padding: root.row-padding;
+        surface-material-level: root.material-level;
+        surface-elevation: root.elevation;
+        surface-backdrop-paused: root.backdrop-paused;
+    }
+
 }

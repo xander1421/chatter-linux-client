@@ -1,19 +1,30 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
+// cSpell: ignore dalvik jboolean jfloat jint
 use super::*;
+use i_slint_common::unicode_utils::{
+    byte_offset_to_utf16_offset, utf16_offset_to_byte_offset_clamped,
+};
 use i_slint_core::SharedString;
 use i_slint_core::api::{PhysicalPosition, PhysicalSize};
 use i_slint_core::graphics::{Color, euclid};
 use i_slint_core::input::{InternalKeyEvent, KeyEvent, KeyEventType};
+use i_slint_core::item_rendering::HasFont;
 use i_slint_core::items::{ColorScheme, InputType};
-use i_slint_core::lengths::PhysicalEdges;
+use i_slint_core::lengths::{LogicalLength, PhysicalEdges};
 use i_slint_core::platform::WindowAdapter;
 use jni::objects::{JClass, JClassLoader, JString, LoaderContext};
-use jni::sys::jint;
+use jni::sys::{jfloat, jint, jlong};
 use jni::{Env, JavaVM, bind_java_type};
 use std::sync::OnceLock;
 use std::time::Duration;
+
+/// Maps an Android `Configuration.fontScale` to a Slint default font size.
+/// 14 LP = Material Design body-text size at `fontScale = 1.0`.
+pub(crate) fn font_scale_to_logical_length(font_scale: f32) -> Option<LogicalLength> {
+    (font_scale.is_finite() && font_scale > 0.0).then(|| LogicalLength::new(14.0 * font_scale))
+}
 
 const DEX_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
@@ -24,7 +35,7 @@ bind_java_type! {
         AndroidRect => "android.graphics.Rect",
     },
     constructors {
-        fn new(activity: AndroidActivity),
+        fn new(activity: AndroidActivity, native_activity: jboolean),
     },
     methods {
         fn accent_color {
@@ -34,6 +45,10 @@ bind_java_type! {
         fn color_scheme {
             name = "color_scheme",
             sig = () -> jint,
+        },
+        fn font_scale {
+            name = "font_scale",
+            sig = () -> jfloat,
         },
         fn get_clipboard {
             name = "get_clipboard",
@@ -46,6 +61,14 @@ bind_java_type! {
         fn get_view_rect {
             name = "get_view_rect",
             sig = () -> AndroidRect,
+        },
+        fn window_focus_gained {
+            name = "window_focus_gained",
+            sig = (),
+        },
+        fn reconcile_window_insets {
+            name = "reconcile_window_insets",
+            sig = (),
         },
         fn hide_keyboard {
             name = "hide_keyboard",
@@ -76,6 +99,15 @@ bind_java_type! {
                 show_cursor_handles: jboolean
             ),
         },
+        fn hide_action_menu {
+            name = "hide_action_menu",
+            sig = (),
+        },
+        fn update_selection_menu {
+            name = "update_selection_menu",
+            sig = (text: JString, selected: jboolean, left_x: jint, left_y: jint,
+                right_x: jint, right_y: jint, cursor_height: jint, show_handles: jboolean),
+        },
         fn show_action_menu {
             name = "show_action_menu",
             sig = (),
@@ -95,8 +127,14 @@ bind_java_type! {
             sig = (id: jint) -> (),
             fn = callback_popup_menu_action,
         },
+        pub static fn invalidate_insets {
+            sig = (sequence: jlong) -> (),
+            fn = callback_invalidate_insets,
+        },
         pub static fn set_insets {
             sig = (
+                sequence: jlong,
+                authoritative_geometry: jint,
                 window_top: jint,
                 window_left: jint,
                 window_bottom: jint,
@@ -116,6 +154,10 @@ bind_java_type! {
             sig = (night_mode: jint) -> (),
             fn = callback_set_night_mode,
         },
+        pub static fn set_font_scale {
+            sig = (font_scale: jfloat) -> (),
+            fn = callback_set_font_scale,
+        },
         pub static fn update_text {
             sig = (
                     text: JString,
@@ -125,6 +167,22 @@ bind_java_type! {
                     preedit_offset: jint
             ) -> (),
             fn = callback_update_text,
+        },
+        pub static fn accessibility_tree {
+            sig = () -> JString,
+            fn = crate::accessibility::query,
+        },
+        pub static fn accessibility_click {
+            sig = (id: jint) -> (),
+            fn = crate::accessibility::click,
+        },
+        pub static fn accessibility_long_click {
+            sig = (id: jint) -> (),
+            fn = crate::accessibility::long_click,
+        },
+        pub static fn accessibility_scroll {
+            sig = (id: jint, forward: jint) -> (),
+            fn = crate::accessibility::scroll,
         },
     },
 }
@@ -314,7 +372,9 @@ fn load_java_helper(
             unsafe { env.as_cast_raw::<jni::refs::Global<AndroidActivity>>(&native_activity_ptr)? };
         let loader = LoaderContext::Loader(get_helper_class_loader(env, native_activity.as_ref())?);
         let _ = SlintAndroidJavaHelperAPI::get(env, &loader)?;
-        let helper_instance = SlintAndroidJavaHelper::new(env, native_activity)?;
+        let helper_instance = SlintAndroidJavaHelper::new(
+            env, native_activity, cfg!(feature = "native-activity"),
+        )?;
         env.new_global_ref(&helper_instance)
     })
 }
@@ -334,8 +394,16 @@ impl JavaHelper {
         })
     }
 
-    /// Unfortunately, the way that the android-activity crate uses to show or hide the virtual keyboard doesn't
-    /// work with native-activity. So do it manually with JNI
+    pub fn window_focus_gained(&self) -> Result<(), jni::errors::Error> {
+        self.with_jni_env(|env, helper| helper.window_focus_gained(env))
+    }
+
+    /// Pull current root insets after return or a native viewport resize.
+    pub fn reconcile_window_insets(&self) -> Result<(), jni::errors::Error> {
+        self.with_jni_env(|env, helper| helper.reconcile_window_insets(env))
+    }
+
+    /// The native-activity IME needs the Java input host.
     pub fn show_or_hide_soft_input(&self, show: bool) -> Result<(), jni::errors::Error> {
         self.with_jni_env(
             |env, helper| {
@@ -365,11 +433,11 @@ impl JavaHelper {
                 }
             }
 
-            let to_utf16 = |x| convert_utf8_index_to_utf16(&text, x);
+            let to_utf16 = |x| byte_offset_to_utf16_offset(&text, x as usize);
             let text = JString::new(env, text.as_str())?;
 
             let input_type = match data.input_type {
-                InputType::Text => AndroidInputType::TYPE_CLASS_TEXT(env)?,
+                InputType::Text | InputType::Search => AndroidInputType::TYPE_CLASS_TEXT(env)?,
                 InputType::Password => {
                     AndroidInputType::TYPE_TEXT_VARIATION_PASSWORD(env)?
                         | AndroidInputType::TYPE_CLASS_TEXT(env)?
@@ -424,6 +492,10 @@ impl JavaHelper {
         self.with_jni_env(|env, helper| helper.color_scheme(env))
     }
 
+    pub fn font_scale(&self) -> Result<f32, jni::errors::Error> {
+        self.with_jni_env(|env, helper| helper.font_scale(env))
+    }
+
     pub fn accent_color(&self) -> Result<Color, jni::errors::Error> {
         self.with_jni_env(|env, helper| {
             Ok(Color::from_argb_encoded(helper.accent_color(env)? as u32))
@@ -451,6 +523,61 @@ impl JavaHelper {
         self.with_jni_env(|env, _helper| {
             let long_press_timeout = AndroidViewConfiguration::get_long_press_timeout(env)?;
             Ok(Duration::from_millis(long_press_timeout as _))
+        })
+    }
+
+    pub fn hide_action_menu(&self) -> Result<(), jni::errors::Error> {
+        self.with_jni_env(|env, helper| helper.hide_action_menu(env))
+    }
+
+    /// Selection presentation only: GameTextInput owns the editable and composition.
+    /// Calling set_imm_data here would restart a second, native-activity InputConnection.
+    pub fn update_selection_menu(
+        &self,
+        data: &i_slint_core::window::InputMethodProperties,
+        scale_factor: f32,
+        show_handles: bool,
+    ) -> Result<(), jni::errors::Error> {
+        self.with_jni_env(|env, helper| {
+            let cursor = data.cursor_rect_origin.to_physical(scale_factor);
+            let anchor = data.anchor_point.to_physical(scale_factor);
+            let size = data.cursor_rect_size.to_physical(scale_factor);
+            let selected = data.anchor_position.is_some_and(|a| a != data.cursor_position)
+                && !data.text.is_empty()
+                && data.preedit_text.is_empty();
+            let cursor_visible = data.clip_rect.map_or(true, |r| {
+                r.contains(i_slint_core::lengths::logical_point_from_api(data.cursor_rect_origin))
+            });
+            let anchor_visible = data.clip_rect.map_or(true, |r| {
+                r.contains(i_slint_core::lengths::logical_point_from_api(data.anchor_point))
+            });
+            let height = size.height as i32 + 2 * size.width as i32;
+            let cursor_handle = (
+                if cursor_visible { cursor.x + size.width as i32 / 2 } else { -1 },
+                cursor.y + height,
+            );
+            let anchor_handle = (
+                if anchor_visible { anchor.x } else { -1 },
+                anchor.y + 2 * size.width as i32,
+            );
+            let (left, right) =
+                if data.cursor_position < data.anchor_position.unwrap_or(data.cursor_position) {
+                    (cursor_handle, anchor_handle)
+                } else {
+                    (anchor_handle, cursor_handle)
+                };
+            let text = JString::new(env, data.text.as_str())?;
+            helper.update_selection_menu(
+                env,
+                &text,
+                selected,
+                left.0,
+                left.1,
+                right.0,
+                right.1,
+                height,
+                show_handles && selected,
+            )
         })
     }
 
@@ -483,16 +610,16 @@ fn callback_update_text<'local>(
     let decoded: std::borrow::Cow<str> = (&java_str).into();
     let text = SharedString::from(decoded.as_ref());
 
-    let cursor_position = convert_utf16_index_to_utf8(&text, cursor_position as usize);
-    let anchor_position = convert_utf16_index_to_utf8(&text, anchor_position as usize);
-    let preedit_start = convert_utf16_index_to_utf8(&text, preedit_start as usize);
-    let preedit_end = convert_utf16_index_to_utf8(&text, preedit_end as usize);
+    let cursor_position = utf16_offset_to_byte_offset_clamped(&text, cursor_position as usize);
+    let anchor_position = utf16_offset_to_byte_offset_clamped(&text, anchor_position as usize);
+    let preedit_start = utf16_offset_to_byte_offset_clamped(&text, preedit_start as usize);
+    let preedit_end = utf16_offset_to_byte_offset_clamped(&text, preedit_end as usize);
 
     i_slint_core::api::invoke_from_event_loop(move || {
         if let Some(adaptor) = CURRENT_WINDOW.with_borrow(|x| x.upgrade()) {
             adaptor.show_cursor_handles.set(false);
             let runtime_window = i_slint_core::window::WindowInner::from_pub(&adaptor.window);
-            let event = if preedit_start != preedit_end {
+            let event = if preedit_start < preedit_end {
                 let adjust = |pos| {
                     if pos <= preedit_start {
                         pos
@@ -509,7 +636,9 @@ fn callback_update_text<'local>(
                 InternalKeyEvent {
                     event_type: KeyEventType::UpdateComposition,
                     preedit_text: text[preedit_start..preedit_end].into(),
-                    preedit_selection: Some(0..(preedit_end - preedit_start) as i32),
+                    preedit_selection: Some(crate::text_input_offsets::preedit_selection(
+                        preedit_start..preedit_end, anchor_position, cursor_position,
+                    )),
                     replacement_range: Some(i32::MIN..i32::MAX),
                     cursor_position: Some(adjust(cursor_position)),
                     anchor_position: Some(adjust(anchor_position)),
@@ -536,22 +665,6 @@ fn callback_update_text<'local>(
     Ok(())
 }
 
-fn convert_utf16_index_to_utf8(in_str: &str, utf16_index: usize) -> usize {
-    let mut utf16_counter = 0;
-
-    for (utf8_index, c) in in_str.char_indices() {
-        if utf16_counter >= utf16_index {
-            return utf8_index;
-        }
-        utf16_counter += c.len_utf16();
-    }
-    in_str.len()
-}
-
-fn convert_utf8_index_to_utf16(in_str: &str, utf8_index: usize) -> usize {
-    in_str[..utf8_index].encode_utf16().count()
-}
-
 fn callback_set_night_mode<'local>(
     _env: &mut Env<'local>,
     _class: JClass<'local>,
@@ -559,12 +672,36 @@ fn callback_set_night_mode<'local>(
 ) -> Result<(), jni::errors::Error> {
     i_slint_core::api::invoke_from_event_loop(move || {
         if let Some(w) = CURRENT_WINDOW.with_borrow(|x| x.upgrade()) {
-            w.color_scheme.as_ref().set(match night_mode {
+            let scheme = match night_mode {
                 0x10 => ColorScheme::Light,  // UI_MODE_NIGHT_NO(0x10)
                 0x20 => ColorScheme::Dark,   // UI_MODE_NIGHT_YES(0x20)
                 0x0 => ColorScheme::Unknown, // UI_MODE_NIGHT_UNDEFINED
                 _ => ColorScheme::Unknown,
-            });
+            };
+            let ctx = i_slint_core::window::WindowInner::from_pub(&w.window).context();
+            ctx.set_color_scheme(scheme);
+            if let Ok(accent) = w.java_helper.accent_color() {
+                ctx.set_accent_color(accent);
+            }
+        }
+    })
+    .unwrap();
+    Ok(())
+}
+
+fn callback_set_font_scale<'local>(
+    _env: &mut Env<'local>,
+    _class: JClass<'local>,
+    font_scale: jfloat,
+) -> Result<(), jni::errors::Error> {
+    // Skip rather than clobber: an OEM/ROM that hands us 0.0 or NaN during a
+    // transient configuration change must not zero out the value `bind_context`
+    // already set.
+    let Some(size) = font_scale_to_logical_length(font_scale) else { return Ok(()) };
+    i_slint_core::api::invoke_from_event_loop(move || {
+        if let Some(w) = CURRENT_WINDOW.with_borrow(|x| x.upgrade()) {
+            let ctx = i_slint_core::window::WindowInner::from_pub(&w.window).context();
+            ctx.set_platform_default_font_size(Some(size));
         }
     })
     .unwrap();
@@ -587,6 +724,7 @@ fn callback_move_cursor_handle<'local>(
             {
                 if let Some(text_input) = focus_item.downcast::<i_slint_core::items::TextInput>() {
                     let scale_factor = adaptor.window.scale_factor();
+                    adaptor.begin_selection_change();
                     let adaptor = adaptor.clone() as Rc<dyn WindowAdapter>;
                     let size = text_input
                         .as_pin_ref()
@@ -656,6 +794,9 @@ fn callback_popup_menu_action<'local>(
             {
                 if let Some(text_input) = focus_item.downcast::<i_slint_core::items::TextInput>() {
                     let text_input = text_input.as_pin_ref();
+                    if id == 3 {
+                        adaptor.begin_selection_change();
+                    }
                     let adaptor = adaptor.clone() as Rc<dyn WindowAdapter>;
                     match id {
                         0 => text_input.cut(&adaptor, &focus_item),
@@ -672,9 +813,23 @@ fn callback_popup_menu_action<'local>(
     Ok(())
 }
 
+static INSET_DISPATCH: crate::inset_dispatch::InsetDispatchFence =
+    crate::inset_dispatch::InsetDispatchFence::new();
+
+fn callback_invalidate_insets<'local>(
+    _env: &mut Env<'local>,
+    _class: JClass<'local>,
+    sequence: jlong,
+) -> Result<(), jni::errors::Error> {
+    INSET_DISPATCH.receive(sequence as u64);
+    Ok(())
+}
+
 fn callback_set_insets<'local>(
     _env: &mut Env<'local>,
     _class: JClass<'local>,
+    sequence: jlong,
+    authoritative_geometry: jint,
     window_top: jint,
     window_left: jint,
     window_bottom: jint,
@@ -688,29 +843,35 @@ fn callback_set_insets<'local>(
     keyboard_bottom: jint,
     keyboard_right: jint,
 ) -> Result<(), jni::errors::Error> {
-    i_slint_core::api::invoke_from_event_loop(move || {
-        if let Some(w) = CURRENT_WINDOW.with_borrow(|x| x.upgrade()) {
-            w.update_window_insets(
-                PhysicalPosition::new(window_left as _, window_top as _),
-                PhysicalSize::new(
-                    (window_right - window_left) as _,
-                    (window_bottom - window_top) as _,
-                ),
-                PhysicalEdges::new(
-                    safe_area_top as _,
-                    safe_area_bottom as _,
-                    safe_area_left as _,
-                    safe_area_right as _,
-                ),
-                PhysicalEdges::new(
-                    keyboard_top as _,
-                    keyboard_bottom as _,
-                    keyboard_left as _,
-                    keyboard_right as _,
-                ),
-            );
-        }
-    })
-    .unwrap();
+    INSET_DISPATCH.receive(sequence as u64);
+    // The Java host may attach before the platform installs its event-loop
+    // proxy, or finish detaching after shutdown. Native init/focus will pull
+    // current insets again; neither boundary should panic across JNI.
+    let _ = i_slint_core::api::invoke_from_event_loop(move || {
+        INSET_DISPATCH.apply(sequence as u64, || {
+            if let Some(w) = CURRENT_WINDOW.with_borrow(|x| x.upgrade()) {
+                w.update_window_insets(
+                    authoritative_geometry != 0,
+                    PhysicalPosition::new(window_left as _, window_top as _),
+                    PhysicalSize::new(
+                        (window_right - window_left) as _,
+                        (window_bottom - window_top) as _,
+                    ),
+                    PhysicalEdges::new(
+                        safe_area_top as _,
+                        safe_area_bottom as _,
+                        safe_area_left as _,
+                        safe_area_right as _,
+                    ),
+                    PhysicalEdges::new(
+                        keyboard_top as _,
+                        keyboard_bottom as _,
+                        keyboard_left as _,
+                        keyboard_right as _,
+                    ),
+                );
+            }
+        });
+    });
     Ok(())
 }

@@ -9,7 +9,6 @@
 //! - mailbox.rs: Group mailbox setup
 
 mod listing;
-mod mailbox;
 mod membership;
 mod moderation;
 
@@ -17,27 +16,24 @@ use std::sync::Arc;
 
 use tokio_stream::StreamExt;
 
-use crate::domain::channel::{
-    Channel, ChannelConfig, ChannelType, MemberRole, Membership, NotificationPreference,
-};
+use crate::domain::channel::{Channel, ChannelConfig, ChannelType};
 use crate::domain::ids::{ChannelId, UserId};
-use crate::mailbox::group::{GroupCoordinator, GroupMailboxSetupResult};
+use crate::mailbox::group::GroupCoordinator;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::mailbox_client::MailboxClient;
-use crate::network::grpc::AnonymousMailboxClient;
-use crate::proto::chat_v1::{self, channel_event};
-use crate::services::current_user::CurrentUserProvider;
+use crate::proto::chat_v1::{self, self as pb, channel_event};
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::section_repo::SectionRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
-use crate::storage::repositories::user_repo::UserRepository;
+use pb::channel_action::Action;
 
 use super::converters::{
-    domain_channel_type_to_proto, domain_config_to_proto,
-    proto_to_domain_channel, proto_to_domain_membership,
+    domain_channel_type_to_proto, domain_config_to_proto, proto_to_domain_channel,
 };
 use super::error::ChannelError;
+use super::membership_log::{AuthorBase, MembershipLog, password_invite_key};
+use super::verified_state::{ChannelRole, Policy};
+use membership::action;
 
 /// Channel service for all channel operations.
 ///
@@ -49,12 +45,13 @@ pub struct ChannelService {
     pub(crate) settings_repo: Arc<SettingsRepository>,
     pub(crate) channel_repo: Arc<ChannelRepository>,
     pub(crate) section_repo: Arc<SectionRepository>,
-    pub(crate) user_repo: Arc<UserRepository>,
-    pub(crate) signal_service: Arc<crate::services::signal_service::SignalService>,
+    pub(crate) signal_service: Arc<crate::services::signal::SignalService>,
     pub(crate) group_coordinator: Arc<GroupCoordinator>,
     /// For SKDM redistribution after kick/leave; set after MessageService
     /// exists. Read access via `message_service()`.
     pub(crate) message_service: Arc<crate::services::message::MessageService>,
+    /// Authoring and verification of the signed membership log.
+    pub(crate) membership_log: Arc<MembershipLog>,
 }
 
 impl ChannelService {
@@ -64,41 +61,38 @@ impl ChannelService {
         settings_repo: Arc<SettingsRepository>,
         channel_repo: Arc<ChannelRepository>,
         section_repo: Arc<SectionRepository>,
-        user_repo: Arc<UserRepository>,
-        signal_service: Arc<crate::services::signal_service::SignalService>,
+        signal_service: Arc<crate::services::signal::SignalService>,
         group_coordinator: Arc<GroupCoordinator>,
         message_service: Arc<crate::services::message::MessageService>,
+        membership_log: Arc<MembershipLog>,
     ) -> Self {
         Self {
             grpc_pool,
             settings_repo,
             channel_repo,
             section_repo,
-            user_repo,
             signal_service,
             group_coordinator,
             message_service,
+            membership_log,
         }
+    }
+
+    /// The channel membership log (verified state, authoring, catch-up).
+    pub fn membership_log(&self) -> &Arc<MembershipLog> {
+        &self.membership_log
     }
 
     /// Get the current user's ID.
     pub fn current_user_id(&self) -> Result<UserId, ChannelError> {
-        self.settings_repo.current_user_id().map_err(ChannelError::from)
+        self.settings_repo
+            .current_user_id()
+            .map_err(ChannelError::from)
     }
 
     /// Create a channel client for network operations.
     pub(crate) fn channel_client(&self) -> ChannelClient {
         self.grpc_pool.channel_client()
-    }
-
-    /// Create an authenticated mailbox client for token requests.
-    pub(crate) fn mailbox_client(&self) -> MailboxClient {
-        self.grpc_pool.mailbox_client()
-    }
-
-    /// Create an anonymous mailbox client for mailbox creation/polling.
-    pub(crate) fn anonymous_mailbox_client(&self) -> AnonymousMailboxClient {
-        self.grpc_pool.anonymous_mailbox_client()
     }
 
     // ==================== Create Operations ====================
@@ -108,21 +102,13 @@ impl ChannelService {
     /// # Arguments
     ///
     /// * `name` - Channel name
-    /// * `channel_type` - Type of channel (Public, Private, DirectMessage)
+    /// * `channel_type` - Type of channel (Public, Private)
     /// * `config` - Optional channel configuration
     /// * `description` - Optional channel description
     /// * `icon` - Optional raw image bytes (PNG/JPEG/WebP, ≤64KB)
-    /// * `password` - Optional password for private channels
+    /// * `password` - Optional channel password. Never sent: it seeds the
+    ///   join capability in the genesis (`password_invite_key`)
     /// * `initial_members` - Initial member user IDs
-    /// * `setup_mailbox` - Whether to setup group mailbox for encrypted channels
-    ///
-    /// # Group Mailbox Setup
-    ///
-    /// If `setup_mailbox` is true and the channel requires encryption,
-    /// this method will automatically:
-    /// 1. Create an ephemeral group mailbox for receiving messages
-    /// 2. The caller should send the returned announcement via
-    ///    `MessageService::send_group_mailbox_announcement()`
     #[allow(clippy::too_many_arguments)]
     pub async fn create_channel(
         &self,
@@ -133,9 +119,8 @@ impl ChannelService {
         icon: Option<&[u8]>,
         password: Option<&str>,
         initial_members: Vec<UserId>,
-        setup_mailbox: bool,
-    ) -> Result<(Channel, Option<GroupMailboxSetupResult>), ChannelError> {
-        let current_user = self.settings_repo.current_user_id()?;
+    ) -> Result<Channel, ChannelError> {
+        let _ = self.settings_repo.current_user_id()?;
 
         let trimmed_name = name.trim();
         if trimmed_name.is_empty() {
@@ -143,104 +128,122 @@ impl ChannelService {
                 "channel name cannot be empty".to_string(),
             ));
         }
+        check_name_length(trimmed_name)?;
 
         let proto_type = domain_channel_type_to_proto(channel_type);
         let proto_config = config.as_ref().map(domain_config_to_proto);
+        let password = password.filter(|p| !p.is_empty());
 
-        // Use call_with_retry to handle stale gRPC connections —
-        // disconnects + reconnects on transport error (same fix as DM mailbox path)
-        let member_ids: Vec<String> = initial_members.iter().map(|id| id.to_string()).collect();
-        let mut stream = self
-            .grpc_pool
-            .call_with_retry("CreateChannel", |pool| {
-                let mut client = pool.channel_client();
-                let name = trimmed_name.to_string();
-                let pt = proto_type;
-                let pc = proto_config.clone();
-                let mids = member_ids.clone();
-                let pw = password.map(str::to_string);
-                let desc = description.map(str::to_string);
-                let icon_bytes = icon.map(|b| b.to_vec());
-                async move {
-                    client
-                        .create_channel(
-                            &name,
-                            pt,
-                            pc,
-                            mids,
-                            pw.as_deref(),
-                            desc.as_deref(),
-                            icon_bytes.as_deref(),
-                        )
-                        .await
-                }
-            })
-            .await?;
-
-        let mut channel_opt: Option<Channel> = None;
-        while let Some(event_result) = stream.next().await {
-            let event = event_result?;
-            tracing::debug!(
-                channel_id = %event.channel_id,
-                creation_status = event.creation_status,
-                has_event = event.event.is_some(),
-                "Received channel creation stream event"
+        let channel = if matches!(channel_type, ChannelType::Public | ChannelType::Private) {
+            // Revision 1 of the membership log names the channel id (picked
+            // here). A password becomes a join capability whose key is
+            // derived from it; a public channel without one is OPEN.
+            let channel_id = ChannelId::from(uuid::Uuid::new_v4());
+            let mut policy = Policy::defaults(channel_type == ChannelType::Public);
+            let mut genesis = Vec::new();
+            if let Some(p) = password {
+                policy.join = super::verified_state::JoinMode::InviteOnly;
+                let key = password_invite_key(&channel_id, p)?;
+                genesis.push(action(Action::CreateInvite(pb::CreateInvite {
+                    capability: Some(pb::InviteCapability {
+                        invite_pub: super::membership_log::invite_pub_of(&key).to_vec(),
+                        role: ChannelRole::Member as i32,
+                        expires_at: 0,
+                        max_uses: 0,
+                        needs_approval: false,
+                        uses: 0,
+                    }),
+                })));
+            }
+            genesis.insert(
+                0,
+                action(Action::Genesis(pb::Genesis {
+                    policy: Some(policy.to_proto()),
+                    disappearing_seconds: 0,
+                })),
             );
-            if let Some(channel_event::Event::ChannelCreated(proto_channel)) = event.event {
-                tracing::info!(
-                    channel_id = %proto_channel.id,
-                    channel_name = %proto_channel.name,
-                    "Received ChannelCreated event from server"
-                );
-                channel_opt = Some(proto_to_domain_channel(&proto_channel)?);
-                break;
+            self.membership_log
+                .author(
+                    &channel_id,
+                    AuthorBase::Genesis,
+                    None,
+                    |_| Ok(genesis.clone()),
+                    |change| {
+                        self.create_on_server(
+                            trimmed_name,
+                            proto_type,
+                            proto_config.clone(),
+                            description,
+                            icon,
+                            Some(change),
+                        )
+                    },
+                )
+                .await?
+        } else {
+            self.create_on_server(
+                trimmed_name,
+                proto_type,
+                proto_config.clone(),
+                description,
+                icon,
+                None,
+            )
+            .await?
+        };
+
+        // Initial members are invitees: each gets a signed invite and joins
+        // by its own AcceptInvite.
+        for member in initial_members {
+            if let Err(e) = self.invite_user(&channel.id, &member, None).await {
+                tracing::warn!(channel_id = %channel.id, user_id = %member, error = %e, "Failed to invite initial member");
             }
         }
 
-        // Drop stream to release borrow of channel_client
-        drop(stream);
+        Ok(channel)
+    }
 
-        if channel_opt.is_none() {
-            tracing::error!("Stream ended without receiving ChannelCreated event");
+    /// `CreateChannel` until its `ChannelCreated`; stores the channel row.
+    #[allow(clippy::too_many_arguments)]
+    async fn create_on_server(
+        &self,
+        name: &str,
+        proto_type: chat_v1::ChannelType,
+        proto_config: Option<chat_v1::channel::Config>,
+        description: Option<&str>,
+        icon: Option<&[u8]>,
+        genesis: Option<chat_v1::ChannelChange>,
+    ) -> Result<Channel, crate::error::NetworkError> {
+        let mut stream = self
+            .grpc_pool
+            .channel_client()
+            .create_channel(name, proto_type, proto_config, description, icon, genesis)
+            .await?;
+        while let Some(event) = stream.next().await {
+            match event?.event {
+                Some(channel_event::Event::ChannelCreated(proto_channel)) => {
+                    let channel = proto_to_domain_channel(&proto_channel)
+                        .map_err(|e| crate::error::NetworkError::InvalidRequest(e.to_string()))?;
+                    // Upsert: this client's own channel-event stream may have
+                    // stored the same server row first.
+                    self.channel_repo
+                        .upsert(&channel)
+                        .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
+                    return Ok(channel);
+                }
+                Some(channel_event::Event::OperationFailed(failure)) => {
+                    let msg = failure
+                        .error
+                        .map(|e| e.message)
+                        .unwrap_or_else(|| "channel creation failed".into());
+                    return Err(crate::error::NetworkError::InvalidRequest(msg));
+                }
+                _ => {}
+            }
         }
-
-        let channel = channel_opt.ok_or_else(|| {
-            ChannelError::InvalidInput("no channel created event received".to_string())
-        })?;
-
-        tracing::info!(channel_id = %channel.id, "Inserting channel to local repo");
-        self.channel_repo.insert(&channel)?;
-        tracing::info!(channel_id = %channel.id, "Channel inserted");
-
-        let membership = Membership {
-            channel_id: channel.id,
-            user_id: current_user,
-            role: MemberRole::Owner,
-            joined_at: channel.created_at,
-            last_read_message_id: None,
-            is_muted: false,
-            muted_until: None,
-            notification_preference: NotificationPreference::All,
-        };
-        tracing::info!(channel_id = %channel.id, "Inserting membership to local repo");
-        self.channel_repo.insert_membership(&membership)?;
-        tracing::info!(channel_id = %channel.id, "Membership inserted");
-
-        // Server-managed channels no longer register a group mailbox; control
-        // and SKDM fanout flow over the device inbox.
-        let _ = setup_mailbox;
-
-        // Sync members (in case initial_members were added by server)
-        let mut channel_client = self.channel_client();
-        if let Err(e) = self.sync_channel_members_internal(&mut channel_client, &channel.id).await {
-            tracing::debug!(
-                channel_id = %channel.id,
-                error = %e,
-                "Failed to sync members after creation (may be normal for new channel)"
-            );
-        }
-
-        Ok((channel, None))
+        Err(crate::error::NetworkError::InvalidRequest(
+            "no channel created event received".into(),
+        ))
     }
 
     // ==================== CRUD Operations ====================
@@ -252,56 +255,10 @@ impl ChannelService {
         let _ = self.settings_repo.current_user_id()?;
 
         let mut channel_client = self.channel_client();
-        let proto_channel = channel_client
-            .get_channel(&channel_id.to_string())
-            .await?;
+        let proto_channel = channel_client.get_channel(&channel_id.to_string()).await?;
 
         let channel = proto_to_domain_channel(&proto_channel)?;
         self.channel_repo.upsert(&channel)?;
-
-        Ok(channel)
-    }
-
-    /// Get a channel by ID and sync its memberships.
-    ///
-    /// Fetches from server, upserts channel to local storage, and syncs all memberships.
-    /// Useful for DM channels where we need membership info immediately.
-    pub async fn get_channel_with_memberships(
-        &self,
-        channel_id: &ChannelId,
-    ) -> Result<Channel, ChannelError> {
-        let _ = self.settings_repo.current_user_id()?;
-
-        let mut channel_client = self.channel_client();
-        let proto_channel = channel_client
-            .get_channel(&channel_id.to_string())
-            .await?;
-
-        let channel = proto_to_domain_channel(&proto_channel)?;
-        self.channel_repo.upsert(&channel)?;
-
-        // Sync memberships
-        for proto_member in &proto_channel.members {
-            match proto_to_domain_membership(channel_id, proto_member) {
-                Ok(membership) => {
-                    if let Err(e) = self.channel_repo.insert_or_ignore_membership(&membership) {
-                        tracing::warn!(
-                            channel_id = %channel_id,
-                            user_id = %membership.user_id,
-                            error = %e,
-                            "Failed to sync membership"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        error = %e,
-                        "Failed to convert proto membership"
-                    );
-                }
-            }
-        }
 
         Ok(channel)
     }
@@ -312,9 +269,7 @@ impl ChannelService {
         channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
     ) -> Result<Channel, ChannelError> {
-        let proto_channel = channel_client
-            .get_channel(&channel_id.to_string())
-            .await?;
+        let proto_channel = channel_client.get_channel(&channel_id.to_string()).await?;
 
         let channel = proto_to_domain_channel(&proto_channel)?;
         self.channel_repo.upsert(&channel)?;
@@ -333,6 +288,14 @@ impl ChannelService {
         config: Option<ChannelConfig>,
     ) -> Result<Channel, ChannelError> {
         let _ = self.settings_repo.current_user_id()?;
+        if name.is_some_and(|name| name.chars().count() < 3) {
+            return Err(ChannelError::InvalidInput(
+                "Name must be at least 3 characters".to_string(),
+            ));
+        }
+        if let Some(name) = name {
+            check_name_length(name)?;
+        }
 
         let existing = self
             .channel_repo
@@ -415,31 +378,110 @@ impl ChannelService {
         let mut channel_client = self.channel_client();
         let mut stream = channel_client.delete_channel(&channel_id_str).await?;
 
-        let mut deleted = false;
-        while let Some(event_result) = stream.next().await {
-            let event = event_result?;
-            if let Some(channel_event::Event::ChannelDeleted(_)) = event.event {
-                deleted = true;
-                break;
-            }
-        }
+        await_channel_deletion(&mut stream, &channel_id_str).await?;
 
-        if !deleted {
-            return Err(ChannelError::InvalidInput(
-                "no channel deleted event received".to_string(),
-            ));
-        }
-
-        let _ = self.channel_repo.delete(channel_id);
-
-        if let Ok(memberships) = self.channel_repo.list_members(channel_id) {
-            for membership in memberships {
-                let _ = self
-                    .channel_repo
-                    .delete_membership(channel_id, &membership.user_id);
-            }
-        }
+        self.channel_repo
+            .remove_confirmed_deleted_channel(channel_id)?;
 
         Ok(())
     }
 }
+
+/// Do not remove local state on progress, another channel's event, or failure.
+async fn await_channel_deletion<S>(stream: &mut S, channel_id: &str) -> Result<(), ChannelError>
+where
+    S: tokio_stream::Stream<Item = Result<pb::ChannelEvent, crate::error::NetworkError>> + Unpin,
+{
+    let mut deleted = false;
+    while let Some(event_result) = stream.next().await {
+        let event = event_result?;
+        match event.event {
+            Some(channel_event::Event::ChannelDeleted(id)) if id == channel_id => {
+                deleted = true;
+                break;
+            }
+            Some(channel_event::Event::OperationFailed(failure)) => {
+                return Err(ChannelError::InvalidInput(
+                    failure
+                        .error
+                        .map(|e| e.message)
+                        .unwrap_or_else(|| "channel deletion failed".into()),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    if !deleted {
+        return Err(ChannelError::InvalidInput(
+            "no channel deleted event received".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Longest channel or group name, in characters: the server's own limit
+/// (`max_len: 100` on the name in `pkg/proto/chat/v1/channel/channel.proto`).
+/// Checked here too so the form answers without a round trip.
+pub const MAX_CHANNEL_NAME_CHARS: usize = 100;
+
+fn check_name_length(name: &str) -> Result<(), ChannelError> {
+    if name.chars().count() > MAX_CHANNEL_NAME_CHARS {
+        return Err(ChannelError::InvalidInput(format!(
+            "Name must be at most {MAX_CHANNEL_NAME_CHARS} characters"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod deletion_tests {
+    use super::*;
+
+    fn event(event: channel_event::Event) -> Result<pb::ChannelEvent, crate::error::NetworkError> {
+        Ok(pb::ChannelEvent {
+            event: Some(event),
+            ..Default::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn deletion_requires_matching_confirmation_and_preserves_failure_reason() {
+        let id = ChannelId::new().to_string();
+        let mut stream = tokio_stream::iter(vec![
+            event(channel_event::Event::ChannelDeleted(
+                ChannelId::new().to_string(),
+            )),
+            event(channel_event::Event::ChannelDeleted(id.clone())),
+        ]);
+        assert!(await_channel_deletion(&mut stream, &id).await.is_ok());
+        let mut stream = tokio_stream::iter(vec![event(channel_event::Event::ChannelDeleted(
+            ChannelId::new().to_string(),
+        ))]);
+        assert!(await_channel_deletion(&mut stream, &id).await.is_err());
+        let mut stream = tokio_stream::iter(vec![event(channel_event::Event::OperationFailed(
+            pb::OperationFailed {
+                error: Some(pb::ChannelError {
+                    message: "delete refused".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ))]);
+        assert!(
+            await_channel_deletion(&mut stream, &id)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("delete refused")
+        );
+        let mut stream =
+            tokio_stream::iter(vec![Err(crate::error::NetworkError::PermissionDenied)]);
+        assert!(matches!(
+            await_channel_deletion(&mut stream, &id).await,
+            Err(ChannelError::Network(_))
+        ));
+    }
+}
+

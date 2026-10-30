@@ -16,6 +16,10 @@ use crate::error::StorageError;
 /// Everything [`MeshService`](super::MeshService) can fail with.
 #[derive(Debug, thiserror::Error)]
 pub enum MeshError {
+    /// Shown verbatim in mesh notices; the message names its own subject
+    /// (private channels, prekeys, QR proofs), so no category prefix.
+    #[error("{0}")]
+    Binding(String),
     /// An operation was attempted before `start()` or after `shutdown()`.
     #[error("mesh service is not running")]
     NotRunning,
@@ -34,6 +38,11 @@ pub enum MeshError {
     /// sealed outbox intact rather than generating a new key over it.
     #[error("the mesh cannot seal what it retains: {0}")]
     SealerUnavailable(String),
+
+    /// A panic wipe erased the stored identity, but this process still holds
+    /// the old keypair; only a restart generates the new one.
+    #[error("mesh identity erased; restart Chatter to start mesh with a new identity")]
+    IdentityWiped,
 
     /// Nostr was not configured — no [`RelayConnector`] was supplied, so there
     /// is no way to reach a relay.

@@ -1,0 +1,256 @@
+// Shared conversation row for the virtualized sidebar.
+//
+// Every loose conversation — friend DMs, anon DMs and requests, channels
+// (current and former), private groups — is ONE list ordered by activity,
+// pinned first (Signal/Telegram). Core builds and orders the rows
+// (`ChatterClient::sidebar_rows`); this only draws them. A folder's rows are
+// the same rows, so both render through ChatRow, which picks the DM, channel
+// or private-group visual from the row's kind.
+
+import { ConversationKind } from "../chat/conversation_kind.slint";
+import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { DMListItem } from "dm_list_item.slint";
+import { ChannelListItem } from "channel_list_item.slint";
+import { PrivateGroupListItem } from "private_group_list_item.slint";
+
+export struct ChatRowData {
+    conversation-id: string,
+    conversation-type: ConversationKind,
+    user-id: string,             // DM rows: the peer
+    display-name: string,
+    accessible-label-text: string,
+    avatar-source: image,
+    has-avatar: bool,
+    initials: string,
+    last-message: string,
+    draft-preview: string,
+    timestamp: string,
+    presence-status: string,     // DM rows
+    private-channel: bool,       // channel rows: invite-only (lock glyph)
+    member-count: int,           // private-group rows
+    unread-count: int,
+    mention-count: int,
+    is-typing: bool,
+    typing-text: string,         // "Alpha is typing…" for channels and groups
+    is-pinned: bool,             // local-only pin; core sorts these first
+    is-muted: bool,
+    can-leave: bool,             // core: `can_leave_channel`; private groups always
+    can-delete: bool,            // channel rows: core's `is_former_channel`
+    is-selected: bool,           // Rust-computed selection flag; drives highlight
+    arrival-serial: int,         // Nonzero only for a newly inserted or promoted row
+}
+
+export component ChatRow inherits Rectangle {
+    in property <ChatRowData> data;
+    in property <bool> collapsed: false;
+    in property <bool> mobile-mode: false;
+    in property <bool> keyboard-highlight: false;
+
+    accessible-role: list-item;
+    accessible-label: root.data.accessible-label-text;
+    accessible-action-default => { root.activate(); }
+    // Long press for a screen reader (TalkBack: double tap and hold): the
+    // row menu (Archive, Mute, Pin, …) had no other route but a swipe.
+    accessible-action-expand => {
+        root.context-menu-requested(root.absolute-position.x + root.width / 2,
+            root.absolute-position.y + root.height / 2);
+    }
+
+    callback clicked();
+    callback pin-requested(bool);
+    callback context-menu-requested(/* x */ length, /* y */ length);
+
+    height: root.collapsed ? 48px : root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop;
+    background: transparent;
+    border-width: root.keyboard-highlight ? 2px : 0px;
+    border-color: Colors.focus-ring;
+    clip: true;
+    property <length> swipe-start-x: 0px;
+    property <length> swipe-start-y: 0px;
+    property <length> swipe-offset: 0px;
+    property <bool> swiping: false;
+    property <bool> was-open: false;
+    property <bool> swallow-click: false;
+    property <length> drag-distance: 0px;
+    property <length> arrival-offset: root.data.arrival-serial > 0 ? 18px : 0px;
+    animate arrival-offset { duration: Materials.motion-standard; easing: Materials.spring; }
+    Timer {
+        interval: 180ms;
+        running: root.swallow-click;
+        triggered => { root.swallow-click = false; }
+    }
+
+    function begin-swipe(x: length, y: length) {
+        root.was-open = root.swipe-offset < 0px;
+        root.drag-distance = 0px;
+        root.swipe-start-x = x;
+        root.swipe-start-y = y;
+        root.swiping = true;
+    }
+    function move-swipe(x: length, y: length) {
+        if (!root.swiping || root.collapsed) { return; }
+        if (abs(y - root.swipe-start-y) > abs(x - root.swipe-start-x)) { return; }
+        root.drag-distance = abs(root.swipe-start-x - x);
+        let pull = max(0px, root.swipe-start-x - x);
+        // The first 128px exposes both actions; excess pull compresses into a
+        // short elastic tail so a long gesture cannot throw the row offscreen.
+        root.swipe-offset = -(pull <= 178px ? pull * 0.72
+            : 128px + min(14px, (pull - 178px) * 0.2));
+    }
+    function end-swipe(cancelled: bool) {
+        root.swiping = false;
+        if (root.drag-distance > Spacing.sm || root.was-open) {
+            root.swallow-click = true;
+        }
+        root.swipe-offset = !cancelled && !root.was-open && root.swipe-offset < -48px ? -128px : 0px;
+    }
+    function activate() {
+        if (root.swallow-click) {
+            root.swallow-click = false;
+            return;
+        }
+        root.clicked();
+    }
+
+    Rectangle {
+        visible: root.swipe-offset < 0px;
+        x: parent.width - 128px;
+        width: 64px;
+        height: parent.height;
+        border-radius: Spacing.radius-md;
+        background: Colors.surface-control-hover;
+        accessible-role: button;
+        accessible-label: root.data.is-pinned ? "Unpin conversation" : "Pin conversation";
+        accessible-action-default => {
+            root.pin-requested(!root.data.is-pinned);
+            root.swipe-offset = 0px;
+        }
+        Image {
+            source: Icons.pin;
+            width: 18px; height: 18px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: Colors.text-primary;
+        }
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.pin-requested(!root.data.is-pinned);
+                root.swipe-offset = 0px;
+            }
+        }
+    }
+    Rectangle {
+        visible: root.swipe-offset < 0px;
+        x: parent.width - 64px;
+        width: 64px;
+        height: parent.height;
+        border-radius: Spacing.radius-md;
+        background: Colors.primary;
+        accessible-role: button;
+        accessible-label: "More conversation actions";
+        accessible-action-default => {
+            root.context-menu-requested(self.absolute-position.x, self.absolute-position.y);
+            root.swipe-offset = 0px;
+        }
+        Image {
+            source: Icons.more-horizontal;
+            width: 20px; height: 20px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: Colors.on-action;
+        }
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.context-menu-requested(self.absolute-position.x, self.absolute-position.y);
+                root.swipe-offset = 0px;
+            }
+        }
+    }
+
+    content := Rectangle {
+        x: root.swipe-offset;
+        y: root.arrival-offset;
+        width: parent.width;
+        height: parent.height;
+        background: root.swipe-offset == 0px ? transparent : Colors.surface;
+        animate x { duration: root.swiping ? 0ms : Materials.motion-standard; easing: Materials.settle; }
+
+    if root.data.conversation-type == ConversationKind.server-dm || root.data.conversation-type == ConversationKind.anon-dm: DMListItem {
+        width: parent.width;
+        display-name: root.data.display-name;
+        anonymous: root.data.conversation-type == ConversationKind.anon-dm;
+        avatar-source: root.data.avatar-source;
+        initials: root.data.initials;
+        presence-status: root.data.presence-status;
+        is-pinned: root.data.is-pinned;
+        is-muted: root.data.is-muted;
+        last-message: root.data.last-message;
+        draft-preview: root.data.draft-preview;
+        timestamp: root.data.timestamp;
+        unread-count: root.data.unread-count;
+        mention-count: root.data.mention-count;
+        is-typing: root.data.is-typing;
+        selected: root.data.is-selected;
+        collapsed: root.collapsed;
+        mobile-mode: root.mobile-mode;
+        clicked => { root.activate(); }
+        context-menu-requested(x, y) => { root.context-menu-requested(x, y); }
+        swipe-down(x, y) => { root.begin-swipe(x, y); }
+        swipe-moved(x, y) => { root.move-swipe(x, y); }
+        swipe-ended(cancelled) => { root.end-swipe(cancelled); }
+    }
+    if root.data.conversation-type == ConversationKind.channel || root.data.conversation-type == ConversationKind.saved-messages: ChannelListItem {
+        width: parent.width;
+        name: root.data.display-name;
+        channel-type: root.data.private-channel ? "private" : "public";
+        unread-count: root.data.unread-count;
+        mention-count: root.data.mention-count;
+        last-message: root.data.last-message;
+        draft-preview: root.data.draft-preview;
+        timestamp: root.data.timestamp;
+        is-typing: root.data.is-typing;
+        typing-text: root.data.typing-text;
+        selected: root.data.is-selected;
+        collapsed: root.collapsed;
+        avatar-source: root.data.avatar-source;
+        has-avatar: root.data.has-avatar;
+        is-pinned: root.data.is-pinned;
+        is-muted: root.data.is-muted;
+        mobile-mode: root.mobile-mode;
+        clicked => { root.activate(); }
+        context-menu-requested(x, y) => { root.context-menu-requested(x, y); }
+        swipe-down(x, y) => { root.begin-swipe(x, y); }
+        swipe-moved(x, y) => { root.move-swipe(x, y); }
+        swipe-ended(cancelled) => { root.end-swipe(cancelled); }
+    }
+    if root.data.conversation-type == ConversationKind.anon-group: PrivateGroupListItem {
+        width: parent.width;
+        name: root.data.display-name;
+        member-count: root.data.member-count;
+        is-muted: root.data.is-muted;
+        avatar-source: root.data.avatar-source;
+        unread-count: root.data.unread-count;
+        mention-count: root.data.mention-count;
+        last-message: root.data.last-message;
+        draft-preview: root.data.draft-preview;
+        timestamp: root.data.timestamp;
+        is-typing: root.data.is-typing;
+        typing-text: root.data.typing-text;
+        selected: root.data.is-selected;
+        collapsed: root.collapsed;
+        mobile-mode: root.mobile-mode;
+        clicked => { root.activate(); }
+        context-menu-requested(x, y) => { root.context-menu-requested(x, y); }
+        swipe-down(x, y) => { root.begin-swipe(x, y); }
+        swipe-moved(x, y) => { root.move-swipe(x, y); }
+        swipe-ended(cancelled) => { root.end-swipe(cancelled); }
+    }
+    }
+}
+

@@ -559,8 +559,14 @@ fn test_key_structure() {
     let aes_key = &encrypted.key[..32];
     let mac_key = &encrypted.key[32..];
 
-    assert!(!aes_key.iter().all(|&b| b == 0), "AES key should not be all zeros");
-    assert!(!mac_key.iter().all(|&b| b == 0), "MAC key should not be all zeros");
+    assert!(
+        !aes_key.iter().all(|&b| b == 0),
+        "AES key should not be all zeros"
+    );
+    assert!(
+        !mac_key.iter().all(|&b| b == 0),
+        "MAC key should not be all zeros"
+    );
     assert_ne!(aes_key, mac_key, "AES and MAC keys should be different");
 }
 

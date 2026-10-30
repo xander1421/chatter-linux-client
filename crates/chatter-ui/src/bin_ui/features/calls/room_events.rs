@@ -6,29 +6,60 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use chatter_core::client::ChatterClient;
-use chatter_core::calls::LiveKitRoomEvent;
-use crate::bin_ui::converters::get_initials;
+use crate::bin_ui::converters::initials_from_name;
 use crate::{CallParticipantData, MainWindow};
+use chatter_core::calls::{LiveKitRoomEvent, RoomState, tiles};
+use chatter_core::client::ChatterClient;
 
-/// The local participant is pinned to the LAST tile (the layout treats the last
-/// row as "You" and feeds it `local-video-frame`). Split it off before touching
-/// the remote rows. Callers must re-attach it via [`order_participants`].
-fn split_local(mut participants: Vec<CallParticipantData>) -> (Vec<CallParticipantData>, Option<CallParticipantData>) {
-    let local = if participants.is_empty() { None } else { Some(participants.remove(participants.len() - 1)) };
-    (participants, local)
+/// Core's tile order ([`chatter_core::calls::tiles::order_tiles`]).
+fn order_participants(
+    remotes: Vec<CallParticipantData>,
+    local: Option<CallParticipantData>,
+) -> Vec<CallParticipantData> {
+    tiles::order_tiles(remotes, local, |p| p.user_id.as_str())
 }
 
-/// Rebuild the participant list: remotes ascending by user_id, local pinned last.
-/// The GL frame list is published in ascending participant-id order and matched
-/// to tiles positionally (see `gl_call.rs`), so the remote rows must be sorted
-/// the same way or a peer's frame lands on the wrong tile.
-fn order_participants(mut remotes: Vec<CallParticipantData>, local: Option<CallParticipantData>) -> Vec<CallParticipantData> {
-    remotes.sort_by(|a, b| a.user_id.as_str().cmp(b.user_id.as_str()));
-    if let Some(l) = local {
-        remotes.push(l);
+/// Render core membership, preserving media flags.
+pub(super) fn reconcile_roster(
+    data: &mut crate::ActiveCallData,
+    roster: Vec<(String, chatter_core::ui::chat_data::CallParticipantInfo)>,
+) {
+    let all = (0..data.participants.row_count())
+        .filter_map(|i| data.participants.row_data(i))
+        .collect();
+    let (mut previous, local) = tiles::split_local(all);
+    let mut remotes = Vec::new();
+    let count = roster.len() + usize::from(local.is_some());
+    for (identity, info) in &roster {
+        let mut tile = previous
+            .iter()
+            .position(|p| p.user_id.as_str() == identity)
+            .map(|i| previous.remove(i))
+            .unwrap_or_default();
+        tile.user_id = identity.clone().into();
+        tile.display_name = info.display_name.clone().into();
+        tile.initials = crate::bin_ui::converters::initials_from_name(&info.display_name).into();
+        tile.avatar_source = info
+            .avatar_bytes
+            .as_deref()
+            .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+            .unwrap_or_default();
+        remotes.push(tile);
     }
-    remotes
+    for tile in previous {
+        if tile.is_screen_sharing
+            && chatter_core::client::calls::room_roster_keeps_screen(
+                tile.user_id.as_str(),
+                tile.display_name.as_str(),
+                &roster,
+                local.as_ref().map(|p| p.user_id.as_str()),
+            )
+        {
+            remotes.push(tile);
+        }
+    }
+    data.participant_count = count as i32;
+    data.participants = ModelRc::new(VecModel::from(order_participants(remotes, local)));
 }
 
 /// Wire room events to update UI (participant count, etc.).
@@ -50,120 +81,70 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         };
 
         tracing::info!("Started room events listener");
-
         while let Some(event) = rx.recv().await {
-            tracing::debug!("UI received room event: {:?}", event);
             let weak = weak.clone();
+            // Only explicitly scoped recovery events may produce a notice.
+            // Ordinary queued state changes remain roster wakeups.
+            let recovery = match &event {
+                LiveKitRoomEvent::RecoveryPhase {
+                    generation,
+                    recovered,
+                } => Some((*generation, *recovered)),
+                _ => None,
+            };
 
             match event {
-                LiveKitRoomEvent::StateChanged(state) => {
-                    if let chatter_core::calls::RoomState::Connected { participant_count, .. } = state {
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                let mut data = w.get_active_call_data();
-                                data.participant_count = participant_count as i32;
-                                w.set_active_call_data(data);
+                LiveKitRoomEvent::MembershipChanged { .. } => {}
+                LiveKitRoomEvent::RecoveryPhase { .. }
+                | LiveKitRoomEvent::ConnectionLost { .. }
+                | LiveKitRoomEvent::StateChanged(_)
+                | LiveKitRoomEvent::ParticipantJoined { .. }
+                | LiveKitRoomEvent::ParticipantLeft { .. } => {
+                    // Events are wakeups, not membership decisions: mount may
+                    // have overwritten earlier joins, and departures may lag.
+                    let Some((snapshot, connection_generation, room_state)) =
+                        ui_ctx.call_room_recovery_snapshot().await
+                    else {
+                        continue;
+                    };
+                    let notice = recovery.and_then(|(generation, recovered)| {
+                        if generation != connection_generation {
+                            return None;
+                        }
+                        match (&room_state, recovered) {
+                            (RoomState::Connected { .. }, true) => Some(("Reconnected", "info")),
+                            (RoomState::Reconnecting { .. } | RoomState::Failed { .. }, false) => {
+                                Some(("Reconnecting…", "info"))
                             }
-                        });
-                    }
-                }
-                LiveKitRoomEvent::ParticipantJoined { identity, display_name } => {
-                    tracing::info!("Participant joined: {} ({:?})", identity, display_name);
-                    // Core resolves the peer's decrypted name, initials, and avatar
-                    // from local state (the LiveKit `name` field is unusable — names
-                    // are E2E encrypted). UI only decodes bytes → image and renders.
-                    let info = ui_ctx.resolve_call_participant(&identity);
-                    let display = info.display_name;
-                    let initials = info.initials;
-                    let avatar_bytes = info.avatar_bytes;
+                            _ => None,
+                        }
+                    });
                     let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            let mut data = w.get_active_call_data();
-
-                            // Decode the resolved avatar (if any) on the UI thread.
-                            let avatar_img = avatar_bytes
-                                .as_deref()
-                                .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
-                                .unwrap_or_default();
-
-                            // Local participant is pinned LAST (the layout feeds it
-                            // `local-video-frame`). Split it off so a remote join can
-                            // NEVER overwrite "You" — in DM calls the local tile's
-                            // user_id is the local user's UUID (not the literal "You",
-                            // see incoming.rs), so identity-string guards can't tell it
-                            // apart from a peer. Position is the contract, matching the
-                            // track handlers' split_local/order_participants.
-                            let all: Vec<CallParticipantData> =
-                                (0..data.participants.row_count())
-                                    .map(|i| data.participants.row_data(i).unwrap_or_default())
-                                    .collect();
-                            let (mut remotes, local) = split_local(all);
-
-                            // LiveKit identity == plain user UUID (server SetIdentity),
-                            // so a pre-populated remote (peer_id) matches by user_id.
-                            if let Some(p) = remotes
-                                .iter_mut()
-                                .find(|p| p.user_id.as_str() == identity.as_str())
-                            {
-                                p.display_name = display.into();
-                                p.initials = initials.into();
-                                p.avatar_source = avatar_img;
-                            } else {
-                                remotes.push(CallParticipantData {
-                                    user_id: identity.into(),
-                                    display_name: display.into(),
-                                    initials: initials.into(),
-                                    avatar_source: avatar_img,
-                                    is_muted: false,
-                                    is_video_enabled: false,
-                                    is_screen_sharing: false,
-                                    is_speaking: false,
-                                    is_audio_muted_locally: false,
-                                    is_video_paused_locally: false,
-                                });
-                            }
-
-                            let participants = order_participants(remotes, local);
-                            data.participant_count = participants.len() as i32;
-                            data.participants = ModelRc::new(VecModel::from(participants));
-                            w.set_active_call_data(data);
-                            tracing::debug!("UI updated for participant join");
+                        let Some(w) = weak.upgrade() else { return };
+                        let mut data = w.global::<crate::CallView>().get_active_call_data();
+                        let matches = data.call_id.as_str() == snapshot.call.id.to_string()
+                            && data.channel_id.as_str() == snapshot.call.channel_id.to_string();
+                        if !matches || !w.global::<crate::CallView>().get_active_call_visible() {
+                            return;
+                        }
+                        if let Some(remotes) = snapshot.remotes {
+                            reconcile_roster(&mut data, remotes);
+                            w.global::<crate::CallView>().set_active_call_data(data);
+                        }
+                        if let Some((message, variant)) = notice {
+                            w.set_toast_message(message.into());
+                            w.set_toast_variant(variant.into());
+                            w.set_toast_visible(true);
                         }
                     });
                 }
-                LiveKitRoomEvent::ParticipantLeft { identity } => {
-                    tracing::info!("Participant left: {}", identity);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            let mut data = w.get_active_call_data();
-                            data.participant_count = (data.participant_count - 1).max(0);
-
-                            // Remove participant from list
-                            let participants: Vec<CallParticipantData> =
-                                (0..data.participants.row_count())
-                                    .filter_map(|i| {
-                                        let p = data.participants.row_data(i)?;
-                                        if p.user_id.to_string() != identity {
-                                            Some(p)
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
-                            data.participants = ModelRc::new(VecModel::from(participants));
-
-                            w.set_active_call_data(data);
-                            tracing::debug!("UI updated for participant leave");
-                        }
-                    });
-                    // Key rotation on participant leave is driven by the core
-                    // room-events policy listener (see `ChatterClient::start`).
-                }
-                LiveKitRoomEvent::TrackSubscribed { participant_identity, track_sid, is_video, is_screen_share } => {
-                    tracing::info!(
-                        "Track subscribed: {} from {} (video: {}, screen_share: {})",
-                        track_sid, participant_identity, is_video, is_screen_share
-                    );
+                LiveKitRoomEvent::TrackSubscribed {
+                    participant_identity,
+                    track_sid: _,
+                    is_video,
+                    is_screen_share,
+                } => {
+                    tracing::info!(is_video, is_screen_share, "Track subscribed");
 
                     if !is_video {
                         continue;
@@ -171,15 +152,14 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let identity = participant_identity.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         let Some(w) = weak.upgrade() else { return };
-                        let mut data = w.get_active_call_data();
-                        let all: Vec<CallParticipantData> =
-                            (0..data.participants.row_count())
-                                .map(|i| data.participants.row_data(i).unwrap_or_default())
-                                .collect();
+                        let mut data = w.global::<crate::CallView>().get_active_call_data();
+                        let all: Vec<CallParticipantData> = (0..data.participants.row_count())
+                            .map(|i| data.participants.row_data(i).unwrap_or_default())
+                            .collect();
                         // Separate local BEFORE reordering remotes, else the sort
                         // would shuffle "You" in among the peers and misalign every
                         // frame slot.
-                        let (mut remotes, local) = split_local(all);
+                        let (mut remotes, local) = tiles::split_local(all);
 
                         if is_screen_share {
                             // Screen share is its OWN tile (camera + screen are
@@ -194,8 +174,17 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             let (name, initials) = remotes
                                 .iter()
                                 .find(|p| p.user_id.to_string() == identity)
-                                .map(|p| (p.display_name.to_string(), p.initials.to_string()))
-                                .unwrap_or_else(|| (identity.clone(), get_initials(&identity)));
+                                .map(|p| {
+                                    (
+                                        p.display_name.to_string(),
+                                        crate::bin_ui::converters::initials_from_name(
+                                            &p.display_name,
+                                        ),
+                                    )
+                                })
+                                .unwrap_or_else(|| {
+                                    (identity.clone(), initials_from_name(&identity))
+                                });
                             remotes.push(CallParticipantData {
                                 user_id: screen_id.into(),
                                 display_name: format!("{name} (screen)").into(),
@@ -218,18 +207,17 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
 
                         let participants = order_participants(remotes, local);
-                        data.participant_count = participants.len() as i32;
                         data.participants = ModelRc::new(VecModel::from(participants));
-                        w.set_active_call_data(data);
+                        w.global::<crate::CallView>().set_active_call_data(data);
                     });
                 }
                 LiveKitRoomEvent::TrackUnsubscribed {
-                    participant_identity, track_sid, is_video, is_screen_share,
+                    participant_identity,
+                    track_sid: _,
+                    is_video,
+                    is_screen_share,
                 } => {
-                    tracing::info!(
-                        "Track unsubscribed: {} from {} (video={}, screen_share={})",
-                        track_sid, participant_identity, is_video, is_screen_share
-                    );
+                    tracing::info!(is_video, is_screen_share, "Track unsubscribed");
 
                     if !is_video {
                         // Audio-only unsubscribe — UI tile state unchanged.
@@ -239,12 +227,11 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let identity = participant_identity.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         let Some(w) = weak.upgrade() else { return };
-                        let mut data = w.get_active_call_data();
-                        let all: Vec<CallParticipantData> =
-                            (0..data.participants.row_count())
-                                .map(|i| data.participants.row_data(i).unwrap_or_default())
-                                .collect();
-                        let (mut remotes, local) = split_local(all);
+                        let mut data = w.global::<crate::CallView>().get_active_call_data();
+                        let all: Vec<CallParticipantData> = (0..data.participants.row_count())
+                            .map(|i| data.participants.row_data(i).unwrap_or_default())
+                            .collect();
+                        let (mut remotes, local) = tiles::split_local(all);
 
                         if is_screen_share {
                             // Screen share stopped — drop its whole pseudo-tile.
@@ -261,54 +248,51 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
 
                         let participants = order_participants(remotes, local);
-                        data.participant_count = participants.len() as i32;
                         data.participants = ModelRc::new(VecModel::from(participants));
-                        w.set_active_call_data(data);
-                        tracing::debug!(
-                            "Cleared video state for {} (screen_share={})",
-                            identity, is_screen_share
-                        );
+                        w.global::<crate::CallView>().set_active_call_data(data);
+                        tracing::debug!(is_screen_share, "Cleared video state");
                     });
                 }
-                LiveKitRoomEvent::EncryptionStateChanged { participant_identity, is_encrypted } => {
-                    tracing::debug!(
-                        "Encryption state changed: {} - encrypted: {}",
-                        participant_identity, is_encrypted
-                    );
+                LiveKitRoomEvent::EncryptionStateChanged {
+                    participant_identity: _,
+                    is_encrypted,
+                } => {
+                    tracing::debug!(is_encrypted, "Encryption state changed");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            let mut data = w.get_active_call_data();
+                            let mut data = w.global::<crate::CallView>().get_active_call_data();
                             data.is_encrypted = is_encrypted;
-                            w.set_active_call_data(data);
+                            w.global::<crate::CallView>().set_active_call_data(data);
                         }
                     });
                 }
                 LiveKitRoomEvent::ActiveSpeakersChanged { speaker_identities } => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            let mut data = w.get_active_call_data();
-                            let updated: Vec<CallParticipantData> =
-                                (0..data.participants.row_count())
-                                    .map(|i| {
-                                        let mut p = data.participants.row_data(i).unwrap_or_default();
-                                        p.is_speaking = speaker_identities
-                                            .iter()
-                                            .any(|id| id == p.user_id.as_str());
-                                        p
-                                    })
-                                    .collect();
+                            let mut data = w.global::<crate::CallView>().get_active_call_data();
+                            let updated: Vec<CallParticipantData> = (0..data
+                                .participants
+                                .row_count())
+                                .map(|i| {
+                                    let mut p = data.participants.row_data(i).unwrap_or_default();
+                                    p.is_speaking = speaker_identities
+                                        .iter()
+                                        .any(|id| id == p.user_id.as_str());
+                                    p
+                                })
+                                .collect();
                             data.participants = ModelRc::new(VecModel::from(updated));
-                            w.set_active_call_data(data);
+                            w.global::<crate::CallView>().set_active_call_data(data);
                         }
                     });
                 }
-                LiveKitRoomEvent::ConnectionQualityChanged { participant_identity, quality } => {
+                LiveKitRoomEvent::ConnectionQualityChanged {
+                    participant_identity: _,
+                    quality,
+                } => {
                     // UI doesn't surface per-participant quality today.
                     // Log so SDK users see the stream is live.
-                    tracing::debug!(
-                        "Connection quality: {} -> {}",
-                        participant_identity, quality
-                    );
+                    tracing::debug!(?quality, "Connection quality changed");
                 }
             }
         }

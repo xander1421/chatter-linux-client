@@ -2,8 +2,8 @@
 //!
 //! Ensure messages are processed in correct order per channel.
 
-use std::collections::{BTreeMap, HashMap};
 use parking_lot::Mutex;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::proto::chat_v1::Message;
 

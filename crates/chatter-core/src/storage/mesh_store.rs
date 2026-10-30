@@ -3,7 +3,8 @@
 //! Two impls of seams `chatter-mesh-store` deliberately left open:
 //!
 //! - [`MeshStorage`] — [`Storage`] over the existing SQLCipher [`Database`],
-//!   one row per [`StorageKey`] in the `mesh_store` table (migration V057).
+//!   one row per [`StorageKey`] in `mesh_store` (V057), plus keyed public
+//!   packet rows in `mesh_archive_packets` (V131).
 //! - [`MeshSealer`] — [`Sealer`], XChaCha20-Poly1305 under a key that lives in
 //!   its **own** OS-keyring entry, separate from the database passphrase.
 //!
@@ -40,7 +41,7 @@ use std::sync::Arc;
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use chatter_mesh_store::outbox::Sealer;
-use chatter_mesh_store::{StoreError, Storage, StorageKey};
+use chatter_mesh_store::{Storage, StorageKey, StoreError};
 use chrono::Utc;
 use rusqlite::params;
 use zeroize::Zeroizing;
@@ -54,6 +55,10 @@ const NONCE_SIZE: usize = 24;
 /// Seal key width.
 const KEY_SIZE: usize = 32;
 
+/// Platforms whose app-private directory is the key store: no reachable OS
+/// keyring, and a per-app sandbox protecting the data directory.
+const APP_SANDBOXED: bool = cfg!(target_os = "android");
+
 /// Label for the keyring entry, used in error messages.
 ///
 /// `StoreError::Storage`'s `key` field is `&'static str`, and the seal key is
@@ -66,7 +71,7 @@ const SEAL_KEY_LABEL: &str = "mesh-seal-key";
 
 /// [`Storage`] backed by the app's SQLCipher database.
 ///
-/// Every value written here is already sealed by [`MeshSealer`]; see the module
+/// Fixed-key blobs written here are already sealed by [`MeshSealer`]; see the module
 /// documentation for why that is not redundant with SQLCipher.
 pub struct MeshStorage {
     db: Arc<Database>,
@@ -156,6 +161,55 @@ impl Storage for MeshStorage {
         Ok(())
     }
 
+    fn load_archive_packets(&self) -> Result<Vec<([u8; 16], Vec<u8>)>, StoreError> {
+        let conn = self.db.read_connection()
+            .map_err(|e| storage_error("load", "public archive", e))?;
+        let mut stmt = conn.prepare(
+            "SELECT packet_id, packet FROM mesh_archive_packets ORDER BY inserted_order"
+        ).map_err(|e| storage_error("load", "public archive", e))?;
+        let rows = stmt.query_map([], |row| {
+            let id: Vec<u8> = row.get(0)?;
+            let packet: Vec<u8> = row.get(1)?;
+            Ok((id, packet))
+        }).map_err(|e| storage_error("load", "public archive", e))?;
+        rows.map(|row| {
+            let (id, packet) = row.map_err(|e| storage_error("load", "public archive", e))?;
+            let id: [u8; 16] = id.try_into()
+                .map_err(|_| storage_error("load", "public archive", "invalid packet id length"))?;
+            Ok((id, packet))
+        }).collect()
+    }
+
+    fn apply_archive_changes(&self, changes: &[([u8; 16], Option<Vec<u8>>)]) -> Result<(), StoreError> {
+        if changes.is_empty() { return Ok(()); }
+        let conn = self.db.connection()
+            .map_err(|e| storage_error("save", "public archive", e))?;
+        let tx = conn.unchecked_transaction()
+            .map_err(|e| storage_error("save", "public archive", e))?;
+        for (id, packet) in changes {
+            if let Some(packet) = packet {
+                tx.execute(
+                    "INSERT INTO mesh_archive_packets (packet_id, packet, inserted_order)
+                     VALUES (?1, ?2, (SELECT COALESCE(MAX(inserted_order), 0) + 1 FROM mesh_archive_packets))
+                     ON CONFLICT(packet_id) DO UPDATE SET packet = excluded.packet",
+                    params![id.as_slice(), packet],
+                ).map_err(|e| storage_error("save", "public archive", e))?;
+            } else {
+                tx.execute("DELETE FROM mesh_archive_packets WHERE packet_id = ?1", params![id.as_slice()])
+                    .map_err(|e| storage_error("delete", "public archive", e))?;
+            }
+        }
+        tx.commit().map_err(|e| storage_error("save", "public archive", e))
+    }
+
+    fn wipe_archive(&self) -> Result<(), StoreError> {
+        let conn = self.db.connection()
+            .map_err(|e| storage_error("wipe", "public archive", e))?;
+        conn.execute("DELETE FROM mesh_archive_packets", [])
+            .map_err(|e| storage_error("wipe", "public archive", e))?;
+        Ok(())
+    }
+
     /// Panic wipe, as one statement.
     ///
     /// The default implementation loops over [`StorageKey::ALL`] and keeps going
@@ -170,11 +224,47 @@ impl Storage for MeshStorage {
             .connection()
             .map_err(|e| storage_error("wipe_all", "all", e))?;
 
-        conn.execute("DELETE FROM mesh_store", [])
+        let tx = conn.unchecked_transaction()
             .map_err(|e| storage_error("wipe_all", "all", e))?;
-
+        tx.execute("DELETE FROM mesh_store", [])
+            .map_err(|e| storage_error("wipe_all", "all", e))?;
+        tx.execute("DELETE FROM mesh_archive_packets", [])
+            .map_err(|e| storage_error("wipe_all", "all", e))?;
+        tx.commit().map_err(|e| storage_error("wipe_all", "all", e))?;
         Ok(())
     }
+}
+
+/// The mesh's storage and sealer for the database at `db_path`, built together
+/// because one decision needs both.
+///
+/// When the sealer had to generate its key, nothing that existed before it can
+/// ever be opened: the key those rows were sealed under is gone — the Android
+/// build kept it only in process memory — not merely locked. Left in place they
+/// make the mesh refuse to start on every launch ("persisted mesh seal is
+/// malformed") with no way out short of clearing app data, so they are wiped
+/// here. Only mesh state goes: peer pins, outbox, courier pool, archive, bridge
+/// dedup and prekeys. Mesh messages and the mesh identity live in other tables.
+///
+/// A key that exists and still fails to open a blob is untouched by this, and
+/// fails closed where the blob is read.
+pub fn sealed_store(db: Arc<Database>, db_path: &Path) -> (MeshStorage, MeshSealer) {
+    let storage = MeshStorage::new(db);
+    let sealer = MeshSealer::from_keyring(db_path);
+    if sealer.key_is_new() {
+        match storage.wipe_all() {
+            Ok(()) => tracing::warn!(
+                target: "mesh::store",
+                "new mesh seal key: cleared mesh state sealed under a key that no longer exists"
+            ),
+            Err(error) => tracing::warn!(
+                target: "mesh::store",
+                %error,
+                "new mesh seal key, but the unreadable mesh state could not be cleared"
+            ),
+        }
+    }
+    (storage, sealer)
 }
 
 // ===========================================================================
@@ -210,6 +300,10 @@ pub struct MeshSealer {
     /// matters: an unreadable key never leads to a *new* key being generated
     /// over sealed data that is still perfectly good.
     cipher: Result<XChaCha20Poly1305, String>,
+    /// True when no key existed and this run generated one. Anything already
+    /// in `mesh_store` was then sealed under a key that exists nowhere and can
+    /// never be opened; see [`Self::key_is_new`].
+    key_is_new: bool,
 }
 
 impl MeshSealer {
@@ -222,6 +316,7 @@ impl MeshSealer {
         let key = Key::from(*key);
         Self {
             cipher: Ok(XChaCha20Poly1305::new(&key)),
+            key_is_new: false,
         }
     }
 
@@ -234,6 +329,7 @@ impl MeshSealer {
     pub fn unavailable(reason: impl Into<String>) -> Self {
         Self {
             cipher: Err(reason.into()),
+            key_is_new: false,
         }
     }
 
@@ -241,6 +337,26 @@ impl MeshSealer {
     #[must_use]
     pub fn is_ready(&self) -> bool {
         self.cipher.is_ok()
+    }
+
+    /// Whether this run generated the key because none existed.
+    ///
+    /// Then every row already in `mesh_store` is unreadable by construction —
+    /// its key is gone, not locked — and the caller wipes them rather than let
+    /// the mesh refuse to start over data nobody can ever open. A key that
+    /// exists and fails to open a blob is a different case (tampering or
+    /// corruption) and still fails closed.
+    #[must_use]
+    pub fn key_is_new(&self) -> bool {
+        self.key_is_new
+    }
+
+    /// A sealer under a key generated just now.
+    fn generated(key: &[u8; KEY_SIZE]) -> Self {
+        Self {
+            key_is_new: true,
+            ..Self::from_key(key)
+        }
     }
 
     /// Why the key is missing, if it is.
@@ -288,6 +404,21 @@ impl MeshSealer {
     /// sentence for the user, not a type: every caller turns it into the same
     /// unavailable sealer.
     fn acquire(db_path: &Path) -> Result<Self, String> {
+        let sandbox_wrap = if APP_SANDBOXED {
+            Some(crate::system::sealed_secret::installed_key_wrap()?)
+        } else {
+            None
+        };
+        Self::acquire_with(db_path, sandbox_wrap)
+    }
+
+    /// [`acquire`](Self::acquire) with the platform decision as a parameter, so
+    /// the Android path is testable on the host: `Some(wrap)` is an
+    /// app-sandboxed platform whose key file is sealed by that wrapper.
+    fn acquire_with(
+        db_path: &Path,
+        sandbox_wrap: Option<&dyn crate::system::sealed_secret::KeyWrap>,
+    ) -> Result<Self, String> {
         // Development / headless bypass, mirroring `CHATTER_DB_PASSPHRASE`.
         //
         // Without this the mesh cannot start on a box with no Secret Service, and
@@ -318,12 +449,41 @@ impl MeshSealer {
         // it, and an unattended run started any other way lands on a Secret
         // Service prompt with nobody there to answer it. See
         // `system::keyring::keyring_disabled` for what this gives up.
+        //
+        // Android has no OS keyring the `keyring` crate can reach: it silently
+        // hands back its in-memory mock (keyring 3.6.3 lib.rs:301-309), so a key
+        // generated there died with the process and the next launch read every
+        // seal as malformed. The key lives in the app-private data directory
+        // instead, sealed under an Android Keystore key the same way the
+        // database passphrase is (`app/infrastructure.rs`, `.db_key`), so a copy
+        // of the app's files does not contain it.
+        if let Some(wrap) = sandbox_wrap {
+            return Self::from_sealed_key_file(db_path, wrap);
+        }
         if crate::system::keyring::keyring_disabled(db_path) {
             return Self::from_local_key_file(db_path);
         }
 
+        crate::system::keyring::ensure_default_store()
+            .map_err(|e| format!("the OS keyring could not be initialized: {e}"))?;
         let entry = keyring::Entry::new(APP_ID, &Self::entry_username(db_path))
             .map_err(|e| format!("the OS keyring could not be opened: {e}"))?;
+
+        // Anywhere else, a keyring that keeps nothing past the process (a build
+        // without a native backend) is refused outright. Sealing under a key it
+        // would forget is exactly how the Android build lost its own pins.
+        if entry
+            .as_any()
+            .downcast_ref::<keyring::mock::Cred>()
+            .is_some()
+        {
+            return Err(
+                "this build has no OS keyring that outlives the process, so a \
+                        mesh seal key could not be kept. Set CHATTER_MESH_SEAL_KEY or \
+                        CHATTER_NO_KEYRING for a development run."
+                    .to_string(),
+            );
+        }
 
         match entry.get_password() {
             Ok(encoded) => {
@@ -333,9 +493,10 @@ impl MeshSealer {
                     // throw away the key that the stored blobs were sealed with.
                     format!("the stored mesh seal key is not hex: {e}")
                 })?);
-                let key: [u8; KEY_SIZE] = raw.as_slice().try_into().map_err(|_| {
-                    format!("expected {KEY_SIZE} key bytes, found {}", raw.len())
-                })?;
+                let key: [u8; KEY_SIZE] = raw
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| format!("expected {KEY_SIZE} key bytes, found {}", raw.len()))?;
                 Ok(Self::from_key(&key))
             }
             Err(keyring::Error::NoEntry) => {
@@ -351,7 +512,7 @@ impl MeshSealer {
                 entry
                     .set_password(&encoded)
                     .map_err(|e| format!("a new mesh seal key could not be stored: {e}"))?;
-                Ok(Self::from_key(&key))
+                Ok(Self::generated(&key))
             }
             // The keyring is there but would not answer: locked, denied, or no
             // Secret Service running. Emphatically not a reason to generate a
@@ -408,13 +569,48 @@ impl MeshSealer {
                 // with but never stored reads back as garbage after a restart.
                 write_private(&path, encoded.as_bytes())
                     .map_err(|e| format!("the mesh seal key could not be saved: {e}"))?;
-                Ok(Self::from_key(&key))
+                Ok(Self::generated(&key))
             }
             Err(error) => Err(format!("{} could not be read: {error}", path.display())),
         }
     }
 
-    /// Where the seal key lives when the keyring is opted out of.
+    /// The seal key from a Keystore-sealed file beside the database (Android),
+    /// generating it only when the file does not exist.
+    ///
+    /// A file the Keystore will not open is an error and the mesh stays off:
+    /// regenerating would orphan every sealed blob while looking like it worked.
+    fn from_sealed_key_file(
+        db_path: &Path,
+        wrap: &dyn crate::system::sealed_secret::KeyWrap,
+    ) -> Result<Self, String> {
+        use crate::system::sealed_secret::{self, MESH_SEAL_ALIAS};
+        let path = Self::local_key_path(db_path);
+
+        if let Some(encoded) = sealed_secret::read(&path, MESH_SEAL_ALIAS, wrap)? {
+            let raw = Zeroizing::new(
+                hex::decode(encoded.as_bytes())
+                    .map_err(|e| format!("{} is not hex: {e}", path.display()))?,
+            );
+            let key: [u8; KEY_SIZE] = raw
+                .as_slice()
+                .try_into()
+                .map_err(|_| format!("{} must hold {KEY_SIZE} key bytes", path.display()))?;
+            let key = Zeroizing::new(key);
+            return Ok(Self::from_key(&key));
+        }
+
+        let key =
+            Zeroizing::new(random_key().map_err(|e| format!("no randomness for a new key: {e}"))?);
+        let encoded = Zeroizing::new(hex::encode(key.as_slice()));
+        // Persisted before use: a key sealed with but never stored reads back as
+        // garbage after a restart.
+        sealed_secret::write(&path, MESH_SEAL_ALIAS, wrap, &encoded)
+            .map_err(|e| format!("the mesh seal key could not be saved: {e}"))?;
+        Ok(Self::generated(&key))
+    }
+
+    /// Where the seal key lives when the keyring is opted out of, or sealed on Android.
     fn local_key_path(db_path: &Path) -> std::path::PathBuf {
         let mut path = db_path.to_path_buf();
         path.set_extension("mesh-seal-key");
@@ -422,6 +618,8 @@ impl MeshSealer {
     }
 
     pub fn delete_from_keyring(db_path: &Path) -> Result<(), StoreError> {
+        crate::system::keyring::ensure_default_store()
+            .map_err(|e| storage_error("keyring initialize", SEAL_KEY_LABEL, e))?;
         let entry = keyring::Entry::new(APP_ID, &Self::entry_username(db_path))
             .map_err(|e| storage_error("keyring open", SEAL_KEY_LABEL, e))?;
         match entry.delete_credential() {
@@ -519,11 +717,19 @@ mod tests {
         // `from_keyring` refuses to allow on the keyring path.
         let dir = tempfile::tempdir().expect("temp dir");
         let db_path = dir.path().join("chatter.db");
-        std::fs::write(dir.path().join(super::super::super::system::keyring::NO_KEYRING_MARKER), "x")
-            .expect("marker");
+        std::fs::write(
+            dir.path()
+                .join(super::super::super::system::keyring::NO_KEYRING_MARKER),
+            "x",
+        )
+        .expect("marker");
 
         let first = MeshSealer::from_keyring(&db_path);
-        assert!(first.is_ready(), "the key should be generated on first use: {:?}", first.unavailable_reason());
+        assert!(
+            first.is_ready(),
+            "the key should be generated on first use: {:?}",
+            first.unavailable_reason()
+        );
 
         let sealed = first.seal(b"outbox").expect("seal");
         let second = MeshSealer::from_keyring(&db_path);
@@ -535,6 +741,124 @@ mod tests {
         );
     }
     use super::*;
+
+    /// The keyring Android actually gets: the crate has no backend there and
+    /// falls back to its in-memory mock (keyring 3.6.3 lib.rs:301-309), whose
+    /// entries forget their password the moment the `Entry` is dropped.
+    fn use_the_platformless_keyring() {
+        static MOCK: std::sync::Once = std::sync::Once::new();
+        MOCK.call_once(|| {
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
+        });
+    }
+
+    #[test]
+    fn a_seal_written_by_one_run_opens_in_the_next_when_the_keyring_cannot_keep_it() {
+        // The S9 bug: session one generated a seal key into a keyring that kept
+        // it only in memory, sealed the peer pins with it, and exited. Session
+        // two found no entry, generated a different key, and read its own pins
+        // back as "persisted mesh seal is malformed" — so the mesh never started.
+        use_the_platformless_keyring();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("chatter.db");
+
+        // An app-sandboxed platform (Android) keeps the key beside the database,
+        // Keystore-sealed, as it already keeps the database passphrase.
+        let wrap = crate::system::sealed_secret::tests::FakeWrap { fail_unseal: false };
+        let first = MeshSealer::acquire_with(&db_path, Some(&wrap)).expect("first run");
+        assert!(first.key_is_new());
+        let sealed = first.seal(b"peer pins").expect("seal");
+        drop(first);
+        let on_disk =
+            std::fs::read_to_string(MeshSealer::local_key_path(&db_path)).expect("key file");
+        assert!(
+            on_disk.starts_with("ks1:"),
+            "the Android key file must hold only a sealed blob"
+        );
+        let second = MeshSealer::acquire_with(&db_path, Some(&wrap)).expect("second run");
+        assert!(!second.key_is_new());
+        assert_eq!(
+            second
+                .open(&sealed)
+                .expect("a seal this device wrote must open after restart"),
+            b"peer pins"
+        );
+    }
+
+    #[test]
+    fn an_android_seal_key_the_keystore_will_not_open_is_refused_not_replaced() {
+        use crate::system::sealed_secret::tests::FakeWrap;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("chatter.db");
+        MeshSealer::acquire_with(&db_path, Some(&FakeWrap { fail_unseal: false }))
+            .expect("first run");
+        let key_file = MeshSealer::local_key_path(&db_path);
+        let before = std::fs::read(&key_file).expect("key file");
+
+        assert!(MeshSealer::acquire_with(&db_path, Some(&FakeWrap { fail_unseal: true })).is_err());
+        assert_eq!(
+            std::fs::read(&key_file).expect("key file"),
+            before,
+            "the sealed key must survive"
+        );
+    }
+
+    #[test]
+    fn a_keyring_that_forgets_is_refused_rather_than_sealed_under() {
+        // Off a sandboxed platform there is no safe place to put the key, so the
+        // sealer must say so up front instead of sealing under a key that dies
+        // with the process.
+        use_the_platformless_keyring();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("chatter.db");
+
+        let first = MeshSealer::from_keyring(&db_path);
+        if let Ok(sealed) = first.seal(b"peer pins") {
+            let second = MeshSealer::from_keyring(&db_path);
+            assert_eq!(
+                second.open(&sealed).ok().as_deref(),
+                Some(&b"peer pins"[..]),
+                "a ready sealer's key must survive a restart"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_seal_key_clears_rows_no_key_can_open_and_an_existing_key_keeps_them() {
+        // The one-time recovery for devices that ran the broken build: their
+        // rows were sealed under a key that is gone, so the first run with a
+        // durable key must not trip over them forever.
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(
+            dir.path().join(crate::system::keyring::NO_KEYRING_MARKER),
+            "",
+        )
+        .expect("marker");
+        let db_path = dir.path().join("chatter.db");
+        let db = Arc::new(Database::open(&db_path, "testpass").expect("open"));
+        db.run_migrations().expect("migrations");
+
+        let orphan = MeshSealer::from_key(&[9u8; KEY_SIZE])
+            .seal(b"lost")
+            .expect("seal");
+        MeshStorage::new(db.clone())
+            .save(StorageKey::PeerPins, &orphan)
+            .expect("save");
+
+        let (storage, sealer) = sealed_store(db.clone(), &db_path);
+        assert!(sealer.key_is_new());
+        assert_eq!(storage.load(StorageKey::PeerPins).expect("load"), None);
+
+        let kept = sealer.seal(b"pins").expect("seal");
+        storage.save(StorageKey::PeerPins, &kept).expect("save");
+        let (storage, sealer) = sealed_store(db, &db_path);
+        assert!(!sealer.key_is_new());
+        let row = storage
+            .load(StorageKey::PeerPins)
+            .expect("load")
+            .expect("row kept");
+        assert_eq!(sealer.open(&row).expect("open"), b"pins");
+    }
 
     // MARK: an unavailable sealer
 
@@ -590,8 +914,8 @@ mod tests {
             Database::open(&dir.path().join("mesh_store_test.db"), "testpass").expect("open"),
         );
         db.run_migrations().expect("migrations");
-        // Keep the directory alive for the whole test.
-        Box::leak(Box::new(dir));
+        // Keep the directory alive until the test ends.
+        crate::test_tempdir::hold(dir);
         db
     }
 
@@ -781,15 +1105,29 @@ mod tests {
     fn wipe_removes_only_that_key() {
         let storage = MeshStorage::new(test_db());
         storage.save(StorageKey::Outbox, b"mail").expect("save");
-        storage.save(StorageKey::Metrics, b"counters").expect("save");
+        storage.apply_archive_changes(&[([1; 16], Some(b"history".to_vec()))]).expect("save");
 
         storage.wipe(StorageKey::Outbox).expect("wipe");
 
         assert_eq!(storage.load(StorageKey::Outbox).expect("load"), None);
-        assert_eq!(
-            storage.load(StorageKey::Metrics).expect("load"),
-            Some(b"counters".to_vec())
-        );
+        assert_eq!(storage.load_archive_packets().expect("load"), vec![([1; 16], b"history".to_vec())]);
+    }
+
+    #[test]
+    fn public_archive_rows_are_independent_and_wiped_with_mesh_state() {
+        let storage = MeshStorage::new(test_db());
+        storage.apply_archive_changes(&[
+            ([1; 16], Some(b"one".to_vec())),
+            ([2; 16], Some(b"two".to_vec())),
+        ]).expect("insert");
+        storage.apply_archive_changes(&[
+            ([1; 16], None),
+            ([2; 16], Some(b"updated".to_vec())),
+        ]).expect("update");
+        assert_eq!(storage.load_archive_packets().expect("load"),
+            vec![([2; 16], b"updated".to_vec())]);
+        storage.wipe_all().expect("wipe all");
+        assert!(storage.load_archive_packets().expect("load").is_empty());
     }
 
     #[test]
@@ -860,5 +1198,9 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    options.open(path)?.write_all(bytes)
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+    // Durable before anything is sealed under it: a key lost to a power cut
+    // after use is every sealed blob lost with it.
+    file.sync_all()
 }

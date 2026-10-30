@@ -6,15 +6,15 @@ authors = ["xander1421"]
 description = "Nostr transport for the bitchat mesh: geohash channels, gift-wrapped DMs, courier drops"
 license = "GPL-3.0"
 repository = "https://github.com/xander1421/chatter"
-rust-version = "1.85"
+rust-version = "1.99"
 
 [lib]
 name = "chatter_mesh_nostr"
 path = "src/lib.rs"
 
 [features]
-# The async relay client. Off-by-default so the event/crypto layer builds and
-# tests without dragging in tokio — the pure half is the half with vectors.
+# The async relay client. On by default. `--no-default-features` builds the
+# event/crypto layer without tokio — the pure half is the half with vectors.
 default = ["client"]
 client = ["dep:tokio"]
 
@@ -23,27 +23,27 @@ chatter-mesh = { path = "../chatter-mesh" }
 
 # secp256k1 Schnorr (BIP-340) for event signing, and ECDH for the DM key
 # agreement. bitchat uses P256K, which is the same libsecp256k1 underneath.
-secp256k1 = { version = "0.30", features = ["rand", "std", "global-context"] }
+secp256k1 = { version = "0.33.1", features = ["rand", "std", "global-context"] }
 
 # NOTE: XChaCha20-Poly1305, NOT the ChaCha20+HMAC construction the published
 # NIP-44 v2 specification defines. bitchat's DM encryption diverges from that
 # spec on every axis (see the P4 design doc §2). This is deliberate: matching
 # the spec would mean not interoperating with bitchat, which is the entire
 # point. Do not "correct" this.
-chacha20poly1305 = { version = "0.10", features = ["alloc"] }
-hkdf = "0.12"
+chacha20poly1305 = { version = "0.11.0", features = ["alloc", "zeroize"] }
+hkdf = "0.13.0"
 # Direct dependency on purpose. Derived geohash identities are HMAC-SHA256 over a
 # device seed, and reaching it through `hkdf::hmac` would silently break the day
 # anyone prunes or bumps hkdf.
-hmac = "0.12"
-sha2 = "0.10"
+hmac = "0.13.0"
+sha2 = "0.11.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-base64 = "0.22"
-bech32 = "0.11"
+base64 = "0.23.1"
+bech32 = "0.12.0"
 hex = "0.4"
 thiserror = "2"
-rand_core = "0.6"
+rand_core = "0.10.1"
 
 # No WebSocket or TLS stack lives here on purpose. `RelayConnector` is injected,
 # so the integration layer supplies a connection backed by the arti Tor client

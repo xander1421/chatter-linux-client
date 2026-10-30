@@ -1,12 +1,11 @@
 //! Integration tests for UserClient.
 //!
-//! Tests user profile operations, presence, friends, blocking,
-//! and navigation history.
+//! Tests user profile operations, presence, friends, and blocking.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
-use chatter_core::network::grpc::{ChannelClient, UserClient};
-use chatter_core::proto::chat_v1::{friend_requests_filter, ChannelType, UserPresence};
+use chatter_core::network::grpc::UserClient;
+use chatter_core::proto::chat_v1::{UserPresence, friend_requests_filter};
 use tokio_stream::StreamExt;
 
 use common::*;
@@ -39,7 +38,9 @@ async fn test_get_nonexistent_user_profile() {
 
     let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
 
-    let result = user_client.get_user_profile("nonexistent-user-id").await;
+    // A well-formed id nobody has; a malformed one is refused by validation.
+    let missing = uuid::Uuid::new_v4().to_string();
+    let result = user_client.get_user_profile(&missing).await;
     assert_not_found(result);
 }
 
@@ -162,11 +163,7 @@ async fn test_send_friend_request() {
     let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
 
     // Send friend request to user2
-    let stream = assert_ok(
-        user_client
-            .send_friend_request(&user2.user_id, None)
-            .await,
-    );
+    let stream = assert_ok(user_client.send_friend_request(&user2.user_id, None).await);
 
     tokio::pin!(stream);
 
@@ -261,137 +258,6 @@ async fn test_block_and_unblock_user() {
 }
 
 // ============================================================================
-// Navigation History Tests
-// ============================================================================
-
-#[tokio::test]
-async fn test_track_channel_visit() {
-    skip_if_no_server!();
-
-    let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-
-    // Create a channel first
-    let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
-    let channel_name = format!("nav_test_{}", unique_username());
-
-    let stream = channel_client
-        .create_channel(
-            &channel_name,
-            ChannelType::ChannelPublic,
-            None,
-            vec![],
-            None,
-            None,
-            None,
-        )
-        .await
-        .expect("Failed to create channel");
-
-    tokio::pin!(stream);
-
-    let mut channel_id = String::new();
-    while let Some(result) = stream.next().await {
-        let event = result.expect("Stream error");
-        if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
-            if let Event::ChannelCreated(channel) = payload {
-                // ChannelCreated directly contains the Channel proto
-                channel_id = channel.id;
-            }
-        }
-    }
-
-    // Track visit
-    let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
-    let result = user_client.track_channel_visit(&channel_id).await;
-    assert!(result.is_ok(), "Should be able to track channel visit");
-
-    // Get navigation history
-    let history = assert_ok(
-        user_client
-            .get_navigation_history(50, true, false)
-            .await,
-    );
-
-    // GetNavigationHistoryResponse has pinned_channels and recent_channels
-    let found = history.recent_channels.iter().any(|ch| ch.channel_id == channel_id)
-        || history.pinned_channels.iter().any(|ch| ch.channel_id == channel_id);
-    assert!(found, "Visited channel should be in navigation history");
-}
-
-#[tokio::test]
-async fn test_clear_navigation_history() {
-    skip_if_no_server!();
-
-    let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-
-    let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
-
-    // Clear history (keeping pinned)
-    let result = user_client.clear_navigation_history(true).await;
-    assert!(result.is_ok(), "Should be able to clear navigation history");
-}
-
-#[tokio::test]
-async fn test_pin_unpin_channel() {
-    skip_if_no_server!();
-
-    let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-
-    // Create a channel
-    let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
-    let channel_name = format!("pin_test_{}", unique_username());
-
-    let stream = channel_client
-        .create_channel(
-            &channel_name,
-            ChannelType::ChannelPublic,
-            None,
-            vec![],
-            None,
-            None,
-            None,
-        )
-        .await
-        .expect("Failed to create channel");
-
-    tokio::pin!(stream);
-
-    let mut channel_id = String::new();
-    while let Some(result) = stream.next().await {
-        let event = result.expect("Stream error");
-        if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
-            if let Event::ChannelCreated(channel) = payload {
-                // ChannelCreated directly contains the Channel proto
-                channel_id = channel.id;
-            }
-        }
-    }
-
-    let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
-
-    // Pin the channel
-    let pin_response = assert_ok(user_client.pin_channel(&channel_id, 0).await);
-    // PinChannelResponse has pinned_channels list
-    assert!(pin_response.total_pinned >= 0, "Pin should succeed");
-
-    // Verify in pinned only list
-    let history = assert_ok(user_client.get_navigation_history(50, true, true).await);
-    // GetNavigationHistoryResponse has pinned_channels
-    let found = history.pinned_channels.iter().any(|ch| ch.channel_id == channel_id);
-    assert!(found, "Pinned channel should appear in pinned-only history");
-
-    // Unpin it
-    let unpin_response = assert_ok(user_client.unpin_channel(&channel_id).await);
-    // UnpinChannelResponse has pinned_channels list
-    assert!(unpin_response.total_pinned >= 0, "Unpin should succeed");
-}
-
-// ============================================================================
 // Event Streaming Tests
 // ============================================================================
 
@@ -414,11 +280,7 @@ async fn test_stream_user_events() {
     // Consume the initial "stream ready" event
     let mut stream = stream_result.unwrap();
     use tokio_stream::StreamExt;
-    let first_event = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        stream.next(),
-    )
-    .await;
+    let first_event = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await;
 
     assert!(first_event.is_ok(), "Should receive initial stream event");
 }

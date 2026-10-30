@@ -17,18 +17,24 @@ use std::collections::BTreeMap;
 
 use chatter_mesh::dedup::MessageDeduplicator;
 use chatter_mesh::ids::PeerId;
-use chatter_mesh::packet::{BROADCAST_RECIPIENT, BitchatPacket, MessageType};
+use chatter_mesh::packet::{BROADCAST_RECIPIENT, BitchatPacket, MessageType, SENDER_ID_LEN};
 use chatter_mesh::relay::MESSAGE_TTL_DEFAULT;
 
 use crate::fanout::{FanoutRequest, FanoutSelection, LinkCandidate, select_links};
 use crate::link::LinkId;
 
 /// Bytes a fragment costs on top of its chunk: the 13-byte fragment header, the
-/// 8-byte sender and 8-byte recipient, and the 13-byte packet frame.
+/// 8-byte sender and 8-byte recipient, and the packet header. A source route
+/// adds one count byte and eight bytes per hop; `plan` accounts for those from
+/// the packet because they vary per send.
 ///
-/// `BLEOutboundPacketPolicy.fragmentFrameOverhead`, kept in the same
-/// `13 + 8 + 8 + 13` form so it stays comparable to the Swift.
-pub const FRAGMENT_FRAME_OVERHEAD: usize = 13 + 8 + 8 + 13;
+/// Swift's `BLEOutboundPacketPolicy.fragmentFrameOverhead` counts a 13-byte
+/// header, but the encoded header is 14 bytes in v1 and 16 in v2
+/// (`chatter_mesh::codec`), so a full chunk overran the link limit by 1-3
+/// bytes and the radio refused it. Budget for the larger v2 header.
+pub const FRAGMENT_FRAME_OVERHEAD: usize = chatter_mesh::fragment::FRAGMENT_HEADER_LEN
+    + SENDER_ID_LEN * 2
+    + chatter_mesh::codec::V2_HEADER_SIZE;
 
 /// Smallest chunk a fragment may carry, `BLEOutboundFragmentPlanner.minimumChunkSize`.
 ///
@@ -181,7 +187,17 @@ pub fn plan(req: &OutboundPlanRequest<'_>) -> OutboundPlan {
     if let Some(limit) = over_mtu {
         return OutboundPlan {
             directed_peer,
-            fragment_chunk_size: Some(fragment_chunk_size(limit)),
+            fragment_chunk_size: Some(
+                fragment_chunk_size(limit)
+                    .saturating_sub(
+                        packet
+                            .route
+                            .as_ref()
+                            .filter(|route| !route.is_empty())
+                            .map_or(0, |route| 1 + route.len() * SENDER_ID_LEN),
+                    )
+                    .max(MIN_FRAGMENT_CHUNK),
+            ),
             selected,
             should_spool_directed: false,
         };
@@ -330,9 +346,7 @@ pub fn priority(packet: &BitchatPacket) -> OutboundPriority {
         // `MessageType` without this arm would silently promote a 512-chunk
         // transfer to `HIGH` and let it starve conversation, which is precisely
         // what this level exists to prevent.
-        Some(MessageType::FileTransfer | MessageType::FileChunk) => {
-            OutboundPriority::FILE_TRANSFER
-        }
+        Some(MessageType::FileTransfer | MessageType::FileChunk) => OutboundPriority::FILE_TRANSFER,
         // `FileManifest` and `FileChunkRequest` stay HIGH deliberately. Both are
         // a few hundred bytes of control plane, and both are on the critical path
         // of a transfer that is otherwise stalled: queueing a retransmit request
@@ -398,7 +412,10 @@ impl DirectedRelaySpool {
 
     /// Total packets held, across all recipients.
     pub fn len(&self) -> usize {
-        self.by_recipient.values().map(|packets| packets.len()).sum()
+        self.by_recipient
+            .values()
+            .map(|packets| packets.len())
+            .sum()
     }
 
     /// Holds a packet. Returns `false` if this recipient already has one under
@@ -517,7 +534,10 @@ mod tests {
 
     #[test]
     fn a_packet_with_no_recipient_is_a_broadcast() {
-        assert_eq!(directed_peer_hint(&packet(MessageType::Message), None), None);
+        assert_eq!(
+            directed_peer_hint(&packet(MessageType::Message), None),
+            None
+        );
     }
 
     #[test]
@@ -557,7 +577,8 @@ mod tests {
     #[test]
     fn a_broadcast_is_subsetted_and_a_directed_packet_is_not() {
         let bob = peer("bbbb");
-        let mut links: Vec<LinkCandidate> = (0..8).map(|i| central(&format!("L{i}"), 512)).collect();
+        let mut links: Vec<LinkCandidate> =
+            (0..8).map(|i| central(&format!("L{i}"), 512)).collect();
         links.push(central("to-bob", 512).bound_to(bob.clone()));
 
         let broadcast = packet(MessageType::Message);
@@ -565,9 +586,9 @@ mod tests {
         assert_eq!(out.selected.len(), 5); // subset_size(9)
 
         let directed = packet(MessageType::NoiseEncrypted);
-        let out =
-            plan(&OutboundPlanRequest::new(&directed, 100, &links)
-                .with_directed_only_peer(Some(&bob)));
+        let out = plan(
+            &OutboundPlanRequest::new(&directed, 100, &links).with_directed_only_peer(Some(&bob)),
+        );
         assert_eq!(ids(&out), vec!["to-bob"]);
     }
 
@@ -618,9 +639,8 @@ mod tests {
         let links: Vec<LinkCandidate> = (0..4).map(|i| central(&format!("L{i}"), 512)).collect();
         let p = packet(MessageType::NoiseEncrypted);
 
-        let flooding = plan(
-            &OutboundPlanRequest::new(&p, 100, &links).with_directed_only_peer(Some(&bob)),
-        );
+        let flooding =
+            plan(&OutboundPlanRequest::new(&p, 100, &links).with_directed_only_peer(Some(&bob)));
         assert_eq!(flooding.selected.len(), 4);
 
         let strict = plan(
@@ -681,9 +701,8 @@ mod tests {
         ];
         let p = packet(MessageType::NoiseEncrypted);
 
-        let directed = plan(
-            &OutboundPlanRequest::new(&p, 400, &links).with_directed_only_peer(Some(&bob)),
-        );
+        let directed =
+            plan(&OutboundPlanRequest::new(&p, 400, &links).with_directed_only_peer(Some(&bob)));
         assert_eq!(ids(&directed), vec!["to-bob"]);
         assert_eq!(directed.fragment_chunk_size, None);
 
@@ -706,10 +725,13 @@ mod tests {
     #[test]
     fn fragment_chunk_size_floors_at_the_minimum() {
         assert_eq!(fragment_chunk_size(0), MIN_FRAGMENT_CHUNK);
-        assert_eq!(fragment_chunk_size(FRAGMENT_FRAME_OVERHEAD), MIN_FRAGMENT_CHUNK);
+        assert_eq!(
+            fragment_chunk_size(FRAGMENT_FRAME_OVERHEAD),
+            MIN_FRAGMENT_CHUNK
+        );
         assert_eq!(fragment_chunk_size(100), MIN_FRAGMENT_CHUNK);
         assert_eq!(fragment_chunk_size(512), 512 - FRAGMENT_FRAME_OVERHEAD);
-        assert_eq!(FRAGMENT_FRAME_OVERHEAD, 42);
+        assert_eq!(FRAGMENT_FRAME_OVERHEAD, 45);
     }
 
     // ---- plan: spooling ------------------------------------------------
@@ -732,10 +754,8 @@ mod tests {
         // Not a Noise type.
         let p = packet(MessageType::Message);
         assert!(
-            !plan(
-                &OutboundPlanRequest::new(&p, 100, &[]).with_directed_only_peer(Some(&bob))
-            )
-            .should_spool_directed
+            !plan(&OutboundPlanRequest::new(&p, 100, &[]).with_directed_only_peer(Some(&bob)))
+                .should_spool_directed
         );
 
         // Not directed.
@@ -745,10 +765,8 @@ mod tests {
         // Directed, Noise, but it did go somewhere.
         let links = vec![central("to-bob", 512).bound_to(bob.clone())];
         assert!(
-            !plan(
-                &OutboundPlanRequest::new(&p, 100, &links).with_directed_only_peer(Some(&bob))
-            )
-            .should_spool_directed
+            !plan(&OutboundPlanRequest::new(&p, 100, &links).with_directed_only_peer(Some(&bob)))
+                .should_spool_directed
         );
     }
 

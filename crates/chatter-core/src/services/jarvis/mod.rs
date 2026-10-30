@@ -36,8 +36,8 @@ pub mod commands;
 pub mod context_builder;
 pub mod engine;
 pub mod entity_extractor;
-pub mod fact_extractor;
 pub mod error;
+pub mod fact_extractor;
 pub mod memory_manager;
 pub mod service;
 
@@ -46,7 +46,7 @@ pub use commands::{JarvisCommand, parse_slash_command};
 pub use context_builder::{BuiltContext, ContextBuilder};
 pub use engine::{JarvisEngine, SharedJarvisEngine};
 pub use entity_extractor::{EntityExtractor, ExtractedEntity};
-pub use fact_extractor::{ExtractedFact, FactExtractor};
 pub use error::JarvisError;
+pub use fact_extractor::{ExtractedFact, FactExtractor};
 pub use memory_manager::{CompressionConfig, MemoryManager, MemoryStats};
 pub use service::JarvisService;

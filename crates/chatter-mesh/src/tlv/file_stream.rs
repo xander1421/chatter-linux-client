@@ -2,17 +2,13 @@
 //!
 //! **Not a port.** Every other module in this directory reproduces a Swift or
 //! Kotlin type byte for byte; there is no bitchat original for these three. They
-//! exist because the single-packet path cannot deliver a large file *at all* on
-//! this radio, and the arithmetic is in
-//! [`crate::fragment`]'s `a_one_mebibyte_payload_cannot_reassemble_within_the_lifetime_window`:
-//! [`FRAGMENT_LIFETIME_SECS`] is measured from the *first* fragment of a stream,
-//! so an assembly 99% complete when it expires is discarded whatever its
-//! progress. A 1 MiB payload is ~2236 fragments, ~1.14 MiB on the wire once each
-//! pads to a 512-byte block, which is ~117 s at the optimistic 10 kB/s measured
-//! on this hardware. The window is 30 s. No amount of retrying a single packet
-//! fixes that: the fix has to be chunking *above* the fragmenter, so that each
-//! unit of retry is small enough to land inside one window, plus a way to ask
-//! for the units that did not.
+//! exist because a large single-packet transfer has no way to request missing
+//! fragments. A 1 MiB payload is ~2236 fragments, ~1.14 MiB on the wire at
+//! 514 bytes per unrouted fragment, or ~117 s at the optimistic 10 kB/s measured
+//! on this hardware. The assembler now expires a stream 30 s after its last
+//! progress, so a continuous stream may finish; one dropped fragment still makes
+//! the entire packet unusable. Chunking above the fragmenter bounds that loss
+//! and lets the receiver ask for only the missing chunks.
 //!
 //! One module for three packet types, which is a deliberate exception to this
 //! directory's one-type-per-module rule. The rule follows from provenance —
@@ -21,22 +17,15 @@
 //! three are *one protocol* with no upstream: they share the transfer id width,
 //! the chunk size, and the caps, and splitting them would mean importing
 //! constants across modules in a directory that has deliberately never done
-//! that. `voice_burst.rs` is the closest precedent — one module, several packet
-//! shapes, one protocol.
+//! that.
 //!
-//! # Message types, and a real collision risk
+//! # Message types
 //!
-//! [`MessageType::FileManifest`] = `0x2A`, [`MessageType::FileChunk`] = `0x2B`,
-//! [`MessageType::FileChunkRequest`] = `0x2C`. Tags `0x22`–`0x29` are taken by
-//! bitchat; `0x2A` and beyond are unused *today*.
+//! [`MessageType::FileManifest`] = `0xE0`, [`MessageType::FileChunk`] = `0xE1`,
+//! [`MessageType::FileChunkRequest`] = `0xE2`. These are Chatter extension tags.
 //!
-//! **If upstream bitchat later claims `0x2A`, two different protocols share a
-//! tag.** The mitigation is weak but real: an unknown type is relayed rather
-//! than rejected, and each of these packets is signature-verified and
-//! structurally validated before it does anything, so a collision degrades to
-//! "peers ignore each other's version" rather than mis-parsing one as the other.
-//! That is not the same as safe. The tag choice must be revisited before anyone
-//! calls this stable.
+//! Upstream has reserved `0x2A`/`0x2B` and assigned `0x2C` to `announceV2`.
+//! These extension tags remain provisional until allocated with upstream.
 //!
 //! # Why chunk TLVs are not added to `BitchatFilePacket`
 //!
@@ -83,17 +72,19 @@ const TLV_MIME_TYPE: u8 = 0x07;
 
 /// Width of a transfer identifier.
 ///
-/// Eight bytes, matching `voice_burst::BURST_ID_LEN` and the fragmenter's stream
-/// id, so every "which stream is this" field in the crate is the same width and
-/// the same hex length in a log line.
+/// Eight bytes, matching the fragmenter's stream id, so every "which stream is
+/// this" field in the crate is the same width and the same hex length in a log
+/// line.
 pub const TRANSFER_ID_LEN: usize = 8;
 
 /// Fixed header of a [`FileChunk`]: transfer id and chunk index.
 pub const CHUNK_HEADER_LEN: usize = TRANSFER_ID_LEN + 4;
 
-/// Bytes on the wire for one 512-byte BLE block. A fragment is padded out to
-/// this whether or not it fills it, so wire cost is counted in blocks.
-const WIRE_BLOCK_BYTES: usize = 512;
+/// Encoded unrouted fragment at the default chunk size: v2 header, sender,
+/// recipient, fragment header, and chunk. Broadcasts omit the recipient, but
+/// using the directed size keeps the ordinary lifetime estimate conservative.
+/// A source route adds bytes per hop; the send planner budgets those per packet.
+const WIRE_BLOCK_BYTES: usize = DEFAULT_FRAGMENT_SIZE + 16 + 8 + 8 + 13;
 
 /// The pessimistic end of the goodput measured on this hardware (Galaxy S25
 /// Ultra, Galaxy S9+, Linux/BlueZ), in bytes per second.
@@ -113,7 +104,7 @@ pub const OPTIMISTIC_GOODPUT_BYTES_PER_SEC: usize = 10_000;
 /// deriving from it would couple two decisions that change for different
 /// reasons. Derived instead from three things:
 ///
-/// - **It must reassemble inside one fragment lifetime.** 32 KiB is ~70
+/// - **It should reassemble within one fragment lifetime.** 32 KiB is ~70
 ///   fragments, ~36 kB of wire once padded, which is ~12 s at
 ///   [`PESSIMISTIC_GOODPUT_BYTES_PER_SEC`] against a 30 s window. See
 ///   [`fits_fragment_lifetime`], and the test that asserts the margin.
@@ -178,9 +169,8 @@ pub const MAX_REQUESTED_CHUNKS: usize = 64;
 
 /// Bytes actually put on the air to carry `payload_len` bytes of packet payload.
 ///
-/// Counts the signed envelope and rounds every fragment up to a 512-byte block,
-/// because that is what the radio charges for. Used to size everything above
-/// against the reassembly clock.
+/// Counts the signed envelope and charges each fragment its maximum encoded
+/// frame size. Used to size everything above against the reassembly clock.
 #[must_use]
 pub fn wire_bytes_for_payload(payload_len: usize) -> usize {
     // 16-byte v2 header + 8 sender + 64 signature. Broadcast omits the
@@ -265,8 +255,9 @@ impl FileManifest {
         chunk_size: u32,
         sha256: [u8; 32],
     ) -> Result<Self, MeshError> {
-        let chunk_count = chunk_count_for(total_size, chunk_size)
-            .ok_or(MeshError::OutOfRange("file manifest chunk count out of range"))?;
+        let chunk_count = chunk_count_for(total_size, chunk_size).ok_or(MeshError::OutOfRange(
+            "file manifest chunk count out of range",
+        ))?;
         let manifest = Self {
             transfer_id,
             file_name,
@@ -290,7 +281,9 @@ impl FileManifest {
     /// fewer than the file needs (so a "complete" transfer is missing its tail).
     pub fn validate(&self) -> Result<(), MeshError> {
         if self.total_size == 0 {
-            return Err(MeshError::OutOfRange("file manifest declares an empty file"));
+            return Err(MeshError::OutOfRange(
+                "file manifest declares an empty file",
+            ));
         }
         if self.total_size > MAX_STREAMED_FILE_BYTES as u64 {
             return Err(MeshError::LengthExceeded {
@@ -642,11 +635,14 @@ mod tests {
         let full = FileChunkRequest::new(ID, (0..MAX_REQUESTED_CHUNKS as u32 * 4).collect())
             .expect("valid");
         let encoded = full.encode().expect("encodes");
-        assert_eq!(encoded.len(), TRANSFER_ID_LEN + 2 + MAX_REQUESTED_CHUNKS * 4);
+        assert_eq!(
+            encoded.len(),
+            TRANSFER_ID_LEN + 2 + MAX_REQUESTED_CHUNKS * 4
+        );
         assert_eq!(
             wire_bytes_for_payload(encoded.len()),
             WIRE_BLOCK_BYTES,
-            "the whole request has to fit one 512-byte block"
+            "the whole request has to fit one BLE frame"
         );
     }
 
@@ -742,7 +738,9 @@ mod tests {
             [0u8; 32],
         );
         assert!(matches!(huge, Err(MeshError::OutOfRange(_))));
-        assert!(!fits_fragment_lifetime(CHUNK_HEADER_LEN + MAX_CHUNK_BYTES * 4));
+        assert!(!fits_fragment_lifetime(
+            CHUNK_HEADER_LEN + MAX_CHUNK_BYTES * 4
+        ));
     }
 
     #[test]
@@ -862,7 +860,9 @@ mod tests {
         let encoded = chunk.encode().unwrap();
         assert_eq!(
             encoded,
-            vec![0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 1, 2, 3, 4, 9, 8, 7]
+            vec![
+                0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 1, 2, 3, 4, 9, 8, 7
+            ]
         );
         assert_eq!(FileChunk::decode(&encoded).unwrap(), chunk);
     }

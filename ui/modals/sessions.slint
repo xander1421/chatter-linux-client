@@ -1,36 +1,69 @@
 // SessionsModal - Modal for viewing and revoking active sessions
 
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
+import { Icons } from "../theme/icons.slint";
 
 // Session information struct
 export struct SessionInfo {
     device-id: int,
     device-info: string,
     ip-address: string,
+    status-text: string,
     last-used: string,
     created-at: string,
     is-current: bool,
+    is-mobile: bool,  // phone/tablet icon instead of the laptop one
+    can-revoke: bool, // not this device and not the primary
+}
+
+// A link this account approved that the new device has not finished yet.
+export struct PendingLinkInfo {
+    uuid: string,
+    device-name: string,
+    expires: string,  // local time, "HH:MM"
 }
 
 export component SessionsModal inherits Rectangle {
     in property <bool> show-modal: false;
     in property <[SessionInfo]> sessions: [];
+    in property <string> error: "";
+    in property <string> notice: "";
+    // Other devices this one may sign out (not itself, not the primary).
+    in property <int> revocable-count: 0;
+    in property <bool> loaded: false;
     in property <bool> loading: false;
     in property <bool> revoking: false;
+    in property <[PendingLinkInfo]> pending-links: [];
 
     callback close();
     callback revoke-session(int);  // device_id
     callback revoke-all-others();
     callback link-new-device();    // open primary-side approve modal
+    callback cancel-pending-link(string);  // provisioning uuid
+
+    // Phone width: the modal card is the window minus 32px.
+    property <bool> narrow: root.width < 560px;
+    // Revoke-all asks first: it logs out every other device at once.
+    property <bool> confirm-revoke-all: false;
+    property <int> confirm-revoke-id: 0;
+    changed show-modal => {
+        if !self.show-modal {
+            self.confirm-revoke-id = 0;
+            self.confirm-revoke-all = false;
+        }
+    }
 
     Modal {
         show: root.show-modal;
-        title: "Active Sessions";
+        title: "Active sessions";
         modal-width: 520px;
+        max-modal-height: 720px;
+        fill-height: true;
 
         close => {
             root.close();
@@ -39,194 +72,341 @@ export component SessionsModal inherits Rectangle {
         VerticalLayout {
             spacing: Spacing.md;
 
-            // Header with count and revoke all button
-            HorizontalLayout {
-                spacing: Spacing.md;
-
-                Text {
-                    text: root.sessions.length + " active session" + (root.sessions.length != 1 ? "s" : "");
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
-
-                // Link a new device (primary-side approve flow)
-                Button {
-                    text: "Link new device";
-                    variant: "primary";
-                    disabled: root.revoking;
-                    clicked => {
-                        root.link-new-device();
-                    }
-                }
-
-                // Only show revoke all if more than 1 session
-                if root.sessions.length > 1: Button {
-                    text: "Revoke All Others";
-                    variant: "danger";
-                    disabled: root.revoking;
-                    clicked => {
-                        root.revoke-all-others();
-                    }
-                }
-            }
-
-            // Divider
-            Rectangle {
-                height: 1px;
-                background: Colors.text-muted.with-alpha(0.2);
-            }
-
-            // Session list
-            Rectangle {
-                min-height: 200px;
-                max-height: 400px;
+            Flickable {
                 vertical-stretch: 1;
+                viewport-height: sessions-content.preferred-height;
+                viewport-width: self.width;
 
-                // Empty state
-                if root.sessions.length == 0 && !root.loading: Rectangle {
-                    width: 100%;
-                    height: 100%;
+                sessions-content := VerticalLayout {
+                    width: parent.width;
+                    spacing: Spacing.md;
 
-                    Text {
-                        text: "No active sessions found";
-                        color: Colors.text-muted;
+                    if root.error != "": Text {
+                        width: parent.width;
+                        text: root.error;
+                        color: Colors.error;
                         font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
+                        wrap: word-wrap;
                     }
-                }
-
-                // Loading state
-                if root.loading: Rectangle {
-                    width: 100%;
-                    height: 100%;
-
-                    Text {
-                        text: "Loading sessions...";
-                        color: Colors.text-muted;
+                    if root.notice != "": Text {
+                        width: parent.width;
+                        text: root.notice;
+                        color: Colors.text-secondary;
                         font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
+                        wrap: word-wrap;
                     }
-                }
+                    if root.revoking: Text { text: "Updating sessions..."; color: Colors.text-secondary; }
 
-                // Sessions list
-                if root.sessions.length > 0 && !root.loading: Flickable {
-                    viewport-height: sessions-list.preferred-height;
-                    viewport-width: parent.width;
+                    // Header: count + actions. On a phone the two buttons do not fit
+                    // beside the count (they clipped to "Link new devic" and
+                    // "Revoke All Other"), so they stack full-width under it.
+                    HorizontalLayout {
+                        spacing: Spacing.md;
 
-                    sessions-list := VerticalLayout {
-                        spacing: Spacing.xs;
+                        Text {
+                            text: root.loaded ? root.sessions.length + " active session" + (root.sessions.length != 1 ? "s" : "") : "Sessions not loaded";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
 
-                        for session[index] in root.sessions: Rectangle {
-                            height: 80px;
-                            background: session-touch.has-hover ? Colors.surface-hover : Colors.surface;
-                            border-radius: Spacing.radius-md;
+                        if !root.narrow: Button {
+                            text: "Link new device";
+                            variant: "primary";
+                            disabled: root.revoking || root.loading;
+                            clicked => { root.link-new-device(); }
+                        }
+
+                    }
+
+                    if root.narrow: Button {
+                        text: "Link new device";
+                        variant: "primary";
+                        disabled: root.revoking || root.loading;
+                        clicked => { root.link-new-device(); }
+                    }
+
+                    // Divider
+                    Rectangle {
+                        height: 1px;
+                        background: Colors.divider;
+                    }
+
+                    // Approved links the new device has not completed. Cancel is the
+                    // one way to take an approval back before that device joins.
+                    for link in root.pending-links: Rectangle {
+                        background: Colors.surface;
+                        border-radius: Spacing.radius-md;
+
+                        HorizontalLayout {
+                            padding: Spacing.md;
+                            spacing: Spacing.md;
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: Spacing.xxs;
+
+                                Text {
+                                    text: link.device-name != "" ? link.device-name : "New device";
+                                    color: Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    font-weight: Typography.medium;
+                                    overflow: elide;
+                                }
+
+                                Text {
+                                    text: "Approved, waiting for it to finish linking (until " + link.expires + ")";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                    wrap: word-wrap;
+                                }
+                            }
 
                             HorizontalLayout {
-                                padding: Spacing.md;
-                                spacing: Spacing.md;
+                                alignment: center;
 
-                                // Device icon (device type detection done in Rust if needed)
-                                Rectangle {
-                                    width: 40px;
-                                    height: 40px;
-                                    border-radius: Spacing.radius-md;
-                                    background: Colors.surface-hover;
-
-                                    // Default desktop icon
-                                    Text {
-                                        text: "💻";
-                                        font-size: Typography.lg;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
-                                    }
+                                Button {
+                                    text: "Cancel";
+                                    variant: "ghost";
+                                    disabled: root.revoking || root.loading;
+                                    clicked => { root.cancel-pending-link(link.uuid); }
                                 }
+                            }
+                        }
+                    }
 
-                                // Session info
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    alignment: center;
-                                    spacing: 2px;
+                    // Session list
+                    Rectangle {
+                        min-height: 200px;
+                        max-height: 400px;
+                        vertical-stretch: 1;
+
+                        // Empty state
+                        if root.sessions.length == 0 && !root.loading && root.loaded && root.error == "": Rectangle {
+                            width: 100%;
+                            height: 100%;
+
+                            Text {
+                                text: "No active sessions found";
+                                color: Colors.text-muted;
+                                font-size: Typography.sm;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                height: 100%;
+                            }
+                        }
+
+                        // Loading state
+                        if root.loading: Rectangle {
+                            width: 100%;
+                            height: 100%;
+
+                            Text {
+                                text: "Loading sessions...";
+                                color: Colors.text-muted;
+                                font-size: Typography.sm;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                height: 100%;
+                            }
+                        }
+
+                        // Sessions list
+                        if root.sessions.length > 0 && !root.loading: Flickable {
+                            viewport-height: sessions-list.preferred-height;
+                            viewport-width: parent.width;
+
+                            sessions-list := VerticalLayout {
+                                spacing: Spacing.xs;
+
+                                for session[index] in root.sessions: Rectangle {
+                                    background: session-touch.has-hover ? Colors.surface-hover : Colors.surface;
+                                    border-radius: Spacing.radius-md;
+                                    transform-scale-x: session-touch.pressed ? 98% : 100%;
+                                    transform-scale-y: session-touch.pressed ? 97% : 100%;
+                                    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                                    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+
+                                    // Hover only. Declared before the row content so the
+                                    // Revoke button stays on top of it and gets the tap.
+                                    session-touch := TouchArea {}
 
                                     HorizontalLayout {
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: session.device-info;
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                            overflow: elide;
-                                        }
-
-                                        // Current session badge
-                                        if session.is-current: Rectangle {
-                                            width: current-text.preferred-width + Spacing.sm * 2;
-                                            height: 20px;
-                                            border-radius: Spacing.radius-sm;
-                                            background: Colors.success.with-alpha(0.2);
-
-                                            current-text := Text {
-                                                text: "Current";
-                                                color: Colors.success;
-                                                font-size: Typography.xs;
-                                                font-weight: Typography.medium;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                                width: 100%;
-                                                height: 100%;
-                                            }
-                                        }
-                                    }
-
-                                    Text {
-                                        text: "IP: " + session.ip-address;
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                    }
-
-                                    HorizontalLayout {
+                                        padding: Spacing.md;
                                         spacing: Spacing.md;
 
-                                        Text {
-                                            text: "Last active: " + session.last-used;
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
+                                        // Device icon: phone or computer (is-mobile set in core)
+                                        Rectangle {
+                                            width: 40px;
+                                            height: 40px;
+                                            border-radius: Spacing.radius-md;
+                                            background: Colors.surface-hover;
+
+                                            Image {
+                                                source: session.is-mobile ? Icons.smartphone : Icons.monitor;
+                                                colorize: Colors.text-secondary;
+                                                width: 20px;
+                                                height: 20px;
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                            }
                                         }
 
-                                        Text {
-                                            text: "Since: " + session.created-at;
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
+                                        // Session info
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            alignment: center;
+                                            spacing: Spacing.xxs;
+
+                                            Text {
+                                                text: session.device-info;
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: Typography.medium;
+                                                wrap: word-wrap;
+                                            }
+
+                                            // Keep the badge below the full device name on narrow cards.
+                                            if session.is-current: HorizontalLayout {
+                                                alignment: start;
+                                                Rectangle {
+                                                    width: current-text.preferred-width + Spacing.sm * 2;
+                                                    height: 20px;
+                                                    border-radius: Spacing.radius-sm;
+                                                    background: Colors.success.with-alpha(0.2);
+
+                                                    current-text := Text {
+                                                        text: "This device";
+                                                        color: Colors.success;
+                                                        font-size: Typography.xs;
+                                                        font-weight: Typography.medium;
+                                                        horizontal-alignment: center;
+                                                        vertical-alignment: center;
+                                                        width: 100%;
+                                                        height: 100%;
+                                                    }
+                                                }
+                                            }
+
+                                            if session.status-text != "": Text {
+                                                text: session.status-text;
+                                                color: Colors.text-muted;
+                                                wrap: word-wrap;
+                                            }
+                                            // The server does not store IPs; an empty
+                                            // field is not shown.
+                                            if session.ip-address != "": Text {
+                                                text: "IP: " + session.ip-address;
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                            }
+
+                                            // One per line: side by side they clipped on a phone.
+                                            // The server stamps last-active at login, so for
+                                            // the device in hand it reads stale; it is in use now.
+                                            Text {
+                                                text: session.is-current ? "Active now" : "Last active: " + session.last-used;
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
+
+                                            Text {
+                                                text: "Since: " + session.created-at;
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
+
+                                            if root.confirm-revoke-id == session.device-id: Text {
+                                                text: "Revoke this device? It must be linked again.";
+                                                color: Colors.error;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
                                         }
-                                    }
-                                }
 
-                                // Revoke button (hidden for current session)
-                                if !session.is-current: HorizontalLayout {
-                                    alignment: center;
+                                        // Revoke button (hidden for current session)
+                                        if session.can-revoke: HorizontalLayout {
+                                            alignment: center;
 
-                                    Button {
-                                        text: "Revoke";
-                                        variant: "ghost";
-                                        disabled: root.revoking;
-                                        clicked => {
-                                            root.revoke-session(session.device-id);
+                                            Button {
+                                                text: root.confirm-revoke-id == session.device-id ? "Confirm" : "Revoke";
+                                                variant: root.confirm-revoke-id == session.device-id ? "destructive" : "ghost";
+                                                disabled: root.revoking || root.loading;
+                                                clicked => {
+                                                    if root.confirm-revoke-id == session.device-id {
+                                                        root.confirm-revoke-id = 0;
+                                                        root.revoke-session(session.device-id);
+                                                    } else {
+                                                        root.confirm-revoke-all = false;
+                                                        root.confirm-revoke-id = session.device-id;
+                                                    }
+                                                }
+                                            }
+
+                                            if root.confirm-revoke-id == session.device-id: Button {
+                                                text: "Cancel";
+                                                variant: "ghost";
+                                                disabled: root.revoking || root.loading;
+                                                clicked => { root.confirm-revoke-id = 0; }
+                                            }
                                         }
                                     }
                                 }
                             }
+                        }
+                    }
 
-                            session-touch := TouchArea {}
+                }
+            }
+
+            // Revoke-all sits under the list, away from the primary
+            // button, and asks first (REVIEW-R4 P1-9). Offered only when it
+            // can sign something out: the primary is never revocable from here.
+            if root.revocable-count > 0 && !root.confirm-revoke-all: Button {
+                text: "Revoke all other sessions";
+                variant: "ghost";
+                disabled: root.revoking || root.loading;
+                clicked => {
+                    root.confirm-revoke-id = 0;
+                    root.confirm-revoke-all = true;
+                }
+            }
+
+            if root.confirm-revoke-all && root.revocable-count > 0: VerticalLayout {
+                spacing: Spacing.sm;
+
+                Text {
+                    text: root.revocable-count == 1
+                        ? "Sign out the other linked device? It must be linked again to use this account."
+                        : "Sign out all \{root.revocable-count} other linked devices? They must be linked again to use this account.";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    alignment: end;
+
+                    Button {
+                        text: "Cancel";
+                        variant: "secondary";
+                        clicked => { root.confirm-revoke-all = false; }
+                    }
+
+                    Button {
+                        text: "Revoke all";
+                        variant: "destructive";
+                        disabled: root.revoking || root.loading;
+                        clicked => {
+                            root.confirm-revoke-all = false;
+                            root.revoke-all-others();
                         }
                     }
                 }

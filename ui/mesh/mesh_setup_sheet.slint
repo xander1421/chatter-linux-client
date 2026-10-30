@@ -1,0 +1,203 @@
+import { ModalContainer } from "../components/modal_container.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+import { SettingsRow } from "../components/settings_row.slint";
+import { ToggleRow } from "../components/toggle_row.slint";
+import { MeshGlobal } from "mesh_global.slint";
+import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+component NearbyPeerRow inherits Rectangle {
+    in property <string> name;
+    in property <string> detail;
+    in property <bool> touch: false;
+    callback clicked();
+    height: root.touch ? Spacing.list-row-height-touch : 56px;
+    background: row-touch.pressed ? Colors.surface-control-hover : row-touch.has-hover ? Colors.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.name;
+    accessible-description: root.detail;
+    accessible-action-default => { root.clicked(); }
+    FocusScope {
+        width: 0px; height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    HorizontalLayout { padding-left: Spacing.md; padding-right: Spacing.md;
+        spacing: Spacing.md;
+        VerticalLayout {
+            alignment: center;
+            Rectangle { width: 40px; height: 40px; border-radius: Spacing.radius-full;
+                background: Colors.tint-strong;
+                Image { source: Icons.user; width: Spacing.button-icon; height: Spacing.button-icon;
+                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                    colorize: Colors.primary; }
+            }
+        }
+        VerticalLayout { horizontal-stretch: 1; alignment: center;
+            Text { text: root.name; color: Colors.text-primary; font-size: Typography.base;
+                font-weight: Typography.semibold; overflow: elide; }
+            Text { text: root.detail; color: Colors.text-secondary; font-size: Typography.sm; overflow: elide; }
+        }
+        Image { source: Icons.chevron-right; width: Spacing.button-icon; image-fit: contain;
+            colorize: Colors.text-muted; }
+    }
+    row-touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component MeshSetupSheet inherits Rectangle {
+    in property <bool> show-modal: false;
+    in property <bool> touch: false;
+    callback close();
+    property <string> name-draft: MeshGlobal.nickname;
+    property <bool> confirming-wipe: false;
+
+    ModalContainer {
+        show: root.show-modal;
+        accessible-title: "Mesh settings";
+        modal-width: 540px;
+        max-modal-height: 760px;
+        fill-height: true;
+        close => { root.close(); }
+        VerticalLayout {
+            padding-left: Spacing.lg; padding-right: Spacing.lg;
+            padding-top: Spacing.md; padding-bottom: Spacing.xl;
+            spacing: Spacing.md;
+            HorizontalLayout {
+                height: Spacing.touch-target-min;
+                                Text { text: "Mesh settings"; color: Colors.text-primary; font-size: Typography.lg;
+                    font-weight: Typography.semibold; horizontal-stretch: 1; vertical-alignment: center; }
+                Button { text: "Done"; variant: "ghost"; touch: root.touch; clicked => { root.close(); } }
+            }
+            Flickable {
+                width: 100%; vertical-stretch: 1;
+                viewport-height: setup-content.preferred-height;
+                setup-content := VerticalLayout {
+                    width: parent.width;
+                    spacing: Spacing.lg;
+                    padding-bottom: Spacing.xl;
+                    if MeshGlobal.pending-private-id != "": VerticalLayout {
+                        spacing: Spacing.sm;
+                        Text { text: "INVITATION"; color: Colors.text-muted; font-size: Typography.xs;
+                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        Rectangle {
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            VerticalLayout { padding: Spacing.md; spacing: Spacing.sm;
+                                Text {
+                                    width: parent.width;
+                                    text: MeshGlobal.pending-private-peer + " invited you to " + MeshGlobal.pending-private-name;
+                                    color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.semibold; wrap: word-wrap; }
+                                Text {
+                                    width: parent.width;
+                                    text: "Peer names are self-asserted until you verify in person.";
+                                    color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
+                                HorizontalLayout { spacing: Spacing.sm;
+                                    Button { text: "Decline"; variant: "secondary"; touch: root.touch;
+                                        clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, false); } }
+                                    Button { text: "Join"; variant: "primary"; touch: root.touch;
+                                        clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, true); } }
+                                }
+                            }
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: Spacing.sm;
+                        Text { text: "RADIO"; color: Colors.text-muted; font-size: Typography.xs;
+                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        Rectangle {
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            VerticalLayout {
+                                ToggleRow {
+                                    checked <=> MeshGlobal.mesh-on;
+                                    accessible-text: "Mesh";
+                                    row-padding: Spacing.md;
+                                    label-spacing: Spacing.xs;
+                                    Text { text: "Mesh"; color: Colors.text-primary; font-size: Typography.base;
+                                        font-weight: Typography.semibold; }
+                                    Text { text: !MeshGlobal.mesh-on ? "Off" : !MeshGlobal.radio-running
+                                        ? (MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth is off" : "Radio unavailable")
+                                        : MeshGlobal.peer-count == 0 ? "On · nobody nearby"
+                                        : MeshGlobal.peer-count == 1 ? "On · 1 nearby" : "On · " + MeshGlobal.peer-count + " nearby";
+                                        color: Colors.text-secondary; font-size: Typography.sm; }
+                                    toggled(value) => { MeshGlobal.set-mesh-on(value); }
+                                }
+                                if MeshGlobal.nearby-peers.length > 0: Rectangle { height: 1px; background: Colors.divider; }
+                                for peer in MeshGlobal.nearby-peers: NearbyPeerRow {
+                                    name: peer.name; detail: peer.binding-label;
+                                    touch: root.touch; clicked => { MeshGlobal.open-peer(peer.id); }
+                                }
+                            }
+                        }
+                        if MeshGlobal.nearby-peers.length == 0: Text {
+                            width: parent.width;
+                            text: "Nearby devices will appear here when discovered.";
+                            color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap;
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: Spacing.sm;
+                        Text { text: "PROFILE"; color: Colors.text-muted; font-size: Typography.xs;
+                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            HorizontalLayout { padding: Spacing.sm; spacing: Spacing.sm;
+                                Input { placeholder: "Nickname"; text <=> root.name-draft;
+                                    control-height: Spacing.touch-target-min; horizontal-stretch: 1;
+                                    accepted(value) => { MeshGlobal.set-nickname(value); } }
+                                // "Save", not "Done": the sheet's own Done closes it.
+                                Button { text: "Save"; variant: "ghost"; touch: root.touch;
+                                    clicked => { MeshGlobal.set-nickname(root.name-draft); } }
+                            }
+                        }
+                        Text {
+                            width: parent.width;
+                            text: "Visible to anyone nearby. Names are self-asserted.";
+                            color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
+                    }
+                    if MeshGlobal.notice != "": Text {
+                        width: parent.width;
+                        text: MeshGlobal.notice; color: Colors.text-secondary;
+                        font-size: Typography.sm; wrap: word-wrap; }
+                    VerticalLayout {
+                        spacing: Spacing.sm;
+                        Rectangle { height: erase-row.preferred-height; background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            erase-row := SettingsRow { icon: Icons.trash; title: "Erase Mesh data…"; destructive: true;
+                                touch: root.touch; show-chevron: false; clicked => { root.confirming-wipe = true; } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if root.confirming-wipe: Rectangle {
+        z: 10; background: Materials.scrim;
+        TouchArea { clicked => { root.confirming-wipe = false; } }
+        VerticalLayout {
+            x: Spacing.lg; width: parent.width - Spacing.lg * 2;
+            y: parent.height - self.preferred-height - Spacing.lg;
+            spacing: Spacing.sm;
+            Rectangle { height: wipe-action.preferred-height;
+                background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                wipe-action := VerticalLayout { padding: Spacing.lg; spacing: Spacing.md;
+                    Text {
+                        width: parent.width;
+                        text: "Erase this device's mesh identity, messages, carried mail and favourites? Your Chatter account stays intact. This cannot be undone.";
+                        color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; horizontal-alignment: center; }
+                    Button { text: "Erase Mesh data"; variant: "destructive"; touch: root.touch;
+                        clicked => { root.confirming-wipe = false; MeshGlobal.panic-wipe(); } }
+                }
+            }
+            Rectangle { height: wipe-cancel.preferred-height;
+                background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                wipe-cancel := VerticalLayout { padding: Spacing.sm;
+                    Button { text: "Cancel"; variant: "ghost"; touch: root.touch;
+                        clicked => { root.confirming-wipe = false; } }
+                }
+            }
+        }
+    }
+}

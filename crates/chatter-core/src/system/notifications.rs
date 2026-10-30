@@ -5,11 +5,11 @@
 //! - Windows: WinRT toast notifications
 //! - macOS: macOS notification center
 
-use crate::domain::notification::{Notification, NotificationPriority};
+use super::platform::APP_DISPLAY_NAME;
 #[cfg(target_os = "linux")]
 use crate::domain::notification::NotificationType;
+use crate::domain::notification::{Notification, NotificationPriority};
 use crate::error::SystemError;
-use super::platform::APP_DISPLAY_NAME;
 use notify_rust::Notification as DesktopNotif;
 
 #[cfg(target_os = "linux")]
@@ -17,15 +17,61 @@ use notify_rust::Urgency;
 
 /// Desktop notification service.
 ///
-/// Wraps notify-rust to show system notifications.
-/// Stateless - each notification is independent.
-pub struct DesktopNotifications;
+/// Wraps notify-rust to show system notifications. On Linux it keeps the
+/// handle of each conversation's notification, so a new message replaces it
+/// and a read closes it; Windows/macOS handles here cannot close by key, so
+/// there each notification is independent.
+pub struct DesktopNotifications {
+    /// Settings › Notifications › Sound. Set through
+    /// `NotificationSink::set_sound`; on until the persisted value arrives.
+    sound: std::sync::atomic::AtomicBool,
+    #[cfg(target_os = "linux")]
+    conversations:
+        std::sync::Mutex<std::collections::HashMap<String, notify_rust::NotificationHandle>>,
+    #[cfg(target_os = "linux")]
+    calls: std::sync::Mutex<std::collections::HashMap<String, LinuxCallNotification>>,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxCallNotification {
+    connection: zbus::Connection,
+    daemon: String,
+    id: u32,
+}
 
 impl DesktopNotifications {
     /// Create a new desktop notifications service.
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self {
+            sound: std::sync::atomic::AtomicBool::new(true),
+            #[cfg(target_os = "linux")]
+            conversations: Default::default(),
+            #[cfg(target_os = "linux")]
+            calls: Default::default(),
+        }
+    }
+
+    /// Ask for the platform's default notification sound, or for silence.
+    /// Each backend's default differs, so both halves are explicit: a
+    /// freedesktop daemon decides on its own unless told, and a Windows toast
+    /// with no sound name is silent.
+    fn apply_sound(&self, notif: &mut DesktopNotif) {
+        let on = self.sound.load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if on {
+            notif.sound_name("message-new-instant");
+        } else {
+            notif.hint(notify_rust::Hint::SuppressSound(true));
+        }
+        #[cfg(target_os = "windows")]
+        if on {
+            notif.sound_name("Default");
+        }
+        #[cfg(target_os = "macos")]
+        if on {
+            notif.sound_name("NSUserNotificationDefaultSoundName");
+        }
     }
 
     /// Show a notification from the domain model.
@@ -44,6 +90,7 @@ impl DesktopNotifications {
             notif.urgency(self.priority_to_urgency(priority));
         }
 
+        self.apply_sound(&mut notif);
         notif
             .show()
             .map_err(|e| SystemError::NotificationSend(e.to_string()))?;
@@ -59,10 +106,7 @@ impl DesktopNotifications {
         priority: NotificationPriority,
     ) -> Result<(), SystemError> {
         let mut notif = DesktopNotif::new();
-        notif
-            .appname(APP_DISPLAY_NAME)
-            .summary(title)
-            .body(body);
+        notif.appname(APP_DISPLAY_NAME).summary(title).body(body);
 
         #[cfg(target_os = "linux")]
         {
@@ -74,6 +118,7 @@ impl DesktopNotifications {
         #[cfg(not(target_os = "linux"))]
         let _ = priority;
 
+        self.apply_sound(&mut notif);
         notif
             .show()
             .map_err(|e| SystemError::NotificationSend(e.to_string()))?;
@@ -99,6 +144,7 @@ impl DesktopNotifications {
         for (action_id, action_label) in actions {
             notif.action(action_id, action_label);
         }
+        self.apply_sound(&mut notif);
 
         notif
             .show()
@@ -167,6 +213,167 @@ impl super::notification_sink::NotificationSink for DesktopNotifications {
 
     fn show_domain(&self, notification: &Notification) -> Result<(), SystemError> {
         DesktopNotifications::show(self, notification)
+    }
+
+    fn set_sound(&self, enabled: bool) {
+        self.sound
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(all(target_os = "linux", feature = "media"))]
+    fn show_incoming_call(
+        &self,
+        call_id: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<(), SystemError> {
+        // Keep call handles separate from conversation handles: reading chat
+        // must not dismiss its ringing call, and ending one call must not
+        // close a newer invitation from the same conversation.
+        let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = calls.get(call_id);
+        let handle = futures::executor::block_on(async {
+            let connection = match previous {
+                Some(previous) => previous.connection.clone(),
+                None => zbus::Connection::session().await?,
+            };
+            // Address the exact daemon instance. If it restarts and reuses
+            // numeric ids, an old call's cancellation must not target it.
+            let bus = zbus::fdo::DBusProxy::new(&connection).await?;
+            let name = zbus::names::WellKnownName::try_from("org.freedesktop.Notifications")?;
+            let owner = match bus.get_name_owner(name.clone().into()).await {
+                Ok(owner) => owner,
+                Err(zbus::fdo::Error::NameHasNoOwner(_)) => {
+                    // GetNameOwner does not activate a cold notification service.
+                    // Resolve its unique owner only after successful activation;
+                    // owner loss during this sequence remains a fallible outcome.
+                    bus.start_service_by_name(name.clone(), 0).await?;
+                    bus.get_name_owner(name.into()).await?
+                }
+                Err(error) => return Err(error.into()),
+            };
+            let daemon = owner.to_string();
+            let replaces = previous.filter(|p| p.daemon == daemon).map_or(0, |p| p.id);
+            let mut hints: std::collections::HashMap<&str, zbus::zvariant::Value<'_>> =
+                std::collections::HashMap::new();
+            hints.insert("urgency", 2u8.into());
+            if self.sound.load(std::sync::atomic::Ordering::Relaxed) {
+                hints.insert("sound-name", "message-new-instant".into());
+            } else {
+                hints.insert("suppress-sound", true.into());
+            }
+            let reply = connection
+                .call_method(
+                    Some(daemon.as_str()),
+                    "/org/freedesktop/Notifications",
+                    Some("org.freedesktop.Notifications"),
+                    "Notify",
+                    &(
+                        APP_DISPLAY_NAME,
+                        replaces,
+                        "call-start",
+                        title,
+                        body,
+                        Vec::<&str>::new(),
+                        hints,
+                        crate::services::call_worker::RING_TIMEOUT.as_millis() as i32,
+                    ),
+                )
+                .await?;
+            let id = reply.body().deserialize()?;
+            Ok::<_, zbus::Error>(LinuxCallNotification {
+                connection,
+                daemon,
+                id,
+            })
+        })
+        .map_err(|e| SystemError::NotificationSend(e.to_string()))?;
+        calls.insert(call_id.to_owned(), handle);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn cancel_incoming_call(&self, call_id: &str) -> Result<(), SystemError> {
+        // Serialize cancellation with posting/replacement of this identity.
+        let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(handle) = calls.get(call_id) {
+            futures::executor::block_on(async {
+                match handle
+                    .connection
+                    .call_method(
+                        Some(handle.daemon.as_str()),
+                        "/org/freedesktop/Notifications",
+                        Some("org.freedesktop.Notifications"),
+                        "CloseNotification",
+                        &(handle.id,),
+                    )
+                    .await
+                {
+                    Ok(_) => Ok(()),
+                    Err(close_error) => {
+                        // Only confirmed loss of this exact owner makes its
+                        // notification gone. Use the stored connection so a
+                        // new bus generation cannot reuse the unique name.
+                        let has_owner = async {
+                            let bus = zbus::fdo::DBusProxy::new(&handle.connection).await?;
+                            let owner = zbus::names::UniqueName::try_from(handle.daemon.as_str())?;
+                            Ok::<_, zbus::Error>(bus.name_has_owner(owner.into()).await?)
+                        }
+                        .await;
+                        match has_owner {
+                            Ok(false) => Ok(()),
+                            // A live owner or an uncertain check must retain
+                            // the handle for retry and the original failure.
+                            _ => Err(close_error),
+                        }
+                    }
+                }
+            })
+            .map_err(|e| SystemError::NotificationSend(e.to_string()))?;
+            calls.remove(call_id);
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn show_conversation(
+        &self,
+        conversation: &str,
+        title: &str,
+        body: &str,
+        priority: NotificationPriority,
+    ) -> Result<(), SystemError> {
+        let mut conversations = self.conversations.lock().unwrap_or_else(|e| e.into_inner());
+        let mut notif = DesktopNotif::new();
+        notif
+            .appname(APP_DISPLAY_NAME)
+            .summary(title)
+            .body(body)
+            .icon("mail-message-new")
+            .urgency(self.priority_to_urgency(priority));
+        // Same server-side id = replaces the conversation's earlier one.
+        if let Some(previous) = conversations.get(conversation) {
+            notif.id(previous.id());
+        }
+        self.apply_sound(&mut notif);
+        let handle = notif
+            .show()
+            .map_err(|e| SystemError::NotificationSend(e.to_string()))?;
+        conversations.insert(conversation.to_string(), handle);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn cancel_conversation(&self, conversation: &str) -> Result<(), SystemError> {
+        let handle = self
+            .conversations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(conversation);
+        if let Some(handle) = handle {
+            handle.close();
+        }
+        Ok(())
     }
 }
 

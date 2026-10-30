@@ -66,10 +66,12 @@ impl Migration for V025AnonDm {
     }
 
     fn down(&self) -> Option<&'static str> {
-        Some(r#"
+        Some(
+            r#"
         DROP TABLE IF EXISTS anon_dm_messages;
         DROP TABLE IF EXISTS anon_dm_mailboxes;
         DROP TABLE IF EXISTS anon_dm_conversations;
-        "#)
+        "#,
+        )
     }
 }

@@ -3,7 +3,8 @@
 //! designed (the SVR escrow path).
 //!
 //! Inputs are hardcoded for the two Dev User accounts auto-created by
-//! `linux-client/crates/chatter-ui/src/lib.rs:344-371` (`CHATTER_DEV=1`).
+//! `chatter-ui`'s `dev_auto_register` (src/lib.rs) — which needs BOTH the
+//! `dev-auto-register` cargo feature and `CHATTER_DEV=1`; `dev-run.sh` sets both.
 //!
 //!     cargo run --example decrypt_dev_user -p chatter-core
 
@@ -44,9 +45,12 @@ fn main() {
 
         // Step 1: derive SVR secret from PIN + username (Argon2id, 128 MiB, t=8).
         // Server cannot do this without the PIN.
-        let svr_secret = derive_svr_secret(u.pin, u.username)
-            .expect("argon2 derivation must succeed");
-        println!("svr_secret = Argon2id(PIN, salt=username) = {}", hex_short(&svr_secret));
+        let svr_secret =
+            derive_svr_secret(u.pin, u.username).expect("argon2 derivation must succeed");
+        println!(
+            "svr_secret = Argon2id(PIN, salt=username) = {}",
+            hex_short(&svr_secret)
+        );
 
         // Step 2: decrypt the SVR backup blob with the derived secret.
         let blob = hex::decode(u.svr_blob_hex).expect("valid hex");
@@ -58,8 +62,14 @@ fn main() {
             }
         };
         println!("backup decrypted ({} bytes)", blob.len());
-        println!("  identity_priv = {}", hex_short(&payload.identity_keypair[..32]));
-        println!("  identity_pub  = {}", hex_short(&payload.identity_keypair[32..]));
+        println!(
+            "  identity_priv = {}",
+            hex_short(&payload.identity_keypair[..32])
+        );
+        println!(
+            "  identity_pub  = {}",
+            hex_short(&payload.identity_keypair[32..])
+        );
         println!("  profile_key   = {}", hex_short(&payload.profile_key));
 
         // Step 3: decrypt the profile display_name with the recovered profile key.

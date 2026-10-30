@@ -7,15 +7,15 @@
 //! `domain_handler` (read-receipt dispatch on active anon DMs, plus anon-DM
 //! action events that use `unified_actions` helpers).
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use slint::{Model, ModelRc, VecModel, Weak};
 
+use crate::bin_ui::features::auth::inbox::unified_actions::{self, EventSource};
+use crate::{FriendRequestData, MainWindow};
 use chatter_core::client::ChatterClient;
 use chatter_core::client::events::AnonDmRequestEvent;
-use crate::{DMListItemData, FriendRequestData, MainWindow};
-use crate::bin_ui::converters::get_initials;
-use crate::bin_ui::features::auth::inbox::unified_actions::{self, EventSource};
 
 /// Spawn anonymous DM request handler to process incoming request events.
 ///
@@ -55,7 +55,11 @@ fn spawn_request_stream(
             let event = match event_rx.recv().await {
                 Ok(event) => event,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(dropped_count = n, "[ANON_DM_HANDLER] Request receiver lagged, continuing");
+                    tracing::warn!(
+                        dropped_count = n,
+                        "[ANON_DM_HANDLER] Request receiver lagged; rebuilding from storage"
+                    );
+                    super::friends::refresh_private_requests(weak_window.clone(), &ui_ctx).await;
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -93,44 +97,55 @@ fn spawn_request_stream(
 
                     // Add to pending requests in UI (no auto-accept)
                     let conv_id_str = conversation_id.to_string();
-                    let peer_name = sender_name.clone();
+                    let peer_name = ui_ctx
+                        .contact_name(&sender_id)
+                        .unwrap_or_else(|| sender_name.clone());
                     let intro = intro_message.unwrap_or_default();
                     let weak = weak_window.clone();
+                    let request_client = ui_ctx.clone();
 
                     // Decode avatar OUTSIDE UI thread - image decoding is expensive
                     // Only raw pixels are Send, so decode to RGBA bytes here
-                    let avatar_pixels: Option<(Vec<u8>, u32, u32)> = sender_avatar.as_ref().and_then(|bytes| {
-                        if bytes.is_empty() {
-                            return None;
-                        }
-                        image::load_from_memory(bytes).ok().map(|img| {
-                            let rgba = img.to_rgba8();
-                            let (w, h) = rgba.dimensions();
-                            (rgba.into_raw(), w, h)
-                        })
+                    // The pointer fetch can finish before this event reaches the UI.
+                    // In that case the stored profile already has the avatar.
+                    let shared_avatar = sender_avatar.or_else(|| {
+                        ui_ctx
+                            .get_anon_dm_conversation(&conversation_id)
+                            .and_then(|dm| dm.peer_avatar)
                     });
+                    let avatar_bytes = ui_ctx.anon_dm_avatar_for_peer(&sender_id, shared_avatar);
+                    let avatar_pixels: Option<(Vec<u8>, u32, u32)> =
+                        avatar_bytes.as_ref().and_then(|bytes| {
+                            if bytes.is_empty() {
+                                return None;
+                            }
+                            image::load_from_memory(bytes).ok().map(|img| {
+                                let rgba = img.to_rgba8();
+                                let (w, h) = rgba.dimensions();
+                                (rgba.into_raw(), w, h)
+                            })
+                        });
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             // Create slint::Image on UI thread from pre-decoded pixels
                             let (avatar_source, has_avatar) = match avatar_pixels {
-                                Some((pixels, width, height)) => {
-                                    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                Some((pixels, width, height)) => (
+                                    crate::bin_ui::slint_conversions::rgba_to_slint_image(
                                         &pixels, width, height,
-                                    );
-                                    (slint::Image::from_rgba8(buffer), true)
-                                }
+                                    ),
+                                    true,
+                                ),
                                 None => (slint::Image::default(), false),
                             };
 
                             // Add to private requests list
-                            let current_requests = w.get_friends_private_requests();
-                            let mut requests: Vec<FriendRequestData> = (0..current_requests.row_count())
-                                .filter_map(|i| current_requests.row_data(i))
-                                .collect();
-
-                            // Add new request
-                            requests.push(FriendRequestData {
+                            let current_requests = w
+                                .global::<crate::ModalHostState>()
+                                .get_friends_private_requests();
+                            // A resent request carries the same conversation
+                            // id: replace its row, never add a second.
+                            let incoming = FriendRequestData {
                                 user_id: conv_id_str.clone().into(), // conversation_id
                                 display_name: peer_name.clone().into(),
                                 username: "Private".into(),
@@ -142,12 +157,22 @@ fn spawn_request_stream(
                                     intro.into()
                                 },
                                 note: "".into(),
-                            });
+                            };
+                            let requests = request_client.reconcile_anon_dm_request_rows(
+                                current_requests.iter(),
+                                &conversation_id,
+                                |row| row.user_id.as_str(),
+                                incoming,
+                            );
 
-                            w.set_friends_private_requests(ModelRc::new(VecModel::from(requests.clone())));
+                            w.global::<crate::ModalHostState>()
+                                .set_friends_private_requests(ModelRc::new(VecModel::from(
+                                    requests.clone(),
+                                )));
 
                             // Update sidebar badge count
-                            w.set_pending_message_requests(requests.len() as i32);
+                            w.global::<crate::ModalHostState>()
+                                .set_pending_message_requests(requests.len() as i32);
 
                             tracing::debug!(
                                 conversation_id = %conv_id_str,
@@ -186,86 +211,9 @@ fn spawn_request_stream(
                         "Our anonymous DM request was accepted"
                     );
 
-                    // Get the full conversation to add to sidebar
-                    let dm = match ui_ctx.get_anon_dm_conversation(&conversation_id) {
-                        Some(dm) => dm,
-                        None => {
-                            tracing::warn!(
-                                conversation_id = %conversation_id,
-                                "Conversation not found after acceptance"
-                            );
-                            continue;
-                        }
-                    };
-
-                    let dm_id = dm.id;
-                    let weak = weak_window.clone();
-                    let peer_name_for_ui = peer_name.clone();
-
-                    // Decode avatar BEFORE invoke_from_event_loop to avoid blocking UI thread
-                    let avatar_bytes = peer_avatar.as_ref().or(dm.peer_avatar.as_ref());
-                    let avatar_pixels: Option<(Vec<u8>, u32, u32)> = avatar_bytes.and_then(|bytes| {
-                        image::load_from_memory(bytes).ok().map(|img| {
-                            let rgba = img.to_rgba8();
-                            let (w, h) = rgba.dimensions();
-                            (rgba.into_raw(), w, h)
-                        })
-                    });
-
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            // Create Slint Image from pre-decoded pixels (fast)
-                            let (avatar_source, has_avatar) = match avatar_pixels {
-                                Some((pixels, width, height)) => {
-                                    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                                        &pixels, width, height,
-                                    );
-                                    (slint::Image::from_rgba8(buffer), true)
-                                }
-                                None => (slint::Image::default(), false),
-                            };
-
-                            // Update existing pending DM or add new active DM
-                            let current_dms = w.get_dm_conversations();
-                            let mut dm_vec: Vec<DMListItemData> = Vec::new();
-                            let channel_id_str = dm_id.to_string();
-
-                            // Filter out old pending version and collect others
-                            for i in 0..current_dms.row_count() {
-                                if let Some(existing_dm) = current_dms.row_data(i) {
-                                    if existing_dm.channel_id.as_str() != channel_id_str {
-                                        dm_vec.push(existing_dm);
-                                    }
-                                }
-                            }
-
-                            // Add active conversation
-                            dm_vec.push(DMListItemData {
-                                channel_id: channel_id_str.into(),
-                                user_id: peer_id.to_string().into(),
-                                display_name: peer_name_for_ui.clone().into(),
-                                avatar_source,
-                                has_avatar,
-                                initials: get_initials(&peer_name_for_ui).into(),
-                                presence_status: "online".into(),
-                                last_message: "Conversation started".into(),
-                                timestamp: chrono::Local::now().format("%H:%M").to_string().into(),
-                                unread_count: 0,
-                                is_typing: false,
-                                is_anon: true,
-        is_pinned: false,
-                                is_selected: false,
-                            });
-
-                            w.set_dm_conversations(ModelRc::new(VecModel::from(dm_vec)));
-
-                            tracing::info!(
-                                conversation_id = %dm_id,
-                                peer_name = %peer_name_for_ui,
-                                "Updated sidebar with active anonymous DM"
-                            );
-                        }
-                    });
+                    // Core stored the acceptance (name, avatar) before it
+                    // emitted this; the row is core's like every row.
+                    crate::bin_ui::features::sidebar::rebuild_chat_list(&weak_window, &ui_ctx);
 
                     // Profile (avatar + display name) is sent back to the
                     // responder by core's inbox processor as soon as the
@@ -287,7 +235,7 @@ fn spawn_request_stream(
                     // Use sender_display_name from the init message
                     // Do NOT use user_service - these are strangers
                     let sender_name = if sender_display_name.is_empty() {
-                        format!("User {}", &sender_id.to_string()[..8])
+                        chatter_core::services::user::friend_display_name_placeholder(&sender_id)
                     } else {
                         sender_display_name.clone()
                     };
@@ -306,44 +254,48 @@ fn spawn_request_stream(
 
                     // Add to pending requests in UI
                     let conv_id_str = conversation_id.to_string();
-                    let peer_name = sender_name.clone();
+                    let peer_name = ui_ctx
+                        .contact_name(&sender_id)
+                        .unwrap_or_else(|| sender_name.clone());
                     let intro = if intro_message.is_empty() {
                         "Private contact request".to_string()
                     } else {
                         intro_message.clone()
                     };
                     let weak = weak_window.clone();
+                    let request_client = ui_ctx.clone();
 
                     // Decode avatar BEFORE invoke_from_event_loop to avoid blocking UI thread
-                    let avatar_pixels: Option<(Vec<u8>, u32, u32)> = sender_avatar.as_ref().and_then(|bytes| {
-                        image::load_from_memory(bytes).ok().map(|img| {
-                            let rgba = img.to_rgba8();
-                            let (w, h) = rgba.dimensions();
-                            (rgba.into_raw(), w, h)
-                        })
-                    });
+                    let avatar_bytes = ui_ctx.anon_dm_avatar_for_peer(&sender_id, sender_avatar);
+                    let avatar_pixels: Option<(Vec<u8>, u32, u32)> =
+                        avatar_bytes.as_ref().and_then(|bytes| {
+                            image::load_from_memory(bytes).ok().map(|img| {
+                                let rgba = img.to_rgba8();
+                                let (w, h) = rgba.dimensions();
+                                (rgba.into_raw(), w, h)
+                            })
+                        });
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             // Create Slint Image from pre-decoded pixels (fast)
                             let (avatar_source, has_avatar) = match avatar_pixels {
-                                Some((pixels, width, height)) => {
-                                    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                Some((pixels, width, height)) => (
+                                    crate::bin_ui::slint_conversions::rgba_to_slint_image(
                                         &pixels, width, height,
-                                    );
-                                    (slint::Image::from_rgba8(buffer), true)
-                                }
+                                    ),
+                                    true,
+                                ),
                                 None => (slint::Image::default(), false),
                             };
 
                             // Add to private requests list
-                            let current_requests = w.get_friends_private_requests();
-                            let mut requests: Vec<FriendRequestData> = (0..current_requests.row_count())
-                                .filter_map(|i| current_requests.row_data(i))
-                                .collect();
-
-                            // Add new request with sender's identity (revealed after ECIES decryption)
-                            requests.push(FriendRequestData {
+                            let current_requests = w
+                                .global::<crate::ModalHostState>()
+                                .get_friends_private_requests();
+                            // A resent request carries the same conversation
+                            // id: replace its row, never add a second.
+                            let incoming = FriendRequestData {
                                 user_id: conv_id_str.clone().into(), // conversation_id
                                 display_name: peer_name.clone().into(),
                                 username: "Private".into(),
@@ -351,12 +303,22 @@ fn spawn_request_stream(
                                 has_avatar,
                                 sent_at: intro.into(),
                                 note: "".into(),
-                            });
+                            };
+                            let requests = request_client.reconcile_anon_dm_request_rows(
+                                current_requests.iter(),
+                                &conversation_id,
+                                |row| row.user_id.as_str(),
+                                incoming,
+                            );
 
-                            w.set_friends_private_requests(ModelRc::new(VecModel::from(requests.clone())));
+                            w.global::<crate::ModalHostState>()
+                                .set_friends_private_requests(ModelRc::new(VecModel::from(
+                                    requests.clone(),
+                                )));
 
                             // Update sidebar badge count
-                            w.set_pending_message_requests(requests.len() as i32);
+                            w.global::<crate::ModalHostState>()
+                                .set_pending_message_requests(requests.len() as i32);
 
                             tracing::info!(
                                 conversation_id = %conv_id_str,
@@ -383,7 +345,7 @@ fn spawn_action_stream(
     weak_window: Weak<MainWindow>,
     ui_ctx: Arc<ChatterClient>,
 ) -> tokio::task::JoinHandle<()> {
-    let chat_state = ui_ctx.chat_state().clone();
+    let chat_state = ui_ctx.clone();
     let mut event_rx = ui_ctx.subscribe_events();
 
     tokio::spawn(async move {
@@ -391,19 +353,23 @@ fn spawn_action_stream(
             let event = match event_rx.recv().await {
                 Ok(event) => event,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(dropped_count = n, "[ANON_DM_HANDLER] Action receiver lagged, continuing");
+                    tracing::warn!(
+                        dropped_count = n,
+                        "[ANON_DM_HANDLER] Action receiver lagged, continuing"
+                    );
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             match event {
                 chatter_core::inbox::DomainEvent::MessageReceived { ref message }
-                    if message.conversation_type == chatter_core::domain::message::ConversationType::AnonDm =>
+                    if message.conversation_type
+                        == chatter_core::domain::message::ConversationType::AnonDm =>
                 {
                     // UI insertion and sidebar updates are handled by domain_handler::anon_dm.
                     // This handler only sends read receipts when the conversation is active.
                     let conversation_id = chatter_core::domain::anon_dm::AnonDmId::from_uuid(
-                        *message.conversation_id.as_uuid()
+                        *message.conversation_id.as_uuid(),
                     );
                     let receipt_conv_id = conversation_id;
                     let receipt_msg_ts = message.sent_at;
@@ -423,16 +389,23 @@ fn spawn_action_stream(
                         match rx.await {
                             Ok(true) => {
                                 let handle = receipt_client.conversation(
-                                    chatter_core::state::ActiveConversation::AnonDm(receipt_conv_id),
+                                    chatter_core::state::ActiveConversation::AnonDm(
+                                        receipt_conv_id,
+                                    ),
                                 );
                                 if let Err(e) = handle.send_read_receipt(&[receipt_msg_ts]).await {
                                     tracing::warn!(error = %e, "[ANON_DM_RECEIPT] Failed to send read receipt");
                                 } else {
-                                    tracing::debug!("[ANON_DM_RECEIPT] Sent read receipt for ts={}", receipt_msg_ts);
+                                    tracing::debug!(
+                                        "[ANON_DM_RECEIPT] Sent read receipt for ts={}",
+                                        receipt_msg_ts
+                                    );
                                 }
                             }
                             Ok(false) => {
-                                tracing::trace!("[ANON_DM_RECEIPT] Conversation not selected, skipping read receipt");
+                                tracing::trace!(
+                                    "[ANON_DM_RECEIPT] Conversation not selected, skipping read receipt"
+                                );
                             }
                             Err(_) => {
                                 tracing::trace!("[ANON_DM_RECEIPT] UI check channel closed");
@@ -443,60 +416,86 @@ fn spawn_action_stream(
                 // =============================================================
                 // Anonymous DM Action Events (typing, reactions, pins, etc.)
                 // =============================================================
-                chatter_core::inbox::DomainEvent::TypingStarted { channel_id, user_id: _ } => {
-                    unified_actions::handle_typing(&weak_window, &chat_state, EventSource::Channel(channel_id), true);
+                chatter_core::inbox::DomainEvent::TypingStarted {
+                    channel_id,
+                    user_id,
+                    timestamp,
+                } => {
+                    unified_actions::handle_typing(
+                        &weak_window,
+                        &ui_ctx,
+                        EventSource::Channel(channel_id),
+                        user_id,
+                        timestamp,
+                        true,
+                    );
                 }
-                chatter_core::inbox::DomainEvent::TypingStopped { channel_id, user_id: _ } => {
-                    unified_actions::handle_typing(&weak_window, &chat_state, EventSource::Channel(channel_id), false);
+                chatter_core::inbox::DomainEvent::TypingStopped {
+                    channel_id,
+                    user_id,
+                    timestamp,
+                } => {
+                    unified_actions::handle_typing(
+                        &weak_window,
+                        &ui_ctx,
+                        EventSource::Channel(channel_id),
+                        user_id,
+                        timestamp,
+                        false,
+                    );
                 }
                 // ReactionAdded/ReactionRemoved are handled by domain_handler::handle_reaction_update
                 // (which handles all conversation types). Handling them here too caused double-counting.
                 chatter_core::inbox::DomainEvent::ReactionAdded { .. }
                 | chatter_core::inbox::DomainEvent::ReactionRemoved { .. } => {}
+                // Anonymous DM pins only: a channel, DM or Saved pin is the
+                // domain handler's, and this `Channel` source would otherwise
+                // take a Saved pin for the same-id view (an alias).
                 chatter_core::inbox::DomainEvent::MessagePinned {
                     message_id,
                     channel_id,
+                    conversation_type: chatter_core::domain::message::ConversationType::AnonDm,
                     ..
                 } => {
                     // Use message_id's timestamp for matching
-                    let target_sent_timestamp = message_id.as_bytes()
+                    let target_sent_timestamp = message_id
+                        .as_bytes()
                         .get(..8)
                         .and_then(|b| b.try_into().ok())
                         .map(u64::from_be_bytes)
                         .unwrap_or(0);
                     unified_actions::handle_pin(
-                        &weak_window, &chat_state,
+                        &weak_window,
+                        &chat_state,
                         EventSource::Channel(channel_id),
-                        target_sent_timestamp, true, // is_pinned = true
+                        target_sent_timestamp,
+                        true, // is_pinned = true
                     );
                 }
                 chatter_core::inbox::DomainEvent::MessageUnpinned {
                     message_id,
                     channel_id,
+                    conversation_type: chatter_core::domain::message::ConversationType::AnonDm,
                     ..
                 } => {
-                    let target_sent_timestamp = message_id.as_bytes()
+                    let target_sent_timestamp = message_id
+                        .as_bytes()
                         .get(..8)
                         .and_then(|b| b.try_into().ok())
                         .map(u64::from_be_bytes)
                         .unwrap_or(0);
                     unified_actions::handle_pin(
-                        &weak_window, &chat_state,
-                        EventSource::Channel(channel_id),
-                        target_sent_timestamp, false, // is_pinned = false (unpin)
-                    );
-                }
-                chatter_core::inbox::DomainEvent::MessageDeleted {
-                    channel_id: Some(channel_id),
-                    target_sent_timestamp,
-                    ..
-                } => {
-                    unified_actions::handle_delete(
-                        &weak_window, &chat_state,
+                        &weak_window,
+                        &chat_state,
                         EventSource::Channel(channel_id),
                         target_sent_timestamp,
+                        false, // is_pinned = false (unpin)
                     );
                 }
+                // Edits and deletes are domain_handler's: it matches the
+                // (author, sent timestamp) bubble in the conversation on
+                // screen. A timestamp-only copy here let a peer rewrite or
+                // blank another sender's bubble by reusing its timestamp.
                 chatter_core::inbox::DomainEvent::MessagesRead {
                     message_timestamps,
                     channel_id,
@@ -508,18 +507,17 @@ fn spawn_action_stream(
                     let cs = chat_state.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if weak.upgrade().is_some() {
-                            let ch_id = channel_id.or_else(|| {
-                                match cs.active_conversation() {
-                                    chatter_core::state::ActiveConversation::AnonDm(id) => {
-                                        Some(chatter_core::domain::ids::ChannelId::from(id))
-                                    }
-                                    _ => None,
+                            let ch_id = channel_id.or_else(|| match cs.active_conversation() {
+                                chatter_core::state::ActiveConversation::AnonDm(id) => {
+                                    Some(chatter_core::domain::ids::ChannelId::from(id))
                                 }
+                                _ => None,
                             });
 
                             if let Some(channel_id) = ch_id {
                                 unified_actions::handle_receipt(
-                                    &weak, &cs,
+                                    &weak,
+                                    &cs,
                                     EventSource::Channel(channel_id),
                                     2, // read
                                     message_timestamps.clone(),
@@ -529,8 +527,7 @@ fn spawn_action_stream(
                     });
                 }
                 chatter_core::inbox::DomainEvent::MessagesDelivered {
-                    message_timestamps,
-                    ..
+                    message_timestamps, ..
                 } => {
                     // For anon DM receipts, check if we're viewing an anon DM
                     let weak = weak_window.clone();
@@ -542,7 +539,8 @@ fn spawn_action_stream(
                             {
                                 let channel_id = chatter_core::domain::ids::ChannelId::from(id);
                                 unified_actions::handle_receipt(
-                                    &weak, &cs,
+                                    &weak,
+                                    &cs,
                                     EventSource::Channel(channel_id),
                                     1, // delivered
                                     message_timestamps.clone(),
@@ -550,22 +548,6 @@ fn spawn_action_stream(
                             }
                         }
                     });
-                }
-                chatter_core::inbox::DomainEvent::MessageEdited {
-                    new_content,
-                    channel_id,
-                    target_sent_timestamp,
-                    ..
-                } => {
-                    let new_body = match new_content {
-                        chatter_core::domain::message::MessageContent::Text(text) => text,
-                        _ => "[Unsupported content]".to_string(),
-                    };
-                    unified_actions::handle_edit(
-                        &weak_window, &chat_state,
-                        EventSource::Channel(channel_id),
-                        target_sent_timestamp, new_body,
-                    );
                 }
                 _ => {
                     // Ignore other events

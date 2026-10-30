@@ -1,18 +1,26 @@
+import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
+import { GifPicker, GifData } from "../components/gif_picker.slint";
+import { Icons } from "../theme/icons.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
+import { Button } from "../components/button.slint";
 // Main chat layout component
 //
 // Integrates ChatHeader, MessageList, and MessageComposer into a complete chat view.
 
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
-import { Icons } from "../theme/icons.slint";
 import { ChatHeader } from "chat_header.slint";
+import { DisappearingStatus } from "disappearing_status.slint";
+import { DisappearingGlobal } from "disappearing_global.slint";
+import { ConversationKind } from "conversation_kind.slint";
 import { MessageList, MessageItemData, MessageAttachmentData, ReactionEntry } from "message_list.slint";
 import { MessageComposer, PendingAttachmentData } from "message_composer.slint";
 import { PinnedBar } from "pinned_bar.slint";
 import { IdentityChangeBar } from "identity_change_bar.slint";
-import { EmojiData } from "../components/emoji_picker.slint";
-import { GifData } from "../components/gif_picker.slint";
+import { MembershipBar } from "membership_bar.slint";
+import { MembershipGlobal } from "membership_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 import { MeshContextBar } from "../mesh/mesh_context_bar.slint";
 
@@ -23,18 +31,44 @@ export component ChatLayout inherits Rectangle {
     // Header properties
     in property <string> channel-id: "";
     in property <string> channel-name: "";
-    in property <string> channel-type: "public";
+    in property <ConversationKind> conversation-kind;
+    in property <bool> private-channel: false;
+    // Core's own statement of where this conversation's messages go, for the
+    // conversations whose kind cannot say it (the Jarvis channel: local or
+    // cloud). Empty means "derive it from the kind". Every conversation open
+    // resets it (bin_ui::converters::set_conversation_kind).
+    in property <string> privacy-line-override: "";
+    // With an override: whether the messages leave this device unencrypted.
+    in property <bool> privacy-line-exposed: false;
+    in property <bool> is-anonymous: false;
     in property <bool> is-dm: false;  // When true, show minimal message UI (no avatars/names)
+    in property <bool> can-forward: false;
     in property <int> member-count: 0;
+    in property <int> invited-count: 0;
     in property <string> topic: "";
     in property <string> typing-indicator: "";
     in property <string> presence-status: "offline";
+    in property <string> header-last-seen: "";
     in property <image> channel-avatar-source;
     in property <bool> channel-has-avatar: false;
 
     // When true, hide the chat header (e.g. during an active call where the
     // call dock already carries channel name/encryption/timer).
     in property <bool> hide-header: false;
+    // Window y where the conversation content starts (below the header and
+    // the pinned bar: the list's own top inset). The message menu is a
+    // window-level overlay and clamps to this, so neither the menu nor the
+    // highlighted bubble covers the title or the pinned bar.
+    out property <length> content-top: root.absolute-position.y + top-chrome.height;
+    out property <length> composer-top: bottom-chrome.absolute-position.y;
+    out property <length> menu-anchor-top: message-list.menu-anchor-top;
+    out property <length> menu-anchor-bottom: message-list.menu-anchor-bottom;
+    out property <length> menu-anchor-left: message-list.menu-anchor-left;
+    out property <length> menu-anchor-right: message-list.menu-anchor-right;
+    out property <MessageItemData> menu-preview-message: message-list.menu-preview-message;
+    out property <length> menu-preview-row-x: message-list.menu-preview-row-x;
+    out property <length> menu-preview-row-y: message-list.menu-preview-row-y;
+    out property <length> menu-preview-row-width: message-list.menu-preview-row-width;
 
     // Jarvis AI thinking state
     in-out property <bool> jarvis-thinking: false;
@@ -49,9 +83,15 @@ export component ChatLayout inherits Rectangle {
     in property <int> scroll-to-message-index: -1;  // Set to scroll to a specific message
     in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
     in-out property <length> message-scroll-position: 0px;  // Scroll position for message list
+    in-out property <int> message-first-visible-row: 0;  // See MessageList.first-visible-row
+    in-out property <int> message-last-visible-row: -1;
+    // The message list is moving (MessageList.scrolling), for glass outside
+    // this layout that sits over it: the window's SelectionBar.
+    out property <bool> list-scrolling: message-list.scrolling;
     // Two-way: the open path resets it so a conversation left scrolled up
     // does not decide where the NEXT conversation opens.
     in-out property <bool> is-at-bottom <=> message-list.is-at-bottom;
+    in-out property <bool> history-load-failed <=> message-list.load-failed;
     // Unread boundary from core — see MessageList.
     in-out property <int> unread-index: -1;
     in-out property <int> unread-count: 0;
@@ -60,25 +100,125 @@ export component ChatLayout inherits Rectangle {
     // Picker properties
     in-out property <bool> emoji-picker-visible: false;
     in-out property <bool> gif-picker-visible: false;
-    in property <[EmojiData]> emoji-list: [];
-    in property <int> emoji-category: 0;
-    in property <string> emoji-search: "";
-    in property <bool> gif-loading: false;
-    in property <[GifData]> gif-results: [];
-    in property <string> gif-search-query: "";
+
+    in property <[EmojiData]> emoji-list;
+    in-out property <int> emoji-category;
+    in-out property <int> emoji-skin-tone;
+    in-out property <string> emoji-search;
+    in-out property <string> gif-search;
+    private property <string> drawer-search-text;
+    private property <int> drawer-search-caret-end-seq: 0;
+    init => { root.drawer-search-text = root.gif-picker-visible ? root.gif-search : root.emoji-search; }
+    changed emoji-search => { if root.emoji-picker-visible { root.drawer-search-text = root.emoji-search; } }
+    changed gif-search => { if root.gif-picker-visible { root.drawer-search-text = root.gif-search; } }
+    changed emoji-picker-visible => { if root.emoji-picker-visible { root.drawer-search-text = root.emoji-search; } }
+    changed gif-picker-visible => { if root.gif-picker-visible { root.drawer-search-text = root.gif-search; } }
+    in property <[GifData]> gif-results;
+    in property <[GifData]> gif-recent;
+    in property <bool> gif-loading;
+    in property <bool> gif-failed;
+    // Core's answer for the open conversation (false in a secret chat): when
+    // false the drawer is Emoji only.
+    in property <bool> gifs-available: true;
+    callback emoji-selected(string);
+    callback emoji-category-changed(int);
+    callback emoji-search-changed(string);
+    callback emoji-skin-tone-changed(int);
+    callback gif-selected(string, string);
+    callback gif-search-changed(string);
+    callback composer-focus-released();
+    callback composer-keyboard-requested(length);
+    callback composer-input-focused();
+    in property <length> keyboard-inset;
+    in property <length> remembered-keyboard-height;
+    private property <bool> drawer-search-focused: false;
+    // The host already subtracts the IME. Reserve only the part of the drawer
+    // it does not occupy while hideSoftInput's asynchronous insets arrive.
+    property <length> drawer-height: root.mobile && root.remembered-keyboard-height > 0px
+        ? root.remembered-keyboard-height
+        : min(340px, (root.height + root.keyboard-inset) * 0.48);
+    private property <bool> drawer-visible: (root.emoji-picker-visible || root.gif-picker-visible)
+        && !root.selection-mode && root.composer-notice == "";
+    private property <bool> instant-drawer-handover: false;
+    changed drawer-visible => {
+        if root.drawer-visible {
+            root.instant-drawer-handover = root.keyboard-inset > 0px;
+        } else {
+            root.drawer-search-focused = false;
+        }
+    }
+    private property <bool> drawer-search-with-ime: root.drawer-visible
+        && root.drawer-search-focused && root.keyboard-inset > 0px;
+    // The pane already excludes the IME. Search lifts the drawer only while
+    // the keyboard is actually open; retained focus must not move its baseline.
+    // GIF thumbnails need more room than emoji cells. Both stop below the
+    // header and composer, with a shared bounded fallback on very short panes.
+    property <length> drawer-search-room: max(0px, root.height - top-chrome.height
+        - composer.height - (root.mobile ? Spacing.sm : 0px));
+    property <length> drawer-space: root.drawer-search-with-ime
+        ? min(root.drawer-search-room, root.gif-picker-visible
+            ? min(480px, root.height * 0.82)
+            : min(max(0px, root.drawer-search-room - Spacing.lg), min(root.drawer-height, root.height * 0.6)))
+        : root.mobile ? max(0px, root.drawer-height - root.keyboard-inset)
+        // Desktop popover: never taller than the gap between header and
+        // composer, so a short window shrinks it rather than covering the title.
+        : min(root.drawer-height, max(0px, root.drawer-search-room - Spacing.xs));
+    // On touch the drawer replaces the IME's occupied space. Drive both the
+    // composer and list from this one value, including during the IME handover.
+    property <length> drawer-occupied-height: root.mobile && root.drawer-visible
+        ? root.drawer-space : 0px;
+    animate drawer-occupied-height {
+        duration: root.instant-drawer-handover || root.keyboard-inset > 0px
+            ? 0ms : Materials.motion-standard;
+        easing: Materials.glide;
+    }
+    in property <string> inserted-emoji;
+    in property <int> insert-serial;
+    changed insert-serial => {
+        if root.emoji-picker-visible { composer.insert-emoji(root.inserted-emoji); }
+    }
 
     // Composer properties
+    in property <int> attachment-prepare-serial;
+    in property <int> attachment-restore-serial;
+    in property <int> composer-caret-end-seq;
     in-out property <string> composer-text: "";
+    out property <bool> composer-composing: composer.composing;
+    out property <string> composer-composed-text: composer.composed-text;
     in property <string> composer-placeholder: "Type a message...";
-    in property <bool> composer-disabled: false;
-    // Non-empty while a send is on the wire — see message_composer.slint.
-    in property <string> composer-send-status: "";
+    // Non-empty when the viewer may not post here (muted, removed): the
+    // composer is replaced by this text, worded by chatter-core.
+    in property <string> composer-notice: "";
+    in property <bool> is-blocked: false;
+    callback unblock-clicked();
+    in property <bool> can-rejoin: false;
+    callback rejoin-clicked();
+    in property <bool> conversation-read-only: false;
+    in property <bool> header-can-call: false;
+    in property <string> active-channel-call-id: "";
+    in property <bool> active-channel-call-video: false;
+    in property <int> active-channel-call-participants: 0;
+    callback refresh-channel-call();
+    callback join-channel-call();
+    in property <bool> header-can-invite: false;
+    in property <bool> header-can-open-settings: false;
+    in property <bool> header-can-open-pinned-list: false;
+    // A secret-chat request we have not answered (core's
+    // `SecretChatGate::offers_answer`): the notice offers Accept / Decline.
+    in property <bool> secret-request-actions: false;
+    in property <bool> secret-request-busy: false;
+    callback secret-request-accept-clicked();
+    callback secret-request-decline-clicked();
     in property <[PendingAttachmentData]> pending-attachments: [];
     in-out property <bool> composer-is-editing: false;
     in-out property <string> composer-edit-message-id: "";
     
     // Reply properties
     in property <bool> composer-is-replying: false;
+    in property <int> reply-focus-serial: 0;
+    in property <bool> keyboard-open: false;
+    in property <bool> composer-enter-sends: true;
+    changed reply-focus-serial => { composer.focus-reply-input(); }
     in property <string> composer-reply-to-sender: "";
     in property <string> composer-reply-to-sender-name: "";
     in property <string> composer-reply-to-timestamp: "";
@@ -103,7 +243,7 @@ export component ChatLayout inherits Rectangle {
     callback settings-clicked();
     callback invite-clicked();
     callback voice-call-clicked();
-    callback video-call-clicked();
+    callback header-more-clicked(/* video-call */ bool, /* settings */ bool);
 
     // Peer identity change — the conversation is wedged until the user decides.
     // Strings are formatted by chatter-core (`ChatterClient::identity_change_prompt`);
@@ -120,26 +260,43 @@ export component ChatLayout inherits Rectangle {
     callback pinned-next-clicked();
     callback pinned-go-to-message();
     callback pinned-dismiss-clicked();
+    callback sender-profile-requested(string);
+    in property <image> pinned-thumbnail;
     callback pinned-show-clicked();  // Re-show dismissed pinned bar
 
     // Message list callbacks
     in property <bool> selection-mode: false;
     in property <bool> mobile: false;
+    in property <bool> page-active: true;
+    // A message menu (context menu or reaction picker) is up.
+    in property <bool> menu-open: false;
     callback selection-toggled(string);
+    callback open-message-link(string, string);
     callback message-clicked(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback forward-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
     callback view-attachment(string);  // attachment ID - for viewing attachment in messages
+    // MessageList records the tapped thumbnail before calling view-attachment.
+    // Forward its window coordinates so the app's viewer can grow from the
+    // source image without coupling its overlay to MessageList internals.
+    out property <length> viewer-origin-x: message-list.viewer-origin-x;
+    out property <length> viewer-origin-y: message-list.viewer-origin-y;
+    out property <length> viewer-origin-width: message-list.viewer-origin-width;
+    out property <length> viewer-origin-height: message-list.viewer-origin-height;
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback load-more();
-    callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button is clicked
+    callback list-geometry(float, float, bool);
+    callback visible-media-rows(int, int);
 
     // Composer callbacks
-    callback send(string);
+    callback send(string) -> bool;
     callback send-edit(string, string);  // (message_id, new_text)
+    callback edit-last-requested();
     callback cancel-edit();
     callback cancel-reply();
     callback attachment-clicked();
@@ -149,45 +306,180 @@ export component ChatLayout inherits Rectangle {
     callback mention-triggered(string);
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
-    callback process-text(string) -> string;  // Insert word breaks for text wrapping
 
-    // In-conversation search (Ctrl+F)
-    in-out property <bool> inline-search-visible: false;
-    in-out property <string> inline-search-query: "";
-    in property <int> inline-search-match-count: 0;
-    in property <int> inline-search-current-match: 0;
-
-    callback inline-search(string);
-    callback inline-search-next();
-    callback inline-search-prev();
-    callback inline-search-close();
-
-    // Picker callbacks
-    callback emoji-selected(string);
-    callback emoji-category-changed(int);
-    callback emoji-search-changed(string);
-    callback gif-selected(string, string);
-    callback gif-search(string);
+    // Tablet two-pane canvas: match the rounded header silhouette behind it.
+    in property <bool> rounded-page-top: false;
 
     // Layout — Neo 2.0 surface continuity: deepest background as base plane
-    background: Colors.background;
+    background: Materials.ambient;
 
-    // 100% width enables text wrapping to work throughout the chain
-    VerticalLayout {
+    message-list := MessageList {
+        page-active: root.page-active;
+        // The drawer shrinks this viewport without shrinking ChatLayout itself.
+        // Explicitly pin it to the top: an unpositioned sized child is centred
+        // in this Rectangle and otherwise moves down by half the drawer height.
+        x: 0;
+        y: 0;
+        background: transparent;
+        border-top-left-radius: root.rounded-page-top && !root.hide-header
+            ? (root.mobile ? Spacing.header-height-touch : Spacing.header-height) / 2 : 0px;
+        border-top-right-radius: self.border-top-left-radius;
+        // With the keyboard up, end the viewport at the composer so rows
+        // cannot show in the strip between its bottom and the IME. Otherwise
+        // older bubbles can still travel beneath the composer glass.
+        clip: true;
+        sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
         width: 100%;
-        height: 100%;
+        height: root.keyboard-open ? max(0px, bottom-chrome.y)
+            : max(0px, root.height - root.drawer-occupied-height
+                - (root.drawer-occupied-height > 0px ? Spacing.sm : 0px));
+        top-inset: top-chrome.height;
+        // The last virtual row owns scroll clearance; reducing the viewport
+        // while the keyboard is closed would expose a hard cut above the glass.
+        // The open-keyboard viewport already ends at the composer's top.
+        tail-clearance: root.keyboard-open ? Spacing.sm : Spacing.md + Spacing.touch-target-min;
+        // bottom-chrome already includes the lifted circle row.
+        bottom-inset: root.keyboard-open ? 0px
+            : bottom-chrome.height + composer.list-clearance-extra
+                - (root.drawer-occupied-height > 0px ? Spacing.sm : 0px);
+        messages: root.messages;
+        loading: root.loading-messages;
+        selection-mode: root.selection-mode;
+        menu-open: root.menu-open;
+        mobile: root.mobile;
+        can-forward: root.can-forward;
+        is-dm: root.is-dm;
+                    is-anonymous: root.is-anonymous;
+        can-thread: root.conversation-kind == ConversationKind.channel;
+        is-mesh: MeshGlobal.active-id != "";
+        // A mesh room and a geohash cell are plaintext broadcasts. Only a
+        // mesh DM runs over Noise, so only it keeps the lock.
+        //
+        // A PUBLIC channel is plaintext too: the server creates it with
+        // Encrypted:false and this client ships cleartext to it on purpose
+        // (services/message/core.rs — "plaintext is the intended, visible
+        // property"). It must not claim end-to-end encryption. The
+        // default kind is a public channel, so a conversation whose kind
+        // has not loaded yet understates privacy rather than overstating it.
+        public-broadcast: root.privacy-line-override != ""
+            ? root.privacy-line-exposed
+          : MeshGlobal.active-kind == "room"
+            || MeshGlobal.active-kind == "geohash"
+            || (MeshGlobal.active-kind != "private-channel" && root.conversation-kind == ConversationKind.channel && !root.private-channel);
+        privacy-line: root.privacy-line-override != ""
+            ? root.privacy-line-override
+          : MeshGlobal.active-kind == "room"
+            ? "Anyone in radio range can read this"
+          : MeshGlobal.active-kind == "geohash"
+            ? "Anyone in this cell can read this"
+          : MeshGlobal.active-kind == "private-channel"
+            ? "Invited devices · encrypted over mesh"
+          : root.conversation-kind == ConversationKind.channel && !root.private-channel
+            ? "Public channel — anyone can read this"
+            : "Messages are end-to-end encrypted";
+        saved-messages: root.conversation-kind == ConversationKind.saved-messages;
+        current-playing-attachment-id: root.current-playing-attachment-id;
+        is-media-playing: root.is-media-playing;
+        audio-progress: root.audio-progress;
+        audio-elapsed: root.audio-elapsed;
+        scroll-to-index: root.scroll-to-message-index;
+        highlighted-message-id: root.highlighted-message-id;
+        scroll-position <=> root.message-scroll-position;
+        first-visible-row <=> root.message-first-visible-row;
+        last-visible-row <=> root.message-last-visible-row;
+        should-auto-scroll: root.should-auto-scroll;
+        unread-index <=> root.unread-index;
+        unread-count <=> root.unread-count;
 
+        selection-toggled(id) => {
+            root.selection-toggled(id);
+        }
+
+        open-message-link(url, display-text) => { root.open-message-link(url, display-text); }
+        message-clicked(id) => {
+            root.message-clicked(id);
+        }
+        reply-clicked(sender-id, timestamp-ns) => {
+            root.reply-clicked(sender-id, timestamp-ns);
+        }
+        forward-clicked(sender-id, timestamp-ns) => {
+            root.forward-clicked(sender-id, timestamp-ns);
+        }
+        reaction-toggled(sender-id, timestamp-ns, emoji) => {
+            root.reaction-toggled(sender-id, timestamp-ns, emoji);
+        }
+
+        react-clicked(sender-id, timestamp-ns, x, y) => {
+            root.react-clicked(sender-id, timestamp-ns, x, y);
+        }
+        thread-clicked(id) => {
+            root.thread-clicked(id);
+        }
+        more-clicked(sender-id, timestamp-ns, x, y) => {
+            root.more-clicked(sender-id, timestamp-ns, x, y);
+        }
+        quote-clicked(id) => {
+            root.quote-clicked(id);
+        }
+        load-more => {
+            root.load-more();
+        }
+        attachment-clicked(id) => {
+            root.view-attachment(id);
+        }
+        audio-seek(id, pos) => {
+            root.audio-seek(id, pos);
+        }
+        list-geometry(visible, content, seeking) => {
+            root.list-geometry(visible, content, seeking);
+        }
+        visible-media-rows(first, last) => {
+            root.visible-media-rows(first, last);
+        }
+    }
+
+    // Floating chrome is positioned explicitly: a sized element without x/y
+    // is centred in its parent, which put the header mid-screen.
+    top-chrome := VerticalLayout {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: self.preferred-height;
+        // Level-3 chrome floats: on a phone it is inset from the screen edges
+        // so its shadow and rim show on all sides and messages visibly pass
+        // underneath it (theme/elevation.slint).
+        padding-left: root.mobile ? Spacing.sm : Spacing.none;
+        padding-right: self.padding-left;
+        padding-top: root.mobile ? Spacing.xs : Spacing.none;
+        spacing: root.mobile ? Spacing.xs : Spacing.none;
+        Timer {
+            interval: 20s;
+            running: root.visible && root.conversation-kind == ConversationKind.channel && root.header-can-call;
+            triggered => { root.refresh-channel-call(); }
+        }
         // Header at top (fixed 56px). Hidden during active calls — the call
         // dock already shows channel name/encryption/timer.
         if !root.hide-header: ChatHeader {
             mobile: root.mobile;
+            backdrop-paused: message-list.scrolling;
+            pinned-bar-shown: root.has-pinned-messages;
             channel-id: root.channel-id;
             channel-name: root.channel-name;
-            channel-type: root.channel-type;
+            conversation-kind: root.conversation-kind;
+            private-channel: root.private-channel;
             member-count: root.member-count;
+            invited-count: root.invited-count;
+            read-only: root.conversation-read-only;
+            can-call: root.header-can-call;
+            can-invite: root.header-can-invite;
+            can-open-settings: root.header-can-open-settings;
+            can-open-pinned-list: root.header-can-open-pinned-list;
             topic: root.topic;
             typing-indicator: root.typing-indicator;
-            presence-status: root.presence-status;
+            // A mesh DM has no server presence; its dot is the core's reachability.
+            presence-status: MeshGlobal.active-kind == "dm"
+                ? (MeshGlobal.active-reachable ? "online" : "offline") : root.presence-status;
+            last-seen: MeshGlobal.active-kind == "dm" ? "" : root.header-last-seen;
             avatar-source: root.channel-avatar-source;
             has-avatar: root.channel-has-avatar;
             jarvis-thinking: root.jarvis-thinking;
@@ -204,23 +496,40 @@ export component ChatLayout inherits Rectangle {
             invite-clicked => {
                 root.invite-clicked();
             }
-            pin-clicked => {
-                root.pinned-show-clicked();
-            }
             voice-call-clicked => {
                 root.voice-call-clicked();
             }
-            video-call-clicked => {
-                root.video-call-clicked();
+            more-clicked(video, settings) => {
+                root.header-more-clicked(video, settings);
+            }
+        }
+
+        if !root.hide-header && root.conversation-kind == ConversationKind.channel
+            && root.header-can-call && root.active-channel-call-id != "": Rectangle {
+            width: 100%;
+            height: 48px;
+            background: Colors.surface-section;
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                spacing: Spacing.sm;
+                Text {
+                    text: "Call in progress · " + root.active-channel-call-participants + " participants";
+                    color: Colors.text-primary;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Button { text: "Join"; variant: "secondary"; clicked => { root.join-channel-call(); } }
             }
         }
 
         // Peer identity change. Above the message list so it is the first thing
         // read, and directly above the marker for the message that could not be
-        // decrypted. Gated on channel-type as well as the flag: the flag is set
+        // decrypted. Gated on the kind as well as the flag: the flag is set
         // per DM open, and this keeps a stale one from ever surviving a switch
         // into a channel, group or mesh room.
-        if root.identity-change-visible && root.channel-type == "dm": IdentityChangeBar {
+        if root.identity-change-visible
+            && root.conversation-kind == ConversationKind.server-dm: IdentityChangeBar {
             width: 100%;
             vertical-stretch: 0;
             title: root.identity-change-title;
@@ -231,172 +540,31 @@ export component ChatLayout inherits Rectangle {
             }
         }
 
-        // Mesh strip — only while a mesh conversation is open *and* it has
-        // something to say. The serverless claim, the peer count and the cell now
-        // sit in the header on one line; what is left here is the delivery
-        // explanation, which is worth vertical space when the user could be
-        // surprised and is furniture when the mesh is simply working.
+        if DisappearingGlobal.status-label != "": DisappearingStatus {
+            width: 100%;
+            vertical-stretch: 0;
+        }
+
+        // Channel membership not verified (failed, fork, or no verified state
+        // yet): sending is paused, and this says why. Core decides whether it
+        // shows and what it says (`channel_membership_header`).
+        if root.conversation-kind == ConversationKind.channel
+            && MembershipGlobal.banner-severity != "": MembershipBar {
+            channel-id: root.channel-id;
+            width: 100%;
+            vertical-stretch: 0;
+        }
+
+        // A compact notice appears only when mesh needs action or attention.
         if MeshGlobal.active-id != "" && MeshGlobal.context-strip-needed: MeshContextBar {
             width: 100%;
             vertical-stretch: 0;
         }
 
-        // In-conversation search bar (Ctrl+F) — Neo glass surface
-        if root.inline-search-visible: Rectangle {
-            width: 100%;
-            height: 44px;
-            background: Colors.surface.with-alpha(0.9);
-            border-width: 1px;
-            border-color: Colors.neo-highlight;
-            drop-shadow-blur: Spacing.neo-blur-sm;
-            drop-shadow-offset-y: Spacing.neo-offset-sm;
-            drop-shadow-color: Colors.neo-shadow;
-
-            // Bottom edge
-            Rectangle {
-                y: parent.height - 1px;
-                width: 100%;
-                height: 1px;
-                background: Colors.neo-highlight;
-            }
-
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                spacing: Spacing.sm;
-                alignment: stretch;
-
-                // Search input — Neo inset
-                Rectangle {
-                    horizontal-stretch: 1;
-                    height: 32px;
-                    background: Colors.neo-inset-bg;
-                    border-radius: Spacing.radius-lg;
-                    border-width: 1px;
-                    border-color: inline-search-input.has-focus ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
-
-                    HorizontalLayout {
-                        padding-left: Spacing.sm;
-                        padding-right: Spacing.sm;
-                        spacing: Spacing.sm;
-
-                        // Search icon
-                        Image {
-                            source: Icons.search;
-                            width: 14px;
-                            height: 14px;
-                            colorize: Colors.text-muted;
-                            y: (parent.height - self.height) / 2;
-                        }
-
-                        inline-search-input := TextInput {
-                            horizontal-stretch: 1;
-                            color: Colors.text-primary;
-                            font-size: Typography.sm;
-                            vertical-alignment: center;
-                            text <=> root.inline-search-query;
-
-                            accepted => {
-                                root.inline-search(self.text);
-                            }
-                            edited => {
-                                root.inline-search(self.text);
-                            }
-                        }
-                    }
-
-                    // Placeholder
-                    if root.inline-search-query == "": Text {
-                        x: Spacing.sm + 14px + Spacing.sm;
-                        text: "Find in conversation...";
-                        color: Colors.text-muted;
-                        font-size: Typography.sm;
-                        vertical-alignment: center;
-                        opacity: inline-search-input.has-focus ? 0.5 : 1.0;
-                    }
-                }
-
-                // Match count
-                if root.inline-search-query != "": Text {
-                    text: root.inline-search-match-count > 0
-                        ? root.inline-search-current-match + " / " + root.inline-search-match-count
-                        : "No results";
-                    color: root.inline-search-match-count > 0 ? Colors.text-secondary : Colors.text-muted;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                }
-
-                // Previous match
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: Spacing.radius-sm;
-                    background: prev-match-touch.has-hover ? Colors.surface-hover : transparent;
-
-                    Text {
-                        text: "\u{25B2}";  // Up triangle
-                        color: Colors.text-secondary;
-                        font-size: Typography.xxs;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    prev-match-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.inline-search-prev(); }
-                    }
-                }
-
-                // Next match
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: Spacing.radius-sm;
-                    background: next-match-touch.has-hover ? Colors.surface-hover : transparent;
-
-                    Text {
-                        text: "\u{25BC}";  // Down triangle
-                        color: Colors.text-secondary;
-                        font-size: Typography.xxs;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    next-match-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.inline-search-next(); }
-                    }
-                }
-
-                // Close button
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: Spacing.radius-sm;
-                    background: close-search-touch.has-hover ? Colors.surface-hover : transparent;
-
-                    Text {
-                        text: "\u{00D7}";
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    close-search-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.inline-search-visible = false;
-                            root.inline-search-query = "";
-                            root.inline-search-close();
-                        }
-                    }
-                }
-            }
-        }
-
         // Pinned messages bar (Telegram-style, always visible when pinned messages exist)
         if root.has-pinned-messages: PinnedBar {
+            backdrop-paused: message-list.scrolling;
+            thumbnail: root.pinned-thumbnail;
             message-preview: root.pinned-message-preview;
             current-index: root.pinned-current-index;
             total-count: root.pinned-total-count;
@@ -418,93 +586,105 @@ export component ChatLayout inherits Rectangle {
 
         // Message list in middle (fills remaining space)
         // Width 100% flows to children for text wrapping
-        message-list := MessageList {
-            width: 100%;
-            vertical-stretch: 1;
-            messages: root.messages;
-            loading: root.loading-messages;
-            selection-mode: root.selection-mode;
-            mobile: root.mobile;
-            is-dm: root.is-dm;
-            is-mesh: MeshGlobal.active-id != "";
-            // A mesh room and a geohash cell are plaintext broadcasts. Only a
-            // mesh DM runs over Noise, so only it keeps the lock.
-            //
-            // A PUBLIC channel is plaintext too: the server creates it with
-            // Encrypted:false and this client ships cleartext to it on purpose
-            // (services/message/core.rs — "plaintext is the intended, visible
-            // property"). It must not claim end-to-end encryption. The
-            // channel-type default is "public", so a conversation whose type
-            // has not loaded yet understates privacy rather than overstating it.
-            public-broadcast: MeshGlobal.active-kind == "room"
-                || MeshGlobal.active-kind == "geohash"
-                || root.channel-type == "public";
-            privacy-line: MeshGlobal.active-kind == "room"
-                ? "Anyone in radio range can read this"
-              : MeshGlobal.active-kind == "geohash"
-                ? "Anyone in this cell can read this"
-              : root.channel-type == "public"
-                ? "Public channel — anyone can read this"
-                : "Messages are end-to-end encrypted";
-            current-playing-attachment-id: root.current-playing-attachment-id;
-            is-media-playing: root.is-media-playing;
-            audio-progress: root.audio-progress;
-            audio-elapsed: root.audio-elapsed;
-            scroll-to-index: root.scroll-to-message-index;
-            highlighted-message-id: root.highlighted-message-id;
-            scroll-position <=> root.message-scroll-position;
-            should-auto-scroll: root.should-auto-scroll;
-            unread-index <=> root.unread-index;
-            unread-count <=> root.unread-count;
 
-            selection-toggled(id) => {
-                root.selection-toggled(id);
-            }
 
-            message-clicked(id) => {
-                root.message-clicked(id);
-            }
-            reply-clicked(sender-id, timestamp-ns) => {
-                root.reply-clicked(sender-id, timestamp-ns);
-            }
-            react-clicked(sender-id, timestamp-ns, x, y) => {
-                root.react-clicked(sender-id, timestamp-ns, x, y);
-            }
-            thread-clicked(id) => {
-                root.thread-clicked(id);
-            }
-            more-clicked(sender-id, timestamp-ns, x, y) => {
-                root.more-clicked(sender-id, timestamp-ns, x, y);
-            }
-            quote-clicked(id) => {
-                root.quote-clicked(id);
-            }
-            load-more => {
-                root.load-more();
-            }
-            attachment-clicked(id) => {
-                root.view-attachment(id);
-            }
-            audio-seek(id, pos) => {
-                root.audio-seek(id, pos);
-            }
-            scroll-to-bottom-clicked => {
-                root.scroll-to-bottom-clicked();
-            }
-        }
+    }
 
-        // Composer at bottom — placed directly in VerticalLayout so its
+    bottom-chrome := VerticalLayout {
+        x: 0;
+        width: root.width;
+        height: self.preferred-height;
+        y: root.height - self.height - root.drawer-occupied-height;
+        padding-left: root.mobile ? Spacing.sm : Spacing.none;
+        padding-right: self.padding-left;
+        // Floating composer — placed directly in VerticalLayout so its
         // explicit height drives the layout slot. A wrapping plain Rectangle
         // does not auto-size from children, which collapses the hit-test
         // region to 0 even though the composer renders via overflow.
-        MessageComposer {
+        if root.composer-notice != "": GlassSurface {
+            vertical-stretch: 0;
+            height: notice-column.preferred-height;
+            elevation: 0;
+            backdrop-paused: message-list.scrolling;
+
+            Rectangle {
+                y: 0;
+                width: 100%;
+                height: 1px;
+                background: Colors.divider;
+            }
+
+            notice-column := VerticalLayout {
+                padding: Spacing.md;
+                spacing: Spacing.sm;
+
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    Text {
+                        text: root.composer-notice;
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        horizontal-alignment: root.is-blocked || root.can-rejoin ? left : center;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        wrap: word-wrap;
+                    }
+                    if root.is-blocked: Button {
+                        text: "Unblock";
+                        variant: "secondary";
+                        clicked => { root.unblock-clicked(); }
+                    }
+                    if root.can-rejoin: Button {
+                        text: "Join";
+                        variant: "primary";
+                        clicked => { root.rejoin-clicked(); }
+                    }
+                }
+
+                if root.secret-request-actions: HorizontalLayout {
+                    alignment: center;
+                    spacing: Spacing.sm;
+                    Button {
+                        text: "Decline";
+                        variant: "secondary";
+                        disabled: root.secret-request-busy;
+                        loading: root.secret-request-busy;
+                        clicked => { root.secret-request-decline-clicked(); }
+                    }
+                    Button {
+                        text: "Accept";
+                        disabled: root.secret-request-busy;
+                        loading: root.secret-request-busy;
+                        clicked => { root.secret-request-accept-clicked(); }
+                    }
+                }
+            }
+        }
+
+        // Hidden while selecting messages: the selection bar owns the screen
+        // then, and a live composer invited typing into a mode that ignores it.
+        composer := MessageComposer {
+            keyboard-open: root.keyboard-open;
+            enter-sends: root.composer-enter-sends;
+            collapsed: root.composer-notice != "" || root.selection-mode;
+            keep-height: root.selection-mode && root.composer-notice == "";
+            picker-open: root.emoji-picker-visible || root.gif-picker-visible;
             width: 100%;
             vertical-stretch: 0;
             mobile: root.mobile;
+            // Search's drawer cap uses the measured composer. Give that composer
+            // an independent pane budget so the two heights cannot feed back.
+            available-pane-height: root.drawer-search-with-ime ? root.height
+                : root.height - (composer.picker-open
+                    ? max(0px, root.drawer-height - root.keyboard-inset) : 0px);
+            backdrop-paused: message-list.scrolling;
+            attachment-prepare-serial: root.attachment-prepare-serial;
+            attachment-restore-serial: root.attachment-restore-serial;
+            caret-end-seq: root.composer-caret-end-seq;
             text <=> root.composer-text;
             placeholder: root.composer-placeholder;
-            disabled: root.composer-disabled;
-            send-status: root.composer-send-status;
+            // Composer owns attachment-row geometry; keep the host reservation
+            // based on its single reported height, including caption-free drafts.
             pending-attachments: root.pending-attachments;
             is-editing <=> root.composer-is-editing;
             edit-message-id <=> root.composer-edit-message-id;
@@ -515,11 +695,12 @@ export component ChatLayout inherits Rectangle {
             reply-thumbnail: root.composer-reply-thumbnail;
 
             send(text) => {
-                root.send(text);
+                return root.send(text);
             }
             send-edit(msg-id, text) => {
                 root.send-edit(msg-id, text);
             }
+            edit-last-requested => { root.edit-last-requested(); }
             cancel-edit => {
                 root.cancel-edit();
             }
@@ -533,14 +714,19 @@ export component ChatLayout inherits Rectangle {
                 root.paste-image();
             }
             emoji-clicked => {
-                root.emoji-picker-visible = !root.emoji-picker-visible;
+                root.emoji-picker-visible = !(root.emoji-picker-visible || root.gif-picker-visible);
                 root.gif-picker-visible = false;
                 root.emoji-clicked();
             }
-            gif-clicked => {
-                root.gif-picker-visible = !root.gif-picker-visible;
+            keyboard-requested => {
+                root.instant-drawer-handover = true;
+                root.composer-keyboard-requested(root.drawer-height);
+            }
+            input-dismissed => { root.composer-focus-released(); }
+            input-focused => {
                 root.emoji-picker-visible = false;
-                root.gif-clicked();
+                root.gif-picker-visible = false;
+                root.composer-input-focused();
             }
             mention-triggered(query) => {
                 root.mention-triggered(query);
@@ -551,9 +737,6 @@ export component ChatLayout inherits Rectangle {
             typing-changed(is-typing) => {
                 root.typing-changed(is-typing);
             }
-            process-text(text) => {
-                return root.process-text(text);
-            }
         }
 
         // Thumb room under the composer. On a phone it otherwise sits flush on
@@ -563,6 +746,242 @@ export component ChatLayout inherits Rectangle {
         if root.mobile: Rectangle {
             vertical-stretch: 0;
             height: Spacing.sm;
+        }
+    }
+
+    // Desktop: a click on the conversation closes the popover like any menu.
+    // Chrome stays live: the emoji button toggles and the input closes it.
+    if root.drawer-visible && !root.mobile: TouchArea {
+        x: 0;
+        y: top-chrome.height;
+        width: root.width;
+        height: max(0px, root.height - top-chrome.height - bottom-chrome.height);
+        clicked => {
+            root.emoji-picker-visible = false;
+            root.gif-picker-visible = false;
+            root.composer-focus-released();
+        }
+    }
+
+    if root.drawer-visible || (root.mobile && root.drawer-occupied-height > 0px): picker-drawer := GlassSurface {
+        init => {
+            root.drawer-search-focused = false;
+            // A fullscreen call can destroy/remount the chat while picker
+            // flags stay true, so restore Back ownership on this mount too.
+            root.composer-focus-released();
+        }
+        // Desktop: typing searches, as in Signal Desktop's picker. It went
+        // nowhere: the composer had let go and nothing took focus. A tick
+        // later: focus() from init, inside the opening click, did not stick.
+        Timer {
+            interval: 1ms;
+            running: !root.mobile;
+            triggered => { self.running = false; drawer-search.focus(); }
+        }
+        // Touch: the whole pane width, docked under the composer where the
+        // IME stood (drawer-occupied-height reserves the space). Desktop: a popover
+        // above the composer, aligned with the emoji button, over the
+        // conversation — the input stays pinned at the bottom and nothing
+        // reserves a row beside it (RC87). No wider than a picker needs:
+        // across a 1600px pane two GIF tiles were 10:1 strips (RC86).
+        x: root.mobile ? Spacing.sm : 0px;
+        width: root.mobile ? root.width - 2 * Spacing.sm : min(root.width, 420px);
+        y: root.mobile ? root.height - Spacing.sm - root.drawer-occupied-height
+            : root.height - bottom-chrome.height - Spacing.xs - root.drawer-space;
+        height: root.mobile ? root.drawer-occupied-height : root.drawer-space;
+        opacity: root.drawer-visible ? 1 : 0;
+        animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+        elevation: root.mobile ? 3 : 4;
+        clip: true;
+        // Derive chrome from the independent drawer budget, never from
+        // a layout's measured height. Keep room for embedded picker chrome
+        // even when the IME leaves too little space for full touch targets.
+        private property <float> chrome-scale: min(1, max(0px, self.height - Spacing.touch-target-min)
+            / (2 * Spacing.touch-target-min + 2 * Spacing.sm + 2 * Spacing.xs));
+        private property <length> drawer-padding: Spacing.sm * self.chrome-scale;
+        private property <length> drawer-gap: Spacing.xs * self.chrome-scale;
+        private property <length> control-height: Spacing.touch-target-min * self.chrome-scale;
+        // The Emoji | GIFs tabs are the only mode switch. On touch they sit
+        // at the foot, in thumb reach above the IME; on desktop at the head,
+        // where a mode switch is looked for.
+        private property <bool> tabs-on-top: !root.mobile;
+        private property <length> tabs-y: self.tabs-on-top ? self.drawer-padding
+            : self.height - self.drawer-padding - self.control-height;
+        private property <length> search-y: self.tabs-on-top
+            ? self.drawer-padding + self.control-height + self.drawer-gap
+            : self.drawer-padding;
+        function clear-search() {
+            root.drawer-search-text = "";
+            if root.gif-picker-visible { root.gif-search = ""; root.gif-search-changed(""); }
+            else { root.emoji-search = ""; root.emoji-search-changed(""); }
+        }
+        function select-mode(gifs: bool) {
+            if gifs == root.gif-picker-visible { return; }
+            if gifs && !root.gifs-available { return; }
+            // Open the destination first: switching tabs keeps the
+            // unified drawer alive and its search focused. Each mode keeps
+            // its own query and tab; only the GIF side re-requests, since
+            // its rows are the provider's.
+            root.gif-picker-visible = gifs;
+            root.emoji-picker-visible = !gifs;
+            root.drawer-search-caret-end-seq += 1;
+            if gifs { root.gif-clicked(); }
+        }
+        // The message list runs full height underneath: swallow clicks that
+        // land between the picker's controls.
+        TouchArea { enabled: root.drawer-visible; }
+        Rectangle {
+            width: parent.width;
+            height: picker-drawer.height;
+            drawer-search-row := Rectangle {
+                x: picker-drawer.drawer-padding;
+                y: picker-drawer.search-y;
+                width: parent.width - 2 * picker-drawer.drawer-padding;
+                height: picker-drawer.control-height;
+                border-radius: Spacing.radius-md;
+                background: Colors.inset;
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.xs;
+                    spacing: Spacing.sm;
+                    VerticalLayout {
+                        horizontal-stretch: 0;
+                        alignment: center;
+                        Image { source: Icons.search; width: 20px; height: 20px; colorize: Colors.text-muted; }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        if drawer-search.text == "" && drawer-search.preedit-text == "": Text {
+                            // Sized like the field so it starts where typing does, not centred.
+                            width: 100%; height: 100%;
+                            text: root.gif-picker-visible ? "Search GIFs" : "Search emoji";
+                            color: Colors.text-muted;
+                            vertical-alignment: center;
+                        }
+                        drawer-search := TextInput {
+                            width: 100%; height: 100%;
+                            text <=> root.drawer-search-text;
+                            property <int> caret-end-seq: root.drawer-search-caret-end-seq;
+                            changed caret-end-seq => { self.set-selection-offsets(2147483647, 2147483647); }
+                            color: Colors.text-primary;
+                            single-line: true;
+                            vertical-alignment: center;
+                            accessible-label: "Search emoji and GIFs";
+                            changed has-focus => { root.drawer-search-focused = self.has-focus; }
+                            edited => {
+                                if root.gif-picker-visible { root.gif-search = self.text; root.gif-search-changed(self.text); }
+                                else { root.emoji-search = self.text; root.emoji-search-changed(self.text); }
+                            }
+                        }
+                    }
+                    // Clear: the embedded pickers hide their own.
+                    if root.drawer-search-text != "": Rectangle {
+                        width: picker-drawer.control-height;
+                        height: picker-drawer.control-height;
+                        border-radius: Spacing.radius-full;
+                        background: clear-touch.pressed ? Materials.pressed
+                            : clear-touch.has-hover ? Materials.hover : transparent;
+                        accessible-role: button;
+                        accessible-label: "Clear search";
+                        accessible-action-default => { picker-drawer.clear-search(); }
+                        Image {
+                            source: Icons.x;
+                            width: 16px;
+                            height: 16px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            colorize: Colors.text-secondary;
+                        }
+                        clear-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { picker-drawer.clear-search(); }
+                        }
+                    }
+                }
+            }
+            picker-results := Rectangle {
+                x: picker-drawer.drawer-padding;
+                y: drawer-search-row.y + drawer-search-row.height + picker-drawer.drawer-gap;
+                width: drawer-search-row.width;
+                height: max(0px, picker-drawer.height - 2 * picker-drawer.drawer-padding
+                    - 2 * picker-drawer.drawer-gap - 2 * picker-drawer.control-height);
+                clip: true;
+                if root.emoji-picker-visible: EmojiPicker {
+                    embedded: true; show: true;
+                    touch: root.mobile;
+                    max-picker-width: parent.width;
+                    max-picker-height: parent.height;
+
+                    emoji-list: root.emoji-list;
+                    selected-category <=> root.emoji-category;
+                    selected-skin-tone <=> root.emoji-skin-tone;
+                    search-query: root.emoji-search;
+                    emoji-selected(emoji) => { root.emoji-selected(emoji); }
+                    category-changed(category) => { root.emoji-category-changed(category); }
+                    skin-tone-changed(tone) => { root.emoji-skin-tone-changed(tone); }
+                }
+                if root.gif-picker-visible: GifPicker {
+                    show: true;
+                    max-picker-width: parent.width;
+                    max-picker-height: parent.height;
+
+                    results: root.gif-results;
+                    recent: root.gif-recent;
+                    loading: root.gif-loading;
+                    failed: root.gif-failed;
+                    search-query: root.gif-search;
+                    search(query) => { root.gif-search-changed(query); }
+                    // Rust validates the send first and hides the drawer only once it is accepted.
+                    gif-selected(id, url) => { root.gif-selected(id, url); }
+                }
+            }
+            mode-tabs := Rectangle {
+                x: picker-drawer.drawer-padding;
+                y: picker-drawer.tabs-y;
+                width: drawer-search-row.width;
+                height: picker-drawer.control-height;
+                for tab[index] in ["Emoji", "GIFs"]: Rectangle {
+                    property <bool> current: index == 0 ? root.emoji-picker-visible : root.gif-picker-visible;
+                    visible: index == 0 || root.gifs-available;
+                    x: index * (parent.width + Spacing.xs) / 2;
+                    width: root.gifs-available ? (parent.width - Spacing.xs) / 2 : parent.width;
+                    height: parent.height;
+                    background: current ? Colors.tint-strong
+                        : tab-touch.pressed ? Materials.pressed
+                        : tab-touch.has-hover ? Materials.hover : transparent;
+                    border-radius: Spacing.radius-md;
+                    // `tab` is the repeater variable above, so the bare enum name resolves to that string.
+                    accessible-role: AccessibleRole.tab;
+                    accessible-label: tab;
+                    accessible-item-selected: current;
+                    accessible-action-default => { picker-drawer.select-mode(index == 1); }
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: Spacing.xs;
+                        VerticalLayout {
+                            alignment: center;
+                            Image {
+                                source: index == 0 ? Icons.smile : Icons.image;
+                                width: 18px;
+                                height: 18px;
+                                colorize: current ? Colors.glass-accent : Colors.text-secondary;
+                            }
+                        }
+                        Text {
+                            text: tab;
+                            color: current ? Colors.glass-accent : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: current ? Typography.semibold : Typography.medium;
+                            vertical-alignment: center;
+                        }
+                    }
+                    tab-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { picker-drawer.select-mode(index == 1); }
+                    }
+                }
+            }
+
         }
     }
 }

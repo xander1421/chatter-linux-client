@@ -13,6 +13,9 @@
 //!   T7: File Transfer
 
 #[macro_use]
+// Shared with tests/it.rs, which uses nearly all of it and stays the
+// dead-code check for it; this target uses a subset.
+#[allow(dead_code, unused_imports)]
 mod common;
 
 use std::sync::Arc;
@@ -38,6 +41,7 @@ const PASSWORD: &str = "TestPass123!";
 
 /// Build a fresh ChatterClient with an isolated data directory.
 fn build_client(dir: &tempfile::TempDir) -> Arc<ChatterClient> {
+    common::headless(dir.path());
     ChatterClient::builder()
         .server_url(SERVER_URL)
         .data_dir(dir.path().to_str().unwrap())
@@ -53,7 +57,12 @@ fn unique_user(prefix: &str) -> String {
         .as_millis();
     let mut rng_bytes = [0u8; 4];
     rand::RngCore::fill_bytes(&mut rand::rng(), &mut rng_bytes);
-    format!("{}_{:x}_{}", prefix, u32::from_le_bytes(rng_bytes), ts % 100000)
+    format!(
+        "{}_{:x}_{}",
+        prefix,
+        u32::from_le_bytes(rng_bytes),
+        ts % 100000
+    )
 }
 
 /// Wait for a specific DomainEvent predicate on the event bus, with timeout.
@@ -94,7 +103,14 @@ async fn register_and_start(
 ) -> UserId {
     client.connect().await.expect("connect failed");
     let result = client
-        .register(username, PASSWORD, display_name, "e2e-test", None, Some(PIN))
+        .register(
+            username,
+            PASSWORD,
+            display_name,
+            "e2e-test",
+            None,
+            Some(PIN),
+        )
         .await
         .expect("registration failed");
     if let Err(e) = client.start().await {
@@ -143,10 +159,7 @@ async fn t1_registration() {
         !res_b.user_id.to_string().is_empty(),
         "User B should have a user_id"
     );
-    assert_ne!(
-        res_a.user_id, res_b.user_id,
-        "User IDs should be distinct"
-    );
+    assert_ne!(res_a.user_id, res_b.user_id, "User IDs should be distinct");
     assert!(res_a.device_id > 0, "User A device_id should be positive");
     assert!(res_b.device_id > 0, "User B device_id should be positive");
 
@@ -185,7 +198,10 @@ async fn t2_friend_request() {
         .connect_via_friend_code(&friend_code, Some("Hey from Bob!"))
         .await
         .expect("connect_via_friend_code failed");
-    println!("  B connected to A, friendship status: {:?}", friendship.status);
+    println!(
+        "  B connected to A, friendship status: {:?}",
+        friendship.status
+    );
 
     // Give the server a moment to process the friend request
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -200,11 +216,21 @@ async fn t2_friend_request() {
     // Verify: both users see each other as friends
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let a_friends = client_a.list_friends(50, 0).await.expect("list_friends failed for A");
-    let b_friends = client_b.list_friends(50, 0).await.expect("list_friends failed for B");
+    let a_friends = client_a
+        .list_friends(50, 0)
+        .await
+        .expect("list_friends failed for A");
+    let b_friends = client_b
+        .list_friends(50, 0)
+        .await
+        .expect("list_friends failed for B");
 
-    let a_has_b = a_friends.iter().any(|f| f.other_party(&uid_a) == Some(&uid_b));
-    let b_has_a = b_friends.iter().any(|f| f.other_party(&uid_b) == Some(&uid_a));
+    let a_has_b = a_friends
+        .iter()
+        .any(|f| f.other_party(&uid_a) == Some(&uid_b));
+    let b_has_a = b_friends
+        .iter()
+        .any(|f| f.other_party(&uid_b) == Some(&uid_a));
 
     assert!(a_has_b, "A should see B as friend");
     assert!(b_has_a, "B should see A as friend");
@@ -254,13 +280,13 @@ async fn t3_direct_message() {
     // User A sends a text message to User B, keyed by B's user_id.
     let test_message = "Hello from T3 — E2E test message!";
     let send_result = client_a
-        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, test_message)
+        .send_text(
+            ActiveConversation::ServerDm { peer_id: uid_b },
+            test_message,
+        )
         .await
         .expect("send_text failed");
-    println!(
-        "  A sent message, id={}",
-        send_result.message_id_string()
-    );
+    println!("  A sent message, id={}", send_result.message_id_string());
 
     // Verify: User B receives the message. On B's side the DM is bucketed by
     // the SENDER's user_id (A), so conversation_id == ChannelId::from(uid_a).
@@ -300,7 +326,10 @@ async fn t4_channel_create_and_join() {
     let _uid_b = register_and_start(&client_b, &unique_user("t4b"), "Bob").await;
 
     // User A creates a public channel
-    let channel_name = format!("test-channel-{}", chrono::Utc::now().timestamp_millis() % 100000);
+    let channel_name = format!(
+        "test-channel-{}",
+        chrono::Utc::now().timestamp_millis() % 100000
+    );
     let channel = client_a
         .create_channel(
             &channel_name,
@@ -321,7 +350,10 @@ async fn t4_channel_create_and_join() {
         .await
         .expect("search_channels failed");
     let found = search_results.iter().find(|c| c.id == channel.id);
-    assert!(found.is_some(), "B should find the channel in search results");
+    assert!(
+        found.is_some(),
+        "B should find the channel in search results"
+    );
     println!("  B found channel in search");
 
     let joined = client_b
@@ -339,7 +371,10 @@ async fn t4_channel_create_and_join() {
     // User A sends message in channel
     let test_message = "Hello channel from T4!";
     let send_result = client_a
-        .send_text(ActiveConversation::Channel(channel.id.clone()), test_message)
+        .send_text(
+            ActiveConversation::Channel(channel.id.clone()),
+            test_message,
+        )
         .await
         .expect("send_text to channel failed");
     println!(
@@ -389,7 +424,10 @@ async fn t5_anonymous_dm() {
     let private_code = client_a
         .generate_private_friend_code()
         .expect("generate_private_friend_code failed");
-    println!("  A's private friend code generated (length: {})", private_code.len());
+    println!(
+        "  A's private friend code generated (length: {})",
+        private_code.len()
+    );
 
     // User B starts anonymous DM with User A
     let anon_dm = client_b
@@ -434,7 +472,10 @@ async fn t6_group_chat() {
     let uid_b = register_and_start(&client_b, &unique_user("t6b"), "Bob").await;
 
     // User A creates a private group with User B as member
-    let group_name = format!("e2e-group-{}", chrono::Utc::now().timestamp_millis() % 100000);
+    let group_name = format!(
+        "e2e-group-{}",
+        chrono::Utc::now().timestamp_millis() % 100000
+    );
     let group = client_a
         .create_channel(
             &group_name,
@@ -454,7 +495,7 @@ async fn t6_group_chat() {
 
     // B was added as initial member (not via join_channel), so explicitly
     // subscribe to the group's message stream.
-    client_b.subscribe_channel_messages(&group.id);
+    client_b.resubscribe_channel_messages();
 
     // Subscribe to events BEFORE sending
     let mut events_b = client_b.subscribe_events();
@@ -526,8 +567,11 @@ async fn t7_file_transfer() {
 
     // Create a test file to upload
     let test_file_path = dir_a.path().join("test_attachment.txt");
-    std::fs::write(&test_file_path, "Hello from E2E file transfer test! This is test content.")
-        .expect("Failed to write test file");
+    std::fs::write(
+        &test_file_path,
+        "Hello from E2E file transfer test! This is test content.",
+    )
+    .expect("Failed to write test file");
 
     // Create pending attachment (the send_message method handles upload internally)
     let pending = PendingAttachment::new(
@@ -570,7 +614,10 @@ async fn t7_file_transfer() {
         "B should receive the message with attachment"
     );
     if let Some(DomainEvent::MessageReceived { message }) = &received {
-        println!("  B received message with {} attachment id(s)", message.attachments.len());
+        println!(
+            "  B received message with {} attachment id(s)",
+            message.attachments.len()
+        );
         if !message.attachments.is_empty() {
             println!("  Attachment ID: {}", message.attachments[0]);
         }
@@ -626,17 +673,36 @@ async fn full_e2e_suite() {
         }};
     }
 
-    run_test!("T1: Registration", { t1_inner().await; });
-    run_test!("T2: Friend Request", { t2_inner().await; });
-    run_test!("T3: Direct Message", { t3_inner().await; });
-    run_test!("T4: Channel Create + Join", { t4_inner().await; });
-    run_test!("T5: Anonymous DM", { t5_inner().await; });
-    run_test!("T6: Group Chat", { t6_inner().await; });
-    run_test!("T7: File Transfer", { t7_inner().await; });
+    run_test!("T1: Registration", {
+        t1_inner().await;
+    });
+    run_test!("T2: Friend Request", {
+        t2_inner().await;
+    });
+    run_test!("T3: Direct Message", {
+        t3_inner().await;
+    });
+    run_test!("T4: Channel Create + Join", {
+        t4_inner().await;
+    });
+    run_test!("T5: Anonymous DM", {
+        t5_inner().await;
+    });
+    run_test!("T6: Group Chat", {
+        t6_inner().await;
+    });
+    run_test!("T7: File Transfer", {
+        t7_inner().await;
+    });
 
     println!();
     println!("═══════════════════════════════════════════════════════");
-    println!(" Results: {} passed, {} failed (total: {:.1}s)", passed, failed, suite_start.elapsed().as_secs_f64());
+    println!(
+        " Results: {} passed, {} failed (total: {:.1}s)",
+        passed,
+        failed,
+        suite_start.elapsed().as_secs_f64()
+    );
     println!("═══════════════════════════════════════════════════════");
     for (name, ok, detail) in &results {
         let status = if *ok { "PASS" } else { "FAIL" };
@@ -666,8 +732,28 @@ async fn t1_inner() {
     let client_b = build_client(&dir_b);
     client_a.connect().await.unwrap();
     client_b.connect().await.unwrap();
-    let res_a = client_a.register(&unique_user("t1a"), PASSWORD, "User A", "e2e-test", None, Some(PIN)).await.unwrap();
-    let res_b = client_b.register(&unique_user("t1b"), PASSWORD, "User B", "e2e-test", None, Some(PIN)).await.unwrap();
+    let res_a = client_a
+        .register(
+            &unique_user("t1a"),
+            PASSWORD,
+            "User A",
+            "e2e-test",
+            None,
+            Some(PIN),
+        )
+        .await
+        .unwrap();
+    let res_b = client_b
+        .register(
+            &unique_user("t1b"),
+            PASSWORD,
+            "User B",
+            "e2e-test",
+            None,
+            Some(PIN),
+        )
+        .await
+        .unwrap();
     assert_ne!(res_a.user_id, res_b.user_id);
     assert!(res_a.device_id > 0);
     assert!(res_b.device_id > 0);
@@ -683,14 +769,25 @@ async fn t2_inner() {
     let uid_a = register_and_start(&client_a, &unique_user("t2a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("t2b"), "Bob").await;
     let friend_code = client_a.generate_friend_code().unwrap();
-    client_b.connect_via_friend_code(&friend_code, Some("Hey!")).await.unwrap();
+    client_b
+        .connect_via_friend_code(&friend_code, Some("Hey!"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
     client_a.respond_friend_request(&uid_b, true).await.unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     let a_friends = client_a.list_friends(50, 0).await.unwrap();
     let b_friends = client_b.list_friends(50, 0).await.unwrap();
-    assert!(a_friends.iter().any(|f| f.other_party(&uid_a) == Some(&uid_b)));
-    assert!(b_friends.iter().any(|f| f.other_party(&uid_b) == Some(&uid_a)));
+    assert!(
+        a_friends
+            .iter()
+            .any(|f| f.other_party(&uid_a) == Some(&uid_b))
+    );
+    assert!(
+        b_friends
+            .iter()
+            .any(|f| f.other_party(&uid_b) == Some(&uid_a))
+    );
     client_a.shutdown().await;
     client_b.shutdown().await;
 }
@@ -708,7 +805,10 @@ async fn t3_inner() {
     tokio::time::sleep(Duration::from_secs(3)).await;
     let mut events_b = client_b.subscribe_events();
     let msg = "T3 test message";
-    client_a.send_text(ActiveConversation::ServerDm { peer_id: uid_b }, msg).await.unwrap();
+    client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, msg)
+        .await
+        .unwrap();
     // On B's side the DM buckets by the sender's user_id (A).
     let expected_conv_id = ChannelId::from(uid_a);
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
@@ -730,14 +830,28 @@ async fn t4_inner() {
     register_and_start(&client_a, &unique_user("t4a"), "Alice").await;
     register_and_start(&client_b, &unique_user("t4b"), "Bob").await;
     let ch_name = format!("e2e-ch-{}", chrono::Utc::now().timestamp_millis() % 100000);
-    let ch = client_a.create_channel(&ch_name, ChannelType::Public, None, Some("test"), None, None, vec![]).await.unwrap();
+    let ch = client_a
+        .create_channel(
+            &ch_name,
+            ChannelType::Public,
+            None,
+            Some("test"),
+            None,
+            None,
+            vec![],
+        )
+        .await
+        .unwrap();
     let results = client_b.search_channels(&ch_name, 10).await.unwrap();
     assert!(results.iter().any(|c| c.id == ch.id));
     client_b.join_channel(&ch.id, None).await.unwrap();
     tokio::time::sleep(Duration::from_secs(3)).await;
     let mut events_b = client_b.subscribe_events();
     let msg = "T4 channel message";
-    client_a.send_text(ActiveConversation::Channel(ch.id.clone()), msg).await.unwrap();
+    client_a
+        .send_text(ActiveConversation::Channel(ch.id.clone()), msg)
+        .await
+        .unwrap();
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
         matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == ch.id)
     }).await;
@@ -754,7 +868,10 @@ async fn t5_inner() {
     let uid_a = register_and_start(&client_a, &unique_user("t5a"), "Alice").await;
     register_and_start(&client_b, &unique_user("t5b"), "Bob").await;
     let _code = client_a.generate_private_friend_code().unwrap();
-    let anon = client_b.start_anon_dm(uid_a, Some("Hi anon")).await.unwrap();
+    let anon = client_b
+        .start_anon_dm(uid_a, Some("Hi anon"))
+        .await
+        .unwrap();
     assert!(!anon.id.to_string().is_empty());
     tokio::time::sleep(Duration::from_secs(5)).await;
     client_a.shutdown().await;
@@ -769,16 +886,30 @@ async fn t6_inner() {
     register_and_start(&client_a, &unique_user("t6a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("t6b"), "Bob").await;
     let grp_name = format!("e2e-grp-{}", chrono::Utc::now().timestamp_millis() % 100000);
-    let grp = client_a.create_channel(&grp_name, ChannelType::Private, None, Some("test"), None, None, vec![uid_b]).await.unwrap();
+    let grp = client_a
+        .create_channel(
+            &grp_name,
+            ChannelType::Private,
+            None,
+            Some("test"),
+            None,
+            None,
+            vec![uid_b],
+        )
+        .await
+        .unwrap();
     // Wait for SKDM propagation — needs longer in suite mode when server is under load
     tokio::time::sleep(Duration::from_secs(5)).await;
-    client_b.subscribe_channel_messages(&grp.id);
+    client_b.resubscribe_channel_messages();
     // Subscribe to events AFTER SKDM wait to avoid stale events from previous tests
     let mut events_b = client_b.subscribe_events();
     // Brief drain period for any pending events
     tokio::time::sleep(Duration::from_millis(500)).await;
     let msg = "T6 group message";
-    client_a.send_text(ActiveConversation::Channel(grp.id.clone()), msg).await.unwrap();
+    client_a
+        .send_text(ActiveConversation::Channel(grp.id.clone()), msg)
+        .await
+        .unwrap();
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
         matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == grp.id)
     }).await;
@@ -808,13 +939,16 @@ async fn t7_inner() {
         "text/plain".into(),
     );
     let mut events_b = client_b.subscribe_events();
-    client_a.send_message(
-        ActiveConversation::ServerDm { peer_id: uid_b },
-        "File attached",
-        &[pending],
-        None,
-        None,
-    ).await.unwrap();
+    client_a
+        .send_message(
+            ActiveConversation::ServerDm { peer_id: uid_b },
+            "File attached",
+            &[pending],
+            None,
+            None,
+        )
+        .await
+        .unwrap();
     let expected_conv_id = ChannelId::from(uid_a);
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
         matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == expected_conv_id)
@@ -822,4 +956,249 @@ async fn t7_inner() {
     assert!(ev.is_some(), "B should receive message with attachment");
     client_a.shutdown().await;
     client_b.shutdown().await;
+}
+
+// Wait for Temporal friendship writes rather than racing an immediate accept.
+async fn p9_befriend(a: &Arc<ChatterClient>, b: &Arc<ChatterClient>, author: UserId, peer: UserId) {
+    a.send_friend_request(&peer, None).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while !b
+        .list_pending_friend_requests()
+        .await
+        .unwrap()
+        .iter()
+        .any(|r| r.addressee_id == author)
+    {
+        assert!(Instant::now() < deadline, "friend request did not arrive");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    b.respond_friend_request(&author, true).await.unwrap();
+    loop {
+        let a_ready = a
+            .list_friends_with_profiles()
+            .await
+            .unwrap()
+            .iter()
+            .any(|(f, _)| f.addressee_id == peer);
+        let b_ready = b
+            .list_friends_with_profiles()
+            .await
+            .unwrap()
+            .iter()
+            .any(|(f, _)| f.addressee_id == author);
+        if a_ready && b_ready {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "accepted friendship did not become mutual"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+// P9: exercise the public conversation API and the UI-facing domain bus.
+async fn p9_assert_remote_delete(
+    sender: &Arc<ChatterClient>,
+    receiver: &Arc<ChatterClient>,
+    outgoing: ActiveConversation,
+    incoming: ChannelId,
+    kind: chatter_core::domain::message::ConversationType,
+    author: UserId,
+    batch: bool,
+) {
+    eprintln!("P9 start {kind:?} batch={batch}");
+    let marker = unique_user("p9_message");
+    let mut events = receiver.subscribe_events();
+    sender
+        .send_text(outgoing, &marker)
+        .await
+        .expect("send target");
+    let event = wait_for_event(&mut events, EVENT_TIMEOUT, |e| {
+        matches!(e, DomainEvent::MessageReceived {message} if message.conversation_id == incoming && message.as_text() == Some(marker.as_str()))
+    }).await.expect("receiver must announce the stored target before deletion");
+    let DomainEvent::MessageReceived { message } = event else {
+        unreachable!()
+    };
+    assert!(
+        receiver
+            .get_messages_local(&incoming, &kind, None, 100)
+            .unwrap()
+            .iter()
+            .any(|m| m.id == message.id)
+    );
+    eprintln!("P9 received target and MessageReceived");
+    let handle = sender.conversation(outgoing);
+    assert!(
+        handle
+            .can_delete_for_everyone(&author, message.sent_at)
+            .unwrap()
+    );
+    if batch {
+        handle
+            .send_delete_batch(&[(author, message.sent_at)])
+            .await
+            .expect("batch remote delete");
+    } else {
+        handle
+            .send_delete(&author, message.sent_at)
+            .await
+            .expect("single remote delete");
+    }
+    eprintln!("P9 delete submission succeeded");
+    wait_for_event(&mut events, EVENT_TIMEOUT, |e| {
+        matches!(e, DomainEvent::MessageDeleted {author_id, target_sent_timestamp, channel_id, ..}
+            if *author_id == author && *target_sent_timestamp == message.sent_at && *channel_id == Some(incoming))
+    }).await.expect("receiver must emit UI-facing MessageDeleted");
+    assert!(
+        !receiver
+            .get_messages_local(&incoming, &kind, None, 100)
+            .unwrap()
+            .iter()
+            .any(|m| m.id == message.id),
+        "receiver still lists deleted target"
+    );
+    let (sender_kind, sender_id) = outgoing.routing_key().unwrap();
+    let sender_id: ChannelId = sender_id.parse().unwrap();
+    assert!(
+        !sender
+            .get_messages_local(&sender_id, &sender_kind, None, 100)
+            .unwrap()
+            .iter()
+            .any(|m| m.sender_id == Some(author) && m.sent_at == message.sent_at),
+        "sender still lists deleted target"
+    );
+}
+
+#[tokio::test]
+async fn p9_channel_delete_for_everyone() {
+    skip_if_no_server!();
+    let da = tempfile::tempdir().unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let a = build_client(&da);
+    let b = build_client(&db);
+    let author = register_and_start(&a, &unique_user("p9ca"), "P9 A").await;
+    let peer = register_and_start(&b, &unique_user("p9cb"), "P9 B").await;
+    p9_befriend(&a, &b, author, peer).await;
+    for channel_type in [ChannelType::Public, ChannelType::Private] {
+        let channel = common::create_group_with_members(
+            &a,
+            &unique_user("p9channel"),
+            channel_type,
+            None,
+            None,
+            &[(&b, &peer)],
+        )
+        .await;
+        for batch in [false, true] {
+            p9_assert_remote_delete(
+                &a,
+                &b,
+                ActiveConversation::Channel(channel.id),
+                channel.id,
+                chatter_core::domain::message::ConversationType::Channel,
+                author,
+                batch,
+            )
+            .await;
+        }
+    }
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+#[tokio::test]
+async fn p9_server_dm_delete_for_everyone() {
+    skip_if_no_server!();
+    let da = tempfile::tempdir().unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let a = build_client(&da);
+    let b = build_client(&db);
+    let author = register_and_start(&a, &unique_user("p9da"), "P9 A").await;
+    let peer = register_and_start(&b, &unique_user("p9db"), "P9 B").await;
+    p9_befriend(&a, &b, author, peer).await;
+    for batch in [false, true] {
+        p9_assert_remote_delete(
+            &a,
+            &b,
+            ActiveConversation::ServerDm { peer_id: peer },
+            ChannelId::from(author),
+            chatter_core::domain::message::ConversationType::ServerDm,
+            author,
+            batch,
+        )
+        .await;
+    }
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+#[tokio::test]
+async fn p9_secret_dm_delete_for_both() {
+    skip_if_no_server!();
+    assert!(
+        cfg!(feature = "onion"),
+        "secret regression requires onion feature"
+    );
+    assert!(
+        chatter_core::config::PINNED_ONION_ADDR.is_some(),
+        "pin the live server onion at build time"
+    );
+    let da = tempfile::tempdir().unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let a = build_client(&da);
+    let b = build_client(&db);
+    let author = register_and_start(&a, &unique_user("p9sa"), "P9 A").await;
+    let peer = register_and_start(&b, &unique_user("p9sb"), "P9 B").await;
+    a.prefetch_tokens(10)
+        .await
+        .expect("A onboarding token prefetch");
+    b.prefetch_tokens(10)
+        .await
+        .expect("B onboarding token prefetch");
+    let dm = a.start_anon_dm(peer, None).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while b.anon_dms().get_conversation(&dm.id).unwrap().is_none() {
+        assert!(Instant::now() < deadline, "secret request did not arrive");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    b.accept_anon_dm(&dm.id).await.unwrap();
+    while !a
+        .anon_dms()
+        .get_conversation(&dm.id)
+        .unwrap()
+        .unwrap()
+        .is_ready()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "secret acceptance did not arrive"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    for batch in [false, true] {
+        p9_assert_remote_delete(
+            &a,
+            &b,
+            ActiveConversation::AnonDm(dm.id),
+            ChannelId::from(dm.id),
+            chatter_core::domain::message::ConversationType::AnonDm,
+            author,
+            batch,
+        )
+        .await;
+        // Either participant may delete the other's message for both.
+        p9_assert_remote_delete(
+            &b,
+            &a,
+            ActiveConversation::AnonDm(dm.id),
+            ChannelId::from(dm.id),
+            chatter_core::domain::message::ConversationType::AnonDm,
+            peer,
+            batch,
+        )
+        .await;
+    }
+    a.shutdown().await;
+    b.shutdown().await;
 }

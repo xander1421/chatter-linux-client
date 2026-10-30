@@ -1,18 +1,44 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // CallHistoryScreen — the mobile bottom nav's "Calls" tab.
 //
 // A list of past calls across every conversation type that can host one
 // (channel, server DM, anon DM, anon group). Rows are built by core; this
 // file only lays them out. Tapping a row reopens the conversation, the two
 // buttons redial it as voice or video.
+//
+// Deleting: hold (touch) or right-click (pointer) a row, or ⋮ → Select calls,
+// to pick rows; ⋮ → Clear call history for the whole list under the current
+// filter. Both delete from this device only — Calls history has no server
+// copy and no peer-side delete, and chat Call messages are separate.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Avatar } from "../components/avatar.slint";
+import { HeaderButton } from "../components/header_button.slint";
+import { DismissButton } from "../components/dismiss_button.slint";
+import { HoldArea } from "../components/hold_area.slint";
 import { CallHistoryRow } from "types.slint";
+
+// The bare Flickable with Slint's lazy row runtime enabled — the same five
+// lines as ui/chat/message_list.slint. The compiler virtualizes a `for` whose
+// parent element is named `ListView` and carries these length properties
+// (i-slint-compiler object_tree.rs, "Custom ListView is OK"): only the rows
+// that fit the viewport exist, each measured for real, the rest estimated
+// from their average. Not exported from message_list.slint, so repeated here
+// rather than editing the chat; a shared ui/components/ home is the obvious
+// next step once a third list needs it.
+component ListView inherits Flickable {
+    out property <length> visible-height: self.height;
+    out property <length> visible-width: self.width;
+    @children
+}
 
 export component CallHistoryScreen inherits Rectangle {
     in property <bool> show-modal: false;
@@ -21,41 +47,97 @@ export component CallHistoryScreen inherits Rectangle {
     // rows read the shared touch geometry rather than desktop density.
     in property <bool> mobile-mode: false;
     in property <length> bottom-inset: 0px;
+    // A tab's root screen (see Modal): no back chevron, the tab bar navigates.
+    in property <bool> root-screen: false;
     in property <[CallHistoryRow]> rows: [];
     in property <bool> loading: false;
+    // Rust followed its budget of empty pages (core hides this process's
+    // live calls) and stopped with older calls still unread. The cursor is
+    // kept; the control below resumes from it. Shown with or without rows.
+    in property <bool> paging-paused: false;
+    in property <string> error-message: "";
+    callback retry();
     in property <string> active-filter: "all";  // "all" or "missed"
 
-    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px;
+    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px * Appearance.text-grow;
     property <length> row-avatar: root.mobile-mode ? Spacing.row-avatar-touch : 40px;
     property <length> row-name-size: root.mobile-mode ? Typography.base : Typography.sm;
     property <length> row-sub-size: root.mobile-mode ? Typography.sm : Typography.xs;
 
     callback close();
     callback filter-changed(string);
+    // The list is a screen from the end of what is loaded: fetch the next
+    // page. Raised once per approach; a page landing re-arms it.
+    callback load-more();
+    private property <bool> load-more-armed: true;
+    property <int> row-count: root.rows.length;
+    changed row-count => { root.load-more-armed = true; }
+    // Rows are moving under the glass bars (finger, wheel, fling): they stop
+    // sampling their backdrop until the list has been still a moment, as the
+    // chat chrome does over MessageList.scrolling.
+    out property <bool> scrolling: false;
     // conversation-id, conversation-type
     callback open-conversation(string, string);
     // conversation-id, conversation-type, is-video
     callback call-back(string, string, bool);
     callback clear-history();
 
+    // Selection, owned by Rust (`features/calls/history.rs`): it sets the
+    // rows' `selected` marks, the count, and `selecting`.
+    in property <bool> selecting: false;
+    in property <int> selected-count: 0;
+    // Enter selection with this row marked, or flip its mark once selecting.
+    callback toggle-select(string);
+    // Mark every loaded row (true) or none (false); also enters selection.
+    callback select-all(bool);
+    callback end-selection();
+    callback delete-selected();
+
     // Clear-history confirmation reveal. Presentation state only — nothing
     // leaves the UI until the second click. Reset on every open, or a screen
     // closed mid-confirm reopens already asking to wipe the list.
     property <bool> show-clear-confirm: false;
-    changed show-modal => { self.show-clear-confirm = false; }
+    // Which delete the confirmation is for: the selected rows, or the list.
+    property <bool> confirm-selected: false;
+    // The header ⋮ menu, which holds Clear call history.
+    in-out property <bool> show-more-menu: false;
+    // Desktop has a close button after overflow; mobile has overflow last.
+    property <length> more-menu-trailing-inset: root.mobile-mode ? 0px
+        : Spacing.header-action-box + Spacing.header-action-gap;
+    // Entering or leaving selection changes what a pending confirmation
+    // would delete, so it never survives the switch.
+    changed selecting => { self.show-clear-confirm = false; }
+    changed show-modal => {
+        self.show-clear-confirm = false;
+        self.show-more-menu = false;
+    }
 
     Modal {
+        floating-content: root.mobile-mode;
         show: root.show-modal;
         title: "Calls";
         modal-width: 560px;
         max-modal-height: 800px;
         full-screen: root.mobile-mode;
+        root-screen: root.root-screen;
         bottom-inset: root.bottom-inset;
-        fill-height: root.mobile-mode;
+        // The scrollable list needs a viewport on desktop too. Its overlay
+        // wrapper cannot supply a content-sized preferred height to Modal.
+        fill-height: true;
+        show-more: !root.loading && root.rows.length > 0 && !root.selecting;
+        more-clicked => { root.show-more-menu = !root.show-more-menu; }
 
         close => {
-            root.close();
+            // Backdrop taps and Escape dismiss the topmost surface first.
+            if root.show-more-menu {
+                root.show-more-menu = false;
+            } else {
+                root.close();
+            }
         }
+
+        Rectangle {
+            vertical-stretch: 1;
 
         VerticalLayout {
             spacing: Spacing.md;
@@ -63,40 +145,106 @@ export component CallHistoryScreen inherits Rectangle {
 
             // Filter tabs — mirrors core's `CallHistoryFilter`. Same box
             // height as the header row's dismissal control above it.
-            HorizontalLayout {
+            // Selection bar — stands in for the filter tabs while picking
+            // rows, as the chat's SelectionBar stands in for its header.
+            if root.selecting: GlassSurface {
+                material-enabled: root.mobile-mode;
+                elevation: 0;
+                z: 1;
+                backdrop-paused: root.scrolling;
                 height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
 
-                for tab in [
-                    { id: "all", label: "All" },
-                    { id: "missed", label: "Missed" }
-                ]: Rectangle {
-                    horizontal-stretch: 1;
-                    background: root.active-filter == tab.id ? Colors.neo-inset-bg : (tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent);
+                HorizontalLayout {
+                    spacing: Spacing.header-action-gap;
 
-                    VerticalLayout {
-                        HorizontalLayout {
-                            alignment: center;
-                            vertical-stretch: 1;
-
-                            Text {
-                                text: tab.label;
-                                color: root.active-filter == tab.id ? Colors.text-primary : Colors.text-secondary;
-                                font-size: Typography.sm;
-                                font-weight: root.active-filter == tab.id ? Typography.semibold : Typography.normal;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        Rectangle {
-                            height: 2px;
-                            background: root.active-filter == tab.id ? Colors.primary : transparent;
-                        }
+                    DismissButton {
+                        touch: root.mobile-mode;
+                        label: "Exit selection";
+                        clicked => { root.end-selection(); }
                     }
 
-                    tab-touch := TouchArea {
-                        mouse-cursor: pointer;
+                    Text {
+                        text: root.selected-count == 1 ? "1 selected" : root.selected-count + " selected";
+                        color: Colors.text-primary;
+                        font-size: Typography.base;
+                        font-weight: Typography.semibold;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+
+                    // One toggle: everything loaded selected → clears it.
+                    HeaderButton {
+                        touch: root.mobile-mode;
+                        icon: Icons.check;
+                        active: root.rows.length > 0 && root.selected-count == root.rows.length;
+                        label: root.rows.length > 0 && root.selected-count == root.rows.length ? "Deselect all" : "Select all";
+                        clicked => { root.select-all(!(root.rows.length > 0 && root.selected-count == root.rows.length)); }
+                    }
+
+                    HeaderButton {
+                        touch: root.mobile-mode;
+                        icon: Icons.trash;
+                        label: "Delete selected";
+                        destructive: true;
+                        enabled: root.selected-count > 0;
                         clicked => {
-                            root.filter-changed(tab.id);
+                            root.confirm-selected = true;
+                            root.show-clear-confirm = true;
+                        }
+                    }
+                }
+            }
+
+            if !root.selecting: GlassSurface {
+                material-enabled: root.mobile-mode;
+                elevation: 0;
+                z: 1;
+                backdrop-paused: root.scrolling;
+                height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
+
+                // Segmented control, concentric with its shell: the tabs sit
+                // `chrome-inset` inside the glass pill and the selected one is
+                // filled at `radius-chrome-inner`, so its fill follows the
+                // shell's curve. Filled square to the shell's rectangle, the
+                // selection's corners stuck out past the rounded ends.
+                HorizontalLayout {
+                    padding: Spacing.chrome-inset;
+
+                    for tab in [
+                        { id: "all", label: "All" },
+                        { id: "missed", label: "Missed" }
+                    ]: Rectangle {
+                        horizontal-stretch: 1;
+                        border-radius: Spacing.radius-chrome-inner;
+                        background: root.active-filter == tab.id ? Colors.tint-strong : (tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent);
+                        transform-scale-x: tab-touch.pressed ? 96% : 100%;
+                        transform-scale-y: tab-touch.pressed ? 94% : 100%;
+                        animate transform-scale-x { duration: tab-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                        animate transform-scale-y { duration: tab-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                        accessible-role: AccessibleRole.tab;
+                        accessible-label: tab.label;
+                        accessible-item-selected: root.active-filter == tab.id;
+                        accessible-action-default => { root.filter-changed(tab.id); }
+                        KeyFocus { border-radius: parent.border-radius; activate => { root.filter-changed(tab.id); } }
+
+                        Text {
+                            width: 100%;
+                            height: 100%;
+                            text: tab.label;
+                            color: root.active-filter == tab.id ? Colors.text-primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: root.active-filter == tab.id ? Typography.semibold : Typography.normal;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        tab-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.filter-changed(tab.id);
+                            }
                         }
                     }
                 }
@@ -114,17 +262,20 @@ export component CallHistoryScreen inherits Rectangle {
                 }
             }
 
-            if !root.loading && root.rows.length == 0: VerticalLayout {
+            if !root.loading && root.error-message == "" && root.rows.length == 0 && !root.paging-paused: VerticalLayout {
                 alignment: center;
                 vertical-stretch: 1;
                 spacing: Spacing.sm;
 
-                Image {
-                    source: Icons.phone;
-                    colorize: Colors.text-muted;
-                    width: 32px;
-                    height: 32px;
-                    horizontal-alignment: center;
+                HorizontalLayout {
+                    alignment: center;
+
+                    Image {
+                        source: Icons.phone;
+                        colorize: Colors.text-muted;
+                        width: 32px;
+                        height: 32px;
+                    }
                 }
 
                 Text {
@@ -135,133 +286,388 @@ export component CallHistoryScreen inherits Rectangle {
                 }
 
                 Text {
-                    text: "Calls you make or receive show up here.";
+                    text: root.active-filter == "missed" ? "Calls you did not answer show up here." : "Use the phone icon in a regular chat or channel.";
                     color: Colors.text-muted;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
                 }
             }
 
-            if !root.loading && root.rows.length > 0: Flickable {
+            if root.error-message != "": VerticalLayout {
+                spacing: Spacing.sm;
+                Text { text: root.error-message; color: Colors.text-muted; horizontal-alignment: center; }
+                Button { text: "Retry"; disabled: root.loading; clicked => { root.retry(); } }
+            }
+
+            // ── The list ─────────────────────────────────────────────────
+            // Rows exist only while they fit the viewport (ListView above):
+            // the runtime creates and destroys them as the user scrolls and
+            // estimates the total from the average of the live ones. The
+            // cards are one height; only the first and last rows carry an
+            // inset, so the estimate is within those insets of the truth and
+            // `viewport-y` is as good as a plain offset. Pages: the screen
+            // asks for more when the loaded end is within a screen of the
+            // viewport; Rust appends to the model, so nothing on screen
+            // moves. A page that lands with no visible row (core hides this
+            // process's live calls) is followed by Rust itself, since no
+            // row-count change re-arms `load-more` and an empty first page
+            // has no list at all (history.rs `EMPTY_PAGES`).
+            if !root.loading && root.rows.length > 0: list-slot := Rectangle {
                 vertical-stretch: 1;
-                viewport-height: calls-list.preferred-height;
+                property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
 
-                calls-list := VerticalLayout {
-                    spacing: Spacing.xs;
+                // A fling reports its release, not its end: `scrolling` lasts
+                // until the viewport has been still this long.
+                at-rest := Timer {
+                    interval: 300ms;
+                    running: false;
+                    triggered => {
+                        self.running = false;
+                        root.scrolling = false;
+                    }
+                }
 
-                    for row in root.rows: Rectangle {
-                        height: root.row-height;
-                        background: row-touch.has-hover ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-md;
-                        border-width: row-touch.has-hover ? 1px : 0px;
-                        border-color: Colors.neo-highlight;
+                calls-list := ListView {
+                    property <length> chrome-inset: parent.chrome-inset;
+                    width: parent.width;
+                    y: root.mobile-mode ? -parent.chrome-inset : 0px;
+                    // Keep the usual floating list behind mobile chrome. When
+                    // confirmation is visible, end at the allocated list slot:
+                    // root.height would carry rows through the footer below it.
+                    height: root.mobile-mode
+                        ? (root.show-clear-confirm || root.paging-paused ? parent.height + parent.chrome-inset : root.height)
+                        : parent.height;
 
-                        HorizontalLayout {
-                            padding: Spacing.sm;
-                            spacing: Spacing.sm;
+                    // Created fresh on every load (it lives under `!loading`),
+                    // so a list that never changed its row count still asks
+                    // for a next page.
+                    init => { root.load-more-armed = true; }
 
-                            Avatar {
-                                size: root.row-avatar;
-                                fallback-text: row.name;
+                    flicked => {
+                        root.scrolling = true;
+                        at-rest.start(); at-rest.restart();
+                    }
+
+                    changed viewport-y => {
+                        // The runtime's "content shorter than the view" fix-up
+                        // can leave viewport-y positive (rows pushed down from
+                        // the top). Rows start at the top edge, always.
+                        if (self.viewport-y > 0px) {
+                            self.viewport-y = 0px;
+                            return;
+                        }
+                        if (root.scrolling) {
+                            at-rest.start(); at-rest.restart();
+                        }
+                        // Content below the bottom edge is
+                        // viewport-y + viewport-height - height; under one
+                        // screen of it left, ask for the next page now, so
+                        // it is in before the last loaded row is reached.
+                        if (root.load-more-armed
+                                && self.viewport-y + self.viewport-height < self.height * 2) {
+                            root.load-more-armed = false;
+                            root.load-more();
+                        }
+                    }
+
+                    for row[idx] in root.rows: VerticalLayout {
+                        width: list-slot.width;
+                        height: self.preferred-height;
+                        // The list's insets ride on its first and last row, so
+                        // the runtime counts them in viewport-height.
+                        padding-top: idx == 0 && root.mobile-mode ? calls-list.chrome-inset : Spacing.none;
+                        padding-bottom: Spacing.xs;
+
+                        Rectangle {
+                            height: root.row-height;
+                            // One screen-reader stop per call, as a chat row:
+                            // its name, outcome and time were three.
+                            accessible-role: button;
+                            accessible-label: row.name + ", " + row.detail + ", " + row.timestamp;
+                            accessible-action-default => {
+                                if root.selecting {
+                                    root.toggle-select(row.id);
+                                } else {
+                                    root.open-conversation(row.conversation-id, row.conversation-type);
+                                }
+                            }
+                            KeyFocus {
+                                border-radius: parent.border-radius;
+                                activate => {
+                                    if root.selecting {
+                                        root.toggle-select(row.id);
+                                    } else {
+                                        root.open-conversation(row.conversation-id, row.conversation-type);
+                                    }
+                                }
+                            }
+                            // Double tap and hold: start selecting, as a long press.
+                            accessible-action-expand => {
+                                if !root.selecting { root.toggle-select(row.id); }
+                            }
+                            background: root.selecting && row.selected ? Colors.text-primary.with-alpha(0.12)
+                                : row-touch.pressed ? Materials.pressed : row-touch.has-hover ? Colors.surface-hover : transparent;
+                            border-radius: Spacing.radius-md;
+                            transform-scale-x: row-touch.pressed ? 99% : 100%;
+                            transform-scale-y: row-touch.pressed ? 97% : 100%;
+                            animate transform-scale-x { duration: row-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                            animate transform-scale-y { duration: row-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                            animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+
+                            // Under the row's content, not over it: declared last it
+                            // sat on top and took the redial buttons' taps, so
+                            // "call back" opened the DM instead of calling.
+                            // Hold (touch) or right-click starts selection here.
+                            row-touch := HoldArea {
+                                enabled-for-touch: root.mobile-mode && !root.selecting;
+                                held => {
+                                    if !root.selecting { root.toggle-select(row.id); }
+                                }
+                                clicked => {
+                                    if self.hold-fired { return; }
+                                    if root.selecting {
+                                        root.toggle-select(row.id);
+                                    } else {
+                                        root.open-conversation(row.conversation-id, row.conversation-type);
+                                    }
+                                }
                             }
 
-                            VerticalLayout {
-                                horizontal-stretch: 1;
-                                alignment: center;
-                                spacing: root.mobile-mode ? 3px : 2px;
+                            HorizontalLayout {
+                                padding: Spacing.sm;
+                                spacing: Spacing.sm;
 
-                                Text {
-                                    // A missed call is the one thing on this
-                                    // screen you came looking for, so it is the
-                                    // name that carries the colour, not a badge
-                                    // tucked into the second line.
-                                    text: row.name;
-                                    color: row.is-missed ? Colors.error : Colors.text-primary;
-                                    font-size: root.row-name-size;
-                                    font-weight: Typography.medium;
-                                    overflow: elide;
-                                }
+                                // Passive mark: the row's HoldArea takes the tap.
+                                // Checkbox would flip its own `checked` and drop
+                                // the binding to the model Rust updates.
+                                // A fixed-height child of a HorizontalLayout sits
+                                // at its top (the layout owns `y`): the column
+                                // centres it on the row.
+                                if root.selecting: VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 0;
 
-                                HorizontalLayout {
-                                    spacing: Spacing.xs;
+                                    Rectangle {
+                                        width: Spacing.switch-thumb;
+                                        height: self.width;
+                                        border-radius: Spacing.radius-sm;
+                                        border-width: Spacing.stroke;
+                                        border-color: row.selected ? Colors.action-fill : Colors.text-muted;
+                                        background: row.selected ? Colors.action-fill : transparent;
+                                        accessible-role: checkbox;
+                                        accessible-label: "Select call with " + row.name;
+                                        accessible-checkable: true;
+                                        accessible-checked: row.selected;
 
-                                    Image {
-                                        source: row.is-video ? Icons.video : Icons.phone;
-                                        colorize: row.is-missed ? Colors.error : Colors.text-muted;
-                                        width: 12px;
-                                        height: 12px;
-                                        y: (parent.height - self.height) / 2;
-                                    }
-
-                                    Text {
-                                        text: row.detail + " · " + row.timestamp;
-                                        color: Colors.text-muted;
-                                        font-size: root.row-sub-size;
-                                        overflow: elide;
-                                        horizontal-stretch: 1;
-                                    }
-                                }
-                            }
-
-                            // Redial. Both types are offered rather than
-                            // repeating the original call's type: wanting to
-                            // switch is exactly why you'd come back to a row.
-                            if row.can-call-back: HorizontalLayout {
-                                spacing: Spacing.xs;
-                                alignment: center;
-
-                                Rectangle {
-                                    width: 44px;
-                                    height: 44px;
-                                    border-radius: Spacing.radius-sm;
-                                    background: voice-touch.has-hover ? Colors.surface : transparent;
-
-                                    Image {
-                                        source: Icons.phone;
-                                        colorize: Colors.primary;
-                                        width: 18px;
-                                        height: 18px;
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                    }
-
-                                    voice-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.call-back(row.conversation-id, row.conversation-type, false);
+                                        if row.selected: Image {
+                                            source: Icons.check;
+                                            width: Spacing.md;
+                                            height: self.width;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            colorize: Colors.on-action;
                                         }
                                     }
                                 }
 
-                                Rectangle {
-                                    width: 44px;
-                                    height: 44px;
-                                    border-radius: Spacing.radius-sm;
-                                    background: video-touch.has-hover ? Colors.surface : transparent;
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 0;
 
-                                    Image {
-                                        source: Icons.video;
-                                        colorize: Colors.primary;
-                                        width: 18px;
-                                        height: 18px;
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
+                                    // A channel without an uploaded icon gets
+                                    // the chat list's # or lock glyph, not
+                                    // initials ("O2" beside a "#" row).
+                                    if row.conversation-type != "channel" || row.avatar-source.width > 0: Avatar {
+                                        size: root.row-avatar;
+                                        name: row.name;
+                                        source: row.avatar-source;
+                                    }
+                                    if row.conversation-type == "channel" && row.avatar-source.width <= 0: Rectangle {
+                                        width: root.row-avatar;
+                                        height: root.row-avatar;
+                                        border-radius: self.width / 2;
+                                        background: Colors.surface-control;
+                                        accessible-role: image;
+                                        accessible-label: "Avatar for " + row.name;
+                                        Image {
+                                            source: row.private-channel ? Icons.lock : Icons.hash;
+                                            width: root.mobile-mode ? 24px : 16px;
+                                            height: self.width;
+                                            colorize: Colors.text-secondary;
+                                        }
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    spacing: root.mobile-mode ? Spacing.xs : Spacing.xxs;
+
+                                    // The time sits on the name line so the
+                                    // outcome below gets the full width; on the
+                                    // phone "Yesterday" beside it elided
+                                    // "Incoming · 0:16" to "Incoming · …".
+                                    HorizontalLayout {
+                                        spacing: Spacing.xs;
+
+                                        Text {
+                                            // A missed call is the one thing on this
+                                            // screen you came looking for, so it is the
+                                            // name that carries the colour, not a badge
+                                            // tucked into the second line.
+                                            text: row.name;
+                                            color: row.is-missed ? Colors.error : Colors.text-primary;
+                                            font-size: root.row-name-size;
+                                            font-weight: Typography.medium;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                        }
+
+                                        Text {
+                                            text: row.timestamp;
+                                            color: Colors.text-muted;
+                                            font-size: root.row-sub-size;
+                                            horizontal-stretch: 0;
+                                            vertical-alignment: center;
+                                        }
                                     }
 
-                                    video-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.call-back(row.conversation-id, row.conversation-type, true);
+                                    HorizontalLayout {
+                                        spacing: Spacing.xs;
+
+                                        Image {
+                                            source: row.is-video ? Icons.video : Icons.phone;
+                                            colorize: row.is-missed ? Colors.error : Colors.text-muted;
+                                            width: 12px;
+                                            height: 12px;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+
+                                        Text {
+                                            text: row.detail;
+                                            color: Colors.text-muted;
+                                            font-size: root.row-sub-size;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                }
+
+                                // Redial. Both types are offered rather than
+                                // repeating the original call's type: wanting to
+                                // switch is exactly why you'd come back to a row.
+                                // Fixed width, no stretch, so the two buttons
+                                // sit at the same x on every row; the row's full
+                                // height, so the target is centred and tall.
+                                if row.can-call-back && !root.selecting: HorizontalLayout {
+                                    spacing: Spacing.xs;
+                                    alignment: center;
+                                    horizontal-stretch: 0;
+
+                                    Rectangle {
+                                        width: Spacing.touch-target-min;
+                                        border-radius: Spacing.radius-sm;
+                                        background: voice-touch.has-hover ? Colors.surface : transparent;
+                                        transform-scale-x: voice-touch.pressed ? 92% : 100%;
+                                        transform-scale-y: voice-touch.pressed ? 92% : 100%;
+                                        animate transform-scale-x { duration: voice-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                                        animate transform-scale-y { duration: voice-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                                        accessible-role: button;
+                                        accessible-label: "Call " + row.name;
+                                        // TalkBack activates through the default action.
+                                        accessible-action-default => { root.call-back(row.conversation-id, row.conversation-type, false); }
+                                        KeyFocus { border-radius: parent.border-radius; activate => { root.call-back(row.conversation-id, row.conversation-type, false); } }
+
+                                        Image {
+                                            source: Icons.phone;
+                                            colorize: Colors.primary;
+                                            width: 18px;
+                                            height: 18px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+
+                                        voice-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.call-back(row.conversation-id, row.conversation-type, false);
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        width: Spacing.touch-target-min;
+                                        border-radius: Spacing.radius-sm;
+                                        background: video-touch.has-hover ? Colors.surface : transparent;
+                                        transform-scale-x: video-touch.pressed ? 92% : 100%;
+                                        transform-scale-y: video-touch.pressed ? 92% : 100%;
+                                        animate transform-scale-x { duration: video-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                                        animate transform-scale-y { duration: video-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                                        accessible-role: button;
+                                        accessible-label: "Video call " + row.name;
+                                        accessible-action-default => { root.call-back(row.conversation-id, row.conversation-type, true); }
+                                        KeyFocus { border-radius: parent.border-radius; activate => { root.call-back(row.conversation-id, row.conversation-type, true); } }
+
+                                        Image {
+                                            source: Icons.video;
+                                            colorize: Colors.primary;
+                                            width: 18px;
+                                            height: 18px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+
+                                        video-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.call-back(row.conversation-id, row.conversation-type, true);
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
 
-                        row-touch := TouchArea {
-                            clicked => {
-                                root.open-conversation(row.conversation-id, row.conversation-type);
-                            }
+                        // The list's bottom inset, carried by the last row (a
+                        // ListView holds nothing but its `for`): on the phone
+                        // the tab dock floats over the list.
+                        if idx == root.rows.length - 1: VerticalLayout {
+                            padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
+                        }
+                    }
+                }
+            }
+
+            // Paging paused at its budget: the one way to older calls under
+            // this filter, since an empty screen has no list to scroll and a
+            // list whose appended pages were all empty never re-arms. Same
+            // slot discipline as the confirmation card below: fixed at its
+            // wrapped height, the list takes the shortage; a shield so
+            // whitespace beside the button is not a row.
+            if !root.loading && root.paging-paused: Rectangle {
+                vertical-stretch: 0;
+                height: resume-body.preferred-height;
+                TouchArea {}
+
+                resume-body := VerticalLayout {
+                    spacing: Spacing.sm;
+                    padding: Spacing.sm;
+
+                    Text {
+                        text: "Older calls were not checked yet.";
+                        color: Colors.text-muted;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        alignment: center;
+
+                        Button {
+                            text: "Load older calls";
+                            variant: "secondary";
+                            clicked => { root.load-more(); }
                         }
                     }
                 }
@@ -269,66 +675,172 @@ export component CallHistoryScreen inherits Rectangle {
 
             // Clearing is irreversible, so it takes the same two-step reveal
             // Channel Settings uses for Leave and Delete — one destructive
-            // vocabulary across the app, not one per screen.
-            if !root.loading && root.rows.length > 0 && !root.show-clear-confirm: HorizontalLayout {
-                alignment: center;
-                padding-bottom: Spacing.sm;
+            // vocabulary across the app, not one per screen. Reached from the
+            // header ⋮ menu below.
+            if !root.loading && root.show-clear-confirm: Rectangle {
+                vertical-stretch: 0;
+                // Fixed at the body's wrapped height so the shared column takes
+                // any shortage from the list slot above, never from this card:
+                // left implicit, the card was squeezed and Cancel/Delete spilled
+                // past its bottom edge onto the mobile tab dock.
+                height: confirm-body.preferred-height;
+                background: Colors.surface;
+                border-radius: Spacing.radius-lg;
+                // Shield whitespace as well as the controls from row actions.
+                TouchArea {}
 
-                Rectangle {
-                    height: Spacing.touch-target-min;
-                    width: clear-label.preferred-width + 2 * Spacing.md;
-                    border-radius: Spacing.radius-sm;
-                    background: clear-touch.has-hover ? Colors.surface-hover : transparent;
+                confirm-body := VerticalLayout {
+                    spacing: Spacing.sm;
+                    padding: Spacing.sm;
 
-                    clear-label := Text {
-                        text: "Clear call history";
+                    Text {
+                        text: !root.confirm-selected
+                            ? "Delete every call in this list from this device? This cannot be undone."
+                            : root.selected-count == 1
+                            ? "Delete 1 selected call from this device? This cannot be undone."
+                            : "Delete " + root.selected-count + " selected calls from this device? This cannot be undone.";
                         color: Colors.error;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
+                        wrap: word-wrap;
                     }
 
-                    clear-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.show-clear-confirm = true;
+                    // Scope, stated: nothing here reaches another device.
+                    Text {
+                        text: "Other people's call history and the call messages in your chats are not changed. A call in progress is kept.";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: Spacing.sm;
+
+                        // Cancel first and non-danger: the safe answer is the one
+                        // the eye and the thumb land on.
+                        Button {
+                            text: "Cancel";
+                            variant: "secondary";
+                            clicked => { root.show-clear-confirm = false; }
+                        }
+
+                        Button {
+                            text: root.confirm-selected ? "Delete" : "Clear history";
+                            variant: "destructive";
+                            clicked => {
+                                root.show-clear-confirm = false;
+                                if root.confirm-selected {
+                                    root.delete-selected();
+                                } else {
+                                    root.clear-history();
+                                }
+                            }
                         }
                     }
                 }
             }
+        }
 
-            if !root.loading && root.show-clear-confirm: VerticalLayout {
-                spacing: Spacing.sm;
-                padding-bottom: Spacing.sm;
-
-                Text {
-                    text: "Delete every call in this list? This cannot be undone.";
-                    color: Colors.error;
-                    font-size: Typography.sm;
-                    horizontal-alignment: center;
-                    wrap: word-wrap;
+            // The Modal body shares the header's padded edges. On desktop,
+            // reserve the trailing close button so the menu aligns with ⋮,
+            // even when the card is centred in a much wider window.
+            if root.show-more-menu: Rectangle {
+                width: 100%;
+                height: 100%;
+                background: transparent;
+                TouchArea {
+                    clicked => { root.show-more-menu = false; }
                 }
 
-                HorizontalLayout {
-                    alignment: center;
-                    spacing: Spacing.sm;
+                GlassSurface {
+                    material-level: 3;
+                    elevation: 4;
+                    x: parent.width - root.more-menu-trailing-inset - self.width;
+                    y: 0;
+                    width: min(max(select-label.preferred-width, menu-label.preferred-width) + 2 * Spacing.lg,
+                        max(0px, parent.width - root.more-menu-trailing-inset));
+                    height: 2 * Spacing.touch-target-min;
+                    border-radius: Spacing.radius-xl;
 
-                    // Cancel first and non-danger: the safe answer is the one
-                    // the eye and the thumb land on.
-                    Button {
-                        text: "Cancel";
-                        variant: "secondary";
-                        clicked => { root.show-clear-confirm = false; }
-                    }
+                    VerticalLayout {
+                        Rectangle {
+                            height: Spacing.touch-target-min;
+                            accessible-role: button;
+                            accessible-label: select-label.text;
+                            accessible-action-default => {
+                                root.show-more-menu = false;
+                                root.show-clear-confirm = false;
+                                root.select-all(false);
+                            }
+                            KeyFocus {
+                                border-radius: parent.border-radius;
+                                activate => {
+                                    root.show-more-menu = false;
+                                    root.show-clear-confirm = false;
+                                    root.select-all(false);
+                                }
+                            }
 
-                    Button {
-                        text: "Clear history";
-                        variant: "danger";
-                        clicked => {
-                            root.show-clear-confirm = false;
-                            root.clear-history();
+                            select-label := Text {
+                                accessible-role: none;
+                                text: "Select calls";
+                                color: Colors.text-primary;
+                                font-size: Typography.base;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                height: 100%;
+                            }
+
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.show-more-menu = false;
+                                    root.show-clear-confirm = false;
+                                    root.select-all(false);
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: Spacing.touch-target-min;
+                            accessible-role: button;
+                            accessible-label: menu-label.text;
+                            accessible-action-default => {
+                                root.show-more-menu = false;
+                                root.confirm-selected = false;
+                                root.show-clear-confirm = true;
+                            }
+                            KeyFocus {
+                                border-radius: parent.border-radius;
+                                activate => {
+                                    root.show-more-menu = false;
+                                    root.confirm-selected = false;
+                                    root.show-clear-confirm = true;
+                                }
+                            }
+
+                            menu-label := Text {
+                                accessible-role: none;
+                                text: "Clear call history";
+                                color: Colors.error;
+                                font-size: Typography.base;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                height: 100%;
+                            }
+
+                            menu-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.show-more-menu = false;
+                                    root.confirm-selected = false;
+                                    root.show-clear-confirm = true;
+                                }
+                            }
                         }
                     }
                 }

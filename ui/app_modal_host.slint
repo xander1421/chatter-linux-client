@@ -1,0 +1,439 @@
+import { SidebarPane } from "app_sidebar_pane.slint";
+import { SettingsPane } from "app_settings_pane.slint";
+import { ModalHostState } from "app_modal_host_state.slint";
+import { AuthFlow } from "app_auth_flow.slint";
+import { MeshPeerSheet } from "mesh/mesh_peer_sheet.slint";
+import { MeshSetupSheet } from "mesh/mesh_setup_sheet.slint";
+import { MeshComposeSheet } from "mesh/mesh_compose_sheet.slint";
+import { MeshInfoSheet } from "mesh/mesh_info_sheet.slint";
+import { ActivitySheet } from "activity/activity_sheet.slint";
+import { Materials } from "theme/materials.slint";
+import { ServerRecordsScreen, ServerRecordsGlobal } from "server_records/screen.slint";
+import { AvatarOption } from "components/avatar_picker.slint";
+import { CreateChannelModal, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
+import { UserProfileModal, SharedContentItem, SharedTab, EditProfileModal, RecoveryCodesModal, SealedSenderIntroModal, LinkDeviceApproveModal } from "modals/mod.slint";
+import { SearchResultChannel } from "modals/join_channel.slint";
+import { InvitePrivateGroupModal } from "modals/invite_private_group.slint";
+import { InviteMemberModal, InviteUser } from "modals/invite_member.slint";
+import { SettingsScreen } from "settings/settings_screen.slint";
+
+export component AppModalHost inherits Rectangle {
+    in property <string> active-modal;
+    in property <bool> compact-layout;
+    in property <string> exiting-modal;
+    in property <bool> is-mobile-platform;
+    in property <string> connection-status;
+    in property <bool> server-unreachable;
+    in property <int> connection-reconnect-attempt;
+    in property <string> presented-modal;
+    function is-presented(name: string) -> bool {
+        return root.presented-modal == name || root.exiting-modal == name;
+    }
+
+    background: transparent;
+
+    // ========== Modal overlay layer ==========
+    // Semi-transparent backdrop when any modal is active. Not under Settings:
+    // it is a full-screen page drawn at z -1 (see SettingsScreen below), so a
+    // backdrop here would sit over it and turn every tap into a close.
+    // One scrim per dialog: each modal draws Materials.scrim itself
+    // (ModalContainer, the menus, the intro/recovery sheets), so this
+    // layer only blocks and routes the outside tap. A tint here stacked
+    // a second dim under every card.
+    if active-modal != "none" && active-modal != "settings": Rectangle {
+        background: transparent;
+
+        // Block clicks from reaching content below
+        TouchArea {
+            clicked => {
+                // Close modal when clicking backdrop
+                ModalHostState.nav-pop();
+            }
+        }
+    }
+
+    if root.is-presented("mesh-setup"): MeshSetupSheet {
+        show-modal: root.active-modal == "mesh-setup";
+        touch: root.is-mobile-platform;
+        close => { ModalHostState.nav-close("mesh-setup"); }
+    }
+
+    if root.is-presented("mesh-info"): MeshInfoSheet {
+        show-modal: root.active-modal == "mesh-info";
+        close => { ModalHostState.nav-close("mesh-info"); }
+    }
+
+    // Mesh peer details
+    if root.is-presented("mesh-peer"): MeshPeerSheet {
+        show-modal: root.active-modal == "mesh-peer";
+        touch: root.is-mobile-platform;
+        close => { ModalHostState.nav-close("mesh-peer"); }
+    }
+
+    if root.is-presented("mesh-compose"): MeshComposeSheet {
+        show-modal: root.active-modal == "mesh-compose";
+        touch: root.is-mobile-platform;
+        close => { ModalHostState.nav-close("mesh-compose"); }
+    }
+
+    if root.is-presented("activity"): ActivitySheet {
+        show-modal: root.active-modal == "activity";
+        touch: root.is-mobile-platform;
+        connection-status: root.connection-status;
+        server-unreachable: root.server-unreachable;
+        connection-reconnect-attempt: root.connection-reconnect-attempt;
+        close => { ModalHostState.nav-close("activity"); }
+    }
+
+    // Create Channel Modal
+    if root.is-presented("create-channel"): CreateChannelModal {
+        show-modal: root.active-modal == "create-channel";
+        touch: root.is-mobile-platform;
+        channel-name <=> ModalHostState.create-channel-name;
+        channel-description <=> ModalHostState.create-channel-description;
+        selected-template <=> ModalHostState.create-channel-template;
+        error-message: ModalHostState.create-channel-error;
+        loading: ModalHostState.create-channel-loading;
+        ai-provider <=> ModalHostState.create-channel-ai-provider;
+        ai-model <=> ModalHostState.create-channel-ai-model;
+        ai-models: ModalHostState.create-channel-ai-models;
+        ai-models-loading: ModalHostState.create-channel-ai-models-loading;
+        ai-models-error: ModalHostState.create-channel-ai-models-error;
+        available-friends <=> ModalHostState.create-channel-available-friends;
+        selected-friend-count <=> ModalHostState.create-channel-selected-friend-count;
+        icon-url <=> ModalHostState.create-channel-icon-url;
+        icon-preview <=> ModalHostState.create-channel-icon-preview;
+        has-icon-preview <=> ModalHostState.create-channel-has-icon-preview;
+
+        // Join tab state
+        active-tab: ModalHostState.create-channel-initial-tab;
+        join-search-query <=> ModalHostState.join-channel-search-query;
+        join-results: ModalHostState.join-channel-results;
+        join-searching: ModalHostState.join-channel-searching;
+        join-error: ModalHostState.join-channel-error;
+        join-selected-id <=> ModalHostState.join-channel-selected-id;
+        join-joining: ModalHostState.join-channel-joining;
+
+        close => {
+            ModalHostState.nav-close("create-channel");
+        }
+        join-search(q) => {
+            ModalHostState.search-channels(q);
+        }
+        join-channel(id) => {
+            ModalHostState.join-channel(id);
+        }
+        create(name, desc, template, config, ai-provider, ai-model) => {
+            ModalHostState.create-channel(name, desc, template, config, ai-provider, ai-model);
+        }
+        provider-selected(provider) => {
+            ModalHostState.create-channel-provider-selected(provider);
+        }
+        pick-channel-icon => {
+            ModalHostState.create-channel-pick-icon();
+        }
+        create-private-group(name, friends) => {
+            ModalHostState.create-private-group(name, friends);
+        }
+        toggle-friend-selection(idx) => {
+            ModalHostState.toggle-friend-selection(idx);
+        }
+        toggle-friend-role(idx) => {
+            ModalHostState.toggle-friend-role(idx);
+        }
+        template-selected(template) => {
+            ModalHostState.create-channel-template-selected(template);
+        }
+    }
+
+    // Invite to Private Group Modal
+    if root.is-presented("invite-private-group"): InvitePrivateGroupModal {
+        show-modal: root.active-modal == "invite-private-group";
+        available-friends <=> ModalHostState.invite-private-group-friends;
+        selected-count <=> ModalHostState.invite-private-group-selected-count;
+        loading: ModalHostState.invite-private-group-loading;
+
+        close => {
+            ModalHostState.nav-close("invite-private-group");
+        }
+        invite(friends) => {
+            ModalHostState.invite-to-private-group(friends);
+        }
+        toggle-selection(idx) => {
+            ModalHostState.toggle-invite-friend-selection(idx);
+        }
+        toggle-role(idx) => {
+            ModalHostState.toggle-invite-friend-role(idx);
+        }
+    }
+
+    // Invite Member to Channel Modal
+    if root.is-presented("invite-member"): InviteMemberModal {
+        show-modal: root.active-modal == "invite-member";
+        channel-name: ModalHostState.invite-member-channel-name;
+        private-channel: ModalHostState.invite-member-private-channel;
+        users <=> ModalHostState.invite-member-users;
+        selected-count <=> ModalHostState.invite-member-selected-count;
+        loading: ModalHostState.invite-member-loading;
+
+        close => {
+            ModalHostState.nav-close("invite-member");
+        }
+        toggle-user(idx) => {
+            ModalHostState.invite-member-toggle-user(idx);
+        }
+        invite => {
+            ModalHostState.invite-member-confirm();
+        }
+        search-changed(q) => {
+            ModalHostState.invite-member-search-changed(q);
+        }
+    }
+
+    // User Profile — a pushed screen (anyone's profile, or your own from the
+    // account menu's My Profile), over whatever tab it was opened from; Back
+    // returns there. Stays mounted under Edit Profile — the only way into
+    // that modal is this page's Edit button — so its backdrop dims the
+    // profile it edits (§112u).
+    if root.is-presented("user-profile") || root.is-presented("edit-profile"): UserProfileModal {
+        shared-page-open <=> ModalHostState.profile-shared-page-open;
+        edit-contact-open <=> ModalHostState.profile-edit-contact-open;
+        // Fill the window: left to its preferred height the modal ended
+        // where its content was measured to, and on a phone the lower
+        // controls painted past that edge received no input.
+        width: 100%;
+        height: 100%;
+        show-modal: root.active-modal == "user-profile" || root.active-modal == "edit-profile";
+        user-id: ModalHostState.profile-user-id;
+        is-anonymous: ModalHostState.profile-is-anonymous;
+        scoped-member: ModalHostState.profile-scoped-member;
+        display-name: ModalHostState.profile-display-name;
+        contact-name: ModalHostState.profile-contact-name;
+        username: ModalHostState.profile-username;
+        avatar-source: ModalHostState.profile-avatar-source;
+        initials: ModalHostState.profile-initials;
+        status-text: ModalHostState.profile-status-text;
+        presence: ModalHostState.profile-presence;
+        bio: ModalHostState.profile-bio;
+        is-friend: ModalHostState.profile-is-friend;
+        is-blocked: ModalHostState.profile-is-blocked;
+        can-start-secret-chat: ModalHostState.profile-can-start-secret-chat;
+        is-self: ModalHostState.profile-is-self;
+        status-mode: SidebarPane.user-presence-mode;
+        loading: ModalHostState.profile-loading;
+        is-verified: ModalHostState.profile-is-verified;
+        verification-pending: ModalHostState.profile-verification-pending;
+        safety-number: ModalHostState.profile-safety-number;
+        show-safety-number <=> ModalHostState.profile-show-safety-number;
+        share-link: ModalHostState.profile-share-link;
+        share-qr: ModalHostState.profile-share-qr;
+        share-status: ModalHostState.profile-share-status;
+        last-seen: ModalHostState.profile-last-seen;
+        is-muted: ModalHostState.profile-is-muted;
+        shared-tabs: ModalHostState.profile-shared-tabs;
+        shared-tab <=> ModalHostState.profile-shared-tab;
+        shared-items: ModalHostState.profile-shared-items;
+        shared-has-previous: ModalHostState.profile-shared-has-previous;
+        shared-has-more: ModalHostState.profile-shared-has-more;
+        shared-loading: ModalHostState.profile-shared-loading;
+        shared-error: ModalHostState.profile-shared-error;
+        mobile-mode: root.compact-layout;
+
+        close => {
+            ModalHostState.nav-close("user-profile");
+            ModalHostState.profile-show-safety-number = false;
+        }
+        toggle-mute => {
+            ModalHostState.profile-toggle-mute();
+        }
+        start-call(is-video) => {
+            ModalHostState.profile-start-call(is-video);
+        }
+        shared-tab-selected(category) => {
+            ModalHostState.profile-shared-tab = category;
+            ModalHostState.profile-shared-tab-selected(category);
+        }
+        shared-load-more => {
+            ModalHostState.profile-shared-load-more();
+        }
+        shared-load-previous => { ModalHostState.profile-shared-load-previous(); }
+        shared-page-closed => { ModalHostState.profile-shared-page-closed(); }
+        shared-retry => { ModalHostState.profile-shared-retry(); }
+        open-shared-item(message-id, attachment-id, category, selected-url) => {
+            ModalHostState.profile-open-shared-item(message-id, attachment-id, category, selected-url);
+        }
+        change-status(mode) => {
+            SidebarPane.user-presence-mode = mode;
+            SidebarPane.change-user-status(mode);
+        }
+        generate-share-link => {
+            ModalHostState.profile-generate-share-link();
+        }
+        copy-share-link => {
+            ModalHostState.profile-copy-share-link();
+        }
+        reset-share-link => {
+            ModalHostState.profile-reset-share-link();
+        }
+        send-message => {
+            ModalHostState.profile-send-message();
+        }
+        start-secret-chat => {
+            ModalHostState.profile-start-secret-chat();
+        }
+        add-friend => {
+            ModalHostState.profile-add-friend();
+        }
+        remove-friend => {
+            ModalHostState.profile-remove-friend();
+        }
+        block-user => {
+            ModalHostState.profile-block-user();
+        }
+        unblock-user => {
+            ModalHostState.profile-unblock-user();
+        }
+        share-contact => { ModalHostState.profile-share-contact(); }
+        edit-contact(name) => { ModalHostState.profile-edit-contact(name); }
+        manage-blocked => {
+            ModalHostState.friends-modal-tab = "blocked";
+            ModalHostState.nav-close("user-profile");
+            SidebarPane.active-tab = "contacts";
+            ModalHostState.friends-modal-switch-tab("blocked");
+        }
+        edit-profile => {
+            ModalHostState.profile-edit-profile();
+        }
+        view-safety-number => {
+            ModalHostState.profile-view-safety-number();
+        }
+        toggle-verified => {
+            ModalHostState.profile-toggle-verified();
+        }
+    }
+
+    // Edit Profile Modal
+    if root.is-presented("edit-profile"): EditProfileModal {
+        show-modal: root.active-modal == "edit-profile";
+        display-name <=> ModalHostState.edit-profile-display-name;
+        bio <=> ModalHostState.edit-profile-bio;
+        avatar: ModalHostState.edit-profile-avatar;
+        avatar-options: AuthFlow.avatar-options;
+        avatar-color: ModalHostState.edit-profile-avatar-color;
+        selected-default-idx: ModalHostState.edit-profile-selected-default-idx;
+        has-photo: ModalHostState.edit-profile-has-photo;
+        loading: ModalHostState.edit-profile-loading;
+        error-message: ModalHostState.edit-profile-error;
+
+        close => {
+            ModalHostState.nav-close("edit-profile");
+        }
+        save(display-name, bio) => {
+            ModalHostState.edit-profile-save(display-name, bio);
+        }
+        change-avatar => {
+            ModalHostState.edit-profile-change-avatar();
+        }
+        select-default-avatar(idx) => { ModalHostState.edit-profile-select-default-avatar(idx); }
+        remove-avatar => { ModalHostState.edit-profile-remove-avatar(); }
+    }
+
+    // Recovery Codes Modal
+    if root.is-presented("recovery-codes"): RecoveryCodesModal {
+        show-modal: root.active-modal == "recovery-codes";
+        codes: AuthFlow.recovery-codes;
+
+        confirmed => {
+            if AuthFlow.recovery-codes-confirmed() {
+                if AuthFlow.recovery-codes-regenerated {
+                    AuthFlow.recovery-codes-regenerated = false;
+                    ModalHostState.nav-close("recovery-codes");
+                } else {
+                    // After recovery codes, show the sealed-sender explainer.
+                    ModalHostState.nav-close("recovery-codes");
+                    ModalHostState.nav-push("sealed-sender-intro");
+                }
+            }
+        }
+        copy-all => {
+            AuthFlow.recovery-codes-copy-all();
+        }
+    }
+
+    // Sealed Sender onboarding explainer (shown right after recovery codes)
+    if root.is-presented("sealed-sender-intro"): SealedSenderIntroModal {
+        show-modal: root.active-modal == "sealed-sender-intro";
+        allow-from-anyone <=> SettingsPane.settings-sealed-sender-unrestricted;
+
+        confirmed => {
+            ModalHostState.nav-close("sealed-sender-intro");
+            AuthFlow.sealed-sender-intro-confirmed(SettingsPane.settings-sealed-sender-unrestricted);
+        }
+    }
+
+    // Link Device Approve Modal (primary side)
+    if root.is-presented("link-device-approve"): LinkDeviceApproveModal {
+        show-modal: root.active-modal == "link-device-approve";
+        link-url <=> AuthFlow.link-approve-url;
+        password <=> AuthFlow.link-approve-password;
+        preview-device-name: AuthFlow.link-approve-preview-name;
+        preview-server-url: AuthFlow.link-approve-preview-server;
+        verification-code: AuthFlow.link-approve-verification-code;
+        preview-ready: AuthFlow.link-approve-preview-ready;
+        status: AuthFlow.link-approve-status;
+        error: AuthFlow.link-approve-error;
+        approving: AuthFlow.link-approve-busy;
+
+        close => {
+            ModalHostState.nav-close("link-device-approve");
+            AuthFlow.link-approve-close();
+        }
+        can-scan: root.is-mobile-platform;
+        scan => { AuthFlow.link-approve-scan(); }
+        paste-changed(t) => { AuthFlow.link-approve-paste-changed(t); }
+        approve(p) => { AuthFlow.link-approve-submit(p); }
+    }
+
+    if root.is-presented("server-records"): ServerRecordsScreen {
+        show: root.active-modal == "server-records";
+        mobile-mode: root.compact-layout;
+        close => { ModalHostState.nav-pop(); }
+        open-notification(id, kind, target, status) => {
+            if id != "" { ServerRecordsGlobal.act(id, "Mark read"); }
+            if kind == "friend-request" && status == "Accepted" && target != "" {
+                ModalHostState.nav-pop();
+                SidebarPane.active-tab = "chats";
+                SidebarPane.mobile-show-chat = true;
+                ModalHostState.friends-start-dm(target);
+            } else if kind == "friend-request" && (status == "Declined" || status == "Blocked" || status == "No longer pending") && target != "" {
+                ModalHostState.nav-pop();
+                ModalHostState.friends-view-profile(target);
+            } else if kind == "friend-request" {
+                ModalHostState.nav-pop();
+                SidebarPane.active-tab = "contacts";
+                ModalHostState.friends-modal-tab = "requests";
+                ModalHostState.friends-requests-sub-tab = "received";
+            } else if kind == "channel-invite" && status == "Joined" && target != "" {
+                ModalHostState.nav-pop();
+                SidebarPane.active-tab = "chats";
+                SidebarPane.mobile-show-chat = true;
+                SidebarPane.channel-selected(target);
+            } else if kind == "channel-invite" {
+                ModalHostState.nav-pop();
+                SidebarPane.active-tab = "contacts";
+                ModalHostState.friends-modal-tab = "requests";
+                ModalHostState.friends-requests-sub-tab = "channels";
+            } else if kind == "friend-accepted" && target != "" {
+                ModalHostState.nav-pop();
+                SidebarPane.active-tab = "chats";
+                SidebarPane.mobile-show-chat = true;
+                ModalHostState.friends-start-dm(target);
+            } else if (kind == "message" || kind == "mention" || kind == "reply" || kind == "reaction") && target != "" {
+                ModalHostState.nav-pop();
+                SidebarPane.active-tab = "chats";
+                SidebarPane.mobile-show-chat = true;
+                SidebarPane.channel-selected(target);
+            }
+        }
+    }
+}

@@ -2,78 +2,202 @@
 //!
 //! Uses ChatterClient services for all operations - no direct repository access.
 
+use slint::ComponentHandle;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Image, ModelRc, SharedString, VecModel, Weak, Model};
+use slint::{Model, ModelRc, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::ids::ChannelId;
 
-use crate::bin_ui::converters::{
-    channel_to_slint, get_initials, messages_to_display_batch,
-    DMListItemExt, DMListItemSendData, FriendDataExt, FriendDataSendData,
-    FriendRequestExt, FriendRequestSendData,
-};
-use crate::{ChannelListItemData, DMListItemData, FriendData, FriendRequestData, MainWindow};
+use crate::bin_ui::converters::initials_from_name;
+use crate::bin_ui::converters::{FriendDataExt, FriendRequestExt, FriendRequestSendData};
+use crate::{FriendData, FriendRequestData, MainWindow};
 
-/// Rebuild the FriendsModal "Friends" tab list — accepted friendships
-/// plus Active anon-DM peers — and push it into the UI. Cheap enough to
-/// run on every relevant event (friend accepted, anon-DM accepted,
-/// anon-DM profile updated); the modal pulls the model by reference.
+/// Bumped by every friends-list refresh. Only the newest refresh may publish:
+/// concurrent refreshes (accept handler, `FriendAccepted`, sync, tab switch)
+/// finish in any order, and an older one landing last repainted whatever it
+/// had computed over the newer rows.
+static FRIENDS_LIST_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Rebuild the FriendsModal "Friends" tab list (also the New Chat picker) and
+/// push it into the UI.
+///
+/// An empty list is painted from local storage before `ListFriends`
+/// returns, so a cold start with the server down does not sit on
+/// "No friends yet" until the RPC fails. A list that is already showing
+/// is left alone until the server answers: painting the offline rows
+/// over it would grey every presence dot for the length of the call.
+/// When the server answers, its rows replace the local ones. When it
+/// does not, the local rows stay (or replace a stale online list).
 pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
+    refresh(window_weak, ui_ctx, false);
+}
+
+/// Shield was entered or left: the list on screen belongs to the other mode
+/// (anon-DM peers vs accepted friends), so repaint from local storage at once
+/// instead of leaving it up until the server answers.
+pub fn refresh_friends_list_for_mode(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
+    refresh(window_weak, ui_ctx, true);
+}
+
+fn refresh(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, paint_local_first: bool) {
+    let owner = super::super::history_owner::SessionOwner::capture(&ui_ctx);
+    let generation = FRIENDS_LIST_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     tokio::spawn(async move {
-        let mut friends_data: Vec<FriendDataSendData> = Vec::new();
-        if let Ok(pairs) = ui_ctx.list_friends_with_profiles().await {
-            for (friendship, profile) in pairs {
-                friends_data.push(FriendDataSendData {
-                    user_id: friendship.addressee_id.to_string(),
-                    display_name: profile.display_name.clone(),
-                    username: String::new(),
-                    avatar_bytes: profile.avatar_bytes.clone(),
-                    avatar_decoded: None,
-                    presence_status: profile.presence.as_str().to_string(),
-                    custom_status: String::new(),
-                    is_anon: false,
-                });
-            }
+        let paint_local = paint_local_first || friends_list_empty(&window_weak).await;
+        if !owner.is_current() {
+            return;
         }
-        if let Ok(anon_dms) = ui_ctx.list_anon_dms() {
-            for dm in anon_dms {
-                if !matches!(dm.status, chatter_core::domain::anon_dm::AnonDmStatus::Active) {
-                    continue;
-                }
-                let peer_name = dm
-                    .peer_display_name
-                    .clone()
-                    .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
-                friends_data.push(FriendDataSendData {
-                    user_id: dm.id.to_string(),
-                    display_name: peer_name,
-                    username: String::new(),
-                    avatar_bytes: dm.peer_avatar.clone(),
-                    avatar_decoded: None,
-                    presence_status: "online".to_string(),
-                    custom_status: String::new(),
-                    is_anon: true,
-                });
-            }
+        let shield = ui_ctx.anon_mode_enabled();
+        if paint_local {
+            publish_friends(
+                window_weak.clone(),
+                &ui_ctx,
+                ui_ctx.local_friend_tab_entries(),
+                Stamp { generation, shield, owner: owner.clone() },
+            );
         }
-        for f in &mut friends_data {
-            f.pre_decode_avatar();
+        if !owner.is_current() {
+            return;
         }
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = window_weak.upgrade() {
-                let slint_list: Vec<FriendData> =
-                    friends_data.into_iter().map(|f| f.to_slint()).collect();
-                w.set_friends_list(ModelRc::new(VecModel::from(slint_list)));
-            }
-        });
+        let rows = ui_ctx.friends_tab_entries().await;
+        publish_friends(window_weak, &ui_ctx, rows, Stamp { generation, shield, owner });
     });
+}
+
+/// Repaint Contacts from the profile already committed by the event stream.
+/// A network friends refresh can return an older snapshot and overwrite the
+/// new name immediately after the live profile update.
+pub fn refresh_friends_list_local(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
+    let owner = super::super::history_owner::SessionOwner::capture(&ui_ctx);
+    let generation = FRIENDS_LIST_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    tokio::spawn(async move {
+        let shield = ui_ctx.anon_mode_enabled();
+        publish_friends(
+            window_weak,
+            &ui_ctx,
+            ui_ctx.local_friend_tab_entries(),
+            Stamp { generation, shield, owner },
+        );
+    });
+}
+
+/// `true` when Contacts has nothing to show yet. A dropped window counts
+/// as empty so the caller still publishes the local rows.
+async fn friends_list_empty(window_weak: &Weak<MainWindow>) -> bool {
+    let weak = window_weak.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    if slint::invoke_from_event_loop(move || {
+        let empty = weak
+            .upgrade()
+            .map(|w| {
+                w.global::<crate::ModalHostState>()
+                    .get_friends_list()
+                    .row_count()
+                    == 0
+            })
+            .unwrap_or(true);
+        let _ = tx.send(empty);
+    })
+    .is_err()
+    {
+        return true;
+    }
+    rx.await.unwrap_or(true)
+}
+
+/// What a set of rows was computed for: the refresh that produced them, the
+/// Shield mode they were read in, and the account.
+struct Stamp {
+    generation: u64,
+    shield: bool,
+    owner: super::super::history_owner::SessionOwner,
+}
+
+impl Stamp {
+    /// Rows from an older refresh, or from the other Shield mode (a toggle
+    /// while `ListFriends` was in flight), are stale and must not paint.
+    fn is_current(&self, ui_ctx: &ChatterClient) -> bool {
+        self.owner.is_current()
+            && FRIENDS_LIST_GENERATION.load(Ordering::SeqCst) == self.generation
+            && ui_ctx.anon_mode_enabled() == self.shield
+    }
+}
+
+fn publish_friends(
+    window_weak: Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    friends_data: Vec<chatter_core::ui::sidebar_data::FriendDataSendData>,
+    stamp: Stamp,
+) {
+    if !stamp.is_current(ui_ctx) {
+        return;
+    }
+    let ui_ctx = ui_ctx.clone();
+    let owner = stamp.owner.clone();
+    crate::run_history_ui!(window_weak, owner, |w| {
+        // Re-check on the UI thread, where a Shield toggle also runs.
+        if !stamp.is_current(&ui_ctx) {
+            return;
+        }
+        let slint_list: Vec<FriendData> = friends_data.into_iter().map(|f| {
+            let label = if f.is_anon {
+                "online".to_string()
+            } else {
+                f.user_id.parse::<chatter_core::domain::ids::UserId>().ok()
+                    .and_then(|id| ui_ctx.peer_last_seen(&id))
+                    .map(|(presence, at)| crate::bin_ui::converters::last_seen_label(presence, at))
+                    .unwrap_or_default()
+            };
+            let mut row = f.to_slint();
+            row.last_seen_label = label.into();
+            row
+        }).collect();
+        w.global::<crate::ModalHostState>()
+            .set_friends_list(ModelRc::new(VecModel::from(slint_list)));
+        crate::bin_ui::features::modals::friends::refresh_new_chat_results(&w);
+    });
+}
+
+/// Restore the local conversation snapshot before the main view first paints.
+/// The later initial-data refresh reconciles any server changes in place.
+pub fn show_cached_chat_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let rows = ui_ctx.sidebar_rows();
+    if rows.is_empty() {
+        return;
+    }
+    crate::bin_ui::features::sidebar::apply_chat_list(window, ui_ctx, rows);
+    window
+        .global::<crate::SidebarPane>()
+        .set_chat_rows_loading(false);
 }
 
 /// Load initial data after login or on startup.
 pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
+    let session_owner = super::super::history_owner::SessionOwner::capture(ui_ctx);
+    let history_owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(
+        ui_ctx,
+        ui_ctx.active_conversation(),
+    );
     tracing::info!("Loading initial data...");
+
+    // The sidebar snapshot is local. Paint it before any channel/profile RPC
+    // so returning users see their conversations on the first main-view frame.
+    let cached_rows = ui_ctx.sidebar_rows();
+    if !cached_rows.is_empty() {
+        let cached_client = ui_ctx.clone();
+        crate::run_history_ui!(window_weak, session_owner, |w| {
+            crate::bin_ui::features::sidebar::apply_chat_list(&w, &cached_client, cached_rows);
+            w.global::<crate::SidebarPane>()
+                .set_chat_rows_loading(false);
+        });
+    }
+
+    // Friends tab, off the awaits below. ListFriends used to run before the
+    // first paint and, on failure, publish an empty list over people the
+    // chat list was about to render from storage.
+    refresh_friends_list(window_weak.clone(), ui_ctx.clone());
 
     // Now that we're authenticated, start the auth-gated notification streams
     // (gRPC message stream + call → ring-notification bridge). The boot-time
@@ -87,7 +211,9 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             for ch in &synced_channels {
                 tracing::debug!(
                     "Synced channel: id={}, name={}, type={:?}",
-                    ch.id, ch.name, ch.channel_type
+                    ch.id,
+                    ch.name,
+                    ch.channel_type
                 );
             }
             tracing::info!("Synced {} channels from server", synced_channels.len());
@@ -97,61 +223,71 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         }
     }
 
+    if !session_owner.is_current() {
+        return;
+    }
     // Pre-fetch anonymous tokens for sealed sender messaging
     // This ensures tokens are available before the first SKDM distribution
     if let Err(e) = ui_ctx.prefetch_tokens(10).await {
         tracing::warn!("Failed to pre-fetch anonymous tokens: {}", e);
     }
 
+    if !session_owner.is_current() {
+        return;
+    }
     // Refresh any anon group mailboxes nearing their 30-day expiry so the
     // user can continue receiving messages across long offline gaps.
     match ui_ctx.refresh_expiring_group_mailboxes().await {
         Ok(refreshed) if !refreshed.is_empty() => {
-            tracing::info!(count = refreshed.len(), "Refreshed expiring anon group mailboxes");
+            tracing::info!(
+                count = refreshed.len(),
+                "Refreshed expiring anon group mailboxes"
+            );
         }
         Ok(_) => {}
         Err(e) => tracing::warn!("Failed to refresh anon group mailboxes: {}", e),
     }
 
-    // Get current user ID for DM peer detection
-    let current_user_id = ui_ctx.auth_state().get().current_user_id;
+    if !session_owner.is_current() {
+        return;
+    }
+    // Our own name/avatar: restored from the server under our profile key
+    // (throttled in core). Only login used to do this, so a linked device
+    // showed initials and no photo while peers saw it.
+    ui_ctx.refresh_own_profile().await;
 
-    // Separate channels and DMs (using Send-safe types for DMs).
-    // ChannelListItemData contains a slint::Image (not Send) — hold domain
-    // Channels here and convert inside the UI-thread closure below.
-    // The DM sidebar is built ENTIRELY in core: mode-exclusive (regular vs anon),
-    // active + incoming requests + outgoing, with all previews/markers/presence.
-    // Same source of truth as refresh_dm_list — the UI never hand-rolls it.
-    let dm_list: Vec<DMListItemSendData> = ui_ctx.list_dm_sidebar();
-
-    // Sidebar-inclusion rule (Public/Private, anon-mode aware) lives in core.
-    let channel_domain_list = ui_ctx.sidebar_channels();
+    if !session_owner.is_current() {
+        return;
+    }
+    // The chat list is built ENTIRELY in core: one list of every loose
+    // conversation, mode-exclusive, ordered by activity with pins first,
+    // previews/markers/presence included. Same source as every later
+    // rebuild (`sidebar::rebuild_chat_list`) — the UI never hand-rolls it.
+    let chat_rows = ui_ctx.sidebar_rows();
 
     // Get user profile info
     let user_display_name = ui_ctx
-        .auth_state()
-        .get()
+        .auth_snapshot()
         .display_name
         .clone()
         .unwrap_or_default();
-    let user_initials = get_initials(&user_display_name);
+    let user_initials = initials_from_name(&user_display_name);
 
     // Load user's own avatar from settings (stored during registration)
     // Pre-decode before entering UI thread to avoid blocking
-    let user_avatar_decoded: Option<(Vec<u8>, u32, u32)> =
-        ui_ctx.my_avatar().and_then(|bytes| {
-            image::load_from_memory(&bytes).ok().map(|img| {
-                let rgba = img.to_rgba8();
-                let (w, h) = rgba.dimensions();
-                tracing::info!(
-                    avatar_size = bytes.len(),
-                    width = w,
-                    height = h,
-                    "Loaded user's own avatar from settings"
-                );
-                (rgba.into_raw(), w, h)
-            })
-        });
+    let user_avatar_decoded: Option<(Vec<u8>, u32, u32)> = ui_ctx.my_avatar().and_then(|bytes| {
+        image::load_from_memory(&bytes).ok().map(|img| {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            tracing::info!(
+                avatar_size = bytes.len(),
+                width = w,
+                height = h,
+                "Loaded user's own avatar from settings"
+            );
+            (rgba.into_raw(), w, h)
+        })
+    });
 
     // First channel to select (exclude DMs and SavedMessages) — rule in core.
     let first_channel_id = ui_ctx.first_selectable_channel_id();
@@ -174,7 +310,9 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             for dm in requests {
                 // Get peer display name from conversation (revealed after ECIES decryption)
                 // Do NOT use user_service - these are strangers
-                let peer_name = dm.peer_display_name.clone()
+                let peer_name = dm
+                    .peer_display_name
+                    .clone()
                     .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
 
                 // Get intro message if any
@@ -190,357 +328,168 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     user_id: dm.id.to_string(),
                     display_name: peer_name,
                     username: "Private".to_string(),
-                    avatar_bytes: dm.peer_avatar.clone(),
-                    avatar_decoded: None,
-                    sent_at: last_message,
+                    avatar_bytes: ui_ctx.anon_dm_avatar(&dm),
+                    secondary_text: last_message,
                 });
             }
         }
     }
-
-    // Load private groups from local storage (folder-aware — see
-    // `private_group::private_group_rows`).
-    let private_groups = crate::bin_ui::features::sidebar::private_group::private_group_rows(&ui_ctx);
-
-    tracing::info!("Loaded {} private groups", private_groups.len());
 
     // Load blocked users for the Blocked tab
-    let users = ui_ctx.get_anon_dm_blocked_users();
-    tracing::info!("Loaded {} blocked users", users.len());
-    let blocked_users_data: Vec<(String, String)> = users.into_iter()
-        .map(|user_id| {
-            // Name resolution (incl. the short-id fallback) belongs in core.
-            let display_name = ui_ctx.fallback_display_name(&user_id);
-            (user_id.to_string(), display_name)
-        })
-        .collect();
+    let blocked_users_slint = crate::bin_ui::features::modals::friends::blocked_user_rows(&ui_ctx);
+    tracing::info!("Loaded {} blocked users", blocked_users_slint.len());
 
     // Pre-decode avatars before entering UI thread to avoid blocking
-    let mut dm_list = dm_list;
-    for dm in &mut dm_list {
-        dm.pre_decode_avatar();
-    }
-    let mut private_requests_ui = private_requests_ui;
-    for req in &mut private_requests_ui {
-        req.pre_decode_avatar();
-    }
-
-    // Build the Friends-tab list — unified over accepted server friendships
-    // and Active anon-DM peers. Both surface in the FriendsModal's "Friends"
-    // tab; the `is_anon` flag discriminates so anon rows route to the anon
-    // chat and render the peer-supplied avatar bytes.
-    let mut friends_data: Vec<FriendDataSendData> = Vec::new();
-    match ui_ctx.list_friends_with_profiles().await {
-        Ok(pairs) => {
-            for (friendship, profile) in pairs {
-                // Profile carries display_name; username is
-                // on the User entity. We don't need it here — the modal
-                // only shows display_name prominently.
-                friends_data.push(FriendDataSendData {
-                    user_id: friendship.addressee_id.to_string(),
-                    display_name: profile.display_name.clone(),
-                    username: String::new(),
-                    avatar_bytes: profile.avatar_bytes.clone(),
-                    avatar_decoded: None,
-                    presence_status: profile.presence.as_str().to_string(),
-                    custom_status: String::new(),
-                    is_anon: false,
-                });
-            }
-        }
-        Err(e) => {
-            tracing::warn!("Failed to load accepted friends: {}", e);
-        }
-    }
-    if let Ok(anon_dms) = ui_ctx.list_anon_dms() {
-        for dm in anon_dms {
-            if !matches!(dm.status, chatter_core::domain::anon_dm::AnonDmStatus::Active) {
-                continue;
-            }
-            let peer_name = dm
-                .peer_display_name
-                .clone()
-                .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
-            friends_data.push(FriendDataSendData {
-                user_id: dm.id.to_string(),
-                display_name: peer_name,
-                username: String::new(),
-                avatar_bytes: dm.peer_avatar.clone(),
-                avatar_decoded: None,
-                presence_status: "online".to_string(),
-                custom_status: String::new(),
-                is_anon: true,
-            });
-        }
-    }
-    for f in &mut friends_data {
-        f.pre_decode_avatar();
-    }
 
     // Update UI with channels, DMs, private groups, and friend requests
     let window_weak_ui = window_weak.clone();
     let pending_message_requests_count = private_requests_ui.len() as i32;
     let ui_ctx_for_refresh = ui_ctx.clone();
-    let ui_ctx_for_convert = ui_ctx.clone();
     let search_shortcut_pref = ui_ctx.get_search_shortcut().as_str();
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(w) = window_weak_ui.upgrade() {
-            let channel_list: Vec<ChannelListItemData> = channel_domain_list
-                .iter()
-                .map(|c| channel_to_slint(c, &ui_ctx_for_convert))
-                .collect();
-            w.set_channels(ModelRc::new(VecModel::from(channel_list)));
-            // Convert Send-safe DM data to Slint types inside event loop
-            let dm_list_slint: Vec<DMListItemData> = dm_list.into_iter().map(|d| d.to_slint()).collect();
-            w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list_slint)));
-            w.set_private_groups(ModelRc::new(VecModel::from(private_groups)));
+    let notification_detail = ui_ctx.notification_detail_level().as_str();
+    let own_username = ui_ctx.full_username().unwrap_or_default();
+    crate::run_history_ui!(window_weak_ui, session_owner, |w| {
+        // Reconcile rows by identity; replacing the model resets scroll and
+        // flashes cached conversations a second time after server sync.
+        crate::bin_ui::features::sidebar::apply_chat_list(&w, &ui_ctx_for_refresh, chat_rows);
+        w.global::<crate::SidebarPane>()
+            .set_chat_rows_loading(false);
 
-            // Apply selection flags on newly-loaded models.
-            crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_for_refresh);
+        #[cfg(target_os = "android")]
+        crate::platform::android::notification_route::open_pending(&w);
 
-            // Compute initial total unread count for mobile bottom nav badge
-            crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(&w, &ui_ctx_for_refresh);
+        w.global::<crate::SidebarPane>()
+            .set_user_display_name(user_display_name.into());
+        w.global::<crate::SidebarPane>()
+            .set_user_initials(user_initials.into());
+        // The account menu's @username line (Profile tab) reads this.
+        w.global::<crate::SettingsPane>()
+            .set_settings_username(own_username.into());
 
-            w.set_user_display_name(user_display_name.into());
-            w.set_user_initials(user_initials.into());
+        // Hydrate the persisted search-shortcut preference so the
+        // FocusScope picks the right combo (Ctrl+K / Ctrl+F / Both) at startup.
+        w.global::<crate::SearchPane>()
+            .set_search_shortcut_pref(search_shortcut_pref.into());
+        // Same for the notification detail level, so Settings shows the
+        // persisted level even when opened without the sidebar hydration
+        // (Ctrl+, opens the Settings tab directly).
+        w.global::<crate::SettingsPane>()
+            .set_settings_notification_detail(notification_detail.into());
 
-            // Hydrate the persisted search-shortcut preference so the
-            // FocusScope picks the right combo (Ctrl+K / Ctrl+F / Both) at startup.
-            w.set_search_shortcut_pref(search_shortcut_pref.into());
-
-            // Set user's own avatar if available
-            if let Some((pixels, width, height)) = user_avatar_decoded {
-                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    &pixels, width, height,
-                );
-                w.set_user_avatar_source(Image::from_rgba8(buffer));
-            }
-
-            // Set friend requests (including private/anonymous DM requests)
-            // Convert Send-safe data to Slint types inside event loop
-            let received_ui_slint: Vec<FriendRequestData> = received_ui.into_iter().map(|r| r.to_slint()).collect();
-            let sent_ui_slint: Vec<FriendRequestData> = sent_ui.into_iter().map(|r| r.to_slint()).collect();
-            let private_requests_ui_slint: Vec<FriendRequestData> = private_requests_ui.into_iter().map(|r| r.to_slint()).collect();
-            w.set_friends_received_requests(ModelRc::new(VecModel::from(received_ui_slint)));
-            w.set_friends_sent_requests(ModelRc::new(VecModel::from(sent_ui_slint)));
-            w.set_friends_private_requests(ModelRc::new(VecModel::from(private_requests_ui_slint)));
-
-            // Friends-tab list — accepted friendships + Active anon-DM peers.
-            let friends_slint: Vec<FriendData> = friends_data.into_iter().map(|f| f.to_slint()).collect();
-            w.set_friends_list(ModelRc::new(VecModel::from(friends_slint)));
-
-            // Set blocked users
-            let blocked_users_slint: Vec<crate::BlockedUserData> = blocked_users_data
-                .into_iter()
-                .map(|(user_id, display_name)| crate::BlockedUserData {
-                    user_id: user_id.into(),
-                    display_name: display_name.into(),
-                    username: "Private".into(),
-                    blocked_at: SharedString::default(),
-                })
-                .collect();
-            w.set_friends_blocked_users(ModelRc::new(VecModel::from(blocked_users_slint)));
-
-            // Set sidebar badge count for message requests
-            w.set_pending_message_requests(pending_message_requests_count);
+        // Set user's own avatar if available
+        if let Some((pixels, width, height)) = user_avatar_decoded {
+            w.global::<crate::SidebarPane>().set_user_avatar_source(
+                crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, width, height),
+            );
         }
+
+        // Set friend requests (including private/anonymous DM requests)
+        // Convert Send-safe data to Slint types inside event loop
+        let received_ui_slint: Vec<FriendRequestData> =
+            received_ui.into_iter().map(|r| r.to_slint()).collect();
+        let sent_ui_slint: Vec<FriendRequestData> =
+            sent_ui.into_iter().map(|r| r.to_slint()).collect();
+        let private_requests_ui_slint: Vec<FriendRequestData> = private_requests_ui
+            .into_iter()
+            .map(|r| r.to_slint())
+            .collect();
+        w.global::<crate::ModalHostState>()
+            .set_friends_received_requests(ModelRc::new(VecModel::from(received_ui_slint)));
+        w.global::<crate::ModalHostState>()
+            .set_friends_sent_requests(ModelRc::new(VecModel::from(sent_ui_slint)));
+        w.global::<crate::ModalHostState>()
+            .set_friends_private_requests(ModelRc::new(VecModel::from(private_requests_ui_slint)));
+
+        // Friends-tab list is published by `refresh_friends_list` (local
+        // rows first, server rows when ListFriends returns). Setting it
+        // again here raced that reconcile and put the offline snapshot
+        // back on top.
+
+        // Set blocked users
+        let blocked_users_slint: Vec<crate::BlockedUserData> = blocked_users_slint
+            .into_iter()
+            .map(crate::bin_ui::features::modals::friends::BlockedUserRow::to_slint)
+            .collect();
+        w.global::<crate::ModalHostState>()
+            .set_friends_blocked_users(ModelRc::new(VecModel::from(blocked_users_slint)));
+
+        // Set sidebar badge count for message requests
+        w.global::<crate::ModalHostState>()
+            .set_pending_message_requests(pending_message_requests_count);
     });
 
-    // If there's a channel, select it and load messages
+    // If there's a channel, select it and load messages — desktop only. On a
+    // phone the conversation list IS the home screen: selecting here opened
+    // the first channel over it at every launch and, via mark_as_read, cleared
+    // its unread badge before the user had seen it.
+    let first_channel_id =
+        first_channel_id.filter(|_| !cfg!(any(target_os = "android", target_os = "ios")));
     if let Some(channel_id) = first_channel_id {
         let channel_id_str = channel_id.to_string();
 
         let window_weak_select = window_weak.clone();
+        let initial_client = ui_ctx.clone();
+        let startup_owner = history_owner.clone();
         let _ = slint::invoke_from_event_loop(move || {
+            if !startup_owner.is_current()
+                || initial_client.active_conversation()
+                    != chatter_core::state::ActiveConversation::None
+            {
+                return;
+            }
             if let Some(w) = window_weak_select.upgrade() {
-                w.invoke_channel_selected(channel_id_str.into());
+                w.global::<crate::SidebarPane>()
+                    .invoke_channel_selected(channel_id_str.into());
             }
         });
 
-        let current_user_id_str = current_user_id.map(|id| id.to_string());
-        load_channel_into_ui_from_services(window_weak, &channel_id, ui_ctx, current_user_id_str)
-            .await;
+        // The selection callback owns the history request and its publication.
+        // A second startup loader could race it or a later manual selection.
     }
 
     // Populate the Received/Sent friend-request tabs via the event path, which
     // decrypts each sender's ECIES envelope (real name + avatar + note). This
     // is the single source of truth — see the empty `received_ui`/`sent_ui`
     // above.
-    ui_ctx.refresh_friend_requests().await;
+    if session_owner.is_current() {
+        let result = ui_ctx.refresh_friend_requests().await;
+        if let Err(error) = &result { tracing::warn!(%error, "Could not refresh friend requests"); }
+        let weak = window_weak.clone();
+        let owner = session_owner.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if !owner.is_current() { return; }
+            if let Some(window) = weak.upgrade() {
+                window.global::<crate::ModalHostState>()
+                    .set_friends_requests_error(result.is_err());
+            }
+        });
+    }
 
     tracing::info!("Initial data load complete");
 }
 
-/// Load channel data and messages into UI using services (no direct repo access).
-async fn load_channel_into_ui_from_services(
-    window_weak: Weak<MainWindow>,
-    channel_id: &ChannelId,
-    ui_ctx: &Arc<ChatterClient>,
-    current_user_id: Option<String>,
-) {
-    // Get channel info from service
-    let channel = match ui_ctx.get_channel_local(channel_id) {
-        Some(ch) => ch,
-        None => {
-            tracing::warn!("Channel {} not found in local storage", channel_id);
-            let weak = window_weak;
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_loading_messages(false);
-                }
-            });
-            return;
-        }
-    };
-
-    // Use the channel's own conversation_type() which respects require_encryption
-    let conversation_type = channel.conversation_type();
-
-    // Fetch recent messages (limit 50)
-    let messages = match ui_ctx.get_messages_local_asc(channel_id, &conversation_type, None, chatter_core::config::MESSAGE_PAGE_SIZE as u32) {
-        Ok(msgs) => msgs,
-        Err(e) => {
-            tracing::error!("Failed to get messages for channel {}: {}", channel_id, e);
-            Vec::new()
-        }
-    };
-
-    // Convert messages to display data
-    let mut display_messages = messages_to_display_batch(
-        &messages,
-        |m| ui_ctx.message_sender_display_name(m),
-        |att_id| ui_ctx.get_attachment_metadata(att_id),
-        |m| ui_ctx.reply_author_display_name(m),
-        |m| ui_ctx.reply_parent_missing_for(m),
-        |m| ui_ctx.reply_parent_media(m),
-    );
-    crate::bin_ui::converters::apply_reply_counts(
-        &mut display_messages,
-        &ui_ctx.thread_reply_counts(channel_id, &conversation_type),
-    );
-
-    // Get current user ID for is_own calculation in to_slint_with_user
-    let current_user_id_for_slint = current_user_id.clone().unwrap_or_default();
-
-    // Update UI
-    let is_saved = matches!(channel.channel_type, chatter_core::domain::channel::ChannelType::SavedMessages);
-    let channel_name = if is_saved { "Saved Messages".to_string() } else { channel.name.clone() };
-    let channel_id_str = channel_id.to_string();
-
-    let ui_ctx_load = ui_ctx.clone();
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(w) = window_weak.upgrade() {
-            // Convert MessageDisplayData to MessageItemData on UI thread
-            let slint_messages: Vec<_> = display_messages
-                .iter()
-                .map(|m| m.to_slint_with_user(&current_user_id_for_slint))
-                .collect();
-
-            w.set_channel_name(channel_name.into());
-            let _ = channel_id_str;
-            w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
-            w.set_loading_messages(false);
-
-            // Auto-register GIF animations for inline playback
-            crate::bin_ui::gif_state::auto_register_gifs_from_messages(
-                w.as_weak(),
-                ui_ctx_load.clone(),
-            );
-        }
-    });
-}
-
-/// Refresh the DM list in the UI from core.
-///
-/// Core's `list_dm_sidebar` is the single source of truth — it builds regular
-/// DMs *and* anon DMs, applies the anon-mode filter, and orders them. The UI
-/// just renders. Do not pair this with a second list-writer on the same event;
-/// two writers race and one clobbers a freshly-accepted DM.
-pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let ui_ctx = ui_ctx.clone();
-    let window_weak = window.as_weak();
-
-    tokio::spawn(async move {
-        // The channel-free DM sidebar is built from the LOCAL friends table.
-        // Sync friends from the server first — `list_friends_with_profiles`
-        // persists each accepted friend into local storage — so the sidebar
-        // reflects server truth even when a friendship was just accepted on the
-        // other device (whose local row we'd otherwise never have written).
-        let _ = ui_ctx.list_friends_with_profiles().await;
-
-        // DB work off the UI thread.
-        let dm_list = ui_ctx.list_dm_sidebar();
-
-        // Marshal the model mutation back onto the UI thread. Slint models must
-        // only be mutated from the event loop; an off-thread `set_*` is silently
-        // dropped, which is why a refreshed DM never rendered. `to_slint`
-        // (builds a non-Send `Image`) also has to run inside the closure.
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = window_weak.upgrade() {
-                let dm_list_slint: Vec<DMListItemData> = dm_list.into_iter()
-                    .map(|mut d| {
-                        // Decode avatar bytes → RGBA so to_slint builds an
-                        // Image; without this the sidebar shows initials only.
-                        d.pre_decode_avatar();
-                        d.to_slint()
-                    })
-                    .collect();
-                w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list_slint)));
-                crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
+pub fn update_sidebar_typing(window: &MainWindow, id: &str, is_typing: bool, text: &str) {
+    let model = window.global::<crate::SidebarPane>().get_chat_rows();
+    for i in 0..model.row_count() {
+        if let Some(mut row) = model.row_data(i) {
+            // By conversation only. A secret chat's row also carries the
+            // peer's user id, so matching `user_id` lit "typing" on the
+            // secret chat whenever its peer typed in the normal DM — tying
+            // the anonymous conversation to the identified one. A friend
+            // DM's conversation id is the peer id, so it still matches.
+            let named = row.conversation_id.as_str() == id;
+            if named && (row.is_typing != is_typing || row.typing_text.as_str() != text) {
+                row.is_typing = is_typing;
+                row.typing_text = text.into();
+                model.set_row_data(i, row);
+                crate::bin_ui::features::sidebar::refresh_flat_rows(window);
             }
-        });
-    });
-}
-
-/// Refresh the anonymous groups list in the UI.
-pub fn refresh_anon_groups(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let ui_ctx = ui_ctx.clone();
-    let window_weak = window.as_weak();
-
-    tokio::spawn(async move {
-        // DB work off the UI thread; the rows are plain SharedStrings so they
-        // cross the boundary. The old body built a degraded row here (no member
-        // count, no preview) AND upgraded the weak handle off the event loop,
-        // where Slint hands back None — so this refresh wrote nothing at all.
-        let private_group_list = crate::bin_ui::features::sidebar::private_group::private_group_rows(&ui_ctx);
-
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = window_weak.upgrade() {
-                w.set_private_groups(ModelRc::new(VecModel::from(private_group_list)));
-                crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
-            }
-        });
-    });
-}
-
-/// Flip the typing flag on whichever sidebar row a typing event names.
-///
-/// `id` is the key `typing_key` produced: a peer user-id for a DM, a channel-id
-/// for a channel, a group-id for a private group. All three lists are scanned
-/// because to the user they are the same kind of row — only the DM one used to
-/// animate, so a channel that someone was typing in sat there looking idle.
-/// Rows are edited in place, so no model swap and no scroll reset.
-pub fn update_sidebar_typing(window: &MainWindow, id: &str, is_typing: bool) {
-    macro_rules! flip {
-        ($model:expr, $id_field:ident) => {{
-            let model = $model;
-            for i in 0..model.row_count() {
-                if let Some(mut row) = model.row_data(i) {
-                    if row.$id_field.as_str() == id && row.is_typing != is_typing {
-                        row.is_typing = is_typing;
-                        model.set_row_data(i, row);
-                    }
-                }
-            }
-        }};
+        }
     }
-
-    flip!(window.get_dm_conversations(), user_id);
-    flip!(window.get_channels(), channel_id);
-    flip!(window.get_private_groups(), group_id);
 }
 
 /// Show incoming call modal with caller information.
+#[cfg(feature = "call-ui")]
 pub fn show_incoming_call(
     window: &MainWindow,
     call_id: &str,
@@ -549,7 +498,6 @@ pub fn show_incoming_call(
     call_type: &str,
     is_identity_verified: bool,
     identity_warning: &str,
-    is_anonymous: bool,
     caller_avatar: Option<&[u8]>,
 ) {
     use crate::IncomingCallData;
@@ -565,26 +513,35 @@ pub fn show_incoming_call(
         call_id: call_id.into(),
         caller_id: peer_id.into(),
         caller_name: caller_name.into(),
-        caller_initials: crate::bin_ui::converters::get_initials(caller_name).into(),
+        caller_initials: initials_from_name(caller_name).into(),
         caller_avatar: String::new().into(),
         caller_avatar_source,
         channel_name: String::new().into(),
         is_video_call: call_type == "video",
-        is_anonymous_call: is_anonymous,
         is_identity_verified,
         identity_warning: identity_warning.into(),
         encryption_key: String::new().into(),
         call_start_timestamp_ns: String::new().into(),
     };
-    
+
     // Set call data and show modal
-    window.set_incoming_call_data(call_data);
-    window.set_incoming_call_visible(true);
+    window
+        .global::<crate::CallView>()
+        .set_incoming_call_data(call_data);
+    window
+        .global::<crate::CallView>()
+        .set_incoming_call_minimized(false);
+    window
+        .global::<crate::CallView>()
+        .set_incoming_call_visible(true);
 }
 
 /// Hide incoming call modal.
+#[cfg(feature = "call-ui")]
 pub fn hide_incoming_call(window: &MainWindow) {
-    window.set_incoming_call_visible(false);
+    window
+        .global::<crate::CallView>()
+        .set_incoming_call_visible(false);
 }
 
 /// Update friend requests lists in the UI.
@@ -594,12 +551,16 @@ pub fn update_friend_requests(
     sent: Vec<crate::FriendRequestData>,
 ) {
     use slint::{ModelRc, VecModel};
-    
+
     // Update received requests
     let received_model = VecModel::from(received);
-    window.set_friends_received_requests(ModelRc::new(received_model));
-    
+    window
+        .global::<crate::ModalHostState>()
+        .set_friends_received_requests(ModelRc::new(received_model));
+
     // Update sent requests
     let sent_model = VecModel::from(sent);
-    window.set_friends_sent_requests(ModelRc::new(sent_model));
+    window
+        .global::<crate::ModalHostState>()
+        .set_friends_sent_requests(ModelRc::new(sent_model));
 }

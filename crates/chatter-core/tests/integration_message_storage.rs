@@ -7,8 +7,7 @@
 //! - Saved messages (Note to Self)
 //! - Signal-style (sender_id, sent_at) lookups
 
-mod common;
-
+use chatter_core::domain::reaction::ReactionScope;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::TempDir;
@@ -50,12 +49,16 @@ fn create_test_channel(channel_repo: &ChannelRepository, channel_type: ChannelTy
     channel
 }
 
-fn create_dm_channel(channel_repo: &ChannelRepository, user_a: &UserId, user_b: &UserId) -> Channel {
+fn create_dm_channel(
+    channel_repo: &ChannelRepository,
+    user_a: &UserId,
+    user_b: &UserId,
+) -> Channel {
     let channel_id = ChannelId::from_dm_participants(user_a, user_b);
     let channel = Channel::new(
         channel_id,
         format!("DM with {}", user_b),
-        ChannelType::DirectMessage,
+        ChannelType::Private,
         *user_a,
     );
     channel_repo.insert(&channel).unwrap();
@@ -81,7 +84,13 @@ fn test_dm_message_storage_roundtrip() {
 
     // Store a sent message (Alice -> Bob)
     let sent_at = next_timestamp_ns();
-    let sent_msg = Message::new_text(dm_channel.id, ConversationType::MailboxDm, Some(alice), "Hello Bob!".to_string(), sent_at);
+    let sent_msg = Message::new_text(
+        dm_channel.id,
+        ConversationType::ServerDm,
+        Some(alice),
+        "Hello Bob!".to_string(),
+        sent_at,
+    );
     message_repo.insert(&sent_msg).unwrap();
 
     // Verify message is stored
@@ -111,7 +120,13 @@ fn test_dm_message_received_storage() {
 
     // Simulate receiving a message from Bob
     let sent_at = next_timestamp_ns();
-    let received_msg = Message::new_text(dm_channel.id, ConversationType::MailboxDm, Some(bob), "Hi Alice!".to_string(), sent_at);
+    let received_msg = Message::new_text(
+        dm_channel.id,
+        ConversationType::ServerDm,
+        Some(bob),
+        "Hi Alice!".to_string(),
+        sent_at,
+    );
 
     // Use insert_or_ignore like the polling code does
     let inserted = message_repo.insert_or_ignore(&received_msg).unwrap();
@@ -122,7 +137,9 @@ fn test_dm_message_received_storage() {
     assert!(!duplicate_inserted, "Duplicate message should be ignored");
 
     // Verify only one message exists
-    let messages = message_repo.list_for_channel(&dm_channel.id, &ConversationType::MailboxDm, None, 100).unwrap();
+    let messages = message_repo
+        .list_for_channel(&dm_channel.id, &ConversationType::ServerDm, None, 100)
+        .unwrap();
     assert_eq!(messages.len(), 1);
 }
 
@@ -135,7 +152,10 @@ fn test_dm_channel_derived_id_consistency() {
     let channel_id_1 = ChannelId::from_dm_participants(&alice, &bob);
     let channel_id_2 = ChannelId::from_dm_participants(&bob, &alice);
 
-    assert_eq!(channel_id_1, channel_id_2, "DM channel ID should be deterministic");
+    assert_eq!(
+        channel_id_1, channel_id_2,
+        "DM channel ID should be deterministic"
+    );
 }
 
 #[test]
@@ -153,20 +173,42 @@ fn test_dm_messages_list_by_channel() {
     let dm_ac = create_dm_channel(&channel_repo, &alice, &charlie);
 
     // Store messages in both channels
-    let msg1 = Message::new_text(dm_ab.id, ConversationType::MailboxDm, Some(alice), "Hi Bob".to_string(), next_timestamp_ns());
-    let msg2 = Message::new_text(dm_ab.id, ConversationType::MailboxDm, Some(bob), "Hi Alice".to_string(), next_timestamp_ns());
-    let msg3 = Message::new_text(dm_ac.id, ConversationType::MailboxDm, Some(alice), "Hi Charlie".to_string(), next_timestamp_ns());
+    let msg1 = Message::new_text(
+        dm_ab.id,
+        ConversationType::ServerDm,
+        Some(alice),
+        "Hi Bob".to_string(),
+        next_timestamp_ns(),
+    );
+    let msg2 = Message::new_text(
+        dm_ab.id,
+        ConversationType::ServerDm,
+        Some(bob),
+        "Hi Alice".to_string(),
+        next_timestamp_ns(),
+    );
+    let msg3 = Message::new_text(
+        dm_ac.id,
+        ConversationType::ServerDm,
+        Some(alice),
+        "Hi Charlie".to_string(),
+        next_timestamp_ns(),
+    );
 
     message_repo.insert(&msg1).unwrap();
     message_repo.insert(&msg2).unwrap();
     message_repo.insert(&msg3).unwrap();
 
     // List messages for Alice-Bob channel
-    let ab_messages = message_repo.list_for_channel(&dm_ab.id, &ConversationType::MailboxDm, None, 100).unwrap();
+    let ab_messages = message_repo
+        .list_for_channel(&dm_ab.id, &ConversationType::ServerDm, None, 100)
+        .unwrap();
     assert_eq!(ab_messages.len(), 2);
 
     // List messages for Alice-Charlie channel
-    let ac_messages = message_repo.list_for_channel(&dm_ac.id, &ConversationType::MailboxDm, None, 100).unwrap();
+    let ac_messages = message_repo
+        .list_for_channel(&dm_ac.id, &ConversationType::ServerDm, None, 100)
+        .unwrap();
     assert_eq!(ac_messages.len(), 1);
 }
 
@@ -186,7 +228,13 @@ fn test_channel_message_storage() {
 
     // Store a channel message
     let sent_at = next_timestamp_ns();
-    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Hello channel!".to_string(), sent_at);
+    let msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Hello channel!".to_string(),
+        sent_at,
+    );
     message_repo.insert(&msg).unwrap();
 
     // Verify storage
@@ -199,13 +247,11 @@ fn test_channel_message_storage() {
     }
 }
 
-/// The sidebar's channel rows rendered as a bare name because the row builder
-/// looked the latest message up under `ConversationType::Channel`, while a
-/// channel's messages are filed under `Channel::conversation_type()` —
-/// `AnonGroup` for an encrypted channel, and encryption is the DEFAULT
-/// (`ChannelConfig::default().require_encryption`). The message list never hit
-/// this because `features/sidebar/channel.rs` already derives the type from the
-/// channel; only the sidebar hardcoded it.
+/// A server channel's messages are filed under `ConversationType::Channel`,
+/// encrypted or not (encryption is the default,
+/// `ChannelConfig::default().require_encryption`). Filing encrypted channels
+/// under `AnonGroup` is what left channel rows without their latest message or
+/// unread badge (663c9b82) — anon groups live only in their own table.
 ///
 /// `test_channel_message_storage` above could not catch it: it reads back by
 /// message id, which is bucket-blind. This one goes through the bucketed list
@@ -218,13 +264,10 @@ fn test_channel_messages_are_listed_under_the_channels_own_conversation_type() {
 
     let channel = create_test_channel(&channel_repo, ChannelType::Public);
     let conv_type = channel.conversation_type();
-    assert_ne!(
+    assert_eq!(
         conv_type,
         ConversationType::Channel,
-        "a default channel is encrypted, so its messages are NOT filed under \
-         ConversationType::Channel — hardcoding that variant is what blanked \
-         the sidebar rows. If this default ever flips, the sidebar is fine but \
-         this test's premise moved."
+        "a server channel is a Channel, encrypted or not"
     );
 
     let msg = Message::new_text(
@@ -236,21 +279,25 @@ fn test_channel_messages_are_listed_under_the_channels_own_conversation_type() {
     );
     message_repo.insert(&msg).unwrap();
 
-    // What the sidebar row builder asks for now.
+    // What the sidebar row builder asks for.
     let found = message_repo
         .list_for_channel(&channel.id, &conv_type, None, 1)
         .unwrap();
-    assert_eq!(found.len(), 1, "the channel's own bucket must hold its messages");
+    assert_eq!(
+        found.len(),
+        1,
+        "the channel's own bucket must hold its messages"
+    );
     assert_eq!(found[0].as_text(), Some("what the fuck9"));
 
-    // What it used to ask for. Kept as the negative control: this is the query
-    // that returned None and produced the bare row.
+    // The old rule's bucket. Kept as the negative control: nothing of a
+    // server channel may land under AnonGroup.
     let wrong_bucket = message_repo
-        .list_for_channel(&channel.id, &ConversationType::Channel, None, 1)
+        .list_for_channel(&channel.id, &ConversationType::AnonGroup, None, 1)
         .unwrap();
     assert!(
         wrong_bucket.is_empty(),
-        "hardcoding ConversationType::Channel must stay proven wrong"
+        "a server channel's messages must never be filed as AnonGroup"
     );
 }
 
@@ -266,7 +313,13 @@ fn test_channel_message_deduplication() {
     // Create message with specific ID
     let msg_id = MessageId::new();
     let sent_at = next_timestamp_ns();
-    let mut msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Test message".to_string(), sent_at);
+    let mut msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Test message".to_string(),
+        sent_at,
+    );
     msg.id = msg_id;
 
     // First insert should succeed
@@ -278,7 +331,9 @@ fn test_channel_message_deduplication() {
     assert!(!second);
 
     // Only one message in database
-    let messages = message_repo.list_for_channel(&channel.id, &ConversationType::Channel, None, 100).unwrap();
+    let messages = message_repo
+        .list_for_channel(&channel.id, &ConversationType::Channel, None, 100)
+        .unwrap();
     assert_eq!(messages.len(), 1);
 }
 
@@ -291,7 +346,13 @@ fn test_private_channel_message_storage() {
     let channel = create_test_channel(&channel_repo, ChannelType::Private);
     let sender = UserId::new();
 
-    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Private message".to_string(), next_timestamp_ns());
+    let msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Private message".to_string(),
+        next_timestamp_ns(),
+    );
     message_repo.insert(&msg).unwrap();
 
     let loaded = message_repo.get(&msg.id).unwrap().unwrap();
@@ -321,7 +382,13 @@ fn test_saved_messages_storage() {
     channel_repo.insert(&channel).unwrap();
 
     // Store a saved message
-    let msg = Message::new_text(channel_id, ConversationType::SavedMessages, Some(user), "Note to self".to_string(), next_timestamp_ns());
+    let msg = Message::new_text(
+        channel_id,
+        ConversationType::SavedMessages,
+        Some(user),
+        "Note to self".to_string(),
+        next_timestamp_ns(),
+    );
     message_repo.insert(&msg).unwrap();
 
     // Verify storage
@@ -375,6 +442,7 @@ fn test_system_message_user_joined() {
         mentioned_integrations: Vec::new(),
         targets_ai_bot: false,
         delivery_status: String::new(),
+        failure_reason: None,
     };
 
     message_repo.insert(&msg).unwrap();
@@ -429,6 +497,7 @@ fn test_system_message_user_left() {
         mentioned_integrations: Vec::new(),
         targets_ai_bot: false,
         delivery_status: String::new(),
+        failure_reason: None,
     };
 
     message_repo.insert(&msg).unwrap();
@@ -456,7 +525,13 @@ fn test_message_update() {
     let sender = UserId::new();
 
     // Insert original message
-    let mut msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Original text".to_string(), next_timestamp_ns());
+    let mut msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Original text".to_string(),
+        next_timestamp_ns(),
+    );
     message_repo.insert(&msg).unwrap();
 
     // Update the message
@@ -474,6 +549,44 @@ fn test_message_update() {
     }
 }
 
+/// §112l: a server-proto upsert (channel backfill after restart) rebuilds the
+/// message without reply context; `update` must not wipe the stored quote.
+#[test]
+fn test_update_preserves_reply_context() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+    let quoted_author = UserId::new();
+    let parent = MessageId::new();
+
+    let mut reply = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "reply".to_string(),
+        next_timestamp_ns(),
+    );
+    reply.reply_to = Some(parent);
+    reply.reply_to_author_id = Some(quoted_author);
+    reply.reply_to_text = Some("original".to_string());
+    message_repo.insert(&reply).unwrap();
+
+    // Same message as the server hands it back: no reply fields.
+    let mut from_server = reply.clone();
+    from_server.reply_to = None;
+    from_server.reply_to_author_id = None;
+    from_server.reply_to_text = None;
+    message_repo.update(&from_server).unwrap();
+
+    let loaded = message_repo.get(&reply.id).unwrap().unwrap();
+    assert_eq!(loaded.reply_to, Some(parent));
+    assert_eq!(loaded.reply_to_author_id, Some(quoted_author));
+    assert_eq!(loaded.reply_to_text.as_deref(), Some("original"));
+}
+
 #[test]
 fn test_message_soft_delete() {
     let (_temp_dir, db) = setup_test_db();
@@ -483,7 +596,13 @@ fn test_message_soft_delete() {
     let channel = create_test_channel(&channel_repo, ChannelType::Public);
     let sender = UserId::new();
 
-    let mut msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "To be deleted".to_string(), next_timestamp_ns());
+    let mut msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "To be deleted".to_string(),
+        next_timestamp_ns(),
+    );
     message_repo.insert(&msg).unwrap();
 
     // Soft delete
@@ -539,40 +658,6 @@ fn test_channel_unread_count_increment() {
     assert_eq!(loaded.unread_count, 2);
 }
 
-#[test]
-fn test_dm_channel_unread_count() {
-    let (_temp_dir, db) = setup_test_db();
-    let channel_repo = ChannelRepository::new(db.clone());
-    let message_repo = MessageRepository::new(db.clone());
-
-    let alice = UserId::new();
-    let bob = UserId::new();
-
-    let dm_channel = create_dm_channel(&channel_repo, &alice, &bob);
-
-    // Add unread received messages
-    let msg1 = Message::new_text(
-        dm_channel.id,
-        ConversationType::Channel,
-        Some(bob),
-        "hey alice".to_string(),
-        next_timestamp_ns(),
-    );
-    message_repo.insert(&msg1).unwrap();
-
-    let msg2 = Message::new_text(
-        dm_channel.id,
-        ConversationType::Channel,
-        Some(bob),
-        "are you there?".to_string(),
-        next_timestamp_ns(),
-    );
-    message_repo.insert(&msg2).unwrap();
-
-    let loaded = channel_repo.get(&dm_channel.id).unwrap().unwrap();
-    assert_eq!(loaded.unread_count, 2);
-}
-
 // ============================================================================
 // Message Ordering Tests
 // ============================================================================
@@ -589,9 +674,27 @@ fn test_messages_ordered_by_timestamp() {
     // Create messages with different sent_at timestamps
     let base_ts = 1_700_000_000_000_000_000u64;
 
-    let mut msg1 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "First".to_string(), base_ts);
-    let mut msg2 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Second".to_string(), base_ts + 5_000_000_000);
-    let mut msg3 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Third".to_string(), base_ts + 10_000_000_000);
+    let mut msg1 = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "First".to_string(),
+        base_ts,
+    );
+    let mut msg2 = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Second".to_string(),
+        base_ts + 5_000_000_000,
+    );
+    let mut msg3 = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Third".to_string(),
+        base_ts + 10_000_000_000,
+    );
 
     // Also set created_at to ensure they differ
     let now = chrono::Utc::now();
@@ -605,15 +708,21 @@ fn test_messages_ordered_by_timestamp() {
     message_repo.insert(&msg3).unwrap();
 
     // Retrieve and verify order
-    let messages = message_repo.list_for_channel(&channel.id, &ConversationType::Channel, None, 100).unwrap();
+    let messages = message_repo
+        .list_for_channel(&channel.id, &ConversationType::Channel, None, 100)
+        .unwrap();
     assert_eq!(messages.len(), 3);
 
     // Messages are returned in descending order (newest first) for pagination
-    match (&messages[0].content, &messages[1].content, &messages[2].content) {
+    match (
+        &messages[0].content,
+        &messages[1].content,
+        &messages[2].content,
+    ) {
         (MessageContent::Text(t1), MessageContent::Text(t2), MessageContent::Text(t3)) => {
-            assert_eq!(t1, "Third");  // Newest first
+            assert_eq!(t1, "Third"); // Newest first
             assert_eq!(t2, "Second");
-            assert_eq!(t3, "First");  // Oldest last
+            assert_eq!(t3, "First"); // Oldest last
         }
         _ => panic!("Expected text messages"),
     }
@@ -634,12 +743,20 @@ fn test_bulk_message_storage() {
 
     // Insert 100 messages
     for i in 0..100 {
-        let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), format!("Message {}", i), next_timestamp_ns());
+        let msg = Message::new_text(
+            channel.id,
+            ConversationType::Channel,
+            Some(sender),
+            format!("Message {}", i),
+            next_timestamp_ns(),
+        );
         message_repo.insert(&msg).unwrap();
     }
 
     // Verify all stored
-    let messages = message_repo.list_for_channel(&channel.id, &ConversationType::Channel, None, 200).unwrap();
+    let messages = message_repo
+        .list_for_channel(&channel.id, &ConversationType::Channel, None, 200)
+        .unwrap();
     assert_eq!(messages.len(), 100);
 }
 
@@ -661,13 +778,21 @@ fn test_concurrent_dm_channels() {
 
     // Store messages in each channel
     for (channel, peer) in &channels {
-        let msg = Message::new_text(channel.id, ConversationType::Channel, Some(*peer), "Hello!".to_string(), next_timestamp_ns());
+        let msg = Message::new_text(
+            channel.id,
+            ConversationType::Channel,
+            Some(*peer),
+            "Hello!".to_string(),
+            next_timestamp_ns(),
+        );
         message_repo.insert(&msg).unwrap();
     }
 
     // Verify each channel has exactly one message
     for (channel, _) in &channels {
-        let messages = message_repo.list_for_channel(&channel.id, &ConversationType::Channel, None, 100).unwrap();
+        let messages = message_repo
+            .list_for_channel(&channel.id, &ConversationType::Channel, None, 100)
+            .unwrap();
         assert_eq!(messages.len(), 1);
     }
 }
@@ -687,11 +812,19 @@ fn test_get_by_sender_timestamp_basic() {
 
     // Create message with known timestamp
     let sent_at = 1_700_000_001_234_567_890u64;
-    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Signal-style test".to_string(), sent_at);
+    let msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Signal-style test".to_string(),
+        sent_at,
+    );
     message_repo.insert(&msg).unwrap();
 
     // Lookup by (sender_id, sent_at) - Signal-style
-    let found = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap();
+    let found = message_repo
+        .get_by_sender_timestamp(&sender, sent_at)
+        .unwrap();
     assert!(found.is_some());
     let found_msg = found.unwrap();
     assert_eq!(found_msg.id, msg.id);
@@ -714,18 +847,34 @@ fn test_get_by_sender_timestamp_not_found() {
 
     // Create message
     let sent_at = 1_700_000_001_234_567_890u64;
-    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Test message".to_string(), sent_at);
+    let msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Test message".to_string(),
+        sent_at,
+    );
     message_repo.insert(&msg).unwrap();
 
     // Try to find with wrong timestamp
     let wrong_ts = 1_700_000_002_000_000_000u64;
-    let not_found = message_repo.get_by_sender_timestamp(&sender, wrong_ts).unwrap();
-    assert!(not_found.is_none(), "Should not find message with wrong timestamp");
+    let not_found = message_repo
+        .get_by_sender_timestamp(&sender, wrong_ts)
+        .unwrap();
+    assert!(
+        not_found.is_none(),
+        "Should not find message with wrong timestamp"
+    );
 
     // Try to find with wrong sender
     let wrong_sender = UserId::new();
-    let not_found = message_repo.get_by_sender_timestamp(&wrong_sender, sent_at).unwrap();
-    assert!(not_found.is_none(), "Should not find message with wrong sender");
+    let not_found = message_repo
+        .get_by_sender_timestamp(&wrong_sender, sent_at)
+        .unwrap();
+    assert!(
+        not_found.is_none(),
+        "Should not find message with wrong sender"
+    );
 }
 
 #[test]
@@ -742,22 +891,50 @@ fn test_get_by_sender_timestamp_multiple_senders() {
     let alice_ts = 1_700_000_001_000_000_000u64;
     let bob_ts = 1_700_000_002_000_000_000u64;
 
-    let alice_msg = Message::new_text(channel.id, ConversationType::Channel, Some(alice), "Hello from Alice".to_string(), alice_ts);
-    let bob_msg = Message::new_text(channel.id, ConversationType::Channel, Some(bob), "Hello from Bob".to_string(), bob_ts);
+    let alice_msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(alice),
+        "Hello from Alice".to_string(),
+        alice_ts,
+    );
+    let bob_msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(bob),
+        "Hello from Bob".to_string(),
+        bob_ts,
+    );
 
     message_repo.insert(&alice_msg).unwrap();
     message_repo.insert(&bob_msg).unwrap();
 
     // Each lookup should find the correct message
-    let found_alice = message_repo.get_by_sender_timestamp(&alice, alice_ts).unwrap().unwrap();
+    let found_alice = message_repo
+        .get_by_sender_timestamp(&alice, alice_ts)
+        .unwrap()
+        .unwrap();
     assert_eq!(found_alice.id, alice_msg.id);
 
-    let found_bob = message_repo.get_by_sender_timestamp(&bob, bob_ts).unwrap().unwrap();
+    let found_bob = message_repo
+        .get_by_sender_timestamp(&bob, bob_ts)
+        .unwrap()
+        .unwrap();
     assert_eq!(found_bob.id, bob_msg.id);
 
     // Cross lookups should fail
-    assert!(message_repo.get_by_sender_timestamp(&alice, bob_ts).unwrap().is_none());
-    assert!(message_repo.get_by_sender_timestamp(&bob, alice_ts).unwrap().is_none());
+    assert!(
+        message_repo
+            .get_by_sender_timestamp(&alice, bob_ts)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        message_repo
+            .get_by_sender_timestamp(&bob, alice_ts)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -774,18 +951,45 @@ fn test_get_by_sender_timestamp_same_sender_different_times() {
     let ts2 = 1_700_000_002_000_000_000u64;
     let ts3 = 1_700_000_003_000_000_000u64;
 
-    let msg1 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "First".to_string(), ts1);
-    let msg2 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Second".to_string(), ts2);
-    let msg3 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Third".to_string(), ts3);
+    let msg1 = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "First".to_string(),
+        ts1,
+    );
+    let msg2 = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Second".to_string(),
+        ts2,
+    );
+    let msg3 = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Third".to_string(),
+        ts3,
+    );
 
     message_repo.insert(&msg1).unwrap();
     message_repo.insert(&msg2).unwrap();
     message_repo.insert(&msg3).unwrap();
 
     // Each timestamp should find the correct message
-    let found1 = message_repo.get_by_sender_timestamp(&sender, ts1).unwrap().unwrap();
-    let found2 = message_repo.get_by_sender_timestamp(&sender, ts2).unwrap().unwrap();
-    let found3 = message_repo.get_by_sender_timestamp(&sender, ts3).unwrap().unwrap();
+    let found1 = message_repo
+        .get_by_sender_timestamp(&sender, ts1)
+        .unwrap()
+        .unwrap();
+    let found2 = message_repo
+        .get_by_sender_timestamp(&sender, ts2)
+        .unwrap()
+        .unwrap();
+    let found3 = message_repo
+        .get_by_sender_timestamp(&sender, ts3)
+        .unwrap()
+        .unwrap();
 
     match &found1.content {
         MessageContent::Text(t) => assert_eq!(t, "First"),
@@ -818,10 +1022,22 @@ fn test_signal_style_deduplication_same_sender_timestamp() {
     // This simulates the same message arriving twice with different server-assigned IDs
     let sent_at = 1_700_000_001_234_567_890u64;
 
-    let mut msg1 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Original message".to_string(), sent_at);
+    let msg1 = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Original message".to_string(),
+        sent_at,
+    );
     let original_id = msg1.id;
 
-    let mut msg2 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Duplicate delivery".to_string(), sent_at);
+    let mut msg2 = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Duplicate delivery".to_string(),
+        sent_at,
+    );
     msg2.id = MessageId::new(); // Different message ID
 
     // First insert should succeed
@@ -833,7 +1049,9 @@ fn test_signal_style_deduplication_same_sender_timestamp() {
     assert!(!second, "Duplicate (sender_id, sent_at) should be ignored");
 
     // Verify only one message exists
-    let messages = message_repo.list_for_channel(&channel.id, &ConversationType::Channel, None, 100).unwrap();
+    let messages = message_repo
+        .list_for_channel(&channel.id, &ConversationType::Channel, None, 100)
+        .unwrap();
     assert_eq!(messages.len(), 1);
 
     // And it should be the original one
@@ -857,18 +1075,35 @@ fn test_signal_style_allows_different_senders_same_timestamp() {
     // Two different senders can have the same timestamp
     let same_ts = 1_700_000_001_234_567_890u64;
 
-    let alice_msg = Message::new_text(channel.id, ConversationType::Channel, Some(alice), "From Alice".to_string(), same_ts);
-    let bob_msg = Message::new_text(channel.id, ConversationType::Channel, Some(bob), "From Bob".to_string(), same_ts);
+    let alice_msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(alice),
+        "From Alice".to_string(),
+        same_ts,
+    );
+    let bob_msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(bob),
+        "From Bob".to_string(),
+        same_ts,
+    );
 
     // Both should be inserted successfully
     let first = message_repo.insert_or_ignore(&alice_msg).unwrap();
     assert!(first, "Alice's message should be inserted");
 
     let second = message_repo.insert_or_ignore(&bob_msg).unwrap();
-    assert!(second, "Bob's message should be inserted (different sender)");
+    assert!(
+        second,
+        "Bob's message should be inserted (different sender)"
+    );
 
     // Verify both messages exist
-    let messages = message_repo.list_for_channel(&channel.id, &ConversationType::Channel, None, 100).unwrap();
+    let messages = message_repo
+        .list_for_channel(&channel.id, &ConversationType::Channel, None, 100)
+        .unwrap();
     assert_eq!(messages.len(), 2);
 }
 
@@ -887,18 +1122,30 @@ fn test_edit_message_via_signal_style_lookup() {
 
     // Create original message
     let sent_at = 1_700_000_001_234_567_890u64;
-    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Original text".to_string(), sent_at);
+    let msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Original text".to_string(),
+        sent_at,
+    );
     message_repo.insert(&msg).unwrap();
 
     // Simulate edit action: lookup by (sender_id, sent_at) and update
-    let mut found = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    let mut found = message_repo
+        .get_by_sender_timestamp(&sender, sent_at)
+        .unwrap()
+        .unwrap();
     found.content = MessageContent::Text("Edited text".to_string());
     found.is_edited = true;
     found.edited_at = Some(chrono::Utc::now());
     message_repo.update(&found).unwrap();
 
     // Verify edit persisted
-    let reloaded = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    let reloaded = message_repo
+        .get_by_sender_timestamp(&sender, sent_at)
+        .unwrap()
+        .unwrap();
     assert!(reloaded.is_edited);
     match &reloaded.content {
         MessageContent::Text(t) => assert_eq!(t, "Edited text"),
@@ -917,16 +1164,28 @@ fn test_delete_message_via_signal_style_lookup() {
 
     // Create message
     let sent_at = 1_700_000_001_234_567_890u64;
-    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "To be deleted".to_string(), sent_at);
+    let msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "To be deleted".to_string(),
+        sent_at,
+    );
     message_repo.insert(&msg).unwrap();
 
     // Simulate delete action: lookup by (sender_id, sent_at) and soft delete
-    let mut found = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    let mut found = message_repo
+        .get_by_sender_timestamp(&sender, sent_at)
+        .unwrap()
+        .unwrap();
     found.is_deleted = true;
     message_repo.update(&found).unwrap();
 
     // Verify delete persisted
-    let reloaded = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    let reloaded = message_repo
+        .get_by_sender_timestamp(&sender, sent_at)
+        .unwrap()
+        .unwrap();
     assert!(reloaded.is_deleted);
 }
 
@@ -941,25 +1200,43 @@ fn test_pin_message_via_signal_style_lookup() {
 
     // Create message
     let sent_at = 1_700_000_001_234_567_890u64;
-    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Pin this message".to_string(), sent_at);
+    let msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Pin this message".to_string(),
+        sent_at,
+    );
     message_repo.insert(&msg).unwrap();
 
     // Simulate pin action: lookup by (sender_id, sent_at) and pin
-    let mut found = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    let mut found = message_repo
+        .get_by_sender_timestamp(&sender, sent_at)
+        .unwrap()
+        .unwrap();
     assert!(!found.is_pinned);
     found.is_pinned = true;
     message_repo.update(&found).unwrap();
 
     // Verify pin persisted
-    let reloaded = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    let reloaded = message_repo
+        .get_by_sender_timestamp(&sender, sent_at)
+        .unwrap()
+        .unwrap();
     assert!(reloaded.is_pinned);
 
     // Unpin
-    let mut found = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    let mut found = message_repo
+        .get_by_sender_timestamp(&sender, sent_at)
+        .unwrap()
+        .unwrap();
     found.is_pinned = false;
     message_repo.update(&found).unwrap();
 
-    let reloaded = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    let reloaded = message_repo
+        .get_by_sender_timestamp(&sender, sent_at)
+        .unwrap()
+        .unwrap();
     assert!(!reloaded.is_pinned);
 }
 
@@ -974,21 +1251,31 @@ fn test_reaction_via_signal_style_lookup() {
 
     // Create message
     let sent_at = 1_700_000_001_234_567_890u64;
-    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "React to this".to_string(), sent_at);
+    let msg = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "React to this".to_string(),
+        sent_at,
+    );
     message_repo.insert(&msg).unwrap();
 
-    // Simulate reaction: lookup by (sender_id, sent_at) and add reaction
-    let mut found = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
-    use chatter_core::domain::message::ReactionCount;
-    found.reaction_counts.push(ReactionCount {
-        emoji: "👍".to_string(),
-        count: 1,
-    });
-    found.current_user_reactions.push("👍".to_string());
-    message_repo.update(&found).unwrap();
+    // Simulate reaction: lookup by (sender_id, sent_at), then vote. Counts are
+    // a projection of the vote table, so `update()` does not write them.
+    let found = message_repo
+        .get_by_sender_timestamp(&sender, sent_at)
+        .unwrap()
+        .unwrap();
+    let me = UserId::new();
+    message_repo
+        .add_reaction(&ReactionScope::of(&found), &sender, sent_at, &me, &me, "👍")
+        .unwrap();
 
     // Verify reaction persisted
-    let reloaded = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    let reloaded = message_repo
+        .get_by_sender_timestamp(&sender, sent_at)
+        .unwrap()
+        .unwrap();
     assert_eq!(reloaded.reaction_counts.len(), 1);
     assert_eq!(reloaded.reaction_counts[0].emoji, "👍");
     assert_eq!(reloaded.reaction_counts[0].count, 1);
@@ -1013,15 +1300,33 @@ fn test_signal_style_lookup_across_channels() {
     let ts1 = 1_700_000_001_000_000_000u64;
     let ts2 = 1_700_000_002_000_000_000u64;
 
-    let msg1 = Message::new_text(channel1.id, ConversationType::Channel, Some(sender), "In channel 1".to_string(), ts1);
-    let msg2 = Message::new_text(channel2.id, ConversationType::Channel, Some(sender), "In channel 2".to_string(), ts2);
+    let msg1 = Message::new_text(
+        channel1.id,
+        ConversationType::Channel,
+        Some(sender),
+        "In channel 1".to_string(),
+        ts1,
+    );
+    let msg2 = Message::new_text(
+        channel2.id,
+        ConversationType::Channel,
+        Some(sender),
+        "In channel 2".to_string(),
+        ts2,
+    );
 
     message_repo.insert(&msg1).unwrap();
     message_repo.insert(&msg2).unwrap();
 
     // Signal-style lookup should find messages regardless of channel
-    let found1 = message_repo.get_by_sender_timestamp(&sender, ts1).unwrap().unwrap();
-    let found2 = message_repo.get_by_sender_timestamp(&sender, ts2).unwrap().unwrap();
+    let found1 = message_repo
+        .get_by_sender_timestamp(&sender, ts1)
+        .unwrap()
+        .unwrap();
+    let found2 = message_repo
+        .get_by_sender_timestamp(&sender, ts2)
+        .unwrap()
+        .unwrap();
 
     assert_eq!(found1.conversation_id, channel1.id);
     assert_eq!(found2.conversation_id, channel2.id);
@@ -1048,8 +1353,20 @@ fn test_delivery_status_update_cross_conversation_isolation() {
 
     // Insert messages with the SAME timestamp in different conversations
     let same_timestamp = next_timestamp_ns();
-    let msg1 = Message::new_text(channel1.id, ConversationType::Channel, Some(sender), "Msg in channel 1".to_string(), same_timestamp);
-    let msg2 = Message::new_text(channel2.id, ConversationType::Channel, Some(sender), "Msg in channel 2".to_string(), same_timestamp);
+    let msg1 = Message::new_text(
+        channel1.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Msg in channel 1".to_string(),
+        same_timestamp,
+    );
+    let msg2 = Message::new_text(
+        channel2.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Msg in channel 2".to_string(),
+        same_timestamp,
+    );
 
     message_repo.insert(&msg1).unwrap();
     message_repo.insert(&msg2).unwrap();
@@ -1091,18 +1408,44 @@ fn test_delivery_status_update_with_lookup_updates_by_id() {
     let sender = UserId::new();
     let channel = create_test_channel(&channel_repo, ChannelType::Public);
 
+    // The timestamp lookup serves anonymous control receipts only; identified
+    // receipts go through MessageReceiptRepository, so a server message with
+    // the same timestamp must not be touched by it.
     let ts = next_timestamp_ns();
-    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Test".to_string(), ts);
-    message_repo.insert(&msg).unwrap();
+    let anon = Message::new_text(
+        channel.id,
+        ConversationType::AnonDm,
+        Some(sender),
+        "Test".to_string(),
+        ts,
+    );
+    message_repo.insert(&anon).unwrap();
+    let server = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "Test".to_string(),
+        ts,
+    );
+    message_repo.insert(&server).unwrap();
 
-    // Use the lookup-based update
     let updated = message_repo
         .update_delivery_status_by_timestamp_with_lookup(ts, "read")
         .unwrap();
     assert!(updated);
 
-    let loaded = message_repo.get(&msg.id).unwrap().unwrap();
-    assert_eq!(loaded.delivery_status, "read");
+    assert_eq!(
+        message_repo.get(&anon.id).unwrap().unwrap().delivery_status,
+        "read"
+    );
+    assert_eq!(
+        message_repo
+            .get(&server.id)
+            .unwrap()
+            .unwrap()
+            .delivery_status,
+        ""
+    );
 }
 
 // ============================================================================
@@ -1122,7 +1465,6 @@ fn test_type_isolation_on_list() {
     let all_types = [
         ConversationType::Channel,
         ConversationType::ServerDm,
-        ConversationType::MailboxDm,
         ConversationType::AnonDm,
         ConversationType::AnonGroup,
         ConversationType::SavedMessages,
@@ -1304,7 +1646,7 @@ fn test_update_delivery_status_by_timestamp_type_collision() {
 
     let msg_mailbox = Message::new_text(
         channel.id,
-        ConversationType::MailboxDm,
+        ConversationType::ServerDm,
         Some(sender),
         "mailbox msg".to_string(),
         shared_ts,
@@ -1319,18 +1661,18 @@ fn test_update_delivery_status_by_timestamp_type_collision() {
     message_repo.insert(&msg_mailbox).unwrap();
     message_repo.insert(&msg_saved).unwrap();
 
-    // Update delivery status for MailboxDm only
+    // Update delivery status for ServerDm only
     let updated = message_repo
         .update_delivery_status_by_timestamp(
             &channel.id,
-            &ConversationType::MailboxDm,
+            &ConversationType::ServerDm,
             shared_ts,
             "delivered",
         )
         .unwrap();
-    assert!(updated, "Should update MailboxDm row");
+    assert!(updated, "Should update ServerDm row");
 
-    // MailboxDm should be "delivered"
+    // ServerDm should be "delivered"
     let loaded_mailbox = message_repo.get(&msg_mailbox.id).unwrap().unwrap();
     assert_eq!(loaded_mailbox.delivery_status, "delivered");
 
@@ -1338,7 +1680,7 @@ fn test_update_delivery_status_by_timestamp_type_collision() {
     let loaded_saved = message_repo.get(&msg_saved.id).unwrap().unwrap();
     assert_eq!(
         loaded_saved.delivery_status, "",
-        "SavedMessages message must NOT be affected by MailboxDm delivery update"
+        "SavedMessages message must NOT be affected by ServerDm delivery update"
     );
 }
 
@@ -1365,11 +1707,11 @@ fn test_get_unread_count_per_type_isolation() {
         message_repo.insert(&msg).unwrap();
     }
 
-    // Insert 5 unread MailboxDm messages (same channel_id)
+    // Insert 5 unread ServerDm messages (same channel_id)
     for _ in 0..5 {
         let msg = Message::new_text(
             channel.id,
-            ConversationType::MailboxDm,
+            ConversationType::ServerDm,
             Some(sender),
             "mailbox unread".to_string(),
             next_timestamp_ns(),
@@ -1394,9 +1736,9 @@ fn test_get_unread_count_per_type_isolation() {
     assert_eq!(channel_count, 3, "Channel unread count should be 3");
 
     let mailbox_count = message_repo
-        .get_unread_count(&channel.id, &ConversationType::MailboxDm)
+        .get_unread_count(&channel.id, &ConversationType::ServerDm)
         .unwrap();
-    assert_eq!(mailbox_count, 5, "MailboxDm unread count should be 5");
+    assert_eq!(mailbox_count, 5, "ServerDm unread count should be 5");
 
     let anon_count = message_repo
         .get_unread_count(&channel.id, &ConversationType::AnonDm)
@@ -1404,10 +1746,10 @@ fn test_get_unread_count_per_type_isolation() {
     assert_eq!(anon_count, 1, "AnonDm unread count should be 1");
 
     // Types with no messages should return 0
-    let server_dm_count = message_repo
-        .get_unread_count(&channel.id, &ConversationType::ServerDm)
+    let saved_count = message_repo
+        .get_unread_count(&channel.id, &ConversationType::SavedMessages)
         .unwrap();
-    assert_eq!(server_dm_count, 0, "ServerDm unread count should be 0");
+    assert_eq!(saved_count, 0, "SavedMessages unread count should be 0");
 }
 
 /// Test 6: Insert unread messages in two types, mark one type as read,
@@ -1506,21 +1848,35 @@ fn test_reaction_counts_per_type_isolation() {
     );
     message_repo.insert(&msg_channel).unwrap();
     message_repo
-        .add_reaction(&sender, ts_channel, &reactor, &reactor, "fire")
+        .add_reaction(
+            &ReactionScope::of(&msg_channel),
+            &sender,
+            ts_channel,
+            &reactor,
+            &reactor,
+            "fire",
+        )
         .unwrap();
 
-    // Insert a MailboxDm message and react to it with a different emoji
+    // Insert a ServerDm message and react to it with a different emoji
     let ts_dm = next_timestamp_ns();
     let msg_dm = Message::new_text(
         channel.id,
-        ConversationType::MailboxDm,
+        ConversationType::ServerDm,
         Some(sender),
         "dm msg".to_string(),
         ts_dm,
     );
     message_repo.insert(&msg_dm).unwrap();
     message_repo
-        .add_reaction(&sender, ts_dm, &reactor, &reactor, "heart")
+        .add_reaction(
+            &ReactionScope::of(&msg_dm),
+            &sender,
+            ts_dm,
+            &reactor,
+            &reactor,
+            "heart",
+        )
         .unwrap();
 
     // get_reaction_counts_for_conversation for Channel should only have "fire"
@@ -1534,7 +1890,7 @@ fn test_reaction_counts_per_type_isolation() {
     );
     assert!(
         !channel_reactions.contains_key(&ts_dm),
-        "Channel reactions must NOT contain MailboxDm timestamp key"
+        "Channel reactions must NOT contain ServerDm timestamp key"
     );
     let channel_emojis: Vec<&String> = channel_reactions[&ts_channel]
         .iter()
@@ -1543,17 +1899,17 @@ fn test_reaction_counts_per_type_isolation() {
     assert!(channel_emojis.contains(&&"fire".to_string()));
     assert!(!channel_emojis.contains(&&"heart".to_string()));
 
-    // get_reaction_counts_for_conversation for MailboxDm should only have "heart"
+    // get_reaction_counts_for_conversation for ServerDm should only have "heart"
     let dm_reactions = message_repo
-        .get_reaction_counts_for_conversation(&channel.id, &ConversationType::MailboxDm)
+        .get_reaction_counts_for_conversation(&channel.id, &ConversationType::ServerDm)
         .unwrap();
     assert!(
         dm_reactions.contains_key(&ts_dm),
-        "MailboxDm reactions should contain ts_dm key"
+        "ServerDm reactions should contain ts_dm key"
     );
     assert!(
         !dm_reactions.contains_key(&ts_channel),
-        "MailboxDm reactions must NOT contain Channel timestamp key"
+        "ServerDm reactions must NOT contain Channel timestamp key"
     );
     let dm_emojis: Vec<&String> = dm_reactions[&ts_dm]
         .iter()
@@ -1626,12 +1982,25 @@ fn test_pagination_isolation_across_types() {
     let page3 = message_repo
         .list_for_channel(&channel.id, &ConversationType::Channel, Some(cursor2), 2)
         .unwrap();
-    assert_eq!(page3.len(), 1, "Page 3 should have 1 remaining Channel message");
+    assert_eq!(
+        page3.len(),
+        1,
+        "Page 3 should have 1 remaining Channel message"
+    );
     assert_eq!(page3[0].conversation_type, ConversationType::Channel);
 
     // Total unique IDs across all pages should be 5 (no ServerDm leaks)
-    let all_ids: std::collections::HashSet<_> = page1.iter().chain(page2.iter()).chain(page3.iter()).map(|m| m.id).collect();
-    assert_eq!(all_ids.len(), 5, "Should have exactly 5 unique Channel messages across all pages");
+    let all_ids: std::collections::HashSet<_> = page1
+        .iter()
+        .chain(page2.iter())
+        .chain(page3.iter())
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(
+        all_ids.len(),
+        5,
+        "Should have exactly 5 unique Channel messages across all pages"
+    );
 
     // ServerDm pagination should be independent and return 3 total
     let dm_all = message_repo
@@ -1658,15 +2027,21 @@ fn test_thread_replies_excluded_from_channel_list() {
     let sender = UserId::new();
 
     let root = Message::new_text(
-        channel.id, ConversationType::Channel, Some(sender),
-        "thread root".to_string(), next_timestamp_ns(),
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "thread root".to_string(),
+        next_timestamp_ns(),
     );
     message_repo.insert(&root).unwrap();
 
     for i in 0..3 {
         let mut reply = Message::new_text(
-            channel.id, ConversationType::Channel, Some(sender),
-            format!("reply {i}"), next_timestamp_ns(),
+            channel.id,
+            ConversationType::Channel,
+            Some(sender),
+            format!("reply {i}"),
+            next_timestamp_ns(),
         );
         reply.thread_id = Some(root.id);
         message_repo.insert(&reply).unwrap();
@@ -1674,8 +2049,11 @@ fn test_thread_replies_excluded_from_channel_list() {
 
     // A plain (non-thread) message stays visible in the main list.
     let plain = Message::new_text(
-        channel.id, ConversationType::Channel, Some(sender),
-        "main channel message".to_string(), next_timestamp_ns(),
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "main channel message".to_string(),
+        next_timestamp_ns(),
     );
     message_repo.insert(&plain).unwrap();
 
@@ -1683,20 +2061,57 @@ fn test_thread_replies_excluded_from_channel_list() {
         .list_for_channel(&channel.id, &ConversationType::Channel, None, 100)
         .unwrap();
     let main_ids: Vec<_> = main_list.iter().map(|m| m.id).collect();
-    assert_eq!(main_list.len(), 2, "main list = root + plain message, no replies");
+    assert_eq!(
+        main_list.len(),
+        2,
+        "main list = root + plain message, no replies"
+    );
     assert!(main_ids.contains(&root.id));
     assert!(main_ids.contains(&plain.id));
     assert!(main_list.iter().all(|m| m.thread_id.is_none()));
 
     // Paginated path must filter too.
     let page = message_repo
-        .list_for_channel(&channel.id, &ConversationType::Channel, Some(&plain.id), 100)
+        .list_for_channel(
+            &channel.id,
+            &ConversationType::Channel,
+            Some(&plain.id),
+            100,
+        )
         .unwrap();
-    assert!(page.iter().all(|m| m.thread_id.is_none()), "cursor page leaked thread replies");
+    assert!(
+        page.iter().all(|m| m.thread_id.is_none()),
+        "cursor page leaked thread replies"
+    );
 
     // The replies are still reachable through the thread query...
     let replies = message_repo.list_for_thread(&root.id, None, 100).unwrap();
     assert_eq!(replies.len(), 3);
+    // Oldest → newest, the order the thread panel draws and appends in.
+    let texts: Vec<_> = replies
+        .iter()
+        .map(|m| m.as_text().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(texts, ["reply 0", "reply 1", "reply 2"]);
+    // A page is the newest `limit` before the cursor, still oldest → newest.
+    let latest = message_repo.list_for_thread(&root.id, None, 2).unwrap();
+    assert_eq!(
+        latest.iter().map(|m| m.id).collect::<Vec<_>>(),
+        [replies[1].id, replies[2].id]
+    );
+    let earlier = message_repo
+        .list_for_thread(&root.id, Some(&latest[0].id), 2)
+        .unwrap();
+    assert_eq!(
+        earlier.iter().map(|m| m.id).collect::<Vec<_>>(),
+        [replies[0].id]
+    );
+    assert_eq!(message_repo.count_for_thread(&root.id).unwrap(), 3);
+    // Who has replied: the thread's followers for Activity.
+    assert!(message_repo.has_thread_reply_from(&root.id, &sender).unwrap());
+    assert!(!message_repo
+        .has_thread_reply_from(&root.id, &UserId::new())
+        .unwrap());
 
     // ...and counted for the root bubble's indicator.
     let counts = message_repo
@@ -1704,6 +2119,34 @@ fn test_thread_replies_excluded_from_channel_list() {
         .unwrap();
     assert_eq!(counts.get(&root.id), Some(&3));
     assert_eq!(counts.get(&plain.id), None);
+
+    // A second member's reply stamped the same millisecond as reply 1 must
+    // not fall between pages when the cursor lands on one of the pair.
+    let mut twin = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(UserId::new()),
+        "twin".to_string(),
+        replies[1].sent_at,
+    );
+    twin.thread_id = Some(root.id);
+    message_repo.insert(&twin).unwrap();
+    let all = message_repo.list_for_thread(&root.id, None, 100).unwrap();
+    let mut paged = message_repo.list_for_thread(&root.id, None, 1).unwrap();
+    while let Some(first) = paged.first().map(|m| m.id) {
+        let older = message_repo
+            .list_for_thread(&root.id, Some(&first), 1)
+            .unwrap();
+        if older.is_empty() {
+            break;
+        }
+        paged.splice(0..0, older);
+    }
+    assert_eq!(
+        paged.iter().map(|m| m.id).collect::<Vec<_>>(),
+        all.iter().map(|m| m.id).collect::<Vec<_>>()
+    );
+    assert_eq!(all.len(), 4);
 }
 
 // ============================================================================
@@ -1758,21 +2201,23 @@ fn test_mark_conversation_read_returns_the_boundary_it_erased() {
         .unread_anchor(&channel.id, &ConversationType::Channel)
         .unwrap();
     assert_eq!(peeked.unread_count, 4);
-    assert_eq!(peeked.first_unread_sent_at, Some(unread_ts[0]));
+    assert_eq!(peeked.unread_sent_at, unread_ts);
 
     // Opening the conversation: the anchor comes back from the very call that
     // destroys it.
     let anchor = message_repo
         .mark_conversation_read(&channel.id, &ConversationType::Channel)
         .unwrap();
-    assert_eq!(anchor.unread_count, 4, "anchor captured after the UPDATE, not before");
     assert_eq!(
-        anchor.first_unread_sent_at,
-        Some(unread_ts[0]),
-        "boundary must be the oldest unread message, not the newest"
+        anchor.unread_count, 4,
+        "anchor captured after the UPDATE, not before"
+    );
+    assert_eq!(
+        anchor.unread_sent_at, unread_ts,
+        "the anchor names the messages that were unread, oldest first"
     );
     assert!(
-        anchor.first_unread_sent_at.unwrap() > *read_ts.last().unwrap(),
+        anchor.unread_sent_at[0] > *read_ts.last().unwrap(),
         "boundary must sit after everything already read"
     );
 
@@ -1786,7 +2231,10 @@ fn test_mark_conversation_read_returns_the_boundary_it_erased() {
     let after = message_repo
         .mark_conversation_read(&channel.id, &ConversationType::Channel)
         .unwrap();
-    assert_eq!(after, chatter_core::domain::message::UnreadAnchor::default());
+    assert_eq!(
+        after,
+        chatter_core::domain::message::UnreadAnchor::default()
+    );
 
     // The divider lands on the first unread row of the rendered page.
     let page = message_repo
@@ -1821,10 +2269,355 @@ fn test_unread_anchor_empty_when_all_read() {
         .mark_conversation_read(&channel.id, &ConversationType::Channel)
         .unwrap();
     assert_eq!(anchor.unread_count, 0);
-    assert_eq!(anchor.first_unread_sent_at, None);
+    assert!(anchor.unread_sent_at.is_empty());
 
     let page = message_repo
         .list_for_channel_asc(&channel.id, &ConversationType::Channel, None, 50)
         .unwrap();
     assert_eq!(anchor.divider_index(&page), None);
+}
+
+/// Server-stream and inbox delivery share reactor-keyed storage. Replaying
+/// either transport must not increment counts or remove another user's vote.
+#[test]
+fn test_server_reaction_replay_and_reactor_isolation() {
+    let (_temp_dir, db) = setup_test_db();
+    let repo = MessageRepository::new(db.clone());
+    let channels = ChannelRepository::new(db);
+    let channel = create_test_channel(&channels, ChannelType::Public);
+    let author = UserId::new();
+    let me = UserId::new();
+    let other = UserId::new();
+    let timestamp = next_timestamp_ns();
+    let message = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(author),
+        "target".into(),
+        timestamp,
+    );
+    repo.insert(&message).unwrap();
+    assert!(
+        repo.add_reaction(
+            &ReactionScope::of(&message),
+            &author,
+            timestamp,
+            &me,
+            &me,
+            "👍"
+        )
+        .unwrap()
+    );
+    assert!(
+        !repo
+            .add_reaction(
+                &ReactionScope::of(&message),
+                &author,
+                timestamp,
+                &me,
+                &me,
+                "👍"
+            )
+            .unwrap()
+    );
+    assert!(
+        repo.add_reaction(
+            &ReactionScope::of(&message),
+            &author,
+            timestamp,
+            &other,
+            &me,
+            "👍"
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        repo.get_reactions(&ReactionScope::of(&message), &author, timestamp)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        repo.remove_reaction(
+            &ReactionScope::of(&message),
+            &author,
+            timestamp,
+            &other,
+            &me,
+            "👍"
+        )
+        .unwrap()
+    );
+    assert!(
+        !repo
+            .remove_reaction(
+                &ReactionScope::of(&message),
+                &author,
+                timestamp,
+                &other,
+                &me,
+                "👍"
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        repo.get_reactions(&ReactionScope::of(&message), &author, timestamp)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        repo.user_has_reacted(&ReactionScope::of(&message), &author, timestamp, "👍")
+            .unwrap()
+    );
+}
+
+/// The *same* wire author/clock occurs in different IDs and kinds. Ledger,
+/// own-reactor cache and zero-count removal must never cross that boundary.
+#[test]
+fn reaction_same_author_clock_isolated_by_kind_and_id() {
+    let (_dir, db) = setup_test_db();
+    let repo = MessageRepository::new(db.clone());
+    let author = UserId::new();
+    let me = UserId::new();
+    let other = UserId::new();
+    let id = ChannelId::new();
+    let timestamp = next_timestamp_ns();
+    let scopes = [
+        ReactionScope::new(id, ConversationType::Channel),
+        ReactionScope::new(id, ConversationType::ServerDm),
+        ReactionScope::new(ChannelId::new(), ConversationType::Channel),
+        ReactionScope::new(ChannelId::new(), ConversationType::AnonDm),
+        // Encrypted server channels and anonymous groups use this storage kind.
+        ReactionScope::new(ChannelId::new(), ConversationType::AnonGroup),
+    ];
+    for scope in &scopes {
+        repo.insert(&Message::new_text(
+            scope.id,
+            scope.kind.clone(),
+            Some(author),
+            "same target clock".into(),
+            timestamp,
+        ))
+        .unwrap();
+    }
+    for scope in &scopes {
+        assert!(
+            repo.add_reaction(scope, &author, timestamp, &me, &me, "👍")
+                .unwrap()
+        );
+        assert!(
+            !repo
+                .add_reaction(scope, &author, timestamp, &me, &me, "👍")
+                .unwrap()
+        );
+        assert!(
+            repo.add_reaction(scope, &author, timestamp, &other, &me, "👍")
+                .unwrap()
+        );
+        assert_eq!(
+            repo.get_reactions(scope, &author, timestamp).unwrap().len(),
+            2
+        );
+        let stored = repo
+            .get_by_reaction_scope(scope, &author, timestamp)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.reaction_counts[0].count, 2);
+        assert_eq!(stored.current_user_reactions, vec!["👍"]);
+        for untouched in scopes.iter().filter(|s| *s != scope) {
+            assert!(
+                repo.get_reactions(untouched, &author, timestamp)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                repo.get_by_reaction_scope(untouched, &author, timestamp)
+                    .unwrap()
+                    .unwrap()
+                    .reaction_counts
+                    .is_empty()
+            );
+        }
+        assert!(
+            repo.remove_reaction(scope, &author, timestamp, &me, &me, "👍")
+                .unwrap()
+        );
+        assert!(
+            !repo
+                .remove_reaction(scope, &author, timestamp, &me, &me, "👍")
+                .unwrap()
+        );
+        assert!(
+            repo.get_by_reaction_scope(scope, &author, timestamp)
+                .unwrap()
+                .unwrap()
+                .current_user_reactions
+                .is_empty()
+        );
+        assert!(
+            repo.remove_reaction(scope, &author, timestamp, &other, &me, "👍")
+                .unwrap()
+        );
+        assert!(
+            repo.get_by_reaction_scope(scope, &author, timestamp)
+                .unwrap()
+                .unwrap()
+                .reaction_counts
+                .is_empty()
+        );
+    }
+}
+
+/// Inject failure *after* the ledger SQL: neither add nor remove can leave a
+/// committed vote with an old projection. Replays also repair projection drift.
+#[test]
+fn reaction_projection_failure_rolls_back_ledger_and_duplicate_repairs_cache() {
+    let (_dir, db) = setup_test_db();
+    let repo = MessageRepository::new(db.clone());
+    let author = UserId::new();
+    let me = UserId::new();
+    let ts = next_timestamp_ns();
+    let scope = ReactionScope::new(ChannelId::new(), ConversationType::AnonGroup);
+    repo.insert(&Message::new_text(
+        scope.id,
+        scope.kind.clone(),
+        Some(author),
+        "target".into(),
+        ts,
+    ))
+    .unwrap();
+    let fail = || {
+        db.connection().unwrap().execute_batch("CREATE TRIGGER fail_reaction_projection BEFORE UPDATE OF reaction_counts_blob ON messages BEGIN SELECT RAISE(ABORT,'injected projection failure'); END;").unwrap()
+    };
+    let recover = || {
+        db.connection()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_reaction_projection")
+            .unwrap()
+    };
+    fail();
+    assert!(
+        repo.add_reaction(&scope, &author, ts, &me, &me, "👍")
+            .is_err()
+    );
+    assert!(repo.get_reactions(&scope, &author, ts).unwrap().is_empty());
+    recover();
+    assert!(
+        repo.add_reaction(&scope, &author, ts, &me, &me, "👍")
+            .unwrap()
+    );
+    fail();
+    assert!(
+        repo.remove_reaction(&scope, &author, ts, &me, &me, "👍")
+            .is_err()
+    );
+    assert_eq!(repo.get_reactions(&scope, &author, ts).unwrap().len(), 1);
+    assert_eq!(
+        repo.get_by_reaction_scope(&scope, &author, ts)
+            .unwrap()
+            .unwrap()
+            .reaction_counts[0]
+            .count,
+        1
+    );
+    recover();
+    let mut stale = repo
+        .get_by_reaction_scope(&scope, &author, ts)
+        .unwrap()
+        .unwrap();
+    stale.reaction_counts.clear();
+    stale.current_user_reactions.clear();
+    repo.update(&stale).unwrap();
+    assert!(
+        !repo
+            .add_reaction(&scope, &author, ts, &me, &me, "👍")
+            .unwrap()
+    );
+    let repaired = repo
+        .get_by_reaction_scope(&scope, &author, ts)
+        .unwrap()
+        .unwrap();
+    assert_eq!(repaired.reaction_counts[0].count, 1);
+    assert_eq!(repaired.current_user_reactions, vec!["👍"]);
+    assert!(
+        repo.remove_reaction(&scope, &author, ts, &me, &me, "👍")
+            .unwrap()
+    );
+    assert!(
+        repo.get_by_reaction_scope(&scope, &author, ts)
+            .unwrap()
+            .unwrap()
+            .reaction_counts
+            .is_empty()
+    );
+}
+
+#[test]
+fn pending_reactions_same_target_are_consumed_only_by_exact_scope() {
+    let (_dir, db) = setup_test_db();
+    let repo = MessageRepository::new(db.clone());
+    let pending =
+        chatter_core::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+            db.clone(),
+        );
+    let me = UserId::new();
+    let author = UserId::new();
+    let ts = next_timestamp_ns();
+    chatter_core::storage::repositories::settings_repo::SettingsRepository::new(db.clone())
+        .set("auth.current_user_id", &me.to_string())
+        .unwrap();
+    let scope_a = ReactionScope::new(ChannelId::new(), ConversationType::ServerDm);
+    let scope_b = ReactionScope::new(scope_a.id, ConversationType::AnonGroup);
+    let scope_c = ReactionScope::new(ChannelId::new(), ConversationType::AnonDm);
+    let now = chatter_core::util::time::TimestampNanos::now().as_u64();
+    pending
+        .queue_reaction(&author, ts, &me, "👍", false, &scope_a, 1, now)
+        .unwrap();
+    pending
+        .queue_reaction(&author, ts, &me, "👍", false, &scope_b, 1, now)
+        .unwrap();
+    pending
+        .queue_reaction(&author, ts, &me, "👍", true, &scope_b, 3, now)
+        .unwrap();
+    pending
+        .queue_reaction(&author, ts, &me, "👍", false, &scope_b, 2, now)
+        .unwrap();
+    for scope in [&scope_c, &scope_b, &scope_a] {
+        repo.insert(&Message::new_text(
+            scope.id,
+            scope.kind.clone(),
+            Some(author),
+            "early target".into(),
+            ts,
+        ))
+        .unwrap();
+    }
+    assert_eq!(repo.get_reactions(&scope_a, &author, ts).unwrap().len(), 1);
+    assert!(
+        repo.get_reactions(&scope_b, &author, ts)
+            .unwrap()
+            .is_empty(),
+        "newer remove wins only in B"
+    );
+    assert!(
+        repo.get_reactions(&scope_c, &author, ts)
+            .unwrap()
+            .is_empty(),
+        "another ID never consumes pending A/B"
+    );
+    assert_eq!(
+        repo.get_by_reaction_scope(&scope_a, &author, ts)
+            .unwrap()
+            .unwrap()
+            .current_user_reactions,
+        vec!["👍"]
+    );
+    assert!(
+        repo.get_by_reaction_scope(&scope_b, &author, ts)
+            .unwrap()
+            .unwrap()
+            .reaction_counts
+            .is_empty()
+    );
 }

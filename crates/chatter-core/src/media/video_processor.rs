@@ -8,11 +8,11 @@ use image::ImageEncoder;
 use std::path::Path;
 use std::sync::{Arc, Mutex, Once};
 
+use gst_video::prelude::*;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
-use gst_video::prelude::*;
 
 /// Maximum thumbnail dimension (width or height).
 const THUMBNAIL_MAX_SIZE: u32 = 400;
@@ -43,14 +43,16 @@ fn ensure_gst_init() -> Result<(), MediaError> {
 ///
 /// Uses hardware-accelerated decoding (VA-API/NVDEC) when available.
 /// Seeks to 1 second (or first frame if video is shorter).
-pub fn extract_video_thumbnail(
-    source: &Path,
-) -> Result<(Vec<u8>, u32, u32, u64), MediaError> {
+pub fn extract_video_thumbnail(source: &Path) -> Result<(Vec<u8>, u32, u32, u64), MediaError> {
     ensure_gst_init()?;
 
-    let uri = format!("file://{}", source.canonicalize()
-        .map_err(MediaError::FileRead)?
-        .display());
+    let uri = format!(
+        "file://{}",
+        source
+            .canonicalize()
+            .map_err(MediaError::FileRead)?
+            .display()
+    );
 
     extract_thumbnail_from_uri(&uri, 1) // Seek to 1 second
 }
@@ -73,7 +75,10 @@ pub fn extract_video_thumbnail_from_memory(
 /// - uridecodebin auto-plugs VA-API/NVDEC decoders when available
 /// - videoconvert handles GPU→CPU memory transfer automatically
 #[allow(clippy::type_complexity)]
-fn extract_thumbnail_from_uri(uri: &str, seek_seconds: u64) -> Result<(Vec<u8>, u32, u32, u64), MediaError> {
+fn extract_thumbnail_from_uri(
+    uri: &str,
+    seek_seconds: u64,
+) -> Result<(Vec<u8>, u32, u32, u64), MediaError> {
     // Build pipeline string - uridecodebin handles HW decoder selection
     // videoconvert will use VA-API postproc or gldownload automatically when needed
     let pipeline_str = format!(
@@ -121,8 +126,8 @@ fn extract_thumbnail_from_uri(uri: &str, seek_seconds: u64) -> Result<(Vec<u8>, 
                 let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
                 let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                 let caps = sample.caps().ok_or(gst::FlowError::Error)?;
-                let info = gst_video::VideoInfo::from_caps(caps)
-                    .map_err(|_| gst::FlowError::Error)?;
+                let info =
+                    gst_video::VideoInfo::from_caps(caps).map_err(|_| gst::FlowError::Error)?;
 
                 // Use VideoFrameRef for proper stride handling
                 let frame = gst_video::VideoFrameRef::from_buffer_ref_readable(buffer, &info)
@@ -141,7 +146,7 @@ fn extract_thumbnail_from_uri(uri: &str, seek_seconds: u64) -> Result<(Vec<u8>, 
                 for y in 0..height as usize {
                     for x in 0..width as usize {
                         let offset = y * stride + x * 4;
-                        rgb_data.push(plane_data[offset]);     // R
+                        rgb_data.push(plane_data[offset]); // R
                         rgb_data.push(plane_data[offset + 1]); // G
                         rgb_data.push(plane_data[offset + 2]); // B
                     }
@@ -155,10 +160,12 @@ fn extract_thumbnail_from_uri(uri: &str, seek_seconds: u64) -> Result<(Vec<u8>, 
     );
 
     // Start pipeline in PAUSED for preroll
-    pipeline.set_state(gst::State::Paused)
+    pipeline
+        .set_state(gst::State::Paused)
         .map_err(|e| MediaError::PlaybackError(format!("Failed to pause: {}", e)))?;
 
-    let bus = pipeline.bus()
+    let bus = pipeline
+        .bus()
         .ok_or_else(|| MediaError::PlaybackError("No bus".to_string()))?;
 
     let mut state = 0u8; // 0=preroll, 1=seeked, 2=playing
@@ -173,7 +180,8 @@ fn extract_thumbnail_from_uri(uri: &str, seek_seconds: u64) -> Result<(Vec<u8>, 
                     match state {
                         0 => {
                             // First AsyncDone = pipeline prerolled, now seek
-                            duration_ms = pipeline.query_duration::<gst::ClockTime>()
+                            duration_ms = pipeline
+                                .query_duration::<gst::ClockTime>()
                                 .map(|d| d.mseconds())
                                 .unwrap_or(0);
 
@@ -186,7 +194,11 @@ fn extract_thumbnail_from_uri(uri: &str, seek_seconds: u64) -> Result<(Vec<u8>, 
                                 0
                             };
 
-                            tracing::debug!("Seeking to {}ms (duration {}ms)", seek_pos, duration_ms);
+                            tracing::debug!(
+                                "Seeking to {}ms (duration {}ms)",
+                                seek_pos,
+                                duration_ms
+                            );
 
                             if seek_pos > 0 {
                                 // Seek with FLUSH + KEY_UNIT for faster seeking
@@ -240,7 +252,10 @@ fn extract_thumbnail_from_uri(uri: &str, seek_seconds: u64) -> Result<(Vec<u8>, 
     let _ = pipeline.set_state(gst::State::Null);
 
     // Get captured frame
-    let (rgb_data, width, height) = frame_data.lock().unwrap().take()
+    let (rgb_data, width, height) = frame_data
+        .lock()
+        .unwrap()
+        .take()
         .ok_or_else(|| MediaError::ThumbnailGeneration("No frame captured".to_string()))?;
 
     encode_thumbnail(&rgb_data, width, height, duration_ms)
@@ -248,7 +263,10 @@ fn extract_thumbnail_from_uri(uri: &str, seek_seconds: u64) -> Result<(Vec<u8>, 
 
 /// Extract thumbnail from memory using appsrc + decodebin.
 #[allow(clippy::type_complexity)]
-fn extract_thumbnail_from_memory_impl(data: &[u8], seek_seconds: u64) -> Result<(Vec<u8>, u32, u32, u64), MediaError> {
+fn extract_thumbnail_from_memory_impl(
+    data: &[u8],
+    seek_seconds: u64,
+) -> Result<(Vec<u8>, u32, u32, u64), MediaError> {
     let pipeline = gst::Pipeline::new();
 
     // Create appsrc for memory data
@@ -276,7 +294,8 @@ fn extract_thumbnail_from_memory_impl(data: &[u8], seek_seconds: u64) -> Result<
                     return;
                 }
 
-                let chunk_size = (if hint > 0 { hint as usize } else { 65536 }).min(data.len() - *pos);
+                let chunk_size =
+                    (if hint > 0 { hint as usize } else { 65536 }).min(data.len() - *pos);
                 let slice = &data[*pos..*pos + chunk_size];
 
                 let mut buffer = gst::Buffer::from_slice(slice.to_vec());
@@ -291,7 +310,7 @@ fn extract_thumbnail_from_memory_impl(data: &[u8], seek_seconds: u64) -> Result<
                 *read_pos_seek.lock().unwrap() = offset as usize;
                 true
             })
-            .build()
+            .build(),
     );
 
     // Create decodebin (auto-selects HW decoder)
@@ -302,15 +321,19 @@ fn extract_thumbnail_from_memory_impl(data: &[u8], seek_seconds: u64) -> Result<
 
     // Create appsink
     let appsink = gst_app::AppSink::builder()
-        .caps(&gst_video::VideoCapsBuilder::new()
-            .format(gst_video::VideoFormat::Rgbx)
-            .build())
+        .caps(
+            &gst_video::VideoCapsBuilder::new()
+                .format(gst_video::VideoFormat::Rgbx)
+                .build(),
+        )
         .sync(false)
         .build();
 
-    pipeline.add_many([appsrc.upcast_ref(), &decodebin])
+    pipeline
+        .add_many([appsrc.upcast_ref(), &decodebin])
         .map_err(|e| MediaError::PlaybackError(format!("Failed to add elements: {}", e)))?;
-    appsrc.link(&decodebin)
+    appsrc
+        .link(&decodebin)
         .map_err(|e| MediaError::PlaybackError(format!("Failed to link: {}", e)))?;
 
     // Frame storage
@@ -329,8 +352,8 @@ fn extract_thumbnail_from_memory_impl(data: &[u8], seek_seconds: u64) -> Result<
                 let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
                 let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                 let caps = sample.caps().ok_or(gst::FlowError::Error)?;
-                let info = gst_video::VideoInfo::from_caps(caps)
-                    .map_err(|_| gst::FlowError::Error)?;
+                let info =
+                    gst_video::VideoInfo::from_caps(caps).map_err(|_| gst::FlowError::Error)?;
 
                 let frame = gst_video::VideoFrameRef::from_buffer_ref_readable(buffer, &info)
                     .map_err(|_| gst::FlowError::Error)?;
@@ -363,25 +386,31 @@ fn extract_thumbnail_from_memory_impl(data: &[u8], seek_seconds: u64) -> Result<
     let video_linked_clone = video_linked.clone();
 
     decodebin.connect_pad_added(move |_decodebin, src_pad| {
-        if let Some(caps) = src_pad.current_caps().or_else(|| Some(src_pad.query_caps(None))) {
+        if let Some(caps) = src_pad
+            .current_caps()
+            .or_else(|| Some(src_pad.query_caps(None)))
+        {
             if let Some(s) = caps.structure(0) {
                 if s.name().as_str().starts_with("video/") {
                     if let Some(pipeline) = pipeline_weak.upgrade() {
                         let convert = gst::ElementFactory::make("videoconvert").build().ok();
 
                         if let Some(convert) = convert {
-                            let elements: &[&gst::Element] = &[&convert, appsink_clone.upcast_ref()];
+                            let elements: &[&gst::Element] =
+                                &[&convert, appsink_clone.upcast_ref()];
                             if pipeline.add_many(elements).is_ok()
-                                && gst::Element::link_many(elements).is_ok() {
-                                    for e in elements {
-                                        let _ = e.sync_state_with_parent();
-                                    }
-                                    if let Some(sink_pad) = convert.static_pad("sink") {
-                                        if src_pad.link(&sink_pad).is_ok() {
-                                            video_linked_clone.store(true, std::sync::atomic::Ordering::SeqCst);
-                                        }
+                                && gst::Element::link_many(elements).is_ok()
+                            {
+                                for e in elements {
+                                    let _ = e.sync_state_with_parent();
+                                }
+                                if let Some(sink_pad) = convert.static_pad("sink") {
+                                    if src_pad.link(&sink_pad).is_ok() {
+                                        video_linked_clone
+                                            .store(true, std::sync::atomic::Ordering::SeqCst);
                                     }
                                 }
+                            }
                         }
                     }
                 }
@@ -389,10 +418,12 @@ fn extract_thumbnail_from_memory_impl(data: &[u8], seek_seconds: u64) -> Result<
         }
     });
 
-    pipeline.set_state(gst::State::Paused)
+    pipeline
+        .set_state(gst::State::Paused)
         .map_err(|e| MediaError::PlaybackError(format!("Failed to pause: {}", e)))?;
 
-    let bus = pipeline.bus()
+    let bus = pipeline
+        .bus()
         .ok_or_else(|| MediaError::PlaybackError("No bus".to_string()))?;
 
     let mut state = 0u8; // 0=preroll, 1=seeked, 2=playing
@@ -410,7 +441,8 @@ fn extract_thumbnail_from_memory_impl(data: &[u8], seek_seconds: u64) -> Result<
 
                     match state {
                         0 => {
-                            duration_ms = pipeline.query_duration::<gst::ClockTime>()
+                            duration_ms = pipeline
+                                .query_duration::<gst::ClockTime>()
                                 .map(|d| d.mseconds())
                                 .unwrap_or(0);
 
@@ -460,7 +492,10 @@ fn extract_thumbnail_from_memory_impl(data: &[u8], seek_seconds: u64) -> Result<
 
     let _ = pipeline.set_state(gst::State::Null);
 
-    let (rgb_data, width, height) = frame_data.lock().unwrap().take()
+    let (rgb_data, width, height) = frame_data
+        .lock()
+        .unwrap()
+        .take()
         .ok_or_else(|| MediaError::ThumbnailGeneration("No frame captured".to_string()))?;
 
     encode_thumbnail(&rgb_data, width, height, duration_ms)
@@ -509,7 +544,11 @@ fn encode_thumbnail(
 
     tracing::debug!(
         "Extracted video thumbnail: {}x{} -> {}x{}, {} bytes",
-        width, height, thumb_width, thumb_height, webp_bytes.len()
+        width,
+        height,
+        thumb_width,
+        thumb_height,
+        webp_bytes.len()
     );
 
     Ok((webp_bytes, thumb_width, thumb_height, duration_ms))
@@ -519,11 +558,18 @@ fn encode_thumbnail(
 pub fn get_video_duration(source: &Path) -> Result<u64, MediaError> {
     ensure_gst_init()?;
 
-    let uri = format!("file://{}", source.canonicalize()
-        .map_err(MediaError::FileRead)?
-        .display());
+    let uri = format!(
+        "file://{}",
+        source
+            .canonicalize()
+            .map_err(MediaError::FileRead)?
+            .display()
+    );
 
-    let pipeline_str = format!("uridecodebin uri=\"{}\" ! fakesink", uri.replace('"', "\\\""));
+    let pipeline_str = format!(
+        "uridecodebin uri=\"{}\" ! fakesink",
+        uri.replace('"', "\\\"")
+    );
 
     let pipeline = gst::parse::launch(&pipeline_str)
         .map_err(|e| MediaError::PlaybackError(format!("Pipeline error: {}", e)))?
@@ -533,7 +579,8 @@ pub fn get_video_duration(source: &Path) -> Result<u64, MediaError> {
     pipeline.set_state(gst::State::Paused).ok();
     let _ = pipeline.state(gst::ClockTime::from_seconds(5));
 
-    let duration = pipeline.query_duration::<gst::ClockTime>()
+    let duration = pipeline
+        .query_duration::<gst::ClockTime>()
         .map(|d| d.mseconds())
         .unwrap_or(0);
 

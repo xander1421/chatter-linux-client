@@ -8,8 +8,7 @@
 //! Requires `INTEGRATION_TESTS=1` + a server on `localhost:50051`
 //! (`skip_if_no_server!()`). Isolated tempdir per client.
 
-#[macro_use]
-mod common;
+use crate::skip_if_no_server;
 
 use std::sync::Arc;
 
@@ -20,6 +19,7 @@ const PIN: &str = "Kf8mq2xpZ"; // non-blocklisted, clears validate_pin
 const PASSWORD: &str = "TestPass123!";
 
 fn build_client(dir: &tempfile::TempDir) -> Arc<ChatterClient> {
+    crate::common::headless(dir.path());
     ChatterClient::builder()
         .server_url(SERVER_URL)
         .data_dir(dir.path().to_str().unwrap())

@@ -1,0 +1,99 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+import { DisappearingGlobal } from "disappearing_global.slint";
+
+// One timer choice: the ring-and-dot radio of the settings screens.
+component TimerOption inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked();
+    min-height: Spacing.touch-target-min;
+    border-radius: Spacing.radius-sm;
+    background: touch.pressed ? Colors.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-description: root.selected ? "Selected" : "";
+    accessible-action-default => { root.clicked(); }
+    KeyFocus { border-radius: parent.border-radius; activate => { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: Spacing.sm;
+        padding-right: Spacing.sm;
+        spacing: Spacing.sm;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Rectangle {
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                border-width: Spacing.stroke;
+                border-color: root.selected ? Colors.primary : Colors.text-muted;
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: root.selected ? Colors.primary : transparent;
+                }
+            }
+        }
+        Text {
+            text: root.label;
+            color: Colors.text-primary;
+            font-size: Typography.sm;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+export component DisappearingSettings inherits VerticalLayout {
+    in property <string> peer-id;
+    in property <int> current-ttl;
+    property <int> selected-ttl: root.current-ttl;
+    changed current-ttl => { root.selected-ttl = root.current-ttl; }
+    changed peer-id => { root.selected-ttl = root.current-ttl; }
+    property <string> minutes: "5";
+    spacing: Spacing.sm;
+    Text { text: "Message lifetime"; color: Colors.text-primary; font-size: Typography.sm; }
+    Text { text: "Each new message disappears after the selected time once its expiry clock starts."; color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
+    // A tap applies at once, as in Signal and Telegram; Off turns it off.
+    for opt in DisappearingGlobal.options: TimerOption {
+        label: opt.label;
+        selected: root.selected-ttl == opt.seconds;
+        clicked => {
+            if opt.seconds != root.selected-ttl {
+                root.selected-ttl = opt.seconds;
+                DisappearingGlobal.set-dm-window(root.peer-id, opt.seconds, root.minutes);
+            }
+        }
+    }
+    // The window only means something while a timer is on.
+    if root.selected-ttl != 0: VerticalLayout {
+        spacing: Spacing.sm;
+        Text { text: "How long to enable"; color: Colors.text-primary; font-size: Typography.sm; }
+        Text { text: "Current: " + DisappearingGlobal.dm-activation-label + ". The window applies to new messages only."; color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
+        Button {
+            text: "5 minutes";
+            variant: root.minutes == "5" ? "primary" : "secondary";
+            clicked => {
+                root.minutes = "5";
+                DisappearingGlobal.set-dm-window(root.peer-id, root.selected-ttl, root.minutes);
+            }
+        }
+        Input {
+            placeholder: "Custom duration in minutes";
+            text <=> root.minutes;
+            accepted => { DisappearingGlobal.set-dm-window(root.peer-id, root.selected-ttl, root.minutes); }
+        }
+        Button {
+            text: "Set duration";
+            variant: "secondary";
+            clicked => { DisappearingGlobal.set-dm-window(root.peer-id, root.selected-ttl, root.minutes); }
+        }
+    }
+}

@@ -1,14 +1,39 @@
+import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
+import { IconAction } from "icon_action.slint";
+import { GlassSurface } from "glass_surface.slint";
+import { MediaActions } from "image_viewer.slint";
 // Video player modal component
 //
-// Full-screen video player with controls for playback, seeking, and volume.
+// Full-screen video player. The chrome is the image viewer's: a glass header
+// above the frame as drawn and a glass footer below it, the same width as the
+// media. The footer adds a playback row above the shared media actions.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { DismissButton } from "dismiss_button.slint";
 import { Typography } from "../theme/typography.slint";
 
 export component VideoPlayer inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
+    private property <bool> compact-layout: root.width < 600px;
+    // Touch platform: the media actions take the 48px Android minimum, as in the image viewer.
+    in property <bool> touch: false;
+    property <length> action-size: (root.touch ? Spacing.touch-target-min : Spacing.button-height) * Appearance.text-grow;
     // Properties
     in property <bool> show: false;
+    property <float> arrival: 0.0;
+    animate arrival { duration: Materials.motion-emphasized; easing: Materials.spring; }
+    arrival-timer := Timer {
+        interval: 1ms;
+        running: root.show && root.arrival == 0.0;
+        triggered => { root.arrival = 1.0; }
+    }
+    changed show => { if (!root.show) { root.arrival = 0.0; } }
     in property <image> frame;  // Current video frame
     in property <string> filename: "";
     in property <float> progress: 0.0;  // 0.0 to 1.0
@@ -18,6 +43,13 @@ export component VideoPlayer inherits Rectangle {
     in property <float> volume: 1.0;  // 0.0 to 1.0
 
     // Callbacks
+    in property <string> position-label;
+    in property <bool> has-previous;
+    in property <bool> has-next;
+    callback previous();
+    callback next();
+    callback download();
+    callback open-downloads();
     callback close();
     callback toggle-play-pause();
     callback seek(float);  // position 0.0 to 1.0
@@ -25,331 +57,187 @@ export component VideoPlayer inherits Rectangle {
 
     // Only render when show is true
     visible: root.show;
-    background: Colors.background.with-alpha(0.94);
-
-    // Close on backdrop click (outside content area)
-    backdrop := TouchArea {
-        clicked => {
-            root.close();
-        }
+    background: transparent;
+    Rectangle {
+        width: 100%; height: 100%;
+        background: Materials.scrim-media;
+        opacity: root.arrival;
     }
 
-    // Content container - blocks clicks from reaching backdrop
-    Rectangle {
-        x: 32px;
-        y: 0;
-        width: parent.width - 64px;
-        height: parent.height;
-        background: transparent;
+    // Close on backdrop click
+    backdrop := TouchArea {
+        clicked => { root.close(); }
+    }
 
-        // Block clicks on content area from closing
-        TouchArea {}
+    // The frame owns the layout, as in the image viewer.
+    viewer-area := Rectangle {
+        x: root.compact-layout ? Spacing.sm : Spacing.xl;
+        y: root.compact-layout ? Spacing.sm : Spacing.xl;
+        width: root.width - 2 * self.x;
+        height: root.height - 2 * self.y;
+        property <length> fit-width: root.frame.width <= 0 || root.frame.height <= 0
+            ? self.width : min(self.width, self.height * root.frame.width / root.frame.height);
+        property <length> fit-height: root.frame.width <= 0 || root.frame.height <= 0
+            ? self.height * 9 / 16 : min(self.height, self.width * root.frame.height / root.frame.width);
 
-        // Main layout
-        VerticalLayout {
-            alignment: center;
-            padding: Spacing.lg;
-
-        // Header with filename and close button
         Rectangle {
-            height: 48px;
-
-            // Block clicks on header from closing video
-            TouchArea {}
-
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                alignment: space-between;
-
-                // File info
-                VerticalLayout {
-                    alignment: center;
-
-                    Text {
-                        text: root.filename;
-                        color: Colors.text-primary;
-                        font-size: Typography.base;
-                        font-weight: Typography.medium;
-                        overflow: elide;
-                    }
-                }
-
-                // Close button
-                Rectangle {
-                    width: 40px;
-                    height: 40px;
-                    border-radius: 20px;
-                    background: close-touch.has-hover ? Colors.surface-hover : transparent;
-
-                    Text {
-                        width: 100%;
-                        height: 100%;
-                        text: "\u{00D7}";  // X mark
-                        color: Colors.text-primary;
-                        font-size: Typography.xl;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    close-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.close();
-                        }
-                    }
-                }
-            }
-        }
-
-        // Video display area
-        Rectangle {
-            vertical-stretch: 1;
-            min-height: 200px;  // Ensure video area has minimum size
-            background: Colors.background;
-            border-radius: Spacing.radius-md;
-
-            // Prevent clicks from closing
-            TouchArea {
-                clicked => {
-                    // Toggle play/pause on video click
-                    root.toggle-play-pause();
-                }
-            }
-
-            // Video frame
-            Image {
-                source: root.frame;
-                image-fit: contain;
-                width: 100%;
-                height: 100%;
-            }
-
-            // Play/pause overlay indicator (shown briefly on toggle)
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2 + (1.0 - root.arrival) * 28px;
+            width: viewer-area.fit-width;
+            height: viewer-area.fit-height;
+            opacity: root.arrival;
+            Image { source: root.frame; image-fit: contain; width: 100%; height: 100%; }
+            // Tapping the video plays or pauses it.
+            TouchArea { clicked => { root.toggle-play-pause(); } }
             if !root.is-playing: Rectangle {
                 width: 80px;
                 height: 80px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
                 border-radius: 40px;
-                background: Colors.overlay;
-
+                background: #06101db8;
                 Text {
-                    width: 100%;
-                    height: 100%;
                     text: "\u{25B6}";  // Play triangle
-                    color: Colors.text-primary;
+                    color: #ffffff;
                     font-size: 32px;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
             }
         }
+    }
 
-        // Controls bar
-        Rectangle {
-            height: 80px;
-            background: transparent;
+    property <length> footer-height: root.action-size * 2;
+    property <length> chrome-width: min(viewer-area.width, max(300px, viewer-area.fit-width));
+    property <length> chrome-x: viewer-area.x + (viewer-area.width - root.chrome-width) / 2;
+    property <length> chrome-top: (viewer-area.height - viewer-area.fit-height) / 2;
+    property <length> header-y: max(viewer-area.y, viewer-area.y + root.chrome-top - 48px * Appearance.text-grow - Spacing.sm);
+    property <length> footer-y: min(root.height - root.footer-height - viewer-area.y,
+        viewer-area.y + root.chrome-top + viewer-area.fit-height + Spacing.sm);
 
-            // Block clicks on controls from closing video
-            TouchArea {}
-
+    GlassSurface {
+        x: root.chrome-x;
+        y: root.header-y - (1.0 - root.arrival) * 12px;
+        width: root.chrome-width;
+        height: 48px * Appearance.text-grow;
+        material-enabled: true;
+        border-radius: Spacing.radius-lg;
+        opacity: root.arrival;
+        TouchArea { width: 100%; height: 100%; }
+        HorizontalLayout {
+            padding-left: Spacing.md;
+            padding-right: Spacing.md;
+            alignment: space-between;
             VerticalLayout {
-                padding: Spacing.sm;
-                spacing: Spacing.sm;
-
-                // Progress bar
-                Rectangle {
-                    height: 20px;
-
-                    HorizontalLayout {
-                        spacing: Spacing.sm;
-                        alignment: stretch;
-
-                        // Elapsed time
-                        Text {
-                            text: root.elapsed;
-                            color: Colors.text-muted;
-                            font-size: Typography.xs;
-                            vertical-alignment: center;
-                            width: 50px;
-                            horizontal-alignment: right;
-                        }
-
-                        // Progress track
-                        Rectangle {
-                            height: 6px;
-                            horizontal-stretch: 1;
-                            background: Colors.surface-hover;
-                            border-radius: 3px;
-
-                            // Progress fill - must be explicitly left-aligned
-                            Rectangle {
-                                x: 0;
-                                y: 0;
-                                width: parent.width * root.progress;
-                                height: 100%;
-                                background: Colors.primary;
-                                border-radius: 3px;
-                            }
-
-                            // Seek handle
-                            Rectangle {
-                                x: parent.width * root.progress - 8px;
-                                y: -5px;
-                                width: 16px;
-                                height: 16px;
-                                border-radius: 8px;
-                                background: Colors.primary;
-                                visible: progress-touch.has-hover || progress-touch.pressed;
-                            }
-
-                            progress-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    // Calculate seek position
-                                    root.seek(self.mouse-x / self.width);
-                                }
-                                moved => {
-                                    if self.pressed {
-                                        root.seek(clamp(self.mouse-x / self.width, 0.0, 1.0));
-                                    }
-                                }
-                            }
-                        }
-
-                        // Duration
-                        Text {
-                            text: root.duration;
-                            color: Colors.text-muted;
-                            font-size: Typography.xs;
-                            vertical-alignment: center;
-                            width: 50px;
-                        }
-                    }
-                }
-
-                // Control buttons row
-                HorizontalLayout {
-                    height: 44px;
-                    alignment: center;
-                    spacing: Spacing.lg;
-
-                    // Volume control
-                    HorizontalLayout {
-                        width: 120px;
-                        spacing: Spacing.xs;
-                        alignment: center;
-
-                        // Volume icon
-                        Rectangle {
-                            width: 32px;
-                            height: 32px;
-                            border-radius: 16px;
-                            background: volume-icon-touch.has-hover ? Colors.surface-hover : transparent;
-
-                            Text {
-                                width: 100%;
-                                height: 100%;
-                                text: root.volume > 0 ? "\u{1F50A}\u{FE0F}" : "\u{1F507}\u{FE0F}";  // Speaker or muted (with emoji variant selector)
-                                font-family: Typography.font-family-emoji;
-                                font-size: Typography.base;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-
-                            volume-icon-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    // Toggle mute
-                                    if root.volume > 0 {
-                                        root.set-volume(0.0);
-                                    } else {
-                                        root.set-volume(1.0);
-                                    }
-                                }
-                            }
-                        }
-
-                        // Volume slider
-                        Rectangle {
-                            width: 80px;
-                            height: 6px;
-                            background: Colors.surface;
-                            border-radius: 3px;
-
-                            // Volume fill - must be explicitly left-aligned
-                            Rectangle {
-                                x: 0;
-                                y: 0;
-                                width: parent.width * root.volume;
-                                height: 100%;
-                                background: Colors.text-muted;
-                                border-radius: 3px;
-                            }
-
-                            volume-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.set-volume(clamp(self.mouse-x / self.width, 0.0, 1.0));
-                                }
-                                moved => {
-                                    if self.pressed {
-                                        root.set-volume(clamp(self.mouse-x / self.width, 0.0, 1.0));
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Play/Pause button
-                    Rectangle {
-                        width: 56px;
-                        height: 56px;
-                        border-radius: 28px;
-                        background: play-touch.has-hover ? Colors.primary-hover : Colors.primary;
-
-                        Text {
-                            width: 100%;
-                            height: 100%;
-                            text: root.is-playing ? "\u{23F8}" : "\u{25B6}";  // Pause or Play
-                            color: Colors.text-primary;
-                            font-size: Typography.xxl;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        play-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.toggle-play-pause();
-                            }
-                        }
-                    }
-
-                    // Spacer to balance volume control
-                    Rectangle {
-                        width: 120px;
-                    }
-                }
+                horizontal-stretch: 1;
+                alignment: center;
+                Text { text: root.filename; overflow: elide; color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.medium; }
             }
-        }
-
-        // Footer hint
-        Rectangle {
-            height: 24px;
-
-            // Block clicks on footer from closing video
-            TouchArea {}
-
-            Text {
-                text: "Click video to play/pause \u{2022} Drag progress bar to seek";
-                color: Colors.text-muted;
-                font-size: Typography.xs;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
+            DismissButton { clicked => { root.close(); } }
         }
     }
+
+    GlassSurface {
+        x: root.chrome-x;
+        y: root.footer-y + (1.0 - root.arrival) * 12px;
+        width: root.chrome-width;
+        height: root.footer-height;
+        border-radius: Spacing.radius-lg;
+        opacity: root.arrival;
+        TouchArea { width: 100%; height: 100%; }
+        VerticalLayout {
+            HorizontalLayout {
+                height: root.action-size;
+                spacing: Spacing.xs;
+                padding-right: Spacing.sm;
+                IconAction {
+                    size: root.action-size;
+                    label: root.is-playing ? "Pause video" : "Play video";
+                    icon: root.is-playing ? Icons.pause : Icons.play;
+                    clicked => { root.toggle-play-pause(); }
+                }
+                Text { text: root.elapsed; color: Colors.text-muted; font-size: Typography.xs; vertical-alignment: center; }
+                // Seek track: tap or drag anywhere along it.
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    Rectangle {
+                        height: 6px;
+                        background: Colors.surface-hover;
+                        border-radius: 3px;
+                        accessible-role: slider;
+                        accessible-label: "Video position";
+                        accessible-value: Math.round(root.progress * 100) + " percent";
+                        seek-keys := FocusScope {
+                            width: 0px;
+                            height: 0px;
+                            enabled: root.show;
+                            key-pressed(event) => {
+                                if event.text == Key.LeftArrow {
+                                    root.seek(max(0.0, root.progress - 0.05));
+                                    return accept;
+                                }
+                                if event.text == Key.RightArrow {
+                                    root.seek(min(1.0, root.progress + 0.05));
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                        if seek-keys.has-focus: Rectangle {
+                            x: -2px; y: -4px;
+                            width: parent.width + 4px; height: parent.height + 8px;
+                            border-width: 2px;
+                            border-color: Colors.focus-ring;
+                            border-radius: self.height / 2;
+                        }
+                        Rectangle {
+                            x: 0;
+                            y: 0;
+                            width: parent.width * clamp(root.progress, 0.0, 1.0);
+                            animate width { duration: Materials.motion-quick; easing: Materials.settle; }
+                            height: 100%;
+                            background: Colors.primary;
+                            border-radius: 3px;
+                        }
+                        Rectangle {
+                            x: max(0px, min(parent.width - self.width, parent.width * clamp(root.progress, 0.0, 1.0) - self.width / 2));
+                            y: -5px;
+                            width: 16px;
+                            height: 16px;
+                            border-radius: 8px;
+                            background: Colors.primary;
+                            visible: root.touch || progress-touch.has-hover || progress-touch.pressed;
+                        }
+                        progress-touch := TouchArea {
+                            y: (parent.height - self.height) / 2;
+                            height: root.action-size;
+                            mouse-cursor: pointer;
+                            clicked => { root.seek(clamp(self.mouse-x / self.width, 0.0, 1.0)); }
+                            moved => {
+                                if self.pressed {
+                                    root.seek(clamp(self.mouse-x / self.width, 0.0, 1.0));
+                                }
+                            }
+                        }
+                    }
+                }
+                Text { text: root.duration; color: Colors.text-muted; font-size: Typography.xs; vertical-alignment: center; }
+                IconAction {
+                    size: root.action-size;
+                    label: root.volume > 0 ? "Mute video" : "Unmute video";
+                    icon: root.volume > 0 ? Icons.volume-2 : Icons.volume-x;
+                    clicked => { root.set-volume(root.volume > 0 ? 0.0 : 1.0); }
+                }
+            }
+            MediaActions {
+                action-size: root.action-size;
+                position-label: root.position-label;
+                has-previous: root.has-previous;
+                has-next: root.has-next;
+                download => { root.download(); }
+                open-downloads => { root.open-downloads(); }
+                previous => { root.previous(); }
+                next => { root.next(); }
+            }
+        }
     }
 }

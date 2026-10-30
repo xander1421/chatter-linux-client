@@ -11,7 +11,7 @@
 //! - [`FanoutResult`] - Per-member delivery result
 //! - [`GroupFanoutResult`] - Complete fanout operation result
 //! - [`GroupPollResult`] - Result of polling a group mailbox
-//! - [`GroupCoordinator`] - Mailbox creation and member address exchange
+//! - [`GroupCoordinator`] - Member address exchange for existing mailboxes
 
 pub mod coordination;
 pub mod fanout;
@@ -24,4 +24,4 @@ pub use member_mailbox::{GroupMailbox, GroupMailboxManager, GroupMailboxState, M
 pub use fanout::{FanoutResult, GroupFanout, GroupFanoutResult, GroupPollResult};
 
 // Re-export coordination types
-pub use coordination::{GroupCoordinator, GroupMailboxSetupResult};
+pub use coordination::GroupCoordinator;

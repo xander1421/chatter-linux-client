@@ -4,20 +4,28 @@
 
 pub mod anon_http;
 pub mod connection;
-pub mod connection_manager;
 pub mod grpc;
-pub mod offline_queue;
 pub mod reconnect_config;
-pub mod recovery;
 pub mod server_monitor;
+pub(crate) mod storage_http;
 pub mod streaming;
 pub mod validation;
 
-pub use connection::{
-    server_status, ConnectionEvent, ConnectionState, ConnectionStateMachine, FailReason,
-    ServerStatus,
-};
-pub use connection_manager::{ConnectionConfig, ConnectionManager, ReplayResult};
-pub use offline_queue::{OfflineQueue, OperationType, QueueError, QueueEvent, QueuedOperation, QueueStats};
+pub use connection::{ConnectionState, FailReason, ServerStatus, server_status};
 pub use reconnect_config::ReconnectConfig;
-pub use recovery::{ConnectionRecovery, FibonacciBackoff};
+
+/// Public HTTP retains the WebPKI roots and ring provider used before reqwest 0.13.
+/// Explicit configuration also avoids introducing Android platform-verifier JNI setup.
+pub(crate) fn public_http_client_builder() -> reqwest::ClientBuilder {
+    let roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    let tls = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("ring supports the default TLS protocol versions")
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    reqwest::Client::builder().tls_backend_preconfigured(tls)
+}

@@ -1,148 +1,211 @@
 // Button component with variants, hover/press states, icons, and loading
 
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
 export component Button inherits Rectangle {
     in property <string> text: "";
-    in property <string> variant: "primary";  // "primary", "secondary", "ghost", "danger"
+    in property <string> variant: "primary";  // primary, secondary, ghost/tertiary, danger/destructive, danger-ghost, icon
+    in property <string> size: "medium"; // small, medium, large
+    in property <bool> touch: false;
+    in property <bool> hover-enabled: true;
+    in property <string> label: root.text; // accessible name for icon-only buttons
     in property <bool> disabled: false;
     in property <bool> loading: false;
     in property <image> icon;
 
     accessible-role: button;
-    accessible-label: root.text;
+    accessible-label: root.label;
     accessible-enabled: !root.disabled && !root.loading;
+    accessible-action-default => { if !root.disabled && !root.loading { root.clicked(); } }
 
     callback clicked();
 
     // Internal state
     property <bool> hover: false;
-    property <bool> pressed: false;
+    property <bool> pressed: touch.pressed && !root.disabled && !root.loading;
 
+    // A destructive button carries white text, so its fill must hold it at
+    // 4.5:1: dark `error` #ef4b4b is 3.6:1 (fine for an icon-only badge, not
+    // for a label), dark `error-hover` #dc2626 is 4.8:1.
+    property <color> destructive-fill: Appearance.dark ? Colors.error-hover : Colors.error;
+    property <color> destructive-fill-active: Appearance.dark ? Colors.error-hover.darker(0.12) : Colors.error-hover;
     // Computed background color based on variant and state
     property <color> bg-color: {
         if disabled {
-            variant == "primary" ? Colors.primary :
-            variant == "secondary" ? Colors.surface :
-            variant == "danger" ? Colors.error :
+            variant == "primary" ? Colors.action-fill :
+            variant == "secondary" ? Colors.fill-secondary :
+            (variant == "destructive" || variant == "danger") ? root.destructive-fill :
             transparent
         } else if pressed {
-            variant == "primary" ? Colors.primary-active :
-            variant == "secondary" ? Colors.surface-hover :
-            variant == "danger" ? Colors.error-hover :
-            Colors.surface-hover.with-alpha(0.2)
-        } else if hover {
-            variant == "primary" ? Colors.primary-hover :
-            variant == "secondary" ? Colors.surface-hover :
-            variant == "danger" ? Colors.error-hover :
-            Colors.surface.with-alpha(0.1)
+            variant == "primary" ? Colors.action-active :
+            variant == "secondary" ? Colors.fill-secondary-hover :
+            (variant == "destructive" || variant == "danger") ? root.destructive-fill-active :
+            variant == "danger-ghost" ? Colors.error.with-alpha(0.16) :
+            Materials.pressed
+        } else if hover && root.hover-enabled {
+            variant == "primary" ? Colors.action-hover :
+            variant == "secondary" ? Colors.fill-secondary-hover :
+            (variant == "destructive" || variant == "danger") ? root.destructive-fill-active :
+            variant == "danger-ghost" ? Colors.error.with-alpha(0.10) :
+            Materials.hover
         } else {
-            variant == "primary" ? Colors.primary :
-            variant == "secondary" ? Colors.surface :
-            variant == "danger" ? Colors.error :
+            variant == "primary" ? Colors.action-fill :
+            variant == "secondary" ? Colors.fill-secondary :
+            (variant == "destructive" || variant == "danger") ? root.destructive-fill :
             transparent
         }
     };
 
-    min-width: 80px;
-    height: 44px;
+    min-width: root.variant == "icon" ? root.height : Spacing.button-min-width;
+    height: root.touch ? max(Spacing.touch-target-min, root.size == "large" ? 52px : Spacing.button-height)
+        : root.size == "small" ? 36px : root.size == "large" ? 48px : Spacing.button-height;
     vertical-stretch: 0;
-    border-radius: Spacing.radius-md;
-    background: bg-color;
-    opacity: disabled ? 0.5 : 1.0;
+    border-radius: root.variant == "icon" ? self.height / 2 : Spacing.radius-md;
 
-    // Content layout
-    HorizontalLayout {
-        alignment: center;
-        padding-left: Spacing.md;
-        padding-right: Spacing.md;
-        spacing: Spacing.sm;
+    property <color> foreground: (root.variant == "primary" || root.variant == "destructive" || root.variant == "danger") ? Colors.on-action : root.variant == "danger-ghost" ? Colors.error : Colors.text-primary;
 
-        // Optional icon
-        if icon.width > 0 && !loading: Image {
-            width: 16px;
-            height: 16px;
-            source: root.icon;
-            colorize: Colors.text-primary;
-            vertical-alignment: center;
-        }
-
-        // Loading spinner (simple animated dots)
-        if loading: HorizontalLayout {
-            spacing: 2px;
-            alignment: center;
-
-            property <float> anim-progress;
-
-            // Three animated dots with staggered opacity
-            Rectangle {
-                width: 4px;
-                height: 4px;
-                border-radius: 2px;
-                background: Colors.text-primary;
-                opacity: 0.4 + 0.6 * Math.cos(anim-progress * 360deg);
+    // Keep opacity on the visual child. A root opacity binding makes Slint
+    // inline the whole Button (including its loading animation) at every use.
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: !root.disabled && !root.loading;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
             }
-            Rectangle {
-                width: 4px;
-                height: 4px;
-                border-radius: 2px;
-                background: Colors.text-primary;
-                opacity: 0.4 + 0.6 * Math.cos((anim-progress - 0.33) * 360deg);
-            }
-            Rectangle {
-                width: 4px;
-                height: 4px;
-                border-radius: 2px;
-                background: Colors.text-primary;
-                opacity: 0.4 + 0.6 * Math.cos((anim-progress - 0.66) * 360deg);
-            }
-
-            anim-progress: 0;
-            animate anim-progress {
-                duration: 800ms;
-                iteration-count: -1;
-            }
-
-            init => {
-                self.anim-progress = 1.0;
-            }
-        }
-
-        // Button text
-        if !loading: Text {
-            text: root.text;
-            color: Colors.text-primary;
-            font-size: Typography.sm;
-            font-weight: Typography.medium;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+            return reject;
         }
     }
 
-    // Interaction area
+    Rectangle {
+        transform-scale-x: root.pressed ? 94% : 100%;
+        transform-scale-y: root.pressed ? 94% : 100%;
+        animate transform-scale-x { duration: root.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: root.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+        border-radius: root.border-radius;
+        background: root.bg-color;
+        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+        // Keyboard focus ring; nothing at rest.
+        border-width: keys.has-focus ? 2px : 0px;
+        border-color: Colors.focus-ring;
+        animate border-width { duration: Materials.motion-quick; easing: Materials.settle; }
+        // 38%: Material's disabled level, including both fill and content.
+        opacity: root.disabled ? 0.38 : 1.0;
+
+        Rectangle {
+            border-radius: parent.border-radius;
+            background: Materials.specular;
+            opacity: root.pressed ? 0.9 : root.hover ? 0.5 : 0;
+            animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+        }
+
+        // Content layout
+        HorizontalLayout {
+            alignment: center;
+            padding-left: root.variant == "icon" ? Spacing.none : Spacing.md;
+            padding-right: root.variant == "icon" ? Spacing.none : Spacing.md;
+            spacing: Spacing.sm;
+
+            // Optional icon
+            if icon.width > 0 && !loading: VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Image {
+                    width: Spacing.button-icon;
+                    height: Spacing.button-icon;
+                    source: root.icon;
+                    colorize: root.foreground;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Loading spinner (simple animated dots)
+            if loading: HorizontalLayout {
+                spacing: Spacing.xxs;
+                alignment: center;
+
+                property <float> anim-progress;
+
+                // Three animated dots with staggered opacity
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: Spacing.xs;
+                        height: Spacing.xs;
+                        border-radius: self.height / 2;
+                        background: root.foreground;
+                        opacity: 0.4 + 0.6 * Math.cos(anim-progress * 360deg);
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: Spacing.xs;
+                        height: Spacing.xs;
+                        border-radius: self.height / 2;
+                        background: root.foreground;
+                        opacity: 0.4 + 0.6 * Math.cos((anim-progress - 0.33) * 360deg);
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: Spacing.xs;
+                        height: Spacing.xs;
+                        border-radius: self.height / 2;
+                        background: root.foreground;
+                        opacity: 0.4 + 0.6 * Math.cos((anim-progress - 0.66) * 360deg);
+                    }
+                }
+
+                anim-progress: 0;
+                animate anim-progress {
+                    duration: Appearance.reduce-motion ? 0ms : 800ms / Appearance.animation-speed;
+                    iteration-count: Appearance.reduce-motion ? 1 : -1;
+                }
+
+                init => {
+                    self.anim-progress = 1.0;
+                }
+            }
+
+            // Button text
+            if !loading && root.text != "": Text {
+                text: root.text;
+                color: root.foreground;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                min-width: 0px;
+                overflow: elide;
+            }
+        }
+
+    }
+
+    // Keep the hit target at its original geometry while the visual squishes.
     touch := TouchArea {
         mouse-cursor: disabled ? default : pointer;
 
         pointer-event(event) => {
-            if !disabled && !loading {
-                if event.kind == PointerEventKind.move {
-                    hover = true;
-                }
-            }
-        }
-
-        moved => {
-            if !disabled && !loading {
+            if !disabled && !loading && event.kind == PointerEventKind.move {
                 hover = true;
             }
         }
 
+        moved => {
+            if !disabled && !loading { hover = true; }
+        }
+
         clicked => {
-            if !disabled && !loading {
-                root.clicked();
-            }
+            if !disabled && !loading { root.clicked(); }
         }
     }
 

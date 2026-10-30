@@ -1,61 +1,94 @@
 //! anon_group façade — thin delegates to services.
 
-#![allow(unused_imports)]
+use super::ChatterClient;
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+/// Core-owned settings state for a private group's roster.
+pub struct PrivateGroupRoster {
+    pub name: String,
+    pub is_owner: bool,
+    pub can_manage_members: bool,
+    pub can_invite: bool,
+    pub can_leave: bool,
+    pub blocked: bool,
+    pub member_count: i32,
+    pub invited_count: i32,
+    pub members: Vec<PrivateGroupMemberRow>,
+}
 
-use parking_lot::Mutex;
-use tokio::task::JoinHandle;
-
-use crate::app::context::{AppContext, ContextError};
-use crate::app::core_services::CoreServices;
-use crate::domain::attachment::Attachment;
-use crate::domain::channel::{Channel, ChannelType};
-use crate::domain::message::{ConversationType, Message};
-use crate::error::NetworkError;
-use crate::events::{DomainEvent, EventBus};
-use crate::services::auth_service::{AuthError, LoginResult};
-use crate::inbox::DeviceInboxProvider;
-use crate::mailbox::group::GroupFanout;
-use crate::proto::content_v1::AttachmentPointer;
-use crate::services::ai_service::AIService;
-use crate::services::anon_dm::AnonDmService;
-use crate::services::anon_group::AnonGroupService;
-use crate::services::attachment::AttachmentService;
-use crate::services::auth_service::AuthService;
-#[cfg(feature = "media")]
-use crate::services::call_worker::CallWorkerHandle;
-use crate::services::channel::ChannelService;
-use crate::services::dm_bootstrap_service::DmBootstrapService;
-use crate::services::gateway::outgoing::{
-    OwnedOutgoingServices, OutgoingIntent, QuoteIntent, SendError, SendResult,
-    route_outgoing_owned,
-};
-use crate::services::ai::LocalAIService;
-use crate::services::mailbox_manager::MailboxManager;
-use crate::services::message::MessageService;
-use crate::services::pin_service::PinService;
-use crate::services::session_service::{SessionError, SessionService};
-use crate::services::signal_service::SignalService;
-use crate::services::section_service::SectionService;
-use crate::services::user::UserService;
-use crate::services::conversation::ConversationHandle;
-use crate::state::{
-    ActiveConversation, AuthState, ChatState, MessageState, OfflineState,
-    PrivacyState, UserState,
-};
-use crate::state::chat_state::PendingAttachment;
-use crate::storage::settings_keys;
-use crate::system::Directories;
-use super::{ChatterClient, ClientError};
+pub struct PrivateGroupMemberRow {
+    pub user_id: String,
+    pub display_name: String,
+    pub role: &'static str,
+    pub avatar: Option<Vec<u8>>,
+    pub can_make_owner: bool,
+    pub invited: bool,
+    pub can_block: bool,
+    pub blocked: bool,
+}
 
 impl ChatterClient {
+    pub fn private_group_settings_roster(
+        &self,
+        group_id: crate::domain::anon_group::AnonGroupId,
+    ) -> Option<PrivateGroupRoster> {
+        let group = self.get_anon_group(&group_id)?;
+        let current_user_id = self.session_current_user_id()?;
+        let channel_id: crate::domain::ids::ChannelId = group_id.into();
+        let blocked_members = self.anon_group_blocked_members(&group_id);
+        let is_owner = group.status.can_send() && group.is_current_user_owner(&current_user_id);
+        let members: Vec<_> = self.get_anon_group_members(&group_id).into_iter().map(|member| {
+            let is_me = member.user_id == current_user_id;
+            let invited = member.mailbox_pk.is_none();
+            PrivateGroupMemberRow {
+                display_name: self.display_name_in(
+                    &crate::domain::message::ConversationType::AnonGroup,
+                    &channel_id, &member.user_id,
+                ),
+                user_id: member.user_id.to_string(),
+                role: member.role.as_str(),
+                avatar: member.avatar,
+                can_make_owner: is_owner && !is_me && !invited,
+                invited,
+                can_block: !is_me,
+                blocked: blocked_members.contains(&member.user_id),
+            }
+        }).collect();
+        let invited_count = members.iter().filter(|member| member.invited).count() as i32;
+        let member_count = members.len() as i32 - invited_count;
+        Some(PrivateGroupRoster {
+            is_owner,
+            can_manage_members: group.status.can_send() && group.can_manage_members(),
+            can_invite: self.can_invite_to_anon_group(&group_id),
+            can_leave: self.can_leave_anon_group(&group_id),
+            blocked: group.is_blocked(),
+            name: group.name, member_count, invited_count, members,
+        })
+    }
+
+    /// Whether this account may invite people into `group_id`: the same rule
+    /// `AnonGroupService::require_invitation_owner` enforces when sending (V1
+    /// invitations are owner-only, `AnonGroupRole::can_invite`), plus a group
+    /// we can still send to. Unknown group or no session: no.
+    pub fn can_invite_to_anon_group(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> bool {
+        let Some(me) = self.session_current_user_id() else {
+            return false;
+        };
+        self.get_anon_group(group_id).is_some_and(|g| {
+            g.status.can_send() && !g.is_blocked() && g.owner_id == me && g.my_role.can_invite()
+        })
+    }
+
     // ── Anon group façade ────────────────────────────────────────────────
 
     pub fn list_anon_groups(
         &self,
-    ) -> Result<Vec<crate::domain::anon_group::AnonGroup>, crate::services::anon_group::AnonGroupError> {
+    ) -> Result<
+        Vec<crate::domain::anon_group::AnonGroup>,
+        crate::services::anon_group::AnonGroupError,
+    > {
         self.anon_groups().list_groups()
     }
 
@@ -90,18 +123,63 @@ impl ChatterClient {
         self.anon_groups().get_members(group_id).unwrap_or_default()
     }
 
+    /// Joined members and pending invitees for the private-group header.
+    pub fn anon_group_member_counts(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> (i32, i32) {
+        self.anon_groups()
+            .member_counts(group_id)
+            .map(|(joined, invited)| {
+                (
+                    i32::try_from(joined).unwrap_or(i32::MAX),
+                    i32::try_from(invited).unwrap_or(i32::MAX),
+                )
+            })
+            .unwrap_or_default()
+    }
+
+    /// Whether to offer Leave for a private group: not to its owner while
+    /// others remain (they must make someone else owner first).
+    pub fn can_leave_anon_group(&self, group_id: &crate::domain::anon_group::AnonGroupId) -> bool {
+        self.anon_groups().can_leave(group_id)
+    }
+
+    /// Members blocked within `group_id` on this device.
+    pub fn anon_group_blocked_members(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> Vec<crate::domain::ids::UserId> {
+        self.anon_groups()
+            .get_blocked_users(group_id)
+            .unwrap_or_default()
+    }
+
     pub fn get_anon_group_member_display_name(
         &self,
         group_id: &crate::domain::anon_group::AnonGroupId,
         user_id: &crate::domain::ids::UserId,
     ) -> Option<String> {
-        self.anon_groups().get_member_display_name(group_id, user_id).ok().flatten()
+        self.anon_groups()
+            .get_member_display_name(group_id, user_id)
+            .ok()
+            .flatten()
+    }
+
+    pub fn get_anon_group_member_avatar(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Option<Vec<u8>> {
+        self.anon_groups()
+            .get_member_avatar(group_id, user_id)
+            .ok()
+            .flatten()
     }
 
     /// Build the synthetic system `Message` shown for an anon-group membership
-    /// change ("X joined", "X left", "X removed by Y"). The membership events
-    /// arrive as bare metadata; constructing the domain `Message` is core's
-    /// job, not the UI's.
+    /// join. The membership event arrives as bare metadata; constructing the
+    /// domain `Message` is core's job, not the UI's.
     pub fn anon_group_system_message(
         &self,
         group_id: crate::domain::anon_group::AnonGroupId,
@@ -139,6 +217,7 @@ impl ChatterClient {
             mentioned_integrations: Vec::new(),
             targets_ai_bot: false,
             delivery_status: String::new(),
+            failure_reason: None,
         }
     }
 
@@ -146,7 +225,10 @@ impl ChatterClient {
         &self,
         group_id: &crate::domain::anon_group::AnonGroupId,
     ) -> Option<crate::domain::message::Message> {
-        self.anon_groups().get_latest_message(group_id).ok().flatten()
+        self.anon_groups()
+            .get_latest_message(group_id)
+            .ok()
+            .flatten()
     }
 
     pub fn get_anon_group_messages_asc(
@@ -154,12 +236,18 @@ impl ChatterClient {
         group_id: &crate::domain::anon_group::AnonGroupId,
         before: Option<&chrono::DateTime<chrono::Utc>>,
         limit: i32,
-    ) -> Result<Vec<crate::domain::message::Message>, crate::services::anon_group::AnonGroupError> {
-        let mut messages = self.anon_groups().get_messages_asc(group_id, before, limit)?;
+    ) -> Result<Vec<crate::domain::message::Message>, crate::services::anon_group::AnonGroupError>
+    {
+        let mut messages = self
+            .anon_groups()
+            .get_messages_asc(group_id, before, limit)?;
         // Join reaction counts here (keyed by sent_at) so callers render a
         // complete Message. Previously the UI issued a second call and merged —
         // duplicated across sidebar sites and a data-shaping leak into the view.
-        let reactions = self.anon_groups().get_all_reaction_counts(group_id).unwrap_or_default();
+        let reactions = self
+            .anon_groups()
+            .get_all_reaction_counts(group_id)
+            .unwrap_or_default();
         for msg in &mut messages {
             if let Some(counts) = reactions.get(&msg.sent_at) {
                 msg.reaction_counts = counts
@@ -183,8 +271,78 @@ impl ChatterClient {
 
     pub async fn refresh_expiring_group_mailboxes(
         &self,
-    ) -> Result<Vec<crate::domain::anon_group::AnonGroupId>, crate::services::anon_group::AnonGroupError> {
+    ) -> Result<
+        Vec<crate::domain::anon_group::AnonGroupId>,
+        crate::services::anon_group::AnonGroupError,
+    > {
         self.anon_groups().refresh_expiring_group_mailboxes().await
+    }
+
+    /// Who can be invited to a private (anon) group: accepted friends and
+    /// peers of ready anon DMs, de-duplicated, never this user, and — for an
+    /// existing `group` — include live pending invitations as explicit retries.
+    /// Confirmed members stay excluded. Read from local state,
+    /// so there is no page cap on the friend list.
+    ///
+    /// In Shield mode friends are not offered — same rule as channel invites:
+    /// only peers known anonymously (a friend who is also an anon-DM peer is
+    /// still listed, as that anon peer).
+    pub fn list_anon_group_invite_candidates(
+        &self,
+        group: Option<&crate::domain::anon_group::AnonGroupId>,
+    ) -> Vec<AnonGroupInviteCandidate> {
+        use crate::domain::ids::UserId;
+        use std::collections::HashSet;
+
+        let me = self.auth_state().get().current_user_id;
+        let mut seen: HashSet<UserId> = me.into_iter().collect();
+        let mut retries = HashSet::new();
+        if let Some(group) = group {
+            for member in self.get_anon_group_members(group) {
+                if Some(member.user_id) != me
+                    && self
+                        .anon_groups()
+                        .can_retry_pending_invitation(group, &member.user_id)
+                        .unwrap_or(false)
+                {
+                    retries.insert(member.user_id);
+                } else {
+                    seen.insert(member.user_id);
+                }
+            }
+        }
+
+        let mut out = Vec::new();
+        if !self.anon_mode_enabled() {
+            for peer in self.listed_friends() {
+                if seen.insert(peer) {
+                    out.push(AnonGroupInviteCandidate {
+                        user_id: peer,
+                        display_name: self.display_name(&peer),
+                        username: self.known_username(&peer).unwrap_or_default(),
+                        is_anonymous: false,
+                    });
+                }
+            }
+        }
+        for dm in self.list_anon_dm_ready_conversations() {
+            if seen.insert(dm.peer_id) {
+                out.push(AnonGroupInviteCandidate {
+                    user_id: dm.peer_id,
+                    display_name: dm
+                        .peer_display_name
+                        .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id)),
+                    username: String::new(),
+                    is_anonymous: true,
+                });
+            }
+        }
+        for candidate in &mut out {
+            if retries.contains(&candidate.user_id) {
+                candidate.display_name = format!("{} — Retry invitation", candidate.display_name);
+            }
+        }
+        out
     }
 
     pub async fn broadcast_profile_to_owned_groups(
@@ -200,17 +358,20 @@ impl ChatterClient {
         group_name: String,
         owner_id: crate::domain::ids::UserId,
         inviter_id: crate::domain::ids::UserId,
+        inviter_device_id: u32,
         inviter_mailbox_pk: [u8; 32],
         inviter_profile_key: Option<[u8; 32]>,
         inviter_display_name: Option<String>,
         inviter_avatar: Option<Vec<u8>>,
-    ) -> Result<crate::domain::anon_group::AnonGroup, crate::services::anon_group::AnonGroupError> {
+    ) -> Result<crate::domain::anon_group::AnonGroup, crate::services::anon_group::AnonGroupError>
+    {
         self.anon_groups()
             .accept_invite(
                 group_id,
                 group_name,
                 owner_id,
                 inviter_id,
+                inviter_device_id,
                 inviter_mailbox_pk,
                 inviter_profile_key,
                 inviter_display_name,
@@ -218,4 +379,40 @@ impl ChatterClient {
             )
             .await
     }
+
+    pub fn list_pending_anon_group_invites(
+        &self,
+    ) -> Result<
+        Vec<crate::storage::repositories::anon_group_repo::PendingAnonGroupInvite>,
+        crate::services::anon_group::AnonGroupError,
+    > {
+        self.anon_groups().list_pending_invites()
+    }
+
+    pub async fn accept_pending_anon_group_invite(
+        &self,
+        group_id: crate::domain::anon_group::AnonGroupId,
+    ) -> Result<crate::domain::anon_group::AnonGroup, crate::services::anon_group::AnonGroupError>
+    {
+        self.anon_groups().accept_pending_invite(group_id).await
+    }
+
+    pub async fn decline_pending_anon_group_invite(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> Result<(), crate::services::anon_group::AnonGroupError> {
+        self.anon_groups().decline_pending_invite(group_id).await
+    }
+}
+
+/// A row of the private-group invite picker; see
+/// [`ChatterClient::list_anon_group_invite_candidates`].
+#[derive(Debug, Clone)]
+pub struct AnonGroupInviteCandidate {
+    pub user_id: crate::domain::ids::UserId,
+    pub display_name: String,
+    /// Complete lookup handle for an identified friend, empty when unknown.
+    pub username: String,
+    /// Reached through an anon DM rather than a server friendship.
+    pub is_anonymous: bool,
 }

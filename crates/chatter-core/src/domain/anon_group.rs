@@ -30,6 +30,8 @@ pub enum AnonGroupStatus {
     Muted = 1,
     /// Group is blocked (ignore all messages, don't poll mailbox).
     Blocked = 2,
+    /// We were removed; retain local history until Delete chat.
+    Removed = 3,
 }
 
 impl AnonGroupStatus {
@@ -38,6 +40,7 @@ impl AnonGroupStatus {
         match value {
             1 => Self::Muted,
             2 => Self::Blocked,
+            3 => Self::Removed,
             _ => Self::Active,
         }
     }
@@ -74,6 +77,27 @@ impl From<i32> for AnonGroupStatus {
     }
 }
 
+/// Parse selected invite rows supplied by a UI adapter. Invalid IDs are
+/// omitted, matching the selection behavior for create and invite flows.
+pub struct PrivateGroupInviteSelection;
+
+impl PrivateGroupInviteSelection {
+    pub fn parse<I, U, R>(rows: I) -> Vec<(UserId, AnonGroupRole)>
+    where
+        I: IntoIterator<Item = (bool, U, R)>,
+        U: AsRef<str>,
+        R: AsRef<str>,
+    {
+        rows.into_iter()
+            .filter(|(selected, _, _)| *selected)
+            .filter_map(|(_, user_id, role)| {
+                let user_id = user_id.as_ref().parse::<UserId>().ok()?;
+                Some((user_id, AnonGroupRole::from_invite_token(role.as_ref())))
+            })
+            .collect()
+    }
+}
+
 /// Role within an anonymous group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(i32)]
@@ -94,6 +118,15 @@ impl AnonGroupRole {
             1 => Self::Admin,
             2 => Self::Owner,
             _ => Self::Member,
+        }
+    }
+
+    /// Parse the role token from a selected invite row.
+    pub fn from_invite_token(role: &str) -> Self {
+        if role == "admin" {
+            Self::Admin
+        } else {
+            Self::Member
         }
     }
 
@@ -127,17 +160,9 @@ impl AnonGroupRole {
         matches!(self, Self::Admin | Self::Owner)
     }
 
-    /// Check if this role can invite new members.
+    /// V1 invitations require the owner; admin delegation is not supported.
     pub fn can_invite(&self) -> bool {
-        matches!(self, Self::Admin | Self::Owner)
-    }
-
-    /// Check if this role can broadcast member lists.
-    ///
-    /// Only admins and owners can send authoritative member list updates.
-    /// This prevents regular members from spoofing other members' profiles.
-    pub fn can_broadcast_member_list(&self) -> bool {
-        matches!(self, Self::Admin | Self::Owner)
+        matches!(self, Self::Owner)
     }
 
     /// Check if this role can pin or unpin messages.
@@ -224,12 +249,11 @@ impl AnonGroup {
         self.owner_id == *user_id || self.my_role == AnonGroupRole::Owner
     }
 
-    /// Check if the given user has the admin role in this group.
-    ///
-    /// Note: this checks for the `Admin` role specifically (not owner). For
-    /// "admin or owner" semantics, combine with [`Self::is_current_user_owner`].
-    pub fn is_current_user_admin(&self, _user_id: &UserId) -> bool {
-        self.my_role == AnonGroupRole::Admin
+    /// Whether this user may manage members (kick) — the same predicate the
+    /// kick path enforces (`removal.rs`), so the settings UI never offers an
+    /// action core would refuse.
+    pub fn can_manage_members(&self) -> bool {
+        self.my_role.can_kick()
     }
 
     /// Check if the group is ready for messaging.
@@ -270,6 +294,11 @@ pub struct AnonGroupMember {
     pub avatar: Option<Vec<u8>>,
     /// When the member joined.
     pub joined_at: DateTime<Utc>,
+    /// The member's device this group is bound to: the one that owns
+    /// `mailbox_pk` and so the only one that can open what we seal to it.
+    /// Learned with the mailbox (their JoinAck, the owner's roster, or the
+    /// invite that came from it); `None` until then, and nothing is sent.
+    pub device_id: Option<u32>,
 }
 
 impl AnonGroupMember {
@@ -285,6 +314,7 @@ impl AnonGroupMember {
             display_name: None,
             avatar: None,
             joined_at: Utc::now(),
+            device_id: None,
         }
     }
 
@@ -305,11 +335,17 @@ impl AnonGroupMember {
             display_name: None,
             avatar: None,
             joined_at: Utc::now(),
+            device_id: None,
         }
     }
 
     /// Set the member's profile information.
-    pub fn with_profile(mut self, profile_key: Option<[u8; 32]>, display_name: Option<String>, avatar: Option<Vec<u8>>) -> Self {
+    pub fn with_profile(
+        mut self,
+        profile_key: Option<[u8; 32]>,
+        display_name: Option<String>,
+        avatar: Option<Vec<u8>>,
+    ) -> Self {
         self.profile_key = profile_key;
         self.display_name = display_name;
         self.avatar = avatar;
@@ -482,12 +518,7 @@ impl AnonGroupMessage {
     ///
     /// The `sent_at` parameter is the sender's timestamp (nanoseconds since epoch),
     /// used for consistent ordering across devices.
-    pub fn new_text(
-        group_id: AnonGroupId,
-        sender_id: UserId,
-        text: &str,
-        sent_at: u64,
-    ) -> Self {
+    pub fn new_text(group_id: AnonGroupId, sender_id: UserId, text: &str, sent_at: u64) -> Self {
         Self {
             id: AnonGroupMessageId::new(),
             group_id,
@@ -524,7 +555,8 @@ impl AnonGroupMessage {
     pub fn attachment_ids(&self) -> Vec<crate::domain::AttachmentId> {
         use crate::storage::serialization::db_deserialize;
 
-        if self.attachments_blob.is_empty() || self.attachments_blob == vec![8, 0, 0, 0, 0, 0, 0, 0] {
+        if self.attachments_blob.is_empty() || self.attachments_blob == vec![8, 0, 0, 0, 0, 0, 0, 0]
+        {
             return Vec::new();
         }
 
@@ -616,9 +648,9 @@ mod tests {
         assert!(!AnonGroupRole::Member.can_kick());
         assert!(AnonGroupRole::Admin.can_kick());
         assert!(AnonGroupRole::Owner.can_kick());
-        // Only admins and owners can invite
+        // Only the owner can invite with the v1 protocol
         assert!(!AnonGroupRole::Member.can_invite());
-        assert!(AnonGroupRole::Admin.can_invite());
+        assert!(!AnonGroupRole::Admin.can_invite());
         assert!(AnonGroupRole::Owner.can_invite());
     }
 
@@ -644,11 +676,7 @@ mod tests {
 
     #[test]
     fn test_anon_group_member_pending() {
-        let member = AnonGroupMember::new(
-            AnonGroupId::new(),
-            UserId::new(),
-            AnonGroupRole::Member,
-        );
+        let member = AnonGroupMember::new(AnonGroupId::new(), UserId::new(), AnonGroupRole::Member);
         assert!(member.is_pending());
         assert!(!member.is_confirmed());
     }
@@ -671,8 +699,14 @@ mod tests {
     fn test_pending_action_type() {
         assert_eq!(PendingActionType::Invite.as_str(), "invite");
         assert_eq!(PendingActionType::Kick.as_str(), "kick");
-        assert_eq!(PendingActionType::parse("invite"), Some(PendingActionType::Invite));
-        assert_eq!(PendingActionType::parse("kick"), Some(PendingActionType::Kick));
+        assert_eq!(
+            PendingActionType::parse("invite"),
+            Some(PendingActionType::Invite)
+        );
+        assert_eq!(
+            PendingActionType::parse("kick"),
+            Some(PendingActionType::Kick)
+        );
         assert_eq!(PendingActionType::parse("unknown"), None);
     }
 
@@ -742,11 +776,8 @@ mod tests {
 
     #[test]
     fn test_anon_group_blocked_user() {
-        let blocked = AnonGroupBlockedUser::new(
-            AnonGroupId::new(),
-            UserId::new(),
-            Some("spam".to_string()),
-        );
+        let blocked =
+            AnonGroupBlockedUser::new(AnonGroupId::new(), UserId::new(), Some("spam".to_string()));
         assert!(blocked.reason.is_some());
         assert_eq!(blocked.reason.unwrap(), "spam");
     }

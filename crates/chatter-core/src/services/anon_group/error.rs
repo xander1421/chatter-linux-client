@@ -1,12 +1,14 @@
 //! Error types for anonymous group service.
 
-use crate::domain::anon_group::AnonGroupId;
 use crate::domain::UserId;
+use crate::domain::anon_group::AnonGroupId;
 use crate::error::StorageError;
 
 /// Anon group service errors.
 #[derive(Debug, thiserror::Error)]
 pub enum AnonGroupError {
+    #[error("Delivery unconfirmed; the original ciphertext is retained for retry")]
+    DeliveryUnconfirmed,
     /// Not logged in.
     #[error("not logged in")]
     NotLoggedIn,
@@ -30,6 +32,11 @@ pub enum AnonGroupError {
     /// Cannot kick the owner.
     #[error("cannot kick the owner")]
     CannotKickOwner,
+
+    /// The owner tried to leave while other members remain: nobody could
+    /// issue member lists, kicks or role changes after them.
+    #[error("make another member the owner before leaving")]
+    OwnerMustTransfer,
 
     /// Storage error.
     #[error("storage error: {0}")]
@@ -62,4 +69,15 @@ pub enum AnonGroupError {
     /// User is blocked in this group.
     #[error("user is blocked in group: {0}")]
     UserBlocked(UserId),
+}
+
+impl From<crate::services::pairwise::PairwiseError> for AnonGroupError {
+    fn from(e: crate::services::pairwise::PairwiseError) -> Self {
+        use crate::services::pairwise::PairwiseError;
+        match e {
+            PairwiseError::Network(e) => Self::MessageError(e.to_string()),
+            PairwiseError::Storage(e) => Self::Storage(e),
+            e => Self::CryptoError(e.to_string()),
+        }
+    }
 }

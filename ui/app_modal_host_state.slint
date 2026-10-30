@@ -1,0 +1,372 @@
+import { Colors } from "theme/colors.slint";
+import { AvatarOption } from "components/avatar_picker.slint";
+import { ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
+import { MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
+import { ConversationKind } from "chat/conversation_kind.slint";
+import { EmojiData } from "components/emoji_picker.slint";
+import { GifData } from "components/gif_picker.slint";
+import { MentionSuggestion } from "components/mention_autocomplete.slint";
+import { AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
+import { SharedContentItem, SharedTab } from "modals/mod.slint";
+import { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } from "modals/friends.slint";
+import { ForwardTarget } from "modals/forward_message.slint";
+import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
+import { SearchResultChannel } from "modals/join_channel.slint";
+import { ChannelMemberData, BannedMemberData, ChannelRosterRowData } from "modals/channel_member_types.slint";
+import { InviteUser } from "modals/invite_member.slint";
+import { QuickSwitcherItem, SearchResult, CalendarDay } from "components/unified_search.slint";
+import { PinnedItem } from "modals/pinned_messages.slint";
+import { MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData } from "modals/jarvis_memory.slint";
+import { IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
+
+export global ModalHostState {
+    // ========== Channel settings callbacks ==========
+    callback channel-settings-save(string, string);  // name, description
+    callback channel-settings-clear-error();
+    callback channel-settings-pick-icon();  // opens native file picker for the channel icon
+    callback channel-settings-change-notification(string);   // preference
+    callback channel-settings-toggle-mute(bool);
+    callback channel-settings-toggle-ai(bool);
+    callback channel-settings-change-member-role(string, string);  // user-id, new-role
+    callback channel-settings-remove-member(string);  // user-id
+    callback channel-settings-ban-member(string);  // user-id
+    callback channel-settings-set-member-muted(string, bool, int);  // user-id, muted, minutes (0 = until unmuted)
+    callback channel-settings-unban-member(string);  // user-id
+    callback channel-settings-transfer-ownership(string);  // new owner's user-id
+    callback channel-settings-block-member(string, bool);  // user-id, block
+    callback channel-settings-block-group(bool);  // block
+    callback channel-settings-invite-members();  // opens invite modal for private groups
+    callback channel-settings-invite-channel-members();  // opens invite modal for regular channels
+    callback invite-member-toggle-user(int);  // index - toggles selection
+    callback invite-member-confirm();  // confirms invite for all selected users
+    callback invite-member-search-changed(string);  // fired on every search keystroke
+    callback channel-settings-archive();
+    callback channel-settings-leave();
+    callback channel-settings-delete();
+    // ========== Modal state ==========
+    // Screens and dialogs pushed over the current tab, top last. Changed only
+    // through nav-push / nav-close / nav-pop (Rust: features/back.rs), so
+    // closing one reveals the one it was pushed over.
+    in-out property <[string]> modal-stack: [];
+    // "settings" is anywhere on the stack. Settings stays mounted under what
+    // it opens (Sessions, Link device, ...), so it cannot key off
+    // `active-modal`; written by back.rs alongside the stack.
+    in-out property <bool> settings-open: false;
+    in property <[string]> third-party-notices: [];
+    callback nav-push(string);
+    // Close that screen and everything pushed above it.
+    callback nav-close(string);
+    callback nav-pop();
+    // Create channel modal properties
+    in-out property <string> create-channel-name: "";
+    in-out property <string> create-channel-description: "";
+    in-out property <string> create-channel-template: "";
+    in property <string> create-channel-error: "";
+    in property <bool> create-channel-loading: false;
+    // Create channel AI config properties
+    in-out property <string> create-channel-ai-provider: "";
+    in-out property <string> create-channel-ai-model: "";
+    in property <[AIModelOption]> create-channel-ai-models: [];
+    in property <bool> create-channel-ai-models-loading: false;
+    in property <string> create-channel-ai-models-error: "";
+    // Create channel private group properties
+    in-out property <[PrivateGroupFriend]> create-channel-available-friends: [];
+    in-out property <int> create-channel-selected-friend-count: 0;
+    // Create channel icon upload properties
+    in-out property <string> create-channel-icon-url: "";
+    in-out property <image> create-channel-icon-preview;
+    in-out property <bool> create-channel-has-icon-preview: false;
+    callback create-channel-pick-icon();
+    // Invite to private group modal properties
+    in-out property <string> invite-private-group-id: "";
+    in-out property <[PrivateGroupFriend]> invite-private-group-friends: [];
+    in-out property <int> invite-private-group-selected-count: 0;
+    in property <bool> invite-private-group-loading: false;
+    // Invite member to channel modal properties
+    in-out property <string> invite-member-channel-id: "";
+    in-out property <string> invite-member-channel-name: "";
+    in-out property <bool> invite-member-private-channel: false;
+    in-out property <[InviteUser]> invite-member-users: [];
+    in-out property <int> invite-member-selected-count: 0;
+    in property <bool> invite-member-loading: false;
+    // Create/rename section modal properties
+    in-out property <bool> create-section-rename-mode: false;
+    in-out property <string> create-section-name: "";
+    in-out property <string> create-section-emoji: "📁";
+    in-out property <string> create-section-id: "";  // set for rename
+    in-out property <bool> create-section-loading: false;
+    in-out property <string> create-section-conversation-id: "";
+    in-out property <ConversationKind> create-section-conversation-kind;
+    // Create-channel modal: which tab to open on (0 = Create, 1 = Join)
+    in-out property <int> create-channel-initial-tab: 0;
+    // Join channel modal properties
+    in-out property <string> join-channel-search-query: "";
+    in property <[SearchResultChannel]> join-channel-results: [];
+    in property <bool> join-channel-searching: false;
+    in property <string> join-channel-error: "";
+    in-out property <string> join-channel-selected-id: "";
+    in property <bool> join-channel-joining: false;
+    // User profile modal properties
+    in property <string> profile-user-id: "";
+    in property <bool> profile-is-anonymous: false;
+    in property <bool> profile-scoped-member: false;
+    in property <string> profile-display-name: "";
+    in property <string> profile-contact-name: "";
+    in property <string> profile-username: "";
+    in property <image> profile-avatar-source;
+    in property <string> profile-initials: "";
+    in property <string> profile-status-text: "";
+    in property <string> profile-presence: "offline";
+    in property <string> profile-bio: "";
+    in property <bool> profile-is-friend: false;
+    in property <bool> profile-is-blocked: false;
+    in property <bool> profile-is-self: false;
+    in property <bool> profile-loading: false;
+    in property <bool> profile-is-verified: false;
+    in property <bool> profile-verification-pending: false;
+    in property <string> profile-safety-number: "";
+    in-out property <bool> profile-show-safety-number: false;
+    // Username link (self view)
+    // Profile shared-content drawer (Media/Files/Links/Voice/GIFs/Music).
+    // Rows, tab labels and counts are all built by chatter-core.
+    in property <[SharedTab]> profile-shared-tabs: [];
+    in-out property <string> profile-shared-tab: "";
+    // Layers inside the profile screen, so Back closes them before the
+    // profile itself (features/back.rs).
+    in-out property <bool> profile-shared-page-open: false;
+    in-out property <bool> profile-edit-contact-open: false;
+    in property <[SharedContentItem]> profile-shared-items: [];
+    in property <bool> profile-shared-has-previous: false;
+    in property <bool> profile-shared-has-more: false;
+    in property <bool> profile-shared-loading: false;
+    in property <string> profile-shared-error: "";
+    // Presence as words ("last seen yesterday 4:12 pm"), shaped by core.
+    in property <string> profile-last-seen: "";
+    in property <bool> profile-is-muted: false;
+    in property <string> profile-share-link: "";
+    in property <image> profile-share-qr;
+    in property <string> profile-share-status: "";
+    // Edit Profile data
+    in-out property <string> edit-profile-display-name: "";
+    in-out property <string> edit-profile-bio: "";
+    in property <image> edit-profile-avatar;
+    in property <color> edit-profile-avatar-color: Colors.avatar-teal;
+    in property <int> edit-profile-selected-default-idx: -1;
+    in property <bool> edit-profile-has-photo: false;
+    in property <bool> edit-profile-loading: false;
+    in property <string> edit-profile-error: "";
+    // Friends modal properties
+    in-out property <string> friends-modal-tab: "find";  // "find", "friends", "requests", "blocked"
+    in property <[FriendData]> friends-list: [];
+    in-out property <string> new-chat-query: "";
+    in property <[FriendData]> new-chat-friends: [];
+    callback new-chat-query-changed(string);
+    in-out property <string> friends-requests-sub-tab: "received";
+    in property <[FriendRequestData]> friends-received-requests: [];
+    in property <[FriendRequestData]> friends-sent-requests: [];
+    in property <[FriendRequestData]> friends-private-requests: [];
+    in property <[FriendRequestData]> friends-group-invites: [];
+    in-out property <string> group-invite-decision: "";
+    in-out property <string> group-invite-error-id: "";
+    in-out property <string> group-invite-error: "";
+    in property <[ChannelInviteData]> friends-channel-invites: [];
+    in property <[BlockedUserData]> friends-blocked-users: [];
+    in property <bool> friends-loading: false;
+    in property <bool> friends-requests-error: false;
+    // Pending message requests count (for sidebar badge)
+    in property <int> pending-message-requests: 0;
+    // Pending group invites count (for sidebar badge)
+    in property <int> pending-group-invites: 0;
+    // Pending channel invites count (for sidebar badge)
+    in property <int> pending-channel-invites: 0;
+    // Friend code (privacy-first discovery)
+    in-out property <string> friends-my-code: "";
+    in-out property <string> friends-code-input: "";
+    in-out property <int> friends-code-caret-end-seq: 0;
+    in-out property <string> friends-code-status: "";
+    in-out property <string> friends-request-note: "";
+    in-out property <image> friends-qr-code-image;
+    in-out property <bool> friends-show-qr: false;
+    // Forward message modal properties
+    in property <string> forward-message-preview: "";
+    in property <bool> forward-contact-share: false;
+    in property <string> forward-contact-name: "";
+    in property <image> forward-contact-avatar;
+    // Source messages, stashed at modal-open, read by the confirm handler:
+    // Messages being forwarded, as "sender_id:timestamp_ns" keys in send order
+    // (one from the message menu, several from the selection bar).
+    in-out property <[string]> forward-sources: [];
+    in-out property <string> forward-search-text: "";
+    in property <[ForwardTarget]> forward-targets: [];
+    in property <bool> forward-loading: false;
+    // Sessions modal properties
+    in property <[SessionInfo]> sessions: [];
+    in-out property <int> sessions-generation: 0;
+    in-out property <int> modal-generation: 0;
+    in property <string> sessions-error: "";
+    // Outcome of a finished action (e.g. revoke all), shown without error styling.
+    in property <string> sessions-notice: "";
+    // Devices "Revoke all other sessions" would sign out (core's revocable_count).
+    in property <int> sessions-revocable-count: 0;
+    in property <bool> sessions-loaded: false;
+    in property <bool> sessions-loading: false;
+    in property <bool> sessions-revoking: false;
+    in property <[PendingLinkInfo]> sessions-pending-links: [];
+    // Channel settings modal properties
+    in property <string> channel-settings-id: "";
+    // Kept here, not in the modal: the modal unmounts under a sheet it
+    // opens (Invite), and came back on Info. Reset when settings is opened.
+    in-out property <string> channel-settings-section: "overview";
+    in property <string> channel-settings-name: "";
+    in property <string> channel-settings-description: "";
+    in property <bool> channel-settings-saving: false;
+    // Editable drafts, reset by Rust on open (open_channel_settings).
+    in-out property <string> channel-settings-name-draft: "";
+    in-out property <string> channel-settings-description-draft: "";
+    // Icon picker state (Rust sets path+preview on pick; Save reads path).
+    in-out property <string> channel-settings-icon-path: "";
+    in-out property <image> channel-settings-icon-preview;
+    in-out property <bool> channel-settings-has-icon-preview: false;
+    in property <string> channel-settings-type: "public";
+    in property <bool> channel-settings-archived: false;
+    in property <string> channel-settings-created-at: "";
+    in property <int> channel-settings-member-count: 0;
+    in property <int> channel-settings-invited-count: 0;
+    in property <bool> channel-settings-can-edit: false;
+    in property <bool> channel-settings-can-manage-members: false;
+    // Core's answer (`can_invite_to_channel` / `can_invite_to_anon_group`).
+    in property <bool> channel-settings-can-invite: false;
+    in property <bool> channel-settings-can-archive: false;
+    in property <bool> channel-settings-can-delete: false;
+    in property <bool> channel-settings-is-owner: false;
+    in property <bool> channel-settings-can-leave: false;
+    in property <bool> channel-settings-group-blocked: false;
+    in-out property <string> channel-settings-notification-pref: "all";
+    in-out property <bool> channel-settings-muted: false;
+    in-out property <bool> channel-settings-ai-enabled: false;
+    in property <[ChannelMemberData]> channel-settings-members: [];
+    in property <[BannedMemberData]> channel-settings-banned-members: [];
+    in property <[ChannelRosterRowData]> channel-settings-roster-rows: [];
+    in property <bool> channel-settings-can-view-bans: false;
+    in property <bool> channel-settings-loading: false;
+    in property <string> channel-settings-error: "";
+    // Create channel modal properties
+    callback create-channel(string, string, string, CreateChannelConfig, string, string);
+    callback create-channel-provider-selected(string);
+    // Private group creation
+    callback create-private-group(string, [PrivateGroupFriend]);
+    callback toggle-friend-selection(int);
+    callback toggle-friend-role(int);  // toggle role between member/admin
+    callback create-channel-template-selected(string);
+    // Invite to private group
+    callback invite-to-private-group([PrivateGroupFriend]);
+    callback toggle-invite-friend-selection(int);
+    callback toggle-invite-friend-role(int);  // toggle role for invite modal
+    // Create/rename section modal properties
+    callback create-section(/* name */ string, /* emoji */ string,
+        /* conversation-id */ string, /* conversation-kind */ ConversationKind);
+    callback rename-section(/* section-id */ string, /* name */ string, /* emoji */ string);
+    // Join channel
+    callback search-channels(string);
+    // Join channel modal properties
+    callback join-channel(string);
+    // User profile
+    callback profile-send-message();
+    // Profile › Start secret chat: core starts (or finds) the secret chat
+    // with `profile-user-id` and the chat pane opens it.
+    callback profile-start-secret-chat();
+    in property <bool> profile-can-start-secret-chat: false;
+    // Chat header ⋯ › Start secret chat, for the open regular DM's peer.
+    // Asked of core when the menu opens (`can_start_secret_chat`).
+    callback chat-menu-can-start-secret-chat() -> bool;
+    callback chat-menu-start-secret-chat();
+    callback secret-timer-set(int);
+    callback profile-add-friend();
+    callback profile-remove-friend();
+    callback profile-block-user();
+    callback profile-unblock-user();
+    callback profile-share-contact();
+    callback profile-edit-contact(string);
+    callback profile-edit-profile();
+    callback profile-view-safety-number();
+    callback profile-toggle-verified();
+    callback profile-toggle-mute();
+    callback profile-start-call(bool /* is-video */);
+    callback profile-shared-tab-selected(string /* category */);
+    callback profile-shared-load-more();
+    callback profile-shared-load-previous();
+    callback profile-shared-page-closed();
+    callback profile-shared-retry();
+    // message-id, attachment-id, category, selected-url
+    callback profile-open-shared-item(string, string, string, string);
+    callback profile-generate-share-link();
+    callback profile-copy-share-link();
+    callback profile-reset-share-link();
+    callback edit-profile-save(string, string);
+    callback edit-profile-change-avatar();
+    callback edit-profile-select-default-avatar(int);
+    callback edit-profile-remove-avatar();
+    // Friends modal
+    callback friends-modal-switch-tab(string);
+    callback friends-requests-retry();
+    callback friends-view-profile(string);
+    callback friends-start-dm(string);
+    callback friends-accept-request(string);
+    callback friends-decline-request(string);
+    callback friends-cancel-request(string);
+    callback friends-unblock-user(string);
+    callback friends-remove-blocked-user(string);
+    // Friend code callbacks (privacy-first discovery)
+    callback friends-generate-code(bool);   // bool = private mode
+    callback friends-generate-qr(bool);     // bool = private mode
+    callback friends-copy-code();
+    // Paste the system clipboard into the friend-code input. Slint's
+    // built-in `Ctrl+V` reads via copypasta (winit), which uses a
+    // different Wayland selection protocol than `wl-copy` / arboard's
+    // `wayland-data-control` — so paste from another app silently
+    // returns empty on most Wayland compositors. This callback routes
+    // through chatter-ui's arboard handle to bypass the mismatch.
+    callback friends-paste-code();
+    callback friends-scan-code();
+    callback friends-connect-via-code(string);
+    callback friends-accept-private-request(string);   // Accept anon DM request
+    callback friends-decline-private-request(string);  // Decline anon DM request
+    callback friends-block-private-request(string);    // Block anon DM request
+    callback friends-accept-group-invite(string);      // Accept anon group invite
+    callback friends-decline-group-invite(string);     // Decline anon group invite
+    callback friends-accept-channel-invite(string);    // Accept channel invite
+    callback friends-decline-channel-invite(string);   // Decline channel invite
+    // Message requests (anon DM)
+    callback message-requests-clicked();
+    // Group invites (anon groups)
+    callback group-invites-clicked();
+    // Channel invites
+    callback channel-invites-clicked();
+    callback forward-message(string);
+    callback forward-search-changed(string);
+    // Sessions
+    callback revoke-session(int);
+    callback revoke-all-sessions();
+    callback cancel-pending-link(string);  // provisioning uuid
+    // Shared by every entry to Create Channel / New Section (sidebar, the
+    // create menu, the account menu), so they cannot open it differently.
+    public function start-create-channel() {
+        root.create-channel-initial-tab = 0;
+        root.nav-push("create-channel");
+    }
+    public function start-create-section() {
+        root.create-section-rename-mode = false;
+        root.create-section-name = "";
+        root.create-section-emoji = "📁";
+        root.create-section-id = "";
+        root.create-section-conversation-id = "";
+        root.create-section-conversation-kind = ConversationKind.channel;
+        root.nav-push("create-section");
+    }
+    public function start-create-section-for-conversation(conversation-id: string, kind: ConversationKind) {
+        root.start-create-section();
+        root.create-section-conversation-id = conversation-id;
+        root.create-section-conversation-kind = kind;
+    }
+
+}

@@ -1,0 +1,71 @@
+// Flat icon controls inside a shared chrome group (for example call controls).
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Materials } from "../theme/materials.slint";
+
+export component IconAction inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active: false;
+    in property <bool> destructive: false;
+    in property <bool> enabled: true;
+    in property <length> size: Spacing.button-height;
+    callback clicked();
+
+    width: max(Spacing.touch-target-min, root.size);
+    height: self.width;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    Rectangle {
+        transform-scale-x: touch.pressed && root.enabled ? 94% : 100%;
+        transform-scale-y: touch.pressed && root.enabled ? 94% : 100%;
+        animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+        border-radius: self.height / 2;
+        border-width: keys.has-focus ? 2px : 0px;
+        border-color: Colors.focus-ring;
+        animate border-width { duration: Materials.motion-quick; easing: Materials.settle; }
+        opacity: root.enabled ? 1 : 0.38;
+        background: root.destructive
+            ? (touch.pressed || touch.has-hover ? Colors.error-hover : Colors.error)
+            : root.active
+            ? (touch.pressed ? Colors.action-active : touch.has-hover ? Colors.action-hover : Colors.action-fill)
+            : (touch.pressed ? Materials.pressed : touch.has-hover ? Materials.hover : Colors.fill-secondary);
+        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+        Rectangle {
+            border-radius: parent.border-radius;
+            background: Materials.specular;
+            opacity: touch.pressed && root.enabled ? 0.9 : touch.has-hover && root.enabled ? 0.4 : 0;
+            animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+        }
+        Image {
+            source: root.icon;
+            width: Spacing.button-icon;
+            height: self.width;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: root.active || root.destructive ? Colors.on-action : Colors.text-primary;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { if root.enabled { root.clicked(); } }
+    }
+}

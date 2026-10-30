@@ -3,8 +3,7 @@
 //! Tests attachment upload, download, encryption,
 //! and metadata handling using the testing framework.
 
-mod common;
-mod framework;
+use crate::framework;
 
 use framework::prelude::*;
 
@@ -86,14 +85,22 @@ async fn test_cdn_url() {
 async fn test_attachment_has_encryption_key() {
     let attachment = AttachmentBuilder::image("encrypted.jpg").build();
 
-    assert_eq!(attachment.key.len(), 32, "Encryption key should be 32 bytes (AES-256)");
+    assert_eq!(
+        attachment.key.len(),
+        32,
+        "Encryption key should be 32 bytes (AES-256)"
+    );
 }
 
 #[tokio::test]
 async fn test_attachment_has_digest() {
     let attachment = AttachmentBuilder::image("verified.jpg").build();
 
-    assert_eq!(attachment.digest.len(), 32, "Digest should be 32 bytes (SHA-256)");
+    assert_eq!(
+        attachment.digest.len(),
+        32,
+        "Digest should be 32 bytes (SHA-256)"
+    );
 }
 
 #[tokio::test]
@@ -101,7 +108,10 @@ async fn test_unique_encryption_keys() {
     let att1 = AttachmentBuilder::image("1.jpg").build();
     let att2 = AttachmentBuilder::image("2.jpg").build();
 
-    assert_ne!(att1.key, att2.key, "Each attachment should have unique encryption key");
+    assert_ne!(
+        att1.key, att2.key,
+        "Each attachment should have unique encryption key"
+    );
 }
 
 #[tokio::test]
@@ -109,7 +119,10 @@ async fn test_unique_digests() {
     let att1 = AttachmentBuilder::image("1.jpg").build();
     let att2 = AttachmentBuilder::image("2.jpg").build();
 
-    assert_ne!(att1.digest, att2.digest, "Each attachment should have unique digest");
+    assert_ne!(
+        att1.digest, att2.digest,
+        "Each attachment should have unique digest"
+    );
 }
 
 // ============================================================================
@@ -196,9 +209,7 @@ async fn test_large_attachment() {
 
 #[tokio::test]
 async fn test_zero_size_attachment() {
-    let attachment = AttachmentBuilder::document("empty.txt")
-        .size(0)
-        .build();
+    let attachment = AttachmentBuilder::document("empty.txt").size(0).build();
 
     assert_eq!(attachment.size, 0);
 }
@@ -276,8 +287,12 @@ async fn test_attachment_in_stored_message() {
 #[tokio::test]
 async fn test_image_types() {
     let jpg = AttachmentBuilder::image("photo.jpg").build();
-    let png = AttachmentBuilder::image("icon.png").mime_type("image/png").build();
-    let gif = AttachmentBuilder::image("animation.gif").mime_type("image/gif").build();
+    let png = AttachmentBuilder::image("icon.png")
+        .mime_type("image/png")
+        .build();
+    let gif = AttachmentBuilder::image("animation.gif")
+        .mime_type("image/gif")
+        .build();
 
     assert_eq!(jpg.mime_type, "image/jpeg");
     assert_eq!(png.mime_type, "image/png");
@@ -287,8 +302,12 @@ async fn test_image_types() {
 #[tokio::test]
 async fn test_video_types() {
     let mp4 = AttachmentBuilder::video("video.mp4").build();
-    let webm = AttachmentBuilder::video("video.webm").mime_type("video/webm").build();
-    let mov = AttachmentBuilder::video("video.mov").mime_type("video/quicktime").build();
+    let webm = AttachmentBuilder::video("video.webm")
+        .mime_type("video/webm")
+        .build();
+    let mov = AttachmentBuilder::video("video.mov")
+        .mime_type("video/quicktime")
+        .build();
 
     assert_eq!(mp4.mime_type, "video/mp4");
     assert_eq!(webm.mime_type, "video/webm");
@@ -298,8 +317,12 @@ async fn test_video_types() {
 #[tokio::test]
 async fn test_audio_types() {
     let mp3 = AttachmentBuilder::audio("song.mp3").build();
-    let wav = AttachmentBuilder::audio("sound.wav").mime_type("audio/wav").build();
-    let ogg = AttachmentBuilder::audio("audio.ogg").mime_type("audio/ogg").build();
+    let wav = AttachmentBuilder::audio("sound.wav")
+        .mime_type("audio/wav")
+        .build();
+    let ogg = AttachmentBuilder::audio("audio.ogg")
+        .mime_type("audio/ogg")
+        .build();
 
     assert_eq!(mp3.mime_type, "audio/mp3");
     assert_eq!(wav.mime_type, "audio/wav");

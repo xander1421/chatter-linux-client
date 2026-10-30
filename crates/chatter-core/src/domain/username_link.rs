@@ -73,10 +73,7 @@ impl UsernameLink {
         use base64::Engine;
 
         let rest = url.trim().strip_prefix(Self::URL_PREFIX).ok_or_else(|| {
-            UsernameLinkParseError::InvalidFormat(format!(
-                "expected {}… URL",
-                Self::URL_PREFIX
-            ))
+            UsernameLinkParseError::InvalidFormat(format!("expected {}… URL", Self::URL_PREFIX))
         })?;
 
         let (link_id, fragment) = rest.split_once('#').ok_or_else(|| {
@@ -85,7 +82,9 @@ impl UsernameLink {
             )
         })?;
         if link_id.is_empty() {
-            return Err(UsernameLinkParseError::InvalidFormat("empty link id".into()));
+            return Err(UsernameLinkParseError::InvalidFormat(
+                "empty link id".into(),
+            ));
         }
 
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -151,9 +150,8 @@ mod tests {
     fn libsignal_round_trip_and_wrong_entropy_fails() {
         let username = "proof_user.42".to_string();
         let mut rng = rand::rng();
-        let (entropy, blob) =
-            usernames::create_for_username(&mut rng, username.clone(), None)
-                .expect("create_for_username");
+        let (entropy, blob) = usernames::create_for_username(&mut rng, username.clone(), None)
+            .expect("create_for_username");
 
         // Round trip: decrypts back byte-exact.
         let decrypted = usernames::decrypt_username(&entropy, &blob).expect("decrypt");

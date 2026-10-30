@@ -1,3 +1,5 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { Materials } from "../theme/materials.slint";
 // Login page component
 
 import { Colors } from "../theme/colors.slint";
@@ -6,6 +8,8 @@ import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { OfflineMeshNotice } from "../components/offline_mesh_notice.slint";
+import { ShieldOnboardingToggle } from "../anon_mode/shield_onboarding.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 
 export component LoginPage inherits Rectangle {
     in-out property <string> username: "";
@@ -19,6 +23,9 @@ export component LoginPage inherits Rectangle {
     in property <string> configured-server-url: "";
     in property <bool> loading: false;
     in property <string> error: "";
+    // The server asked this login for a proof of work (an account with recent
+    // failed attempts); the device is solving it, which can take seconds.
+    in property <bool> verifying: false;
     // Live server reachability and the mesh escape hatch — see
     // `components/offline_mesh_notice.slint` for why this screen needs a way out
     // of itself at all.
@@ -32,8 +39,35 @@ export component LoginPage inherits Rectangle {
     // unreachable server the real key is still out there, and chatter-core
     // refuses the reset rather than letting the UI decide.
     in property <bool> identity-reset-available: false;
+    // Touch density for the Shield header control.
+    in property <bool> touch: false;
 
     property <bool> submitted: false;
+    property <float> arrival: 0;
+    animate arrival { duration: Materials.motion-standard; easing: Materials.glide; }
+    init => { root.arrival = 1; }
+    property <length> error-nudge: 0px;
+    changed error => {
+        if root.error != "" {
+            root.error-nudge = -8px;
+            error-settle.start(); error-settle.restart();
+        }
+    }
+    error-settle := Timer {
+        interval: 16ms;
+        running: false;
+        triggered => { self.running = false; root.error-nudge = 0px; }
+    }
+
+    // Shared by the Sign In button and the keyboard's Done key on the
+    // password and PIN fields.
+    function submit() {
+        if root.loading { return; }
+        submitted = true;
+        if username != "" && password != "" && server-url != "" {
+            root.login(root.username, root.password, root.server-url, root.pin);
+        }
+    }
 
     callback login(string, string, string, string);
     callback register();
@@ -42,9 +76,9 @@ export component LoginPage inherits Rectangle {
     callback continue-without-account();
     callback accept-new-identity();
 
-    background: Colors.background;
+    background: Materials.ambient;
 
-    Flickable {
+    flick := Flickable {
         width: 100%;
         height: 100%;
         viewport-height: content.preferred-height;
@@ -52,19 +86,30 @@ export component LoginPage inherits Rectangle {
 
         content := VerticalLayout {
             padding: Spacing.lg;
-            spacing: 0px;
+            spacing: Spacing.none;
+            // Centre the card: a max-width alone left-aligns it, so on a
+            // tablet it sat against the left edge of a 1000dp+ screen.
+            cross-axis-alignment: center;
 
             Rectangle { height: Spacing.xl * 2; }
 
             Rectangle {
-                max-width: 400px;
-                horizontal-stretch: 0;
+                width: min(480px, flick.width - 2 * Spacing.lg);
                 background: Colors.surface;
                 border-radius: Spacing.radius-lg;
+                transform-origin: { x: self.width / 2, y: 0px };
+                transform-scale-x: 96% + root.arrival * 4%;
+                transform-scale-y: 94% + root.arrival * 6%;
+                opacity: 0.5 + root.arrival * 0.5;
 
                 VerticalLayout {
                     spacing: Spacing.md;
                     padding: Spacing.lg;
+
+                    ShieldOnboardingToggle {
+                        busy: root.loading;
+                        touch: root.touch;
+                    }
 
                     Text {
                         text: "Chatter";
@@ -94,21 +139,23 @@ export component LoginPage inherits Rectangle {
                         password: true;
                         text <=> root.password;
                         disabled: root.loading;
+                        accepted => { root.submit(); }
                     }
 
-                    // PIN (optional) with explanation
+                    // PIN with explanation
                     VerticalLayout {
-                        spacing: 2px;
+                        spacing: Spacing.xxs;
 
                         Input {
-                            placeholder: "PIN (optional)";
+                            placeholder: "PIN";
                             password: true;
                             text <=> root.pin;
                             disabled: root.loading;
+                            accepted => { root.submit(); }
                         }
 
                         Text {
-                            text: "Enter your PIN to restore encryption keys on this device";
+                            text: "Your account PIN. Needed on a new device to restore your encryption keys.";
                             color: Colors.text-muted;
                             font-size: Typography.xxs;
                             wrap: word-wrap;
@@ -125,31 +172,46 @@ export component LoginPage inherits Rectangle {
                     HorizontalLayout {
                         spacing: Spacing.sm;
 
-                        Rectangle {
-                            height: 28px;
+                        Button {
+                            text: "Localhost";
+                            variant: "secondary";
                             horizontal-stretch: 1;
-                            background: Colors.surface-hover;
-                            border-radius: Spacing.radius-sm;
-                            Text { text: "Localhost"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
-                            TouchArea { clicked => { root.server-url = "http://localhost:50051"; } }
+                            disabled: root.loading;
+                            clicked => { root.server-url = "http://localhost:50051"; }
                         }
 
-                        Rectangle {
-                            height: 28px;
+                        Button {
+                            text: "LAN";
+                            variant: "secondary";
                             horizontal-stretch: 1;
-                            background: Colors.surface-hover;
-                            border-radius: Spacing.radius-sm;
-                            Text { text: "LAN"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
-                            TouchArea { clicked => { root.server-url = root.configured-server-url; } }
+                            disabled: root.loading;
+                            clicked => { root.server-url = root.configured-server-url; }
                         }
 
                     }
 
-                    if error != "": Text {
-                        text: root.error;
-                        color: Colors.error;
+                    if error != "": Rectangle {
+                        min-height: error-copy.preferred-height + Spacing.sm * 2;
+                        background: Colors.error.with-alpha(0.1);
+                        border-radius: Spacing.radius-sm;
+                        error-copy := Text {
+                            x: Spacing.sm + root.error-nudge;
+                            y: Spacing.sm;
+                            width: parent.width - Spacing.sm * 2;
+                            text: root.error;
+                            color: Colors.error;
+                            font-size: Typography.sm;
+                            wrap: word-wrap;
+                            animate x { duration: Materials.motion-quick; easing: Materials.spring; }
+                        }
+                    }
+
+                    if root.loading && root.verifying: Text {
+                        text: "Verifying this sign-in on your device… this can take a few seconds.";
+                        color: Colors.text-secondary;
                         font-size: Typography.sm;
                         wrap: word-wrap;
+                        horizontal-alignment: center;
                     }
 
                     // Destructive and irreversible, so it is a deliberate
@@ -166,7 +228,7 @@ export component LoginPage inherits Rectangle {
 
                         Button {
                             text: "Start over with new keys";
-                            variant: "danger";
+                            variant: "destructive";
                             disabled: root.loading;
                             clicked => { root.accept-new-identity(); }
                         }
@@ -187,25 +249,33 @@ export component LoginPage inherits Rectangle {
                             text: "Forgot password?";
                             color: Colors.primary;
                             font-size: Typography.xs;
+                            height: Spacing.touch-target-min;
+                            vertical-alignment: center;
+                            accessible-role: button;
+                            accessible-action-default => { root.go-to-recovery(); }
+                            KeyFocus { activate => { root.go-to-recovery(); } }
                             TouchArea {
                                 clicked => { root.go-to-recovery(); }
                             }
                         }
                     }
 
+                    if root.loading && AnonMode.onboarding-progress != "": Text {
+                        text: AnonMode.onboarding-progress;
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
+                    }
+
                     // Login button
                     Button {
-                        text: loading ? "" : "Sign In";
+                        text: loading ? "" : "Sign in";
                         variant: "primary";
                         loading: root.loading;
                         disabled: root.loading;
 
-                        clicked => {
-                            submitted = true;
-                            if username != "" && password != "" && server-url != "" {
-                                root.login(root.username, root.password, root.server-url, root.pin);
-                            }
-                        }
+                        clicked => { root.submit(); }
                     }
 
                     // Register link
@@ -217,6 +287,8 @@ export component LoginPage inherits Rectangle {
                             text: "Don't have an account?";
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
+                            height: Spacing.touch-target-min;
+                            vertical-alignment: center;
                         }
 
                         Text {
@@ -224,6 +296,11 @@ export component LoginPage inherits Rectangle {
                             color: Colors.primary;
                             font-size: Typography.sm;
                             font-weight: Typography.medium;
+                            height: Spacing.touch-target-min;
+                            vertical-alignment: center;
+                            accessible-role: button;
+                            accessible-action-default => { root.register(); }
+                            KeyFocus { activate => { root.register(); } }
 
                             TouchArea {
                                 clicked => { root.register(); }
@@ -238,6 +315,12 @@ export component LoginPage inherits Rectangle {
                             text: "Link to an existing account on another device";
                             color: Colors.primary;
                             font-size: Typography.xs;
+                            min-height: Spacing.touch-target-min;
+                            vertical-alignment: center;
+                            accessible-role: button;
+                            accessible-action-default => { root.go-to-link-device(); }
+                            KeyFocus { activate => { root.go-to-link-device(); } }
+                            wrap: word-wrap;
                             TouchArea {
                                 clicked => { root.go-to-link-device(); }
                             }

@@ -215,7 +215,57 @@ impl MentionSuggestion {
 /// Provides basic mention detection for @username, @here, @all, and #channel patterns.
 pub struct MentionExtractor;
 
+/// A conversation member whose names may be used in an @mention.
+#[derive(Clone, Debug)]
+pub struct MentionMember {
+    pub user_id: UserId,
+    pub names: Vec<String>,
+}
+
 impl MentionExtractor {
+    /// Resolve visible mention ranges against actual conversation members.
+    /// The input is a rendered paragraph, so markdown code can be excluded by
+    /// the caller without duplicating mention parsing in the presentation layer.
+    pub fn resolve_mentions(text: &str, members: &[MentionMember], broadcast: bool) -> Vec<Mention> {
+        let mut found = Vec::new();
+        if broadcast {
+            found.extend(Self::extract_mentions(text).into_iter().filter(|m| {
+                matches!(m.mention_type, MentionType::Here | MentionType::All)
+                    && mention_boundaries(text, m.start_offset, m.end_offset)
+            }));
+        }
+        for member in members {
+            for name in &member.names {
+                if name.is_empty() { continue; }
+                let needle = format!("@{name}");
+                for (start, _) in text.match_indices(|c: char| c == '@') {
+                    let Some(candidate) = text.get(start..start + needle.len()) else { continue; };
+                    if !candidate.eq_ignore_ascii_case(&needle) { continue; }
+                    let end = start + needle.len();
+                    if mention_boundaries(text, start, end) {
+                        found.push(Mention::user(member.user_id, candidate.to_string(), start, end));
+                    }
+                }
+            }
+        }
+        // Prefer the longest matching display name and never assign one span
+        // to two people when names collide.
+        found.sort_by_key(|m| (m.start_offset, std::cmp::Reverse(m.length())));
+        let mut resolved: Vec<Mention> = Vec::new();
+        for mention in &found {
+            if mention.target_id.is_some() && found.iter().any(|other| other.start_offset == mention.start_offset
+                && other.end_offset == mention.end_offset
+                && other.target_id.is_some() && other.target_id != mention.target_id)
+            {
+                continue;
+            }
+            if resolved.last().is_none_or(|last| last.end_offset <= mention.start_offset) {
+                resolved.push(mention.clone());
+            }
+        }
+        resolved
+    }
+
     /// Extract mentions from text.
     ///
     /// Detects patterns:
@@ -241,7 +291,8 @@ impl MentionExtractor {
                 .unwrap_or(text.len());
 
             if chars[i] == '@' {
-                if let Some((mention, end_idx)) = Self::parse_at_mention(&chars, i, byte_offset, text)
+                if let Some((mention, end_idx)) =
+                    Self::parse_at_mention(&chars, i, byte_offset, text)
                 {
                     mentions.push(mention);
                     i = end_idx;
@@ -275,9 +326,7 @@ impl MentionExtractor {
 
         // Collect the identifier
         let mut end_idx = start_idx + 1;
-        while end_idx < chars.len()
-            && (chars[end_idx].is_alphanumeric() || chars[end_idx] == '_')
-        {
+        while end_idx < chars.len() && (chars[end_idx].is_alphanumeric() || chars[end_idx] == '_') {
             end_idx += 1;
         }
 
@@ -337,9 +386,7 @@ impl MentionExtractor {
         // Collect the identifier (alphanumeric, hyphen, underscore)
         let mut end_idx = start_idx + 1;
         while end_idx < chars.len()
-            && (chars[end_idx].is_alphanumeric()
-                || chars[end_idx] == '-'
-                || chars[end_idx] == '_')
+            && (chars[end_idx].is_alphanumeric() || chars[end_idx] == '-' || chars[end_idx] == '_')
         {
             end_idx += 1;
         }
@@ -367,6 +414,13 @@ impl MentionExtractor {
             end_idx,
         ))
     }
+}
+
+fn mention_boundaries(text: &str, start: usize, end: usize) -> bool {
+    let before = text[..start].chars().next_back();
+    let after = text[end..].chars().next();
+    before.is_none_or(|c| !c.is_alphanumeric() && c != '_' && c != '@')
+        && after.is_none_or(|c| !c.is_alphanumeric() && c != '_')
 }
 
 #[cfg(test)]
@@ -439,8 +493,8 @@ mod tests {
     #[test]
     fn test_mention_suggestion_user() {
         let user_id = UserId::new();
-        let suggestion = MentionSuggestion::user(user_id, "alice".to_string())
-            .with_online_status(true);
+        let suggestion =
+            MentionSuggestion::user(user_id, "alice".to_string()).with_online_status(true);
 
         assert_eq!(suggestion.suggestion_type, MentionType::User);
         assert_eq!(suggestion.display_name, "alice");
@@ -538,6 +592,24 @@ mod tests {
         assert_eq!(mentions.len(), 1);
         assert_eq!(mentions[0].display_text, "@alice");
         // Verify byte offsets are correct for the actual text
-        assert_eq!(&text[mentions[0].start_offset..mentions[0].end_offset], "@alice");
+        assert_eq!(
+            &text[mentions[0].start_offset..mentions[0].end_offset],
+            "@alice"
+        );
+    }
+
+    #[test]
+    fn resolved_mentions_require_members_and_preserve_byte_ranges() {
+        let user_id = UserId::new();
+        let members = [MentionMember {
+            user_id,
+            names: vec!["Alpha".into(), "Alpha One".into()],
+        }];
+        let text = "é @Alpha One, @Alpha @Nobody mail@Alpha.org @here";
+        let mentions = MentionExtractor::resolve_mentions(text, &members, true);
+        let displays: Vec<_> = mentions.iter().map(|m| &text[m.start_offset..m.end_offset]).collect();
+        assert_eq!(displays, ["@Alpha One", "@Alpha", "@here"]);
+        assert_eq!(mentions[0].target_id, Some(user_id.to_string()));
+        assert_eq!(mentions[2].target_id, None);
     }
 }

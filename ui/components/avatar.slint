@@ -3,19 +3,35 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Appearance } from "../theme/appearance.slint";
+
+// Initials from a display name. Backed by core's `initials_from_name`
+// (wired in lib.rs) so every avatar abbreviates a name the same way.
+export global AvatarText {
+    pure callback initials(string) -> string;
+}
 
 export component Avatar inherits Rectangle {
     in property <image> source;
+    in property <bool> anonymous: false;
+    // A display name: the fallback shows its initials. Prefer this over
+    // `fallback-text`, which is rendered verbatim.
+    in property <string> name: "";
     in property <string> fallback-text: "";
+    // Spoken name when `fallback-text` carries initials (not read aloud).
+    in property <string> alt-name: "";
     in property <length> size: Spacing.avatar-md;
     in property <bool> show-presence: false;
     in property <color> presence-color: Colors.offline;
     // Colored background for letter-based fallback avatars.
     // When set (non-transparent), overrides default surface color for the fallback circle.
     in property <color> fallback-bg: transparent;
+    in property <color> fallback-fg: Colors.text-primary;
 
     accessible-role: image;
-    accessible-label: root.fallback-text != "" ? "Avatar for " + root.fallback-text : "Avatar";
+    accessible-label: root.name != "" ? "Avatar for " + root.name
+        : root.alt-name != "" ? "Avatar for " + root.alt-name
+        : root.fallback-text != "" && root.fallback-text != "?" ? "Avatar for " + root.fallback-text : "Avatar";
 
     width: size;
     height: size;
@@ -37,15 +53,30 @@ export component Avatar inherits Rectangle {
         }
 
         if root.source.width <= 0: Text {
+            // The avatar's own label speaks for it; the letters are decoration.
+            accessible-role: none;
             width: 100%;
             height: 100%;
-            text: root.fallback-text;
-            color: Colors.text-primary;
+            text: root.name != "" && AvatarText.initials(root.name) != ""
+                ? AvatarText.initials(root.name) : root.fallback-text;
+            color: root.fallback-fg;
             font-size: root.size * 0.4;
             font-weight: Typography.semibold;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
+    }
+
+    // Anonymous identities keep their purple ring around real images or initials.
+    if root.anonymous: Rectangle {
+        x: -2px;
+        y: -2px;
+        width: root.size + 4px;
+        height: root.size + 4px;
+        border-radius: self.width / 2;
+        border-width: 2px;
+        border-color: Colors.group-accent;
+        background: transparent;
     }
 
     // Presence indicator dot — bottom-left, sitting just outside the circle
@@ -59,5 +90,17 @@ export component Avatar inherits Rectangle {
         background: root.presence-color;
         border-width: 2px;
         border-color: Colors.background;
+        // Keep the halo at the breathing animation's midpoint. A clock-bound
+        // color makes every online avatar redraw the whole window at idle.
+        if root.presence-color == Colors.online: Rectangle {
+            width: parent.width + 5px;
+            height: self.width;
+            x: -2.5px;
+            y: -2.5px;
+            border-radius: self.width / 2;
+            background: transparent;
+            border-width: 1px;
+            border-color: Colors.online.with-alpha(Appearance.reduce-motion ? 0 : 0.28);
+        }
     }
 }

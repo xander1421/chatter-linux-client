@@ -11,7 +11,8 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 
 use crate::{
-    MainWindow, MemoryEntityData, MemoryFactData, MemoryGraphEdgeData, MemoryGraphNodeData,
+    JarvisGlobal, MainWindow, MemoryEntityData, MemoryFactData, MemoryGraphEdgeData,
+    MemoryGraphNodeData,
 };
 
 const VW: f32 = 400.0;
@@ -32,24 +33,73 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     {
         let ui_ctx = ui_ctx.clone();
         let weak = window.as_weak();
-        window.on_jarvis_memory_refresh(move || {
-            let ui_ctx = ui_ctx.clone();
-            let weak = weak.clone();
-            tokio::spawn(async move { refresh(ui_ctx, weak, None).await });
-        });
+        window
+            .global::<crate::JarvisPane>()
+            .on_jarvis_memory_refresh(move || {
+                let ui_ctx = ui_ctx.clone();
+                let weak = weak.clone();
+                tokio::spawn(async move { refresh(ui_ctx, weak, None).await });
+            });
     }
     {
         let ui_ctx = ui_ctx.clone();
         let weak = window.as_weak();
-        window.on_jarvis_memory_select_entity(move |entity_id: SharedString| {
+        window
+            .global::<crate::JarvisPane>()
+            .on_jarvis_memory_select_entity(move |entity_id: SharedString| {
+                let ui_ctx = ui_ctx.clone();
+                let weak = weak.clone();
+                tokio::spawn(
+                    async move { refresh(ui_ctx, weak, Some(entity_id.to_string())).await },
+                );
+            });
+    }
+    {
+        let ui_ctx = ui_ctx.clone();
+        let weak = window.as_weak();
+        window.global::<JarvisGlobal>().on_clear_history(move || {
             let ui_ctx = ui_ctx.clone();
             let weak = weak.clone();
-            tokio::spawn(async move { refresh(ui_ctx, weak, Some(entity_id.to_string())).await });
+            tokio::spawn(async move {
+                if let Err(error) = ui_ctx.jarvis_clear_history() {
+                    tracing::error!(%error, "failed to clear Jarvis history");
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_toast_message("Couldn't clear Jarvis history. Try again.".into());
+                            w.set_toast_variant("error".into());
+                            w.set_toast_visible(true);
+                        }
+                    });
+                    return;
+                }
+                let current = matches!(ui_ctx.active_conversation(),
+                    chatter_core::state::ActiveConversation::Channel(id)
+                        if chatter_core::client::is_jarvis_channel(&id));
+                if current {
+                    let weak_chat = weak.clone();
+                    let ui_ctx_chat = ui_ctx.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_chat.upgrade() {
+                            if matches!(ui_ctx_chat.active_conversation(),
+                                chatter_core::state::ActiveConversation::Channel(id)
+                                    if chatter_core::client::is_jarvis_channel(&id)) {
+                                w.global::<crate::ChatPane>()
+                                    .set_messages(ModelRc::new(VecModel::default()));
+                            }
+                        }
+                    });
+                }
+                refresh(ui_ctx, weak, None).await
+            });
         });
     }
 }
 
-async fn refresh(ui_ctx: Arc<ChatterClient>, weak: slint::Weak<MainWindow>, selected: Option<String>) {
+async fn refresh(
+    ui_ctx: Arc<ChatterClient>,
+    weak: slint::Weak<MainWindow>,
+    selected: Option<String>,
+) {
     // Facts + entities come from SQLite via the Jarvis façade (fast, sync).
     let facts = ui_ctx.jarvis_memory_facts();
     let entities = ui_ctx.jarvis_top_entities(12);
@@ -87,7 +137,11 @@ async fn refresh(ui_ctx: Arc<ChatterClient>, weak: slint::Weak<MainWindow>, sele
             entity_id: e.id.to_string().into(),
             name: e.name.clone().into(),
             kind: kind_str(e.entity_type).into(),
-            mention_label: format!("{} mentions", e.mention_count).into(),
+            mention_label: if e.mention_count == 1 {
+                "1 mention".into()
+            } else {
+                format!("{} mentions", e.mention_count).into()
+            },
             is_selected: selected_id.as_deref() == Some(&e.id.to_string()),
         })
         .collect();
@@ -111,7 +165,12 @@ async fn refresh(ui_ctx: Arc<ChatterClient>, weak: slint::Weak<MainWindow>, sele
             let angle = (i as f32) / n * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
             let x = cx + radius * angle.cos();
             let y = cy + (radius * 0.75) * angle.sin();
-            edges.push(MemoryGraphEdgeData { x1: cx, y1: cy, x2: x, y2: y });
+            edges.push(MemoryGraphEdgeData {
+                x1: cx,
+                y1: cy,
+                x2: x,
+                y2: y,
+            });
             nodes.push(MemoryGraphNodeData {
                 name: entity.name.clone().into(),
                 kind: kind_str(entity.entity_type).into(),
@@ -122,21 +181,20 @@ async fn refresh(ui_ctx: Arc<ChatterClient>, weak: slint::Weak<MainWindow>, sele
         }
     }
 
-    let current_count = facts.iter().filter(|f| f.valid_until.is_none()).count();
-    let stats = format!(
-        "{} facts ({} current) · {} entities",
-        facts.len(),
-        current_count,
-        entities.len()
-    );
+    let stats = ui_ctx.jarvis_memory_stats_label();
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            w.set_jarvis_memory_facts(ModelRc::new(VecModel::from(fact_rows)));
-            w.set_jarvis_memory_entities(ModelRc::new(VecModel::from(entity_rows)));
-            w.set_jarvis_memory_graph_nodes(ModelRc::new(VecModel::from(nodes)));
-            w.set_jarvis_memory_graph_edges(ModelRc::new(VecModel::from(edges)));
-            w.set_jarvis_memory_stats(stats.into());
+            w.global::<crate::JarvisPane>()
+                .set_jarvis_memory_facts(ModelRc::new(VecModel::from(fact_rows)));
+            w.global::<crate::JarvisPane>()
+                .set_jarvis_memory_entities(ModelRc::new(VecModel::from(entity_rows)));
+            w.global::<crate::JarvisPane>()
+                .set_jarvis_memory_graph_nodes(ModelRc::new(VecModel::from(nodes)));
+            w.global::<crate::JarvisPane>()
+                .set_jarvis_memory_graph_edges(ModelRc::new(VecModel::from(edges)));
+            w.global::<crate::JarvisPane>()
+                .set_jarvis_memory_stats(stats.into());
         }
     });
 }

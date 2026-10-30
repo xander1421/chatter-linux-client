@@ -13,8 +13,8 @@ use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
 
-use crate::error::MediaError;
 use super::GifFrame;
+use crate::error::MediaError;
 
 /// Lazy GStreamer initialization.
 static GST_INIT: Once = Once::new();
@@ -48,6 +48,16 @@ fn ensure_gst_init() -> Result<(), MediaError> {
 /// Measured ~0.15s for a 93-frame 1040×600 GIF (vs ~2.3s pure-Rust `image`,
 /// ~0.85s real-time GL playback). Blocking — call off the UI thread.
 pub fn decode_all_frames_cpu(gif_bytes: &[u8]) -> Result<Vec<GifFrame>, MediaError> {
+    decode_frames_cpu_bounded(gif_bytes, usize::MAX, usize::MAX)
+}
+
+/// Decode at most `max_frames` and `max_bytes` of tightly packed RGBA frames.
+/// The pipeline is stopped as soon as either budget would be exceeded.
+pub fn decode_frames_cpu_bounded(
+    gif_bytes: &[u8],
+    max_frames: usize,
+    max_bytes: usize,
+) -> Result<Vec<GifFrame>, MediaError> {
     ensure_gst_init()?;
 
     if gif_bytes.len() < 6 || (&gif_bytes[0..6] != b"GIF89a" && &gif_bytes[0..6] != b"GIF87a") {
@@ -66,11 +76,20 @@ pub fn decode_all_frames_cpu(gif_bytes: &[u8]) -> Result<Vec<GifFrame>, MediaErr
     let convert = gst::ElementFactory::make("videoconvert")
         .build()
         .map_err(|e| MediaError::PlaybackError(format!("videoconvert: {e}")))?;
-    let caps = gst::Caps::builder("video/x-raw").field("format", "RGBA").build();
+    let caps = gst::Caps::builder("video/x-raw")
+        .field("format", "RGBA")
+        .build();
     let appsink = gst_app::AppSink::builder().caps(&caps).sync(false).build();
+    // Backpressure prevents the decoder from queuing unbounded frames ahead of us.
+    appsink.set_property("max-buffers", 1u32);
 
     pipeline
-        .add_many([appsrc.upcast_ref(), &decodebin, &convert, appsink.upcast_ref()])
+        .add_many([
+            appsrc.upcast_ref(),
+            &decodebin,
+            &convert,
+            appsink.upcast_ref(),
+        ])
         .map_err(|e| MediaError::PlaybackError(format!("add: {e}")))?;
     appsrc
         .link(&decodebin)
@@ -102,10 +121,13 @@ pub fn decode_all_frames_cpu(gif_bytes: &[u8]) -> Result<Vec<GifFrame>, MediaErr
     let _ = appsrc.end_of_stream();
 
     let mut frames = Vec::new();
+    let mut decoded_bytes = 0usize;
     loop {
         match appsink.try_pull_sample(gst::ClockTime::from_seconds(5)) {
             Some(sample) => {
-                let Some(buffer) = sample.buffer() else { continue };
+                let Some(buffer) = sample.buffer() else {
+                    continue;
+                };
                 let Some(caps) = sample.caps() else { continue };
                 let info = gst_video::VideoInfo::from_caps(caps)
                     .map_err(|e| MediaError::PlaybackError(format!("caps: {e}")))?;
@@ -117,7 +139,14 @@ pub fn decode_all_frames_cpu(gif_bytes: &[u8]) -> Result<Vec<GifFrame>, MediaErr
                 let w = info.width() as usize;
                 let h = info.height() as usize;
                 let stride = info.stride()[0] as usize;
+                let Some(frame_bytes) = w.checked_mul(h).and_then(|pixels| pixels.checked_mul(4)) else {
+                    break;
+                };
+                if !super::frame_fits_budget(frames.len(), decoded_bytes, frame_bytes, max_frames, max_bytes) {
+                    break;
+                }
                 let row_bytes = w * 4;
+                decoded_bytes += frame_bytes;
 
                 // Copy row-by-row to strip stride padding into tight RGBA.
                 let mut data = vec![0u8; row_bytes * h];
@@ -147,7 +176,9 @@ pub fn decode_all_frames_cpu(gif_bytes: &[u8]) -> Result<Vec<GifFrame>, MediaErr
                     break;
                 }
                 pipeline.set_state(gst::State::Null).ok();
-                return Err(MediaError::PlaybackError("timed out pulling frames".to_string()));
+                return Err(MediaError::PlaybackError(
+                    "timed out pulling frames".to_string(),
+                ));
             }
         }
     }

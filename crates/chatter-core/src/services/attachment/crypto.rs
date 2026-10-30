@@ -1,7 +1,5 @@
 //! Cryptographic operations for attachments.
 
-use std::path::Path;
-
 use memmap2::Mmap;
 
 use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
@@ -11,7 +9,7 @@ use crate::crypto::streaming_decrypt::StreamingDecryptor;
 use crate::domain::attachment::ContentLocation;
 use crate::domain::ids::AttachmentId;
 
-use super::{attachment_file_path, AttachmentError, AttachmentService};
+use super::{AttachmentError, AttachmentService, attachment_file_path};
 
 impl AttachmentService {
     /// Decrypt attachment content to memory.
@@ -31,7 +29,10 @@ impl AttachmentService {
             .get(attachment_id)
             .map_err(|e| AttachmentError::StorageError(e.to_string()))?
             .ok_or_else(|| {
-                AttachmentError::InvalidAttachment(format!("Attachment {} not found", attachment_id))
+                AttachmentError::InvalidAttachment(format!(
+                    "Attachment {} not found",
+                    attachment_id
+                ))
             })?;
 
         // Must be on filesystem
@@ -42,9 +43,10 @@ impl AttachmentService {
         }
 
         // Get encryption keys
-        let encryption_key = attachment.encryption_key.as_ref().ok_or_else(|| {
-            AttachmentError::DecryptionError("No encryption key".to_string())
-        })?;
+        let encryption_key = attachment
+            .encryption_key
+            .as_ref()
+            .ok_or_else(|| AttachmentError::DecryptionError("No encryption key".to_string()))?;
         let digest = attachment.encryption_iv.as_ref().ok_or_else(|| {
             AttachmentError::DecryptionError("No digest for verification".to_string())
         })?;
@@ -60,7 +62,6 @@ impl AttachmentService {
         // Read from filesystem using mmap
         let file_path = attachment_file_path(attachment_id);
         tracing::debug!(
-            attachment_id = %attachment_id,
             file_path = %file_path.display(),
             "Reading ciphertext from filesystem via mmap"
         );
@@ -93,7 +94,6 @@ impl AttachmentService {
         }
 
         tracing::debug!(
-            attachment_id = %attachment_id,
             ciphertext_len = mmap.len(),
             plaintext_size = attachment.metadata.size,
             "Decrypting attachment to memory"
@@ -112,7 +112,6 @@ impl AttachmentService {
         .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
 
         tracing::info!(
-            attachment_id = %attachment_id,
             plaintext_len = plaintext.len(),
             "Decrypted attachment to secure buffer"
         );
@@ -125,76 +124,11 @@ impl AttachmentService {
         Ok(buffer)
     }
 
-    /// Export a decrypted attachment to a file.
-    ///
-    /// Decrypts the attachment content to memory and writes it to the
-    /// specified path. Used for "Save As" functionality.
-    ///
-    /// # Security Note
-    ///
-    /// This is the only method that writes decrypted content to disk.
-    /// It should only be called when the user explicitly requests to
-    /// export a file via "Save As".
-    pub fn export_to_file(
-        &self,
-        attachment_id: &AttachmentId,
-        destination: &Path,
-    ) -> Result<(), AttachmentError> {
-        // Decrypt to memory
-        let secure_buffer = self.decrypt_to_memory(attachment_id)?;
-
-        // Write to destination file
-        std::fs::write(destination, secure_buffer.as_slice())
-            .map_err(|e| AttachmentError::FileError(format!("Failed to write file: {}", e)))?;
-
-        tracing::info!(
-            attachment_id = %attachment_id,
-            destination = %destination.display(),
-            size = secure_buffer.len(),
-            "Exported attachment to file"
-        );
-
-        Ok(())
-        // secure_buffer dropped here -> memory zeroized
-    }
-
-    /// Export a decrypted attachment asynchronously.
-    ///
-    /// Same as export_to_file but runs the file write in a blocking task.
-    pub async fn export_to_file_async(
-        &self,
-        attachment_id: &AttachmentId,
-        destination: &Path,
-    ) -> Result<(), AttachmentError> {
-        // Decrypt to memory (sync operation on DB)
-        let secure_buffer = self.decrypt_to_memory(attachment_id)?;
-        let dest = destination.to_path_buf();
-        let att_id = *attachment_id;
-
-        // Write to file in blocking task
-        tokio::task::spawn_blocking(move || {
-            std::fs::write(&dest, secure_buffer.as_slice())
-                .map_err(|e| AttachmentError::FileError(format!("Failed to write file: {}", e)))?;
-
-            tracing::info!(
-                attachment_id = %att_id,
-                destination = %dest.display(),
-                "Exported attachment to file"
-            );
-
-            Ok::<(), AttachmentError>(())
-        })
-        .await
-        .map_err(|e| AttachmentError::FileError(format!("Export task failed: {}", e)))??;
-
-        Ok(())
-    }
-
     /// Decrypt attachment using true streaming I/O.
     ///
-    /// Uses `StreamingDecryptor` which reads in 512KB chunks with OpenSSL
-    /// hardware-accelerated SHA-NI + AES-NI. Single-pass: computes SHA256,
-    /// HMAC-SHA256, and AES-CBC decryption simultaneously.
+    /// Uses `StreamingDecryptor`, which reads in 512KB chunks. Two passes:
+    /// SHA256 and HMAC-SHA256 over the whole file first, AES-CBC only once
+    /// both have matched.
     ///
     /// ## Memory Usage
     ///
@@ -202,16 +136,12 @@ impl AttachmentService {
     /// The output plaintext still requires memory, but the ciphertext is never
     /// fully loaded — it streams from the file.
     ///
-    /// ## Performance
-    ///
-    /// Single-pass with OpenSSL hardware crypto is faster than the rayon parallel
-    /// approach because it avoids the 874MB allocation + copy overhead.
     pub fn decrypt_streaming(
         &self,
         attachment_id: &AttachmentId,
     ) -> Result<SecureBuffer, AttachmentError> {
         let start = std::time::Instant::now();
-        tracing::info!(attachment_id = %attachment_id, "Starting streaming decryption (OpenSSL single-pass)");
+        tracing::info!("Starting streaming decryption");
 
         // Get attachment metadata
         let attachment = self
@@ -219,7 +149,10 @@ impl AttachmentService {
             .get(attachment_id)
             .map_err(|e| AttachmentError::StorageError(e.to_string()))?
             .ok_or_else(|| {
-                AttachmentError::InvalidAttachment(format!("Attachment {} not found", attachment_id))
+                AttachmentError::InvalidAttachment(format!(
+                    "Attachment {} not found",
+                    attachment_id
+                ))
             })?;
 
         // Must be on filesystem
@@ -230,9 +163,10 @@ impl AttachmentService {
         }
 
         // Get encryption keys
-        let encryption_key = attachment.encryption_key.as_ref().ok_or_else(|| {
-            AttachmentError::DecryptionError("No encryption key".to_string())
-        })?;
+        let encryption_key = attachment
+            .encryption_key
+            .as_ref()
+            .ok_or_else(|| AttachmentError::DecryptionError("No encryption key".to_string()))?;
         let digest = attachment.encryption_iv.as_ref().ok_or_else(|| {
             AttachmentError::DecryptionError("No digest for verification".to_string())
         })?;
@@ -262,7 +196,6 @@ impl AttachmentService {
             .len() as usize;
 
         tracing::debug!(
-            attachment_id = %attachment_id,
             file_path = %file_path.display(),
             file_size = file_size,
             plaintext_size = attachment.metadata.size,
@@ -278,7 +211,7 @@ impl AttachmentService {
         })?;
         let reader = std::io::BufReader::with_capacity(512 * 1024, file);
 
-        // Use StreamingDecryptor — single-pass, 512KB chunks, OpenSSL hardware crypto
+        // Use StreamingDecryptor — verify pass, then decrypt pass, 512KB chunks
         let mut decryptor = StreamingDecryptor::new(
             reader,
             &key,
@@ -294,11 +227,10 @@ impl AttachmentService {
         let total_elapsed = start.elapsed();
         let size_mb = plaintext.len() as f64 / (1024.0 * 1024.0);
         tracing::info!(
-            attachment_id = %attachment_id,
             plaintext_len = plaintext.len(),
             total_ms = total_elapsed.as_millis(),
             throughput_mbps = format_args!("{:.1}", size_mb / total_elapsed.as_secs_f64()),
-            "Decrypted attachment via streaming (single-pass)"
+            "Decrypted attachment via streaming"
         );
 
         // Validate incoming media (MP4/WebP structure) before renderers parse it.
@@ -325,7 +257,10 @@ impl AttachmentService {
             .get(attachment_id)
             .map_err(|e| AttachmentError::StorageError(e.to_string()))?
             .ok_or_else(|| {
-                AttachmentError::InvalidAttachment(format!("Attachment {} not found", attachment_id))
+                AttachmentError::InvalidAttachment(format!(
+                    "Attachment {} not found",
+                    attachment_id
+                ))
             })?;
 
         if attachment.content_location != ContentLocation::OnFilesystem {
@@ -334,9 +269,10 @@ impl AttachmentService {
             ));
         }
 
-        let encryption_key = attachment.encryption_key.as_ref().ok_or_else(|| {
-            AttachmentError::DecryptionError("No encryption key".to_string())
-        })?;
+        let encryption_key = attachment
+            .encryption_key
+            .as_ref()
+            .ok_or_else(|| AttachmentError::DecryptionError("No encryption key".to_string()))?;
         let digest = attachment.encryption_iv.as_ref().ok_or_else(|| {
             AttachmentError::DecryptionError("No digest for verification".to_string())
         })?;
@@ -400,26 +336,22 @@ impl AttachmentService {
 
     /// Decrypt attachment using the best method for its size.
     ///
-    /// - Small files (<1MB): `decrypt_to_memory` with rayon parallel (fast for small data)
-    /// - Large files (>=1MB): `decrypt_streaming` with OpenSSL single-pass (low memory)
+    /// - Small files (<1MB): `decrypt_to_memory`, whole ciphertext in memory
+    /// - Large files (>=1MB): `decrypt_streaming`, ciphertext streamed from disk
     ///
-    /// The threshold is 1MB because below that, the overhead of OpenSSL init
-    /// and single-pass coordination exceeds the memory savings.
+    /// Both authenticate the ciphertext before decrypting any of it.
     pub fn decrypt_auto(
         &self,
         attachment_id: &AttachmentId,
     ) -> Result<SecureBuffer, AttachmentError> {
         // Check file size to pick strategy
         let file_path = attachment_file_path(attachment_id);
-        let file_size = std::fs::metadata(&file_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let file_size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
 
         const STREAMING_THRESHOLD: u64 = 1024 * 1024; // 1MB
 
         if file_size >= STREAMING_THRESHOLD {
             tracing::debug!(
-                attachment_id = %attachment_id,
                 file_size = file_size,
                 "Using streaming decryption (file >= 1MB)"
             );

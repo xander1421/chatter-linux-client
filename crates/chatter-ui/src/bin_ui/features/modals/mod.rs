@@ -9,20 +9,20 @@ mod channel_invites;
 mod channel_settings;
 mod create_channel;
 mod forward;
-mod friends;
+pub(crate) mod friends;
 mod join_channel;
 pub mod link_approve;
 // `pub` so the ui_wiring harness can wire ONLY the profile callbacks (incl.
 // the username-link share wires) against a real offline ChatterClient.
 pub mod profile;
-mod sessions;
+pub(crate) mod sessions;
 // `pub` so the VALIDATED-UI headless harness can wire ONLY the settings
 // callbacks against a real offline ChatterClient, without invoking the full
 // `wire_all` (which spawns a call-orchestrator subscriber that needs a live
 // Slint event loop). Registration-only; no behavioural change to the app.
-pub mod settings;
 #[cfg(feature = "jarvis")]
 pub mod local_ai;
+pub mod settings;
 
 use std::sync::Arc;
 
@@ -31,12 +31,21 @@ use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 pub use anon_dm_request::spawn_anon_dm_request_handler;
-pub use anon_group_invite::{spawn_anon_group_invite_handler, wire_group_invite_callbacks, pending_group_invite_count};
+pub use anon_group_invite::{
+    refresh_group_invites, spawn_anon_group_invite_handler, wire_group_invite_callbacks,
+};
 pub use channel_invites::load_channel_invites;
-pub use channel_settings::{open_channel_settings, open_invite_member_modal, wire_channel_settings};
+pub use channel_settings::{
+    apply_private_group_roster, open_channel_settings, open_invite_member_modal,
+    open_private_group_invite_modal, refresh_members_if_open, wire_channel_settings,
+};
+pub(crate) use channel_settings::{
+    preference_label, present_settings_error, settings_open_allowed, settings_refresh_allowed,
+    show_channel_settings_shell,
+};
+pub use forward::{target_avatar, wire_forward_message};
 pub use friends::wire_friends_modal;
-pub use forward::wire_forward_message;
-pub use profile::open_user_profile;
+pub use profile::{open_user_profile, open_user_profile_in_conversation};
 
 /// Wire modal callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {

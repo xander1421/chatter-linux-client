@@ -28,6 +28,8 @@ pub struct QuickSwitcherEntry {
     pub presence_status: String,
     /// Unread message count; primary sort key.
     pub unread_count: i32,
+    /// An invite-only channel: the row shows the sidebar's lock glyph.
+    pub private_channel: bool,
 }
 
 /// Apply the canonical quick switcher ordering and cap the list.
@@ -55,6 +57,7 @@ mod tests {
             conv_type: "channel".into(),
             presence_status: String::new(),
             unread_count: unread,
+            private_channel: false,
         }
     }
 

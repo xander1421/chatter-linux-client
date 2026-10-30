@@ -111,18 +111,13 @@ impl KeyRecoveryNeed {
 /// direction silently destroys a recoverable account.
 pub fn classify_restore_failure(err: &SvrBackupError) -> KeyRecoveryNeed {
     match err {
-        // The server knows no backup under the id derived from this PIN. Two
-        // causes are indistinguishable *from this error alone* — no backup was
-        // ever made, or the PIN is wrong so the derived id points nowhere — and
-        // they demand opposite responses. Treating it as "no backup" would let
-        // a typo destroy a recoverable account, so the cautious reading wins
-        // here. The caller then asks the server directly (`has_key_backup`,
-        // which takes no PIN input and so cannot be a PIN oracle) and upgrades
-        // this to `NoBackup` only when the account genuinely has none.
-        SvrBackupError::BackupNotFound => KeyRecoveryNeed::WrongPin,
-        // The backup was found and did not decrypt: the PIN-derived key is
-        // wrong.
-        SvrBackupError::Crypto(_) => KeyRecoveryNeed::WrongPin,
+        // The server answers NOT_FOUND only when the account has no backup at
+        // all; a backup under a different PIN-derived id is PERMISSION_DENIED
+        // (`WrongPin`). OPEN-ITEMS §114.
+        SvrBackupError::BackupNotFound => KeyRecoveryNeed::NoBackup,
+        // The server says the PIN-derived id does not match, or the backup was
+        // found and did not decrypt: either way the PIN is wrong.
+        SvrBackupError::WrongPin | SvrBackupError::Crypto(_) => KeyRecoveryNeed::WrongPin,
         SvrBackupError::BackupDestroyed => KeyRecoveryNeed::BackupDestroyed,
         SvrBackupError::RateLimited => KeyRecoveryNeed::RateLimited,
         SvrBackupError::Network(_) | SvrBackupError::Storage(_) | SvrBackupError::Generic(_) => {
@@ -141,9 +136,9 @@ mod tests {
         // The single most dangerous misclassification: a typo must not be
         // allowed to look like "this account has no backup", because the
         // response to that is to mint a key and abandon the real one.
-        let need = classify_restore_failure(&SvrBackupError::Crypto(
-            CryptoError::Protocol("decrypt failed".into()),
-        ));
+        let need = classify_restore_failure(&SvrBackupError::Crypto(CryptoError::Protocol(
+            "decrypt failed".into(),
+        )));
         assert_eq!(need, KeyRecoveryNeed::WrongPin);
         assert!(
             need.is_retryable(),
@@ -152,15 +147,15 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_backup_is_read_as_a_wrong_pin() {
-        // The backup id is derived from the PIN, so a wrong PIN and a
-        // non-existent backup produce the same server answer. The lenient
-        // reading is unrecoverable; the cautious one merely costs a retry.
-        // `ChatterClient::attempt_svr_restore` upgrades this to `NoBackup`
-        // only after the server confirms the account has no backup at all.
-        let need = classify_restore_failure(&SvrBackupError::BackupNotFound);
+    fn a_server_wrong_pin_is_retryable_and_a_missing_backup_is_final() {
+        // The server tells the two apart (NOT_FOUND vs PERMISSION_DENIED); a
+        // typo must stay retryable, an account with no backup must not.
+        let need = classify_restore_failure(&SvrBackupError::WrongPin);
         assert_eq!(need, KeyRecoveryNeed::WrongPin);
         assert!(need.is_retryable());
+        let need = classify_restore_failure(&SvrBackupError::BackupNotFound);
+        assert_eq!(need, KeyRecoveryNeed::NoBackup);
+        assert!(!need.is_retryable());
     }
 
     #[test]
@@ -183,7 +178,10 @@ mod tests {
     fn rate_limiting_is_retryable() {
         let need = classify_restore_failure(&SvrBackupError::RateLimited);
         assert_eq!(need, KeyRecoveryNeed::RateLimited);
-        assert!(need.is_retryable(), "the backup is intact; only waiting is needed");
+        assert!(
+            need.is_retryable(),
+            "the backup is intact; only waiting is needed"
+        );
     }
 
     #[test]
@@ -212,7 +210,10 @@ mod tests {
             KeyRecoveryNeed::Unavailable,
         ] {
             // The whole defect was silence. An empty message would reproduce it.
-            assert!(!need.user_message().is_empty(), "{need:?} has nothing to say");
+            assert!(
+                !need.user_message().is_empty(),
+                "{need:?} has nothing to say"
+            );
         }
     }
 }

@@ -41,7 +41,41 @@ fn wrap_selection(text: &str, fmt: &str, start: usize, end: usize) -> String {
     out
 }
 
+fn replace_selection(text: &str, replacement: &str, start: usize, end: usize) -> String {
+    let s = floor_boundary(text, start.min(end));
+    let e = floor_boundary(text, start.max(end));
+    format!("{}{}{}", &text[..s], replacement, &text[e..])
+}
+
+pub(crate) fn mention_query(text: &str) -> &str {
+    let Some(at) = text.rfind('@') else { return "" };
+    if at > 0 && !text[..at].chars().last().is_some_and(char::is_whitespace) {
+        return "";
+    }
+    let token = &text[at..];
+    if token[1..].chars().any(char::is_whitespace) {
+        ""
+    } else {
+        token
+    }
+}
+
 pub(crate) fn wire_format_text(window: &MainWindow) {
+    window.global::<TextFormat>().on_mention_query(|text| mention_query(&text).into());
+    window
+        .global::<TextFormat>()
+        .on_replace(|text, replacement, start, end| {
+            replace_selection(
+                &text,
+                &replacement,
+                start.max(0) as usize,
+                end.max(0) as usize,
+            )
+            .into()
+        });
+    window
+        .global::<TextFormat>()
+        .on_byte_length(|text| text.len() as i32);
     window.global::<TextFormat>().on_wrap(
         |text: SharedString, fmt: SharedString, start: i32, end: i32| {
             wrap_selection(&text, &fmt, start.max(0) as usize, end.max(0) as usize).into()
@@ -54,14 +88,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn picker_insertion_preserves_middle_and_unicode_boundaries() {
+        assert_eq!(replace_selection("abXYZcd", "😀", 2, 5), "ab😀cd");
+        assert_eq!(replace_selection("abXYZcd", "😀", 5, 2), "ab😀cd");
+        assert_eq!(replace_selection("café!", "😀", 4, 4), "caf😀é!");
+        assert_eq!(replace_selection("abc", "😀", 999, 999), "abc😀");
+        assert_eq!(replace_selection("ab", "preedit", 1, 1), "apreeditb");
+    }
+
+    #[test]
     fn wraps_selection_only() {
         // "hello world", select "world" (bytes 6..11)
-        assert_eq!(wrap_selection("hello world", "bold", 6, 11), "hello **world**");
+        assert_eq!(
+            wrap_selection("hello world", "bold", 6, 11),
+            "hello **world**"
+        );
     }
 
     #[test]
     fn wraps_middle_selection() {
-        assert_eq!(wrap_selection("abcXYZdef", "strikethrough", 3, 6), "abc~~XYZ~~def");
+        assert_eq!(
+            wrap_selection("abcXYZdef", "strikethrough", 3, 6),
+            "abc~~XYZ~~def"
+        );
     }
 
     #[test]
@@ -74,13 +123,19 @@ mod tests {
     #[test]
     fn reversed_offsets_normalized() {
         // anchor after cursor — same result as forward selection
-        assert_eq!(wrap_selection("hello world", "code", 11, 6), "hello `world`");
+        assert_eq!(
+            wrap_selection("hello world", "code", 11, 6),
+            "hello `world`"
+        );
     }
 
     #[test]
     fn multibyte_boundary_safe() {
         // "café world", select "world". 'é' is 2 bytes → "world" at bytes 6..11.
-        assert_eq!(wrap_selection("café world", "bold", 6, 11), "café **world**");
+        assert_eq!(
+            wrap_selection("café world", "bold", 6, 11),
+            "café **world**"
+        );
     }
 
     #[test]

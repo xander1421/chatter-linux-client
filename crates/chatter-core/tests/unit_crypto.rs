@@ -3,8 +3,7 @@
 //! Tests Signal Protocol components, key generation, session management,
 //! and encryption/decryption flows using the testing framework.
 
-mod common;
-mod framework;
+use crate::framework;
 
 use framework::prelude::*;
 
@@ -16,9 +15,20 @@ use framework::prelude::*;
 async fn test_identity_key_pair_generation() {
     let (private, public) = CryptoBuilder::identity_key_pair();
 
-    assert_eq!(private.len(), 32, "Private key should be 32 bytes (Curve25519)");
-    assert_eq!(public.len(), 33, "Public key should be 33 bytes (type prefix + 32 bytes)");
-    assert_eq!(public[0], 0x05, "Public key should have DJB type prefix (0x05)");
+    assert_eq!(
+        private.len(),
+        32,
+        "Private key should be 32 bytes (Curve25519)"
+    );
+    assert_eq!(
+        public.len(),
+        33,
+        "Public key should be 33 bytes (type prefix + 32 bytes)"
+    );
+    assert_eq!(
+        public[0], 0x05,
+        "Public key should have DJB type prefix (0x05)"
+    );
 }
 
 #[tokio::test]
@@ -36,7 +46,11 @@ async fn test_prekey_generation() {
 
     assert_eq!(id, 1, "Prekey ID should match");
     assert_eq!(private.len(), 32, "Private key should be 32 bytes");
-    assert_eq!(public.len(), 33, "Public key should be 33 bytes with type prefix");
+    assert_eq!(
+        public.len(),
+        33,
+        "Public key should be 33 bytes with type prefix"
+    );
     assert_eq!(public[0], 0x05, "Public key should have DJB type prefix");
 }
 
@@ -55,7 +69,11 @@ async fn test_kyber_prekey_generation() {
     let (id, public, signature) = CryptoBuilder::kyber_prekey(1);
 
     assert_eq!(id, 1, "Kyber prekey ID should match");
-    assert_eq!(public.len(), 1568, "Kyber1024 public key should be 1568 bytes");
+    assert_eq!(
+        public.len(),
+        1568,
+        "Kyber1024 public key should be 1568 bytes"
+    );
     assert_eq!(signature.len(), 64, "Signature should be 64 bytes");
 }
 
@@ -96,7 +114,11 @@ async fn test_sender_key_generation() {
 #[tokio::test]
 async fn test_distribution_id_generation() {
     let dist_id = CryptoBuilder::distribution_id();
-    assert_eq!(dist_id.len(), 16, "Distribution ID (UUID) should be 16 bytes");
+    assert_eq!(
+        dist_id.len(),
+        16,
+        "Distribution ID (UUID) should be 16 bytes"
+    );
 }
 
 // ============================================================================
@@ -108,8 +130,14 @@ async fn test_prekey_bundle_generation() {
     let (bundle, identity_key) = generate_prekey_bundle();
 
     assert!(!identity_key.is_empty(), "Identity key should not be empty");
-    assert!(!bundle.identity_key.is_empty(), "Bundle identity key should not be empty");
-    assert!(bundle.registration_id > 0, "Registration ID should be positive");
+    assert!(
+        !bundle.identity_key.is_empty(),
+        "Bundle identity key should not be empty"
+    );
+    assert!(
+        bundle.registration_id > 0,
+        "Registration ID should be positive"
+    );
     assert!(bundle.device_id > 0, "Device ID should be positive");
     assert!(bundle.signed_prekey.is_some(), "Should have signed prekey");
 }
@@ -120,9 +148,18 @@ async fn test_prekey_bundle_signed_prekey_structure() {
 
     let signed = bundle.signed_prekey.expect("Should have signed prekey");
     assert!(signed.id > 0, "Signed prekey ID should be positive");
-    assert!(!signed.public_key.is_empty(), "Signed prekey public key should not be empty");
-    assert!(!signed.signature.is_empty(), "Signed prekey signature should not be empty");
-    assert!(signed.timestamp > 0, "Signed prekey timestamp should be set");
+    assert!(
+        !signed.public_key.is_empty(),
+        "Signed prekey public key should not be empty"
+    );
+    assert!(
+        !signed.signature.is_empty(),
+        "Signed prekey signature should not be empty"
+    );
+    assert!(
+        signed.timestamp > 0,
+        "Signed prekey timestamp should be set"
+    );
 }
 
 // ============================================================================
@@ -148,7 +185,10 @@ async fn test_signal_store_registration_id() {
     let stores = InMemorySignalStores::new();
     let reg_id = stores.registration_id();
 
-    assert!(reg_id >= 1 && reg_id <= 16380, "Registration ID in valid range");
+    assert!(
+        reg_id >= 1 && reg_id <= 16380,
+        "Registration ID in valid range"
+    );
 }
 
 #[tokio::test]
@@ -251,7 +291,10 @@ async fn test_session_builder_basic() {
 
     assert_eq!(session.user_id, "alice");
     assert_eq!(session.device_id, 1);
-    assert!(!session.established, "Session should not be established by default");
+    assert!(
+        !session.established,
+        "Session should not be established by default"
+    );
 }
 
 #[tokio::test]
@@ -272,7 +315,10 @@ async fn test_session_builder_custom_data() {
         .with_data(custom_data.clone())
         .build();
 
-    assert!(session.established, "Session with data should be established");
+    assert!(
+        session.established,
+        "Session with data should be established"
+    );
     assert_eq!(session.session_data, custom_data);
 }
 
@@ -361,7 +407,11 @@ async fn test_attachment_has_encryption_metadata() {
     let attachment = AttachmentBuilder::image("test.jpg").build();
 
     // Key should be 32 bytes (AES-256)
-    assert_eq!(attachment.key.len(), 32, "Encryption key should be 32 bytes");
+    assert_eq!(
+        attachment.key.len(),
+        32,
+        "Encryption key should be 32 bytes"
+    );
 
     // Digest should be 32 bytes (SHA-256)
     assert_eq!(attachment.digest.len(), 32, "Digest should be 32 bytes");
@@ -418,7 +468,8 @@ async fn test_multiple_prekeys() {
     assert_eq!(prekeys.len(), 100);
 
     // All should have unique public keys
-    let public_keys: std::collections::HashSet<_> = prekeys.iter().map(|(_, _, pk)| pk.clone()).collect();
+    let public_keys: std::collections::HashSet<_> =
+        prekeys.iter().map(|(_, _, pk)| pk.clone()).collect();
     assert_eq!(public_keys.len(), 100, "All prekeys should be unique");
 }
 

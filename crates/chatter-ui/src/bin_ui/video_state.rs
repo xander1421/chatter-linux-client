@@ -2,12 +2,12 @@
 //!
 //! Tracks video playback state for the in-app video player.
 //! Supports two rendering modes:
-//! - Hardware mode: Zero-copy GPU rendering (GL on Linux/Android, Metal on iOS)
+//! - Hardware mode: Zero-copy GPU rendering (GL on Linux, D3D11 on Windows)
 //! - Software mode: Frame buffer passing with RGB conversion (fallback)
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chatter_core::media::InAppVideoPlayer as VideoPlayer;
@@ -15,13 +15,20 @@ use chatter_core::media::InAppVideoPlayer as VideoPlayer;
 use super::video as hw_video;
 
 /// Global video player instance (software mode).
-static VIDEO_PLAYER: OnceLock<Arc<Mutex<Option<VideoPlayer>>>> = OnceLock::new();
+static VIDEO_PLAYER: Mutex<Option<VideoPlayer>> = Mutex::new(None);
 
 /// Global state tracking video playback.
-static VIDEO_STATE: OnceLock<Arc<Mutex<VideoState>>> = OnceLock::new();
+static VIDEO_STATE: Mutex<VideoState> = Mutex::new(VideoState {
+    current_path: None,
+    filename: String::new(),
+    is_playing: false,
+    position: 0.0,
+    duration: 0.0,
+    volume: 0.0,
+});
 
 /// Shared frame buffer for cross-thread frame passing (software mode).
-static FRAME_BUFFER: OnceLock<Arc<Mutex<Option<FrameData>>>> = OnceLock::new();
+static FRAME_BUFFER: Mutex<Option<FrameData>> = Mutex::new(None);
 
 /// Whether GL video is being used for current playback.
 static USING_GL_VIDEO: AtomicBool = AtomicBool::new(false);
@@ -51,25 +58,19 @@ pub struct VideoState {
     pub volume: f32,
 }
 
-/// Get or initialize the global video player holder.
-pub fn get_video_player() -> Arc<Mutex<Option<VideoPlayer>>> {
-    VIDEO_PLAYER
-        .get_or_init(|| Arc::new(Mutex::new(None)))
-        .clone()
+/// Get the global video player holder.
+pub fn get_video_player() -> &'static Mutex<Option<VideoPlayer>> {
+    &VIDEO_PLAYER
 }
 
-/// Get or initialize the global video state.
-pub fn get_video_state() -> Arc<Mutex<VideoState>> {
-    VIDEO_STATE
-        .get_or_init(|| Arc::new(Mutex::new(VideoState::default())))
-        .clone()
+/// Get the global video state.
+pub fn get_video_state() -> &'static Mutex<VideoState> {
+    &VIDEO_STATE
 }
 
-/// Get or initialize the frame buffer.
-fn get_frame_buffer() -> Arc<Mutex<Option<FrameData>>> {
-    FRAME_BUFFER
-        .get_or_init(|| Arc::new(Mutex::new(None)))
-        .clone()
+/// Get the frame buffer.
+fn get_frame_buffer() -> &'static Mutex<Option<FrameData>> {
+    &FRAME_BUFFER
 }
 
 /// Take the latest frame from the buffer (called by UI timer on main thread).
@@ -81,81 +82,177 @@ pub fn take_frame() -> Option<FrameData> {
     }
 }
 
-/// Start video playback from memory (non-blocking).
-///
-/// Tries GL video first for hardware-accelerated rendering,
-/// falls back to software rendering if GL is not available.
-///
-/// # Arguments
-/// * `data` - Video data bytes
-/// * `filename` - Display filename
-/// * `on_ready` - Callback invoked when video is ready (duration, duration_str) or error
-pub fn start_video_from_memory_async<F>(
-    data: Vec<u8>,
-    filename: String,
-    on_ready: F,
-) where
-    F: FnOnce(Result<(f64, String), String>) + Send + 'static,
-{
-    // Stop any existing playback
-    stop_video();
+/// Serializes request acceptance, player installation, stop and frame publication.
+/// Decoder shutdown happens outside this lock: stop joins its frame callback thread.
+static LOAD_GENERATION: Mutex<u64> = Mutex::new(0);
 
-    // Try hardware-accelerated video first (GL on Linux/Android, Metal on iOS)
-    // IMPORTANT: Check is_hw_connected() on UI thread where GL context lives
-    if hw_video::is_hw_available() {
-        tracing::info!("HW video available, checking connection on UI thread");
-
-        // HW video must be started from UI thread (thread_local state)
-        // Check connection AND start video on UI thread
-        let _ = slint::invoke_from_event_loop(move || {
-            // Check connection on UI thread where GL context is initialized
-            if !hw_video::is_hw_connected() {
-                tracing::debug!("HW video not connected on UI thread, falling back to software");
-                USING_GL_VIDEO.store(false, Ordering::SeqCst);
-                start_video_software(data, filename, on_ready);
-                return;
-            }
-
-            match hw_video::start_hw_video(data.clone()) {
-                Some(duration) => {
-                    USING_GL_VIDEO.store(true, Ordering::SeqCst);
-
-                    // Update global state
-                    if let Ok(mut video_state) = get_video_state().lock() {
-                        video_state.current_path = None;
-                        video_state.filename = filename;
-                        video_state.is_playing = true;
-                        video_state.duration = duration;
-                        video_state.position = 0.0;
-                        video_state.volume = 1.0;
-                    }
-
-                    let duration_str = chatter_core::media::format_duration(duration);
-                    tracing::info!("HW video started: {}s ({})", duration, duration_str);
-                    on_ready(Ok((duration, duration_str)));
-                }
-                None => {
-                    tracing::warn!("HW video start failed, falling back to software");
-                    USING_GL_VIDEO.store(false, Ordering::SeqCst);
-
-                    // Fall back to software rendering
-                    start_video_software(data, filename, on_ready);
-                }
-            }
-        });
-        return;
-    }
-
-    // Software rendering path (no HW available)
-    start_video_software(data, filename, on_ready);
+#[derive(Clone)]
+struct LoadRequest {
+    generation: u64,
+    still_current: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
-/// Start video playback from an authenticated range decryptor (streaming).
-///
-/// The GL pipeline pulls decrypted ranges on demand, so playback starts without
-/// decrypting the whole file into memory. If HW video isn't available/connected
-/// (or the range backend isn't supported), falls back to a full decrypt + the
-/// software renderer.
+impl LoadRequest {
+    fn matches(&self, generation: u64) -> bool {
+        self.generation == generation && (self.still_current)()
+    }
+
+    fn is_current(&self) -> bool {
+        LOAD_GENERATION
+            .lock()
+            .is_ok_and(|generation| self.matches(*generation))
+    }
+
+    fn publish_frame(&self, width: u32, height: u32, rgb_data: Vec<u8>) {
+        let Ok(generation) = LOAD_GENERATION.lock() else {
+            return;
+        };
+        if !self.matches(*generation) {
+            return;
+        }
+        if let Ok(mut buffer) = FRAME_BUFFER.lock() {
+            *buffer = Some(FrameData {
+                width,
+                height,
+                rgb_data,
+            });
+        }
+    }
+}
+
+fn clear_playback() -> Option<VideoPlayer> {
+    USING_GL_VIDEO.store(false, Ordering::SeqCst);
+    let player = VIDEO_PLAYER
+        .lock()
+        .ok()
+        .and_then(|mut player| player.take());
+    if let Ok(mut frame) = FRAME_BUFFER.lock() {
+        *frame = None;
+    }
+    if let Ok(mut state) = VIDEO_STATE.lock() {
+        *state = VideoState::default();
+    }
+    player
+}
+
+fn stop_hardware_for(generation: u64) {
+    if !hw_video::is_hw_available() {
+        return;
+    }
+    // Hardware state belongs to the UI thread. A delayed stop cannot stop a
+    // newer start: both operations compare the generation under the same gate.
+    let _ = slint::invoke_from_event_loop(move || {
+        let Ok(current) = LOAD_GENERATION.lock() else {
+            return;
+        };
+        if *current == generation {
+            hw_video::stop_hw_video();
+        }
+    });
+}
+
+fn begin_request(still_current: Arc<dyn Fn() -> bool + Send + Sync>) -> Option<LoadRequest> {
+    let (generation, previous) = {
+        let mut generation = LOAD_GENERATION.lock().ok()?;
+        // A slow, superseded decrypt must not even stop the current player.
+        if !still_current() {
+            return None;
+        }
+        *generation = generation.wrapping_add(1);
+        (*generation, clear_playback())
+    };
+    drop(previous);
+    stop_hardware_for(generation);
+    Some(LoadRequest {
+        generation,
+        still_current,
+    })
+}
+
+fn stop_generation(expected: Option<u64>) {
+    let (generation, previous) = {
+        let Ok(mut generation) = LOAD_GENERATION.lock() else {
+            return;
+        };
+        if expected.is_some_and(|expected| expected != *generation) {
+            return;
+        }
+        *generation = generation.wrapping_add(1);
+        (*generation, clear_playback())
+    };
+    drop(previous);
+    stop_hardware_for(generation);
+}
+
+fn update_loaded_state(filename: String, duration: f64) {
+    if let Ok(mut state) = VIDEO_STATE.lock() {
+        *state = VideoState {
+            filename,
+            is_playing: true,
+            duration,
+            volume: 1.0,
+            ..Default::default()
+        };
+    }
+}
+
+/// Existing callers retain the unguarded API; gallery callers supply a request guard.
+pub fn start_video_from_memory_async<F>(data: Vec<u8>, filename: String, on_ready: F)
+where
+    F: FnOnce(Result<(f64, String), String>) + Send + 'static,
+{
+    start_video_from_memory_guarded_async(data, filename, || true, on_ready);
+}
+
+pub fn start_video_from_memory_guarded_async<G, F>(
+    data: Vec<u8>,
+    filename: String,
+    still_current: G,
+    on_ready: F,
+) where
+    G: Fn() -> bool + Send + Sync + 'static,
+    F: FnOnce(Result<(f64, String), String>) + Send + 'static,
+{
+    let Some(request) = begin_request(Arc::new(still_current)) else {
+        return;
+    };
+    if hw_video::is_hw_available() {
+        let _ = slint::invoke_from_event_loop(move || {
+            let Ok(generation) = LOAD_GENERATION.lock() else {
+                return;
+            };
+            if !request.matches(*generation) {
+                return;
+            }
+            hw_video::stop_hw_video();
+            let duration = hw_video::is_hw_connected()
+                .then(|| hw_video::start_hw_video(data.clone()))
+                .flatten();
+            if let Some(duration) = duration {
+                // External selection can change while the backend starts.
+                if !request.matches(*generation) {
+                    hw_video::stop_hw_video();
+                    return;
+                }
+                USING_GL_VIDEO.store(true, Ordering::SeqCst);
+                update_loaded_state(filename, duration);
+                drop(generation);
+                if request.is_current() {
+                    on_ready(Ok((
+                        duration,
+                        chatter_core::media::format_duration(duration),
+                    )));
+                }
+            } else {
+                drop(generation);
+                start_video_software(data, filename, request, on_ready);
+            }
+        });
+    } else {
+        start_video_software(data, filename, request, on_ready);
+    }
+}
+
 pub fn start_video_from_range_async<F>(
     dec: Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
     filename: String,
@@ -163,218 +260,167 @@ pub fn start_video_from_range_async<F>(
 ) where
     F: FnOnce(Result<(f64, String), String>) + Send + 'static,
 {
-    stop_video();
-
-    if hw_video::is_hw_available() {
-        tracing::info!("HW video available (range source), checking connection on UI thread");
-
-        let _ = slint::invoke_from_event_loop(move || {
-            if !hw_video::is_hw_connected() {
-                tracing::debug!("HW video not connected, falling back to software (full decrypt)");
-                USING_GL_VIDEO.store(false, Ordering::SeqCst);
-                let data = dec.read_range(0, dec.plaintext_size());
-                start_video_software(data, filename, on_ready);
-                return;
-            }
-
-            match hw_video::start_hw_video_range(dec.clone()) {
-                Some(duration) => {
-                    USING_GL_VIDEO.store(true, Ordering::SeqCst);
-
-                    if let Ok(mut video_state) = get_video_state().lock() {
-                        video_state.current_path = None;
-                        video_state.filename = filename;
-                        video_state.is_playing = true;
-                        video_state.duration = duration;
-                        video_state.position = 0.0;
-                        video_state.volume = 1.0;
-                    }
-
-                    let duration_str = chatter_core::media::format_duration(duration);
-                    tracing::info!("HW video started (streaming): {}s ({})", duration, duration_str);
-                    on_ready(Ok((duration, duration_str)));
-                }
-                None => {
-                    tracing::warn!("HW range video start failed, falling back to software");
-                    USING_GL_VIDEO.store(false, Ordering::SeqCst);
-                    let data = dec.read_range(0, dec.plaintext_size());
-                    start_video_software(data, filename, on_ready);
-                }
-            }
-        });
-        return;
-    }
-
-    // No HW: software renderer needs the full plaintext.
-    let data = dec.read_range(0, dec.plaintext_size());
-    start_video_software(data, filename, on_ready);
+    start_video_from_range_guarded_async(dec, filename, || true, on_ready);
 }
 
-/// Start video playback using software rendering.
-fn start_video_software<F>(
-    data: Vec<u8>,
+pub fn start_video_from_range_guarded_async<G, F>(
+    dec: Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
     filename: String,
+    still_current: G,
+    on_ready: F,
+) where
+    G: Fn() -> bool + Send + Sync + 'static,
+    F: FnOnce(Result<(f64, String), String>) + Send + 'static,
+{
+    let Some(request) = begin_request(Arc::new(still_current)) else {
+        return;
+    };
+    if hw_video::is_hw_available() {
+        let _ = slint::invoke_from_event_loop(move || {
+            let Ok(generation) = LOAD_GENERATION.lock() else {
+                return;
+            };
+            if !request.matches(*generation) {
+                return;
+            }
+            hw_video::stop_hw_video();
+            let duration = hw_video::is_hw_connected()
+                .then(|| hw_video::start_hw_video_range(dec.clone()))
+                .flatten();
+            if let Some(duration) = duration {
+                if !request.matches(*generation) {
+                    hw_video::stop_hw_video();
+                    return;
+                }
+                USING_GL_VIDEO.store(true, Ordering::SeqCst);
+                update_loaded_state(filename, duration);
+                drop(generation);
+                if request.is_current() {
+                    on_ready(Ok((
+                        duration,
+                        chatter_core::media::format_duration(duration),
+                    )));
+                }
+            } else {
+                drop(generation);
+                start_software_range(dec, filename, request, on_ready);
+            }
+        });
+    } else {
+        start_software_range(dec, filename, request, on_ready);
+    }
+}
+
+fn start_software_range<F>(
+    dec: Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    filename: String,
+    request: LoadRequest,
     on_ready: F,
 ) where
     F: FnOnce(Result<(f64, String), String>) + Send + 'static,
 {
-    USING_GL_VIDEO.store(false, Ordering::SeqCst);
+    // Full-decrypt fallback is existing desktop behavior; keep it off the UI thread.
+    std::thread::spawn(move || {
+        if !request.is_current() {
+            return;
+        }
+        let data = dec.read_range(0, dec.plaintext_size());
+        start_video_software(data, filename, request, on_ready);
+    });
+}
 
-    let frame_buffer = get_frame_buffer();
-    let filename_clone = filename.clone();
-
-    // Spawn loading in background thread to avoid blocking
-    std::thread::Builder::new()
-        .name("video-loader".into())
-        .spawn(move || {
-            // Start the video player from memory
-            let player = match VideoPlayer::start_from_memory(data, move |width, height, rgb_data| {
-                if let Ok(mut buffer) = frame_buffer.lock() {
-                    *buffer = Some(FrameData {
-                        width,
-                        height,
-                        rgb_data,
-                    });
-                }
-            }) {
-                Ok(p) => p,
-                Err(e) => {
-                    on_ready(Err(e.to_string()));
+fn start_video_software<F>(data: Vec<u8>, filename: String, request: LoadRequest, on_ready: F)
+where
+    F: FnOnce(Result<(f64, String), String>) + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let frame_request = request.clone();
+        // Creation only spawns the decoder thread. Serialize its installation
+        // with stop, and never join/drop a decoder while holding this gate.
+        let player_state = {
+            let Ok(generation) = LOAD_GENERATION.lock() else {
+                return;
+            };
+            if !request.matches(*generation) {
+                return;
+            }
+            let player = VideoPlayer::start_from_memory(data, move |width, height, rgb_data| {
+                frame_request.publish_frame(width, height, rgb_data);
+            });
+            let player = match player {
+                Ok(player) => player,
+                Err(error) => {
+                    drop(generation);
+                    if request.is_current() {
+                        on_ready(Err(error.to_string()));
+                    }
                     return;
                 }
             };
-
-            // CRITICAL: Store player IMMEDIATELY after creation to prevent race condition.
-            // If stop_video() is called while we're in the loading poll loop below,
-            // it needs to find this player to stop it. Otherwise multiple pipelines
-            // can run simultaneously, causing multiple PipeWire audio streams.
-            let player_state = player.state().clone();
-            if let Ok(mut player_guard) = get_video_player().lock() {
-                *player_guard = Some(player);
+            if !request.matches(*generation) {
+                drop(generation);
+                drop(player);
+                return;
             }
-
-            // Poll for loading completion (in background thread, doesn't block UI)
-            let max_wait = Duration::from_secs(15);
-            let start = Instant::now();
-            let poll_interval = Duration::from_millis(50);
-
-            loop {
-                let state = player_state.get_state();
-
-                if !state.loading {
-                    tracing::debug!("Video player finished loading: duration={}s", state.duration);
-                    break;
+            let state = player.state().clone();
+            let Ok(mut holder) = VIDEO_PLAYER.lock() else {
+                drop(generation);
+                drop(player);
+                return;
+            };
+            let previous = holder.replace(player);
+            USING_GL_VIDEO.store(false, Ordering::SeqCst);
+            drop(holder);
+            drop(generation);
+            drop(previous);
+            state
+        };
+        let start = Instant::now();
+        loop {
+            if !request.is_current() {
+                stop_generation(Some(request.generation));
+                return;
+            }
+            let state = player_state.get_state();
+            if let Some(error) = state.error {
+                if request.is_current() {
+                    on_ready(Err(error));
                 }
-
-                if let Some(ref err) = state.error {
-                    on_ready(Err(err.clone()));
+                stop_generation(Some(request.generation));
+                return;
+            }
+            if !state.loading {
+                let Ok(generation) = LOAD_GENERATION.lock() else {
+                    return;
+                };
+                if !request.matches(*generation) {
                     return;
                 }
-
-                if start.elapsed() > max_wait {
-                    tracing::warn!("Timeout waiting for video player to load");
-                    break;
+                update_loaded_state(filename, state.duration);
+                drop(generation);
+                if request.is_current() {
+                    on_ready(Ok((
+                        state.duration,
+                        chatter_core::media::format_duration(state.duration),
+                    )));
                 }
-
-                std::thread::sleep(poll_interval);
+                return;
             }
-
-            // Get final state
-            let state = player_state.get_state();
-            let duration = state.duration;
-            let duration_str = chatter_core::media::format_duration(duration);
-            tracing::info!("Video loaded (software): {}s ({})", duration, duration_str);
-
-            // Update global state
-            if let Ok(mut video_state) = get_video_state().lock() {
-                video_state.current_path = None;
-                video_state.filename = filename_clone;
-                video_state.is_playing = true;
-                video_state.duration = duration;
-                video_state.position = 0.0;
-                video_state.volume = 1.0;
+            if start.elapsed() >= Duration::from_secs(15) {
+                if request.is_current() {
+                    on_ready(Err("Video loading timed out".into()));
+                }
+                stop_generation(Some(request.generation));
+                return;
             }
-
-            on_ready(Ok((duration, duration_str)));
-        })
-        .expect("Failed to spawn video loader thread");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
 }
-/// Stop video playback.
-///
-/// IMPORTANT: This function handles both UI and non-UI thread calls.
-/// For GL video, it stops directly if on UI thread, otherwise schedules on UI thread.
+
+/// Invalidate queued loaders before taking and stopping the installed decoder.
 pub fn stop_video() {
-    tracing::info!("stop_video called, USING_GL_VIDEO={}", USING_GL_VIDEO.load(Ordering::SeqCst));
-
-    // Stop hardware video if active
-    // CRITICAL: GL video state is thread_local - must stop on UI thread
-    if USING_GL_VIDEO.load(Ordering::SeqCst) {
-        tracing::info!("Stopping GL video...");
-
-        // First mark as not using GL to prevent race conditions
-        USING_GL_VIDEO.store(false, Ordering::SeqCst);
-
-        // Check if we're already on the UI thread by trying invoke_from_event_loop
-        // If we're on the UI thread, calling invoke_from_event_loop and blocking
-        // would deadlock, so we call stop_hw_video directly instead.
-        //
-        // We detect this by checking if we can run something immediately via
-        // slint's upgrade_in_event_loop pattern - but simpler is to just try
-        // running directly and use a flag to track success.
-        let (tx, rx) = std::sync::mpsc::channel();
-        let tx_clone = tx.clone();
-
-        // Try to schedule on event loop
-        match slint::invoke_from_event_loop(move || {
-            tracing::info!("GL video stop executing on UI thread (scheduled)");
-            hw_video::stop_hw_video();
-            let _ = tx_clone.send(());
-        }) {
-            Ok(()) => {
-                // Successfully scheduled - wait with very short timeout
-                // If we're on UI thread, invoke_from_event_loop returns Ok but
-                // the closure won't run until this function returns (deadlock).
-                // So use a very short timeout to detect this case.
-                match rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                    Ok(()) => tracing::info!("GL video stop completed (async)"),
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        // Likely on UI thread - call directly
-                        tracing::info!("GL video stop: likely on UI thread, calling directly");
-                        hw_video::stop_hw_video();
-                        tracing::info!("GL video stop completed (direct)");
-                    }
-                    Err(e) => tracing::warn!("GL video stop error: {:?}", e),
-                }
-            }
-            Err(_) => {
-                // Event loop not running - call directly (we're likely shutting down)
-                tracing::info!("GL video stop: event loop not available, calling directly");
-                hw_video::stop_hw_video();
-            }
-        }
-    }
-
-    // Stop the software player
-    if let Ok(mut player_guard) = get_video_player().lock() {
-        if let Some(ref mut player) = *player_guard {
-            player.stop();
-        }
-        *player_guard = None;
-    }
-
-    // Clear frame buffer
-    if let Ok(mut buffer) = get_frame_buffer().lock() {
-        *buffer = None;
-    }
-
-    // Clear state
-    if let Ok(mut state) = get_video_state().lock() {
-        state.current_path = None;
-        state.filename = String::new();
-        state.is_playing = false;
-        state.position = 0.0;
-        state.duration = 0.0;
-    }
+    stop_generation(None);
 }
 
 /// Toggle play/pause.
@@ -459,4 +505,71 @@ pub fn get_playback_state() -> Option<(f64, f64, bool)> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod loader_tests {
+    use super::*;
+    static TEST_GATE: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn stale_decrypt_does_not_begin_or_clear_newer_playback() {
+        let _serial = TEST_GATE.lock().unwrap();
+        *LOAD_GENERATION.lock().unwrap() = 40;
+        VIDEO_STATE.lock().unwrap().filename = "newer video".into();
+        let called = Arc::new(AtomicBool::new(false));
+        let callback = called.clone();
+        start_video_from_memory_guarded_async(
+            vec![1],
+            "stale video".into(),
+            || false,
+            move |_| {
+                callback.store(true, Ordering::SeqCst);
+            },
+        );
+        assert_eq!(*LOAD_GENERATION.lock().unwrap(), 40);
+        assert_eq!(VIDEO_STATE.lock().unwrap().filename, "newer video");
+        assert!(!called.load(Ordering::SeqCst));
+        *VIDEO_STATE.lock().unwrap() = VideoState::default();
+    }
+
+    #[test]
+    fn obsolete_decoder_frames_cannot_overwrite_the_current_frame() {
+        let _serial = TEST_GATE.lock().unwrap();
+        *LOAD_GENERATION.lock().unwrap() = 42;
+        let current = LoadRequest {
+            generation: 42,
+            still_current: Arc::new(|| true),
+        };
+        let old = LoadRequest {
+            generation: 41,
+            still_current: Arc::new(|| true),
+        };
+        current.publish_frame(1, 1, vec![1, 2, 3]);
+        old.publish_frame(1, 1, vec![9, 9, 9]);
+        assert_eq!(take_frame().unwrap().rgb_data, vec![1, 2, 3]);
+        let cancelled = LoadRequest {
+            generation: 42,
+            still_current: Arc::new(|| false),
+        };
+        cancelled.publish_frame(1, 1, vec![8, 8, 8]);
+        assert!(take_frame().is_none());
+    }
+
+    #[test]
+    fn old_loader_cleanup_cannot_clear_newer_playback() {
+        let _serial = TEST_GATE.lock().unwrap();
+        *LOAD_GENERATION.lock().unwrap() = 44;
+        VIDEO_STATE.lock().unwrap().filename = "keep new player".into();
+        let request = LoadRequest {
+            generation: 44,
+            still_current: Arc::new(|| true),
+        };
+        request.publish_frame(1, 1, vec![1, 2, 3]);
+        stop_generation(Some(43));
+        assert_eq!(*LOAD_GENERATION.lock().unwrap(), 44);
+        assert_eq!(VIDEO_STATE.lock().unwrap().filename, "keep new player");
+        assert_eq!(take_frame().unwrap().rgb_data, vec![1, 2, 3]);
+        *VIDEO_STATE.lock().unwrap() = VideoState::default();
+    }
 }

@@ -1,0 +1,119 @@
+import { AvatarOption } from "components/avatar_picker.slint";
+import { Colors } from "theme/colors.slint";
+
+// Authentication, onboarding, device link, and account recovery UI state.
+export global AuthFlow {
+    in property <bool> is-signed-in: false;
+    callback continue-without-account();
+
+    // ========== Loading page properties ==========
+    in property <string> loading-message: "Loading...";
+    in property <string> loading-secondary-message: "";
+
+    // ========== Auth page properties ==========
+    in-out property <string> login-username: "";
+    in-out property <string> login-password: "";
+    in-out property <string> login-pin: "";
+    in property <bool> login-loading: false;
+    in property <string> login-error: "";
+    // The login is solving the server's proof of work (chatter-core
+    // AuthStateData::login_verifying). Set from Rust.
+    in property <bool> login-verifying: false;
+    in property <bool> login-identity-reset-available: false;
+    callback accept-new-identity();
+
+    in-out property <string> register-display-name: "";
+    in-out property <string> register-username: "";
+    in-out property <string> register-password: "";
+    in-out property <string> register-confirm-password: "";
+    in-out property <string> register-pin: "";
+    in-out property <string> register-server-url: "";
+    in-out property <string> login-server-url: "";
+    in-out property <string> configured-server-url: "";
+    in property <bool> register-loading: false;
+    in property <string> register-error: "";
+    in property <image> register-avatar-source;
+    in property <[AvatarOption]> avatar-options: [];
+    in property <bool> register-has-avatar: false;
+    in-out property <int> register-selected-default-idx: 0;
+    in-out property <color> register-avatar-color: Colors.avatar-teal;
+    in property <int> register-password-strength: 0;
+    in property <int> register-pin-strength: 0;
+    callback register-select-avatar();
+    callback register-select-default-avatar(int);
+    callback register-remove-avatar();
+    pure callback register-username-validation(string) -> string;
+    pure callback register-pin-validation(string) -> string;
+    callback register-clear-error();
+    callback register-password-changed(string);
+    callback register-pin-changed(string);
+
+    // ========== Link Device page properties (new device side) ==========
+    in property <image> link-device-qr;
+    in property <string> link-device-url: "";
+    in property <string> link-device-status: "Generate a QR to begin.";
+    in property <string> link-device-error: "";
+    in property <bool> link-device-active: false;
+    in property <bool> link-device-has-local-identity: false;
+    callback link-device-start();
+    callback link-device-cancel();
+    callback link-device-copy();
+
+    // ========== Link Device Approve modal (primary side) ==========
+    in-out property <string> link-approve-url: "";
+    in-out property <string> link-approve-password: "";
+    in property <string> link-approve-preview-name: "";
+    in property <string> link-approve-preview-server: "";
+    // 6-char code derived from the new device's ephemeral pubkey. Must
+    // match the value displayed on the new device — this is the user's
+    // gate against MITM substitution of the QR ephemeral key.
+    in property <string> link-approve-verification-code: "";
+    in property <bool> link-approve-preview-ready: false;
+    in property <string> link-approve-status: "";
+    in property <string> link-approve-error: "";
+    in property <bool> link-approve-busy: false;
+    callback link-approve-paste-changed(string);
+    callback link-approve-submit(string);  // password (pending link is
+                                            // already stashed on paste)
+    callback link-approve-open();
+    callback link-approve-close();
+    callback link-approve-scan();
+
+    // ========== Recovery codes modal properties ==========
+    in property <[string]> recovery-codes: [];
+    // Set when the codes came from Settings › Regenerate: Continue returns to
+    // Settings instead of carrying on into registration's onboarding.
+    in-out property <bool> recovery-codes-regenerated: false;
+    callback recovery-codes-confirmed() -> bool;
+    callback recovery-codes-copy-all();
+
+    // Sealed sender onboarding explainer (shown after recovery codes).
+    // Fired when the user confirms; carries their initial "allow from anyone"
+    // choice so the caller can persist it to the server.
+    callback sealed-sender-intro-confirmed(bool);
+
+    // ========== Account recovery page properties ==========
+    in-out property <string> recovery-username: "";
+    in-out property <string> recovery-code: "";
+    in-out property <string> recovery-new-password: "";
+    in-out property <string> recovery-confirm-password: "";
+    in-out property <string> recovery-new-pin: "";
+    in property <bool> recovery-loading: false;
+    in property <string> recovery-error: "";
+    in property <string> recovery-success: "";
+    callback recover-account(string, string, string, string);  // username, recovery_code, new_password, new_pin
+
+    // ========== Auth callbacks ==========
+    callback login(string, string, string, string);  // username, password, server_url, pin
+    callback register(string, string, string, string, string);  // username, password, display_name, pin, server_url
+    callback go-to-register();
+    callback go-to-login();
+    callback go-to-recovery();
+    callback go-to-link-device();
+
+    // Welcome page callbacks
+    callback welcome-add-friends();
+    callback welcome-browse-channels();
+    callback welcome-get-started();
+
+}

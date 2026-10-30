@@ -1,0 +1,55 @@
+// Appearance preferences (Settings › Appearance).
+//
+// `theme` is written from Rust with what core persisted
+// (`bin_ui::features::modals::settings`); the settings page writes it back and
+// fires `theme-changed` so core can persist the choice.
+
+import { Palette } from "std-widgets.slint";
+
+export global Appearance {
+    in-out property <bool> keyboard-focus-visible: false;
+    // Settings › Appearance › Reduce animations. Written from Rust with what
+    // core persisted; the settings page writes it back and fires
+    // `reduce-motion-changed`. Every `animate` reads a Materials duration or
+    // this flag, and the decorative loops (shimmer, typing dots, ringing
+    // pulse, spinners) stop while it is on.
+    in-out property <bool> reduce-motion: false;
+    callback reduce-motion-changed(bool);
+    // Device-local multiplier for all visual motion; four times faster by default.
+    in-out property <float> animation-speed: 4.0;
+    callback animation-speed-changed(float);
+    // Disable expensive material optics on slow devices.
+    in-out property <bool> glass-effects: true;
+    callback glass-effects-changed(bool);
+
+    // "system" | "light" | "dark"
+    in-out property <string> theme: "system";
+
+    // Whether the dark palette is in force. "system" follows the OS live; an OS
+    // that states no preference keeps the dark palette.
+    out property <bool> dark: theme == "dark"
+        || (theme == "system" && Palette.color-scheme != ColorScheme.light);
+
+    callback theme-changed(string);
+
+    // Text size: "small" | "default" | "large" | "largest". `text-scale` is
+    // what every `Typography` size is multiplied by, written from Rust with
+    // core's `TextSize::scale` ("default" follows the OS font scale).
+    in-out property <string> text-size: "default";
+    in-out property <float> text-scale: 1.0;
+    callback text-size-changed(string);
+    // Fixed-height boxes that hold text grow by this and never shrink, so a
+    // smaller text size keeps the touch targets it had.
+    out property <float> text-grow: max(1.0, text-scale);
+
+    // Message spacing: "comfortable" | "compact". Read through the density
+    // tokens in `Spacing`, never directly by a screen.
+    in-out property <string> density: "comfortable";
+    out property <bool> compact: density == "compact";
+    callback density-changed(string);
+
+    // Fired when the palette flips (a theme pick, or the OS switching while
+    // on "system"), so Android can recolour its status/nav-bar icons.
+    callback dark-changed(bool);
+    changed dark => { self.dark-changed(self.dark); }
+}

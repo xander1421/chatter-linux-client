@@ -1,3 +1,12 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { SharedContentItem, SharedTab } from "profile_shared_types.slint";
+import { ProfileSharedList } from "profile_shared_list.slint";
+import { ProfileSharedGrid } from "profile_shared_grid.slint";
+import { ProfileStatusPicker } from "profile_status_picker.slint";
+import { ProfileInfoCard } from "profile_info_card.slint";
+import { ProfileActionTiles } from "profile_action_tiles.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // UserProfileModal — the contact/self profile page.
 //
 // Telegram-shaped: avatar and name on top, a row of square action tiles, an
@@ -13,34 +22,45 @@
 // `ModalContainer`, so nothing is reimplemented here except the top bar.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { ModalContainer } from "../components/modal_container.slint";
 import { DismissButton } from "../components/dismiss_button.slint";
 import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+import { Modal } from "../components/modal.slint";
 import { Avatar } from "../components/avatar.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+import { DisappearingSettings } from "../chat/disappearing_settings.slint";
+import { DisappearingGlobal } from "../chat/disappearing_global.slint";
 
-// One tile (Media/GIFs) or row (Files/Links/Voice/Music) of the shared-content
-// tabs. Built by `chatter_core::ui::SharedContentItemData` — every string here
-// arrives display-ready.
-export struct SharedContentItem {
-    message-id: string,
-    attachment-id: string,
-    category: string,
-    title: string,
-    subtitle: string,
-    thumbnail: image,
-    has-thumbnail: bool,
-    is-video: bool,
-}
 
-// One segment of the tab strip. Core decides which tabs exist (only non-empty
-// ones) and in what order.
-export struct SharedTab {
-    id: string,
-    label: string,
-    count: int,
+// Telegram-style list row for the profile's action card: leading glyph,
+// left-aligned label, red only for the destructive action.
+component ProfileActionRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> text;
+    in property <bool> destructive: false;
+    in property <length> row-height: 48px;
+    callback clicked();
+    height: root.row-height;
+    background: touch.has-hover ? Colors.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    KeyFocus { border-radius: parent.border-radius; activate => { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.md;
+        VerticalLayout { alignment: center;
+            Image { source: root.icon; width: 20px; height: 20px; colorize: root.destructive ? Colors.danger : Colors.text-secondary; }
+        }
+        Text { text: root.text; color: root.destructive ? Colors.danger : Colors.text-primary;
+            font-size: Typography.base; vertical-alignment: center; horizontal-stretch: 1; }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
 export component UserProfileModal inherits Rectangle {
@@ -49,6 +69,8 @@ export component UserProfileModal inherits Rectangle {
     in property <string> display-name: "";
     in property <string> username: "";
     in property <image> avatar-source;
+    in property <bool> is-anonymous: false;
+    in property <bool> scoped-member: false;
     in property <string> initials: "";
     in property <string> status-text: "";  // custom status message
     in property <string> presence: "offline";  // "online", "away", "dnd", "offline"
@@ -59,11 +81,32 @@ export component UserProfileModal inherits Rectangle {
     in property <string> last-seen: "";
     in property <string> bio: "";
     in property <bool> is-friend: false;
+    in property <string> contact-name: "";
     in property <bool> is-blocked: false;
+    // Core's `can_start_secret_chat`: onion channel available, not Shield,
+    // not self, not blocked.
+    in property <bool> can-start-secret-chat: false;
+    // Block asks first (Signal: "Block <name>? They won't be able to call or
+    // message you."); reset whenever another profile is shown.
+    property <bool> confirm-block: false;
+    // Remove Friend asks too — it is destructive and was instant.
+    property <bool> confirm-remove: false;
+    property <bool> confirm-unblock: false;
+    property <bool> more-open: false;
+    in-out property <bool> edit-contact-open: false;
+    property <string> contact-draft: "";
+    in-out property <bool> shared-page-open: false;
+    // The opened category's own label ("2 videos"), shown as the page title.
+    property <string> shared-title: "";
+    // The disappearing-messages choices are unfolded under their row.
+    property <bool> timer-picker-open: false;
+    changed user-id => { self.timer-picker-open = false; self.shared-page-open = false; self.more-open = false; self.edit-contact-open = false; }
+    changed display-name => { self.confirm-block = false; self.confirm-remove = false; self.confirm-unblock = false; }
     in property <bool> is-self: false;  // viewing own profile
     in property <bool> is-muted: false;
     in property <bool> loading: false;
     in property <bool> is-verified: false;
+    in property <bool> verification-pending: false;
     in property <string> safety-number: "";
     in-out property <bool> show-safety-number: false;
     // Username link (self view): shareable chatter://u/… URL + QR that
@@ -82,16 +125,22 @@ export component UserProfileModal inherits Rectangle {
     // desktop density.
     in property <bool> mobile-mode: false;
     in property <length> bottom-inset: 0px;
+    // A tab's root screen (see Modal): no back chevron, the tab bar navigates.
+    in property <bool> root-screen: false;
 
     // ── Shared content ────────────────────────────────────────────────
     in property <[SharedTab]> shared-tabs: [];
     in-out property <string> shared-tab: "";
     in property <[SharedContentItem]> shared-items: [];
+    in property <bool> shared-has-previous: false;
+    in property <bool> shared-has-more: false;
     in property <bool> shared-loading: false;
+    in property <string> shared-error: "";
 
-    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px;
+    property <length> row-height: root.mobile-mode ? Spacing.list-row-height-touch : 56px * Appearance.text-grow;
     property <length> avatar-size: root.mobile-mode ? 112px : 96px;
     property <length> name-size: root.mobile-mode ? Typography.xxxl : Typography.xxl;
+    property <length> header-stretch: min(36px, max(0px, -page-scroll.viewport-y));
 
     callback close();
     // Presence picker (self view)
@@ -101,18 +150,34 @@ export component UserProfileModal inherits Rectangle {
     callback copy-share-link();
     callback reset-share-link();     // rotate: old URLs stop resolving
     callback send-message();  // open DM
+    callback start-secret-chat();  // open (or start) the secret chat with this user
     callback edit-profile();   // open edit profile modal
     callback add-friend();
     callback remove-friend();
     callback block-user();
     callback unblock-user();
+    callback share-contact();
+    callback edit-contact(string);
+    // The blocked banner also opens the full list of blocked contacts.
+    callback manage-blocked();
     callback view-safety-number();
     callback toggle-verified();
     callback toggle-mute();
     callback start-call(bool /* is-video */);
     callback shared-tab-selected(string /* category */);
     callback shared-load-more();
-    callback open-shared-item(string /* message-id */, string /* attachment-id */, string /* category */);
+    callback shared-load-previous();
+    callback shared-page-closed();
+    callback shared-retry();
+    callback open-shared-item(string /* message-id */, string /* attachment-id */, string /* category */, string /* selected-url */);
+
+    pure function shared-icon(id: string) -> image {
+        if id == "photo" || id == "gif" { return Icons.image; }
+        if id == "video" { return Icons.video; }
+        if id == "audio" || id == "voice" { return Icons.mic; }
+        if id == "link" { return Icons.link; }
+        return Icons.file;
+    }
 
     // Helper to get presence color from string
     pure function presence-color(p: string) -> color {
@@ -134,42 +199,36 @@ export component UserProfileModal inherits Rectangle {
         } else if p == "away" {
             return "Away";
         } else if p == "dnd" {
-            return "Do Not Disturb";
+            return "Do not disturb";
         } else {
             return "Offline";
         }
     }
 
-    // Category glyph for a list row / a media tile with no thumbnail.
-    pure function category-icon(c: string) -> image {
-        if c == "link" {
-            return Icons.link;
-        } else if c == "voice" || c == "music" {
-            return Icons.mic;
-        } else if c == "media" || c == "gif" {
-            return Icons.image;
-        } else {
-            return Icons.file;
-        }
-    }
 
     ModalContainer {
         show: root.show-modal;
+        accessibility-modal: !root.root-screen;
         modal-width: 440px;
         // Same conservative viewport carve-out `Modal` applies: safe-area
         // insets are not plumbed into modals, so leave room for the Android
         // status + navigation bars rather than running off-screen.
         max-modal-height: max(240px, root.height - 96px);
-        fill-height: true;
+        fill-height: root.mobile-mode;
         full-screen: root.mobile-mode;
-        bottom-inset: root.bottom-inset;
+        bottom-inset: root.mobile-mode ? 0px : root.bottom-inset;
 
         close => {
             root.close();
         }
 
-        VerticalLayout {
-            spacing: 0px;
+        Rectangle {
+            // A floating card is sized to its content; a phone page fills the
+            // screen. Left to its preferred height on a phone, the page ended
+            // where its (under-measured) content did, and everything painted
+            // below that edge was not hit-tested.
+            preferred-height: profile-header.height + page.preferred-height;
+            height: root.mobile-mode ? parent.height : self.preferred-height;
 
             // ── Top bar ───────────────────────────────────────────────
             // Same rule `Modal` applies, hand-placed only because this screen
@@ -177,61 +236,110 @@ export component UserProfileModal inherits Rectangle {
             // to edge, which `Modal`'s padded body cannot do). The glyph, size
             // and label still come from the shared `DismissButton` — only the
             // EDGE is decided here, because that is a position in this layout.
-            HorizontalLayout {
+            profile-header := GlassSurface {
+                z: 1;
+                x: root.mobile-mode ? Spacing.sm : 0px;
+                y: root.mobile-mode ? Spacing.sm : 0px;
+                width: parent.width - 2 * self.x;
+                material-enabled: root.mobile-mode;
+                border-radius: root.mobile-mode ? self.height / 2 : 0px;
                 height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
-                padding-left: Spacing.xs;
-                padding-right: Spacing.xs;
+                HorizontalLayout {
+                    padding-left: Spacing.xs;
+                    padding-right: Spacing.xs;
 
-                // Full-screen page → back chevron, leading. Floating card →
-                // X, trailing. The bar carries no title on purpose; the name
-                // below is the title. (No kebab: every action it would hold is
-                // already a tile or a row on this page.)
-                if root.mobile-mode: DismissButton {
-                    back: true;
-                    clicked => { root.close(); }
-                }
+                    // Full-screen page → back chevron, leading. Floating card →
+                    // X, trailing. The compact title appears once the large name
+                    // has scrolled behind this bar.
+                    if root.shared-page-open: DismissButton {
+                        back: true;
+                        clicked => { root.shared-page-open = false; root.shared-page-closed(); }
+                    }
 
-                Rectangle { horizontal-stretch: 1; }
+                    if root.mobile-mode && !root.root-screen && !root.shared-page-open: DismissButton {
+                        back: true;
+                        clicked => { root.close(); }
+                    }
 
-                if !root.mobile-mode: DismissButton {
-                    back: false;
-                    clicked => { root.close(); }
+                    Text {
+                        // Once the large name has scrolled under the header: the
+                        // body (inside an `if`) cannot be measured from here, so
+                        // this uses the avatar plus the name row's height.
+                        visible: root.mobile-mode && !root.shared-page-open
+                            && -page-scroll.viewport-y >= root.avatar-size + Spacing.md + 40px;
+                        text: root.display-name;
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        font-weight: Typography.medium;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+
+                    if !root.mobile-mode: Rectangle { horizontal-stretch: 1; }
+
+
+                    if !root.mobile-mode && !root.shared-page-open: DismissButton {
+                        back: false;
+                        clicked => { root.close(); }
+                    }
                 }
             }
 
             // ── The page ──────────────────────────────────────────────
             page-scroll := Flickable {
-                vertical-stretch: 1;
+                x: 0;
+                y: root.mobile-mode ? 0px : profile-header.height;
+                width: parent.width;
+                height: parent.height - self.y;
                 viewport-width: self.width;
-                viewport-height: page.preferred-height;
+                // At least the visible height: children outside the viewport
+                // are not hit-tested, and the page's measured height can fall
+                // short of what wrapped text paints, which left the lower
+                // buttons on a phone drawn but dead.
+                viewport-height: max(self.height, page.preferred-height);
+                interactive: page.preferred-height > self.height;
+                // Buttons and action tiles contain nested TouchAreas. Deliver
+                // their press immediately while retaining drag-to-scroll.
+                immediate-child-press: true;
 
                 // Lazy paging: ask for the next page while there is still a
                 // screenful of runway, so the grid never visibly runs out.
                 // Core ignores the request when a load is already in flight or
                 // the last page came back short.
                 changed viewport-y => {
-                    if (self.viewport-height + self.viewport-y - self.height < self.height) {
+                    if (root.shared-page-open && self.viewport-height + self.viewport-y - self.height < self.height) {
                         root.shared-load-more();
                     }
                 }
 
                 page := VerticalLayout {
+                    padding-top: root.mobile-mode ? profile-header.height + Spacing.sm * 2 : Spacing.none;
+                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
                     alignment: start;
                     spacing: Spacing.md;
 
+                    if !root.shared-page-open: profile-body := VerticalLayout {
+                        spacing: Spacing.md;
                     // ── Avatar ────────────────────────────────────────
                     HorizontalLayout {
                         alignment: center;
                         Avatar {
                             size: root.avatar-size;
+                            transform-origin: { x: self.width / 2, y: self.height / 2 };
+                            transform-scale-x: 100% + 16% * (root.header-stretch / 36px);
+                            transform-scale-y: 100% + 16% * (root.header-stretch / 36px);
                             source: root.avatar-source;
+                            anonymous: root.is-anonymous;
                             fallback-text: root.initials;
+                            alt-name: root.display-name;
                             show-presence: false;
                         }
                     }
 
                     // ── Name + verification badge ─────────────────────
-                    HorizontalLayout {
+                    profile-name-row := HorizontalLayout {
                         alignment: center;
                         spacing: Spacing.xs;
 
@@ -244,19 +352,47 @@ export component UserProfileModal inherits Rectangle {
                             overflow: elide;
                         }
 
-                        if !root.is-self: Rectangle {
-                            width: 22px;
-                            height: 22px;
-                            border-radius: 11px;
-                            background: root.is-verified ? Colors.online.with-alpha(0.15) : Colors.text-muted.with-alpha(0.1);
+                        // Signal shows a badge only once verified; an
+                        // unverified "?" read as "suspicious person".
+                        if !root.is-self && root.is-verified: Rectangle {
+                            // A small inline mark beside the name, not a
+                            // button-sized tile.
+                            width: 20px;
+                            height: 20px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: self.width / 2;
+                            background: Colors.online;
+                            accessible-role: button;
+                            accessible-label: "Verified — show safety number";
+                            accessible-action-default => {
+                                if root.safety-number == "" { root.view-safety-number(); }
+                                root.show-safety-number = true;
+                            }
+                            KeyFocus {
+                                border-radius: parent.border-radius;
+                                activate => {
+                                    if root.safety-number == "" { root.view-safety-number(); }
+                                    root.show-safety-number = true;
+                                }
+                            }
 
                             Text {
-                                text: root.is-verified ? "\u{2713}" : "?";
-                                color: root.is-verified ? Colors.online : Colors.text-muted;
-                                font-size: Typography.xs2;
+                                text: "\u{2713}";
+                                color: Colors.on-action;
+                                font-size: Typography.xs;
                                 font-weight: Typography.bold;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
+                            }
+
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    if root.safety-number == "" {
+                                        root.view-safety-number();
+                                    }
+                                    root.show-safety-number = true;
+                                }
                             }
                         }
                     }
@@ -291,10 +427,8 @@ export component UserProfileModal inherits Rectangle {
                         Rectangle {
                             width: status-pill-text.width + Spacing.md * 2;
                             height: 28px;
-                            background: Colors.neo-inset-bg;
+                            background: Colors.inset;
                             border-radius: Spacing.radius-full;
-                            border-width: 1px;
-                            border-color: Colors.neo-inset-shadow;
 
                             status-pill-text := Text {
                                 x: Spacing.md;
@@ -310,61 +444,104 @@ export component UserProfileModal inherits Rectangle {
                     // ── Action tiles ──────────────────────────────────
                     // Four equal tiles, icon over label. Self sees only the
                     // one action that applies to their own profile.
-                    if !root.is-self && !root.is-blocked: HorizontalLayout {
+                    if !root.is-self && !root.is-blocked: ProfileActionTiles {
+                        scoped-member: root.scoped-member;
+                        is-muted: root.is-muted;
+                        is-anonymous: root.is-anonymous;
+                        is-friend: root.is-friend;
+                        send-message => { root.send-message(); }
+                        toggle-mute => { root.toggle-mute(); }
+                        start-call(video) => { root.start-call(video); }
+                        open-more => { root.more-open = !root.more-open; }
+                    }
+
+                    if root.more-open && !root.is-self: HorizontalLayout {
+                        padding-left: Spacing.md; padding-right: Spacing.md;
+                        Rectangle {
+                            height: more-content.preferred-height;
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            drop-shadow-blur: Elevation.card-blur;
+                            drop-shadow-offset-y: Elevation.card-offset;
+                            drop-shadow-color: Elevation.card-shadow;
+                            border-width: Elevation.rim-width;
+                            border-color: Elevation.card-rim;
+                            more-content := VerticalLayout {
+                                padding: Spacing.sm; spacing: Spacing.xs;
+                                if !root.scoped-member && !root.is-anonymous: Button { text: "Video call"; variant: "secondary"; clicked => { root.more-open = false; root.start-call(true); } }
+                                if root.can-start-secret-chat && !root.scoped-member: Button { text: "Start secret chat"; variant: "secondary"; clicked => { root.more-open = false; root.start-secret-chat(); } }
+                                if !root.scoped-member: Button { text: "Safety number"; variant: "secondary"; clicked => { root.more-open = false; root.view-safety-number(); root.show-safety-number = true; } }
+                            }
+                        }
+                    }
+
+                    // ── Disappearing messages ─────────────────────────
+                    // This DM's timer (Signal's "Disappearing messages" in
+                    // conversation settings). Friends only: core has no DM to
+                    // announce a timer to anyone else. The row shows the value;
+                    // tapping it opens the choices in place.
+                    if DisappearingGlobal.dm-can-set && !root.is-self && !root.is-blocked: HorizontalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
-                        spacing: Spacing.xs;
 
-                        for act in [
-                            { id: "message", label: "Message", icon: Icons.message-circle },
-                            { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: Icons.mic-off },
-                            { id: "call", label: "Call", icon: Icons.phone },
-                            { id: "video", label: "Video", icon: Icons.video },
-                        ]: Rectangle {
-                            horizontal-stretch: 1;
-                            height: 62px;
-                            border-radius: Spacing.radius-md;
-                            background: act-touch.has-hover ? Colors.surface-hover : Colors.neo-inset-bg;
-                            border-width: 1px;
-                            border-color: Colors.neo-inset-shadow;
-                            accessible-role: button;
-                            accessible-label: act.label;
+                        Rectangle {
+                            height: timer-card.preferred-height;
+                            background: Colors.surface-section;
+                            border-radius: Spacing.radius-lg;
+                            drop-shadow-blur: Elevation.card-blur;
+                            drop-shadow-offset-y: Elevation.card-offset;
+                            drop-shadow-color: Elevation.card-shadow;
+                            border-width: Elevation.rim-width;
+                            border-color: Elevation.card-rim;
 
-                            VerticalLayout {
-                                alignment: center;
-                                spacing: Spacing.xs;
+                            timer-card := VerticalLayout {
+                                padding: Spacing.md;
+                                spacing: Spacing.sm;
 
-                                HorizontalLayout {
-                                    alignment: center;
-                                    Image {
-                                        source: act.icon;
-                                        width: 20px;
-                                        height: 20px;
-                                        colorize: act.id == "mute" && root.is-muted
-                                            ? Colors.warning : Colors.primary;
+                                timer-row := Rectangle {
+                                    height: timer-row-layout.preferred-height;
+                                    accessible-role: button;
+                                    accessible-label: "Disappearing messages: " + DisappearingGlobal.dm-label;
+                                    accessible-action-default => { root.timer-picker-open = !root.timer-picker-open; }
+                                    KeyFocus { border-radius: parent.border-radius; activate => { root.timer-picker-open = !root.timer-picker-open; } }
+
+                                    timer-row-layout := HorizontalLayout {
+                                        spacing: Spacing.sm;
+
+                                        Image {
+                                            source: Icons.clock;
+                                            width: 20px;
+                                            height: 20px;
+                                            y: (parent.height - self.height) / 2;
+                                            colorize: Colors.text-secondary;
+                                        }
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: Spacing.xxs;
+
+                                            Text {
+                                                text: "Disappearing messages";
+                                                color: Colors.text-primary;
+                                                font-size: Typography.base;
+                                            }
+
+                                            Text {
+                                                text: DisappearingGlobal.dm-label;
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                            }
+                                        }
+                                    }
+
+                                    TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.timer-picker-open = !root.timer-picker-open; }
                                     }
                                 }
 
-                                Text {
-                                    text: act.label;
-                                    color: Colors.text-secondary;
-                                    font-size: Typography.xs;
-                                    horizontal-alignment: center;
-                                }
-                            }
-
-                            act-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    if (act.id == "message") {
-                                        root.send-message();
-                                    } else if (act.id == "mute") {
-                                        root.toggle-mute();
-                                    } else if (act.id == "call") {
-                                        root.start-call(false);
-                                    } else {
-                                        root.start-call(true);
-                                    }
+                                if root.timer-picker-open: DisappearingSettings {
+                                    peer-id: root.user-id;
+                                    current-ttl: DisappearingGlobal.dm-seconds;
                                 }
                             }
                         }
@@ -375,23 +552,29 @@ export component UserProfileModal inherits Rectangle {
                         padding-right: Spacing.md;
 
                         Button {
-                            text: "Edit Profile";
+                            text: "Edit profile";
                             variant: "primary";
                             clicked => { root.edit-profile(); }
                         }
                     }
 
-                    if root.is-blocked && !root.is-self: HorizontalLayout {
+                    if root.is-blocked && !root.is-self: VerticalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
+                        spacing: Spacing.sm;
+
+                        Text {
+                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                            text: "You blocked this person.";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            wrap: word-wrap;
+                        }
 
                         Button {
-                            text: root.loading ? "" : "Unblock User";
-                            variant: "danger";
-                            loading: root.loading;
-                            clicked => {
-                                if !root.loading { root.unblock-user(); }
-                            }
+                            text: "Open blocked";
+                            variant: "secondary";
+                            clicked => { root.manage-blocked(); }
                         }
                     }
 
@@ -399,354 +582,43 @@ export component UserProfileModal inherits Rectangle {
                     // Value on top, label underneath. Phone number is
                     // deliberately absent: it exists in neither the proto, the
                     // domain model nor the schema, and a faked row is worse
-                    // than a missing one.
-                    HorizontalLayout {
-                        padding-left: Spacing.md;
-                        padding-right: Spacing.md;
-
-                        Rectangle {
-                            height: info-card.preferred-height;
-                            background: Colors.neo-inset-bg;
-                            border-radius: Spacing.radius-lg;
-                            border-width: 1px;
-                            border-color: Colors.neo-inset-shadow;
-
-                            info-card := VerticalLayout {
-                                padding: Spacing.md;
-                                spacing: Spacing.md;
-
-                                // Username, with the QR behind a glyph on the row
-                                // rather than a permanently-open 150px image.
-                                HorizontalLayout {
-                                    spacing: Spacing.sm;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: 2px;
-
-                                        Text {
-                                            text: root.username != "" ? "@" + root.username : root.user-id;
-                                            color: Colors.text-primary;
-                                            font-size: Typography.base;
-                                            overflow: elide;
-                                        }
-
-                                        Text {
-                                            text: "Username";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
-                                    }
-
-                                    if root.is-self: Rectangle {
-                                        width: 40px;
-                                        height: 40px;
-                                        border-radius: Spacing.radius-sm;
-                                        background: qr-touch.has-hover ? Colors.surface-hover : transparent;
-                                        accessible-role: button;
-                                        accessible-label: "Show username QR code";
-
-                                        // Drawn rather than an SVG asset: three
-                                        // finder squares and a dot read as a QR at
-                                        // this size and cost no new file.
-                                        Rectangle {
-                                            width: 18px;
-                                            height: 18px;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-
-                                            for corner in [
-                                                { cx: 0px, cy: 0px },
-                                                { cx: 11px, cy: 0px },
-                                                { cx: 0px, cy: 11px },
-                                            ]: Rectangle {
-                                                x: corner.cx;
-                                                y: corner.cy;
-                                                width: 7px;
-                                                height: 7px;
-                                                border-width: 2px;
-                                                border-color: Colors.text-secondary;
-                                                border-radius: 1px;
-                                            }
-
-                                            Rectangle {
-                                                x: 12px;
-                                                y: 12px;
-                                                width: 4px;
-                                                height: 4px;
-                                                background: Colors.text-secondary;
-                                            }
-                                        }
-
-                                        qr-touch := TouchArea {
-                                            mouse-cursor: pointer;
-                                            clicked => {
-                                                root.show-share-qr = !root.show-share-qr;
-                                                if root.share-link == "" {
-                                                    root.generate-share-link();
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Expanded QR + link (self view, on demand)
-                                if root.is-self && root.show-share-qr: VerticalLayout {
-                                    spacing: Spacing.sm;
-
-                                    if root.share-link != "": HorizontalLayout {
-                                        alignment: center;
-
-                                        Rectangle {
-                                            width: 150px;
-                                            height: 150px;
-                                            background: white;
-                                            border-radius: Spacing.radius-md;
-
-                                            Image {
-                                                width: 142px;
-                                                height: 142px;
-                                                x: 4px;
-                                                y: 4px;
-                                                source: root.share-qr;
-                                            }
-                                        }
-                                    }
-
-                                    if root.share-link != "": Text {
-                                        text: root.share-link;
-                                        color: Colors.text-secondary;
-                                        font-size: Typography.xs;
-                                        wrap: char-wrap;
-                                    }
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.sm;
-
-                                        Button {
-                                            text: root.share-link == "" ? "Create link" : "Copy Link";
-                                            variant: "secondary";
-                                            horizontal-stretch: 1;
-                                            clicked => {
-                                                if root.share-link == "" {
-                                                    root.generate-share-link();
-                                                } else {
-                                                    root.copy-share-link();
-                                                }
-                                            }
-                                        }
-
-                                        if root.share-link != "": Button {
-                                            text: "Reset Link";
-                                            variant: "secondary";
-                                            horizontal-stretch: 1;
-                                            clicked => { root.reset-share-link(); }
-                                        }
-                                    }
-
-                                    if root.share-status != "": Text {
-                                        text: root.share-status;
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                        wrap: word-wrap;
-                                    }
-                                }
-
-                                // Bio
-                                if root.bio != "": VerticalLayout {
-                                    spacing: 2px;
-
-                                    Text {
-                                        text: root.bio;
-                                        color: Colors.text-primary;
-                                        font-size: Typography.base;
-                                        wrap: word-wrap;
-                                        max-height: Typography.base * 6;
-                                        overflow: elide;
-                                    }
-
-                                    Text {
-                                        text: "About";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                    }
-                                }
-                            }
-                            }
+                    // than a missing one. Nothing to show (a peer with no
+                    // known handle and no bio) means no card, not an empty one.
+                    if root.username != "" || root.bio != "" || (!root.is-self && !root.scoped-member): ProfileInfoCard {
+                        username: root.username;
+                        bio: root.bio;
+                        is-self: root.is-self;
+                        scoped-member: root.scoped-member;
+                        is-verified: root.is-verified;
+                        verification-pending: root.verification-pending;
+                        safety-number: root.safety-number;
+                        show-safety-number <=> root.show-safety-number;
+                        view-safety-number => { root.view-safety-number(); }
+                        toggle-verified => { root.toggle-verified(); }
+                        share-link: root.share-link;
+                        share-qr: root.share-qr;
+                        share-status: root.share-status;
+                        show-share-qr <=> root.show-share-qr;
+                        generate-share-link => { root.generate-share-link(); }
+                        copy-share-link => { root.copy-share-link(); }
+                        reset-share-link => { root.reset-share-link(); }
                     }
 
                     // ── Status picker (self view) ─────────────────────
-                    if root.is-self: VerticalLayout {
-                        padding-left: Spacing.md;
-                        padding-right: Spacing.md;
-                        spacing: Spacing.sm;
-
-                        Text {
-                            text: "STATUS";
-                            color: Colors.text-muted;
-                            font-size: Typography.xs2;
-                            font-weight: Typography.bold;
-                            letter-spacing: 0.5px;
-                        }
-
-                        HorizontalLayout {
-                            spacing: Spacing.xs;
-                            for opt in [
-                                { mode: "auto", label: "Auto", dot: Colors.online },
-                                { mode: "online", label: "Online", dot: Colors.online },
-                                { mode: "away", label: "Away", dot: Colors.away },
-                                { mode: "dnd", label: "DND", dot: Colors.dnd },
-                                { mode: "invisible", label: "Invisible", dot: Colors.text-muted },
-                            ]: Rectangle {
-                                height: 32px;
-                                horizontal-stretch: 1;
-                                border-radius: 6px;
-                                border-width: root.status-mode == opt.mode ? 1.5px : 1px;
-                                border-color: root.status-mode == opt.mode ? Colors.primary : Colors.neo-inset-shadow;
-                                background: status-touch.has-hover ? Colors.surface-hover : transparent;
-                                accessible-role: button;
-                                accessible-label: "status-" + opt.mode;
-                                status-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.change-status(opt.mode); }
-                                }
-                                HorizontalLayout {
-                                    alignment: center;
-                                    spacing: 4px;
-                                    VerticalLayout { alignment: center;
-                                        Rectangle { width: 8px; height: 8px; border-radius: 4px; background: opt.dot; }
-                                    }
-                                    Text {
-                                        text: opt.label;
-                                        vertical-alignment: center;
-                                        color: root.status-mode == opt.mode ? Colors.text-primary : Colors.text-muted;
-                                        font-size: Typography.xs;
-                                    }
-                                }
-                            }
-                        }
+                    if root.is-self: ProfileStatusPicker {
+                        status-mode: root.status-mode;
+                        change-status(mode) => { root.change-status(mode); }
                     }
 
-                    // ── Safety number (non-self) ──────────────────────
-                    if !root.is-self: VerticalLayout {
+                    // ── Add friend ────────────────────────────────────
+                    if !root.scoped-member && !root.is-self && !root.is-blocked && !root.is-friend && !AnonMode.enabled: HorizontalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
-                        spacing: Spacing.sm;
 
-                        safety-number-toggle := TouchArea {
-                            mouse-cursor: pointer;
-                            height: 32px;
-
-                            clicked => {
-                                if root.safety-number == "" {
-                                    root.view-safety-number();
-                                } else {
-                                    root.show-safety-number = !root.show-safety-number;
-                                }
-                            }
-
-                            HorizontalLayout {
-                                alignment: space-between;
-
-                                Text {
-                                    text: "SAFETY NUMBER";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs2;
-                                    font-weight: Typography.bold;
-                                    letter-spacing: 0.5px;
-                                    vertical-alignment: center;
-                                }
-
-                                Text {
-                                    text: root.show-safety-number ? "\u{25B2}" : "\u{25BC}";
-                                    color: safety-number-toggle.has-hover ? Colors.text-primary : Colors.text-muted;
-                                    font-size: Typography.xxs;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-
-                        if root.show-safety-number && root.safety-number != "": VerticalLayout {
-                            spacing: Spacing.sm;
-
-                            Text {
-                                text: "Compare this number with your contact to verify end-to-end encryption. If the numbers match, your conversation is secure.";
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                                wrap: word-wrap;
-                            }
-
-                            Rectangle {
-                                background: Colors.neo-inset-bg;
-                                border-radius: Spacing.radius-md;
-                                border-width: 1px;
-                                border-color: Colors.neo-inset-shadow;
-                                height: safety-number-text.preferred-height + Spacing.md * 2;
-
-                                safety-number-text := Text {
-                                    x: Spacing.md;
-                                    y: Spacing.md;
-                                    width: parent.width - Spacing.md * 2;
-                                    text: root.safety-number;
-                                    color: Colors.text-primary;
-                                    font-size: Typography.sm2;
-                                    font-weight: Typography.medium;
-                                    horizontal-alignment: center;
-                                    wrap: word-wrap;
-                                    letter-spacing: 1px;
-                                }
-                            }
-
-                            HorizontalLayout {
-                                alignment: center;
-
-                                verify-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    width: verify-btn-rect.width;
-                                    height: 32px;
-
-                                    clicked => { root.toggle-verified(); }
-
-                                    verify-btn-rect := Rectangle {
-                                        width: verify-btn-text.width + Spacing.lg * 2;
-                                        height: 32px;
-                                        border-radius: Spacing.radius-md;
-                                        background: root.is-verified
-                                            ? (verify-touch.has-hover ? Colors.error.with-alpha(0.15) : Colors.text-muted.with-alpha(0.1))
-                                            : (verify-touch.has-hover ? Colors.online.with-alpha(0.2) : Colors.online.with-alpha(0.1));
-
-                                        verify-btn-text := Text {
-                                            text: root.is-verified ? "Mark as Unverified" : "Mark as Verified";
-                                            color: root.is-verified ? Colors.error : Colors.online;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // ── Friend / block row ────────────────────────────
-                    if !root.is-self && !root.is-blocked: HorizontalLayout {
-                        padding-left: Spacing.md;
-                        padding-right: Spacing.md;
-                        spacing: Spacing.sm;
-
-                        if root.is-friend: Button {
-                            text: root.loading ? "" : "Remove Friend";
-                            variant: "secondary";
-                            horizontal-stretch: 1;
-                            loading: root.loading;
-                            clicked => {
-                                if !root.loading { root.remove-friend(); }
-                            }
-                        }
-
-                        if !root.is-friend: Button {
-                            text: root.loading ? "" : "Add Friend";
+                        // Core refuses friend requests in Anon Mode (they
+                        // reveal the real identity), so the button is not shown.
+                        Button {
+                            text: root.loading ? "" : "Add friend";
                             variant: "secondary";
                             horizontal-stretch: 1;
                             loading: root.loading;
@@ -754,237 +626,230 @@ export component UserProfileModal inherits Rectangle {
                                 if !root.loading { root.add-friend(); }
                             }
                         }
-
-                        Button {
-                            text: "Block";
-                            variant: "secondary";
-                            horizontal-stretch: 1;
-                            clicked => { root.block-user(); }
-                        }
                     }
 
-                    // ── Shared-content tab strip ──────────────────────
-                    // A pill segmented control, not the underlined tabs the
-                    // Contacts modal uses: those read as page navigation, this
-                    // is a filter over one list.
-                    //
-                    // The pill is sized from the chip inside it, not the other
-                    // way round: 48px shell minus 2px inset either side leaves
-                    // each chip exactly at the 48px-token-derived 44px touch
-                    // floor. At the old 40px/3px it was 34px, which is a
-                    // failed target dressed as a style choice.
-                    if root.shared-tabs.length > 0: HorizontalLayout {
-                        padding-left: Spacing.md;
-                        padding-right: Spacing.md;
+                    if !root.is-self && !root.shared-page-open && root.shared-error != "": VerticalLayout {
+                        padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.sm;
+                        Text {
+                            width: max(0px, parent.width - parent.padding-left);
+                            text: root.shared-error; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
+                        Button { text: "Retry shared content"; clicked => { root.shared-retry(); } }
+                    }
 
+                    // Shared categories remain a compact card until one is opened.
+                    if !root.is-self && root.shared-tabs.length > 0: HorizontalLayout {
+                        padding-left: Spacing.md; padding-right: Spacing.md;
                         Rectangle {
-                            height: Spacing.touch-target-min;
-                            border-radius: Spacing.radius-full;
-                            background: Colors.neo-inset-bg;
-                            border-width: 1px;
-                            border-color: Colors.neo-inset-shadow;
-
-                            HorizontalLayout {
-                                padding: 2px;
-                                spacing: 2px;
-
-                                for tab in root.shared-tabs: Rectangle {
-                                    horizontal-stretch: 1;
-                                    border-radius: Spacing.radius-full;
-                                    background: root.shared-tab == tab.id
-                                        ? Colors.primary.with-alpha(0.18)
-                                        : (tab-touch.has-hover ? Colors.surface-hover : transparent);
+                            height: shared-card.preferred-height;
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            drop-shadow-blur: Elevation.card-blur;
+                            drop-shadow-offset-y: Elevation.card-offset;
+                            drop-shadow-color: Elevation.card-shadow;
+                            border-width: Elevation.rim-width;
+                            border-color: Elevation.card-rim;
+                            shared-card := VerticalLayout {
+                                for category in root.shared-tabs: Rectangle {
+                                    height: root.row-height;
+                                    background: shared-touch.has-hover ? Colors.surface-hover : transparent;
                                     accessible-role: button;
-                                    accessible-label: "shared-tab-" + tab.id;
-
-                                    Text {
-                                        text: tab.label;
-                                        color: root.shared-tab == tab.id ? Colors.primary : Colors.text-muted;
-                                        font-size: Typography.sm;
-                                        font-weight: root.shared-tab == tab.id ? Typography.semibold : Typography.normal;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
-                                        overflow: elide;
-                                    }
-
-                                    tab-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => { root.shared-tab-selected(tab.id); }
-                                    }
-                                }
-                            }
-                            }
-                    }
-
-                    // ── Media / GIF grid ──────────────────────────────
-                    // Three flush columns, 2px gutters, edge to edge. Same
-                    // absolute-placement trick the section-icon picker uses —
-                    // Slint has no wrapping grid over a model.
-                    if root.shared-tab == "media" || root.shared-tab == "gif": grid-box := Rectangle {
-                        property <length> gutter: 2px;
-                        property <length> tile: (self.width - grid-box.gutter * 2) / 3;
-                        height: Math.ceil(root.shared-items.length / 3) * (grid-box.tile + grid-box.gutter);
-
-                        for item[index] in root.shared-items: Rectangle {
-                            x: mod(index, 3) * (grid-box.tile + grid-box.gutter);
-                            y: Math.floor(index / 3) * (grid-box.tile + grid-box.gutter);
-                            width: grid-box.tile;
-                            height: grid-box.tile;
-                            background: Colors.neo-inset-bg;
-                            clip: true;
-                            accessible-role: button;
-                            accessible-label: item.title;
-
-                            if item.has-thumbnail: Image {
-                                width: 100%;
-                                height: 100%;
-                                source: item.thumbnail;
-                                image-fit: cover;
-                            }
-
-                            // No thumbnail yet (not downloaded, or a document
-                            // that landed in Media) — a glyph beats a blank.
-                            if !item.has-thumbnail: Image {
-                                source: root.category-icon(item.category);
-                                width: 28px;
-                                height: 28px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                colorize: Colors.text-muted;
-                            }
-
-                            if item.is-video: Rectangle {
-                                width: 26px;
-                                height: 26px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: 13px;
-                                background: Colors.overlay-heavy;
-
-                                Image {
-                                    source: Icons.play;
-                                    width: 14px;
-                                    height: 14px;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    colorize: Colors.text-primary;
-                                }
-                            }
-
-                            TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.open-shared-item(item.message-id, item.attachment-id, item.category);
-                                }
-                            }
-                        }
-                    }
-
-                    // ── Files / Links / Voice / Music list ────────────
-                    if root.shared-tab != "" && root.shared-tab != "media" && root.shared-tab != "gif": VerticalLayout {
-                        alignment: start;
-                        spacing: 0px;
-
-                        for item in root.shared-items: Rectangle {
-                            height: root.row-height;
-                            background: list-touch.has-hover ? Colors.surface-hover : transparent;
-                            accessible-role: button;
-                            accessible-label: item.title;
-
-                            HorizontalLayout {
-                                padding-left: Spacing.md;
-                                padding-right: Spacing.md;
-                                spacing: Spacing.md;
-
-                                VerticalLayout {
-                                    alignment: center;
-
-                                    Rectangle {
-                                        width: root.mobile-mode ? Spacing.row-avatar-touch : 40px;
-                                        height: self.width;
-                                        border-radius: Spacing.radius-md;
-                                        background: Colors.neo-inset-bg;
-                                        clip: true;
-
-                                        if item.has-thumbnail: Image {
-                                            width: 100%;
-                                            height: 100%;
-                                            source: item.thumbnail;
-                                            image-fit: cover;
+                                    accessible-label: category.label;
+                                    accessible-action-default => { root.shared-tab = category.id; root.shared-title = category.label; root.shared-page-open = true; root.shared-tab-selected(category.id); }
+                                    KeyFocus { border-radius: parent.border-radius; activate => { root.shared-tab = category.id; root.shared-title = category.label; root.shared-page-open = true; root.shared-tab-selected(category.id); } }
+                                    HorizontalLayout {
+                                        padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.md;
+                                        VerticalLayout { alignment: center;
+                                            Image { source: root.shared-icon(category.id); width: 20px; height: 20px; colorize: Colors.text-secondary; }
                                         }
-
-                                        if !item.has-thumbnail: Image {
-                                            source: root.category-icon(item.category);
-                                            width: 20px;
-                                            height: 20px;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                            colorize: Colors.primary;
+                                        Text { text: category.label; color: Colors.text-primary; font-size: Typography.base; vertical-alignment: center; horizontal-stretch: 1; }
+                                        VerticalLayout { alignment: center;
+                                            Image { source: Icons.chevron-right; width: 16px; height: 16px; colorize: Colors.text-muted; }
                                         }
                                     }
-                                }
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    horizontal-stretch: 1;
-                                    spacing: 2px;
-
-                                    Text {
-                                        text: item.title;
-                                        color: Colors.text-primary;
-                                        font-size: root.mobile-mode ? Typography.base : Typography.sm;
-                                        overflow: elide;
-                                    }
-
-                                    Text {
-                                        text: item.subtitle;
-                                        color: Colors.text-muted;
-                                        font-size: root.mobile-mode ? Typography.sm : Typography.xs;
-                                        overflow: elide;
-                                    }
-                                }
-                            }
-
-                            list-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.open-shared-item(item.message-id, item.attachment-id, item.category);
+                                    shared-touch := TouchArea { mouse-cursor: pointer; clicked => { root.shared-tab = category.id; root.shared-title = category.label; root.shared-page-open = true; root.shared-tab-selected(category.id); } }
                                 }
                             }
                         }
                     }
 
-                    // Nothing shared yet, or the tab is still loading.
-                    if root.shared-tabs.length == 0 && !root.shared-loading && !root.is-self: HorizontalLayout {
-                        alignment: center;
-                        padding: Spacing.lg;
-
-                        Text {
-                            text: "Nothing shared in this conversation yet.";
-                            color: Colors.text-muted;
-                            font-size: Typography.sm;
-                            horizontal-alignment: center;
-                        }
-                    }
-
-                    if root.shared-loading: HorizontalLayout {
-                        alignment: center;
-                        padding: Spacing.md;
-
-                        Text {
-                            text: "Loading…";
-                            color: Colors.text-muted;
-                            font-size: Typography.xs;
+                    if !root.scoped-member && !root.is-self: HorizontalLayout {
+                        padding-left: Spacing.md; padding-right: Spacing.md;
+                        Rectangle {
+                            height: actions-card.preferred-height;
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            drop-shadow-blur: Elevation.card-blur;
+                            drop-shadow-offset-y: Elevation.card-offset;
+                            drop-shadow-color: Elevation.card-shadow;
+                            border-width: Elevation.rim-width;
+                            border-color: Elevation.card-rim;
+                            actions-card := VerticalLayout {
+                                ProfileActionRow { icon: Icons.send; text: "Share this contact"; row-height: root.row-height;
+                                    clicked => { root.share-contact(); } }
+                                ProfileActionRow { icon: Icons.edit; text: "Edit contact"; row-height: root.row-height;
+                                    clicked => { root.contact-draft = root.contact-name != "" ? root.contact-name : root.display-name; root.edit-contact-open = true; } }
+                                if root.is-friend: ProfileActionRow { icon: Icons.trash; text: "Delete contact"; row-height: root.row-height;
+                                    destructive: true;
+                                    clicked => { root.confirm-remove = true; } }
+                                ProfileActionRow { icon: Icons.slash; text: root.is-blocked ? "Unblock user" : "Block user"; row-height: root.row-height;
+                                    destructive: !root.is-blocked;
+                                    clicked => { if root.is-blocked { root.confirm-unblock = true; } else { root.confirm-block = true; } } }
+                            }
                         }
                     }
 
                     // Breathing room so the last grid row clears the bottom
                     // edge (and, full-screen, the floating dock).
                     Rectangle { height: Spacing.xl; }
+                    }
+
+                    if root.shared-page-open: VerticalLayout {
+                        spacing: Spacing.md;
+                        padding-left: Spacing.md; padding-right: Spacing.md;
+                        Text { text: root.shared-title; color: Colors.text-primary; font-size: Typography.xl; font-weight: Typography.semibold; }
+                        if root.shared-has-previous: Button {
+                            text: "Load earlier";
+                            clicked => { root.shared-load-previous(); }
+                        }
+                        if root.shared-tab == "photo" || root.shared-tab == "video" || root.shared-tab == "gif": ProfileSharedGrid {
+                            shared-items: root.shared-items;
+                            open-shared-item(message-id, attachment-id, category, selected-url) => { root.open-shared-item(message-id, attachment-id, category, selected-url); }
+                        }
+                        if root.shared-tab != "photo" && root.shared-tab != "video" && root.shared-tab != "gif": ProfileSharedList {
+                            shared-items: root.shared-items; mobile-mode: root.mobile-mode; row-height: root.row-height;
+                            open-shared-item(message-id, attachment-id, category, selected-url) => { root.open-shared-item(message-id, attachment-id, category, selected-url); }
+                        }
+                        if root.shared-has-more && !root.shared-loading: Button {
+                            text: "Load more";
+                            clicked => { root.shared-load-more(); }
+                        }
+                        if root.shared-loading: Text { text: "Loading…"; color: Colors.text-muted; font-size: Typography.sm; }
+                        if root.shared-error != "": VerticalLayout {
+                            spacing: Spacing.sm;
+                            Text {
+                                width: parent.width;
+                                text: root.shared-error; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
+                            Button { text: "Retry"; clicked => { root.shared-retry(); } }
+                        }
+                        if !root.shared-loading && root.shared-error == "" && root.shared-items.length == 0: Text { text: "Nothing shared yet."; color: Colors.text-muted; font-size: Typography.sm; }
+                    }
                 }
             }
         }
     }
+    // Confirms are real dialogs, like "Delete message?": inline in the page
+    // they collided with the Media strip below.
+    Modal {
+        show: root.confirm-remove && root.is-friend && !root.is-self && !root.is-blocked;
+        title: "Delete " + root.display-name + "?";
+        modal-width: 400px;
+        show-close: false;
+        close => { root.confirm-remove = false; }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+
+            Text {
+                width: parent.width;
+                text: "They'll be removed from your friends. Your chat history stays.";
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                alignment: end;
+
+                Button {
+                    text: "Cancel";
+                    variant: "secondary";
+                    clicked => { root.confirm-remove = false; }
+                }
+
+                Button {
+                    text: "Delete contact";
+                    variant: "destructive";
+                    clicked => {
+                        root.confirm-remove = false;
+                        root.remove-friend();
+                    }
+                }
+            }
+        }
+    }
+
+    Modal {
+        show: root.confirm-block && !root.is-self && !root.is-blocked;
+        title: "Block " + root.display-name + "?";
+        modal-width: 400px;
+        show-close: false;
+        close => { root.confirm-block = false; }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+
+            Text {
+                width: parent.width;
+                text: "Blocked people can't call or message you. You can unblock them from their profile or Contacts › Blocked.";
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                alignment: end;
+
+                Button {
+                    text: "Cancel";
+                    variant: "secondary";
+                    clicked => { root.confirm-block = false; }
+                }
+
+                Button {
+                    text: "Block";
+                    variant: "destructive";
+                    clicked => {
+                        root.confirm-block = false;
+                        root.block-user();
+                    }
+                }
+            }
+        }
+    }
+    edit-contact-modal := Modal {
+        show: root.edit-contact-open;
+        title: "Edit contact";
+        modal-width: 400px;
+        show-close: false;
+        close => { edit-contact-modal.release-focus(); root.edit-contact-open = false; }
+        VerticalLayout {
+            spacing: Spacing.md;
+            Input { text <=> root.contact-draft; placeholder: "Contact name"; control-height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height; }
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                Button { text: "Cancel"; variant: "secondary"; clicked => { edit-contact-modal.release-focus(); root.edit-contact-open = false; } }
+                Button { text: "Reset"; variant: "secondary"; clicked => { edit-contact-modal.release-focus(); root.edit-contact-open = false; root.edit-contact(""); } }
+                Button { text: "Save"; variant: "primary"; clicked => { edit-contact-modal.release-focus(); root.edit-contact-open = false; root.edit-contact(root.contact-draft); } }
+            }
+        }
+    }
+
+    Modal {
+        show: root.confirm-unblock && root.is-blocked && !root.is-self;
+        title: "Unblock " + root.display-name + "?";
+        modal-width: 400px; show-close: false;
+        close => { root.confirm-unblock = false; }
+        VerticalLayout {
+            spacing: Spacing.md;
+            Text {
+                width: parent.width;
+                text: "They will be able to call and message you again."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                Button { text: "Cancel"; variant: "secondary"; clicked => { root.confirm-unblock = false; } }
+                Button { text: "Unblock"; variant: "primary"; clicked => { root.confirm-unblock = false; root.unblock-user(); } }
+            }
+        }
+    }
+
 }

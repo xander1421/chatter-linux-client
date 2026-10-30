@@ -1,0 +1,236 @@
+import { ModalContainer } from "../components/modal_container.slint";
+import { Input } from "../components/input.slint";
+import { SettingsRow } from "../components/settings_row.slint";
+import { MeshGlobal } from "mesh_global.slint";
+import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+component ComposeMenuRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> detail;
+    in property <color> tint: Colors.primary;
+    in property <bool> touch: false;
+    callback clicked();
+    height: root.touch ? Spacing.list-row-height-touch : 56px;
+    background: row-touch.pressed ? Colors.surface-control-hover : row-touch.has-hover ? Colors.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.title;
+    accessible-description: root.detail;
+    accessible-action-default => { root.clicked(); }
+    FocusScope {
+        width: 0px; height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        padding-left: Spacing.md; padding-right: Spacing.md;
+        spacing: Spacing.md;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 40px; height: 40px; border-radius: Spacing.radius-md;
+                background: root.tint.with-alpha(0.16);
+                Image { source: root.icon; width: Spacing.button-icon; height: Spacing.button-icon;
+                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                    colorize: root.tint; }
+            }
+        }
+        VerticalLayout { horizontal-stretch: 1; alignment: center;
+            Text { text: root.title; color: Colors.text-primary; font-size: Typography.base;
+                font-weight: Typography.semibold; overflow: elide; }
+            Text { text: root.detail; color: Colors.text-secondary; font-size: Typography.sm; overflow: elide; }
+        }
+        Image { source: Icons.chevron-right; width: Spacing.button-icon; image-fit: contain;
+            colorize: Colors.text-muted; }
+    }
+    row-touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component MeshComposeSheet inherits Rectangle {
+    in property <bool> show-modal: false;
+    in property <bool> touch: false;
+    callback close();
+    property <string> page: "menu";
+    property <string> group-draft: "";
+    property <string> channel-draft: "";
+    property <string> invite-draft: "";
+    property <string> cell-draft: "";
+    function go-back() {
+        if root.page == "menu" { root.close(); } else { root.page = "menu"; }
+    }
+    function submit() {
+        if root.page == "group" && root.group-draft != "" {
+            if MeshGlobal.create-private-channel(root.group-draft) {
+                root.group-draft = "";
+            }
+        } else if root.page == "channel" && root.channel-draft != "" {
+            if MeshGlobal.join-channel(root.channel-draft) {
+                root.channel-draft = "";
+                root.close();
+            }
+        } else if root.page == "invite" && root.invite-draft != "" {
+            if MeshGlobal.join-private-channel(root.invite-draft) {
+                root.invite-draft = "";
+                root.close();
+            }
+        } else if root.page == "cell" && root.cell-draft != "" {
+            if MeshGlobal.join-geohash(root.cell-draft) {
+                root.cell-draft = "";
+                root.close();
+            }
+        }
+    }
+    property <bool> can-submit: root.page == "group" ? root.group-draft != ""
+        : root.page == "channel" ? root.channel-draft != ""
+        : root.page == "invite" ? root.invite-draft != ""
+        : root.page == "cell" && root.cell-draft != "";
+    property <string> page-title: root.page == "group" ? "New private group"
+        : root.page == "channel" ? "Join public channel"
+        : root.page == "invite" ? "Join with invite"
+        : root.page == "cell" ? "Join location cell" : "New";
+
+    ModalContainer {
+        show: root.show-modal;
+        accessible-title: root.page-title;
+        modal-width: 500px;
+        max-modal-height: 700px;
+        fill-height: true;
+        close => { root.close(); }
+        VerticalLayout {
+            padding-left: Spacing.lg; padding-right: Spacing.lg;
+            padding-top: Spacing.md; padding-bottom: Spacing.xl;
+            spacing: Spacing.lg;
+            HorizontalLayout {
+                height: Spacing.touch-target-min;
+                                Rectangle {
+                    width: 78px; height: Spacing.touch-target-min;
+                    accessible-role: button;
+                    accessible-label: root.page == "menu" ? "Cancel" : "Back";
+                    accessible-action-default => { root.go-back(); }
+                    HorizontalLayout {
+                        alignment: start;
+                        if root.page != "menu": Image { source: Icons.chevron-left; width: Spacing.button-icon; image-fit: contain; colorize: Colors.primary; }
+                        Text { text: root.page == "menu" ? "Cancel" : "Back"; color: Colors.primary; font-size: Typography.base; vertical-alignment: center; }
+                    }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.go-back(); } }
+                }
+                Text { text: root.page-title; color: Colors.text-primary; font-size: Typography.lg; font-weight: Typography.semibold;
+                    horizontal-alignment: center; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                Rectangle {
+                    width: 78px; height: Spacing.touch-target-min;
+                    accessible-role: button;
+                    accessible-label: root.page == "group" ? "Create" : "Join";
+                    accessible-enabled: root.can-submit;
+                    accessible-action-default => { if root.can-submit { root.submit(); } }
+                    Text { text: root.page == "menu" ? "" : root.page == "group" ? "Create" : "Join";
+                        color: root.can-submit ? Colors.primary : Colors.text-muted; font-size: Typography.base;
+                        font-weight: Typography.semibold; vertical-alignment: center; horizontal-alignment: right; }
+                    TouchArea { enabled: root.can-submit; mouse-cursor: pointer; clicked => { root.submit(); } }
+                }
+            }
+            Flickable {
+                width: 100%; vertical-stretch: 1;
+                viewport-height: compose-content.preferred-height;
+                compose-content := VerticalLayout {
+                    width: parent.width;
+                    spacing: Spacing.lg;
+                    padding-bottom: Spacing.xl;
+                    if root.page == "menu": VerticalLayout {
+                        spacing: Spacing.sm;
+                        Text { text: "START A CONVERSATION"; color: Colors.text-muted; font-size: Typography.xs; font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        Rectangle {
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            VerticalLayout {
+                                ComposeMenuRow { icon: Icons.lock; title: "New private group"; detail: "Invite only";
+                                    tint: Colors.group-accent; touch: root.touch;
+                                    clicked => { root.page = "group"; } }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                ComposeMenuRow { icon: Icons.hash; title: "Join public channel"; detail: "Talk with devices nearby"; touch: root.touch;
+                                    clicked => { root.page = "channel"; } }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                ComposeMenuRow { icon: Icons.link; title: "Join with invite"; detail: "Paste or scan a private invite";
+                                    tint: Colors.info; touch: root.touch;
+                                    clicked => { root.page = "invite"; } }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                ComposeMenuRow { icon: Icons.radio; title: "Join location cell"; detail: "Connect through nearby relays";
+                                    tint: Colors.accent; touch: root.touch;
+                                    clicked => { root.page = "cell"; } }
+                            }
+                        }
+                    }
+                    if root.page == "group": VerticalLayout {
+                        spacing: Spacing.sm;
+                        Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            HorizontalLayout { padding: Spacing.sm; spacing: Spacing.sm;
+                                Input { placeholder: "Group name"; text <=> root.group-draft; control-height: Spacing.touch-target-min;
+                                    horizontal-stretch: 1; accepted(value) => { root.submit(); } }
+                            }
+                        }
+                        Text {
+                            width: parent.width;
+                            text: "Only devices you invite can read it. You can add members after creating it.";
+                            color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; }
+                    }
+                    if root.page == "channel": VerticalLayout {
+                        spacing: Spacing.sm;
+                        Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            HorizontalLayout { padding: Spacing.sm;
+                                Input { placeholder: "#channel"; text <=> root.channel-draft; control-height: Spacing.touch-target-min;
+                                    horizontal-stretch: 1; accepted(value) => { root.submit(); } }
+                            }
+                        }
+                        if MeshGlobal.nearby-channels.length > 0: Text { text: "SEEN NEARBY"; color: Colors.text-muted;
+                            font-size: Typography.xs; font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        if MeshGlobal.nearby-channels.length > 0: Rectangle {
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            VerticalLayout {
+                                for name in MeshGlobal.nearby-channels: SettingsRow {
+                                    icon: Icons.hash; title: "#" + name; touch: root.touch;
+                                    clicked => { if MeshGlobal.join-channel(name) { root.close(); } }
+                                }
+                            }
+                        }
+                    }
+                    if root.page == "invite": VerticalLayout {
+                        spacing: Spacing.sm;
+                        Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            VerticalLayout {
+                                HorizontalLayout { padding: Spacing.sm;
+                                    Input { placeholder: "Paste private invite"; text <=> root.invite-draft;
+                                        control-height: Spacing.touch-target-min; horizontal-stretch: 1;
+                                        accepted(value) => { root.submit(); } }
+                                }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                SettingsRow { icon: Icons.image; title: "Scan QR code"; touch: root.touch;
+                                    clicked => { MeshGlobal.open-private-scanner(); } }
+                            }
+                        }
+                    }
+                    if root.page == "cell": VerticalLayout {
+                        spacing: Spacing.sm;
+                        Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            HorizontalLayout { padding: Spacing.sm;
+                                Input { placeholder: "Location cell (e.g. u4pruy)"; text <=> root.cell-draft;
+                                    control-height: Spacing.touch-target-min; horizontal-stretch: 1;
+                                    accepted(value) => { root.submit(); } }
+                            }
+                        }
+                        Text {
+                            width: parent.width;
+                            text: "Location cells use geohashes and available relays to connect devices in an area.";
+                            color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; }
+                    }
+                    if MeshGlobal.notice != "": Text {
+                        width: parent.width;
+                        text: MeshGlobal.notice; color: Colors.text-secondary;
+                        font-size: Typography.sm; wrap: word-wrap; }
+                }
+            }
+        }
+    }
+}

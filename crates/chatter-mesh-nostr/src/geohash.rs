@@ -103,10 +103,7 @@ pub fn encode(lat: f64, lon: f64, precision: usize) -> Result<String, NostrError
 /// Decode a geohash to the centre of its bounding box, as `(lat, lon)`.
 pub fn decode(geohash: &str) -> Result<(f64, f64), NostrError> {
     let (lat_min, lat_max, lon_min, lon_max) = bounds(geohash)?;
-    Ok((
-        (lat_min + lat_max) / 2.0,
-        (lon_min + lon_max) / 2.0,
-    ))
+    Ok(((lat_min + lat_max) / 2.0, (lon_min + lon_max) / 2.0))
 }
 
 /// Decode a geohash to its bounding box, as `(lat_min, lat_max, lon_min, lon_max)`.

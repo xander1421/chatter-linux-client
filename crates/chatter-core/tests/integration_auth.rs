@@ -3,9 +3,8 @@
 //! Tests authentication, registration, session management, and device management
 //! against a running server.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
-use sha2::{Digest, Sha256};
 use tokio_stream::StreamExt;
 
 use chatter_core::error::NetworkError;
@@ -13,6 +12,30 @@ use chatter_core::network::grpc::AuthClient;
 use chatter_core::proto::chat_v1::auth_event;
 
 use common::*;
+
+fn signed_kyber_prekey(
+    identity: &libsignal_protocol::IdentityKeyPair,
+    id: u32,
+    timestamp: u64,
+) -> chatter_core::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
+    use libsignal_protocol::{GenericSignedPreKey, KyberPreKeyId, KyberPreKeyRecord, kem};
+    let key = KyberPreKeyRecord::generate(
+        kem::KeyType::Kyber1024,
+        KyberPreKeyId::from(id),
+        identity.private_key(),
+    )
+    .expect("Kyber prekey generation should succeed");
+    chatter_core::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
+        id,
+        public_key: key
+            .public_key()
+            .expect("Kyber public key")
+            .serialize()
+            .to_vec(),
+        signature: key.signature().expect("Kyber signature"),
+        timestamp,
+    }
+}
 
 // ============================================================================
 // Registration Tests
@@ -35,8 +58,8 @@ async fn test_register_user_stream() {
     let uak = chatter_core::crypto::derive_uak(&profile_key);
 
     // Generate real Signal Protocol keys
-    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
     use chatter_core::proto::chat_v1::SignalPreKeyBundle;
+    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
     use libsignal_protocol::{IdentityKeyPair, KeyPair};
 
     let identity_key_pair = IdentityKeyPair::generate(&mut rand::rng());
@@ -61,56 +84,86 @@ async fn test_register_user_stream() {
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_millis() as u64,
+                .as_nanos() as u64,
         }),
         one_time_prekey: Some(PreKeyRecord {
             id: 1,
             public_key: one_time_prekey_pair.public_key.serialize().to_vec(),
         }),
-        kyber_prekey: None,
-        unidentified_access_key: Some(random_uak().to_vec()),
+        kyber_prekey: Some(signed_kyber_prekey(
+            &identity_key_pair,
+            1,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64,
+        )),
         unrestricted_unidentified_access: Some(false),
     };
 
-    let password_hash = random_password_hash();
-    // libsignal's `Username::new` requires `nickname.discriminator` grammar
-    // and `register_test_user` skips it by using the (permissive) login auth
-    // hash as the username-lookup hash. Mirror that here so the test username
-    // doesn't need Signal grammar.
-    let username_lookup_hash =
-        chatter_core::crypto::auth_crypto::derive_login_auth_hash(&password_hash, &username);
-    let username_hash_hex = hex::encode(username_lookup_hash);
+    let password = random_password();
+    let username_hash_hex = chatter_core::crypto::auth_crypto::login_identifier(&username);
+    // Discovery hash + the ZK proof the server verifies it against, over a
+    // Signal-grammar `nickname.discriminator` (as `register_test_user` does).
+    let full_username = chatter_core::crypto::auth_crypto::username_candidates(&username)
+        .expect("test nickname is Signal-grammar")
+        .remove(0);
+    let (username_lookup_hash, username_proof) =
+        chatter_core::crypto::auth_crypto::username_claim(&full_username)
+            .expect("candidate is Signal-grammar");
 
     // Server now requires a registration challenge proving identity-key
-    // possession. Mirror what `register_test_user` does: request a nonce and
-    // sign it with the identity private key.
+    // possession, and the OPAQUE registration rides it. Mirror what
+    // `register_test_user` does: request a nonce with the RegistrationRequest
+    // and sign the domain-separated message (registration_challenge_message).
     let identity_public_key_stripped = &identity_public_key[1..]; // strip 0x05 type byte
+    let opaque_reg = chatter_core::crypto::opaque::registration_start(&password).unwrap();
     let challenge = assert_ok(
         auth_client
-            .request_registration_challenge(&username_hash_hex, identity_public_key_stripped)
+            .request_registration_challenge(
+                &username_hash_hex,
+                identity_public_key_stripped,
+                &opaque_reg.request,
+            )
             .await,
     );
+    let opaque_record = chatter_core::crypto::opaque::registration_finish_async(
+        opaque_reg,
+        &password,
+        challenge.opaque_registration_response.clone(),
+    )
+    .await
+    .expect("OPAQUE registration finishes against the server's response");
+    assert_eq!(opaque_record.len(), 192);
     let challenge_response = identity_key_pair
         .private_key()
-        .calculate_signature(&challenge.challenge_nonce, &mut rand::rng())
+        .calculate_signature(
+            &chatter_core::crypto::signal::identity::registration_challenge_message(
+                &challenge.challenge_nonce,
+            )
+            .expect("server nonce must be REGISTRATION_CHALLENGE_NONCE_LEN bytes"),
+            &mut rand::rng(),
+        )
         .expect("XEdDSA challenge signing should succeed");
 
     let stream = assert_ok(
         auth_client
             .register(
                 &username_hash_hex,
-                &password_hash,
+                &opaque_record,
                 &encrypted_display_name,
-                identity_public_key.as_ref(),
+                identity_public_key_stripped,
                 "integration-test",
                 &device_auth_token,
                 &uak,
                 Some(prekey_bundle),
                 Vec::new(),
-                &challenge.challenge_id,
+                &challenge.challenge.as_ref().expect("challenge token").token,
                 &challenge_response,
+                common::solve_registration_pow(&challenge),
                 &[0u8; 32], // Empty registration lock for tests
                 &username_lookup_hash,
+                &username_proof,
             )
             .await,
     );
@@ -161,8 +214,8 @@ async fn test_register_duplicate_username() {
     let user = assert_ok(register_test_user(&pool).await);
 
     // Generate real Signal Protocol keys for the duplicate attempt
-    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
     use chatter_core::proto::chat_v1::SignalPreKeyBundle;
+    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
     use libsignal_protocol::{IdentityKeyPair, KeyPair};
 
     let identity_key_pair = IdentityKeyPair::generate(&mut rand::rng());
@@ -187,14 +240,20 @@ async fn test_register_duplicate_username() {
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_millis() as u64,
+                .as_nanos() as u64,
         }),
         one_time_prekey: Some(PreKeyRecord {
             id: 1,
             public_key: one_time_prekey_pair.public_key.serialize().to_vec(),
         }),
-        kyber_prekey: None,
-        unidentified_access_key: Some(random_uak().to_vec()),
+        kyber_prekey: Some(signed_kyber_prekey(
+            &identity_key_pair,
+            1,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64,
+        )),
         unrestricted_unidentified_access: Some(false),
     };
 
@@ -203,26 +262,43 @@ async fn test_register_duplicate_username() {
     let dup_profile_key = random_profile_key();
     let dup_encrypted_name = encrypt_test_display_name(&dup_profile_key, "Duplicate User");
     let dup_uak = chatter_core::crypto::derive_uak(&dup_profile_key);
-    // Mirror `register_test_user`: use the login auth hash as the username
-    // lookup hash so non-Signal-grammar test usernames are accepted. The
-    // server enforces uniqueness on the lookup hash, so we must reuse the
-    // first user's password hash here — otherwise the second hash differs
-    // and the server treats it as a brand-new account.
-    let dup_password_hash = user.password_hash.clone();
-    let dup_username_lookup_hash =
-        chatter_core::crypto::auth_crypto::derive_login_auth_hash(&dup_password_hash, &user.username);
-    let dup_username_hash_hex = hex::encode(dup_username_lookup_hash);
+    // Same nickname => same login identifier (the `username` field the
+    // registration-lock check keys on). The discovery hash must carry a
+    // verifying username proof or the server rejects the request before it
+    // reaches the registration-lock check.
+    let dup_username_hash_hex = chatter_core::crypto::auth_crypto::login_identifier(&user.username);
+    let (dup_username_lookup_hash, dup_username_proof) =
+        chatter_core::crypto::auth_crypto::username_claim(&user.full_username)
+            .expect("fixture full_username is Signal-grammar");
 
     // Registration challenge required by server.
     let identity_public_key_stripped = &identity_public_key[1..]; // strip 0x05 type byte
+    let dup_reg = chatter_core::crypto::opaque::registration_start("another password").unwrap();
     let challenge = assert_ok(
         auth_client
-            .request_registration_challenge(&dup_username_hash_hex, identity_public_key_stripped)
+            .request_registration_challenge(
+                &dup_username_hash_hex,
+                identity_public_key_stripped,
+                &dup_reg.request,
+            )
             .await,
     );
+    let dup_record = chatter_core::crypto::opaque::registration_finish_async(
+        dup_reg,
+        "another password",
+        challenge.opaque_registration_response.clone(),
+    )
+    .await
+    .unwrap();
     let challenge_response = identity_key_pair
         .private_key()
-        .calculate_signature(&challenge.challenge_nonce, &mut rand::rng())
+        .calculate_signature(
+            &chatter_core::crypto::signal::identity::registration_challenge_message(
+                &challenge.challenge_nonce,
+            )
+            .expect("server nonce must be REGISTRATION_CHALLENGE_NONCE_LEN bytes"),
+            &mut rand::rng(),
+        )
         .expect("XEdDSA challenge signing should succeed");
 
     // Use a DIFFERENT registration lock than the original. The server treats
@@ -234,18 +310,20 @@ async fn test_register_duplicate_username() {
     let result = auth_client
         .register_and_wait(
             &dup_username_hash_hex,
-            &dup_password_hash,
+            &dup_record,
             &dup_encrypted_name,
-            identity_public_key.as_ref(),
+            identity_public_key_stripped,
             "test-device",
             &random_device_auth_token(),
             &dup_uak,
             Some(prekey_bundle),
             Vec::new(),
-            &challenge.challenge_id,
+            &challenge.challenge.as_ref().expect("challenge token").token,
             &challenge_response,
+            common::solve_registration_pow(&challenge),
             &dup_registration_lock,
             &dup_username_lookup_hash,
+            &dup_username_proof,
         )
         .await;
 
@@ -281,28 +359,19 @@ async fn test_login_success() {
     let pool = assert_ok(create_test_pool().await);
     let user = assert_ok(register_test_user(&pool).await);
 
-    // Login with the same credentials. Server expects the password-keyed
-    // login lookup hash (hex), not the plaintext username — mirror what
-    // `AuthService::login` does in the SDK.
-    let username_hash = hex::encode(
-        chatter_core::crypto::auth_crypto::derive_login_auth_hash(
-            &user.password_hash,
-            &user.username,
-        ),
-    );
+    // OPAQUE login with the same nickname + password, as `AuthService::login`.
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
     let response = assert_ok(
-        auth_client
-            .login(
-                &username_hash,
-                &user.password_hash,
-                "test-device-login",
-                &user.public_key,
-                &user.device_auth_token,
-                &random_uak(),
-                Some(user.device_id),
-            )
-            .await,
+        opaque_login(
+            &mut auth_client,
+            &user.username,
+            &user.password,
+            "test-device-login",
+            &random_svr_public_key(),
+            &user.device_auth_token,
+            Some(user.device_id),
+        )
+        .await,
     );
 
     // AuthResponse contains session and user_profile
@@ -319,50 +388,453 @@ async fn test_login_wrong_password() {
     let pool = assert_ok(create_test_pool().await);
     let user = assert_ok(register_test_user(&pool).await);
 
-    // Login with wrong password
-    let wrong_password = Sha256::digest(b"wrong_password").to_vec();
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
-    let result = auth_client
-        .login(
-            &user.username,
-            &wrong_password,
-            "test-device",
-            &user.public_key,
-            &user.device_auth_token,
-            &random_uak(),
-            None,
-        )
-        .await;
+    let result = opaque_login(
+        &mut auth_client,
+        &user.username,
+        "wrong_password",
+        "test-device",
+        &random_svr_public_key(),
+        &user.device_auth_token,
+        None,
+    )
+    .await;
 
-    // Should fail with auth error
+    // The client cannot open KE2 with a wrong password.
     assert_auth_error(result);
 }
 
+/// An unknown nickname is answered exactly like a real one: LoginStart
+/// succeeds with a full-size KE2 (from the server's fake record), and the
+/// login then fails the same way a wrong password does.
 #[tokio::test]
-async fn test_login_nonexistent_user() {
+async fn test_login_nonexistent_user_is_indistinguishable() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
-    let result = auth_client
-        .login(
-            "nonexistent_user_12345",
-            &random_password_hash(),
-            "test-device",
-            &random_public_key(),
+    let start = chatter_core::crypto::opaque::login_start("any password").unwrap();
+    let identifier = chatter_core::crypto::auth_crypto::login_identifier(&unique_username());
+    let started = assert_ok(
+        auth_client
+            .login_start(&identifier, &start.ke1, None, &[], &[])
+            .await,
+    );
+    assert_eq!(started.ke2.len(), 320, "fake KE2 has the real KE2's size");
+    assert!(matches!(
+        chatter_core::crypto::opaque::login_finish_async(start, "any password", started.ke2).await,
+        Err(chatter_core::crypto::opaque::OpaqueError::InvalidLogin)
+    ));
+
+    let result = opaque_login(
+        &mut auth_client,
+        &unique_username(),
+        "any password",
+        "test-device",
+        &random_svr_public_key(),
+        &random_device_auth_token(),
+        None,
+    )
+    .await;
+    assert_auth_error(result);
+}
+
+/// Login is priced, not locked (server OPEN-ITEMS §133): after the free
+/// attempts the server answers LoginStart with a proof-of-work challenge and
+/// no KE2; a bad solution is refused; `login_start_paying_pow` solves, repeats
+/// the call, and the owner still logs in with the right password.
+#[tokio::test]
+async fn test_login_priced_by_proof_of_work_not_locked() {
+    use chatter_core::crypto::opaque;
+    use chatter_core::services::auth_service::login_start_paying_pow;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    skip_if_no_server!();
+
+    let pool = assert_ok(create_test_pool().await);
+    let user = assert_ok(register_test_user(&pool).await);
+    let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
+    let identifier = chatter_core::crypto::auth_crypto::login_identifier(&user.username);
+
+    // A stranger's guesses: KE2s until the free tier runs out, then a price.
+    let mut challenge = None;
+    for _ in 0..10 {
+        let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
+        let r = assert_ok(
+            auth_client
+                .login_start(&identifier, &ke1, None, &[], &[])
+                .await,
+        );
+        if let Some(c) = r.pow_challenge {
+            assert!(
+                r.ke2.is_empty() && r.login_id.is_empty(),
+                "a challenge carries no KE2"
+            );
+            challenge = Some(c);
+            break;
+        }
+        assert_eq!(r.ke2.len(), 320);
+    }
+    let challenge = challenge.expect("repeated failures must price the login");
+    assert!(
+        challenge.difficulty >= 6 && challenge.difficulty <= 9,
+        "{}",
+        challenge.difficulty
+    );
+
+    // A solution for the sign-up puzzle over the same token is not a login
+    // solution (unless by chance it is both; skip those).
+    use chatter_core::crypto::pow::{self, Purpose};
+    let far = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let reg = pow::solve(
+        Purpose::Register,
+        &challenge.token,
+        challenge.difficulty,
+        challenge.gate_bits,
+        far,
+    )
+    .unwrap();
+    // (By chance it can be both; the domain separation is then left to the
+    // unit tests.)
+    if !pow::verify(
+        Purpose::Login,
+        &challenge.token,
+        reg,
+        challenge.difficulty,
+        challenge.gate_bits,
+    ) {
+        let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
+        let refused = auth_client
+            .login_start(&identifier, &ke1, Some((&challenge.token, reg)), &[], &[])
+            .await;
+        assert!(
+            matches!(&refused, Err(NetworkError::PermissionDenied)),
+            "sign-up-domain solution must be refused: {refused:?}"
+        );
+    }
+
+    // The owner: solved transparently, then a normal login.
+    let paid = AtomicU32::new(0);
+    let start = opaque::login_start(&user.password).unwrap();
+    let started = login_start_paying_pow(
+        &mut auth_client,
+        &identifier,
+        &start.ke1,
+        None,
+        &mut None,
+        &|| {
+            paid.fetch_add(1, Ordering::Relaxed);
+        },
+    )
+    .await
+    .expect("priced LoginStart must be paid and answered");
+    assert_eq!(
+        paid.load(Ordering::Relaxed),
+        1,
+        "the solve was announced once"
+    );
+    let done = opaque::login_finish_async(start, &user.password, started.ke2)
+        .await
+        .expect("right password opens KE2");
+    assert_ok(
+        auth_client
+            .login_finish(
+                &started.login_id,
+                &done.ke3,
+                "d1",
+                &random_svr_public_key(),
+                &random_device_auth_token(),
+                None,
+            )
+            .await,
+    );
+
+    // A verified login wipes the count: the next attempt is free again.
+    let ke1 = opaque::login_start(&user.password).unwrap().ke1;
+    let r = assert_ok(
+        auth_client
+            .login_start(&identifier, &ke1, None, &[], &[])
+            .await,
+    );
+    assert!(r.pow_challenge.is_none());
+}
+
+/// The login guess ceiling (server OPEN-ITEMS §133): paid guesses are
+/// hard-capped per account and the client gets `AuthError::LoginGuessLimit`
+/// with text pointing at the ways in. Those ways in work while it is full: a
+/// signed-in device still proves the password, and a recovery code needs no
+/// password and returns a grant that gets the new password through a ceiling
+/// someone burnt again right after.
+#[tokio::test]
+async fn test_login_guess_ceiling_and_its_bypasses() {
+    use chatter_core::crypto::opaque;
+    use chatter_core::services::auth_service::{AuthError, login_start_paying_pow};
+    skip_if_no_server!();
+
+    // A signed-in device with fresh recovery codes.
+    let device_pool = assert_ok(create_test_pool().await);
+    let user = assert_ok(setup_authenticated_test(&device_pool).await);
+    let mut device = AuthClient::new(device_pool.channel(), device_pool.auth_clone());
+    let prove = |pw: String| {
+        let mut device = AuthClient::new(device_pool.channel(), device_pool.auth_clone());
+        async move {
+            let start = opaque::login_start(&pw).unwrap();
+            let opened = device.password_proof_start(&start.ke1).await?;
+            let done = opaque::login_finish_async(start, &pw, opened.ke2)
+                .await
+                .unwrap();
+            Ok::<_, NetworkError>(chatter_core::proto::chat_v1::PasswordProof {
+                proof_id: opened.proof_id,
+                ke3: done.ke3,
+            })
+        }
+    };
+    let codes = assert_ok(
+        device
+            .regenerate_recovery_codes(assert_ok(prove(user.password.clone()).await))
+            .await,
+    );
+
+    // A stranger burns the account's guesses, paying for each.
+    let pool = assert_ok(create_test_pool().await);
+    let mut stranger = AuthClient::new(pool.channel(), pool.auth_clone());
+    let identifier = chatter_core::crypto::auth_crypto::login_identifier(&user.username);
+    let burn = || {
+        let mut stranger = AuthClient::new(pool.channel(), pool.auth_clone());
+        let identifier = identifier.clone();
+        async move {
+            for _ in 0..30 {
+                let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
+                match login_start_paying_pow(
+                    &mut stranger,
+                    &identifier,
+                    &ke1,
+                    None,
+                    &mut None,
+                    &|| {},
+                )
+                .await
+                {
+                    Ok(_) => continue,
+                    Err(e) => return e,
+                }
+            }
+            panic!("30 paid guesses and no ceiling");
+        }
+    };
+    let err = burn().await;
+    assert!(matches!(err, AuthError::LoginGuessLimit), "{err:?}");
+    let text = err.user_message();
+    assert!(
+        text.contains("recovery code") && text.contains("link"),
+        "{text}"
+    );
+
+    // The owner's password, too, gets no KE2 now...
+    let ke1 = opaque::login_start(&user.password).unwrap().ke1;
+    let refused =
+        login_start_paying_pow(&mut stranger, &identifier, &ke1, None, &mut None, &|| {}).await;
+    assert!(
+        matches!(refused, Err(AuthError::LoginGuessLimit)),
+        "{refused:?}"
+    );
+    // ...but the signed-in device still proves it (per-device budget).
+    assert_ok(
+        device
+            .verify_password(assert_ok(prove(user.password.clone()).await))
+            .await,
+    );
+
+    // Recovery: no password, not gated, returns a grant.
+    let new_pw = "a brand new passphrase 77";
+    let reg = opaque::registration_start(new_pw).unwrap();
+    let started = assert_ok(
+        stranger
+            .use_recovery_code_start(&codes[0], &reg.request)
+            .await,
+    );
+    let record = opaque::registration_finish_async(reg, new_pw, started.registration_response)
+        .await
+        .unwrap();
+    let finished = assert_ok(
+        stranger
+            .use_recovery_code_finish(
+                &started.recovery_id,
+                &record,
+                &random_svr_public_key(),
+                &[7u8; 32],
+            )
+            .await,
+    );
+    assert_eq!(finished.login_grant.len(), 32);
+
+    // Burnt again straight after; the grant still gets the owner in.
+    assert!(matches!(burn().await, AuthError::LoginGuessLimit));
+    let start = opaque::login_start(new_pw).unwrap();
+    let started = login_start_paying_pow(
+        &mut stranger,
+        &identifier,
+        &start.ke1,
+        Some(&finished.login_grant),
+        &mut None,
+        &|| {},
+    )
+    .await
+    .expect("the recovery grant skips the ceiling");
+    let done = opaque::login_finish_async(start, new_pw, started.ke2)
+        .await
+        .expect("new password opens KE2");
+    assert_ok(
+        stranger
+            .login_finish(
+                &started.login_id,
+                &done.ke3,
+                "d1",
+                &random_svr_public_key(),
+                &random_device_auth_token(),
+                None,
+            )
+            .await,
+    );
+}
+
+/// Trusted-device tokens (server OPEN-ITEMS §134): a device that logged in
+/// before keeps getting in while a stranger holds the account's shared guess
+/// ceiling full; a token the server no longer honours is dropped and the
+/// login goes on without it. Needs a dev server running this change.
+#[tokio::test]
+async fn test_trusted_device_token_outlasts_burnt_ceiling() {
+    use chatter_core::crypto::opaque;
+    use chatter_core::services::auth_service::{AuthError, login_start_paying_pow};
+    skip_if_no_server!();
+
+    let pool = assert_ok(create_test_pool().await);
+    let user = assert_ok(register_test_user(&pool).await);
+    let mut device = AuthClient::new(pool.channel(), pool.auth_clone());
+    let identifier = chatter_core::crypto::auth_crypto::login_identifier(&user.username);
+
+    // A first password login on "this device" hands out a token.
+    let login = |token: Option<Vec<u8>>| {
+        let identifier = identifier.clone();
+        let pw = user.password.clone();
+        let mut device = AuthClient::new(pool.channel(), pool.auth_clone());
+        async move {
+            let mut token = token;
+            let start = opaque::login_start(&pw).unwrap();
+            let started = login_start_paying_pow(
+                &mut device,
+                &identifier,
+                &start.ke1,
+                None,
+                &mut token,
+                &|| {},
+            )
+            .await?;
+            let done = opaque::login_finish_async(start, &pw, started.ke2)
+                .await
+                .unwrap();
+            let resp = device
+                .login_finish(
+                    &started.login_id,
+                    &done.ke3,
+                    "d1",
+                    &random_svr_public_key(),
+                    &random_device_auth_token(),
+                    None,
+                )
+                .await
+                .map_err(AuthError::Network)?;
+            Ok::<_, AuthError>((token, resp.trusted_device_token))
+        }
+    };
+    let (_, token) = login(None).await.expect("first login");
+    assert_eq!(token.len(), 57, "LoginFinish issues a trusted-device token");
+
+    // A stranger fills the shared ceiling, paying for each guess.
+    let mut stranger = AuthClient::new(pool.channel(), pool.auth_clone());
+    let mut burnt = false;
+    for _ in 0..30 {
+        let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
+        if let Err(e) =
+            login_start_paying_pow(&mut stranger, &identifier, &ke1, None, &mut None, &|| {}).await
+        {
+            assert!(matches!(e, AuthError::LoginGuessLimit), "{e:?}");
+            burnt = true;
+            break;
+        }
+    }
+    assert!(burnt, "30 paid guesses and no ceiling");
+    assert!(
+        matches!(login(None).await, Err(AuthError::LoginGuessLimit)),
+        "no token: locked out"
+    );
+
+    // With the token the device still gets in, and receives a fresh one.
+    let (kept, fresh) = login(Some(token.clone()))
+        .await
+        .expect("token bypasses the shared ceiling");
+    assert_eq!(
+        kept.as_deref(),
+        Some(token.as_slice()),
+        "a valid token is kept"
+    );
+    assert_eq!(fresh.len(), 57);
+
+    // A token the server did not issue is dropped (and, the ceiling being
+    // full, the login then fails like any token-less one).
+    let mut forged = fresh.clone();
+    forged[56] ^= 1;
+    let mut dropped = Some(forged);
+    let ke1 = opaque::login_start(&user.password).unwrap().ke1;
+    let r =
+        login_start_paying_pow(&mut device, &identifier, &ke1, None, &mut dropped, &|| {}).await;
+    assert!(dropped.is_none(), "an invalid token is dropped");
+    assert!(matches!(r, Err(AuthError::LoginGuessLimit)), "{r:?}");
+}
+
+/// A LoginFinish is single-use: replaying the same login_id + KE3 fails.
+#[tokio::test]
+async fn test_login_finish_replay_rejected() {
+    skip_if_no_server!();
+
+    let pool = assert_ok(create_test_pool().await);
+    let user = assert_ok(register_test_user(&pool).await);
+    let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
+
+    let start = chatter_core::crypto::opaque::login_start(&user.password).unwrap();
+    let identifier = chatter_core::crypto::auth_crypto::login_identifier(&user.username);
+    let started = assert_ok(
+        auth_client
+            .login_start(&identifier, &start.ke1, None, &[], &[])
+            .await,
+    );
+    let done = chatter_core::crypto::opaque::login_finish_async(start, &user.password, started.ke2)
+        .await
+        .expect("right password opens KE2");
+    let svr = random_svr_public_key();
+    assert_ok(
+        auth_client
+            .login_finish(
+                &started.login_id,
+                &done.ke3,
+                "d1",
+                &svr,
+                &random_device_auth_token(),
+                None,
+            )
+            .await,
+    );
+    let replay = auth_client
+        .login_finish(
+            &started.login_id,
+            &done.ke3,
+            "d2",
+            &svr,
             &random_device_auth_token(),
-            &random_uak(),
             None,
         )
         .await;
-
-    // Should fail with not found or auth error
-    match result {
-        Err(NetworkError::NotFound(_)) | Err(NetworkError::Unauthenticated) => {}
-        Err(e) => panic!("Expected NotFound or Unauthenticated, got: {:?}", e),
-        Ok(_) => panic!("Expected error, got Ok"),
-    }
+    assert_auth_error(replay);
 }
 
 // ============================================================================
@@ -396,7 +868,10 @@ async fn test_list_devices() {
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
     let response = assert_ok(auth_client.list_devices().await);
 
-    assert!(!response.devices.is_empty(), "Should have at least one device");
+    assert!(
+        !response.devices.is_empty(),
+        "Should have at least one device"
+    );
 
     // Find our device
     let our_device = response
@@ -456,18 +931,17 @@ async fn test_request_sender_certificate() {
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
     let _ = user.device_id; // server reads device_id from auth session
-    let response = assert_ok(
-        auth_client
-            .request_sender_certificate(None)
-            .await,
-    );
+    let response = assert_ok(auth_client.request_sender_certificate().await);
 
     assert!(
         response.certificate.is_some(),
         "Should return a sender certificate"
     );
     let cert = response.certificate.unwrap();
-    assert!(!cert.certificate.is_empty(), "Certificate data should not be empty");
+    assert!(
+        !cert.certificate.is_empty(),
+        "Certificate data should not be empty"
+    );
 }
 
 // ============================================================================
@@ -480,24 +954,61 @@ async fn test_change_password() {
 
     let pool = assert_ok(create_test_pool().await);
     let user = assert_ok(setup_authenticated_test(&pool).await);
-
-    let new_password_hash = Sha256::digest(b"new_secure_password").to_vec();
-
+    let new_password = "new_secure_password";
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
-    let result = auth_client
-        .change_password(&user.password_hash, &new_password_hash)
-        .await;
 
-    assert!(result.is_ok(), "Password change should succeed: {:?}", result.err());
+    // OPAQUE: KE1 for the current password + RegistrationRequest for the new,
+    // then KE3 + RegistrationRecord.
+    let proof = chatter_core::crypto::opaque::login_start(&user.password).unwrap();
+    let reg = chatter_core::crypto::opaque::registration_start(new_password).unwrap();
+    let started = assert_ok(
+        auth_client
+            .change_password_start(&proof.ke1, &reg.request)
+            .await,
+    );
+    let done = chatter_core::crypto::opaque::login_finish_async(proof, &user.password, started.ke2)
+        .await
+        .expect("current password opens KE2");
+    let record = chatter_core::crypto::opaque::registration_finish_async(
+        reg,
+        new_password,
+        started.registration_response,
+    )
+    .await
+    .unwrap();
+    assert_ok(
+        auth_client
+            .change_password_finish(&started.flow_id, &done.ke3, &record)
+            .await,
+    );
 
-    // NOTE: We deliberately do NOT verify we can log in again with the new
-    // password here. The server's `username` lookup column is the *password-
-    // keyed* login auth hash (hex(derive_login_auth_hash(password, name))),
-    // and `UpdateUserPassword` only rotates the password column — it does
-    // not rewrite that lookup row. After a password change, login with the
-    // newly-derived username hash returns Unauthenticated until the SDK
-    // adds an explicit "rotate-username-hash" step on password change.
-    // That gap is tracked separately; it is not what this test exercises.
+    // The account must now be reachable with the new password only, under
+    // the SAME login identifier (it is nickname-derived).
+    let old = opaque_login(
+        &mut auth_client,
+        &user.username,
+        &user.password,
+        "test-device-old-password",
+        &random_svr_public_key(),
+        &user.device_auth_token,
+        Some(user.device_id),
+    )
+    .await;
+    assert_auth_error(old);
+    let response = assert_ok(
+        opaque_login(
+            &mut auth_client,
+            &user.username,
+            new_password,
+            "test-device-after-password-change",
+            &random_svr_public_key(),
+            &user.device_auth_token,
+            Some(user.device_id),
+        )
+        .await,
+    );
+    let profile = response.user_profile.expect("login returns the profile");
+    assert_eq!(profile.user_id, user.user_id);
 }
 
 // ============================================================================
@@ -543,8 +1054,8 @@ async fn test_upload_and_get_prekey_bundle() {
     let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create a prekey bundle with real Signal keys
-    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
     use chatter_core::proto::chat_v1::SignalPreKeyBundle;
+    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
     use libsignal_protocol::{IdentityKeyPair, KeyPair};
 
     // Reuse the identity key pair from registration. The server enforces
@@ -573,19 +1084,24 @@ async fn test_upload_and_get_prekey_bundle() {
             id: 2, // Different from registration bundle
             public_key: signed_prekey_pair.public_key.serialize().to_vec(),
             signature: signed_prekey_signature.into_vec(),
-            // Server's UploadPreKeyBundle calls ValidatePreKeyTimestamps which
-            // interprets this as Unix seconds; ms would be far in the future.
+            // Upload validation uses Unix nanoseconds, like registration.
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_secs(),
+                .as_nanos() as u64,
         }),
         one_time_prekey: Some(PreKeyRecord {
             id: 100,
             public_key: one_time_prekey_pair.public_key.serialize().to_vec(),
         }),
-        kyber_prekey: None,
-        unidentified_access_key: Some(random_uak().to_vec()),
+        kyber_prekey: Some(signed_kyber_prekey(
+            &identity_key_pair,
+            2,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64,
+        )),
         unrestricted_unidentified_access: Some(false),
     };
 
@@ -593,7 +1109,11 @@ async fn test_upload_and_get_prekey_bundle() {
 
     // Upload the bundle
     let upload_result = auth_client.upload_pre_key_bundle(bundle).await;
-    assert!(upload_result.is_ok(), "Should be able to upload prekey bundle: {:?}", upload_result.err());
+    assert!(
+        upload_result.is_ok(),
+        "Should be able to upload prekey bundle: {:?}",
+        upload_result.err()
+    );
 
     // Fetch it back (as another user would)
     let get_result = auth_client

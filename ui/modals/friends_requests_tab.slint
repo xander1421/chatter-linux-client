@@ -1,0 +1,751 @@
+import { RequestTabs } from "friends_request_tabs.slint";
+import { FriendRequestData, ChannelInviteData } from "friends_data.slint";
+import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Button } from "../components/button.slint";
+import { Avatar } from "../components/avatar.slint";
+
+// Every request list's empty state: icon, title, one hint — as Blocked.
+component RequestsEmpty inherits VerticalLayout {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> hint;
+    alignment: center;
+    spacing: Spacing.sm;
+    HorizontalLayout {
+        alignment: center;
+        Image { source: root.icon; width: 40px; height: 40px; colorize: Colors.text-muted; }
+    }
+    Text { text: root.title; color: Colors.text-muted; font-size: Typography.base; horizontal-alignment: center; }
+    Text { text: root.hint; color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; wrap: word-wrap; }
+}
+
+export component RequestsTab inherits VerticalLayout {
+    in property <bool> mobile-mode;
+    in property <bool> loading;
+    in property <bool> read-error;
+    callback retry();
+    in property <length> bottom-inset;
+    in-out property <string> requests-sub-tab;
+    in property <[FriendRequestData]> received-requests;
+    in property <[FriendRequestData]> sent-requests;
+    in property <[FriendRequestData]> private-requests;
+    in property <[FriendRequestData]> group-invites;
+    in property <[ChannelInviteData]> channel-invites;
+    in property <string> private-request-decision;
+    in property <string> group-invite-decision;
+    in property <string> group-invite-error-id;
+    in property <string> group-invite-error;
+    callback accept-request(string);
+    callback decline-request(string);
+    callback cancel-request(string);
+    callback accept-private-request(string);
+    callback decline-private-request(string);
+    callback block-private-request(string);
+    callback accept-group-invite(string);
+    callback decline-group-invite(string);
+    callback accept-channel-invite(string);
+    callback decline-channel-invite(string);
+    vertical-stretch: 1;
+    spacing: Spacing.sm;
+
+    if root.read-error: HorizontalLayout {
+        spacing: Spacing.sm;
+        Text { text: "Could not refresh requests. Showing the last loaded list."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; horizontal-stretch: 1; vertical-alignment: center; }
+        retry-button := Button { text: "Retry"; clicked => { root.retry(); } }
+    }
+
+    // Sub-tab bar
+    RequestTabs {
+        requests-sub-tab <=> root.requests-sub-tab;
+        received-requests-count: root.received-requests.length;
+        sent-requests-count: root.sent-requests.length;
+        private-requests-count: root.private-requests.length;
+        group-invites-count: root.group-invites.length;
+        channel-invites-count: root.channel-invites.length;
+    }
+
+    Rectangle {
+        height: 1px;
+        background: Colors.divider;
+    }
+
+    // Received requests
+    if root.requests-sub-tab == "received": VerticalLayout {
+        vertical-stretch: 1;
+
+        if root.received-requests.length == 0 && !root.read-error: RequestsEmpty {
+
+            icon: Icons.user-plus;
+
+            title: "No pending requests";
+
+            hint: "Friend requests you receive appear here";
+
+        }
+
+        if root.received-requests.length > 0: Rectangle {
+            vertical-stretch: 1;
+            property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+            scroll-received-list := Flickable {
+                property <length> chrome-inset: parent.chrome-inset;
+                width: parent.width;
+                y: root.mobile-mode ? -parent.chrome-inset : 0px;
+                height: root.mobile-mode ? root.height : parent.height;
+                viewport-height: received-list.preferred-height;
+
+                received-list := VerticalLayout {
+                    padding-top: root.mobile-mode ? scroll-received-list.chrome-inset : Spacing.none;
+                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
+                    // Rows stack from the top (see friends-list).
+                    alignment: start;
+                    spacing: Spacing.xs;
+
+                    for request in root.received-requests: Rectangle {
+                        min-height: 124px * Appearance.text-grow;
+                        background: recv-touch.has-hover ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-md;
+
+                        // TouchArea first (behind) for hover detection
+                        recv-touch := TouchArea {}
+
+                        VerticalLayout {
+                            padding: Spacing.sm;
+                            spacing: Spacing.sm;
+
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
+
+                                Avatar {
+                                    size: 40px;
+                                    source: request.avatar-source;
+                                    name: request.display-name;
+                                }
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    spacing: Spacing.xxs;
+
+                                    Text {
+                                        text: request.display-name;
+                                        min-width: 0px;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                        overflow: elide;
+                                    }
+
+                                    if request.note != "": Text {
+                                        text: request.note;
+                                        color: Colors.text-secondary;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+
+                                    if request.sent-at != "": Text {
+                                        text: request.sent-at;
+                                        overflow: elide;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
+                                }
+
+                            }
+
+                            HorizontalLayout {
+                                padding-left: Spacing.avatar-md + Spacing.sm;
+                                spacing: Spacing.sm;
+                                alignment: start;
+
+                                Button {
+                                    touch: root.mobile-mode;
+                                    text: "Accept";
+                                    variant: "primary";
+                                    disabled: root.loading;
+
+                                    clicked => {
+                                        root.accept-request(request.user-id);
+                                    }
+                                }
+
+                                Button {
+                                    touch: root.mobile-mode;
+                                    text: "Decline";
+                                    variant: "ghost";
+                                    disabled: root.loading;
+
+                                    clicked => {
+                                        root.decline-request(request.user-id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            }
+        }
+    }
+
+    // Sent requests
+    if root.requests-sub-tab == "sent": VerticalLayout {
+        vertical-stretch: 1;
+
+        if root.sent-requests.length == 0 && !root.read-error: RequestsEmpty {
+
+            icon: Icons.user-plus;
+
+            title: "No outgoing requests";
+
+            hint: "Requests you send appear here until they are answered";
+
+        }
+
+        if root.sent-requests.length > 0: Rectangle {
+            vertical-stretch: 1;
+            property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+            scroll-sent-list := Flickable {
+                property <length> chrome-inset: parent.chrome-inset;
+                width: parent.width;
+                y: root.mobile-mode ? -parent.chrome-inset : 0px;
+                height: root.mobile-mode ? root.height : parent.height;
+                viewport-height: sent-list.preferred-height;
+
+                sent-list := VerticalLayout {
+                    padding-top: root.mobile-mode ? scroll-sent-list.chrome-inset : Spacing.none;
+                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
+                    // Rows stack from the top (see friends-list).
+                    alignment: start;
+                    spacing: Spacing.xs;
+
+                    for request in root.sent-requests: Rectangle {
+                        min-height: 124px * Appearance.text-grow;
+                        background: sent-touch.has-hover ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-md;
+
+                        // TouchArea first (behind) for hover detection
+                        sent-touch := TouchArea {}
+
+                        VerticalLayout {
+                            padding: Spacing.sm;
+                            spacing: Spacing.sm;
+
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
+
+                                if request.display-name == "Pending request" && !request.has-avatar: Rectangle {
+                                    width: 40px;
+                                    height: 40px;
+                                    border-radius: 20px;
+                                    background: Colors.primary.transparentize(0.7);
+                                    Image {
+                                        source: Icons.user;
+                                        width: 22px;
+                                        height: 22px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: Colors.text-secondary;
+                                    }
+                                }
+                                if request.display-name != "Pending request" || request.has-avatar: Avatar {
+                                    size: 40px;
+                                    source: request.avatar-source;
+                                    name: request.display-name;
+                                }
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    spacing: Spacing.xxs;
+
+                                    Text {
+                                        text: request.display-name;
+                                        min-width: 0px;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                        overflow: elide;
+                                    }
+                                    if request.sent-at != "": Text {
+                                        text: request.sent-at;
+                                        overflow: elide;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
+                                }
+
+                            }
+
+                            HorizontalLayout {
+                                padding-left: Spacing.avatar-md + Spacing.sm;
+                                alignment: start;
+
+                                Button {
+                                    touch: root.mobile-mode;
+                                    text: "Cancel";
+                                    variant: "ghost";
+                                    disabled: root.loading;
+
+                                    clicked => {
+                                        root.cancel-request(request.user-id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            }
+        }
+    }
+
+    // Private requests (anonymous DMs)
+    if root.requests-sub-tab == "private": VerticalLayout {
+        vertical-stretch: 1;
+
+        if root.private-requests.length == 0: VerticalLayout {
+            alignment: center;
+            spacing: Spacing.sm;
+
+            HorizontalLayout {
+                alignment: center;
+                Image { source: Icons.lock; width: 40px; height: 40px; colorize: Colors.text-muted; }
+            }
+
+            Text {
+                text: "No private message requests";
+                color: Colors.text-muted;
+                font-size: Typography.base;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Private requests use end-to-end encryption\nwith no server involvement";
+                color: Colors.text-muted.with-alpha(0.7);
+                font-size: Typography.sm;
+                horizontal-alignment: center;
+            }
+        }
+
+        if root.private-requests.length > 0: Rectangle {
+            vertical-stretch: 1;
+            property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+            scroll-private-list := Flickable {
+                property <length> chrome-inset: parent.chrome-inset;
+                width: parent.width;
+                y: root.mobile-mode ? -parent.chrome-inset : 0px;
+                height: root.mobile-mode ? root.height : parent.height;
+                viewport-height: private-list.preferred-height;
+
+                private-list := VerticalLayout {
+                    padding-top: root.mobile-mode ? scroll-private-list.chrome-inset : Spacing.none;
+                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
+                    // Rows stack from the top (see friends-list).
+                    alignment: start;
+                    spacing: Spacing.xs;
+
+                    for request in root.private-requests: Rectangle {
+                        min-height: 124px * Appearance.text-grow;
+                        background: priv-touch.has-hover ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-md;
+
+                        // TouchArea first (behind) for hover detection
+                        priv-touch := TouchArea {}
+
+                        VerticalLayout {
+                            padding: Spacing.sm;
+                            spacing: Spacing.sm;
+
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
+
+                                Avatar {
+                                    size: 40px;
+                                    source: request.avatar-source;
+                                    name: request.display-name;
+                                }
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    spacing: Spacing.xxs;
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.xs;
+
+                                        Text {
+                                            text: request.display-name;
+                                            min-width: 0px;
+                                            horizontal-stretch: 1;
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                            overflow: elide;
+                                        }
+
+                                        Rectangle {
+                                            width: 16px;
+                                            height: 16px;
+                                            border-radius: 8px;
+                                            background: Colors.primary.with-alpha(0.2);
+
+                                            Text {
+                                                text: "\u{1F512}";  // Private badge
+                                                font-size: Typography.xxs;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                                width: 100%;
+                                                height: 100%;
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Private" + (request.sent-at != "" ? " · " + request.sent-at : "");
+                                        overflow: elide;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
+                                }
+
+                            }
+
+                            HorizontalLayout {
+                                padding-left: Spacing.avatar-md + Spacing.sm;
+                                spacing: Spacing.sm;
+                                alignment: start;
+
+                                Button {
+                                    touch: root.mobile-mode;
+                                    text: "Accept";
+                                    variant: "primary";
+                                    disabled: root.loading || root.private-request-decision != "";
+                                    loading: root.private-request-decision == request.user-id;
+
+                                    clicked => {
+                                        root.accept-private-request(request.user-id);
+                                    }
+                                }
+
+                                Button {
+                                    touch: root.mobile-mode;
+                                    text: "Decline";
+                                    variant: "ghost";
+                                    disabled: root.loading || root.private-request-decision != "";
+                                    loading: root.private-request-decision == request.user-id;
+
+                                    clicked => {
+                                        root.decline-private-request(request.user-id);
+                                    }
+                                }
+
+                                Button {
+                                    touch: root.mobile-mode;
+                                    text: "Block";
+                                    variant: "danger-ghost";
+                                    disabled: root.loading || root.private-request-decision != "";
+
+                                    clicked => {
+                                        root.block-private-request(request.user-id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            }
+        }
+    }
+
+    // Group invites (anonymous group invitations)
+    if root.requests-sub-tab == "groups": VerticalLayout {
+        vertical-stretch: 1;
+
+        if root.group-invites.length == 0: VerticalLayout {
+            alignment: center;
+            spacing: Spacing.sm;
+
+            HorizontalLayout {
+                alignment: center;
+                Image {
+                    source: Icons.users;
+                    width: 40px;
+                    height: 40px;
+                    colorize: Colors.text-muted;
+                }
+            }
+
+            Text {
+                text: "No pending group invites";
+                color: Colors.text-muted;
+                font-size: Typography.base;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Group invites use end-to-end encryption\nwith anonymous mailboxes";
+                color: Colors.text-muted.with-alpha(0.7);
+                font-size: Typography.sm;
+                horizontal-alignment: center;
+            }
+        }
+
+        if root.group-invites.length > 0: Rectangle {
+            vertical-stretch: 1;
+            property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+            scroll-group-invite-list := Flickable {
+                property <length> chrome-inset: parent.chrome-inset;
+                width: parent.width;
+                y: root.mobile-mode ? -parent.chrome-inset : 0px;
+                height: root.mobile-mode ? root.height : parent.height;
+                viewport-height: group-invite-list.preferred-height;
+
+                group-invite-list := VerticalLayout {
+                    padding-top: root.mobile-mode ? scroll-group-invite-list.chrome-inset : Spacing.none;
+                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
+                    // Rows stack from the top (see friends-list).
+                    alignment: start;
+                    spacing: Spacing.xs;
+
+                    for invite in root.group-invites: Rectangle {
+                        min-height: (root.group-invite-error-id == invite.user-id && root.group-invite-error != "" ? 148px : 124px) * Appearance.text-grow;
+                        background: gi-touch.has-hover ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-md;
+
+                        gi-touch := TouchArea {}
+
+                        VerticalLayout {
+                            padding: Spacing.sm;
+                            spacing: Spacing.sm;
+
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
+
+                                // Private groups are anonymous: ringed avatar,
+                                // like the sidebar row it will become.
+                                Avatar {
+                                    size: 40px;
+                                    source: invite.avatar-source;
+                                    name: invite.display-name;
+                                    anonymous: true;
+                                }
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    spacing: Spacing.xxs;
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.xs;
+
+                                        Text {
+                                            text: invite.display-name;
+                                            min-width: 0px;
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                            overflow: elide;
+                                        }
+                                    }
+
+                                    // Inviter info (stored in username field)
+                                    if invite.username != "": Text {
+                                        text: "Invited by " + invite.username;
+                                        overflow: elide;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
+                                    if root.group-invite-error-id == invite.user-id && root.group-invite-error != "": Text {
+                                        text: root.group-invite-error;
+                                        color: Colors.error;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+                                }
+
+                            }
+
+                            HorizontalLayout {
+                                padding-left: Spacing.avatar-md + Spacing.sm;
+                                spacing: Spacing.sm;
+                                alignment: start;
+
+                                Button {
+                                    touch: root.mobile-mode;
+                                    text: "Join";
+                                    variant: "primary";
+                                    disabled: root.loading || root.group-invite-decision != "";
+                                    loading: root.group-invite-decision == "join:" + invite.user-id;
+
+                                    clicked => {
+                                        root.accept-group-invite(invite.user-id);
+                                    }
+                                }
+
+                                Button {
+                                    touch: root.mobile-mode;
+                                    text: "Decline";
+                                    variant: "ghost";
+                                    disabled: root.loading || root.group-invite-decision != "";
+                                    loading: root.group-invite-decision == "decline:" + invite.user-id;
+
+                                    clicked => {
+                                        root.decline-group-invite(invite.user-id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            }
+        }
+    }
+
+    // Channel invites (pending channel invitations)
+    if root.requests-sub-tab == "channels": VerticalLayout {
+        vertical-stretch: 1;
+
+        if root.channel-invites.length == 0: VerticalLayout {
+            alignment: center;
+            spacing: Spacing.sm;
+
+            HorizontalLayout {
+                alignment: center;
+                Image { source: Icons.hash; width: 40px; height: 40px; colorize: Colors.text-muted; }
+            }
+
+            Text {
+                text: "No pending channel invites";
+                color: Colors.text-muted;
+                font-size: Typography.base;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Channel invitations you receive will appear here";
+                color: Colors.text-muted.with-alpha(0.7);
+                font-size: Typography.sm;
+                horizontal-alignment: center;
+            }
+        }
+
+        if root.channel-invites.length > 0: Rectangle {
+            vertical-stretch: 1;
+            property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+            scroll-channel-invite-list := Flickable {
+                property <length> chrome-inset: parent.chrome-inset;
+                width: parent.width;
+                y: root.mobile-mode ? -parent.chrome-inset : 0px;
+                height: root.mobile-mode ? root.height : parent.height;
+                viewport-height: channel-invite-list.preferred-height;
+
+                channel-invite-list := VerticalLayout {
+                    padding-top: root.mobile-mode ? scroll-channel-invite-list.chrome-inset : Spacing.none;
+                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
+                    // Rows stack from the top (see friends-list).
+                    alignment: start;
+                    spacing: Spacing.xs;
+
+                    for invite in root.channel-invites: Rectangle {
+                        min-height: 124px * Appearance.text-grow;
+                        background: ci-touch.has-hover ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-md;
+
+                        ci-touch := TouchArea {}
+
+                        VerticalLayout {
+                            padding: Spacing.sm;
+                            spacing: Spacing.sm;
+
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
+
+                                Avatar {
+                                    size: Spacing.avatar-md;
+                                    source: invite.avatar-source;
+                                    name: invite.display-name;
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    Image {
+                                        source: invite.private-channel ? Icons.lock : Icons.hash;
+                                        width: 16px;
+                                        height: 16px;
+                                        colorize: Colors.text-muted;
+                                    }
+                                }
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    spacing: Spacing.xxs;
+
+                                    Text {
+                                        text: invite.display-name;
+                                        min-width: 0px;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                        overflow: elide;
+                                    }
+
+                                    // "Invited by <name>" (channel_invites.rs puts it in username)
+                                    if invite.username != "": Text {
+                                        text: invite.username;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        overflow: elide;
+                                    }
+
+                                    // Invitation message (stored in note field)
+                                    if invite.note != "": Text {
+                                        text: invite.note;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        overflow: elide;
+                                    }
+                                }
+
+                            }
+
+                            HorizontalLayout {
+                                padding-left: Spacing.avatar-md + Spacing.sm;
+                                spacing: Spacing.sm;
+                                alignment: start;
+
+                                Button {
+                                    touch: root.mobile-mode;
+                                    text: "Join";
+                                    variant: "primary";
+                                    disabled: root.loading;
+
+                                    clicked => {
+                                        root.accept-channel-invite(invite.user-id);
+                                    }
+                                }
+
+                                Button {
+                                    touch: root.mobile-mode;
+                                    text: "Decline";
+                                    variant: "ghost";
+                                    disabled: root.loading;
+
+                                    clicked => {
+                                        root.decline-channel-invite(invite.user-id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            }
+        }
+    }
+}

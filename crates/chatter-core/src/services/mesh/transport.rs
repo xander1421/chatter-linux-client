@@ -26,7 +26,6 @@
 //! reporting that as prompt suppresses the courier deposit that is the message's
 //! only other route.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use chatter_mesh::ids::PeerId;
@@ -36,12 +35,10 @@ use chatter_mesh::tlv::file::BitchatFilePacket;
 use chatter_mesh::tlv::file_stream::FileManifest;
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
 use chatter_mesh_noise::MeshIdentity;
-use chatter_mesh_noise::seal::seal_courier;
 use chatter_mesh_store::bridge_drop::DropOperationId;
 use chatter_mesh_store::courier::INITIAL_COPIES;
 use chatter_mesh_store::router::CourierDirectory;
 use chatter_mesh_store::{MESSAGE_TTL_SECS, PeerSnapshot, RouterTransport};
-use parking_lot::Mutex;
 
 use super::state::{MeshState, NostrState, now_secs, recipient_pubkey};
 
@@ -57,6 +54,25 @@ use super::state::{MeshState, NostrState, now_secs, recipient_pubkey};
 /// carry it", which is exactly what the trait says acceptance means.
 #[derive(Debug)]
 pub enum BleCommand {
+    /// An account proof prepared after explicit local consent.
+    BindingProof {
+        peer: PeerId,
+        bytes: Vec<u8>,
+    },
+    /// Open a Noise session (and so a Chatter Hello) if none exists yet.
+    OpenSession {
+        peer: PeerId,
+    },
+    /// A PQXDH bundle exchanged only inside a live authenticated Noise link.
+    SignalBundle {
+        peer: PeerId,
+        bytes: Vec<u8>,
+    },
+    /// Signed opaque Chatter extension carrying Signal ciphertext.
+    SignalCarrier {
+        peer: PeerId,
+        bytes: Vec<u8>,
+    },
     /// Encrypt and send a private message, handshaking first if necessary.
     PrivateMessage {
         peer: PeerId,
@@ -64,9 +80,15 @@ pub enum BleCommand {
         content: String,
     },
     /// Hand a sealed envelope to a courier over a directed packet.
-    Courier { peer: PeerId, envelope: CourierEnvelope },
+    Courier {
+        peer: PeerId,
+        envelope: CourierEnvelope,
+    },
     /// Put a packet on every selected link.
-    Broadcast { packet: BitchatPacket, sign: bool },
+    Broadcast {
+        packet: BitchatPacket,
+        sign: bool,
+    },
     /// Put a packet on the links bound to one peer.
     Directed {
         peer: PeerId,
@@ -80,7 +102,48 @@ pub enum BleCommand {
         payload_type: NoisePayloadType,
     },
     /// Broadcast a public message into the mesh room.
-    PublicMessage { message_id: String, content: String },
+    PublicMessage {
+        message_id: String,
+        content: String,
+    },
+    /// Signed open-channel broadcast.
+    ChannelMessage {
+        message_id: String,
+        name: String,
+        content: String,
+    },
+    ChannelPresence {
+        name: String,
+    },
+    PrivateJoinRequest {
+        creator: PeerId,
+        bytes: Vec<u8>,
+    },
+    PrivateEpoch {
+        peer: PeerId,
+        bytes: zeroize::Zeroizing<Vec<u8>>,
+    },
+    PrivateInvite {
+        peer: PeerId,
+        bytes: zeroize::Zeroizing<Vec<u8>>,
+    },
+    PrivateDecline {
+        peer: PeerId,
+        notice: Vec<u8>,
+    },
+    PrivateEpochAck {
+        peer: PeerId,
+        id: String,
+    },
+    PrivateChannelMessage {
+        channel_id: String,
+        bytes: Vec<u8>,
+    },
+    PrivateLeave {
+        peers: Vec<PeerId>,
+        notice: Vec<u8>,
+        broadcast: Vec<u8>,
+    },
     /// Broadcast a file into the mesh room.
     ///
     /// The TLV arrives already built and already size-checked: the service reads
@@ -165,118 +228,22 @@ pub enum NostrCommand {
     Stop,
 }
 
-// ---------------------------------------------------------------------------
-// Favourites
-// ---------------------------------------------------------------------------
-
-/// Mutual favourites, by Noise static key.
-///
-/// The courier tiers exist so strangers cannot crowd out favourites, and this is
-/// the set that decides which tier a peer draws from. It is a plain set rather
-/// than a repository because the mesh has no server-side notion of a
-/// relationship — favouriting is a purely local act.
-#[derive(Debug, Default)]
-pub struct MeshFavorites {
-    keys: Mutex<BTreeSet<[u8; 32]>>,
-    /// Durable mirror. `None` in tests that do not care about persistence.
-    ///
-    /// Losing this set on restart is not cosmetic: it silently demotes every
-    /// favourite to the stranger quota, so less of the user's mail gets carried
-    /// and nothing anywhere reports it.
-    store: Option<Arc<crate::storage::repositories::MeshFavoritesRepository>>,
-}
-
-impl MeshFavorites {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Load the durable set and keep mirroring to it.
-    ///
-    /// A read failure is logged and starts empty rather than refusing to build:
-    /// a mesh with no favourites still works, one that will not start does not.
-    #[must_use]
-    pub fn with_store(
-        store: Arc<crate::storage::repositories::MeshFavoritesRepository>,
-    ) -> Self {
-        let keys = match store.list() {
-            Ok(keys) => keys.into_iter().collect(),
-            Err(error) => {
-                tracing::warn!(%error, "mesh: could not load favourites; starting with none");
-                BTreeSet::new()
-            }
-        };
-        Self {
-            keys: Mutex::new(keys),
-            store: Some(store),
-        }
-    }
-
-    pub fn add(&self, key: [u8; 32]) {
-        self.keys.lock().insert(key);
-        if let Some(store) = &self.store
-            && let Err(error) = store.add(&key)
-        {
-            tracing::warn!(%error, "mesh: could not persist a favourite");
-        }
-    }
-
-    pub fn remove(&self, key: &[u8; 32]) {
-        self.keys.lock().remove(key);
-        if let Some(store) = &self.store
-            && let Err(error) = store.remove(key)
-        {
-            tracing::warn!(%error, "mesh: could not un-persist a favourite");
-        }
-    }
-
-    /// Forget every favourite. Panic-wipe support.
-    ///
-    /// Favourites are the courier trust tier, so this is not cosmetic: after it,
-    /// no peer is permitted the larger deposit quota.
-    pub fn clear(&self) {
-        self.keys.lock().clear();
-        if let Some(store) = &self.store
-            && let Err(error) = store.wipe()
-        {
-            tracing::warn!(%error, "mesh: could not wipe favourites from disk");
-        }
-    }
-
-    #[must_use]
-    pub fn contains(&self, key: &[u8; 32]) -> bool {
-        self.keys.lock().contains(key)
-    }
-
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.keys.lock().len()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-/// The trust and identity lookups the router needs to pick couriers.
+/// The identity lookups the router needs to address couriered mail.
 pub struct MeshDirectory {
     state: Arc<MeshState>,
-    favorites: Arc<MeshFavorites>,
 }
 
 impl MeshDirectory {
     #[must_use]
-    pub fn new(state: Arc<MeshState>, favorites: Arc<MeshFavorites>) -> Self {
-        Self { state, favorites }
+    pub fn new(state: Arc<MeshState>) -> Self {
+        Self { state }
     }
 }
 
 impl CourierDirectory for MeshDirectory {
     fn noise_key(&self, peer: &PeerId) -> Option<[u8; 32]> {
         // A peer ID that *is* a full Noise key needs no lookup. This is the
-        // normal case for a favourite addressed from the UI, where the stable
+        // normal case for a peer addressed from the UI, where the stable
         // 64-hex form is what gets stored.
         if let Some(bytes) = peer.noise_key()
             && let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice())
@@ -298,10 +265,6 @@ impl CourierDirectory for MeshDirectory {
         // envelopes nobody can open, so the courier path stays closed for them —
         // the bridge drop is their offline route, not the mesh courier.
         from_mesh
-    }
-
-    fn is_trusted_courier(&self, noise_key: &[u8; 32]) -> bool {
-        self.favorites.contains(noise_key)
     }
 }
 
@@ -333,8 +296,9 @@ impl BleTransport {
     /// Seal a message to `recipient_key` and wrap it as a courier envelope.
     ///
     /// The plaintext never leaves this function: what the envelope carries is a
-    /// Noise `X` seal to the recipient's static key, opaque to every courier
-    /// that relays it.
+    /// Noise `X` seal to one of the recipient's one-time prekeys when we hold
+    /// their fresh bundle, else to their static key — opaque to every courier
+    /// that relays it either way.
     fn seal_envelope(
         &self,
         content: &str,
@@ -346,7 +310,13 @@ impl BleTransport {
             .encode()
             .ok()?;
         let payload = encode_noise_payload(NoisePayloadType::PrivateMessage, &inner);
-        let ciphertext = seal_courier(&payload, recipient_key, &self.identity).ok()?;
+        let (ciphertext, prekey_id) = super::prekeys::seal_offline(
+            &self.state,
+            &payload,
+            recipient_key,
+            &self.identity,
+            now_unix_secs.saturating_mul(1_000),
+        )?;
         let expiry_ms = now_unix_secs
             .saturating_add(MESSAGE_TTL_SECS)
             .saturating_mul(1_000);
@@ -355,7 +325,7 @@ impl BleTransport {
             expiry_ms,
             ciphertext,
             INITIAL_COPIES,
-            None,
+            prekey_id,
         );
         // Refuse anything that cannot be put on the wire rather than handing a
         // courier an envelope it will fail to forward.
@@ -458,10 +428,7 @@ pub struct NostrTransport {
 
 impl NostrTransport {
     #[must_use]
-    pub fn new(
-        state: Arc<NostrState>,
-        commands: Arc<super::CommandBus<NostrCommand>>,
-    ) -> Self {
+    pub fn new(state: Arc<NostrState>, commands: Arc<super::CommandBus<NostrCommand>>) -> Self {
         Self { state, commands }
     }
 }
@@ -476,7 +443,7 @@ impl RouterTransport for NostrTransport {
     }
 
     /// We hold a gift-wrap recipient key for them. Deliberately independent of
-    /// relay state: bitchat treats any favourite with a known npub as reachable
+    /// relay state: bitchat treats any peer with a known npub as reachable
     /// even with every relay down, and the *prompt* predicate is what corrects
     /// for that.
     fn is_peer_reachable(&self, peer: &PeerId) -> bool {
@@ -535,8 +502,8 @@ impl RouterTransport for NostrTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::os_rng;
     use chatter_mesh_link::{LinkId, LinkRole};
-    use rand_core_06::OsRng;
     use tokio::sync::mpsc;
 
     fn peer(s: &str) -> PeerId {
@@ -548,7 +515,7 @@ mod tests {
         Arc<MeshState>,
         mpsc::UnboundedReceiver<BleCommand>,
     ) {
-        let identity = Arc::new(MeshIdentity::generate(&mut OsRng));
+        let identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
         let state = Arc::new(MeshState::new(identity.peer_id()));
         let (bus, rx) = crate::services::mesh::CommandBus::new();
         (
@@ -616,7 +583,9 @@ mod tests {
         assert!(transport.send_private("hi", &remote, "m1"));
         match rx.try_recv() {
             Ok(BleCommand::PrivateMessage {
-                peer, message_id, content,
+                peer,
+                message_id,
+                content,
             }) => {
                 assert_eq!(peer, remote);
                 assert_eq!(message_id, "m1");
@@ -642,7 +611,10 @@ mod tests {
         );
         assert_eq!(accepted, vec![writable]);
         assert!(matches!(rx.try_recv(), Ok(BleCommand::Courier { .. })));
-        assert!(rx.try_recv().is_err(), "exactly one envelope was handed over");
+        assert!(
+            rx.try_recv().is_err(),
+            "exactly one envelope was handed over"
+        );
     }
 
     #[test]
@@ -747,26 +719,19 @@ mod tests {
 
     #[test]
     fn the_directory_reads_a_key_straight_out_of_a_full_key_peer_id() {
-        let identity = Arc::new(MeshIdentity::generate(&mut OsRng));
+        let identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
         let state = Arc::new(MeshState::new(identity.peer_id()));
-        let favorites = Arc::new(MeshFavorites::new());
-        let directory = MeshDirectory::new(state, Arc::clone(&favorites));
+        let directory = MeshDirectory::new(state);
 
         let key = identity.static_public();
         let as_peer = PeerId::from_str(&hex::encode(key));
         assert_eq!(directory.noise_key(&as_peer), Some(key));
-        assert!(!directory.is_trusted_courier(&key));
-        favorites.add(key);
-        assert!(directory.is_trusted_courier(&key));
     }
 
     #[test]
     fn the_directory_has_no_key_for_a_nostr_only_peer() {
-        let identity = MeshIdentity::generate(&mut OsRng);
-        let directory = MeshDirectory::new(
-            Arc::new(MeshState::new(identity.peer_id())),
-            Arc::new(MeshFavorites::new()),
-        );
+        let identity = MeshIdentity::generate(&mut os_rng());
+        let directory = MeshDirectory::new(Arc::new(MeshState::new(identity.peer_id())));
         // A secp256k1 pubkey is not a Noise static key; sealing to it would
         // produce envelopes nobody can open.
         assert!(directory.noise_key(&nostr_peer()).is_none());

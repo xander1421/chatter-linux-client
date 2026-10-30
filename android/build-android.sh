@@ -11,9 +11,52 @@
 #
 # Usage: ./build-android.sh [install]
 #   install -> also adb-install to the connected device and set the 50051 tunnel.
+#   MULTI_INSTANCE=1 -> build base, .b and .c debug packages in one Gradle run.
 set -euo pipefail
 cd "$(dirname "$0")"
 PROJECT_ROOT="$(cd .. && pwd)"
+# Cargo honours CARGO_TARGET_DIR (a worktree sharing one build cache); so must we.
+TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
+# Relative Cargo target paths are relative to the workspace, not android/.
+[[ "$TARGET_DIR" = /* ]] || TARGET_DIR="$PROJECT_ROOT/$TARGET_DIR"
+export CARGO_TARGET_DIR="$TARGET_DIR"
+
+# Explicit Android metadata; debug retains the historical defaults.
+# Validate before bootstrap/download/build work. Android caps codes at 2100000000.
+# RELEASE=1 also checks every production input here, before any download or
+# build: no dev keys/auto-register, a public non-local endpoint, provisioned
+# pins and CA (packaging/check-release-inputs.sh), and an external release
+# signer. Nothing is defaulted; see packaging/README.md for the exact inputs.
+if [ "${RELEASE:-0}" = "1" ]; then
+    [ "${MULTI_INSTANCE:-0}" = "0" ] || { echo "FATAL: MULTI_INSTANCE=1 is debug-only" >&2; exit 1; }
+    [ "${1:-}" != "install" ] || { echo "FATAL: RELEASE=1 never installs or tunnels to the dev stack; adb install the APK yourself" >&2; exit 1; }
+    [ "${DEV_TRUST_ROOT:-1}" = "0" ] && [ "${DEV_AUTO_REGISTER:-1}" = "0" ] \
+        || { echo "FATAL: RELEASE=1 needs DEV_TRUST_ROOT=0 and DEV_AUTO_REGISTER=0" >&2; exit 1; }
+    for v in CHATTER_ANDROID_VERSION_CODE CHATTER_ANDROID_VERSION_NAME \
+        CHATTER_KEYSTORE CHATTER_KEYSTORE_PASSWORD CHATTER_KEY_ALIAS CHATTER_KEY_PASSWORD; do
+        [ -n "${!v:-}" ] || { echo "FATAL: RELEASE=1 needs $v" >&2; exit 1; }
+    done
+    [ -f "$CHATTER_KEYSTORE" ] || { echo "FATAL: CHATTER_KEYSTORE is not a file" >&2; exit 1; }
+    # A keystore under the repository is one `git add` from being published.
+    case "$(realpath "$CHATTER_KEYSTORE")/" in
+        "$(realpath "$PROJECT_ROOT/..")"/*) echo "FATAL: CHATTER_KEYSTORE must live outside the repository" >&2; exit 1 ;;
+    esac
+    # Same precedence as chatter-core app/server_endpoint.rs on Android.
+    RELEASE_SERVER_URL="${CHATTER_ANDROID_SERVER:-${CHATTER_SERVER_URL:-}}"
+    [ -n "$RELEASE_SERVER_URL" ] || { echo "FATAL: RELEASE=1 needs CHATTER_SERVER_URL (or CHATTER_ANDROID_SERVER)" >&2; exit 1; }
+    "$PROJECT_ROOT/packaging/check-release-inputs.sh" "$RELEASE_SERVER_URL"
+fi
+export CHATTER_ANDROID_VERSION_CODE="${CHATTER_ANDROID_VERSION_CODE-1}"
+export CHATTER_ANDROID_VERSION_NAME="${CHATTER_ANDROID_VERSION_NAME-0.1.0}"
+python3 - <<'VERSION_CHECK'
+import os, re, sys
+code = os.environ["CHATTER_ANDROID_VERSION_CODE"]
+name = os.environ["CHATTER_ANDROID_VERSION_NAME"]
+if not re.fullmatch(r"[1-9][0-9]{0,9}", code) or int(code) > 2100000000:
+    sys.exit("FATAL: CHATTER_ANDROID_VERSION_CODE must be 1..2100000000 (decimal, no leading zeros)")
+if not re.fullmatch(r"[0-9][A-Za-z0-9._+-]{0,63}", name):
+    sys.exit("FATAL: CHATTER_ANDROID_VERSION_NAME must be 1..64 ASCII version characters, starting with a digit")
+VERSION_CHECK
 
 # ── Toolchain / cross-compile env ───────────────────────────────────────────
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
@@ -37,20 +80,18 @@ export PKG_CONFIG_PATH="$GSTREAMER_ROOT_ANDROID/arm64/lib/pkgconfig"
 # separate OpenSSL — so the whole cdylib has exactly ONE libcrypto (BoringSSL).
 # A separate OpenSSL would collide with webrtc's BoringSSL on the same symbol
 # names (different ABI) and corrupt the heap in webrtc's network thread on calls.
-# SQLCipher 4.5.7 is BoringSSL-compatible (uses EVP_CIPHER_nid + OBJ_nid2sn, not
-# the BoringSSL-removed EVP_CIPHER_name). libwebrtc.a exports every symbol it
-# needs (EVP_*, HMAC, PKCS5_PBKDF2_HMAC, RAND_bytes — verified).
+# SQLCipher 4.6.1 (rusqlite 0.37) is BoringSSL-compatible. Newer SQLCipher
+# requires OpenSSL 3 EVP_MAC APIs, absent in the pinned libwebrtc BoringSSL.
+# Keep the compatible rusqlite pin until the native SDK supports those APIs.
 setup_boringssl_for_sqlcipher() {
     local webrtc_a webrtc_inc stage
-    webrtc_a="$(find "$PROJECT_ROOT/target" -name libwebrtc.a -path '*android-arm64-release*' 2>/dev/null | head -1)"
-    webrtc_inc="$(find "$PROJECT_ROOT/target" -type d -path '*android-arm64-release*/third_party/boringssl/src/include' 2>/dev/null | head -1)"
-    if [ -z "$webrtc_a" ] || [ -z "$webrtc_inc" ]; then
-        echo "ERROR: webrtc BoringSSL artifacts not found under target/."
-        echo "       Run a normal cargo-ndk build once so webrtc-sys downloads libwebrtc.a, then re-run."
-        echo "       (looked for libwebrtc.a + third_party/boringssl/src/include)"
-        exit 1
-    fi
-    stage="$PROJECT_ROOT/target/boringssl-sqlcipher"
+    # Bootstrap before any Cargo step: SQLCipher needs these headers/archive
+    # while compiling, so asking for a prior successful build was circular.
+    export LK_CUSTOM_WEBRTC
+    LK_CUSTOM_WEBRTC="$(python3 "$PROJECT_ROOT/android/bootstrap-webrtc.py" "$PROJECT_ROOT" "$TARGET_DIR")"
+    webrtc_a="$LK_CUSTOM_WEBRTC/lib/libwebrtc.a"
+    webrtc_inc="$LK_CUSTOM_WEBRTC/include/third_party/boringssl/src/include"
+    stage="$TARGET_DIR/boringssl-sqlcipher"
     mkdir -p "$stage/lib"
     # -lcrypto resolves to webrtc's BoringSSL. Duplicate of the main libwebrtc.a
     # link is collapsed by -Wl,--allow-multiple-definition (set in build.rs).
@@ -74,60 +115,53 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_RANLIB="$NDK_BIN/llvm-ranlib"
 export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-z,max-page-size=16384"
 
 # ── 1. Build the cdylib ─────────────────────────────────────────────────────
-echo ">> cargo-ndk: building libchatter_ui.so (arm64-v8a, debug)…"
-# MESH=1 adds the bitchat mesh (BLE radio over the JNI bridge). Off by default,
-# matching the desktop build: the radio stack is opt-in until it has been shown
-# to talk to another device.
+echo ">> cargo-ndk: building libchatter_ui.so (arm64-v8a)…"
+# Mesh is included by default; MESH=0 omits the Bluetooth transport.
 MESH_FEATURE=""
-if [ "${MESH:-0}" = "1" ]; then
+if [ "${MESH:-1}" = "1" ]; then
     MESH_FEATURE=",mesh"
     echo ">> mesh enabled (BLE radio + Kotlin bridge)"
 fi
 
 # Pinned keys. This script targets the local docker-compose stack, whose Vault
 # signs with the committed dev keypairs, so it opts into the dev keys
-# EXPLICITLY. That opt-in is the whole point: both keys are forgeable by anyone
+# EXPLICITLY. All four development keys are forgeable by anyone
 # with a copy of this repository.
 #
-# The `dev-trust-root` feature selects the dev value for BOTH pinned keys:
+# The `dev-trust-root` feature selects the dev value for all four key pins:
 #   - the sealed-sender trust root (forged sender certificates = impersonation)
 #   - the KT tree-head key         (forged signed tree heads = KT defeated)
+#   - the KT VRF key               (public seed defeats query privacy)
+#   - the release-update key       (forged update manifests = code execution)
 #
-# For a real build, export DEV_TRUST_ROOT=0 and both hex values. Get them from
-# `scripts/provision-trust-root.sh` in the server repo, which derives both from
-# Vault and refuses to emit a dev value.
+# For a real build, export DEV_TRUST_ROOT=0 and all four public-key hex values. Resolve them with
+# `scripts/anchors.sh exec` after provisioning in the server repo.
+# The TLS CA is the fifth anchor and is required in both modes.
 TRUST_ROOT_FEATURE=""
 if [ "${DEV_TRUST_ROOT:-1}" = "1" ]; then
     TRUST_ROOT_FEATURE=",dev-trust-root"
-    echo ">> !! DEV pinned keys (trust root + KT tree head) — forgeable, local dev only"
+    echo ">> !! DEV pinned keys (trust root + KT tree head + VRF + release update) — forgeable, local dev only"
 else
     missing=""
     [ -z "${CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX"
     [ -z "${CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX"
+    [ -z "${CHATTER_KT_VRF_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_KT_VRF_PUBLIC_KEY_HEX"
+    [ -z "${CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX"
     if [ -n "$missing" ]; then
         echo "FATAL: DEV_TRUST_ROOT=0 but unset:$missing"
         echo
-        echo "Both are compile-time pins. Without them the cargo build fails"
+        echo "All four public keys are compile-time pins. Without them the cargo build fails"
         echo "(config.rs refuses to fall back to a dev key), so this stops here"
         echo "with a better message than a const-eval panic."
         echo
-        echo "Generate both:  ./scripts/provision-trust-root.sh   (server repo)"
+        echo "Provision keys:  ./scripts/provision-trust-root.sh   (server repo)"
         exit 1
-    fi
-    # The VRF key is optional on purpose: it buys query privacy, not integrity,
-    # and both server and client fall back to the dev value rather than failing.
-    # Warn rather than refuse, so an operator who has not provisioned it knows
-    # what they are shipping.
-    if [ -z "${CHATTER_KT_VRF_PUBLIC_KEY_HEX:-}" ]; then
-        echo ">> NOTE: CHATTER_KT_VRF_PUBLIC_KEY_HEX unset — pinning the DEV VRF key."
-        echo "   KT query privacy is degraded (an auditor can link user -> leaf)."
-        echo "   Integrity is unaffected. ./scripts/provision-trust-root.sh emits it."
     fi
     echo ">> production pinned keys from the environment"
 fi
 
-# The TLS root CA is a THIRD pin, separate from DEV_TRUST_ROOT above (which
-# only covers the sealed-sender/KT keys) -- the server has no plaintext mode,
+# The TLS root CA is the fifth pin, separate from DEV_TRUST_ROOT above (which
+# covers the four Ed25519 public keys) -- the server has no plaintext mode,
 # so every build needs one now, dev-trust-root included. Local dev: point it
 # at create-certs.sh's cert. Real build: your server's actual CA.
 if [ -z "${CHATTER_TLS_ROOT_CA_PEM:-}" ]; then
@@ -137,7 +171,7 @@ if [ -z "${CHATTER_TLS_ROOT_CA_PEM:-}" ]; then
     echo "the server has no plaintext fallback, so this is a compile-time pin now"
     echo "regardless of DEV_TRUST_ROOT."
     echo
-    echo "Local dev:  CHATTER_TLS_ROOT_CA_PEM=\"\$(cat ../../certs/server.crt)\" $0"
+    echo "Local dev:  CHATTER_TLS_ROOT_CA_PEM=\"\$(cat ../../certs/ca.crt)\" $0"
     echo "  (run ./create-certs.sh in the server repo first if that file doesn't exist)"
     exit 1
 fi
@@ -147,13 +181,72 @@ fi
 # transport, not an opt-in layered on top of one.
 QUIC_FEATURE=",quic"
 
-( cd "$PROJECT_ROOT" && cargo ndk -t arm64-v8a build -p chatter-ui \
-    --no-default-features --features "mobile${MESH_FEATURE}${TRUST_ROOT_FEATURE}${QUIC_FEATURE}" --lib )
+# Tor v3 onion transport for anon mode (Shield). CHATTER_ONION_ADDR is the
+# server's .onion, pinned into the build (config.rs PINNED_ONION_ADDR) — read
+# it from the server's ONION_DATA_DIR/hs/hostname after starting it with
+# ONION_ENABLED=true. Without it Shield cannot hide the network location and
+# says so.
+ONION_FEATURE=""
+if [ -n "${CHATTER_ONION_ADDR:-}" ]; then
+    ONION_FEATURE=",onion"
+    echo ">> onion transport pinned: $CHATTER_ONION_ADDR"
+else
+    echo ">> no CHATTER_ONION_ADDR: Shield will not hide the network location"
+fi
+
+# Auto-register a throwaway dev account on first launch, with fixed credentials
+# that are in this repository in plain sight (chatter-ui `dev_auto_register`).
+#
+# This is a compile-time cargo feature, NOT a runtime OS check. It used to be
+# `cfg!(target_os = "android")` in lib.rs, which is true for every Android build
+# — so a RELEASE APK auto-registered with those credentials too. Debug builds
+# opt in by default; RELEASE=1 refuses this feature and its public credentials.
+#
+# Set DEV_AUTO_REGISTER=0 to build the debug APK with the normal register screen.
+DEV_AUTO_REGISTER_FEATURE=""
+if [ "${DEV_AUTO_REGISTER:-1}" = "1" ]; then
+    DEV_AUTO_REGISTER_FEATURE=",dev-auto-register"
+    echo ">> !! dev auto-register enabled — first launch self-registers with public credentials"
+fi
+
+# RELEASE=1: optimized Rust (profile.release), a signed assembleRelease, and a
+# refusal to ship any dev key or the dev auto-register credentials. Signing
+# needs CHATTER_KEYSTORE, CHATTER_KEYSTORE_PASSWORD, CHATTER_KEY_ALIAS and
+# CHATTER_KEY_PASSWORD (read by app/build.gradle.kts).
+RUST_PROFILE=debug; CARGO_PROFILE_FLAG=""; GRADLE_TASK=assembleDebug; APK="app/build/outputs/apk/debug/app-debug.apk"
+GRADLE_ARGS=()
+# OPT=1: debug-signed APK with optimized Rust ([profile.release-dev]), so a
+# device build installs over the dev app while measuring near-release memory
+# (the profile.dev .so is ~225 MB of mapped code; release-dev is a fraction).
+if [ "${OPT:-0}" = "1" ] && [ "${RELEASE:-0}" != "1" ]; then
+    RUST_PROFILE=release-dev; CARGO_PROFILE_FLAG="--profile release-dev"
+fi
+if [ "${MULTI_INSTANCE:-0}" = "1" ]; then
+    GRADLE_ARGS+=(-PmultiInstance=true)
+    APK="app/build/outputs/apk/base/debug/app-base-debug.apk"
+fi
+if [ "${RELEASE:-0}" = "1" ]; then
+    # Inputs were refused above; this only selects the release profile.
+    RUST_PROFILE=release; CARGO_PROFILE_FLAG="--release"; GRADLE_TASK=assembleRelease
+    APK="app/build/outputs/apk/release/app-release.apk"
+    # Google Play accepts only an App Bundle for a new app; same signer.
+    GRADLE_ARGS+=(:app:bundleRelease)
+    AAB="app/build/outputs/bundle/release/app-release.aab"
+    rm -f "$AAB"
+    echo ">> RELEASE build: production keys, signed"
+fi
+
+( cd "$PROJECT_ROOT" && cargo ndk -t arm64-v8a build --locked -p chatter-ui $CARGO_PROFILE_FLAG \
+    --no-default-features --features "mobile${MESH_FEATURE}${TRUST_ROOT_FEATURE}${QUIC_FEATURE}${ONION_FEATURE}${DEV_AUTO_REGISTER_FEATURE}" --lib )
 
 # ── 2. Stage the .so into the Gradle module ─────────────────────────────────
 JNI_DIR="app/src/main/jniLibs/arm64-v8a"
 mkdir -p "$JNI_DIR"
-cp "$PROJECT_ROOT/target/aarch64-linux-android/debug/libchatter_ui.so" "$JNI_DIR/"
+cp "$TARGET_DIR/aarch64-linux-android/$RUST_PROFILE/libchatter_ui.so" "$JNI_DIR/"
+# Strip only the staged copy; target/ retains symbols for native diagnostics.
+# --strip-debug leaves the enormous .symtab/.strtab in place. --strip-unneeded
+# removes them while preserving dynamic exports (including WebRTC JNI).
+"$NDK_BIN/llvm-strip" --strip-unneeded "$JNI_DIR/libchatter_ui.so"
 echo ">> staged $(du -h "$JNI_DIR/libchatter_ui.so" | cut -f1) cdylib"
 
 # Note: LiveKit's webrtc Java classes (livekit.org.webrtc / jni_zero) are pulled
@@ -161,23 +254,60 @@ echo ">> staged $(du -h "$JNI_DIR/libchatter_ui.so" | cut -f1) cdylib"
 # (fileTree) — produced by the cargo-ndk step above, so no copy step is needed.
 
 # ── 3. Assemble the APK ─────────────────────────────────────────────────────
-echo ">> gradle: assembleDebug…"
-JAVA_HOME="${JAVA_HOME:-/opt/android-studio/jbr}" ./gradlew :app:assembleDebug --no-daemon
-
-APK="app/build/outputs/apk/debug/app-debug.apk"
+echo ">> gradle: $GRADLE_TASK…"
+# Android's incremental APK writer can retain large gaps from the previous
+# native library. Start the ZIP afresh without rebuilding unchanged classes.
+rm -f "$APK"
+if [ "${MULTI_INSTANCE:-0}" = "1" ]; then
+    for variant in b c; do
+        rm -f "app/build/outputs/apk/$variant/debug/app-$variant-debug.apk"
+    done
+fi
+# AGP 9 needs JDK 21+; Gradle 9.8.1 supports the installed stable JDK 27.
+JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-27-openjdk}" ./gradlew :app:$GRADLE_TASK "${GRADLE_ARGS[@]}" --no-daemon
+[ -f "$APK" ] || { echo "FATAL: $APK missing (unsigned release?)"; exit 1; }
+if [ "${RELEASE:-0}" = "1" ]; then
+    # Prove the shipped APK carries the release signer, never the debug key.
+    APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)"
+    [ -x "$APKSIGNER" ] || { echo "FATAL: apksigner not found under $ANDROID_HOME/build-tools"; exit 1; }
+    SIGNER="$("$APKSIGNER" verify --print-certs "$APK")" || { echo "FATAL: $APK signature does not verify"; exit 1; }
+    if grep -q 'certificate DN: .*CN=Android Debug' <<<"$SIGNER"; then
+        rm -f "$APK"; echo "FATAL: release APK is signed with the Android debug key; removed"; exit 1
+    fi
+    echo "$SIGNER" | grep -E 'certificate (DN|SHA-256 digest):'
+    (cd "$(dirname "$APK")" && sha256sum "$(basename "$APK")" > "$(basename "$APK").sha256")
+    # The bundle is jar-signed (apksigner cannot read it); it must carry the
+    # same certificate as the APK, which the digest comparison proves.
+    [ -f "$AAB" ] || { echo "FATAL: $AAB missing"; exit 1; }
+    APK_DIGEST="$(grep -m1 'certificate SHA-256 digest:' <<<"$SIGNER" | awk '{print $NF}')"
+    AAB_DIGEST="$("${JAVA_HOME:-/usr/lib/jvm/java-27-openjdk}/bin/keytool" -printcert -jarfile "$AAB" \
+        | awk '/SHA256:/ {print tolower($2); exit}' | tr -d ':')"
+    [ -n "$APK_DIGEST" ] && [ "$AAB_DIGEST" = "$APK_DIGEST" ] \
+        || { rm -f "$AAB"; echo "FATAL: $AAB is unsigned or not signed by the APK's release certificate; removed"; exit 1; }
+    (cd "$(dirname "$AAB")" && sha256sum "$(basename "$AAB")" > "$(basename "$AAB").sha256")
+    echo "Bundle: $AAB (upload this one to Google Play)"
+fi
 echo "------------------------------------------------------------"
 echo "Build complete: $APK"
+if [ "${MULTI_INSTANCE:-0}" = "1" ]; then
+    for variant in b c; do
+        variant_apk="app/build/outputs/apk/$variant/debug/app-$variant-debug.apk"
+        [ -f "$variant_apk" ] || { echo "FATAL: $variant_apk missing"; exit 1; }
+        echo "Build complete: $variant_apk (com.chatter.client.$variant)"
+    done
+fi
 echo "------------------------------------------------------------"
 
 # ── 4. Optional: install + tunnel ───────────────────────────────────────────
 if [ "${1:-}" = "install" ]; then
     ADB="$ANDROID_HOME/platform-tools/adb"
-    echo ">> installing + setting reverse tunnels (50051 gRPC, 9000 RustFS storage)…"
-    # 50051 = ConnectRPC server. 9000 = RustFS/S3 — attachment uploads hit a
-    # presigned URL at 127.0.0.1:9000, which on-device is the phone's localhost,
-    # so it must be tunnelled to the host too or attachment sends fail.
+    echo ">> installing + setting reverse tunnels (50051 gRPC, 9444 HTTPS storage)…"
+    # 50051 = ConnectRPC server. Presigned storage URLs use the pinned
+    # HTTPS edge at 127.0.0.1:9444; tunnel it so uploads work on mobile data.
+    # 9000 remains available for legacy local development tools.
     "$ADB" reverse tcp:50051 tcp:50051 || true
     "$ADB" reverse tcp:9000 tcp:9000 || true
+    "$ADB" reverse tcp:9444 tcp:9444 || true
     # 7880 = LiveKit signaling (WS), 7881 = LiveKit ICE/TCP media fallback.
     # (UDP media won't tunnel over adb; for real calls use the host LAN IP.)
     "$ADB" reverse tcp:7880 tcp:7880 || true

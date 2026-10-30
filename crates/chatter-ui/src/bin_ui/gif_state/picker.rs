@@ -2,6 +2,7 @@
 //!
 //! Manages animated GIF playback for the GIF picker panel.
 
+use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -20,26 +21,16 @@ thread_local! {
 /// Register a GIF for the picker animation.
 pub fn register_picker_gif(
     gif_id: String,
-    raw_frames: Vec<(Vec<u8>, u32, u32, u64)>,
+    prepared_frames: Vec<(slint::SharedPixelBuffer<slint::Rgba8Pixel>, u64)>,
 ) {
-    if raw_frames.len() <= 1 {
+    if prepared_frames.len() <= 1 {
         return;
     }
 
-    // Convert raw frames to Slint Images
-    let frames: Vec<Image> = raw_frames
-        .iter()
-        .map(|(data, width, height, _)| {
-            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                data,
-                *width,
-                *height,
-            );
-            slint::Image::from_rgba8(buffer)
-        })
-        .collect();
-
-    let delays: Vec<u64> = raw_frames.iter().map(|(_, _, _, d)| *d).collect();
+    let (frames, delays): (Vec<Image>, Vec<u64>) = prepared_frames
+        .into_iter()
+        .map(|(pixels, delay)| (Image::from_rgba8(pixels), delay))
+        .unzip();
 
     let state = InlineGifState {
         frames,
@@ -115,18 +106,26 @@ fn tick_picker_gifs(elapsed_ms: u64) {
 }
 
 fn update_picker_thumbnails(window: &crate::MainWindow, updates: &[(String, Image)]) {
-    let results = window.get_composer_gif_picker_results();
-    let count = results.row_count();
-
-    for (update_id, new_image) in updates {
-        for idx in 0..count {
-            if let Some(mut gif) = results.row_data(idx) {
-                if gif.id.as_str() == update_id {
-                    if let Some(model) = results.as_any().downcast_ref::<slint::VecModel<crate::GifData>>() {
-                        gif.preview = new_image.clone();
-                        model.set_row_data(idx, gif);
-                    }
-                    break;
+    // A GIF can sit in both sections (sent before, trending now).
+    let changed: HashMap<&str, &Image> = updates
+        .iter()
+        .map(|(id, image)| (id.as_str(), image))
+        .collect();
+    for results in [
+        window.global::<crate::ChatPane>().get_composer_gif_picker_recent(),
+        window.global::<crate::ChatPane>().get_composer_gif_picker_results(),
+    ] {
+        let Some(model) = results
+            .as_any()
+            .downcast_ref::<slint::VecModel<crate::GifData>>()
+        else {
+            continue;
+        };
+        for idx in 0..model.row_count() {
+            if let Some(mut gif) = model.row_data(idx) {
+                if let Some(image) = changed.get(gif.id.as_str()) {
+                    gif.preview = (*image).clone();
+                    model.set_row_data(idx, gif);
                 }
             }
         }

@@ -129,7 +129,10 @@ impl TimingObfuscation {
     pub async fn delay_before_send(&self) {
         if self.config.enabled {
             let delay = self.random_delay();
-            tracing::trace!(delay_ms = delay.as_millis(), "Timing obfuscation: pre-send delay");
+            tracing::trace!(
+                delay_ms = delay.as_millis(),
+                "Timing obfuscation: pre-send delay"
+            );
             sleep(delay).await;
         }
     }
@@ -140,7 +143,10 @@ impl TimingObfuscation {
     pub async fn delay_before_poll(&self) {
         if self.config.enabled {
             let delay = self.random_delay();
-            tracing::trace!(delay_ms = delay.as_millis(), "Timing obfuscation: pre-poll delay");
+            tracing::trace!(
+                delay_ms = delay.as_millis(),
+                "Timing obfuscation: pre-poll delay"
+            );
             sleep(delay).await;
         }
     }
@@ -151,7 +157,10 @@ impl TimingObfuscation {
     pub async fn delay_before_operation(&self) {
         if self.config.enabled {
             let delay = self.random_delay();
-            tracing::trace!(delay_ms = delay.as_millis(), "Timing obfuscation: pre-operation delay");
+            tracing::trace!(
+                delay_ms = delay.as_millis(),
+                "Timing obfuscation: pre-operation delay"
+            );
             sleep(delay).await;
         }
     }

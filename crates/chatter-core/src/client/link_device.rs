@@ -10,40 +10,40 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::crypto::SecretString;
-use crate::proto::provisioning_v1::ProvisioningSession;
 use crate::services::link_device_service::{
-    ApprovedDevice, LinkDeviceError, LinkDeviceService, LinkProgress,
-    PendingDeviceLink,
+    ApprovedDevice, LinkDeviceError, LinkDeviceService, LinkProgress, PendingDeviceLink,
+    PendingLink,
 };
 use crate::storage::repositories::settings_repo::SettingsRepository;
-use crate::storage::repositories::user_repo::UserRepository;
 
 use super::{ChatterClient, ClientError};
 
 impl ChatterClient {
     /// Lazy accessor for the device-linking service.
     ///
-    /// Constructed on first use because the deps (settings repo, user repo)
+    /// Constructed on first use because the deps (settings repo, key store)
     /// are read-only and only touched when the user opens the link-device
     /// flow. Cheap to call repeatedly thereafter.
     pub(crate) fn link_device(&self) -> &Arc<LinkDeviceService> {
         self.link_device_service.get_or_init(|| {
             let settings = Arc::new(SettingsRepository::new(self.services.database.clone()));
-            let user_repo = Arc::new(UserRepository::new(self.services.database.clone()));
             let key_store = self.signal().key_store.clone();
             Arc::new(LinkDeviceService::new(
                 self.services.grpc_pool.clone(),
                 settings,
-                user_repo,
                 key_store,
                 self.services.database.clone(),
                 self.services.event_bus.clone(),
-                self.notifications().clone(),
             ))
         })
     }
 
     // ── New-device flow ────────────────────────────────────────────────
+
+    /// Check for an existing identity before showing the new-device QR flow.
+    pub fn link_device_has_local_identity(&self) -> Result<bool, LinkDeviceError> {
+        self.link_device().has_local_identity()
+    }
 
     /// Run the entire new-device QR flow as a single stream of progress
     /// events. The UI's only job is to render `QrReady`, update status on
@@ -65,7 +65,7 @@ impl ChatterClient {
             self.connect().await?;
         }
         let device_info = LinkDeviceService::current_device_info().to_string();
-        let device_name = format!("{} ({})", device_info, env!("CARGO_PKG_VERSION"));
+        let device_name = LinkDeviceService::current_device_name();
         Ok(self
             .link_device()
             .run_new_device_flow(device_info, device_name))
@@ -94,10 +94,7 @@ impl ChatterClient {
     ///
     /// Errors:
     /// - `InvalidLinkUrl(_)` — paste was malformed
-    pub fn prepare_link_from_url(
-        &self,
-        url: &str,
-    ) -> Result<PendingDeviceLink, LinkDeviceError> {
+    pub fn prepare_link_from_url(&self, url: &str) -> Result<PendingDeviceLink, LinkDeviceError> {
         self.link_device().prepare_link_from_url(url)
     }
 
@@ -127,9 +124,14 @@ impl ChatterClient {
         self.link_device().approve_link(pending, secret).await
     }
 
-    pub async fn list_pending_links(
-        &self,
-    ) -> Result<Vec<ProvisioningSession>, LinkDeviceError> {
+    /// Links this account approved that the new device has not finished
+    /// (Settings › Active Sessions lists them with a Cancel).
+    pub async fn list_pending_links(&self) -> Result<Vec<PendingLink>, LinkDeviceError> {
         self.link_device().list_pending().await
+    }
+
+    /// Cancel an approved link before the new device completes it.
+    pub async fn cancel_pending_link(&self, uuid: &str) -> Result<(), LinkDeviceError> {
+        self.link_device().cancel(uuid).await
     }
 }

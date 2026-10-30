@@ -36,3 +36,6 @@ chatter-windows-x64.zip
 
 # Stray Windows installers/tools — no .exe belongs in source
 *.exe
+
+# Personal MCP server config (machine-specific paths)
+.mcp.json

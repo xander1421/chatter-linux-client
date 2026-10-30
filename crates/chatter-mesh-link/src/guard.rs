@@ -76,9 +76,9 @@ impl PacketFreshnessPolicy {
     /// One-sided staleness: is this packet older than `max_age_millis`?
     ///
     /// A future timestamp is never stale, mirroring Swift. That is not sloppiness —
-    /// this window guards announce replay, and the symmetric check that catches
-    /// implausible future timestamps is [`Self::is_within_skew`], applied to the same
-    /// packet on ingress.
+    /// this window guards announce replay. Implausible future timestamps are
+    /// rejected in [`IngressGuard::evaluate`], which compares [`Self::skew_millis`]
+    /// with `max_timestamp_skew_millis` and returns [`IngressRejection::TimestampSkew`].
     ///
     /// The `now < max_age` guard reproduces Swift's `guard nowMilliseconds >=
     /// maxAgeMilliseconds else { return false }`. It only fires for clocks set near
@@ -98,15 +98,6 @@ impl PacketFreshnessPolicy {
     /// Absolute distance between the timestamp and now, in either direction.
     pub fn skew_millis(timestamp_millis: u64, now_unix_millis: u64) -> u64 {
         timestamp_millis.abs_diff(now_unix_millis)
-    }
-
-    /// Symmetric freshness: within `max_skew_millis` of now, past or future.
-    pub fn is_within_skew(
-        timestamp_millis: u64,
-        now_unix_millis: u64,
-        max_skew_millis: u64,
-    ) -> bool {
-        Self::skew_millis(timestamp_millis, now_unix_millis) <= max_skew_millis
     }
 }
 
@@ -186,7 +177,8 @@ impl SelfBroadcastTracker {
 
     /// True when this packet is an echo of something we sent.
     pub fn contains(&self, packet: &BitchatPacket) -> bool {
-        self.entries.contains_key(&SelfBroadcastKey::for_packet(packet))
+        self.entries
+            .contains_key(&SelfBroadcastKey::for_packet(packet))
     }
 
     /// The local message ID for an echo, without consuming the record.
@@ -194,17 +186,6 @@ impl SelfBroadcastTracker {
         self.entries
             .get(&SelfBroadcastKey::for_packet(packet))
             .map(|entry| entry.message_id.as_str())
-    }
-
-    /// The local message ID for an echo, consuming the record.
-    ///
-    /// Consuming is the point: the second echo of the same packet finds nothing and
-    /// is handled as an ordinary duplicate rather than re-resolving to a message the
-    /// caller has already reconciled.
-    pub fn take_message_id(&mut self, packet: &BitchatPacket) -> Option<String> {
-        self.entries
-            .remove(&SelfBroadcastKey::for_packet(packet))
-            .map(|entry| entry.message_id)
     }
 
     /// Drops records sent before `cutoff_millis`. Retention is bounded because this
@@ -589,7 +570,11 @@ mod tests {
 
         // Exactly at the boundary is not stale: Swift uses a strict `<`.
         assert!(!PacketFreshnessPolicy::is_stale(now - window, now, window));
-        assert!(PacketFreshnessPolicy::is_stale(now - window - 1, now, window));
+        assert!(PacketFreshnessPolicy::is_stale(
+            now - window - 1,
+            now,
+            window
+        ));
         // The future is never stale by this policy — the skew check catches it.
         assert!(!PacketFreshnessPolicy::is_stale(
             now + 10_000_000,
@@ -610,22 +595,14 @@ mod tests {
         let now = 1_000_000;
         assert_eq!(PacketFreshnessPolicy::age_millis(now + 10_000, now), 0);
         assert_eq!(PacketFreshnessPolicy::age_millis(now - 10_000, now), 10_000);
-        assert_eq!(PacketFreshnessPolicy::skew_millis(now + 10_000, now), 10_000);
-        assert_eq!(PacketFreshnessPolicy::skew_millis(now - 10_000, now), 10_000);
-    }
-
-    #[test]
-    fn skew_window_accepts_inside_and_rejects_outside_on_both_sides() {
-        let now = 10_000_000;
-        let max = DEFAULT_MAX_TIMESTAMP_SKEW_MILLIS;
-
-        assert!(PacketFreshnessPolicy::is_within_skew(now, now, max));
-        // Exactly on the boundary is accepted, both directions: Swift's `<=`.
-        assert!(PacketFreshnessPolicy::is_within_skew(now - max, now, max));
-        assert!(PacketFreshnessPolicy::is_within_skew(now + max, now, max));
-        // One millisecond past it is not, both directions.
-        assert!(!PacketFreshnessPolicy::is_within_skew(now - max - 1, now, max));
-        assert!(!PacketFreshnessPolicy::is_within_skew(now + max + 1, now, max));
+        assert_eq!(
+            PacketFreshnessPolicy::skew_millis(now + 10_000, now),
+            10_000
+        );
+        assert_eq!(
+            PacketFreshnessPolicy::skew_millis(now - 10_000, now),
+            10_000
+        );
     }
 
     #[test]
@@ -680,8 +657,7 @@ mod tests {
 
         assert!(tracker.contains(&pkt));
         assert_eq!(tracker.message_id(&pkt), Some("local-message"));
-        assert_eq!(tracker.take_message_id(&pkt).as_deref(), Some("local-message"));
-        assert_eq!(tracker.take_message_id(&pkt), None);
+        tracker.clear();
         assert!(tracker.is_empty());
     }
 
@@ -714,8 +690,8 @@ mod tests {
 
         tracker.prune(95_000);
 
-        assert_eq!(tracker.take_message_id(&old), None);
-        assert_eq!(tracker.take_message_id(&fresh).as_deref(), Some("fresh"));
+        assert_eq!(tracker.message_id(&old), None);
+        assert_eq!(tracker.message_id(&fresh), Some("fresh"));
 
         // Retention is `>=`: an entry exactly on the cutoff survives.
         let mut edge = SelfBroadcastTracker::new();
@@ -743,11 +719,9 @@ mod tests {
 
         let echo = BitchatPacket { ttl: 2, ..ours };
         let rejection = guard
-            .evaluate(
-                input(&echo, &sender, None, &local, now),
-                &tracker,
-                |_| false,
-            )
+            .evaluate(input(&echo, &sender, None, &local, now), &tracker, |_| {
+                false
+            })
             .expect_err("our own packet coming back must not be processed");
         assert_eq!(
             rejection,

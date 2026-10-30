@@ -5,7 +5,7 @@
 //! attacks on short PINs. The username is used as a deterministic salt.
 
 use argon2::{Argon2, Params};
-use hmac::{Hmac, Mac};
+use hkdf::Hkdf;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
@@ -77,7 +77,10 @@ fn estimate_pin_entropy_bits(pin: &str) -> f64 {
     if pin.chars().any(|c| c.is_ascii_uppercase()) {
         charset += 26;
     }
-    if pin.chars().any(|c| c.is_ascii_graphic() && !c.is_ascii_alphanumeric()) {
+    if pin
+        .chars()
+        .any(|c| c.is_ascii_graphic() && !c.is_ascii_alphanumeric())
+    {
         charset += 32;
     }
     if charset == 0 {
@@ -99,26 +102,98 @@ fn estimate_pin_entropy_bits(pin: &str) -> f64 {
 /// because past the head the structural checks and the entropy floor carry
 /// the weight.
 const BLOCKED_PINS: &[&str] = &[
-    "password", "password1", "password12", "password123", "passw0rd", "p@ssw0rd",
-    "12345678", "123456789", "1234567890", "123123123", "987654321", "11111111",
-    "00000000", "1q2w3e4r", "1q2w3e4r5t", "1qaz2wsx", "qazwsx123", "aa123456",
-    "abc12345", "abcd1234", "qwertyui", "qwertyuiop", "asdfghjk", "asdfghjkl",
-    "zxcvbnm123", "iloveyou", "iloveyou1", "sunshine", "princess", "football",
-    "baseball", "superman", "trustno1", "welcome1", "michelle", "jennifer",
-    "computer", "whatever", "chocolate", "butterfly", "liverpool", "starwars",
-    "pokemon1", "michael1", "jordan23", "harley123", "shadow123", "monkey123",
-    "dragon123", "master123", "samantha", "anthony1", "danielle", "jessica1",
-    "charlie1", "internet", "creative", "adventure", "elephant", "November",
-    "December", "September", "alexander", "victoria", "kimberly", "veronica",
-    "corvette", "mercedes", "midnight", "snickers", "mountain", "dinosaur",
-    "hardcore", "lovelove", "loveyou2", "babygirl", "babygirl1", "angelina",
-    "valentina", "isabella", "gabriella", "benjamin", "nicholas", "matthew1",
+    "password",
+    "password1",
+    "password12",
+    "password123",
+    "passw0rd",
+    "p@ssw0rd",
+    "12345678",
+    "123456789",
+    "1234567890",
+    "123123123",
+    "987654321",
+    "11111111",
+    "00000000",
+    "1q2w3e4r",
+    "1q2w3e4r5t",
+    "1qaz2wsx",
+    "qazwsx123",
+    "aa123456",
+    "abc12345",
+    "abcd1234",
+    "qwertyui",
+    "qwertyuiop",
+    "asdfghjk",
+    "asdfghjkl",
+    "zxcvbnm123",
+    "iloveyou",
+    "iloveyou1",
+    "sunshine",
+    "princess",
+    "football",
+    "baseball",
+    "superman",
+    "trustno1",
+    "welcome1",
+    "michelle",
+    "jennifer",
+    "computer",
+    "whatever",
+    "chocolate",
+    "butterfly",
+    "liverpool",
+    "starwars",
+    "pokemon1",
+    "michael1",
+    "jordan23",
+    "harley123",
+    "shadow123",
+    "monkey123",
+    "dragon123",
+    "master123",
+    "samantha",
+    "anthony1",
+    "danielle",
+    "jessica1",
+    "charlie1",
+    "internet",
+    "creative",
+    "adventure",
+    "elephant",
+    "November",
+    "December",
+    "September",
+    "alexander",
+    "victoria",
+    "kimberly",
+    "veronica",
+    "corvette",
+    "mercedes",
+    "midnight",
+    "snickers",
+    "mountain",
+    "dinosaur",
+    "hardcore",
+    "lovelove",
+    "loveyou2",
+    "babygirl",
+    "babygirl1",
+    "angelina",
+    "valentina",
+    "isabella",
+    "gabriella",
+    "benjamin",
+    "nicholas",
+    "matthew1",
 ];
 
 /// Blocklist membership, case-insensitive.
 fn is_blocklisted_pin(pin: &str) -> bool {
     let lowered = pin.to_ascii_lowercase();
-    BLOCKED_PINS.iter().any(|b| b.eq_ignore_ascii_case(&lowered))
+    BLOCKED_PINS
+        .iter()
+        .any(|b| b.eq_ignore_ascii_case(&lowered))
 }
 
 /// Structural weakness: patterns whose keyspace is tiny regardless of what
@@ -251,13 +326,11 @@ pub fn derive_svr_secret(pin: &str, salt: &str) -> Result<[u8; 32], CryptoError>
     if salt_bytes.len() < 8 {
         salt_bytes.resize(8, 0);
     }
-    
-    argon2.hash_password_into(
-        pin.as_bytes(),
-        &salt_bytes,
-        &mut output,
-    ).map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
-    
+
+    argon2
+        .hash_password_into(pin.as_bytes(), &salt_bytes, &mut output)
+        .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
+
     Ok(output)
 }
 
@@ -296,6 +369,28 @@ pub fn derive_pin_fingerprint(pin: &str, username: &str) -> Result<[u8; 32], Cry
     Ok(fp)
 }
 
+/// Derive a purpose-specific 32-byte subkey from the SVR secret.
+///
+/// CRYPTO-3: the Argon2id output is one secret with several consumers — an
+/// AES-256-GCM key, a lookup index the server sees, an X25519 static scalar and
+/// two more authenticators. Handing the same 32 bytes to different primitives
+/// gives none of them a key of their own, so a weakness or a leak in any one of
+/// them is a weakness in all of them. Every consumer now takes an HKDF-SHA256
+/// expansion under its own info string, exactly as `message_backup::
+/// derive_server_kek` already did.
+pub fn svr_subkey(svr_secret: &[u8; 32], info: &[u8]) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(None, svr_secret);
+    let mut out = [0u8; 32];
+    hk.expand(info, &mut out)
+        .expect("32 bytes is a valid HKDF-SHA256 output length");
+    out
+}
+
+/// HKDF info strings. Each consumer of the SVR secret gets exactly one.
+pub(crate) const SVR_INFO_PIN_FINGERPRINT: &[u8] = b"Chatter SVR Local PIN Fingerprint v1";
+pub(crate) const SVR_INFO_REGISTRATION_LOCK: &[u8] = b"Chatter SVR Registration Lock v1";
+pub(crate) const SVR_INFO_X25519: &[u8] = b"Chatter SVR X25519 Static Secret v1";
+
 /// Same as [`derive_pin_fingerprint`] but takes an already-derived SVR secret.
 ///
 /// PERF: [`derive_svr_secret`] is a deliberately expensive memory-hard KDF
@@ -305,14 +400,7 @@ pub fn derive_pin_fingerprint(pin: &str, username: &str) -> Result<[u8; 32], Cry
 /// security benefit. Callers deriving several values from one PIN should call
 /// [`derive_svr_secret`] once and use the `*_from_secret` variants.
 pub fn pin_fingerprint_from_secret(svr_secret: &[u8; 32]) -> [u8; 32] {
-    type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(svr_secret)
-        .expect("HMAC can take key of any size");
-    mac.update(b"Chatter Local PIN Fingerprint");
-    let result = mac.finalize();
-    let mut fp = [0u8; 32];
-    fp.copy_from_slice(&result.into_bytes());
-    fp
+    svr_subkey(svr_secret, SVR_INFO_PIN_FINGERPRINT)
 }
 
 /// Derive registration lock token from PIN.
@@ -331,34 +419,18 @@ pub fn derive_registration_lock(pin: &str, username: &str) -> Result<[u8; 32], C
 /// Same as [`derive_registration_lock`] but takes an already-derived SVR secret.
 /// See [`pin_fingerprint_from_secret`] for why callers should prefer this.
 pub fn registration_lock_from_secret(svr_secret: &[u8; 32]) -> [u8; 32] {
-    type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(svr_secret)
-        .expect("HMAC can take key of any size");
-    mac.update(b"Registration Lock");
-    let result = mac.finalize();
-
-    let mut lock = [0u8; 32];
-    lock.copy_from_slice(&result.into_bytes());
-    lock
+    svr_subkey(svr_secret, SVR_INFO_REGISTRATION_LOCK)
 }
 
 /// SVR Keypair for Secure Value Recovery.
 ///
 /// # Security: Zeroize on Drop
 ///
-/// The `secret` field (`StaticSecret` from x25519-dalek) implements `Zeroize` but does NOT
-/// implement `ZeroizeOnDrop`. We explicitly implement `Drop` to ensure the private key material
-/// is zeroized when the keypair goes out of scope, preventing key leakage through memory.
-/// The `zeroize` feature is enabled on `x25519-dalek` in Cargo.toml to support this.
+/// Dalek 3's `StaticSecret` implements `Drop` and `ZeroizeOnDrop` with the
+/// explicitly enabled `zeroize` feature, clearing the private key on release.
 pub struct SvrKeypair {
     secret: StaticSecret,
     public: PublicKey,
-}
-
-impl Drop for SvrKeypair {
-    fn drop(&mut self) {
-        self.secret.zeroize();
-    }
 }
 
 impl SvrKeypair {
@@ -374,7 +446,11 @@ impl SvrKeypair {
     /// secret. See [`pin_fingerprint_from_secret`] for why callers should
     /// prefer this.
     pub fn from_secret(svr_secret: &[u8; 32]) -> Self {
-        let secret = StaticSecret::from(*svr_secret);
+        // CRYPTO-3: an X25519 static scalar of its own, not the raw SVR secret
+        // that also keys AES-GCM and the server-visible backup id.
+        let mut scalar = svr_subkey(svr_secret, SVR_INFO_X25519);
+        let secret = StaticSecret::from(scalar);
+        scalar.zeroize();
         let public = PublicKey::from(&secret);
         Self { secret, public }
     }
@@ -383,7 +459,7 @@ impl SvrKeypair {
     pub fn public_key_bytes(&self) -> [u8; 32] {
         self.public.to_bytes()
     }
-    
+
     /// Borrow the static secret (private key) bytes for the duration of `f`.
     ///
     /// # Why a closure?
@@ -415,14 +491,14 @@ mod tests {
     #[test]
     fn common_and_predictable_pins_are_rejected_despite_high_charset_entropy() {
         for pin in [
-            "password",  // 37.6 "bits", first line of rockyou (§10's own example)
-            "Password1", // blocklist is case-insensitive
-            "iloveyou",  // common-list
-            "aaaaaaaa",  // one repeated char — 37.6 "bits" under the charset model
-            "abcdefgh",  // +1 run
-            "hgfedcba",  // -1 run
-            "12341234",  // repeated block, integer tiling
-            "abcabcab",  // repeated block, NON-integer tiling (period 3 over 8)
+            "password",   // 37.6 "bits", first line of rockyou (§10's own example)
+            "Password1",  // blocklist is case-insensitive
+            "iloveyou",   // common-list
+            "aaaaaaaa",   // one repeated char — 37.6 "bits" under the charset model
+            "abcdefgh",   // +1 run
+            "hgfedcba",   // -1 run
+            "12341234",   // repeated block, integer tiling
+            "abcabcab",   // repeated block, NON-integer tiling (period 3 over 8)
             "xyxyxyxyxy", // period 2
         ] {
             assert!(
@@ -436,7 +512,12 @@ mod tests {
     /// this check can never lock the integration suite out.
     #[test]
     fn reasonable_pins_still_pass() {
-        for pin in ["Va1idPin!x9", "tr0mb0ne-cloud", "Bl4ckb1rd$", "novemberrain77"] {
+        for pin in [
+            "Va1idPin!x9",
+            "tr0mb0ne-cloud",
+            "Bl4ckb1rd$",
+            "novemberrain77",
+        ] {
             assert!(
                 validate_pin(pin).is_ok(),
                 "{pin:?} should pass but was rejected"
@@ -508,7 +589,10 @@ mod tests {
         let kp2 = SvrKeypair::new_from_pin("123456", "alice").unwrap();
 
         let eq = kp1.with_secret_bytes(|a| kp2.with_secret_bytes(|b| a == b));
-        assert!(eq, "same (pin, username) must produce the same secret bytes");
+        assert!(
+            eq,
+            "same (pin, username) must produce the same secret bytes"
+        );
     }
 
     /// The `*_from_secret` variants exist so the registration/login paths can
@@ -534,7 +618,9 @@ mod tests {
         );
         assert_eq!(
             SvrKeypair::from_secret(&secret).public_key_bytes(),
-            SvrKeypair::new_from_pin(pin, user).unwrap().public_key_bytes(),
+            SvrKeypair::new_from_pin(pin, user)
+                .unwrap()
+                .public_key_bytes(),
             "SvrKeypair::from_secret must equal SvrKeypair::new_from_pin"
         );
     }
@@ -574,8 +660,14 @@ mod tests {
         // NOT "abcdefgh" — that is a keyboard-walk run the structural check
         // now rejects (§10); an 8-char PIN must be fine when it isn't a
         // pattern.
-        assert!(validate_pin("kf8mq2xp").is_ok(), "8 mixed lowercase+digits accepted");
-        assert!(validate_pin("AaBbCc12").is_ok(), "mixed alphanumeric accepted");
+        assert!(
+            validate_pin("kf8mq2xp").is_ok(),
+            "8 mixed lowercase+digits accepted"
+        );
+        assert!(
+            validate_pin("AaBbCc12").is_ok(),
+            "mixed alphanumeric accepted"
+        );
         assert!(validate_pin("Pa$$w0rd!").is_ok(), "symbols accepted");
     }
 
@@ -583,13 +675,22 @@ mod tests {
     fn validate_pin_rejects_low_entropy() {
         // 8-digit numeric (~26.6 bits) is below the entropy floor — the case a
         // software-only SVR can't defend against.
-        assert!(validate_pin("12345678").is_err(), "8-digit numeric rejected");
+        assert!(
+            validate_pin("12345678").is_err(),
+            "8-digit numeric rejected"
+        );
         // A longer numeric PIN clears the entropy floor (10 digits ~= 33
         // bits), but "1234567890" specifically is a +1 run AND on the
         // blocklist — the §10 case of a high-scoring first-guess. A
         // non-pattern 10-digit PIN passes.
-        assert!(validate_pin("1234567890").is_err(), "the canonical 10-digit run rejected");
-        assert!(validate_pin("8629174035").is_ok(), "non-pattern 10-digit numeric accepted");
+        assert!(
+            validate_pin("1234567890").is_err(),
+            "the canonical 10-digit run rejected"
+        );
+        assert!(
+            validate_pin("8629174035").is_ok(),
+            "non-pattern 10-digit numeric accepted"
+        );
     }
 
     #[test]
@@ -616,5 +717,67 @@ mod tests {
         assert_eq!(p.t_cost(), 8, "expected 8 iterations");
         assert_eq!(p.p_cost(), 4, "expected 4 lanes");
         assert_eq!(p.output_len(), Some(32));
+    }
+
+    /// Recorded with the RC112 Argon2 0.5.3 / HKDF 0.12.4 dependencies.
+    /// Pin the full Shield derivation, including username normalization and
+    /// domain separation, so dependency upgrades cannot silently re-key it.
+    #[test]
+    fn shield_pin_fingerprint_matches_rc112_vector() {
+        let secret = derive_svr_secret("p5-test-only-pin", "  KAT-USER  ").unwrap();
+        assert_eq!(
+            hex::encode(secret),
+            "2fe1bd622c2de214dce93f772755a0f4fb6f3de4e309c5990d3e9911a0b0d722",
+        );
+        assert_eq!(
+            hex::encode(pin_fingerprint_from_secret(&secret)),
+            "e45ea2d83712c174b511a2bdfd3961d452203142da70990e4e32a3f16b601a0f",
+        );
+    }
+
+    /// CRYPTO-3: the Argon2id SVR secret used to be handed unmodified to an
+    /// AES-256-GCM key, an HMAC key whose output the server sees as a lookup
+    /// index, an X25519 static scalar and two more HMAC keys — one secret, five
+    /// primitives, no separation. Each consumer now takes its own HKDF-SHA256
+    /// expansion. These vectors were computed independently (Python
+    /// hmac/hashlib HKDF over ikm = 0x00..0x1f) so a silent change to an info
+    /// string — which re-keys every backup and every registration lock — fails
+    /// loudly instead.
+    #[test]
+    fn svr_subkeys_match_pinned_vectors_and_are_distinct() {
+        let secret: [u8; 32] = core::array::from_fn(|i| i as u8);
+
+        assert_eq!(
+            hex::encode(pin_fingerprint_from_secret(&secret)),
+            "1ca0b8c4ab8fc1732fd3dc28680ef40168d18cb1b50d4e6146da26a3ff8d05a9",
+        );
+        assert_eq!(
+            hex::encode(registration_lock_from_secret(&secret)),
+            "fec745f7e2513c68282a8dceb96077b0a57405e85f2f237faecef53f657ad002",
+        );
+        assert_eq!(
+            hex::encode(svr_subkey(&secret, SVR_INFO_X25519)),
+            "fae4444170eda3a0b0b22c8108d6dcb5e76ce24a711c879d3175151ca4a6b337",
+        );
+
+        // No consumer may see the raw secret, and no two may see the same bytes.
+        let subkeys = [
+            pin_fingerprint_from_secret(&secret),
+            registration_lock_from_secret(&secret),
+            svr_subkey(&secret, SVR_INFO_X25519),
+            crate::crypto::svr_backup::derive_backup_id(&secret),
+        ];
+        for (i, a) in subkeys.iter().enumerate() {
+            assert_ne!(*a, secret, "subkey {i} is the raw SVR secret");
+            for b in subkeys.iter().skip(i + 1) {
+                assert_ne!(a, b, "two consumers share key material");
+            }
+        }
+
+        // The X25519 scalar is derived, not the secret itself.
+        assert_ne!(SvrKeypair::from_secret(&secret).public_key_bytes(), {
+            use x25519_dalek::{PublicKey, StaticSecret};
+            PublicKey::from(&StaticSecret::from(secret)).to_bytes()
+        });
     }
 }

@@ -9,6 +9,7 @@ use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
 use rusqlite::params;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A custom sidebar section.
@@ -173,11 +174,7 @@ impl SectionRepository {
     }
 
     /// Set how a section's conversations are ordered.
-    pub fn set_sort_mode(
-        &self,
-        id: &SectionId,
-        mode: SectionSortMode,
-    ) -> Result<(), StorageError> {
+    pub fn set_sort_mode(&self, id: &SectionId, mode: SectionSortMode) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let now = Utc::now();
 
@@ -264,15 +261,40 @@ impl SectionRepository {
         Ok(memberships)
     }
 
+    /// Read every folder membership with one connection checkout, preserving
+    /// the insertion order that each folder uses before its sort mode applies.
+    pub fn all_section_conversations(
+        &self,
+    ) -> Result<HashMap<SectionId, Vec<SectionMembership>>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT section_id, conversation_id, conversation_type
+             FROM section_memberships ORDER BY section_id, added_at ASC",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut memberships: HashMap<SectionId, Vec<SectionMembership>> = HashMap::new();
+        while let Some(row) = rows.next()? {
+            let section_id: String = row.get(0)?;
+            let id = section_id.parse().map_err(|e| {
+                StorageError::InvalidData(format!("Invalid section ID: {}", e))
+            })?;
+            let conversation_type = ConversationType::from_str_value(&row.get::<_, String>(2)?)?;
+            memberships.entry(id).or_default().push(SectionMembership {
+                conversation_id: row.get(1)?,
+                conversation_type,
+            });
+        }
+        Ok(memberships)
+    }
+
     /// Get which section a conversation belongs to, if any.
     pub fn get_conversation_section(
         &self,
         conversation_id: &str,
     ) -> Result<Option<SectionId>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT section_id FROM section_memberships WHERE conversation_id = ?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT section_id FROM section_memberships WHERE conversation_id = ?1")?;
 
         match stmt.query_row(params![conversation_id], |row| {
             let id_str: String = row.get(0)?;
@@ -292,9 +314,7 @@ impl SectionRepository {
     /// Return the set of all conversation IDs that belong to any section.
     pub fn all_conversation_ids(&self) -> Result<std::collections::HashSet<String>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT conversation_id FROM section_memberships",
-        )?;
+        let mut stmt = conn.prepare("SELECT DISTINCT conversation_id FROM section_memberships")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         let mut ids = std::collections::HashSet::new();
         for row in rows {

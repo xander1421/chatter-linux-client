@@ -1,0 +1,219 @@
+import { SidebarPane } from "app_sidebar_pane.slint";
+import { SettingsPane } from "app_settings_pane.slint";
+import { ModalHostState } from "app_modal_host_state.slint";
+import { ChatPane } from "app_chat_pane.slint";
+import { CallView } from "app_call_view.slint";
+import { ServerRecordsGlobal } from "server_records/screen.slint";
+import { Spacing } from "theme/spacing.slint";
+import { FriendsModal, FriendData, FriendRequestData, BlockedUserData } from "modals/friends.slint";
+import { AccountMenu } from "settings/account_menu.slint";
+import { CallHistoryScreen, CallHistoryRow } from "calls/mod.slint";
+
+export component AppTabScreens inherits Rectangle {
+    in property <bool> bottom-nav-visible;
+    in property <bool> compact-layout;
+    in property <bool> is-mobile-platform;
+    in property <length> return-to-call-height;
+    in property <length> safe-area-bottom;
+
+    background: transparent;
+
+    // Account menu — the "Profile" tab. A tab screen like Calls and Contacts:
+    // z -1, under anything pushed over it and under the bottom bar. Settings
+    // and My Profile are pushed from here, so Back returns to it.
+    if SidebarPane.active-tab == "profile": AccountMenu {
+        z: -1;
+        show-modal: true;
+        mobile-mode: root.compact-layout;
+        // A tab's root screen only where there is a tab bar (phone layout);
+        // on desktop and tablets it is a dialog, modal for screen readers.
+        root-screen: root.compact-layout;
+        bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
+        display-name: SidebarPane.user-display-name;
+        username: SettingsPane.settings-username;
+        avatar: SidebarPane.user-avatar-source;
+        initials: SidebarPane.user-initials;
+
+        close => {
+            SidebarPane.active-tab = "chats";
+        }
+        notifications => {
+            ModalHostState.nav-push("server-records");
+            ServerRecordsGlobal.open("notifications", "");
+        }
+        my-profile => {
+            ModalHostState.nav-push("user-profile");
+            SidebarPane.profile-clicked();
+        }
+        saved-messages => {
+            SidebarPane.active-tab = "chats";
+            SidebarPane.mobile-show-chat = true;
+            SidebarPane.saved-messages-clicked();
+        }
+        new-channel => {
+            ModalHostState.start-create-channel();
+        }
+        settings => {
+            ModalHostState.nav-push("settings");
+            SidebarPane.settings-clicked();
+        }
+    }
+
+    // Calls screen — the "Calls" tab. Like Contacts it is a tab
+    // screen, not a modal: z -1 keeps it under anything pushed over it and
+    // under the bottom bar, whose strip it leaves free.
+    if SidebarPane.active-tab == "calls": CallHistoryScreen {
+        z: -1;
+        mobile-mode: root.compact-layout;
+        // A tab's root screen: the tab bar navigates, no back chevron.
+        root-screen: root.compact-layout;
+        // During a call the return bar occupies the strip above the dock.
+        // Reserve it for fixed confirmation controls as well as list rows.
+        bottom-inset: (root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px)
+            + (root.compact-layout && CallView.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px);
+        show-modal: true;
+        rows: CallView.call-history-rows;
+        loading: CallView.call-history-loading;
+        paging-paused: CallView.call-history-paging-paused;
+        error-message: CallView.call-history-error;
+        active-filter: CallView.call-history-filter;
+        show-more-menu <=> CallView.calls-more-menu-visible;
+        selecting: CallView.call-history-selecting;
+        selected-count: CallView.call-history-selected-count;
+        retry => { CallView.call-history-retry(); }
+        load-more => { CallView.call-history-load-more(); }
+        toggle-select(id) => { CallView.call-history-toggle-select(id); }
+        select-all(all) => { CallView.call-history-select-all(all); }
+        end-selection => { CallView.call-history-end-selection(); }
+        delete-selected => { CallView.call-history-delete-selected(); }
+
+        close => {
+            SidebarPane.active-tab = "chats";
+        }
+        filter-changed(f) => {
+            CallView.call-history-filter = f;
+            CallView.call-history-filter-changed(f);
+        }
+        open-conversation(id, kind) => {
+            SidebarPane.active-tab = "chats";
+            SidebarPane.mobile-show-chat = true;
+            CallView.call-history-open(id, kind);
+        }
+        call-back(id, kind, video) => {
+            SidebarPane.active-tab = "chats";
+            SidebarPane.mobile-show-chat = true;
+            CallView.call-history-redial(id, kind, video);
+        }
+        clear-history => {
+            CallView.call-history-clear();
+        }
+    }
+
+    // Friends Modal
+    if SidebarPane.active-tab == "contacts": FriendsModal {
+        init => {
+            if (ModalHostState.friends-modal-tab == "find") { ModalHostState.friends-modal-switch-tab("find"); }
+        }
+        z: -1;
+        mobile-mode: root.compact-layout;
+        // A tab's root screen: the tab bar navigates, no back chevron.
+        root-screen: root.compact-layout;
+        // Keep the tab bar visible under the Contacts screen — unless the
+        // keyboard has replaced it, in which case there is nothing to leave
+        // room for.
+        bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
+        show-modal: true;
+        active-tab <=> ModalHostState.friends-modal-tab;
+        friends: ModalHostState.friends-list;
+        requests-sub-tab <=> ModalHostState.friends-requests-sub-tab;
+        received-requests: ModalHostState.friends-received-requests;
+        sent-requests: ModalHostState.friends-sent-requests;
+        private-requests: ModalHostState.friends-private-requests;
+        private-request-decision: ChatPane.private-request-decision;
+        group-invites: ModalHostState.friends-group-invites;
+        group-invite-decision: ModalHostState.group-invite-decision;
+        group-invite-error-id: ModalHostState.group-invite-error-id;
+        group-invite-error: ModalHostState.group-invite-error;
+        channel-invites: ModalHostState.friends-channel-invites;
+        requests-error: ModalHostState.friends-requests-error;
+        blocked-users: ModalHostState.friends-blocked-users;
+        loading: ModalHostState.friends-loading;
+        // Friend code (privacy-first discovery)
+        my-code <=> ModalHostState.friends-my-code;
+        code-input <=> ModalHostState.friends-code-input;
+        code-caret-end-seq: ModalHostState.friends-code-caret-end-seq;
+        code-status <=> ModalHostState.friends-code-status;
+        request-note <=> ModalHostState.friends-request-note;
+        qr-code-image <=> ModalHostState.friends-qr-code-image;
+        show-qr <=> ModalHostState.friends-show-qr;
+
+        close => {
+            SidebarPane.active-tab = "chats";
+        }
+        switch-tab(tab) => {
+            ModalHostState.friends-modal-switch-tab(tab);
+        }
+        requests-retry => { ModalHostState.friends-requests-retry(); }
+        view-profile(user-id) => {
+            ModalHostState.friends-view-profile(user-id);
+        }
+        start-dm(user-id) => {
+            ModalHostState.friends-start-dm(user-id);
+        }
+        accept-request(user-id) => {
+            ModalHostState.friends-accept-request(user-id);
+        }
+        decline-request(user-id) => {
+            ModalHostState.friends-decline-request(user-id);
+        }
+        cancel-request(user-id) => {
+            ModalHostState.friends-cancel-request(user-id);
+        }
+        unblock-user(user-id) => {
+            ModalHostState.friends-unblock-user(user-id);
+        }
+        remove-blocked-user(user-id) => {
+            ModalHostState.friends-remove-blocked-user(user-id);
+        }
+        generate-code(private-mode) => {
+            ModalHostState.friends-generate-code(private-mode);
+        }
+        generate-qr(private-mode) => {
+            ModalHostState.friends-generate-qr(private-mode);
+        }
+        copy-code => {
+            ModalHostState.friends-copy-code();
+        }
+        can-scan: root.is-mobile-platform;
+        paste-code => {
+            ModalHostState.friends-paste-code();
+        }
+        scan-code => {
+            ModalHostState.friends-scan-code();
+        }
+        connect-via-code(code) => {
+            ModalHostState.friends-connect-via-code(code);
+        }
+        accept-private-request(conversation-id) => {
+            ModalHostState.friends-accept-private-request(conversation-id);
+        }
+        decline-private-request(conversation-id) => {
+            ModalHostState.friends-decline-private-request(conversation-id);
+        }
+        block-private-request(conversation-id) => {
+            ModalHostState.friends-block-private-request(conversation-id);
+        }
+        accept-group-invite(group-id) => {
+            ModalHostState.friends-accept-group-invite(group-id);
+        }
+        decline-group-invite(group-id) => {
+            ModalHostState.friends-decline-group-invite(group-id);
+        }
+        accept-channel-invite(channel-id) => {
+            ModalHostState.friends-accept-channel-invite(channel-id);
+        }
+        decline-channel-invite(channel-id) => {
+            ModalHostState.friends-decline-channel-invite(channel-id);
+        }
+    }
+}

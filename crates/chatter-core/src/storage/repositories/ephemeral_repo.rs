@@ -41,38 +41,40 @@ impl EphemeralRepository {
         Ok(())
     }
 
-    /// Insert an already-armed ephemeral entry (send-time-start semantics).
+    /// Arm a message's disappearing timer (Signal's expireTimer).
     ///
-    /// Unlike [`insert`](Self::insert) — which writes a *Pending* row
-    /// (`countdown_started = 0`) that the reaper never touches until a
-    /// separate `mark_read` starts the clock — this writes a row whose
-    /// countdown is ALREADY running from now: `expires_at = now + ttl_seconds`
-    /// and `countdown_started = 1`. That is exactly what the cleanup query
-    /// (`delete_all_expired`, which requires `countdown_started = 1`) reaps.
+    /// The clock starts when the local user has read the message: at once
+    /// for a message already stored read (our own — see
+    /// `UnifiedMessageRepository::stored_is_read` — or one read before it was
+    /// armed), otherwise when it is marked read
+    /// (`UnifiedMessageRepository::mark_*read*` call
+    /// [`start_read_countdowns`]). A row whose clock runs has
+    /// `countdown_started = 1` and `expires_at = start + ttl`, which is what
+    /// the reaper (`list_expired`) collects. A message
+    /// not stored yet counts as read, so the timer never waits forever.
+    /// An own message that is still `sending` or `failed` keeps its stamped
+    /// TTL with the clock stopped; the `ephemeral_countdown_on_sent` trigger
+    /// (v097) starts it when any path confirms the send.
     ///
-    /// Used by the send/receive arming paths where the disappearing timer
-    /// starts at message time (matching V29's channel semantics and the
-    /// server's Temporal-from-receipt scheduling), not at read time. Accepts
-    /// arbitrary `ttl_seconds` (the `MessageTTL` enum only models a fixed
-    /// menu; a conversation timer can be any value), so it bypasses the enum
-    /// and writes the seconds straight through.
-    ///
-    /// `INSERT OR REPLACE` so re-arming the same message (e.g. a retry, or a
-    /// self-sync copy landing after the primary) is idempotent.
-    pub fn insert_armed(&self, message_id: &MessageId, ttl_seconds: u32) -> Result<(), StorageError> {
+    /// Takes arbitrary `ttl_seconds` (a peer's timer need not be a preset).
+    /// `INSERT OR REPLACE` so re-arming the same message (a retry, a
+    /// self-sync copy after the primary) is idempotent.
+    pub fn insert_armed(
+        &self,
+        message_id: &MessageId,
+        ttl_seconds: u32,
+    ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        let now = Utc::now();
-        let expires_at = now + chrono::Duration::seconds(i64::from(ttl_seconds));
         conn.execute(
             "INSERT OR REPLACE INTO ephemeral_messages
                  (message_id, ttl_seconds, expires_at, read_at, countdown_started)
-             VALUES (?1, ?2, ?3, ?4, 1)",
-            params![
-                message_id.to_string(),
-                i64::from(ttl_seconds),
-                expires_at.to_rfc3339(),
-                now.to_rfc3339(),
-            ],
+             SELECT ?1, ?2,
+                    strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now', '+' || ?2 || ' seconds'),
+                    CASE WHEN read THEN strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now') END,
+                    read
+             FROM (SELECT COALESCE((SELECT is_read AND delivery_status NOT IN ('sending', 'failed')
+                                    FROM messages WHERE id = ?1), 1) AS read)",
+            params![message_id.to_string(), i64::from(ttl_seconds)],
         )?;
         Ok(())
     }
@@ -85,9 +87,7 @@ impl EphemeralRepository {
              FROM ephemeral_messages WHERE message_id = ?1",
         )?;
 
-        let result = stmt.query_row(params![message_id.to_string()], |row| {
-            row_to_ephemeral(row)
-        });
+        let result = stmt.query_row(params![message_id.to_string()], |row| row_to_ephemeral(row));
 
         match result {
             Ok(ephemeral) => Ok(Some(ephemeral?)),
@@ -109,7 +109,7 @@ impl EphemeralRepository {
             "UPDATE ephemeral_messages
              SET read_at = ?1,
                  countdown_started = 1,
-                 expires_at = datetime(?1, '+' || ttl_seconds || ' seconds')
+                 expires_at = strftime('%Y-%m-%dT%H:%M:%f+00:00', ?1, '+' || ttl_seconds || ' seconds')
              WHERE message_id = ?2 AND countdown_started = 0",
             params![now.to_rfc3339(), message_id.to_string()],
         )?;
@@ -136,6 +136,27 @@ impl EphemeralRepository {
     /// List all expired messages (countdown_started=1 AND expires_at < now).
     ///
     /// Returns message IDs that should be deleted.
+    /// Which of `ids` are disappearing messages (armed or awaiting their read).
+    pub fn disappearing_among(&self, ids: &[String]) -> Result<std::collections::HashSet<String>, StorageError> {
+        let mut found = std::collections::HashSet::new();
+        if ids.is_empty() {
+            return Ok(found);
+        }
+        let conn = self.db.read_connection()?;
+        // SQLite's default parameter limit is well above a message page.
+        for chunk in ids.chunks(500) {
+            let marks = vec!["?"; chunk.len()].join(",");
+            let mut stmt = conn.prepare(&format!(
+                "SELECT message_id FROM ephemeral_messages WHERE message_id IN ({marks})"
+            ))?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |row| row.get::<_, String>(0))?;
+            for id in rows {
+                found.insert(id?);
+            }
+        }
+        Ok(found)
+    }
+
     pub fn list_expired(&self) -> Result<Vec<MessageId>, StorageError> {
         let conn = self.db.read_connection()?;
         let now = Utc::now().to_rfc3339();
@@ -175,43 +196,6 @@ impl EphemeralRepository {
         Ok(())
     }
 
-    /// Delete all expired ephemeral messages in a single query.
-    ///
-    /// This is more efficient than list_expired() + N delete() calls.
-    /// Returns the message IDs that were deleted.
-    pub fn delete_all_expired(&self) -> Result<Vec<MessageId>, StorageError> {
-        let conn = self.db.connection()?;
-        let now = Utc::now().to_rfc3339();
-
-        // First, get the IDs to return (so caller knows what was deleted)
-        let ids: Vec<MessageId> = {
-            let mut stmt = conn.prepare(
-                "SELECT message_id FROM ephemeral_messages
-                 WHERE countdown_started = 1 AND expires_at < ?1",
-            )?;
-            let mut rows = stmt.query(params![now])?;
-            let mut ids = Vec::new();
-            while let Some(row) = rows.next()? {
-                let id_str: String = row.get(0)?;
-                if let Ok(id) = id_str.parse() {
-                    ids.push(id);
-                }
-            }
-            ids
-        };
-
-        // Then delete them all in one query
-        if !ids.is_empty() {
-            conn.execute(
-                "DELETE FROM ephemeral_messages
-                 WHERE countdown_started = 1 AND expires_at < ?1",
-                params![now],
-            )?;
-        }
-
-        Ok(ids)
-    }
-
     /// List pending (unread) ephemeral messages.
     ///
     /// Returns ephemeral messages where countdown has not yet started.
@@ -238,6 +222,24 @@ impl EphemeralRepository {
 // Helper functions
 // ============================================================================
 
+/// Start the disappearing clock of every armed message that is now read
+/// (Signal: a received message's timer starts when it is read). Called by
+/// each `UnifiedMessageRepository` path that marks messages read; the pending
+/// set is small (`idx_ephemeral_pending`), so it is not scoped further.
+pub(crate) fn start_read_countdowns(conn: &rusqlite::Connection) -> Result<(), StorageError> {
+    conn.execute(
+        "UPDATE ephemeral_messages
+         SET countdown_started = 1,
+             read_at = strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'),
+             expires_at = strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now', '+' || ttl_seconds || ' seconds')
+         WHERE countdown_started = 0
+           AND message_id IN (SELECT id FROM messages WHERE is_read = 1
+                              AND delivery_status NOT IN ('sending', 'failed'))",
+        [],
+    )?;
+    Ok(())
+}
+
 /// Parse an RFC3339 datetime string, falling back to now if invalid.
 fn parse_datetime(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
@@ -261,7 +263,7 @@ fn row_to_ephemeral(
             return Ok(Err(StorageError::InvalidData(format!(
                 "Invalid message ID: {}",
                 message_id_str
-            ))))
+            ))));
         }
     };
 

@@ -22,14 +22,12 @@ pub enum AttachmentStatus {
 /// Where the encrypted content is stored.
 ///
 /// Tracks whether encrypted attachment data needs to be fetched from CDN
-/// or is already stored locally (in database or filesystem).
+/// or is already stored locally on the filesystem.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ContentLocation {
     /// Content needs to be fetched from CDN (not downloaded yet).
     #[default]
     NotDownloaded = 0,
-    /// Content is stored encrypted in database BLOB (legacy, for migration compatibility).
-    InDatabase = 1,
     /// Content is stored encrypted on filesystem (~/.local/share/chatter/attachments/).
     /// This is the preferred storage for large files (videos, large images).
     OnFilesystem = 2,
@@ -147,8 +145,8 @@ impl FileCategory {
 /// voice notes and music the way every messenger's media drawer does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SharedCategory {
-    /// Photos and videos — the grid.
-    Media,
+    Photo,
+    Video,
     /// Any other attachment: documents, archives, code.
     File,
     /// A URL found in message text. Has no attachment record behind it.
@@ -156,8 +154,8 @@ pub enum SharedCategory {
     /// An audio attachment recorded in-app — it carries a waveform.
     Voice,
     /// An audio attachment that is not a voice note.
-    Music,
-    /// `image/gif`, split out of Media the way every messenger does.
+    Audio,
+    /// `image/gif`, split out of photos.
     Gif,
     /// Transient: an attachment whose `attachments` row has not landed yet,
     /// so its MIME type is not known. Never rendered — `AttachmentRepository`
@@ -172,11 +170,12 @@ impl SharedCategory {
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Media => "media",
+            Self::Photo => "photo",
+            Self::Video => "video",
             Self::File => "file",
             Self::Link => "link",
             Self::Voice => "voice",
-            Self::Music => "music",
+            Self::Audio => "audio",
             Self::Gif => "gif",
             Self::Unsorted => "unsorted",
         }
@@ -187,11 +186,12 @@ impl SharedCategory {
     #[must_use]
     pub fn from_str_value(s: &str) -> Option<Self> {
         Some(match s {
-            "media" => Self::Media,
+            "photo" => Self::Photo,
+            "video" => Self::Video,
             "file" => Self::File,
             "link" => Self::Link,
             "voice" => Self::Voice,
-            "music" => Self::Music,
+            "audio" => Self::Audio,
             "gif" => Self::Gif,
             "unsorted" => Self::Unsorted,
             _ => return None,
@@ -200,26 +200,25 @@ impl SharedCategory {
 
     /// Which tab an attachment belongs in.
     ///
-    /// Order matters: GIF is checked before Media (a GIF is an image), and
-    /// the waveform check before Music (a voice note is audio).
+    /// Order matters: GIF is checked before photo, and waveform separates
+    /// voice messages from audio files.
     #[must_use]
     pub fn of(meta: &FileMetadata) -> Self {
         if meta.is_gif() {
             return Self::Gif;
         }
         if meta.is_audio() {
-            // A waveform is only ever attached by the in-app recorder, so it
-            // is the one honest voice-note marker we have. The proto's
-            // `voice_note` bool is written `false` everywhere and read
-            // nowhere.
+            // Stored attachment metadata classifies voice by waveform; the
+            // recorder supplies it even without a platform waveform decoder.
             return if meta.waveform_samples.is_some() {
                 Self::Voice
             } else {
-                Self::Music
+                Self::Audio
             };
         }
         match FileCategory::from_mime_and_filename(&meta.mime_type, &meta.name) {
-            FileCategory::Image | FileCategory::Video => Self::Media,
+            FileCategory::Image => Self::Photo,
+            FileCategory::Video => Self::Video,
             _ => Self::File,
         }
     }
@@ -247,13 +246,9 @@ pub struct Attachment {
     pub id: AttachmentId,
     pub metadata: FileMetadata,
     pub status: AttachmentStatus,
-    /// Where encrypted content is stored (NotDownloaded or InDatabase).
+    /// Where encrypted content is stored (NotDownloaded or OnFilesystem).
     #[serde(default)]
     pub content_location: ContentLocation,
-    /// Local file path (DEPRECATED - kept for migration compatibility).
-    /// New attachments should use content_location + encrypted_content in DB.
-    #[serde(default)]
-    pub local_path: Option<String>,
     /// Remote URL / CDN key for downloading encrypted content.
     pub remote_url: Option<String>,
     /// Encryption key for encrypted attachments (64 bytes: AES key + HMAC key).
@@ -261,15 +256,33 @@ pub struct Attachment {
     /// Encryption IV/digest for verification (32 bytes SHA-256).
     pub encryption_iv: Option<Vec<u8>>,
     pub created_at: DateTime<Utc>,
+    /// Created for a secret chat (anonymous DM / group): every transfer goes
+    /// over Tor. Set where the row is made — the secret-chat receive path or
+    /// an upload routed for a secret chat — and never cleared.
+    pub secret_chat: bool,
 }
 
 impl Attachment {
+    /// Fetch received photos automatically on any network up to this size.
+    /// Larger images still receive their small thumbnail sidecar and need a tap
+    /// for the original. Other attachment types stay tap-to-download.
+    pub const AUTO_DOWNLOAD_IMAGE_LIMIT: u64 = 10 * 1024 * 1024;
+
     /// Whether this attachment has what it needs to fetch + decrypt its remote
     /// content: a CDN URL and an encryption key. Callers use this to decide
     /// whether to enqueue a background download.
     #[must_use]
     pub fn is_downloadable(&self) -> bool {
         self.remote_url.is_some() && self.encryption_key.is_some()
+    }
+
+    /// Whether receiving this attachment should fetch its full encrypted blob.
+    /// Thumbnail sidecars are fetched separately, regardless of this policy.
+    #[must_use]
+    pub fn should_auto_download(&self) -> bool {
+        self.needs_download()
+            && self.metadata.is_image()
+            && self.metadata.size <= Self::AUTO_DOWNLOAD_IMAGE_LIMIT
     }
 
     /// Create a new pending attachment.
@@ -280,11 +293,11 @@ impl Attachment {
             metadata,
             status: AttachmentStatus::Pending,
             content_location: ContentLocation::NotDownloaded,
-            local_path: None,
             remote_url: None,
             encryption_key: None,
             encryption_iv: None,
             created_at: Utc::now(),
+            secret_chat: false,
         }
     }
 
@@ -346,9 +359,29 @@ impl Attachment {
                 .duration_seconds
                 .map(|d| (d * 1000.0) as u64)
                 .unwrap_or(0),
+            // Without these every message-path send (DM, group, resend) shipped
+            // a voice note with no bars, and the receiver drew a flat line.
+            waveform: self.metadata.waveform_samples.clone().unwrap_or_default(),
+            voice_note: SharedCategory::of(&self.metadata) == SharedCategory::Voice,
             ..Default::default()
         })
     }
+}
+
+/// Wire/local name written for a recorded voice note (not a user-picked file).
+/// Android encodes AAC in MP4; desktop still writes WAV.
+pub const GENERIC_VOICE_NOTE_FILENAME: &str = if cfg!(target_os = "android") {
+    "Voice message.m4a"
+} else {
+    "Voice message.wav"
+};
+
+/// True when `name` is the autogenerated recorded-note label from any platform.
+#[must_use]
+pub fn is_generic_voice_note_filename(name: &str) -> bool {
+    ["Voice message.m4a", "Voice message.wav"]
+        .iter()
+        .any(|generic| name.eq_ignore_ascii_case(generic))
 }
 
 /// File metadata information (matches proto FileMetadata).
@@ -413,6 +446,43 @@ impl FileMetadata {
             thumbnail_key: None,
             thumbnail_digest: None,
             thumbnail_plaintext_size: None,
+        }
+    }
+
+    /// Filename shown on the bubble. Recorded voice notes ship as
+    /// [`GENERIC_VOICE_NOTE_FILENAME`]; that autogenerated label is hidden.
+    /// A user-picked audio file keeps its name.
+    #[must_use]
+    pub fn bubble_filename(&self) -> &str {
+        if SharedCategory::of(self) == SharedCategory::Voice
+            && is_generic_voice_note_filename(&self.name)
+        {
+            ""
+        } else {
+            &self.name
+        }
+    }
+
+    /// One-line type label for a conversation preview — "🎤 Voice message",
+    /// "📷 Photo", "📄 report.pdf". Media gets a kind word rather than a
+    /// filename because "IMG_4821.HEIC" tells the reader nothing a 📷 hasn't;
+    /// a document keeps its name because that is what identifies it.
+    #[must_use]
+    pub fn preview_label(&self) -> String {
+        let category = FileCategory::from_mime_and_filename(&self.mime_type, &self.name);
+        let icon = crate::ui::file_data::category_icon(category.as_str());
+        match SharedCategory::of(self) {
+            SharedCategory::Voice => "\u{1F3A4} Voice message".to_string(),
+            // 🎬 has emoji presentation by default; 🎞 (U+1F39E) is text-default
+            // and shaped from the text font as a box on Android.
+            SharedCategory::Gif => "\u{1F3AC} GIF".to_string(),
+            SharedCategory::Audio => format!("{} Audio", icon),
+            _ => match category {
+                FileCategory::Image => format!("{} Photo", icon),
+                FileCategory::Video => format!("{} Video", icon),
+                _ if self.name.trim().is_empty() => format!("{} File", icon),
+                _ => format!("{} {}", icon, self.name.trim()),
+            },
         }
     }
 
@@ -542,4 +612,47 @@ pub struct Thumbnail {
     pub width: u32,
     pub height: u32,
     pub created_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod preview_label_tests {
+    use super::FileMetadata;
+
+    #[test]
+    fn every_attachment_kind_gets_a_type_label() {
+        let label = |name: &str, mime: &str, waveform: Option<Vec<u8>>| {
+            let mut meta = FileMetadata::new(name.into(), mime.into(), 1);
+            meta.waveform_samples = waveform;
+            meta.preview_label()
+        };
+        assert_eq!(
+            label("Voice message.wav", "audio/wav", Some(vec![13; 32])),
+            "\u{1F3A4} Voice message"
+        );
+        assert_eq!(label("song.mp3", "audio/mpeg", None), "\u{1F3B5} Audio");
+        // Camera, not 🖼️: the framed picture rendered as tofu on Android 10
+        // (`ui::file_data::category_icon`, ae492dbb).
+        assert_eq!(label("IMG_1.HEIC", "image/heic", None), "\u{1F4F7} Photo");
+        assert_eq!(label("a.gif", "image/gif", None), "\u{1F3AC} GIF");
+        assert_eq!(label("clip.mp4", "video/mp4", None), "\u{1F3AC} Video");
+        let mut recorded = FileMetadata::new(
+            super::GENERIC_VOICE_NOTE_FILENAME.into(),
+            "audio/wav".into(),
+            1,
+        );
+        recorded.waveform_samples = Some(vec![13; 32]);
+        assert_eq!(recorded.bubble_filename(), "");
+        assert_eq!(
+            FileMetadata::new("interview.wav".into(), "audio/wav".into(), 1).bubble_filename(),
+            "interview.wav"
+        );
+        assert_eq!(
+            label("report.pdf", "application/pdf", None),
+            "\u{1F4C4} report.pdf"
+        );
+        assert_eq!(
+            label(" ", "application/octet-stream", None),
+            "\u{1F4CE} File"
+        );
+    }
 }

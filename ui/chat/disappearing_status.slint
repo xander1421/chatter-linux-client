@@ -1,0 +1,54 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
+import { DisappearingGlobal } from "disappearing_global.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
+
+export component DisappearingStatus inherits Rectangle {
+    property <bool> entered: false;
+    Timer {
+        interval: 16ms;
+        running: !root.entered;
+        triggered => { root.entered = true; }
+    }
+    transform-origin: { x: self.width / 2, y: 0px };
+    transform-scale-y: Appearance.reduce-motion || root.entered ? 100% : 88%;
+    opacity: Appearance.reduce-motion || root.entered ? 1 : 0;
+    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+    animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+    background: transparent;
+    min-height: max(36px, status-content.preferred-height + 2 * Spacing.xs);
+    GlassSurface {
+        x: Spacing.md;
+        y: Spacing.xs;
+        width: max(0px, root.width - 2 * Spacing.md);
+        height: max(0px, root.height - 2 * Spacing.xs);
+        elevation: 0;
+        material-level: 2;
+        border-radius: Spacing.radius-chrome;
+        status-content := HorizontalLayout {
+            padding-left: Spacing.md;
+            padding-right: Spacing.md;
+            padding-top: Spacing.xs;
+            padding-bottom: Spacing.xs;
+            spacing: Spacing.sm;
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Image { source: Icons.clock; width: 16px; height: 16px; colorize: Colors.primary; }
+            }
+            Text {
+                text: DisappearingGlobal.status-label;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                accessible-role: text;
+                accessible-label: self.text;
+            }
+        }
+    }
+}

@@ -3,8 +3,7 @@
 //! Tests DM channel creation, encrypted message exchange,
 //! session establishment, and DM-specific features.
 
-mod common;
-mod framework;
+use crate::framework;
 
 use framework::prelude::*;
 
@@ -236,7 +235,10 @@ async fn test_dm_uses_signal_session() {
     let (alice_priv, alice_pub) = alice_stores.identity_key_pair();
     let (bob_priv, bob_pub) = bob_stores.identity_key_pair();
 
-    assert_ne!(alice_pub, bob_pub, "Users should have different identity keys");
+    assert_ne!(
+        alice_pub, bob_pub,
+        "Users should have different identity keys"
+    );
     assert_ne!(alice_priv, bob_priv);
 }
 

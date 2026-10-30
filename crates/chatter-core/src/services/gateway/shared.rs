@@ -6,30 +6,22 @@
 //!
 //! Phase 3 of messaging consolidation.
 
+use crate::domain::AttachmentId;
 use crate::domain::attachment::{Attachment, FileCategory};
 use crate::domain::message::Message;
-use crate::domain::AttachmentId;
 use crate::proto::content_v1::{AttachmentPointer, Quote, QuotedAttachment, quote};
 
 // =============================================================================
 // Preview text
 // =============================================================================
 
-/// Maximum characters for a quote preview.
+/// Maximum graphemes for a quote preview.
 const QUOTE_PREVIEW_MAX_CHARS: usize = 100;
-/// Characters to show before the ellipsis (3 chars for "...").
-const QUOTE_PREVIEW_TRUNCATE_AT: usize = 97;
-
 /// Truncate text for use as a quote preview.
 ///
-/// If the text exceeds 100 characters, it's truncated to 97 characters
-/// with "..." appended. This is the standard Signal-style quote preview.
+/// The wire preview is capped at 100 graphemes; the UI supplies the ellipsis.
 pub fn truncate_preview(text: &str) -> String {
-    if text.chars().count() > QUOTE_PREVIEW_MAX_CHARS {
-        format!("{}...", text.chars().take(QUOTE_PREVIEW_TRUNCATE_AT).collect::<String>())
-    } else {
-        text.to_string()
-    }
+    crate::domain::message::truncate_preview_text(text, QUOTE_PREVIEW_MAX_CHARS)
 }
 
 /// Build the reply-preview string for a message, falling back to an
@@ -64,7 +56,7 @@ pub fn message_reply_preview(msg: &Message, attachments: &[Attachment]) -> Strin
             return format!("{} {}", emoji, name);
         }
         if att.metadata.mime_type == "image/gif" {
-            return "🎞️ GIF".to_string();
+            return "🎬 GIF".to_string();
         }
         let (emoji, label) = match cat {
             FileCategory::Image => ("📷", "Photo"),
@@ -97,15 +89,6 @@ pub fn message_reply_preview(msg: &Message, attachments: &[Attachment]) -> Strin
 // =============================================================================
 // Quote construction
 // =============================================================================
-
-/// Build a Signal-style Quote proto from reply context.
-///
-/// The Quote uses `author_aci` (author's UUID string) and `id` (the original
-/// message's timestamp) for identification — this is how Signal identifies
-/// quoted messages without server-assigned message IDs.
-pub fn build_quote(author_id: &str, timestamp: u64, preview_text: &str) -> Quote {
-    build_quote_with_attachments(author_id, timestamp, preview_text, vec![])
-}
 
 /// Build a Signal-style Quote proto including one or more `QuotedAttachment`s.
 ///
@@ -188,41 +171,6 @@ pub const CONTENT_TYPE_TEXT: i32 = 1;
 pub const CONTENT_TYPE_ATTACHMENT: i32 = 2;
 pub const CONTENT_TYPE_MIXED: i32 = 3;
 
-/// Determine the content type for a message based on its contents.
-///
-/// Returns one of the `CONTENT_TYPE_*` constants.
-pub fn determine_content_type(has_text: bool, has_attachments: bool) -> i32 {
-    match (has_text, has_attachments) {
-        (true, true) => CONTENT_TYPE_MIXED,
-        (true, false) => CONTENT_TYPE_TEXT,
-        (false, true) => CONTENT_TYPE_ATTACHMENT,
-        (false, false) => CONTENT_TYPE_EMPTY,
-    }
-}
-
-/// Build the `content_json` string for message storage.
-///
-/// The JSON format is used by both anon DM and anon group message tables
-/// to store structured message content alongside the raw proto.
-pub fn build_content_json(text: &str, attachment_ids: &[AttachmentId]) -> String {
-    let has_text = !text.is_empty();
-    let has_attachments = !attachment_ids.is_empty();
-
-    match (has_text, has_attachments) {
-        (true, true) => serde_json::json!({
-            "text": text,
-            "attachments": attachment_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>()
-        })
-        .to_string(),
-        (true, false) => serde_json::json!({ "text": text }).to_string(),
-        (false, true) => serde_json::json!({
-            "attachments": attachment_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>()
-        })
-        .to_string(),
-        (false, false) => "{}".to_string(),
-    }
-}
-
 /// Build `content_json` for a reply message with quote metadata.
 ///
 /// Includes the quote's author, display name, timestamp, and preview text
@@ -246,15 +194,6 @@ pub fn build_reply_content_json(
     .to_string()
 }
 
-/// Serialize attachment IDs to a binary blob for DB storage.
-///
-/// Uses bincode serialization. Returns an empty-vec bincode encoding
-/// (`[8, 0, 0, 0, 0, 0, 0, 0]`) on serialization failure.
-pub fn serialize_attachment_ids(ids: &[AttachmentId]) -> Vec<u8> {
-    crate::storage::serialization::db_serialize(&ids.to_vec())
-        .unwrap_or_else(|_| vec![8, 0, 0, 0, 0, 0, 0, 0])
-}
-
 /// The empty-vec bincode encoding used when there are no attachments.
 pub const EMPTY_ATTACHMENTS_BLOB: [u8; 8] = [8, 0, 0, 0, 0, 0, 0, 0];
 
@@ -269,6 +208,12 @@ pub const EMPTY_ATTACHMENTS_BLOB: [u8; 8] = [8, 0, 0, 0, 0, 0, 0, 0];
 pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> String {
     use super::outgoing::SendError;
 
+    if matches!(
+        error,
+        SendError::Message(crate::services::message::MessageError::ShieldNotReady)
+    ) {
+        return crate::services::message::core::SHIELD_WAITING_FOR_TOKENS.to_owned();
+    }
     let detail = error.to_string();
 
     tracing::error!(
@@ -279,15 +224,22 @@ pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> S
 
     // Return user-facing message (don't expose internal error details)
     match error {
-        SendError::NotLoggedIn |
-        SendError::Message(crate::services::message::MessageError::NotLoggedIn) |
-        SendError::AnonDm(crate::services::anon_dm::AnonDmError::NotLoggedIn) |
-        SendError::AnonGroup(crate::services::anon_group::AnonGroupError::NotLoggedIn) => {
+        SendError::BeforeSubmission(original) => handle_send_error(original, context),
+        SendError::Message(crate::services::message::MessageError::InvalidContent(reason))
+            if reason.contains("too large") => "Message too long".to_string(),
+        SendError::Message(crate::services::message::MessageError::Network(
+            crate::error::NetworkError::InvalidRequest(reason),
+        )) if reason.contains("too large") => "Message too long".to_string(),
+        SendError::NotLoggedIn
+        | SendError::Message(crate::services::message::MessageError::NotLoggedIn)
+        | SendError::AnonDm(crate::services::anon_dm::AnonDmError::NotLoggedIn)
+        | SendError::AnonGroup(crate::services::anon_group::AnonGroupError::NotLoggedIn) => {
             "Not logged in".to_string()
         }
-        SendError::UnsupportedAction => {
-            "Action not supported for this channel type".to_string()
-        }
+        SendError::DeliveryUnconfirmed => SendError::DeliveryUnconfirmed.to_string(),
+        SendError::SendInProgress => SendError::SendInProgress.to_string(),
+        SendError::AttemptAlreadyConfirmed => SendError::AttemptAlreadyConfirmed.to_string(),
+        SendError::UnsupportedAction => "Action not supported for this channel type".to_string(),
         SendError::Message(crate::services::message::MessageError::EncryptionFailed(_)) => {
             "Encryption failed — try again".to_string()
         }
@@ -295,19 +247,55 @@ pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> S
         // parked, so every retry fails identically; the only thing that clears
         // it is the user accepting the new safety number. The prompt to do that
         // is already open in this conversation, so point at it.
-        SendError::Message(
-            crate::services::message::MessageError::RecipientIdentityChanged { .. },
-        ) => {
-            "Their safety number changed — accept it above to send".to_string()
-        }
-        SendError::AnonDm(crate::services::anon_dm::AnonDmError::ConversationBlocked(_)) |
-        SendError::AnonGroup(crate::services::anon_group::AnonGroupError::GroupBlocked(_)) => {
+        SendError::Message(crate::services::message::MessageError::RecipientIdentityChanged {
+            ..
+        }) => "Their safety number changed — accept it above to send".to_string(),
+        // Not "try again" either: the server could not prove this contact's
+        // key, and retrying asks it the same question.
+        SendError::Message(crate::services::message::MessageError::RecipientKeyUnverified {
+            ..
+        }) => "Can't verify this contact's security key — not sent".to_string(),
+        SendError::AnonDm(crate::services::anon_dm::AnonDmError::ConversationBlocked(_))
+        | SendError::AnonGroup(crate::services::anon_group::AnonGroupError::GroupBlocked(_)) => {
             "Conversation is blocked".to_string()
         }
-        SendError::AnonDm(crate::services::anon_dm::AnonDmError::RateLimitExceeded(n)) |
-        SendError::AnonGroup(crate::services::anon_group::AnonGroupError::RateLimitExceeded(n)) => {
+        SendError::AnonDm(crate::services::anon_dm::AnonDmError::RateLimitExceeded(n))
+        | SendError::AnonGroup(crate::services::anon_group::AnonGroupError::RateLimitExceeded(n)) =>
+        {
             format!("Slow down — {} messages per minute limit", n)
         }
+        e if e.is_refused() => "You can't send messages here".to_string(),
         _ => format!("Failed to send: {}", detail),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_preview_cuts_on_char_boundary() {
+        // 'é' is 2 bytes; 96 ASCII bytes put one straddling byte 97, where a
+        // byte slice `&text[..97]` panics.
+        let text = format!("{}é{}", "a".repeat(96), "b".repeat(10));
+        assert!(!text.is_char_boundary(97));
+        let preview = truncate_preview(&text);
+        assert_eq!(preview, format!("{}é{}", "a".repeat(96), "b".repeat(3)));
+        assert_eq!(truncate_preview("héllo"), "héllo");
+    }
+
+    #[test]
+    fn server_send_refusal_is_not_a_retryable_failure() {
+        // A muted/banned member's send is refused by the server's
+        // `send_message` check; say so instead of "Failed to send: ...".
+        let err = super::super::outgoing::SendError::Message(
+            crate::services::message::MessageError::Network(
+                crate::error::NetworkError::PermissionDenied,
+            ),
+        );
+        assert_eq!(
+            handle_send_error(&err, "send"),
+            "You can't send messages here"
+        );
     }
 }

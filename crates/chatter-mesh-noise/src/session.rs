@@ -487,9 +487,10 @@ impl NoiseSession {
 
     /// Mirrors `SecureNoiseSession.setMessageCountForTesting`. Reaching the real
     /// threshold takes 900 million encryptions, so the policy is untestable
-    /// without it.
-    #[cfg(test)]
-    pub(crate) fn set_messages_sent_for_testing(&mut self, count: u64) {
+    /// without it. The `testing` feature exposes it to chatter-core's tests of
+    /// the rekey wiring; it can only bring a rekey (or exhaustion) sooner.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn set_messages_sent_for_testing(&mut self, count: u64) {
         self.messages_sent = count;
     }
 }

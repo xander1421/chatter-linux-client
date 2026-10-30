@@ -1,18 +1,100 @@
-use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmStatus};
-use crate::domain::private_friend_code::PrivateFriendCode;
 use crate::domain::UserId;
+use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmStatus, RequestState};
+use crate::domain::private_friend_code::PrivateFriendCode;
 use crate::proto::chat_v1::SealedSenderMessage;
 use crate::proto::content_v1::{self, AnonDmRequest, Content};
 use crate::util::time::TimestampNanos;
 
 use super::{AnonDmError, AnonDmService};
 
+// Mailbox open + anonymous prekey fetch + anonymous request delivery.
+const REQUIRED_TOKENS: u32 = 3;
+
+async fn retry_start<T, F, Fut>(mut attempt: F) -> Result<T, AnonDmError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, AnonDmError>>,
+{
+    loop {
+        match attempt().await {
+            Err(AnonDmError::TokensPending) => {
+                crate::app::core_services::jittered_sleep().await;
+            }
+            result => return result,
+        }
+    }
+}
+
 impl AnonDmService {
+    // Weak entries retain no operation or plaintext after a start finishes.
+    fn start_lock(&self, peer: UserId) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.start_locks.lock().expect("start locks poisoned");
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(&peer).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        locks.insert(peer, std::sync::Arc::downgrade(&lock));
+        lock
+    }
+
+    /// Park an empty-pool start in this session, independently of the refill
+    /// loop. No token request or refill notification is reachable here.
+    pub async fn start_conversation(
+        &self,
+        peer_id: UserId,
+        intro_message: Option<&str>,
+    ) -> Result<AnonDm, AnonDmError> {
+        self.check_start(peer_id)?;
+        let owner = self.current_user_id()?;
+        let lock = self.start_lock(peer_id);
+        let _guard = lock.lock().await;
+        retry_start(|| async {
+            if self.current_user_id()? != owner {
+                return Err(AnonDmError::NotLoggedIn);
+            }
+            self.start_conversation_attempt(peer_id, intro_message)
+                .await
+        })
+        .await
+    }
+
+    pub async fn start_conversation_private(
+        &self,
+        friend_code: &PrivateFriendCode,
+        intro_message: Option<&str>,
+        sender_display_name: Option<&str>,
+    ) -> Result<AnonDm, AnonDmError> {
+        self.check_start(friend_code.user_id)?;
+        let owner = self.current_user_id()?;
+        let lock = self.start_lock(friend_code.user_id);
+        let _guard = lock.lock().await;
+        retry_start(|| async {
+            if self.current_user_id()? != owner {
+                return Err(AnonDmError::NotLoggedIn);
+            }
+            self.start_conversation_private_attempt(friend_code, intro_message, sender_display_name)
+                .await
+        })
+        .await
+    }
+
+    fn check_start(&self, peer: UserId) -> Result<(), AnonDmError> {
+        if self.current_user_id()? == peer {
+            return Err(AnonDmError::CannotMessageSelf);
+        }
+        self.drop_declined(&peer)?;
+        self.grpc_pool
+            .secret_channel()
+            .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
+        Ok(())
+    }
+
     /// Start a new anonymous DM conversation with a stranger.
     ///
     /// Creates a local conversation and sends a message request to the peer's
     /// device inbox. The conversation becomes active when they accept.
-    pub async fn start_conversation(
+    async fn start_conversation_attempt(
         &self,
         peer_id: UserId,
         intro_message: Option<&str>,
@@ -24,18 +106,35 @@ impl AnonDmService {
             return Err(AnonDmError::CannotMessageSelf);
         }
 
-        // Check if conversation already exists
-        if let Some(existing) = self.anon_dm_repo.get_conversation_by_peer(&peer_id)? {
-            // Allow retry if:
-            // - Previous request was declined by them
-            // - Our outgoing request is still pending (never got response, retrying with new code)
-            let can_retry = existing.status == AnonDmStatus::Declined
-                || (existing.status == AnonDmStatus::Pending && existing.initiated_by_us);
+        // A declined request is over: it gives way to the new one.
+        self.drop_declined(&peer_id)?;
+        if let Some(existing) = self.anon_dm_repo.get_live_conversation_by_peer(&peer_id)? {
+            // Our request with an unknown outcome is resent as is (same chat,
+            // same request id), never replaced by a second request.
+            if existing.is_uncertain_request() {
+                let mailbox = self.request_mailbox(&existing.id)?;
+                let profile_key = self.get_my_profile_key();
+                self.send_message_request(
+                    &peer_id,
+                    &existing.id,
+                    &mailbox,
+                    intro_message,
+                    profile_key.as_ref(),
+                )
+                .await?;
+                return self.reload(existing.id);
+            }
+            // Reuse a submitted request; only a provably unsent one can restart.
+            let can_retry = existing.status == AnonDmStatus::Pending && existing.initiated_by_us;
 
+            if existing.status == AnonDmStatus::Pending
+                && existing.initiated_by_us
+                && !existing.is_unsent_request()
+            {
+                return Ok(existing);
+            }
             if can_retry {
                 tracing::info!(
-                    peer_id = %peer_id,
-                    old_conversation_id = %existing.id,
                     old_status = ?existing.status,
                     "Removing old conversation to allow retry"
                 );
@@ -47,34 +146,99 @@ impl AnonDmService {
             }
         }
 
+        if self
+            .token_manager
+            .available_token_count()
+            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
+            < REQUIRED_TOKENS
+        {
+            return Err(AnonDmError::TokensPending);
+        }
         // Create conversation locally
         let dm = AnonDm::new_initiated(peer_id);
         self.anon_dm_repo.insert_conversation(&dm)?;
-
-        // Create our mailbox for this conversation
-        let mailbox = self.create_conversation_mailbox(&dm.id).await?;
-        self.anon_dm_repo.insert_mailbox(&mailbox)?;
-
-        // Get profile key if available
-        let profile_key = self.get_my_profile_key();
-
-        // Send message request to peer's device inbox
-        self.send_message_request(
-            &peer_id,
+        crate::services::disappearing::initialize_anon_dm_timer(
+            &self.settings_repo, &self.message_repo,
             &dm.id,
-            &mailbox.public_key,
-            intro_message,
-            profile_key.as_ref(),
-        )
-        .await?;
+            &current_user,
+            TimestampNanos::now().as_u64(),
+        )?;
 
-        tracing::info!(
-            "Started anonymous DM conversation {} with {}",
-            dm.id,
-            peer_id
+        let sent = async {
+            // Create our mailbox for this conversation
+            let mailbox = self.create_conversation_mailbox(&dm.id).await?;
+            self.anon_dm_repo.insert_mailbox(&mailbox)?;
+
+            // Get profile key if available
+            let profile_key = self.get_my_profile_key();
+
+            // Send message request to peer's device inbox
+            self.send_message_request(
+                &peer_id,
+                &dm.id,
+                &mailbox.public_key,
+                intro_message,
+                profile_key.as_ref(),
+            )
+            .await
+        }
+        .await;
+        if let Err(e) = sent {
+            self.discard_if_unsent(&dm.id).await;
+            return Err(e);
+        }
+
+        // Reload: sealing the request bound it to the peer's device.
+        self.reload(dm.id)
+    }
+
+    /// Delete every Declined chat with `peer`, messages and all.
+    fn drop_declined(&self, peer: &UserId) -> Result<(), AnonDmError> {
+        for id in self.anon_dm_repo.declined_conversation_ids_by_peer(peer)? {
+            self.delete_conversation(&id)?;
+        }
+        Ok(())
+    }
+
+    fn reload(&self, id: AnonDmId) -> Result<AnonDm, AnonDmError> {
+        self.anon_dm_repo
+            .get_conversation(&id)?
+            .ok_or(AnonDmError::ConversationNotFound(id))
+    }
+
+    /// The public key of the mailbox our request for `id` announced.
+    fn request_mailbox(&self, id: &AnonDmId) -> Result<[u8; 32], AnonDmError> {
+        self.anon_dm_repo
+            .get_mailbox(id)?
+            .map(|m| m.public_key)
+            .ok_or_else(|| AnonDmError::InvalidData("secret-chat request has no mailbox".into()))
+    }
+
+    /// After a failed start: drop the conversation if its request provably
+    /// never left this device (failed before the send RPC), so nothing
+    /// half-made is left behind, its server mailbox included: no peer ever
+    /// learned that mailbox's key, so nothing will arrive there. A request
+    /// that may have left stays, with its uncertain delivery and the mailbox
+    /// a reply would land in, exactly as it is.
+    async fn discard_if_unsent(&self, id: &AnonDmId) {
+        let unsent = matches!(
+            self.anon_dm_repo.get_conversation(id),
+            Ok(Some(dm)) if dm.is_unsent_request()
         );
-
-        Ok(dm)
+        if !unsent {
+            return;
+        }
+        let mailbox = self.anon_dm_repo.get_mailbox(id).ok().flatten();
+        let _ = self.anon_dm_repo.delete_mailbox(id);
+        if let Err(e) = self.anon_dm_repo.delete_conversation(id) {
+            tracing::warn!(error = %e, "could not discard an unsent secret-chat request");
+        }
+        if let Some(mailbox) = mailbox
+            && let Err(e) = self.delete_server_mailbox(&mailbox).await
+        {
+            // Best effort: the server's TTL removes it anyway.
+            tracing::warn!(error = %e, "could not delete an unused secret-chat mailbox");
+        }
     }
 
     /// Start a new anonymous DM conversation using NDSS'21-compliant flow.
@@ -95,7 +259,7 @@ impl AnonDmService {
     /// - No server lookup: Peer ID, identity key, delivery token all embedded
     /// - Anonymous delivery: Uses blind signature token
     /// - Sealed sender: Server can't identify sender
-    pub async fn start_conversation_private(
+    async fn start_conversation_private_attempt(
         &self,
         friend_code: &PrivateFriendCode,
         intro_message: Option<&str>,
@@ -109,18 +273,35 @@ impl AnonDmService {
             return Err(AnonDmError::CannotMessageSelf);
         }
 
-        // Check if conversation already exists
-        if let Some(existing) = self.anon_dm_repo.get_conversation_by_peer(&peer_id)? {
-            // Allow retry if:
-            // - Previous request was declined by them
-            // - Our outgoing request is still pending (never got response, retrying with new code)
-            let can_retry = existing.status == AnonDmStatus::Declined
-                || (existing.status == AnonDmStatus::Pending && existing.initiated_by_us);
+        // A declined request is over: it gives way to the new one.
+        self.drop_declined(&peer_id)?;
+        if let Some(existing) = self.anon_dm_repo.get_live_conversation_by_peer(&peer_id)? {
+            // As in `start_conversation`: resend an uncertain request as is.
+            if existing.is_uncertain_request() {
+                let mailbox = self.request_mailbox(&existing.id)?;
+                let profile_key = self.get_my_profile_key();
+                self.send_message_request_ecies(
+                    friend_code,
+                    &existing.id,
+                    &mailbox,
+                    intro_message,
+                    sender_display_name,
+                    profile_key.as_ref(),
+                )
+                .await?;
+                return self.reload(existing.id);
+            }
+            // Reuse a submitted request; only a provably unsent one can restart.
+            let can_retry = existing.status == AnonDmStatus::Pending && existing.initiated_by_us;
 
+            if existing.status == AnonDmStatus::Pending
+                && existing.initiated_by_us
+                && !existing.is_unsent_request()
+            {
+                return Ok(existing);
+            }
             if can_retry {
                 tracing::info!(
-                    peer_id = %peer_id,
-                    old_conversation_id = %existing.id,
                     old_status = ?existing.status,
                     "Removing old conversation to allow retry (private mode)"
                 );
@@ -132,35 +313,50 @@ impl AnonDmService {
             }
         }
 
+        if self
+            .token_manager
+            .available_token_count()
+            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
+            < 2
+        {
+            return Err(AnonDmError::TokensPending);
+        }
         // Create conversation locally
         let dm = AnonDm::new_initiated(peer_id);
         self.anon_dm_repo.insert_conversation(&dm)?;
-
-        // Create our mailbox for this conversation
-        let mailbox = self.create_conversation_mailbox(&dm.id).await?;
-        self.anon_dm_repo.insert_mailbox(&mailbox)?;
-
-        // Get profile key if available
-        let profile_key = self.get_my_profile_key();
-
-        // Send message request using ECIES (NDSS'21 compliant - no prekey fetch)
-        self.send_message_request_ecies(
-            friend_code,
+        crate::services::disappearing::initialize_anon_dm_timer(
+            &self.settings_repo, &self.message_repo,
             &dm.id,
-            &mailbox.public_key,
-            intro_message,
-            sender_display_name,
-            profile_key.as_ref(),
-        )
-        .await?;
+            &current_user,
+            TimestampNanos::now().as_u64(),
+        )?;
 
-        tracing::info!(
-            conversation_id = %dm.id,
-            peer_id = %peer_id,
-            "Started NDSS'21-compliant anonymous DM conversation (no prekey fetch)"
-        );
+        let sent = async {
+            // Create our mailbox for this conversation
+            let mailbox = self.create_conversation_mailbox(&dm.id).await?;
+            self.anon_dm_repo.insert_mailbox(&mailbox)?;
 
-        Ok(dm)
+            // Get profile key if available
+            let profile_key = self.get_my_profile_key();
+
+            // Send message request using ECIES (NDSS'21 compliant - no prekey fetch)
+            self.send_message_request_ecies(
+                friend_code,
+                &dm.id,
+                &mailbox.public_key,
+                intro_message,
+                sender_display_name,
+                profile_key.as_ref(),
+            )
+            .await
+        }
+        .await;
+        if let Err(e) = sent {
+            self.discard_if_unsent(&dm.id).await;
+            return Err(e);
+        }
+
+        self.reload(dm.id)
     }
 
     /// Send a message request using HPKE encryption (NDSS'21 compliant).
@@ -201,9 +397,15 @@ impl AnonDmService {
         // NOTE: No avatar in Phase 1 — ECIES has no PFS, so only ephemeral data goes here.
         // Avatars are exchanged after Double Ratchet session is established (Phase 2).
         // Also, server caps ECIES_INIT payloads at 2048 bytes (GRA-572).
+        // This device owns our mailbox, so the chat binds the peer to it.
+        let our_device_id: u32 = self
+            .settings_repo
+            .get(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)?
+            .ok_or(AnonDmError::NotLoggedIn)?;
         let init_message = AnonDmInitMessage::new(
             *conversation_id,
             our_user_id,
+            our_device_id,
             *our_mailbox_pk,
             our_identity_key,
             our_delivery_token,
@@ -213,58 +415,74 @@ impl AnonDmService {
         );
 
         // Serialize the init message
-        let plaintext = init_message.to_bytes()
+        let plaintext = init_message
+            .to_bytes()
             .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
 
-        // Encrypt with ECIES to recipient's identity key (no prekey fetch!)
-        let recipient_x25519 = friend_code.x25519_public_key();
-        let ecies_message = ecies::encrypt(&recipient_x25519, &plaintext)
-            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
+        // HPKE to recipient's identity key (no prekey fetch!)
+        let recipient_identity = libsignal_protocol::IdentityKey::decode(&friend_code.identity_key)
+            .map_err(|e| AnonDmError::CryptoError(format!("friend code identity key: {e}")))?;
+        let sealed_body = ecies::seal_to_identity(
+            &recipient_identity,
+            ecies::IdentityHpkeUse::AnonDmInit,
+            &plaintext,
+        )
+        .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
+
+        // Secret-chat traffic goes over Tor or not at all; refuse before the
+        // token is spent.
+        let mut anon_client = self
+            .grpc_pool
+            .secret_message_client()
+            .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
 
         // Get blind signature token for anonymous delivery
-        let token = self.get_or_request_token().await?;
+        let token = self.claim_token()?;
 
         // Send to recipient's device inbox using anonymous credential
         // The ECIES ciphertext goes in the sealed_body, but we're NOT using
         // sealed sender here - we're using raw ECIES + anonymous credential
-        let mut anon_client = self.grpc_pool.anonymous_message_client();
-
-        // Use a custom envelope type for ECIES messages
-        // Set timestamp to current time in nanoseconds for server validation
-        let timestamp_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("Time should be after Unix epoch")
-            .as_nanos() as u64;
 
         // ECIES_INIT requires server_key_id == 0 (server rejects non-zero, see sealed_sender.go:66-68)
         let sealed_message = SealedSenderMessage {
-            sealed_body: ecies_message.to_bytes(),
-            timestamp: timestamp_nanos,
+            sealed_body,
+            // Plaintext to the server: coarsened (see now_anonymized).
+            timestamp: crate::util::time::TimestampNanos::now_anonymized().as_u64(),
             server_key_id: 0,
         };
 
         // Use envelope_type=4 (ECIES_INIT) so receiver knows to use HPKE decryption
         const ENVELOPE_TYPE_ECIES_INIT: i32 = 4;
 
-        anon_client
-            .send_with_anonymous_credential_typed(
+        // The chat is bound to the one device the code names: the request is
+        // sealed to it alone (the peer's other devices never see it), and an
+        // acceptance from any other device is refused (`handle_acceptance`).
+        self.anon_dm_repo
+            .pin_peer_device(conversation_id, friend_code.device_id)?;
+        let dm = self.reload(*conversation_id)?;
+        // From here on the request may leave this device.
+        self.anon_dm_repo
+            .set_request_state(conversation_id, RequestState::Uncertain)?;
+        let sent = anon_client
+            .send_with_anonymous_credential(
+                &super::infrastructure::request_id(conversation_id),
                 &friend_code.user_id.to_string(),
-                0, // All devices
-                sealed_message,
+                vec![crate::proto::chat_v1::SealedDeviceMessage {
+                    device_id: friend_code.device_id,
+                    // Not compared for named devices: there is no session.
+                    registration_id: 0,
+                    sealed_message: Some(sealed_message),
+                }],
+                crate::proto::chat_v1::SealedDelivery::NamedDevices,
+                ENVELOPE_TYPE_ECIES_INIT,
                 &token.public_key,
                 &token.signature,
-                token.randomizer.as_deref(),
-                ENVELOPE_TYPE_ECIES_INIT,
             )
-            .await
-            .map_err(|e| AnonDmError::MessageError(format!("Failed to send ECIES message: {}", e)))?;
-
-        tracing::debug!(
-            conversation_id = %conversation_id,
-            peer_id = %friend_code.user_id,
-            "Sent ECIES-encrypted message request (NDSS'21 compliant)"
-        );
-
+            .await;
+        self.settle_request_send(&dm, sent.as_ref().map(|_| ()))?;
+        sent.map_err(|e| {
+            AnonDmError::MessageError(format!("Failed to send ECIES message: {}", e))
+        })?;
         Ok(())
     }
 
@@ -277,8 +495,11 @@ impl AnonDmService {
         intro_message: Option<&str>,
         profile_key: Option<&[u8; 32]>,
     ) -> Result<(), AnonDmError> {
-        // Encrypt display name and avatar with profile key if available
-        let (encrypted_display_name, encrypted_avatar) = if let Some(pk) = profile_key {
+        // Name under the profile key; the avatar as a pointer to its upload,
+        // never inline: this request is sealed to a device inbox (8 KiB cap).
+        // Only an already-uploaded avatar: the request never waits on an
+        // upload, and the profile update after acceptance carries it.
+        let (encrypted_display_name, avatar) = if let Some(pk) = profile_key {
             // Encrypt display name
             let enc_name = {
                 let display_name = self.get_my_display_name().unwrap_or_default();
@@ -288,9 +509,7 @@ impl AnonDmService {
                     None
                 }
             };
-            // Encrypt avatar (stored locally, shared encrypted during bootstrap)
-            let enc_avatar = self.get_encrypted_avatar(pk);
-            (enc_name, enc_avatar)
+            (enc_name, self.my_avatar_pointer_without_upload())
         } else {
             (None, None)
         };
@@ -302,7 +521,8 @@ impl AnonDmService {
             profile_key: profile_key.map(|k| k.to_vec()),
             timestamp: TimestampNanos::now().as_u64(),
             encrypted_display_name,
-            encrypted_avatar,
+            avatar,
+            disappearing_seconds: crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS,
         };
 
         let content = Content {
@@ -313,13 +533,436 @@ impl AnonDmService {
         };
 
         // Send to peer's device inbox via pairwise sealed sender
-        self.send_to_device_inbox(peer_id, content).await?;
+        self.send_to_device_inbox(conversation_id, peer_id, content)
+            .await?;
 
-        tracing::debug!(
-            "Sent message request for conversation {} to {}",
-            conversation_id,
-            peer_id
-        );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::repositories::settings_repo::keys;
+
+    #[test]
+    fn only_empty_pool_errors_are_parkable() {
+        use crate::error::MailboxError;
+        use crate::services::pairwise::PairwiseError;
+        assert!(matches!(
+            AnonDmError::from(PairwiseError::Token(MailboxError::NoTokensAvailable)),
+            AnonDmError::TokensPending
+        ));
+        assert!(matches!(
+            AnonDmError::from(PairwiseError::Token(MailboxError::Storage("test".into()))),
+            AnonDmError::CryptoError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn empty_private_start_has_no_partial_chat_or_network_request() {
+        let (_dir, client) = client();
+        let svc = client.anon_dms();
+        let peer = UserId::new();
+        let code = PrivateFriendCode::new(peer, 1, [1; 33], [2; 12]);
+        assert!(matches!(
+            svc.start_conversation_private_attempt(&code, None, None)
+                .await,
+            Err(AnonDmError::TokensPending)
+        ));
+        assert!(
+            svc.anon_dm_repo
+                .get_live_conversation_by_peer(&peer)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn empty_pool_real_start_parks_without_token_requests_or_partial_chat() {
+        let (_dir, client) = client();
+        let svc = client.anon_dms();
+        let peer = UserId::new();
+        let mut start = Box::pin(retry_start(|| svc.start_conversation_attempt(peer, None)));
+        assert!(futures::poll!(&mut start).is_pending());
+        // The configured endpoint is unavailable. Any GetMailboxTokens or
+        // mailbox-open RPC would return a network error instead of parking.
+        assert_eq!(svc.token_manager.available_token_count().unwrap(), 0);
+        assert!(
+            svc.anon_dm_repo
+                .get_live_conversation_by_peer(&peer)
+                .unwrap()
+                .is_none()
+        );
+        tokio::time::advance(std::time::Duration::from_secs(900)).await;
+        assert!(futures::poll!(&mut start).is_pending());
+        assert_eq!(svc.token_manager.available_token_count().unwrap(), 0);
+        assert!(
+            svc.anon_dm_repo
+                .get_live_conversation_by_peer(&peer)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn empty_pool_start_waits_for_independent_jitter_then_starts_once() {
+        use std::cell::Cell;
+        use std::time::Duration;
+        let pool = Cell::new(0);
+        let starts = Cell::new(0);
+        let attempts = Cell::new(0);
+        let mut start = Box::pin(retry_start(|| {
+            attempts.set(attempts.get() + 1);
+            std::future::ready(if pool.get() < REQUIRED_TOKENS {
+                Err(AnonDmError::TokensPending)
+            } else {
+                pool.set(pool.get() - REQUIRED_TOKENS);
+                starts.set(starts.get() + 1);
+                Ok(())
+            })
+        }));
+        assert!(futures::poll!(&mut start).is_pending());
+        assert_eq!(starts.get(), 0);
+        // Refill itself cannot wake the parked operation.
+        tokio::time::advance(Duration::from_secs(30)).await;
+        pool.set(20);
+        assert!(futures::poll!(&mut start).is_pending());
+        tokio::time::advance(Duration::from_secs(269)).await;
+        assert!(futures::poll!(&mut start).is_pending());
+        assert_eq!(attempts.get(), 1);
+        tokio::time::advance(Duration::from_secs(601)).await;
+        start.await.unwrap();
+        assert_eq!(starts.get(), 1);
+        assert_eq!(attempts.get(), 2);
+        assert_eq!(pool.get(), 17);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn parked_start_reparks_and_does_not_retry_other_failures() {
+        use std::cell::Cell;
+        use std::time::Duration;
+        let attempts = Cell::new(0);
+        let mut start = Box::pin(retry_start(|| {
+            attempts.set(attempts.get() + 1);
+            std::future::ready(if attempts.get() <= 2 {
+                Err::<(), _>(AnonDmError::TokensPending)
+            } else {
+                Err(AnonDmError::NotLoggedIn)
+            })
+        }));
+        assert!(futures::poll!(&mut start).is_pending());
+        tokio::time::advance(Duration::from_secs(900)).await;
+        assert!(futures::poll!(&mut start).is_pending());
+        assert_eq!(attempts.get(), 2);
+        tokio::time::advance(Duration::from_secs(900)).await;
+        assert!(matches!(start.await, Err(AnonDmError::NotLoggedIn)));
+        assert_eq!(attempts.get(), 3);
+    }
+
+    #[tokio::test]
+    async fn concurrent_starts_share_a_peer_lock_and_submitted_request() {
+        let (_dir, client) = client();
+        let svc = client.anon_dms();
+        let peer = UserId::new();
+        let first = svc.start_lock(peer);
+        let second = svc.start_lock(peer);
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert!(!std::sync::Arc::ptr_eq(
+            &first,
+            &svc.start_lock(UserId::new())
+        ));
+        let guard = first.lock().await;
+        assert!(second.try_lock().is_err());
+        drop(guard);
+        let dm = outgoing(&svc, peer);
+        svc.anon_dm_repo
+            .set_request_state(&dm.id, RequestState::Submitted)
+            .unwrap();
+        // No route or tokens are needed to return the already submitted request.
+        let again = svc.start_conversation_attempt(peer, None).await.unwrap();
+        assert_eq!(again.id, dm.id);
+    }
+
+    fn client() -> (
+        tempfile::TempDir,
+        std::sync::Arc<crate::client::ChatterClient>,
+    ) {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let s = &client.messages().settings_repo;
+        s.set(keys::CURRENT_USER_ID, &UserId::new().to_string())
+            .unwrap();
+        s.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+        (dir, client)
+    }
+
+    fn outgoing(svc: &AnonDmService, peer: UserId) -> AnonDm {
+        let dm = AnonDm::new_initiated(peer);
+        svc.anon_dm_repo.insert_conversation(&dm).unwrap();
+        svc.anon_dm_repo
+            .insert_mailbox(&crate::domain::anon_dm::AnonDmMailbox {
+                id: dm.id.to_string(),
+                conversation_id: dm.id,
+                public_key: [4; 32],
+                private_key: [5; 64],
+                token_id: "t".into(),
+                created_at: chrono::Utc::now(),
+                expires_at: chrono::Utc::now() + chrono::Duration::days(1),
+            })
+            .unwrap();
+        dm
+    }
+
+    /// The hook marks a request uncertain right before the send RPC; this is
+    /// what settling the RPC's outcome leaves behind.
+    fn settle(svc: &AnonDmService, before: &AnonDm, rpc: Result<(), NetworkError>) -> AnonDm {
+        svc.anon_dm_repo
+            .set_request_state(&before.id, RequestState::Uncertain)
+            .unwrap();
+        svc.settle_request_send(before, rpc.as_ref().map(|_| ()))
+            .unwrap();
+        svc.anon_dm_repo
+            .get_conversation(&before.id)
+            .unwrap()
+            .unwrap()
+    }
+
+    use crate::error::NetworkError;
+
+    /// A start that fails before its request can leave the device (here: no
+    /// Tor route for the mailbox) leaves nothing behind, so "Start secret
+    /// chat" simply starts again.
+    #[tokio::test]
+    async fn start_failing_before_the_rpc_leaves_nothing() {
+        let (_dir, client) = client();
+        let svc = client.anon_dms();
+        let peer = UserId::new();
+        assert!(svc.start_conversation(peer, None).await.is_err());
+        assert!(
+            svc.anon_dm_repo
+                .get_live_conversation_by_peer(&peer)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// The server refusing the first attempt proves the request never left:
+    /// the chat (and its mailbox) is discarded, and a new start is possible
+    /// (RC107 device finding: a rejected start left a Pending chat that
+    /// "Start secret chat" kept reopening).
+    #[tokio::test]
+    async fn definite_rejection_discards_and_allows_a_restart() {
+        let (_dir, client) = client();
+        let svc = client.anon_dms();
+        let peer = UserId::new();
+        let dm = outgoing(&svc, peer);
+        for refusal in [
+            NetworkError::PermissionDenied,
+            NetworkError::InvalidRequest("too large".into()),
+            NetworkError::RateLimited,
+        ] {
+            assert!(refusal.is_definite_rejection());
+            assert!(settle(&svc, &dm, Err(refusal)).is_unsent_request());
+        }
+        svc.discard_if_unsent(&dm.id).await;
+        assert!(
+            svc.anon_dm_repo
+                .get_live_conversation_by_peer(&peer)
+                .unwrap()
+                .is_none()
+        );
+        assert!(svc.anon_dm_repo.get_mailbox(&dm.id).unwrap().is_none());
+    }
+
+    /// A failure that does not prove anything (timeout, transport, server
+    /// error) keeps the chat as an uncertain request. Starting again resends
+    /// THAT request under the same request id instead of creating a second
+    /// chat; a refusal of the resend keeps it uncertain, since an earlier
+    /// attempt may have been queued.
+    #[tokio::test]
+    async fn ambiguous_failure_is_resent_not_duplicated() {
+        let (_dir, client) = client();
+        let svc = client.anon_dms();
+        let peer = UserId::new();
+        let dm = outgoing(&svc, peer);
+        for unknown in [
+            NetworkError::Timeout,
+            NetworkError::Unavailable,
+            NetworkError::ServerError("internal".into()),
+        ] {
+            assert!(!unknown.is_definite_rejection());
+            let after = settle(&svc, &dm, Err(unknown));
+            assert!(after.is_uncertain_request() && !after.is_unsent_request());
+        }
+        svc.discard_if_unsent(&dm.id).await;
+        let uncertain = svc.anon_dm_repo.get_conversation(&dm.id).unwrap().unwrap();
+        assert!(uncertain.is_uncertain_request());
+
+        // Resend (fails here before the RPC: no Tor route): same chat, no other.
+        assert!(svc.start_conversation(peer, None).await.is_err());
+        let all: Vec<_> = svc
+            .anon_dm_repo
+            .list_conversations()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.peer_id == peer)
+            .collect();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, dm.id);
+        assert!(all[0].is_uncertain_request());
+
+        // A resend the server refuses stays uncertain.
+        let after = settle(&svc, &uncertain, Err(NetworkError::PermissionDenied));
+        assert!(after.is_uncertain_request());
+
+        // Every resend carries the same idempotency key, distinct per chat.
+        let id = super::super::infrastructure::request_id(&dm.id);
+        assert_eq!(id, super::super::infrastructure::request_id(&dm.id));
+        assert_ne!(
+            id,
+            super::super::infrastructure::request_id(&AnonDmId::new())
+        );
+        assert!(uuid::Uuid::parse_str(&id).is_ok() && !id.contains(&dm.id.to_string()));
+    }
+
+    /// The server queuing it makes the request submitted: kept, never resent
+    /// or restarted by "Start secret chat".
+    #[tokio::test]
+    async fn accepted_send_is_submitted() {
+        let (_dir, client) = client();
+        let svc = client.anon_dms();
+        let dm = outgoing(&svc, UserId::new());
+        let after = settle(&svc, &dm, Ok(()));
+        assert_eq!(after.request, RequestState::Submitted);
+        assert!(!after.is_unsent_request() && !after.is_uncertain_request());
+        svc.discard_if_unsent(&dm.id).await;
+        assert!(svc.anon_dm_repo.get_conversation(&dm.id).unwrap().is_some());
+    }
+
+    /// RC107: the S25 accepted a secret chat, got the peer's avatar pointer,
+    /// and kept showing initials. Once the avatar resolves after acceptance it
+    /// is stored on the chat, and the sidebar row and the chat header read it;
+    /// a failed fetch (no route here) stores nothing and is reported as
+    /// retried, not silently dropped.
+    #[tokio::test]
+    async fn accepted_chat_stores_the_resolved_peer_avatar_for_sidebar_and_header() {
+        let (_dir, client) = client();
+        let svc = client.anon_dms();
+        let peer = UserId::new();
+        let dm = outgoing(&svc, peer);
+        svc.anon_dm_repo.pin_peer_device(&dm.id, 2).unwrap();
+        svc.handle_acceptance(dm.id, peer, 2, [7; 32], None, Some("Peer".into()), None)
+            .unwrap();
+
+        let pointer = crate::proto::content_v1::AttachmentPointer {
+            cdn_key: "k".into(),
+            plaintext_size: 3,
+            plaintext_hash: "00".into(),
+            ..Default::default()
+        };
+        let none = svc
+            .refresh_peer_avatar(&dm.id, &peer, &pointer, &[std::time::Duration::ZERO; 2])
+            .await
+            .unwrap();
+        assert_eq!(none, None);
+        // Every fetch failed: the pointer stays pending for the next open,
+        // which tries again (and fails again here, so it stays).
+        let pending =
+            || crate::services::secret_avatar::pending_peer(&svc.settings_repo, &dm.id.to_string());
+        assert_eq!(pending(), Some(pointer.clone()));
+        assert_eq!(svc.retry_pending_peer_avatar(&dm.id).await.unwrap(), None);
+        assert_eq!(pending(), Some(pointer.clone()));
+
+        let avatar = vec![0x89, b'P', b'N', b'G'];
+        assert_eq!(
+            svc.store_peer_avatar(&dm.id, &peer, avatar.clone())
+                .unwrap(),
+            Some(avatar.clone())
+        );
+        // Same avatar again: no change to announce.
+        assert_eq!(
+            svc.store_peer_avatar(&dm.id, &peer, avatar.clone())
+                .unwrap(),
+            None
+        );
+        // Another peer's pointer never lands on this chat.
+        assert_eq!(
+            svc.store_peer_avatar(&dm.id, &UserId::new(), vec![1])
+                .unwrap(),
+            None
+        );
+
+        let row = client
+            .list_dm_sidebar()
+            .into_iter()
+            .find(|r| r.user_id == peer.to_string())
+            .expect("sidebar row for the accepted secret chat");
+        assert_eq!(row.avatar_bytes.as_deref(), Some(avatar.as_slice()));
+        let (name, header_avatar) = client.anon_dm_peer_card(&dm.id).unwrap();
+        assert_eq!(name, "Peer");
+        assert_eq!(header_avatar.as_deref(), Some(avatar.as_slice()));
+
+        // Deleting the chat forgets its pending avatar.
+        svc.delete_conversation(&dm.id).unwrap();
+        assert_eq!(pending(), None);
+    }
+
+    /// A secret chat is bound to one peer device: the first binding wins, an
+    /// acceptance from another device of the peer is refused, and a received
+    /// request binds the device it was sealed from.
+    #[tokio::test]
+    async fn chat_is_bound_to_one_peer_device() {
+        let (_dir, client) = client();
+        let svc = client.anon_dms();
+        let peer = UserId::new();
+        let dm = AnonDm::new_initiated(peer);
+        svc.anon_dm_repo.insert_conversation(&dm).unwrap();
+        svc.anon_dm_repo.pin_peer_device(&dm.id, 3).unwrap();
+        svc.anon_dm_repo.pin_peer_device(&dm.id, 3).unwrap();
+        assert!(svc.anon_dm_repo.pin_peer_device(&dm.id, 1).is_err());
+
+        let res = svc.handle_acceptance(dm.id, peer, 1, [7; 32], None, None, None);
+        assert!(matches!(res, Err(AnonDmError::InvalidData(_))), "{res:?}");
+        let still = svc.anon_dm_repo.get_conversation(&dm.id).unwrap().unwrap();
+        assert_eq!(still.status, AnonDmStatus::Pending);
+        assert_eq!(still.peer_device_id, Some(3));
+        svc.handle_acceptance(dm.id, peer, 3, [7; 32], None, None, None)
+            .unwrap();
+        assert!(
+            svc.anon_dm_repo
+                .get_conversation(&dm.id)
+                .unwrap()
+                .unwrap()
+                .is_ready()
+        );
+
+        let stranger = UserId::new();
+        let incoming = AnonDmId::new();
+        let got = svc
+            .handle_request(incoming, stranger, 5, [9; 32], None, None, None, None)
+            .unwrap();
+        assert_eq!(got.peer_device_id, Some(5));
+        // The same request again (an initiator's resend) is not a new one.
+        assert!(matches!(
+            svc.handle_request(incoming, stranger, 5, [9; 32], None, None, None, None),
+            Err(AnonDmError::ConversationExists(_))
+        ));
+        assert_eq!(
+            svc.anon_dm_repo
+                .get_conversation(&incoming)
+                .unwrap()
+                .unwrap()
+                .peer_device_id,
+            Some(5)
+        );
     }
 }

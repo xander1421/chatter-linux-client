@@ -6,17 +6,17 @@
 //! - Blind signature token management
 //! - Device message queue operations
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use chatter_core::mailbox::blind_signature::{blind_key, unblind, ServerPublicKey};
 use chatter_core::network::grpc::{AuthClient, MailboxClient, MessageClient};
-use chatter_core::proto::{
-    signal_pre_key_bundle::PreKeyRecord, GetPreKeyBundleResponse, SealedSenderMessage,
-};
 use chatter_core::proto::mailbox_v1::EnvelopeType;
+use chatter_core::proto::{
+    signal_pre_key_bundle::PreKeyRecord, GetPreKeyBundleResponse, SealedDelivery,
+    SealedDeviceMessage, SealedSenderMessage,
+};
 use common::*;
 use ed25519_dalek::{Signer, SigningKey};
-use rand::RngCore;
 
 // ============================================================================
 // Sealed Sender Message Tests
@@ -36,32 +36,13 @@ async fn test_send_sealed_message_to_user() {
     // Create recipient (need a second user)
     let recipient = assert_ok(register_test_user(&pool).await);
 
-    // Get recipient's prekey bundle to obtain their UAK
-    let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
-    let bundle_response = assert_ok(
-        auth_client.get_pre_key_bundle(&recipient.user_id, "1").await
-    );
+    // Signal model: the sender derives the recipient's UAK from the profile
+    // key the recipient shared; the server never serves it.
+    let uak = chatter_core::crypto::derive_uak(&recipient.profile_key);
 
-    // Extract UAK from bundle
-    let uak = match bundle_response.result {
-        Some(chatter_core::proto::get_pre_key_bundle_response::Result::Bundle(bundle)) => {
-            bundle.unidentified_access_key.unwrap_or_default()
-        }
-        _ => panic!("Expected single bundle result"),
-    };
-
-    // Skip if recipient has no UAK configured
-    if uak.is_empty() {
-        println!("Recipient has no UAK configured, skipping test");
-        return;
-    }
-
-    // Sealed sender is mutually exclusive with Basic auth — server now
-    // returns "provide exactly one auth method (anonymous credential, UAK,
-    // or Basic auth)" when both are present. Clear the pool's Basic auth
-    // before sending so only the UAK header survives.
-    pool.auth().clear();
-    let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
+    // Sealed sender is mutually exclusive with Basic auth: the anonymous
+    // client carries only the UAK header.
+    let mut msg_client = pool.anonymous_message_client();
 
     // Create a sealed sender message with realistic envelope size
     // Signal sealed sender envelopes are typically 200+ bytes
@@ -83,7 +64,17 @@ async fn test_send_sealed_message_to_user() {
 
     // Send sealed message with UAK for anonymous delivery
     let result = msg_client
-        .send_sealed_message_anonymous(&recipient.user_id, 1, sealed_message, &uak)
+        .send_sealed_messages_with_uak(
+            &recipient.user_id,
+            vec![SealedDeviceMessage {
+                device_id: 1,
+                registration_id: 0,
+                sealed_message: Some(sealed_message.clone()),
+            }],
+            SealedDelivery::NamedDevices,
+            &uuid::Uuid::new_v4().to_string(),
+            &uak,
+        )
         .await;
 
     assert!(
@@ -94,6 +85,51 @@ async fn test_send_sealed_message_to_user() {
 
     let response = result.unwrap();
     assert!(response.success, "Sealed message should be accepted");
+    assert_eq!(response.delivered_to_devices, vec![1]);
+
+    // A send to all devices that names none is answered with the devices
+    // the recipient has, and queues nothing (OPEN-ITEMS §124 F2).
+    let result = msg_client
+        .send_sealed_messages_with_uak(
+            &recipient.user_id,
+            Vec::new(),
+            SealedDelivery::AllDevices,
+            &uuid::Uuid::new_v4().to_string(),
+            &uak,
+        )
+        .await;
+    match result {
+        Err(chatter_core::error::NetworkError::MismatchedDevices {
+            missing,
+            extra,
+            stale,
+        }) => {
+            assert_eq!(missing, vec![1]);
+            assert!(extra.is_empty() && stale.is_empty());
+        }
+        other => panic!("expected MismatchedDevices, got {other:?}"),
+    }
+
+    // A wrong registration id is stale: nothing queued for any device.
+    let result = msg_client
+        .send_sealed_messages_with_uak(
+            &recipient.user_id,
+            vec![SealedDeviceMessage {
+                device_id: 1,
+                registration_id: 1,
+                sealed_message: Some(sealed_message),
+            }],
+            SealedDelivery::AllDevices,
+            &uuid::Uuid::new_v4().to_string(),
+            &uak,
+        )
+        .await;
+    if let Err(chatter_core::error::NetworkError::MismatchedDevices { stale, .. }) = &result {
+        assert_eq!(stale, &vec![1]);
+    } else {
+        // Registration id 1 is the device's own only by a 1-in-16k chance.
+        assert!(result.is_ok(), "unexpected answer: {result:?}");
+    }
 }
 
 /// Tests that SendSealedMessage correctly rejects requests without UAK header.
@@ -117,14 +153,20 @@ async fn test_send_sealed_message_without_uak_rejected() {
 
     // Without UAK header, server should reject (Unauthenticated)
     let result = msg_client
-        .send_sealed_message(&recipient.user_id, 1, sealed_message)
+        .send_sealed_messages(
+            &recipient.user_id,
+            vec![SealedDeviceMessage {
+                device_id: 1,
+                registration_id: 0,
+                sealed_message: Some(sealed_message),
+            }],
+            SealedDelivery::NamedDevices,
+            &uuid::Uuid::new_v4().to_string(),
+        )
         .await;
 
     // Should fail with Unauthenticated - requires UAK header
-    assert!(
-        result.is_err(),
-        "Should fail without UAK header"
-    );
+    assert!(result.is_err(), "Should fail without UAK header");
 }
 
 #[tokio::test]
@@ -143,7 +185,16 @@ async fn test_send_sealed_message_to_nonexistent_user() {
     };
 
     let result = msg_client
-        .send_sealed_message("00000000-0000-0000-0000-000000000000", 1, sealed_message)
+        .send_sealed_messages(
+            "00000000-0000-0000-0000-000000000000",
+            vec![SealedDeviceMessage {
+                device_id: 1,
+                registration_id: 0,
+                sealed_message: Some(sealed_message),
+            }],
+            SealedDelivery::NamedDevices,
+            &uuid::Uuid::new_v4().to_string(),
+        )
         .await;
 
     assert!(result.is_err(), "Should fail for non-existent user");
@@ -325,11 +376,7 @@ async fn test_blind_signature_flow() {
     let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
 
     // Parse the server public key using real blind_signature module
-    let server_pk = assert_ok(ServerPublicKey::from_der(
-        &pk_response.public_key,
-        pk_response.key_id.clone(),
-        pk_response.valid_until,
-    ));
+    let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
 
     // Step 2: Generate real Ed25519 keypair
     let mut secret_bytes = [0u8; 32];
@@ -342,7 +389,11 @@ async fn test_blind_signature_flow() {
 
     // Step 4: Request blind signature from server
     let result = mailbox_client
-        .get_mailbox_tokens(1, vec![blinding_op.blinded_message.clone()])
+        .get_mailbox_tokens(
+            1,
+            vec![blinding_op.blinded_message.clone()],
+            server_pk.key_id.clone(),
+        )
         .await;
 
     assert!(
@@ -352,15 +403,18 @@ async fn test_blind_signature_flow() {
     );
 
     let response = result.unwrap();
-    assert_eq!(response.blinded_signatures.len(), 1, "Should get 1 signature");
+    assert_eq!(
+        response.blinded_signatures.len(),
+        1,
+        "Should get 1 signature"
+    );
     assert!(response.remaining_quota >= 0, "Should have quota info");
 
     // Step 5: Unblind the signature
     let unblinded_sig = assert_ok(unblind(
         &server_pk,
         &response.blinded_signatures[0],
-        &blinding_op.secret,
-        &blinding_op.randomizer,
+        &blinding_op,
         &public_key_bytes,
     ));
 
@@ -385,11 +439,7 @@ async fn test_get_mailbox_tokens_multiple() {
 
     // Get server key
     let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
-    let server_pk = assert_ok(ServerPublicKey::from_der(
-        &pk_response.public_key,
-        pk_response.key_id.clone(),
-        pk_response.valid_until,
-    ));
+    let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
 
     // Generate 3 keypairs and blind them
     let mut blinded_keys = Vec::new();
@@ -404,7 +454,9 @@ async fn test_get_mailbox_tokens_multiple() {
     }
 
     // Request all 3 signatures
-    let result = mailbox_client.get_mailbox_tokens(3, blinded_keys).await;
+    let result = mailbox_client
+        .get_mailbox_tokens(3, blinded_keys, server_pk.key_id.clone())
+        .await;
 
     assert!(
         result.is_ok(),
@@ -413,7 +465,11 @@ async fn test_get_mailbox_tokens_multiple() {
     );
 
     let response = result.unwrap();
-    assert_eq!(response.blinded_signatures.len(), 3, "Should get 3 signatures");
+    assert_eq!(
+        response.blinded_signatures.len(),
+        3,
+        "Should get 3 signatures"
+    );
 }
 
 #[tokio::test]
@@ -427,11 +483,7 @@ async fn test_create_ephemeral_mailbox_with_real_signature() {
 
     // Step 1: Get server's RSA public key
     let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
-    let server_pk = assert_ok(ServerPublicKey::from_der(
-        &pk_response.public_key,
-        pk_response.key_id.clone(),
-        pk_response.valid_until,
-    ));
+    let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
 
     // Step 2: Generate Ed25519 keypair
     let mut secret_bytes = [0u8; 32];
@@ -444,7 +496,11 @@ async fn test_create_ephemeral_mailbox_with_real_signature() {
 
     let tokens_response = assert_ok(
         mailbox_client
-            .get_mailbox_tokens(1, vec![blinding_op.blinded_message.clone()])
+            .get_mailbox_tokens(
+                1,
+                vec![blinding_op.blinded_message.clone()],
+                server_pk.key_id.clone(),
+            )
             .await,
     );
 
@@ -452,17 +508,13 @@ async fn test_create_ephemeral_mailbox_with_real_signature() {
     let signature = assert_ok(unblind(
         &server_pk,
         &tokens_response.blinded_signatures[0],
-        &blinding_op.secret,
-        &blinding_op.randomizer,
+        &blinding_op,
         &public_key_bytes,
     ));
 
     // Step 5: Create ephemeral mailbox with real signature
-    // Generate a random message randomizer for the mailbox
-    let mut message_randomizer = [0u8; 32];
-    rand::fill(&mut message_randomizer);
     let create_result = mailbox_client
-        .create_ephemeral_mailbox(public_key_bytes.clone(), signature, 86400, message_randomizer.to_vec())
+        .create_ephemeral_mailbox(public_key_bytes.clone(), signature, 86400)
         .await;
 
     assert!(
@@ -475,7 +527,11 @@ async fn test_create_ephemeral_mailbox_with_real_signature() {
     if !response.success {
         println!("Mailbox creation failed: error={}", response.error);
     }
-    assert!(response.success, "Mailbox creation should succeed: {}", response.error);
+    assert!(
+        response.success,
+        "Mailbox creation should succeed: {}",
+        response.error
+    );
     assert!(!response.mailbox_id.is_empty(), "Should have mailbox ID");
 
     println!("Created mailbox: {}", response.mailbox_id);
@@ -492,11 +548,7 @@ async fn test_ephemeral_mailbox_poll_with_real_signature() {
 
     // Get server key
     let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
-    let server_pk = assert_ok(ServerPublicKey::from_der(
-        &pk_response.public_key,
-        pk_response.key_id.clone(),
-        pk_response.valid_until,
-    ));
+    let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
 
     // Generate keypair
     let mut secret_bytes = [0u8; 32];
@@ -508,26 +560,31 @@ async fn test_ephemeral_mailbox_poll_with_real_signature() {
     let blinding_op = assert_ok(blind_key(&server_pk, &public_key_bytes));
     let tokens_response = assert_ok(
         mailbox_client
-            .get_mailbox_tokens(1, vec![blinding_op.blinded_message.clone()])
+            .get_mailbox_tokens(
+                1,
+                vec![blinding_op.blinded_message.clone()],
+                server_pk.key_id.clone(),
+            )
             .await,
     );
     let signature = assert_ok(unblind(
         &server_pk,
         &tokens_response.blinded_signatures[0],
-        &blinding_op.secret,
-        &blinding_op.randomizer,
+        &blinding_op,
         &public_key_bytes,
     ));
 
     // Create mailbox
-    let mut message_randomizer = [0u8; 32];
-    rand::fill(&mut message_randomizer);
     let create_response = assert_ok(
         mailbox_client
-            .create_ephemeral_mailbox(public_key_bytes.clone(), signature, 86400, message_randomizer.to_vec())
+            .create_ephemeral_mailbox(public_key_bytes.clone(), signature, 86400)
             .await,
     );
-    assert!(create_response.success, "Mailbox creation should succeed: {}", create_response.error);
+    assert!(
+        create_response.success,
+        "Mailbox creation should succeed: {}",
+        create_response.error
+    );
 
     // Get challenge
     let challenge_response = assert_ok(
@@ -572,11 +629,7 @@ async fn test_send_to_ephemeral_mailbox() {
 
     // Create a mailbox first using real crypto
     let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
-    let server_pk = assert_ok(ServerPublicKey::from_der(
-        &pk_response.public_key,
-        pk_response.key_id.clone(),
-        pk_response.valid_until,
-    ));
+    let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
 
     let mut secret_bytes = [0u8; 32];
     rand::fill(&mut secret_bytes);
@@ -586,25 +639,30 @@ async fn test_send_to_ephemeral_mailbox() {
     let blinding_op = assert_ok(blind_key(&server_pk, &public_key_bytes));
     let tokens_response = assert_ok(
         mailbox_client
-            .get_mailbox_tokens(1, vec![blinding_op.blinded_message.clone()])
+            .get_mailbox_tokens(
+                1,
+                vec![blinding_op.blinded_message.clone()],
+                server_pk.key_id.clone(),
+            )
             .await,
     );
     let signature = assert_ok(unblind(
         &server_pk,
         &tokens_response.blinded_signatures[0],
-        &blinding_op.secret,
-        &blinding_op.randomizer,
+        &blinding_op,
         &public_key_bytes,
     ));
 
-    let mut message_randomizer = [0u8; 32];
-    rand::fill(&mut message_randomizer);
     let create_response = assert_ok(
         mailbox_client
-            .create_ephemeral_mailbox(public_key_bytes.clone(), signature, 86400, message_randomizer.to_vec())
+            .create_ephemeral_mailbox(public_key_bytes.clone(), signature, 86400)
             .await,
     );
-    assert!(create_response.success, "Mailbox creation should succeed: {}", create_response.error);
+    assert!(
+        create_response.success,
+        "Mailbox creation should succeed: {}",
+        create_response.error
+    );
 
     // Now send a message to this mailbox
     let send_result = mailbox_client
@@ -635,11 +693,9 @@ async fn test_request_sender_certificate() {
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
-    // Request a new sender certificate (valid for 7 days). Server reads
+    // Request a new sender certificate (the server sets its lifetime). Server reads
     // the requesting device_id from the authenticated session.
-    let result = auth_client
-        .request_sender_certificate(Some(std::time::Duration::from_secs(7 * 24 * 60 * 60)))
-        .await;
+    let result = auth_client.request_sender_certificate().await;
 
     assert!(
         result.is_ok(),

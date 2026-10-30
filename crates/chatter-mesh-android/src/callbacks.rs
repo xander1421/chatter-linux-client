@@ -14,7 +14,7 @@
 //! 1. **The thread must be attached before any JNI call.** It is a thread the
 //!    JVM has never seen from Rust's side; touching JNI without attaching is a
 //!    segfault, not an error. Here that is free — the JVM called *us*, so the
-//!    `JNIEnv` arrives as an argument — but it is why [`crate::bridge`] attaches
+//!    `Env` arrives as an argument — but it is why [`crate::bridge`] attaches
 //!    explicitly on the way out.
 //! 2. **Nothing may block.** A blocked Bluetooth callback stalls the whole
 //!    Android Bluetooth stack, for every app, not just this one. Each function
@@ -39,8 +39,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use chatter_mesh_link::{LinkEvent, LinkRole};
 use jni::objects::{JByteArray, JClass, JObject, JString};
-use jni::sys::{JNI_FALSE, JNI_VERSION_1_6, jboolean, jint};
-use jni::{JNIEnv, JavaVM, NativeMethod};
+use jni::sys::{JNI_VERSION_1_6, jint};
+use jni::{Env, JavaVM, NativeMethod};
 
 use crate::error;
 use crate::link;
@@ -87,31 +87,35 @@ pub extern "system" fn JNI_OnLoad(vm: *mut jni::sys::JavaVM, _reserved: *mut c_v
 fn on_load(raw_vm: *mut jni::sys::JavaVM) -> Result<(), String> {
     // SAFETY: this is the `JavaVM` the JVM itself passed to `JNI_OnLoad`, which
     // is valid for the life of the process. `from_raw` only null-checks it.
-    let vm = unsafe { JavaVM::from_raw(raw_vm) }
-        .map_err(|err| format!("JNI_OnLoad was handed an unusable JavaVM: {err}"))?;
+    if raw_vm.is_null() {
+        return Err("JNI_OnLoad received a null JavaVM".to_owned());
+    }
+    let vm = unsafe { JavaVM::from_raw(raw_vm) };
+    vm.attach_current_thread(|env| {
+        Ok::<_, jni::errors::Error>((|| -> Result<(), String> {
+            // FindClass resolves through the classloader of whatever is on the call
+            // stack. Doing it here works because `System.loadLibrary` was called from
+            // app code; the same call from a native thread later would see only the
+            // system classloader and fail. That is the second reason registration
+            // happens at load time rather than on demand.
+            let class = match env.find_class(jni::strings::JNIString::from(BRIDGE_CLASS)) {
+                Ok(class) => class,
+                Err(err) => {
+                    let described = error::drain_exception(&env, "FindClass");
+                    return Err(format!(
+                        "{BRIDGE_CLASS} was not found: {err}{}",
+                        described
+                            .map(|text| format!(" ({text})"))
+                            .unwrap_or_default()
+                    ));
+                }
+            };
 
-    // The thread running `JNI_OnLoad` is attached by definition — it is the one
-    // that called `System.loadLibrary`.
-    let mut env = vm.get_env().map_err(|err| format!("no JNIEnv in JNI_OnLoad: {err}"))?;
-
-    // FindClass resolves through the classloader of whatever is on the call
-    // stack. Doing it here works because `System.loadLibrary` was called from
-    // app code; the same call from a native thread later would see only the
-    // system classloader and fail. That is the second reason registration
-    // happens at load time rather than on demand.
-    let class = match env.find_class(BRIDGE_CLASS) {
-        Ok(class) => class,
-        Err(err) => {
-            let described = error::drain_exception(&env, "FindClass");
-            return Err(format!(
-                "{BRIDGE_CLASS} was not found: {err}{}",
-                described.map(|text| format!(" ({text})")).unwrap_or_default()
-            ));
-        }
-    };
-
-    crate::bridge::install(&mut env, &class)?;
-    register_natives(&mut env, &class)
+            crate::bridge::install(env, &class)?;
+            register_natives(env, &class)
+        })())
+    })
+    .map_err(|e| e.to_string())?
 }
 
 /// Every native handler, paired with the name it answers to.
@@ -121,7 +125,10 @@ fn handlers() -> [(&'static str, *mut c_void); 5] {
         (HANDLER_NAMES[1], native_on_connected as *mut c_void),
         (HANDLER_NAMES[2], native_on_disconnected as *mut c_void),
         (HANDLER_NAMES[3], native_on_data as *mut c_void),
-        (HANDLER_NAMES[4], native_on_adapter_power_changed as *mut c_void),
+        (
+            HANDLER_NAMES[4],
+            native_on_adapter_power_changed as *mut c_void,
+        ),
     ]
 }
 
@@ -130,27 +137,40 @@ fn handlers() -> [(&'static str, *mut c_void); 5] {
 /// Descriptors come from [`NATIVE_METHODS`] and nowhere else, so there is one
 /// place a descriptor can be wrong and one test that checks it against the
 /// compiled Kotlin.
-fn register_natives(env: &mut JNIEnv<'_>, class: &JClass<'_>) -> Result<(), String> {
+fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> Result<(), String> {
     let handlers = handlers();
     let mut methods = Vec::with_capacity(NATIVE_METHODS.len());
-    for (name, descriptor) in NATIVE_METHODS {
+    let names: Vec<jni::strings::JNIString> = NATIVE_METHODS
+        .iter()
+        .map(|(name, _)| (*name).into())
+        .collect();
+    let signatures: Vec<jni::strings::JNIString> = NATIVE_METHODS
+        .iter()
+        .map(|(_, sig)| (*sig).into())
+        .collect();
+    for (index, (name, descriptor)) in NATIVE_METHODS.iter().enumerate() {
         let Some((_, fn_ptr)) = handlers.iter().find(|(handler, _)| handler == name) else {
-            return Err(format!("{name}{descriptor} has no native handler behind it"));
+            return Err(format!(
+                "{name}{descriptor} has no native handler behind it"
+            ));
         };
-        methods.push(NativeMethod {
-            name: (*name).into(),
-            sig: (*descriptor).into(),
-            fn_ptr: *fn_ptr,
+        // SAFETY: the frozen descriptor/handler table is checked against Kotlin;
+        // JNIString storage outlives RegisterNatives and JNI copies the descriptors.
+        methods.push(unsafe {
+            NativeMethod::from_raw_parts(&names[index], &signatures[index], *fn_ptr)
         });
     }
 
-    match env.register_native_methods(class, &methods) {
+    // SAFETY: handler signatures match the frozen native table verified against Kotlin.
+    match unsafe { env.register_native_methods(class, &methods) } {
         Ok(()) => Ok(()),
         Err(err) => {
             let described = error::drain_exception(env, "RegisterNatives");
             Err(format!(
                 "RegisterNatives on {BRIDGE_CLASS} failed: {err}{}",
-                described.map(|text| format!(" ({text})")).unwrap_or_default()
+                described
+                    .map(|text| format!(" ({text})"))
+                    .unwrap_or_default()
             ))
         }
     }
@@ -171,12 +191,12 @@ fn guard(entry_point: &str, body: impl FnOnce()) {
 }
 
 /// Read a Java string, or `None` with a log line if it cannot be read.
-fn read_string(env: &mut JNIEnv<'_>, value: &JString<'_>, during: &str) -> Option<String> {
+fn read_string(env: &mut Env<'_>, value: &JString<'_>, during: &str) -> Option<String> {
     if value.as_raw().is_null() {
         error::log_warn(&format!("mesh: {during} was null, dropping the event"));
         return None;
     }
-    let read = env.get_string(value);
+    let read = (value).try_to_string(&env);
     match read {
         Ok(text) => Some(String::from(text)),
         Err(err) => {
@@ -188,7 +208,7 @@ fn read_string(env: &mut JNIEnv<'_>, value: &JString<'_>, during: &str) -> Optio
 }
 
 /// Copy a Java byte array, or `None` with a log line if it cannot be read.
-fn read_bytes(env: &JNIEnv<'_>, value: &JByteArray<'_>, during: &str) -> Option<Vec<u8>> {
+fn read_bytes(env: &Env<'_>, value: &JByteArray<'_>, during: &str) -> Option<Vec<u8>> {
     if value.as_raw().is_null() {
         error::log_warn(&format!("mesh: {during} was null, dropping the event"));
         return None;
@@ -203,13 +223,13 @@ fn read_bytes(env: &JNIEnv<'_>, value: &JByteArray<'_>, during: &str) -> Option<
     }
 }
 
-/// JNI booleans are only specified as zero or non-zero.
+/// JNI uses an unsigned byte at the native boundary; normalize before Rust bool.
 ///
 /// Kotlin sends 1 for `true`, but reading the byte as `== JNI_TRUE` would turn
 /// any other non-zero value into `false`, which is the wrong way round for a
 /// flag that decides which role a link took.
-fn to_bool(raw: jboolean) -> bool {
-    raw != JNI_FALSE
+fn to_bool(raw: u8) -> bool {
+    raw != 0
 }
 
 /// Which side of the link we are, from Kotlin's "is peripheral role" flag.
@@ -219,7 +239,11 @@ fn to_bool(raw: jboolean) -> bool {
 /// the central and we send by writing a characteristic. Getting this backwards
 /// picks the wrong send path for the link's whole life.
 fn role_for(is_peripheral_role: bool) -> LinkRole {
-    if is_peripheral_role { LinkRole::Peripheral } else { LinkRole::Central }
+    if is_peripheral_role {
+        LinkRole::Peripheral
+    } else {
+        LinkRole::Central
+    }
 }
 
 /// Narrow an advertisement's RSSI to the event's width.
@@ -239,26 +263,36 @@ fn clamp_rssi(raw: jint) -> i16 {
 /// the scheduler decides whether it is worth one of the scarce central slots,
 /// and `address` is what [`chatter_mesh_link::MeshLink::connect`] takes.
 extern "system" fn native_on_discovered(
-    mut env: JNIEnv<'_>,
+    mut env: jni::EnvUnowned<'_>,
     _this: JObject<'_>,
     address: JString<'_>,
     rssi: jint,
     peer: JString<'_>,
 ) {
-    guard("nativeOnDiscovered", || {
-        let Some(address) = read_string(&mut env, &address, "nativeOnDiscovered(address)") else {
-            return;
-        };
-        // Null whenever the scan response has not arrived, which is common on the
-        // first sighting and never an error. Unparseable is treated the same as
-        // absent: the policy layer dials an unknown peer, so the worst case is the
-        // behaviour we had before the id existed.
-        let peer = (!peer.is_null())
-            .then(|| read_string(&mut env, &peer, "nativeOnDiscovered(peer)"))
-            .flatten()
-            .and_then(|hex| decode_peer_hex(&hex));
-        link::dispatch(LinkEvent::Discovered { address, rssi: clamp_rssi(rssi), peer });
-    });
+    env.with_env(|mut env| -> jni::errors::Result<_> {
+        Ok((|| {
+            guard("nativeOnDiscovered", || {
+                let Some(address) = read_string(&mut env, &address, "nativeOnDiscovered(address)")
+                else {
+                    return;
+                };
+                // Null whenever the scan response has not arrived, which is common on the
+                // first sighting and never an error. Unparseable is treated the same as
+                // absent: the policy layer dials an unknown peer, so the worst case is the
+                // behaviour we had before the id existed.
+                let peer = (!peer.is_null())
+                    .then(|| read_string(&mut env, &peer, "nativeOnDiscovered(peer)"))
+                    .flatten()
+                    .and_then(|hex| decode_peer_hex(&hex));
+                link::dispatch(LinkEvent::Discovered {
+                    address,
+                    rssi: clamp_rssi(rssi),
+                    peer,
+                });
+            });
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 /// Sixteen hex characters to the eight bytes they name.
@@ -280,34 +314,46 @@ fn decode_peer_hex(hex: &str) -> Option<[u8; 8]> {
 /// direction it was opened in, and `max_write` is the negotiated ATT MTU less
 /// the three-byte ATT header, which Kotlin computes from `onMtuChanged`.
 extern "system" fn native_on_connected(
-    mut env: JNIEnv<'_>,
+    mut env: jni::EnvUnowned<'_>,
     _this: JObject<'_>,
     handle: JString<'_>,
-    is_peripheral_role: jboolean,
+    is_peripheral_role: u8,
     max_write: jint,
 ) {
-    guard("nativeOnConnected", || {
-        let Some(handle) = read_string(&mut env, &handle, "nativeOnConnected(handle)") else {
-            return;
-        };
-        link::on_connected(&handle, role_for(to_bool(is_peripheral_role)), max_write);
-    });
+    env.with_env(|mut env| -> jni::errors::Result<_> {
+        Ok((|| {
+            guard("nativeOnConnected", || {
+                let Some(handle) = read_string(&mut env, &handle, "nativeOnConnected(handle)")
+                else {
+                    return;
+                };
+                link::on_connected(&handle, role_for(to_bool(is_peripheral_role)), max_write);
+            });
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 /// JNI: `MeshBleBridge.nativeOnDisconnected`.
 ///
 /// The connection is gone. State keyed on it should be dropped, not retried.
 extern "system" fn native_on_disconnected(
-    mut env: JNIEnv<'_>,
+    mut env: jni::EnvUnowned<'_>,
     _this: JObject<'_>,
     handle: JString<'_>,
 ) {
-    guard("nativeOnDisconnected", || {
-        let Some(handle) = read_string(&mut env, &handle, "nativeOnDisconnected(handle)") else {
-            return;
-        };
-        link::on_disconnected(&handle);
-    });
+    env.with_env(|mut env| -> jni::errors::Result<_> {
+        Ok((|| {
+            guard("nativeOnDisconnected", || {
+                let Some(handle) = read_string(&mut env, &handle, "nativeOnDisconnected(handle)")
+                else {
+                    return;
+                };
+                link::on_disconnected(&handle);
+            });
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 /// JNI: `MeshBleBridge.nativeOnData`.
@@ -317,20 +363,25 @@ extern "system" fn native_on_disconnected(
 /// borrowed: it is a local reference belonging to this callback and is invalid
 /// the moment it returns, while the event outlives it in the queue.
 extern "system" fn native_on_data(
-    mut env: JNIEnv<'_>,
+    mut env: jni::EnvUnowned<'_>,
     _this: JObject<'_>,
     handle: JString<'_>,
     bytes: JByteArray<'_>,
 ) {
-    guard("nativeOnData", || {
-        let Some(handle) = read_string(&mut env, &handle, "nativeOnData(handle)") else {
-            return;
-        };
-        let Some(bytes) = read_bytes(&env, &bytes, "nativeOnData(bytes)") else {
-            return;
-        };
-        link::on_data(&handle, bytes);
-    });
+    env.with_env(|mut env| -> jni::errors::Result<_> {
+        Ok((|| {
+            guard("nativeOnData", || {
+                let Some(handle) = read_string(&mut env, &handle, "nativeOnData(handle)") else {
+                    return;
+                };
+                let Some(bytes) = read_bytes(&env, &bytes, "nativeOnData(bytes)") else {
+                    return;
+                };
+                link::on_data(&handle, bytes);
+            });
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 /// JNI: `MeshBleBridge.nativeOnAdapterPowerChanged`.
@@ -339,13 +390,20 @@ extern "system" fn native_on_data(
 /// mode. Every link dies with it, which the link layer reports link by link so
 /// the layer above does not have to find out one failed write at a time.
 extern "system" fn native_on_adapter_power_changed(
-    _env: JNIEnv<'_>,
+    mut _env: jni::EnvUnowned<'_>,
     _this: JObject<'_>,
-    powered: jboolean,
+    powered: u8,
 ) {
-    guard("nativeOnAdapterPowerChanged", || {
-        link::dispatch(LinkEvent::AdapterPowerChanged { powered: to_bool(powered) });
-    });
+    _env.with_env(|mut _env| -> jni::errors::Result<_> {
+        Ok((|| {
+            guard("nativeOnAdapterPowerChanged", || {
+                link::dispatch(LinkEvent::AdapterPowerChanged {
+                    powered: to_bool(powered),
+                });
+            });
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 #[cfg(test)]
@@ -358,7 +416,10 @@ mod tests {
         // fails at the first callback, on a phone. Cheap to rule out here.
         assert_eq!(HANDLER_NAMES.len(), NATIVE_METHODS.len());
         for (name, _) in NATIVE_METHODS {
-            assert!(HANDLER_NAMES.contains(name), "{name} is declared but has no handler");
+            assert!(
+                HANDLER_NAMES.contains(name),
+                "{name} is declared but has no handler"
+            );
         }
         for name in HANDLER_NAMES {
             assert!(
@@ -374,7 +435,10 @@ mod tests {
         // out of order would bind the wrong pointer — a mismatch RegisterNatives
         // accepts happily, because both the name and the descriptor still exist.
         for (index, (declared, _)) in NATIVE_METHODS.iter().enumerate() {
-            assert_eq!(HANDLER_NAMES[index], *declared, "handler {index} is out of order");
+            assert_eq!(
+                HANDLER_NAMES[index], *declared,
+                "handler {index} is out of order"
+            );
         }
     }
 
@@ -429,11 +493,15 @@ mod tests {
     #[test]
     fn adapter_power_marshals_both_ways() {
         assert_eq!(
-            LinkEvent::AdapterPowerChanged { powered: to_bool(1) },
+            LinkEvent::AdapterPowerChanged {
+                powered: to_bool(1)
+            },
             LinkEvent::AdapterPowerChanged { powered: true }
         );
         assert_eq!(
-            LinkEvent::AdapterPowerChanged { powered: to_bool(0) },
+            LinkEvent::AdapterPowerChanged {
+                powered: to_bool(0)
+            },
             LinkEvent::AdapterPowerChanged { powered: false }
         );
     }

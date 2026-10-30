@@ -36,10 +36,14 @@ pub fn refresh(w: &MainWindow, ui_ctx: &ChatterClient, peer: &UserId) {
                 attributed = prompt.attributed,
                 "[IDENTITY] showing the identity-change prompt — conversation is wedged"
             );
-            w.set_identity_change_title(prompt.title.into());
-            w.set_identity_change_detail(prompt.detail.into());
-            w.set_identity_change_attributed(prompt.attributed);
-            w.set_identity_change_visible(true);
+            w.global::<crate::ChatPane>()
+                .set_identity_change_title(prompt.title.into());
+            w.global::<crate::ChatPane>()
+                .set_identity_change_detail(prompt.detail.into());
+            w.global::<crate::ChatPane>()
+                .set_identity_change_attributed(prompt.attributed);
+            w.global::<crate::ChatPane>()
+                .set_identity_change_visible(true);
         }
         Ok(None) => clear(w),
         Err(e) => {
@@ -55,10 +59,14 @@ pub fn refresh(w: &MainWindow, ui_ctx: &ChatterClient, peer: &UserId) {
 /// Hide the prompt. Used on open paths that are not a server DM, and after a
 /// successful accept.
 pub fn clear(w: &MainWindow) {
-    w.set_identity_change_visible(false);
-    w.set_identity_change_title("".into());
-    w.set_identity_change_detail("".into());
-    w.set_identity_change_attributed(false);
+    w.global::<crate::ChatPane>()
+        .set_identity_change_visible(false);
+    w.global::<crate::ChatPane>()
+        .set_identity_change_title("".into());
+    w.global::<crate::ChatPane>()
+        .set_identity_change_detail("".into());
+    w.global::<crate::ChatPane>()
+        .set_identity_change_attributed(false);
 }
 
 /// Wire the Accept button.
@@ -72,42 +80,45 @@ pub fn wire_accept(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_identity_change_accept_clicked(move || {
-        let Some(w) = weak.upgrade() else { return };
+    window
+        .global::<crate::ChatPane>()
+        .on_identity_change_accept_clicked(move || {
+            let Some(w) = weak.upgrade() else { return };
 
-        let ActiveConversation::ServerDm { peer_id } = ui_ctx.chat_state().active_conversation()
-        else {
-            tracing::warn!("[IDENTITY] accept fired with no server DM open; ignoring");
-            return;
-        };
+            let ActiveConversation::ServerDm { peer_id } = ui_ctx.active_conversation() else {
+                tracing::warn!("[IDENTITY] accept fired with no server DM open; ignoring");
+                return;
+            };
 
-        match ui_ctx.accept_peer_identity_change(&peer_id) {
-            Ok(sessions_dropped) => {
-                tracing::warn!(
-                    peer = %peer_id,
-                    sessions_dropped,
-                    "[IDENTITY] user ACCEPTED a new peer identity key"
-                );
-                clear(&w);
-                // Say so explicitly. The visible consequence of accepting is a
-                // bar disappearing, which on its own does not distinguish
-                // "accepted" from "the button did nothing".
-                w.set_toast_message("New safety number accepted — you can message again".into());
-                w.set_toast_variant("success".into());
-                w.set_toast_visible(true);
-            }
-            Err(e) => {
-                tracing::error!(peer = %peer_id, error = %e, "[IDENTITY] accept failed");
-                // The prompt deliberately stays up: the conversation is still
-                // wedged, so removing the only route back would be a lie.
-                w.set_toast_message(
-                    "Could not accept the new safety number — the conversation is still \
+            match ui_ctx.accept_peer_identity_change(&peer_id) {
+                Ok(sessions_dropped) => {
+                    tracing::warn!(
+                        peer = %peer_id,
+                        sessions_dropped,
+                        "[IDENTITY] user ACCEPTED a new peer identity key"
+                    );
+                    clear(&w);
+                    // Say so explicitly. The visible consequence of accepting is a
+                    // bar disappearing, which on its own does not distinguish
+                    // "accepted" from "the button did nothing".
+                    w.set_toast_message(
+                        "New safety number accepted — you can message again".into(),
+                    );
+                    w.set_toast_variant("success".into());
+                    w.set_toast_visible(true);
+                }
+                Err(e) => {
+                    tracing::error!(peer = %peer_id, error = %e, "[IDENTITY] accept failed");
+                    // The prompt deliberately stays up: the conversation is still
+                    // wedged, so removing the only route back would be a lie.
+                    w.set_toast_message(
+                        "Could not accept the new safety number — the conversation is still \
                      blocked."
-                        .into(),
-                );
-                w.set_toast_variant("error".into());
-                w.set_toast_visible(true);
+                            .into(),
+                    );
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                }
             }
-        }
-    });
+        });
 }

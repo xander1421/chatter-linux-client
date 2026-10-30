@@ -17,12 +17,26 @@
 // conversation, and a dismissed prompt would leave the user with a DM that
 // silently refuses to send.
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 
 export component IdentityChangeBar inherits Rectangle {
+    property <bool> entered: false;
+    Timer {
+        interval: 16ms;
+        running: !root.entered;
+        triggered => { root.entered = true; }
+    }
+    transform-origin: { x: self.width / 2, y: 0px };
+    transform-scale-y: Appearance.reduce-motion || root.entered ? 100% : 88%;
+    opacity: Appearance.reduce-motion || root.entered ? 1 : 0;
+    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+    animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
     // Both strings are formatted by chatter-core.
     in property <string> title;
     in property <string> detail;
@@ -37,7 +51,8 @@ export component IdentityChangeBar inherits Rectangle {
     property <color> accent: root.attributed ? Colors.warning : Colors.error;
 
     min-height: 24px;
-    background: root.accent.with-alpha(0.10);
+    // Opaque: a safety-number warning must stay legible over scrolling bubbles.
+    background: Colors.surface.mix(root.accent, 0.88);
 
     // Bottom hairline, matching the other in-chat strips.
     Rectangle {
@@ -68,7 +83,7 @@ export component IdentityChangeBar inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
-            spacing: 2px;
+            spacing: Spacing.xxs;
 
             Text {
                 text: root.title;
@@ -104,8 +119,10 @@ export component IdentityChangeBar inherits Rectangle {
                 background: accept-touch.has-hover
                     ? root.accent.with-alpha(0.28)
                     : root.accent.with-alpha(0.16);
-                border-width: 1px;
-                border-color: root.accent.with-alpha(0.5);
+                transform-scale-x: accept-touch.pressed ? 96% : 100%;
+                transform-scale-y: accept-touch.pressed ? 94% : 100%;
+                animate transform-scale-x { duration: accept-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                animate transform-scale-y { duration: accept-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
 
                 accept-label := Text {
                     // Deliberately not "OK" or "Continue": the user is pinning
@@ -123,6 +140,8 @@ export component IdentityChangeBar inherits Rectangle {
                     mouse-cursor: pointer;
                     accessible-role: button;
                     accessible-label: "Accept new safety number";
+                    accessible-action-default => { root.accept-clicked(); }
+                    KeyFocus { activate => { root.accept-clicked(); } }
                     clicked => {
                         root.accept-clicked();
                     }

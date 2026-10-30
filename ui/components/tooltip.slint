@@ -1,53 +1,13 @@
+import { GlassSurface } from "glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // Tooltip components for hover hints
 //
-// Provides both a raw Tooltip and a self-contained TooltipArea that
-// handles hover detection, eliminating the need for signal bubbling.
+// TooltipArea: wraps content and renders its own tooltip on hover, so no
+// signal bubbling is needed.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
-
-// Raw tooltip — positioned absolutely, controlled by parent
-export component Tooltip inherits Rectangle {
-    in property <string> text: "";
-    in property <bool> show: false;
-    in property <length> tip-x: 0px;
-    in property <length> tip-y: 0px;
-
-    // Position at specified coordinates
-    x: root.tip-x;
-    y: root.tip-y;
-
-    // Visibility
-    visible: root.show;
-    opacity: root.show ? 1 : 0;
-
-    // Size based on content with max width
-    width: Math.min(text-content.preferred-width + Spacing.sm * 2, 200px);
-    height: text-content.preferred-height + Spacing.sm * 2;
-    animate opacity { duration: 150ms; }
-
-    // Tooltip background — Neo 2.0 with subtle shadow
-    background: Colors.tooltip-bg;
-    border-radius: Spacing.radius-sm;
-    border-color: Colors.neo-highlight;
-    border-width: 1px;
-    drop-shadow-blur: Spacing.neo-blur-sm;
-    drop-shadow-offset-x: Spacing.neo-offset-sm;
-    drop-shadow-offset-y: Spacing.neo-offset-sm;
-    drop-shadow-color: Colors.neo-shadow;
-
-    // Tooltip text
-    text-content := Text {
-        x: Spacing.sm;
-        y: Spacing.sm;
-        width: parent.width - Spacing.sm * 2;
-        text: root.text;
-        color: Colors.text-primary;
-        font-size: Typography.xs;
-        wrap: word-wrap;
-    }
-}
 
 // Self-contained tooltip trigger — wraps any content and renders its
 // own tooltip on hover. No signal bubbling needed.
@@ -67,6 +27,7 @@ export component TooltipArea inherits Rectangle {
 
     // Internal hover state
     property <bool> hovered: tooltip-touch.has-hover;
+    property <bool> active: root.hovered && root.tooltip-enabled && root.tooltip-text != "";
 
     // Forward focus and pass through mouse events
     tooltip-touch := TouchArea {
@@ -78,7 +39,17 @@ export component TooltipArea inherits Rectangle {
     @children
 
     // Render tooltip inline when hovered and enabled
-    if root.hovered && root.tooltip-enabled && root.tooltip-text != "": Rectangle {
+    GlassSurface {
+        visible: root.active || self.opacity > 0;
+        opacity: root.active ? 1 : 0;
+        animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+        transform-scale-x: root.active ? 100% : 90%;
+        transform-scale-y: root.active ? 100% : 90%;
+        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+        material-level: 3;
+        elevation: 4;
+
         // Position based on placement
         x: root.placement == "right" ? parent.width + 8px :
            root.placement == "bottom" ? (parent.width - self.width) / 2 :
@@ -90,12 +61,7 @@ export component TooltipArea inherits Rectangle {
         width: Math.min(tt-text.preferred-width + Spacing.sm * 2, 200px);
         height: tt-text.preferred-height + Spacing.sm * 2;
 
-        background: Colors.tooltip-bg;
-        border-radius: Spacing.radius-sm;
-        border-color: Colors.surface-hover;
-        border-width: 1px;
-        opacity: 1;
-        animate opacity { duration: 150ms; }
+        border-radius: Spacing.radius-xl;
 
         tt-text := Text {
             x: Spacing.sm;

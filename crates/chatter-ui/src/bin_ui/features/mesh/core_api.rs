@@ -51,7 +51,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use chatter_core::domain::message::Message;
 use chatter_core::services::mesh::{
-    MeshConversation, MeshDelivery, MeshError, MeshEvent, MeshPeer, MeshStatus,
+    MeshConversation, MeshDelivery, MeshError, MeshEvent, MeshStatus,
 };
 
 /// One sidebar row, as the Slint model wants it.
@@ -74,30 +74,12 @@ pub struct MeshRow {
     /// DM rows only: some transport can carry to this peer right now. False is
     /// not an error — it means what you send is held and offered to couriers.
     pub reachable: bool,
-    /// DM rows only: the peer's announce signature verified. Nicknames on
-    /// public traffic are unauthenticated and never set this.
+    /// Reserved for a private account-binding proof. A signed announce is not
+    /// proof that its self-asserted nickname belongs to a Chatter account.
     pub verified: bool,
-}
-
-/// Which glyph and which wording a scope gets. Pure presentation over a core
-/// enum — no facts are decided here.
-#[must_use]
-pub fn kind_of(conversation: &MeshConversation) -> &'static str {
-    match conversation {
-        MeshConversation::Room => "room",
-        MeshConversation::Geohash(_) => "geohash",
-        MeshConversation::Dm(_) => "dm",
-    }
-}
-
-/// The scope string the user must be able to read at all times.
-#[must_use]
-pub fn scope_of(conversation: &MeshConversation) -> String {
-    match conversation {
-        MeshConversation::Room => String::new(),
-        MeshConversation::Geohash(cell) => cell.clone(),
-        MeshConversation::Dm(peer) => peer.as_str().to_string(),
-    }
+    pub muted: bool,
+    pub blocked: bool,
+    pub binding_label: &'static str,
 }
 
 /// What a message this device sent should say about its own fate.
@@ -109,8 +91,11 @@ pub fn scope_of(conversation: &MeshConversation) -> String {
 #[must_use]
 pub fn delivery_label(state: MeshDelivery) -> &'static str {
     match state {
-        // Handed to a live link. It has left this device.
-        MeshDelivery::Secure | MeshDelivery::Insecure | MeshDelivery::Reachable => "sent",
+        MeshDelivery::SignalQueued => "queued",
+        MeshDelivery::SignalRelayed => "relayed",
+        // Queued for a live link with an established Noise session.
+        MeshDelivery::Secure => "sent",
+        MeshDelivery::Insecure | MeshDelivery::Reachable => "waiting",
         // Nothing could carry it; it is retained and offered to couriers.
         MeshDelivery::Unreachable => "waiting",
         // A courier or a relay drop took a sealed copy.
@@ -149,46 +134,91 @@ pub fn service_running(ui_ctx: &Arc<ChatterClient>) -> bool {
 /// guessed at: it would be unopenable, and a sidebar entry that does nothing is
 /// worse than no entry.
 pub fn rows(ui_ctx: &Arc<ChatterClient>) -> Vec<MeshRow> {
-    let conversations = match ui_ctx.mesh_conversations() {
-        Ok(conversations) => conversations,
+    let rows = match ui_ctx.mesh_sidebar_rows() {
+        Ok(rows) => rows,
         Err(error) => {
             tracing::warn!(%error, "mesh: could not list conversations");
             return Vec::new();
         }
     };
-    let peers: Vec<MeshPeer> = ui_ctx.mesh_peers();
+    rows.into_iter().map(map_row).collect()
+}
 
-    conversations
-        .into_iter()
-        .filter_map(|conversation| {
-            let scope = ui_ctx.mesh_conversation_for(&conversation.id)?;
-            // `MeshPeer` is handed to the UI whole, by design ("everything here
-            // is already shaped"), so a DM row reads its peer's own flags
-            // rather than inferring anything about them.
-            let (reachable, verified) = match &scope {
-                MeshConversation::Dm(peer) => peers
-                    .iter()
-                    .find(|known| known.peer == *peer)
-                    .map(|known| (known.connected || known.reachable, known.verified))
-                    .unwrap_or((false, false)),
-                _ => (false, false),
-            };
-            Some(MeshRow {
-                id: conversation.id,
-                kind: kind_of(&scope),
-                scope: scope_of(&scope),
-                title: conversation.name,
-                timestamp: conversation
-                    .last_message_at
-                    .map(chatter_core::ui::format_timestamp)
-                    .unwrap_or_default(),
-                unread_count: i32::try_from(conversation.unread_count).unwrap_or(i32::MAX),
-                reachable,
-                verified,
-                conversation: scope,
-            })
-        })
-        .collect()
+/// Core resolves which conversation a clicked sidebar id belongs to.
+pub fn row_for(ui_ctx: &Arc<ChatterClient>, id: &str) -> Option<MeshRow> {
+    match ui_ctx.mesh_sidebar_row_for(id) {
+        Ok(row) => row.map(map_row),
+        Err(error) => {
+            tracing::warn!(%error, "mesh: could not find conversation");
+            None
+        }
+    }
+}
+
+fn map_row(row: chatter_core::services::mesh::MeshSidebarRow) -> MeshRow {
+    MeshRow {
+        kind: row.kind,
+        scope: row.scope,
+        timestamp: row
+            .last_message_at
+            .map(crate::bin_ui::converters::sidebar_time)
+            .unwrap_or_default(),
+        unread_count: row.unread_count,
+        conversation: row.conversation,
+        id: row.id,
+        title: row.title,
+        reachable: row.reachable,
+        verified: row.verified,
+        muted: row.muted,
+        blocked: row.blocked,
+        binding_label: row.binding_label,
+    }
+}
+
+pub fn share_identity(ui_ctx: &Arc<ChatterClient>, peer: &str) -> Result<(), MeshError> {
+    ui_ctx.mesh_share_identity(peer)
+}
+
+pub fn signal_opted_in(ui_ctx: &ChatterClient, peer: &str) -> Result<bool, MeshError> {
+    ui_ctx.mesh_signal_opted_in(peer)
+}
+
+pub fn signal_protection_label(
+    ui_ctx: &ChatterClient,
+    peer: &str,
+) -> Result<&'static str, MeshError> {
+    ui_ctx.mesh_signal_protection_label(peer)
+}
+
+pub fn set_signal_opt_in(
+    ui_ctx: &ChatterClient,
+    peer: &str,
+    enabled: bool,
+) -> Result<(), MeshError> {
+    ui_ctx.mesh_set_signal_opt_in(peer, enabled)
+}
+
+pub fn identity_qr_png(ui_ctx: &Arc<ChatterClient>, peer: &str) -> Result<Vec<u8>, MeshError> {
+    ui_ctx.mesh_identity_qr_png(peer)
+}
+
+pub fn verify_binding(
+    ui_ctx: &Arc<ChatterClient>,
+    peer: &str,
+    qr: &str,
+) -> Result<chatter_core::client::MeshBindingStatus, MeshError> {
+    ui_ctx.mesh_verify_binding(peer, Some(qr))
+}
+
+pub fn verify_known_contact(
+    ui_ctx: &Arc<ChatterClient>,
+    peer: &str,
+) -> Result<chatter_core::client::MeshBindingStatus, MeshError> {
+    ui_ctx.mesh_verify_binding(peer, None)
+}
+
+pub fn comparison_code(ui_ctx: &Arc<ChatterClient>, peer: &str) -> Option<String> {
+    ui_ctx.mesh_comparison_code(peer)
 }
 
 /// History for one mesh conversation, oldest first.
@@ -227,6 +257,11 @@ pub fn leave(ui_ctx: &Arc<ChatterClient>, cell: &str) -> Result<(), MeshError> {
     ui_ctx.mesh_leave_geohash(cell)
 }
 
+/// Panic wipe: every mesh secret and message on this device. Not the account.
+pub fn panic_wipe(ui_ctx: &Arc<ChatterClient>) -> Result<(), MeshError> {
+    ui_ctx.mesh_panic_wipe()
+}
+
 /// Mark a mesh conversation read on this device.
 ///
 /// Local only, and deliberately so: telling the peer costs airtime, and
@@ -237,6 +272,17 @@ pub fn mark_read(
     conversation: &MeshConversation,
 ) -> Result<(), MeshError> {
     ui_ctx.mesh_mark_conversation_read(conversation)
+}
+
+/// `MeshGlobal.radio-down`: which of core's radio-down causes applies, as the
+/// token the Slint captions switch on. Core decides; this only spells it.
+pub fn radio_down_label(status: &MeshStatus) -> &'static str {
+    use chatter_core::services::mesh::RadioDown;
+    match status.radio_down() {
+        None => "",
+        Some(RadioDown::BluetoothOff) => "bluetooth-off",
+        Some(RadioDown::Unavailable) => "unavailable",
+    }
 }
 
 /// How a mesh message's author should be named.

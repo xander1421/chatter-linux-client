@@ -8,14 +8,17 @@
 //! # Wire Format
 //!
 //! ```text
-//! | user_id (16) | identity_key (33) | delivery_token (12) |
+//! | user_id (16) | device_id (4, BE) | identity_key (33) | delivery_token (12) |
 //! ```
 //!
 //! - user_id: UUID as 16 bytes
+//! - device_id: the device the code was shown on. A secret chat is bound to
+//!   one device, so the request is sealed to that device alone; every other
+//!   device of the account never sees it.
 //! - identity_key: Signal Protocol identity key (0x05 prefix + 32-byte Curve25519)
 //! - delivery_token: 96-bit token derived from profile key (HKDF)
 //!
-//! Total: 61 bytes → ~98 characters when base32 encoded.
+//! Total: 65 bytes → 104 characters when base32 encoded.
 //!
 //! # URL Format
 //!
@@ -37,6 +40,9 @@ use super::UserId;
 pub struct PrivateFriendCode {
     /// Target user's ID.
     pub user_id: UserId,
+    /// The target's device that showed this code: the request goes to it
+    /// alone and the secret chat is bound to it. Never 0.
+    pub device_id: u32,
     /// Target user's Signal Protocol identity key (33 bytes).
     pub identity_key: [u8; 33],
     /// Target user's delivery token (12 bytes / 96 bits).
@@ -55,7 +61,7 @@ pub enum PrivateFriendCodeError {
     Base32DecodeFailed(String),
 
     /// Invalid data length.
-    #[error("invalid data length: expected 61 bytes, got {0}")]
+    #[error("invalid data length: expected 65 bytes, got {0}")]
     InvalidLength(usize),
 
     /// Invalid identity key format.
@@ -73,7 +79,7 @@ pub enum PrivateFriendCodeError {
 
 impl PrivateFriendCode {
     /// Total size of the encoded data.
-    pub const DATA_SIZE: usize = 16 + 33 + 12; // 61 bytes
+    pub const DATA_SIZE: usize = 16 + 4 + 33 + 12; // 65 bytes
 
     /// URL prefix for private friend codes.
     pub const URL_PREFIX: &'static str = "chatter://private/";
@@ -81,11 +87,13 @@ impl PrivateFriendCode {
     /// Create a new private friend code.
     pub fn new(
         user_id: UserId,
+        device_id: u32,
         identity_key: [u8; 33],
         delivery_token: [u8; 12],
     ) -> Self {
         Self {
             user_id,
+            device_id,
             identity_key,
             delivery_token,
         }
@@ -101,8 +109,9 @@ impl PrivateFriendCode {
     pub fn to_bytes(&self) -> [u8; Self::DATA_SIZE] {
         let mut bytes = [0u8; Self::DATA_SIZE];
         bytes[..16].copy_from_slice(self.user_id.as_bytes());
-        bytes[16..49].copy_from_slice(&self.identity_key);
-        bytes[49..61].copy_from_slice(&self.delivery_token);
+        bytes[16..20].copy_from_slice(&self.device_id.to_be_bytes());
+        bytes[20..53].copy_from_slice(&self.identity_key);
+        bytes[53..65].copy_from_slice(&self.delivery_token);
         bytes
     }
 
@@ -116,9 +125,15 @@ impl PrivateFriendCode {
         let user_id = UserId::try_from_slice(&bytes[..16])
             .ok_or_else(|| PrivateFriendCodeError::InvalidFormat("invalid user ID".into()))?;
 
+        // Device ID (4 bytes, big-endian); 0 names no device.
+        let device_id = u32::from_be_bytes(bytes[16..20].try_into().expect("4 bytes"));
+        if device_id == 0 {
+            return Err(PrivateFriendCodeError::InvalidFormat("device ID 0".into()));
+        }
+
         // Parse identity key (33 bytes)
         let mut identity_key = [0u8; 33];
-        identity_key.copy_from_slice(&bytes[16..49]);
+        identity_key.copy_from_slice(&bytes[20..53]);
 
         // Verify identity key format
         if identity_key[0] != 0x05 {
@@ -130,10 +145,11 @@ impl PrivateFriendCode {
 
         // Parse delivery token (12 bytes)
         let mut delivery_token = [0u8; 12];
-        delivery_token.copy_from_slice(&bytes[49..61]);
+        delivery_token.copy_from_slice(&bytes[53..65]);
 
         Ok(Self {
             user_id,
+            device_id,
             identity_key,
             delivery_token,
         })
@@ -200,17 +216,28 @@ mod tests {
         let user_id = UserId::new();
         let mut identity_key = [0u8; 33];
         identity_key[0] = 0x05; // Type byte
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut identity_key[1..]).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut identity_key[1..])
+                .expect("OS CSPRNG must not fail");
+        }
 
         let mut delivery_token = [0u8; 12];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut delivery_token).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut delivery_token)
+                .expect("OS CSPRNG must not fail");
+        }
 
-        let code = PrivateFriendCode::new(user_id, identity_key, delivery_token);
+        let code = PrivateFriendCode::new(user_id, 3, identity_key, delivery_token);
 
         // Test bytes roundtrip
         let bytes = code.to_bytes();
         let parsed = PrivateFriendCode::from_bytes(&bytes).unwrap();
         assert_eq!(code.user_id, parsed.user_id);
+        assert_eq!(code.device_id, parsed.device_id);
         assert_eq!(code.identity_key, parsed.identity_key);
         assert_eq!(code.delivery_token, parsed.delivery_token);
 
@@ -229,7 +256,12 @@ mod tests {
     #[test]
     fn test_delivery_token_derivation() {
         let mut profile_key = [0u8; 32];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut profile_key).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut profile_key)
+                .expect("OS CSPRNG must not fail");
+        }
 
         let token1 = PrivateFriendCode::derive_delivery_token(&profile_key);
         let token2 = PrivateFriendCode::derive_delivery_token(&profile_key);
@@ -249,6 +281,7 @@ mod tests {
 
         let code = PrivateFriendCode {
             user_id,
+            device_id: 3,
             identity_key,
             delivery_token,
         };
@@ -265,11 +298,13 @@ mod tests {
         identity_key[0] = 0x05;
         let delivery_token = [0u8; 12];
 
-        let code = PrivateFriendCode::new(user_id, identity_key, delivery_token);
+        let code = PrivateFriendCode::new(user_id, 3, identity_key, delivery_token);
         let url = code.to_url();
 
         assert!(PrivateFriendCode::is_private_code(&url));
-        assert!(!PrivateFriendCode::is_private_code("chatter://connect/user-id"));
+        assert!(!PrivateFriendCode::is_private_code(
+            "chatter://connect/user-id"
+        ));
     }
 
     #[test]
@@ -282,7 +317,7 @@ mod tests {
         }
         let delivery_token = [0u8; 12];
 
-        let code = PrivateFriendCode::new(user_id, identity_key, delivery_token);
+        let code = PrivateFriendCode::new(user_id, 3, identity_key, delivery_token);
         let x25519 = code.x25519_public_key();
 
         assert_eq!(x25519.len(), 32);

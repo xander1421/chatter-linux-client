@@ -19,6 +19,7 @@
 //! | send_to_ephemeral_mailbox | AnonymousMailboxClient | None (fire and forget) |
 //! | poll_ephemeral_mailbox | AnonymousMailboxClient | Challenge-response |
 //! | acknowledge_messages | AnonymousMailboxClient | Challenge-response |
+//! | delete_ephemeral_mailbox | AnonymousMailboxClient | Challenge-response |
 //! | get_mailbox_challenge | AnonymousMailboxClient | None |
 //! | get_blind_signature_public_key | Either | None |
 
@@ -26,12 +27,12 @@ use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::proto::mailbox_v1::{
-    ephemeral_mailbox_service_client::EphemeralMailboxServiceClient,
     AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, CreateEphemeralMailboxRequest,
-    CreateEphemeralMailboxResponse, GetBlindSignaturePublicKeyRequest,
-    GetBlindSignaturePublicKeyResponse, GetMailboxChallengeRequest, GetMailboxChallengeResponse,
-    JoinAnonCallRoomRequest, JoinAnonCallRoomResponse, PollEphemeralMailboxRequest,
+    CreateEphemeralMailboxResponse, DeleteEphemeralMailboxRequest,
+    GetBlindSignaturePublicKeyRequest, GetBlindSignaturePublicKeyResponse,
+    GetMailboxChallengeRequest, GetMailboxChallengeResponse, PollEphemeralMailboxRequest,
     PollEphemeralMailboxResponse, SendToEphemeralMailboxRequest, SendToEphemeralMailboxResponse,
+    ephemeral_mailbox_service_client::EphemeralMailboxServiceClient,
 };
 
 /// Anonymous mailbox client - NO auth interceptor.
@@ -98,19 +99,17 @@ impl AnonymousMailboxClient {
     /// * `public_key` - The ephemeral public key (Ed25519)
     /// * `signature` - The unblinded blind signature (proves valid user)
     /// * `ttl_seconds` - Requested TTL in seconds
-    /// * `message_randomizer` - Randomizer used during blinding
     pub async fn create_ephemeral_mailbox(
         &mut self,
         public_key: Vec<u8>,
         signature: Vec<u8>,
         ttl_seconds: u64,
-        message_randomizer: Vec<u8>,
     ) -> Result<CreateEphemeralMailboxResponse, NetworkError> {
         let request = CreateEphemeralMailboxRequest {
+            wake_topic: crate::network::streaming::mailbox_wakes::topic(&public_key),
             public_key,
             signature,
             ttl_seconds,
-            message_randomizer,
         };
 
         self.inner
@@ -170,6 +169,7 @@ impl AnonymousMailboxClient {
         limit: i32,
     ) -> Result<PollEphemeralMailboxResponse, NetworkError> {
         let request = PollEphemeralMailboxRequest {
+            wake_topic: crate::network::streaming::mailbox_wakes::topic(&public_key),
             public_key,
             challenge_signature,
             challenge,
@@ -216,41 +216,24 @@ impl AnonymousMailboxClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
-    /// Join an anonymous call room using a blind signature token.
-    ///
-    /// Proves authorization via blind signature without revealing identity.
-    /// Returns LiveKit credentials for joining the call.
-    ///
-    /// # Arguments
-    ///
-    /// * `room_name` - The room name (must start with "anon-")
-    /// * `public_key` - The ephemeral public key (Ed25519)
-    /// * `signature` - The unblinded blind signature
-    /// * `message_randomizer` - Randomizer used during blinding
-    /// * `display_name` - Display name for this participant
-    /// * `call_type` - Call type (1 = voice, 2 = video)
-    pub async fn join_anon_call_room(
+    /// Delete a mailbox and everything queued in it (challenge-response).
+    /// Success also when it was already gone.
+    pub async fn delete_ephemeral_mailbox(
         &mut self,
-        room_name: String,
         public_key: Vec<u8>,
-        signature: Vec<u8>,
-        message_randomizer: Vec<u8>,
-        display_name: String,
-        call_type: i32,
-    ) -> Result<JoinAnonCallRoomResponse, NetworkError> {
-        let request = JoinAnonCallRoomRequest {
-            room_name,
+        challenge_signature: Vec<u8>,
+        challenge: Vec<u8>,
+    ) -> Result<(), NetworkError> {
+        let request = DeleteEphemeralMailboxRequest {
             public_key,
-            signature,
-            message_randomizer,
-            display_name,
-            call_type,
+            challenge_signature,
+            challenge,
         };
 
         self.inner
-            .join_anon_call_room(request)
+            .delete_ephemeral_mailbox(request)
             .await
-            .map(|r| r.into_inner())
+            .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))
     }
 }

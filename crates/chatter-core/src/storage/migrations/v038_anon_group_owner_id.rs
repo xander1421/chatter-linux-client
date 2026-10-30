@@ -27,7 +27,7 @@ impl Migration for V038AnonGroupOwnerId {
     }
 
     fn down(&self) -> Option<&'static str> {
-        // SQLite doesn't support DROP COLUMN in older versions easily, 
+        // SQLite doesn't support DROP COLUMN in older versions easily,
         // but for this migration we can leave it as it's just an extra column.
         None
     }

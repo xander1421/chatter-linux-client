@@ -1,12 +1,13 @@
 //! Signal call event handlers (non-anonymous).
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use slint::Weak;
 
+use crate::MainWindow;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
-use crate::MainWindow;
 
 /// Handle incoming call key offer.
 ///
@@ -22,7 +23,6 @@ pub(super) fn handle_call_key_offer(
     peer_id: UserId,
     _ephemeral_public_key: [u8; 32],
     call_type: String,
-    _channel_id: String,
     is_identity_verified: bool,
     _identity_warning: String,
     caller_name: String,
@@ -38,28 +38,40 @@ pub(super) fn handle_call_key_offer(
     );
 }
 
-// NOTE: CallKeyAnswerReceived and GroupCallKeyReceived are handled by
-// calls/event_handlers.rs (wire_call_key_answer_handler), which delegates
-// to key_exchange::handle_call_key_answer for ECDH key derivation and
-// call_service.set_encryption_key for group keys. The domain_handler
-// arms for these events are intentional no-ops.
+// NOTE: CallKeyAnswerReceived is handled by calls/event_handlers.rs
+// (wire_call_key_answer_handler), which delegates to
+// key_exchange::handle_call_key_answer for ECDH key derivation.
+// GroupCallSignalReceived is handled in core (ChatterClient::handle_group_call_signal);
+// the UI never sees group key bytes. The domain_handler arms for these
+// events are intentional no-ops.
 
 /// Handle call hangup received — hide call UI.
 pub(super) fn handle_call_hangup(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<ChatterClient>,
     call_id: String,
     peer_id: UserId,
-    reason: String,
+    reason: chatter_core::services::gateway::CallHangupReason,
 ) {
     let weak = window.clone();
 
-    // Clear call state in core
-    ui_ctx.chat_state().clear_call_state();
-
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            super::super::super::initial_data::hide_incoming_call(&w);
+            // A hangup names its call: a late one for an older call must not
+            // dismiss or tear down the call on screen now.
+            let ringing = w.global::<crate::CallView>().get_incoming_call_visible()
+                && w.global::<crate::CallView>()
+                    .get_incoming_call_data()
+                    .call_id
+                    == call_id.as_str();
+            let active = w.global::<crate::CallView>().get_active_call_visible()
+                && w.global::<crate::CallView>().get_active_call_data().call_id == call_id.as_str();
+            if !ringing && !active {
+                tracing::info!(call_id = %call_id, "Hangup for a call not on screen; ignored");
+                return;
+            }
+            if ringing {
+                super::super::super::initial_data::hide_incoming_call(&w);
+            }
             tracing::info!(
                 call_id = %call_id,
                 peer_id = %peer_id,

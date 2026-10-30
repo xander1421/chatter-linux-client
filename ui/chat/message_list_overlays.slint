@@ -1,0 +1,126 @@
+// Floating controls over the virtualized message rows.
+import { KeyFocus } from "../components/key_focus.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
+
+// Scroll-to-bottom, or an unread count that takes the reader to the tail.
+export component MessageScrollPill inherits GlassSurface {
+    in property <bool> hide-pill;
+    in property <bool> scrolling;
+    in property <int> unread-count;
+    callback clicked();
+    elevation: 3;
+    width: pill-content.preferred-width + Spacing.lg * 2;
+    height: Spacing.touch-target-min * Appearance.text-grow;
+    border-radius: self.height / 2;
+    material-level: 2;
+    backdrop-paused: root.scrolling;
+    accessible-role: button;
+    accessible-action-default => { root.clicked(); }
+    accessible-label: root.unread-count == 1 ? "1 new message, jump to newest"
+        : root.unread-count > 0 ? root.unread-count + " new messages, jump to newest"
+        : "Scroll to bottom";
+    KeyFocus { enabled: !root.hide-pill; border-radius: parent.border-radius; activate => { root.clicked(); } }
+
+    opacity: self.hide-pill ? 0 : 1;
+    visible: !self.hide-pill || self.opacity > 0;
+    transform-scale-x: self.hide-pill ? 72% : (scroll-btn.pressed ? 93% : 100%);
+    transform-scale-y: self.hide-pill ? 72% : (scroll-btn.pressed ? 93% : 100%);
+    animate opacity { duration: Materials.motion-standard; easing: Materials.glide; }
+    animate transform-scale-x { duration: scroll-btn.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+    animate transform-scale-y { duration: scroll-btn.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+
+    // Hover/press overlay, as on the FAB: the pill is already thick,
+    // so retinting it to thick on hover showed nothing.
+    Rectangle {
+        border-radius: parent.border-radius;
+        background: scroll-btn.pressed ? Materials.pressed : scroll-btn.has-hover ? Materials.hover : transparent;
+    }
+
+    pill-content := HorizontalLayout {
+        alignment: center;
+        spacing: Spacing.sm;
+
+        if root.unread-count > 0: Text {
+            text: root.unread-count == 1
+                ? "1 new message"
+                : root.unread-count + " new messages";
+            // The pill's own label says this; TalkBack read it twice.
+            accessible-role: none;
+            color: Colors.text-primary;
+            font-size: Typography.sm;
+            font-weight: Typography.medium;
+            vertical-alignment: center;
+        }
+
+        // Down arrow: the bundled chevron turned, not a Unicode
+        // arrow the UI font may lack.
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: Icons.chevron-right;
+                width: Spacing.button-icon;
+                height: Spacing.button-icon;
+                transform-rotation: 90deg;
+                colorize: Colors.text-primary;
+            }
+        }
+    }
+
+    scroll-btn := TouchArea {
+        enabled: !root.hide-pill;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Older history failed to load: a nonfatal notice with a retry.
+export component MessageHistoryError inherits Rectangle {
+    in property <length> available-width;
+    callback retry();
+    width: max(0px, min(root.available-width - 2 * Spacing.md, history-error.preferred-width));
+    height: max(Spacing.touch-target-min, history-error.preferred-height);
+    border-radius: self.height / 2;
+    background: Materials.regular;
+    // Taps on the chip's own padding must not reach the rows under it.
+    TouchArea { }
+    history-error := HorizontalLayout {
+        padding-left: Spacing.lg;
+        padding-right: Spacing.xs;
+        spacing: Spacing.sm;
+        Text {
+            text: "Older messages didn't load";
+            color: Colors.text-primary;
+            font-size: Typography.xs;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Rectangle {
+            width: max(Spacing.touch-target-min, retry-label.preferred-width + 2 * Spacing.md);
+            border-radius: self.height / 2;
+            background: retry-touch.pressed ? Materials.pressed
+                : retry-touch.has-hover ? Materials.hover : transparent;
+            accessible-role: button;
+            accessible-label: "Retry loading older messages";
+            accessible-action-default => { root.retry(); }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.retry(); } }
+            retry-label := Text {
+                text: "Retry";
+                color: Colors.primary;
+                font-size: Typography.xs;
+                font-weight: Typography.semibold;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            retry-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.retry(); }
+            }
+        }
+    }
+
+}

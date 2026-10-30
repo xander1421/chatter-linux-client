@@ -176,8 +176,8 @@ pub fn derive_link_sync_kek(
 /// two backups are independently addressable.
 pub fn derive_message_backup_id(svr_secret: &[u8; 32]) -> [u8; 32] {
     type HmacSha256 = Hmac<Sha256>;
-    let mut mac =
-        <HmacSha256 as Mac>::new_from_slice(svr_secret).expect("HMAC accepts any key size");
+    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(svr_secret)
+        .expect("HMAC accepts any key size");
     mac.update(b"MessageBackupId");
     let mut id = [0u8; 32];
     id.copy_from_slice(&mac.finalize().into_bytes());
@@ -211,7 +211,7 @@ pub fn encrypt_backup_file(
         _ => {
             return Err(CryptoError::Validation(
                 "invalid backup key mode / salt combination".into(),
-            ))
+            ));
         }
     }
 
@@ -223,7 +223,10 @@ pub fn encrypt_backup_file(
     let wrap_nonce = random_bytes::<NONCE_LEN>();
     let kek_cipher = Aes256Gcm::new_from_slice(kek).map_err(|_| CryptoError::InvalidKeyFormat)?;
     let wrapped_ct = kek_cipher
-        .encrypt(Nonce::from_slice(&wrap_nonce), file_key.as_ref())
+        .encrypt(
+            <&Nonce<_>>::try_from(&wrap_nonce[..]).expect("fixed cryptographic input length"),
+            file_key.as_ref(),
+        )
         .map_err(|e| CryptoError::EncryptionFailed(format!("file-key wrap failed: {e}")))?;
     let mut wrapped_file_key = Vec::with_capacity(WRAPPED_FILE_KEY_LEN);
     wrapped_file_key.extend_from_slice(&wrap_nonce);
@@ -244,7 +247,7 @@ pub fn encrypt_backup_file(
     file_key.zeroize();
     let ciphertext = file_cipher
         .encrypt(
-            Nonce::from_slice(&payload_nonce),
+            <&Nonce<_>>::try_from(&payload_nonce[..]).expect("fixed cryptographic input length"),
             Payload {
                 msg: payload,
                 aad: &header_bytes,
@@ -252,8 +255,7 @@ pub fn encrypt_backup_file(
         )
         .map_err(|e| CryptoError::EncryptionFailed(format!("payload encrypt failed: {e}")))?;
 
-    let mut out =
-        Vec::with_capacity(MAGIC.len() + 4 + header_bytes.len() + ciphertext.len());
+    let mut out = Vec::with_capacity(MAGIC.len() + 4 + header_bytes.len() + ciphertext.len());
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
     out.extend_from_slice(&header_bytes);
@@ -318,7 +320,10 @@ pub fn decrypt_backup_file(
     let (wrap_nonce, wrapped_ct) = parsed.header.wrapped_file_key.split_at(NONCE_LEN);
     let kek_cipher = Aes256Gcm::new_from_slice(kek).map_err(|_| CryptoError::InvalidKeyFormat)?;
     let mut file_key_vec = kek_cipher
-        .decrypt(Nonce::from_slice(wrap_nonce), wrapped_ct)
+        .decrypt(
+            <&Nonce<_>>::try_from(&wrap_nonce[..]).expect("fixed cryptographic input length"),
+            wrapped_ct,
+        )
         .map_err(|_| {
             CryptoError::DecryptionFailed("file-key unwrap failed (wrong passphrase/PIN?)".into())
         })?;
@@ -334,7 +339,8 @@ pub fn decrypt_backup_file(
     file_key_vec.zeroize();
     file_cipher
         .decrypt(
-            Nonce::from_slice(&parsed.header.payload_nonce),
+            <&Nonce<_>>::try_from(&parsed.header.payload_nonce[..])
+                .expect("fixed cryptographic input length"),
             Payload {
                 msg: parsed.ciphertext,
                 aad: parsed.header_bytes,
@@ -364,11 +370,12 @@ mod tests {
             hex::encode(derive_message_backup_id(&secret())),
             "11192d4389f60baf9f35d5fd2d18fd7f76e0578c0c046e3223ba7fa44fa81de0",
         );
-        // Distinct from the SVR key-backup id (HMAC context "BackupId") — the
-        // two backups must be independently addressable server-side.
+        // Distinct from the SVR key-backup id (HKDF info "Chatter SVR Backup Id
+        // v1" since CRYPTO-3; it was HMAC(secret, "BackupId")) — the two backups
+        // must be independently addressable server-side.
         assert_eq!(
             hex::encode(crate::crypto::svr_backup::derive_backup_id(&secret())),
-            "4d1e8edd95b19217583c78fbeb1b5e89714c551d7057e4a7b06a61606dcea3d8",
+            "c795c10a785300f313f43403a419adc4db433c5bf8148675c030aea76fbce02c",
         );
         assert_ne!(
             derive_message_backup_id(&secret()),
@@ -400,13 +407,21 @@ mod tests {
         );
 
         // Each binding is load-bearing.
-        assert_ne!(k, derive_link_sync_kek(&[9u8; 32], aci, 7), "ephemeral key binds");
+        assert_ne!(
+            k,
+            derive_link_sync_kek(&[9u8; 32], aci, 7),
+            "ephemeral key binds"
+        );
         assert_ne!(
             k,
             derive_link_sync_kek(&eph, "22222222-2222-2222-2222-222222222222", 7),
             "ACI salt binds — a blob cannot be replayed across accounts"
         );
-        assert_ne!(k, derive_link_sync_kek(&eph, aci, 8), "primary reg-id binds");
+        assert_ne!(
+            k,
+            derive_link_sync_kek(&eph, aci, 8),
+            "primary reg-id binds"
+        );
         // Domain separation from the SVR KEK built on the same 32 bytes.
         assert_ne!(k, derive_server_kek(&eph));
     }
@@ -431,7 +446,9 @@ mod tests {
         assert!(decrypt_backup_file(&parsed, &wrong).is_err());
 
         // A link-mode file must carry no Argon2 salt.
-        assert!(encrypt_backup_file(&payload, &kek, KEY_MODE_LINK, &[0u8; ARGON2_SALT_LEN]).is_err());
+        assert!(
+            encrypt_backup_file(&payload, &kek, KEY_MODE_LINK, &[0u8; ARGON2_SALT_LEN]).is_err()
+        );
 
         // Header tamper (flip a byte in the header) breaks the AAD bind.
         let mut tampered = file.clone();
@@ -475,9 +492,7 @@ mod tests {
 
         // Ciphertext must not contain the plaintext (sanity for the
         // no-plaintext greps in V50/V51)
-        assert!(!file
-            .windows(payload.len())
-            .any(|w| w == payload.as_slice()));
+        assert!(!file.windows(payload.len()).any(|w| w == payload.as_slice()));
 
         // Wrong KEK
         let wrong = derive_server_kek(&[9u8; 32]);

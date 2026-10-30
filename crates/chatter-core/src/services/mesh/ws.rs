@@ -104,7 +104,10 @@ where
                     // Swallowed per the RelayStream contract. tungstenite answers
                     // pings itself; binary and raw frames are not Nostr.
                     Some(Ok(
-                        Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_),
+                        Message::Binary(_)
+                        | Message::Ping(_)
+                        | Message::Pong(_)
+                        | Message::Frame(_),
                     )) => continue,
                     Some(Err(error)) => {
                         return Err(NostrError::Relay(format!("websocket read failed: {error}")));

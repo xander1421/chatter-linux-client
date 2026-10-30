@@ -1,0 +1,78 @@
+// ToggleRow - a settings row whose whole surface flips its switch.
+//
+// The label area (the element's children) and the switch sit on one
+// TouchArea, so tapping anywhere on the row toggles it, as in Signal's
+// settings. The switch keeps its own TouchArea on top; a tap on it is handled
+// there and does not also reach the row's, so one tap is one flip.
+//
+// Bind `checked` two-way (`checked <=> root.some-state`): both the row and the
+// switch write it, and a one-way binding would be dropped on the first tap.
+
+import { Spacing } from "../theme/spacing.slint";
+import { Toggle } from "toggle.slint";
+import { NeoActionToggle } from "neo_action_toggle.slint";
+import { Materials } from "../theme/materials.slint";
+
+export component ToggleRow inherits Rectangle {
+    in-out property <bool> checked: false;
+    in property <bool> disabled: false;
+    in property <string> accessible-text: "";
+    // "" = plain Toggle; "cyan" / "violet" = NeoActionToggle with that glow.
+    in property <string> glow-mode: "";
+    in property <length> row-padding: Spacing.none;
+    in property <length> row-spacing: Spacing.sm;
+    in property <length> label-spacing: Spacing.none;
+    out property <length> label-width: max(0px, root.width - root.row-padding * 2 - root.row-spacing - Spacing.touch-target-min);
+
+    callback toggled(bool);
+    // Keep wrapped labels from being compressed below the height the row asks for.
+    min-height: max(Spacing.touch-target-min, row-layout.preferred-height);
+    preferred-height: max(Spacing.touch-target-min, row-layout.preferred-height);
+    border-radius: Spacing.radius-md;
+    background: row-touch.pressed ? Materials.pressed
+        : row-touch.has-hover && !root.disabled ? Materials.hover : transparent;
+    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+    row-touch := TouchArea {
+        mouse-cursor: root.disabled ? default : pointer;
+        clicked => {
+            if !root.disabled {
+                root.checked = !root.checked;
+                root.toggled(root.checked);
+            }
+        }
+    }
+
+    row-layout := HorizontalLayout {
+        y: row-touch.pressed ? Spacing.xxs : 0px;
+        animate y { duration: Materials.motion-quick; easing: Materials.spring; }
+        padding: root.row-padding;
+        spacing: root.row-spacing;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            alignment: center;
+            spacing: root.label-spacing;
+
+            @children
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            if root.glow-mode == "": Toggle {
+                checked <=> root.checked;
+                disabled: root.disabled;
+                accessible-text: root.accessible-text;
+                toggled(value) => { root.toggled(value); }
+            }
+            if root.glow-mode != "": NeoActionToggle {
+                checked <=> root.checked;
+                disabled: root.disabled;
+                accessible-text: root.accessible-text;
+                glow-mode: root.glow-mode;
+                toggled(value) => { root.toggled(value); }
+            }
+        }
+    }
+}

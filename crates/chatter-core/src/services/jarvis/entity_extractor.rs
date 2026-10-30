@@ -7,8 +7,8 @@ use crate::domain::jarvis::{EntityType, JarvisEntity};
 use crate::services::ai::SampleParams;
 
 use super::engine::SharedJarvisEngine;
-use crate::ai_policy::policy::AiAccess;
 use super::error::JarvisError;
+use crate::ai_policy::policy::AiAccess;
 
 /// Entity extractor using local AI.
 pub struct EntityExtractor {

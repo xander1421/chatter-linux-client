@@ -4,14 +4,14 @@
 //! meters token spend. Used by the cloud silo's broker backend when the user
 //! is on managed tokens rather than their own API key.
 
-use tonic::service::interceptor::InterceptedService;
 use crate::network::grpc::transport::GrpcTransport;
+use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    ai_service_client::AiServiceClient, ChatTurn, CompleteRequest, CompleteResponse,
-    GetQuotaRequest, GetQuotaResponse, ListServedModelsRequest, ListServedModelsResponse,
+    ChatTurn, CompleteRequest, CompleteResponse, GetQuotaRequest, GetQuotaResponse,
+    ListServedModelsRequest, ListServedModelsResponse, ai_service_client::AiServiceClient,
 };
 
 /// AI broker client wrapper.

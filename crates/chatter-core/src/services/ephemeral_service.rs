@@ -8,8 +8,7 @@ use crate::domain::ephemeral::{EphemeralMessage, MessageTTL};
 use crate::domain::ids::MessageId;
 use crate::error::StorageError;
 use crate::storage::repositories::ephemeral_repo::EphemeralRepository;
-use crate::storage::repositories::MessageRepository;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 
 /// Ephemeral service errors.
 #[derive(Debug, thiserror::Error)]
@@ -40,20 +39,22 @@ pub enum EphemeralError {
 pub struct EphemeralService {
     settings_repo: Arc<SettingsRepository>,
     ephemeral_repo: Arc<EphemeralRepository>,
-    message_repo: Arc<MessageRepository>,
 }
 
 impl EphemeralService {
+    /// Which of the given message ids will disappear (Signal's timer glyph).
+    pub fn disappearing_among(&self, ids: &[String]) -> std::collections::HashSet<String> {
+        self.ephemeral_repo.disappearing_among(ids).unwrap_or_default()
+    }
+
     /// Create a new EphemeralService with dependencies.
     pub fn new(
         settings_repo: Arc<SettingsRepository>,
         ephemeral_repo: Arc<EphemeralRepository>,
-        message_repo: Arc<MessageRepository>,
     ) -> Self {
         Self {
             settings_repo,
             ephemeral_repo,
-            message_repo,
         }
     }
 
@@ -96,20 +97,23 @@ impl EphemeralService {
         Ok(ephemeral)
     }
 
-    /// Track a message whose disappearing timer starts NOW (send-time-start).
+    /// Track a message armed with a conversation disappearing timer.
     ///
     /// This is the arming path used on send and receive: the message already
-    /// carries an armed `ephemeral_ttl` (V29), so its countdown starts at
-    /// message time, not at read time. The entry is written with its clock
-    /// already running (`expires_at = now + ttl_seconds`, countdown started)
-    /// so the periodic reaper's [`cleanup_expired`](Self::cleanup_expired)
-    /// will remove it once the ttl elapses — including on the next boot after
+    /// carries an armed `ephemeral_ttl` (V29). The repository starts the clock
+    /// now for a read message (our own sends) and on read otherwise (Signal
+    /// read-start), and the periodic reaper (`disappearing::reap_expired`)
+    /// removes it once the ttl elapses — including on the next boot after
     /// a restart, since `expires_at` is persisted (migration v015).
     ///
     /// Unlike [`track`](Self::track) this accepts arbitrary `ttl_seconds`
     /// (a conversation timer is not restricted to the `MessageTTL` menu).
     /// `ttl_seconds == 0` is a no-op (timer disabled).
-    pub fn track_armed(&self, message_id: MessageId, ttl_seconds: u32) -> Result<(), EphemeralError> {
+    pub fn track_armed(
+        &self,
+        message_id: MessageId,
+        ttl_seconds: u32,
+    ) -> Result<(), EphemeralError> {
         if ttl_seconds == 0 {
             return Ok(());
         }
@@ -164,35 +168,6 @@ impl EphemeralService {
 
         let ephemeral = self.ephemeral_repo.get(message_id)?;
         Ok(ephemeral)
-    }
-
-    /// Cleanup expired ephemeral messages.
-    ///
-    /// This method:
-    /// 1. Finds all ephemeral messages whose timer has elapsed
-    /// 2. HARD-deletes each message via the message repository (purge, not
-    ///    tombstone — a "disappeared" message must be truly gone from disk, so
-    ///    its plaintext `content_json` doesn't linger; mirrors the app's own
-    ///    `delete_message_local`). The `ephemeral_messages` row is removed too
-    ///    (it is deleted in step 1, and would CASCADE from the message anyway).
-    ///
-    /// # Returns
-    ///
-    /// List of message IDs that were deleted.
-    pub fn cleanup_expired(&self) -> Result<Vec<MessageId>, EphemeralError> {
-        self.check_logged_in()?;
-
-        // Use batch operations for efficiency (avoids N+1 queries)
-        // 1. Delete all expired ephemeral entries and get their IDs
-        let expired_ids = self.ephemeral_repo.delete_all_expired()?;
-
-        if !expired_ids.is_empty() {
-            // 2. Batch hard-delete all the messages. Ignore errors — a message
-            // already removed (e.g. a manual delete raced the reaper) is fine.
-            let _ = self.message_repo.delete_batch(&expired_ids);
-        }
-
-        Ok(expired_ids)
     }
 
     /// List all pending (unread) ephemeral messages.

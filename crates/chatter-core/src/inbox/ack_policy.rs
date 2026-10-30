@@ -69,9 +69,9 @@ use std::sync::Arc;
 
 use tokio::sync::broadcast;
 
+use crate::domain::UserId;
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
-use crate::domain::UserId;
 use crate::error::{CryptoError, ServiceError, StorageError};
 use crate::inbox::handlers::DomainEvent;
 use crate::storage::MessageRepository;
@@ -278,7 +278,9 @@ fn marker_id(target: &MarkerTarget, marker: FailureMarker) -> MessageId {
         "inbox_marker:{}:{}:{}:{}:{}",
         target.conversation_type.as_str(),
         target.conversation_id,
-        target.peer_id.map_or_else(|| "-".to_string(), |p| p.to_string()),
+        target
+            .peer_id
+            .map_or_else(|| "-".to_string(), |p| p.to_string()),
         target.envelope_ts_ns / MARKER_BUCKET_NS,
         kind,
     );
@@ -326,6 +328,7 @@ pub fn marker_message(target: MarkerTarget, marker: FailureMarker) -> Message {
         mentioned_integrations: Vec::new(),
         targets_ai_bot: false,
         delivery_status: String::new(),
+        failure_reason: None,
     }
 }
 
@@ -559,8 +562,12 @@ pub fn retain_within_budget(
          re-decrypted long enough that 'a later attempt can succeed' is no longer \
          a description of it. Recording a marker, then draining."
     );
-    let decision =
-        record_marker_then_ack(message_repo, domain_tx, target, FailureMarker::DeliveryIssue);
+    let decision = record_marker_then_ack(
+        message_repo,
+        domain_tx,
+        target,
+        FailureMarker::DeliveryIssue,
+    );
     if decision == AckDecision::Ack {
         budget.forget(envelope_id);
     }
@@ -681,6 +688,7 @@ mod tests {
             msg_type: 2,
             ciphertext: vec![1, 2, 3],
             reason: "bad mac".into(),
+            group_id: None,
         };
         assert_eq!(classify_crypto(&e), Durability::Permanent);
         assert_eq!(marker_for_crypto(&e), FailureMarker::DeliveryIssue);

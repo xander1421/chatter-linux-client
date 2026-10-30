@@ -1,0 +1,312 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+
+export component ChannelDangerSection inherits VerticalLayout {
+    in-out property <string> active-section;
+    in property <bool> can-archive;
+    in property <bool> can-delete;
+    in property <bool> can-leave;
+    in property <string> channel-name;
+    in property <bool> group-blocked;
+    in property <bool> is-archived;
+    in property <bool> is-owner;
+    in property <bool> is-private-group;
+    in-out property <bool> show-delete-confirm;
+    in-out property <bool> show-leave-confirm;
+    callback archive-channel();
+    callback block-group(bool);
+    callback delete-channel();
+    callback leave-channel();
+
+    spacing: Spacing.md;
+
+    Text {
+        text: "Danger zone";
+        color: Colors.error;
+        font-size: Typography.lg;
+        font-weight: Typography.semibold;
+    }
+
+    Rectangle {
+        height: 1px;
+        background: Colors.error.with-alpha(0.3);
+    }
+
+    // Every wrapped Text in these rows pins
+    // `height: self.preferred-height`: a HorizontalLayout
+    // (Slint 1.17) sizes the text column's height as if
+    // it had the whole row, so a description that wraps
+    // beside its button ran under the next row's title.
+    // The pin reads the height at the width it really got.
+
+    // Leave channel. Gated unconditionally, not just
+    // for private channels: leaving a private one has
+    // no rejoin path, and a control that is sometimes
+    // destructive and sometimes not, with no visual
+    // difference, is worse than one that always asks.
+    if root.can-leave && !root.show-leave-confirm: HorizontalLayout {
+        spacing: Spacing.sm;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 0px;
+
+            Text {
+                text: root.is-private-group ? "Leave group" : "Leave channel";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+                height: self.preferred-height;
+            }
+            Text {
+                text: root.is-private-group ? "The group and its messages are removed from this device" : "You will lose access to this channel's messages";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+                height: self.preferred-height;
+            }
+        }
+
+        Button {
+            height: Spacing.touch-target-min;
+            text: "Leave";
+            variant: "secondary";
+
+            clicked => {
+                root.show-leave-confirm = true;
+            }
+        }
+    }
+
+    if root.can-leave && root.show-leave-confirm: VerticalLayout {
+        spacing: Spacing.sm;
+
+        Text {
+            width: parent.width;
+            text: root.is-private-group
+                ? "Leave " + root.channel-name + "? You can only come back if a member invites you again."
+                : "Leave #" + root.channel-name + "? You won't get new messages, and an invite-only channel cannot be rejoined on your own.";
+            color: Colors.error;
+            font-size: Typography.sm;
+            wrap: word-wrap;
+            height: self.preferred-height;
+        }
+
+        HorizontalLayout {
+            spacing: Spacing.sm;
+
+            Button {
+                height: Spacing.touch-target-min;
+                text: "Cancel";
+                variant: "secondary";
+                clicked => {
+                    root.show-leave-confirm = false;
+                }
+            }
+
+            Button {
+                height: Spacing.touch-target-min;
+                text: root.is-private-group ? "Leave group" : "Leave channel";
+                variant: "destructive";
+                clicked => {
+                    root.show-leave-confirm = false;
+                    root.leave-channel();
+                }
+            }
+        }
+    }
+
+    // An owner may not leave while others remain (the
+    // server refuses it for a channel, core for a
+    // group), so say why the Leave row is missing and
+    // point at the way out: Members › ⋮ › Make owner.
+    if root.is-owner && (root.can-delete || (root.is-private-group && !root.can-leave)): HorizontalLayout {
+        spacing: Spacing.sm;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 0px;
+
+            Text {
+                text: "Transfer ownership";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+                height: self.preferred-height;
+            }
+            Text {
+                text: root.is-private-group ? "Make another member the owner to leave." : "Transfer ownership to leave, or delete the channel.";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+                height: self.preferred-height;
+            }
+        }
+
+        Button {
+            height: Spacing.touch-target-min;
+            text: "Transfer…";
+            variant: "secondary";
+
+            clicked => {
+                root.active-section = "members";
+            }
+        }
+    }
+
+    // Block this private group on this device: everything
+    // it sends is dropped until unblocked here.
+    if root.is-private-group: HorizontalLayout {
+        spacing: Spacing.sm;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 0px;
+
+            Text {
+                text: root.group-blocked ? "Unblock group" : "Block group";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+                height: self.preferred-height;
+            }
+            Text {
+                text: root.group-blocked
+                    ? "Messages from this group are being dropped on this device"
+                    : "Drop everything this group sends, on this device";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+                height: self.preferred-height;
+            }
+        }
+
+        Button {
+            height: Spacing.touch-target-min;
+            text: root.group-blocked ? "Unblock" : "Block";
+            variant: root.group-blocked ? "secondary" : "destructive";
+
+            clicked => { root.block-group(!root.group-blocked); }
+        }
+    }
+
+    // Archive channel
+    if root.can-archive: HorizontalLayout {
+        spacing: Spacing.sm;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 0px;
+
+            Text {
+                text: root.is-archived ? "Unarchive channel" : "Archive channel";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+                height: self.preferred-height;
+            }
+            Text {
+                text: root.is-archived ? "Make channel active again" : "Archive to hide from active channels";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+                height: self.preferred-height;
+            }
+        }
+
+        Button {
+            height: Spacing.touch-target-min;
+            text: root.is-archived ? "Unarchive" : "Archive";
+            variant: "secondary";
+
+            clicked => {
+                root.archive-channel();
+            }
+        }
+    }
+
+    // Delete channel. H3: the one irreversible action
+    // in this modal was a single click on a button
+    // sitting in the same row rhythm as "Archive" —
+    // one slip and the channel and every message in it
+    // are gone. Same two-step reveal Settings uses for
+    // Delete Account (settings_screen.slint
+    // `show-delete-confirm`): the first click only
+    // asks, and the answer defaults to Cancel.
+    if root.can-delete && !root.show-delete-confirm: HorizontalLayout {
+        spacing: Spacing.sm;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 0px;
+
+            Text {
+                text: "Delete channel";
+                color: Colors.error;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+                wrap: word-wrap;
+                height: self.preferred-height;
+            }
+            Text {
+                text: "Deletes the channel and all its messages. Can't be undone.";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+                height: self.preferred-height;
+            }
+        }
+
+        Button {
+            height: Spacing.touch-target-min;
+            text: "Delete";
+            variant: "destructive";
+
+            clicked => {
+                root.show-delete-confirm = true;
+            }
+        }
+    }
+
+    if root.can-delete && root.show-delete-confirm: VerticalLayout {
+        spacing: Spacing.sm;
+
+        Text {
+            width: parent.width;
+            text: "Delete \"" + root.channel-name + "\" permanently? Every message in it goes with it. This cannot be undone.";
+            color: Colors.error;
+            font-size: Typography.sm;
+            wrap: word-wrap;
+            height: self.preferred-height;
+        }
+
+        HorizontalLayout {
+            spacing: Spacing.sm;
+
+            // Cancel first, and it is the non-danger
+            // variant: the safe answer is the one the
+            // eye and the thumb land on.
+            Button {
+                height: Spacing.touch-target-min;
+                text: "Cancel";
+                variant: "secondary";
+                clicked => {
+                    root.show-delete-confirm = false;
+                }
+            }
+
+            Button {
+                height: Spacing.touch-target-min;
+                text: "Delete channel";
+                variant: "destructive";
+                clicked => {
+                    root.show-delete-confirm = false;
+                    root.delete-channel();
+                }
+            }
+        }
+    }
+                    
+}

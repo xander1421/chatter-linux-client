@@ -1,3 +1,6 @@
+import { Checkbox } from "../components/checkbox.slint";
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // RecoveryCodesModal - Displays one-time recovery codes after registration
 
 import { Colors } from "../theme/colors.slint";
@@ -6,11 +9,22 @@ import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 
 export component RecoveryCodesModal inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show-modal ? "modal-overlay" : "";
     in property <bool> show-modal: false;
     in property <[string]> codes: [];
     in property <bool> loading: false;
 
     property <bool> saved-confirmed: false;
+    property <bool> entered: false;
+    changed show-modal => { if !root.show-modal { root.entered = false; } }
+    Timer {
+        interval: 16ms;
+        running: root.show-modal && !root.entered;
+        triggered => { root.entered = true; }
+    }
 
     callback confirmed();
     callback copy-all();
@@ -20,10 +34,11 @@ export component RecoveryCodesModal inherits Rectangle {
     // the Continue button, and that is gated on the "I saved them" checkbox.
     // Same shape as sealed_sender_intro.slint's acknowledge screen.
     opacity: root.show-modal ? 1 : 0;
-    visible: root.show-modal;
+    animate opacity { duration: Materials.sheet-duration; easing: Materials.glide; }
+    visible: root.show-modal || self.opacity > 0;
 
     // Backdrop
-    background: Colors.overlay;
+    background: Materials.scrim;
 
     // Block backdrop clicks (no dismiss allowed)
     TouchArea {
@@ -32,16 +47,20 @@ export component RecoveryCodesModal inherits Rectangle {
     }
 
     // Modal container — centered card with content-based sizing
-    Rectangle {
+    GlassSurface {
+        material-level: 3;
+        elevation: 5;
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale-x: root.show-modal && root.entered ? 100% : 94%;
+        transform-scale-y: root.show-modal && root.entered ? 100% : 91%;
+        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+
         width: min(480px, parent.width - 32px);
         height: max(200px, min(content-layout.preferred-height, min(760px, parent.height - 48px)));
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        background: Colors.surface;
-        border-radius: Spacing.radius-lg;
-        clip: true;
-        drop-shadow-blur: 16px;
-        drop-shadow-color: Colors.shadow;
+        border-radius: Spacing.radius-sheet;
 
         // Block clicks from passing through
         TouchArea {
@@ -49,155 +68,158 @@ export component RecoveryCodesModal inherits Rectangle {
             height: 100%;
         }
 
-        content-layout := VerticalLayout {
-            padding: Spacing.lg;
-            spacing: Spacing.md;
+        // The codes are hidden the moment the dialog is logically closed —
+        // the same change that drops the secure-screen flag (app.slint
+        // `changed active-modal`), so no frame shows a code unprotected.
+        // The empty shell and scrim finish their fade; an invisible subtree
+        // gets no pointer, key, Tab focus or accessible default action, and
+        // the controls are disabled besides.
+        Rectangle {
+            visible: root.show-modal;
+            content-layout := VerticalLayout {
+                padding: Spacing.lg;
+                spacing: Spacing.md;
 
-            // Title
-            Text {
-                text: "Save Your Recovery Codes";
-                color: Colors.text-primary;
-                font-size: Typography.xl;
-                font-weight: Typography.semibold;
-                horizontal-alignment: center;
-            }
+                // Title
+                Text {
+                    text: "Save your recovery codes";
+                    color: Colors.text-primary;
+                    font-size: Typography.xl;
+                    font-weight: Typography.semibold;
+                    horizontal-alignment: center;
+                }
 
-            // Subtitle
-            Text {
-                text: "These codes can recover your account if you forget your password and PIN. Save them somewhere safe. They will not be shown again.";
-                color: Colors.text-secondary;
-                font-size: Typography.sm;
-                horizontal-alignment: center;
-                wrap: word-wrap;
-            }
+                // Subtitle
+                Text {
+                    width: max(0px, parent.width - parent.padding * 2);
+                    text: "These codes can recover your account if you forget your password and PIN. Save them somewhere safe. They will not be shown again.";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
 
-            Rectangle { height: Spacing.sm; }
+                Rectangle { height: Spacing.sm; }
 
-            // Recovery codes list (single column).
-            //
-            // Asks for the WHOLE list, not a 120px window into it. These are
-            // write-them-down-now codes: a box three rows tall that hides the
-            // rest behind a scroll is how someone copies six of ten and loses
-            // the account. The Flickable below stays as the last-resort escape
-            // hatch for a genuinely short screen, but on a normal phone
-            // nothing scrolls and every code is on screen at once.
-            Rectangle {
-                vertical-stretch: 1;
-                // Wants to grow to codes-list.preferred-height (every code
-                // visible at once, the normal case) but must be able to
-                // shrink below that — pinning min-height to the full list
-                // height made this Flickable's "last-resort scroll" comment
-                // a lie: the modal could never actually get shorter than
-                // all-codes-at-once, so on a short window the Continue
-                // button below just got clipped off-screen, unreachable.
-                // ~3 rows (32px item + xs spacing) is the real floor.
-                min-height: 120px;
-                background: Colors.background;
-                border-radius: Spacing.radius-md;
+                // Recovery codes list (single column).
+                //
+                // Asks for the WHOLE list, not a 120px window into it. These are
+                // write-them-down-now codes: a box three rows tall that hides the
+                // rest behind a scroll is how someone copies six of ten and loses
+                // the account. The Flickable below stays as the last-resort escape
+                // hatch for a genuinely short screen, but on a normal phone
+                // nothing scrolls and every code is on screen at once.
+                Rectangle {
+                    vertical-stretch: 1;
+                    // Wants to grow to codes-list.preferred-height (every code
+                    // visible at once, the normal case) but must be able to
+                    // shrink below that — pinning min-height to the full list
+                    // height made this Flickable's "last-resort scroll" comment
+                    // a lie: the modal could never actually get shorter than
+                    // all-codes-at-once, so on a short window the Continue
+                    // button below just got clipped off-screen, unreachable.
+                    // ~3 rows (32px item + xs spacing) is the real floor.
+                    min-height: 120px;
+                    background: Colors.inset;
+                    border-radius: Spacing.radius-md;
 
-                Flickable {
-                    viewport-height: codes-list.preferred-height;
-                    viewport-width: parent.width;
+                    Flickable {
+                        viewport-height: codes-list.preferred-height;
+                        viewport-width: parent.width;
 
-                    codes-list := VerticalLayout {
-                        padding: Spacing.md;
-                        spacing: Spacing.xs;
+                        codes-list := VerticalLayout {
+                            padding: Spacing.md;
+                            spacing: Spacing.xs;
 
-                        for code[i] in root.codes: Rectangle {
-                            height: 32px;
-                            background: Colors.surface;
-                            border-radius: Spacing.radius-sm;
+                            for code[i] in root.codes: Rectangle {
+                                height: 32px;
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-sm;
 
-                            HorizontalLayout {
-                                padding-left: Spacing.md;
-                                padding-right: Spacing.md;
-                                alignment: center;
+                                HorizontalLayout {
+                                    padding-left: Spacing.md;
+                                    padding-right: Spacing.md;
+                                    alignment: center;
 
-                                Text {
-                                    text: (i + 1) + ". ";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.sm;
-                                }
-                                Text {
-                                    text: code;
-                                    color: Colors.text-primary;
-                                    font-size: Typography.sm;
-                                    font-weight: Typography.medium;
-                                    letter-spacing: 1px;
+                                    Text {
+                                        text: (i + 1) + ". ";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.sm;
+                                    }
+                                    Text {
+                                        text: code;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                        letter-spacing: 1px;
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            // Copy All button
-            HorizontalLayout {
-                alignment: center;
+                // Copy All button
+                HorizontalLayout {
+                    alignment: center;
 
-                Button {
-                    text: "Copy All";
-                    variant: "secondary";
-                    clicked => { root.copy-all(); }
-                }
-            }
-
-            Rectangle { height: Spacing.xs; }
-
-            // Checkbox: I have saved my recovery codes
-            HorizontalLayout {
-                alignment: center;
-                spacing: Spacing.sm;
-
-                Rectangle {
-                    width: 20px;
-                    height: 20px;
-                    border-radius: Spacing.radius-sm;
-                    border-width: 2px;
-                    border-color: root.saved-confirmed ? Colors.primary : Colors.text-muted;
-                    background: root.saved-confirmed ? Colors.primary : transparent;
-
-                    if root.saved-confirmed: Text {
-                        text: "\u{2713}";
-                        color: Colors.text-primary;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
+                    Button {
+                        text: "Copy all";
+                        variant: "secondary";
+                        disabled: !root.show-modal;
+                        clicked => { root.copy-all(); }
                     }
+                }
 
+                Rectangle { height: Spacing.xs; }
+
+                // Checkbox: I have saved my recovery codes
+                Rectangle {
+                    min-height: Spacing.button-height;
                     TouchArea {
+                        enabled: root.show-modal;
                         mouse-cursor: pointer;
-                        clicked => {
-                            root.saved-confirmed = !root.saved-confirmed;
+                        clicked => { root.saved-confirmed = !root.saved-confirmed; }
+                    }
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            Checkbox {
+                                enabled: root.show-modal;
+                                checked <=> root.saved-confirmed;
+                                label: "I have saved my recovery codes";
+                            }
+                        }
+                        Text {
+                            text: "I have saved my recovery codes";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            min-width: 0px;
+                            wrap: word-wrap;
                         }
                     }
                 }
 
-                Text {
-                    text: "I have saved my recovery codes";
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
+                Rectangle { height: Spacing.sm; }
+
+                // Continue button (disabled until checkbox checked)
+                Button {
+                    text: "Continue";
+                    variant: "primary";
+                    disabled: !root.saved-confirmed || !root.show-modal;
+                    clicked => { root.confirmed(); }
                 }
-
-                TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.saved-confirmed = !root.saved-confirmed;
-                    }
-                }
-            }
-
-            Rectangle { height: Spacing.sm; }
-
-            // Continue button (disabled until checkbox checked)
-            Button {
-                text: "Continue";
-                variant: "primary";
-                disabled: !root.saved-confirmed;
-                clicked => { root.confirmed(); }
             }
         }
+    }
+
+    // The fade-out is presentation only: nothing in it is a live target.
+    if !root.show-modal: TouchArea {
+        width: 100%;
+        height: 100%;
     }
 }

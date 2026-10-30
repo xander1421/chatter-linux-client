@@ -7,9 +7,9 @@
 
 use std::sync::{Arc, RwLock};
 
-use crate::local_ai::backend::{ChatMessage, ChatRole, GenerateParams, LocalAIBackend};
 use crate::ai_policy::policy::{AiAccess, Silo as AiSilo};
 use crate::cloud_ai::{AnyCloudBackend, CloudSettings};
+use crate::local_ai::backend::{ChatMessage, ChatRole, GenerateParams, LocalAIBackend};
 use crate::local_ai::providers::{AnyBackend, ProviderKind};
 use crate::local_ai::settings::LocalAISettings;
 use crate::services::ai::{LocalAIActorHandle, SampleParams};
@@ -22,10 +22,16 @@ pub enum JarvisEngine {
     InProcess(LocalAIActorHandle),
     /// Local HTTP provider with the model to use. The model is interior-mutable
     /// so a missing-model completion can self-heal to an installed model.
-    Http { backend: Arc<AnyBackend>, model: RwLock<String> },
+    Http {
+        backend: Arc<AnyBackend>,
+        model: RwLock<String>,
+    },
     /// Cloud provider. Constructed only from the cloud silo's own settings —
     /// `from_settings` cannot produce this variant.
-    Cloud { backend: Arc<AnyCloudBackend>, model: RwLock<String> },
+    Cloud {
+        backend: Arc<AnyCloudBackend>,
+        model: RwLock<String>,
+    },
 }
 
 impl JarvisEngine {
@@ -57,7 +63,10 @@ impl JarvisEngine {
     /// Wrap an already-built cloud backend (e.g. the metered broker, which
     /// needs a live authenticated client rather than settings).
     pub fn cloud(backend: AnyCloudBackend, model: String) -> Self {
-        Self::Cloud { backend: Arc::new(backend), model: RwLock::new(model) }
+        Self::Cloud {
+            backend: Arc::new(backend),
+            model: RwLock::new(model),
+        }
     }
 
     /// Which silo this engine belongs to.
@@ -104,13 +113,10 @@ impl JarvisEngine {
 
     /// First installed model that looks like a chat model (skip embedders).
     fn pick_chat_model(models: &[crate::local_ai::backend::AvailableModel]) -> Option<String> {
-        models
-            .iter()
-            .map(|m| m.name.clone())
-            .find(|name| {
-                let n = name.to_lowercase();
-                !n.contains("embed") && !n.contains("minilm") && !n.contains("bge")
-            })
+        models.iter().map(|m| m.name.clone()).find(|name| {
+            let n = name.to_lowercase();
+            !n.contains("embed") && !n.contains("minilm") && !n.contains("bge")
+        })
     }
 
     async fn complete(
@@ -133,7 +139,10 @@ impl JarvisEngine {
                     full.push_str("\n\n");
                 }
                 full.push_str("Assistant:");
-                actor.complete(full, params).await.map_err(JarvisError::from)
+                actor
+                    .complete(full, params)
+                    .await
+                    .map_err(JarvisError::from)
             }
             Self::Http { backend, model } => {
                 Self::complete_via(backend.as_ref(), model, messages, params).await
@@ -231,34 +240,9 @@ impl SharedJarvisEngine {
         self.local.read().expect("engine lock poisoned").clone()
     }
 
-    /// Single-shot completion (entity extraction, summaries).
-    pub async fn complete(&self, prompt: String, params: SampleParams) -> Result<String, JarvisError> {
-        self.complete_conversation(
-            vec![ChatMessage {
-                role: ChatRole::User,
-                content: prompt,
-            }],
-            params,
-        )
-        .await
-    }
-
-    /// Full multi-turn completion: `[system, user, assistant, …, user]`.
-    /// HTTP providers get real roles (what chat models are trained on); the
-    /// in-process actor gets the turns rendered as text.
-    pub async fn complete_conversation(
-        &self,
-        messages: Vec<ChatMessage>,
-        params: SampleParams,
-    ) -> Result<String, JarvisError> {
-        let engine = self.local.read().expect("engine lock poisoned").clone();
-        engine.complete(messages, params).await
-    }
-
     /// Single-shot completion gated by a conversation's AI policy.
     ///
-    /// The gated twin of [`Self::complete`], for extraction and summarisation
-    /// which run over message content.
+    /// For extraction and summarisation, which run over message content.
     pub async fn complete_gated(
         &self,
         access: AiAccess,
@@ -267,7 +251,10 @@ impl SharedJarvisEngine {
     ) -> Result<String, JarvisError> {
         self.complete_conversation_gated(
             access,
-            vec![ChatMessage { role: ChatRole::User, content: prompt }],
+            vec![ChatMessage {
+                role: ChatRole::User,
+                content: prompt,
+            }],
             params,
         )
         .await
@@ -311,9 +298,6 @@ impl SharedJarvisEngine {
     /// content is sent when the active engine is a cloud provider and the
     /// conversation only permits local inference (DMs, anon transports), or
     /// when AI is denied outright (mesh-delivered traffic).
-    ///
-    /// Prefer this over [`Self::complete_conversation`] for anything driven by
-    /// message content.
     pub async fn complete_conversation_gated(
         &self,
         access: AiAccess,
@@ -382,7 +366,10 @@ mod tests {
             ProviderKind::Vllm,
             ProviderKind::MistralRs,
         ] {
-            let settings = LocalAISettings { active_provider: kind, ..LocalAISettings::default() };
+            let settings = LocalAISettings {
+                active_provider: kind,
+                ..LocalAISettings::default()
+            };
             let engine = JarvisEngine::from_settings(&settings, LocalAIActorHandle::spawn());
             assert!(!engine.is_cloud(), "{kind:?} produced a cloud engine");
             assert_eq!(engine.silo(), crate::ai_policy::policy::Silo::Local);
@@ -395,7 +382,10 @@ mod tests {
     }
 
     fn user(text: &str) -> Vec<ChatMessage> {
-        vec![ChatMessage { role: ChatRole::User, content: text.into() }]
+        vec![ChatMessage {
+            role: ChatRole::User,
+            content: text.into(),
+        }]
     }
 
     #[tokio::test]
@@ -463,11 +453,7 @@ mod tests {
         let shared = SharedJarvisEngine::new(engine);
 
         if let Err(err) = shared
-            .complete_conversation_gated(
-                AiAccess::LocalOnly,
-                user("hi"),
-                SampleParams::default(),
-            )
+            .complete_conversation_gated(AiAccess::LocalOnly, user("hi"), SampleParams::default())
             .await
         {
             assert!(!matches!(err, JarvisError::NotPermitted(_)), "{err:?}");
@@ -484,28 +470,6 @@ mod tests {
         assert!(matches!(engine, JarvisEngine::InProcess(_)));
     }
 
-    /// Live: configured model absent → engine self-heals to an installed one.
-    /// `cargo test -p chatter-core --lib live_ -- --ignored --nocapture`
-    #[tokio::test]
-    #[ignore = "needs a running Ollama on localhost:11434 with ≥1 chat model"]
-    async fn live_missing_model_self_heals() {
-        let settings = LocalAISettings {
-            chat_model: "definitely-not-installed:1b".into(),
-            ..LocalAISettings::default()
-        };
-        let shared = SharedJarvisEngine::new(JarvisEngine::from_settings(
-            &settings,
-            LocalAIActorHandle::spawn(),
-        ));
-        let reply = shared
-            .complete("Reply with exactly one word: ping".into(), crate::services::ai::SampleParams::default())
-            .await
-            .expect("self-heal fallback failed");
-        println!("self-healed reply: {reply:?}; engine now {}", shared.describe());
-        assert!(!reply.trim().is_empty());
-        assert!(!shared.describe().contains("definitely-not-installed"));
-    }
-
     #[test]
     fn reasoning_blocks_are_stripped() {
         assert_eq!(
@@ -517,8 +481,14 @@ mod tests {
             "abc"
         );
         // Truncated generation: unterminated block dropped.
-        assert_eq!(JarvisEngine::strip_reasoning("ok<think>trailing junk".into()), "ok");
-        assert_eq!(JarvisEngine::strip_reasoning("no tags at all".into()), "no tags at all");
+        assert_eq!(
+            JarvisEngine::strip_reasoning("ok<think>trailing junk".into()),
+            "ok"
+        );
+        assert_eq!(
+            JarvisEngine::strip_reasoning("no tags at all".into()),
+            "no tags at all"
+        );
     }
 
     #[test]
@@ -535,7 +505,10 @@ mod tests {
             chat_model: "qwen2.5-7b".into(),
             ..LocalAISettings::default()
         };
-        shared.set(JarvisEngine::from_settings(&lm, LocalAIActorHandle::spawn()));
+        shared.set(JarvisEngine::from_settings(
+            &lm,
+            LocalAIActorHandle::spawn(),
+        ));
         assert_eq!(shared.describe(), "lm-studio (qwen2.5-7b)");
     }
 }
@@ -544,7 +517,7 @@ mod tests {
 mod silo_selection_tests {
     use super::*;
     use crate::ai_policy::policy::Silo;
-    use crate::cloud_ai::{AnyCloudBackend, CloudSettings};
+    use crate::cloud_ai::CloudSettings;
 
     fn shared_local() -> SharedJarvisEngine {
         let settings = LocalAISettings::default();
@@ -563,7 +536,10 @@ mod silo_selection_tests {
     }
 
     fn user(text: &str) -> Vec<ChatMessage> {
-        vec![ChatMessage { role: ChatRole::User, content: text.into() }]
+        vec![ChatMessage {
+            role: ChatRole::User,
+            content: text.into(),
+        }]
     }
 
     #[test]
@@ -661,7 +637,10 @@ mod silo_selection_tests {
                 )
                 .await
                 .expect_err("mesh must get no inference");
-            assert!(matches!(err, JarvisError::NotPermitted(_)), "{silo:?}: {err:?}");
+            assert!(
+                matches!(err, JarvisError::NotPermitted(_)),
+                "{silo:?}: {err:?}"
+            );
         }
     }
 }

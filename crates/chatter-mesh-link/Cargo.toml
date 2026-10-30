@@ -6,7 +6,7 @@ authors = ["xander1421"]
 description = "Sans-IO link policy and the MeshLink radio abstraction for the bitchat mesh"
 license = "GPL-3.0"
 repository = "https://github.com/xander1421/chatter"
-rust-version = "1.85"
+rust-version = "1.99"
 
 [lib]
 name = "chatter_mesh_link"
@@ -19,7 +19,7 @@ thiserror = "2"
 # Determinism across peers is the whole point — every node must choose the same
 # links for the same message or duplicate suppression stops working — so the hash
 # is part of the wire behaviour, not an implementation detail.
-sha2 = "0.10"
+sha2 = "0.11.0"
 
 # No tokio, and no futures. The MeshLink trait uses boxed futures from core, so a
 # radio implementation can be swapped at runtime (bluer on Linux, JNI on Android,

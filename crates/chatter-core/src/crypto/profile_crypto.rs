@@ -60,8 +60,13 @@ pub fn encrypt_profile_item(
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; 12];
-    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS CSPRNG must not fail");}
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    {
+        use rand::TryRngCore;
+        rand::rngs::OsRng
+            .try_fill_bytes(&mut nonce_bytes)
+            .expect("OS CSPRNG must not fail");
+    }
+    let nonce = <&Nonce<_>>::try_from(&nonce_bytes[..]).expect("fixed cryptographic input length");
 
     // Encrypt
     let cipher =
@@ -89,12 +94,10 @@ pub fn decrypt_profile_item(
 ) -> Result<String, CryptoError> {
     // Minimum length: 12-byte nonce + 16-byte auth tag
     if encrypted.len() < 12 + 16 {
-        return Err(CryptoError::Validation(
-            "ciphertext too short".to_string(),
-        ));
+        return Err(CryptoError::Validation("ciphertext too short".to_string()));
     }
 
-    let nonce = Nonce::from_slice(&encrypted[..12]);
+    let nonce = <&Nonce<_>>::try_from(&encrypted[..12]).expect("fixed cryptographic input length");
     let ciphertext = &encrypted[12..];
 
     let cipher =
@@ -133,7 +136,10 @@ pub fn encrypt_display_name(profile_key: &[u8; 32], name: &str) -> Result<Vec<u8
 
 /// Decrypt display name. Bucket is recovered from ciphertext length; the
 /// trailing-zero strip in `decrypt_profile_item` handles all bucket sizes.
-pub fn decrypt_display_name(profile_key: &[u8; 32], encrypted: &[u8]) -> Result<String, CryptoError> {
+pub fn decrypt_display_name(
+    profile_key: &[u8; 32],
+    encrypted: &[u8],
+) -> Result<String, CryptoError> {
     decrypt_profile_item(profile_key, encrypted)
 }
 
@@ -193,8 +199,13 @@ pub fn encrypt_avatar(profile_key: &[u8; 32], avatar: &[u8]) -> Result<Vec<u8>, 
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; 12];
-    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS CSPRNG must not fail");}
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    {
+        use rand::TryRngCore;
+        rand::rngs::OsRng
+            .try_fill_bytes(&mut nonce_bytes)
+            .expect("OS CSPRNG must not fail");
+    }
+    let nonce = <&Nonce<_>>::try_from(&nonce_bytes[..]).expect("fixed cryptographic input length");
 
     // Encrypt
     let cipher =
@@ -223,7 +234,7 @@ pub fn decrypt_avatar(profile_key: &[u8; 32], encrypted: &[u8]) -> Result<Vec<u8
         ));
     }
 
-    let nonce = Nonce::from_slice(&encrypted[..12]);
+    let nonce = <&Nonce<_>>::try_from(&encrypted[..12]).expect("fixed cryptographic input length");
     let ciphertext = &encrypted[12..];
 
     let cipher =
@@ -260,7 +271,10 @@ mod tests {
         let name = "a".repeat(100);
         let encrypted = encrypt_display_name(&profile_key, &name).unwrap();
         assert_eq!(encrypted.len(), 12 + NAME_PADDED_LENGTH_LONG + 16);
-        assert_eq!(decrypt_display_name(&profile_key, &encrypted).unwrap(), name);
+        assert_eq!(
+            decrypt_display_name(&profile_key, &encrypted).unwrap(),
+            name
+        );
     }
 
     #[test]
@@ -287,7 +301,11 @@ mod tests {
         ] {
             let s = "a".repeat(n);
             let enc = encrypt_status(&profile_key, &s).unwrap();
-            assert_eq!(enc.len(), 12 + bucket + 16, "len={n} expected bucket={bucket}");
+            assert_eq!(
+                enc.len(),
+                12 + bucket + 16,
+                "len={n} expected bucket={bucket}"
+            );
             assert_eq!(decrypt_status(&profile_key, &enc).unwrap(), s);
         }
     }

@@ -6,12 +6,7 @@
 use std::sync::Arc;
 
 use crate::services::ai::{LocalAIActorHandle, LocalAIService};
-#[cfg(feature = "jarvis")]
-use crate::services::jarvis::{JarvisEngine, JarvisService, SharedJarvisEngine};
 use crate::services::ai_service::AIService;
-use crate::services::local_ai_service::HttpLocalAIService;
-use crate::services::semantic_search::SemanticSearchService;
-use crate::local_ai::indexer::MessageIndexer;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
@@ -19,25 +14,28 @@ use crate::services::auth_service::AuthService;
 use crate::services::channel::ChannelService;
 use crate::services::channel_bootstrap_service::ChannelBootstrapService;
 use crate::services::channel_event_service::ChannelEventService;
+use crate::services::conversation_pins::ConversationPins;
+use crate::services::device_service::DeviceService;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
-use crate::services::draft_service::DraftService;
 use crate::services::ephemeral_service::EphemeralService;
+use crate::services::gateway::MessageGateway;
+#[cfg(feature = "jarvis")]
+use crate::services::jarvis::{JarvisEngine, JarvisService, SharedJarvisEngine};
+use crate::services::local_ai_service::HttpLocalAIService;
 use crate::services::mailbox_manager::MailboxManager;
 #[cfg(feature = "mesh")]
 use crate::services::mesh::{MeshConfig, MeshDeps, MeshService};
 use crate::services::message::MessageService;
-use crate::services::gateway::MessageGateway;
 use crate::services::pairwise::PairwiseService;
 use crate::services::pin_service::PinService;
-use crate::services::session_service::SessionService;
-use crate::services::signal_service::SignalService;
-use crate::services::conversation_pins::ConversationPins;
 use crate::services::section_service::SectionService;
-use crate::services::device_service::DeviceService;
+use crate::services::semantic_search::SemanticSearchService;
+use crate::services::session_service::SessionService;
+use crate::services::signal::SignalService;
 use crate::services::user::UserService;
 
-use super::infrastructure::InfrastructureContainer;
 use super::ContextError;
+use super::infrastructure::InfrastructureContainer;
 
 /// Service container holding all pre-built services.
 ///
@@ -75,8 +73,6 @@ pub struct ServiceContainer {
     pub channel_event_service: Arc<ChannelEventService>,
     /// AI service for AI integrations.
     pub ai_service: Arc<AIService>,
-    /// Draft service for message drafts.
-    pub draft_service: Arc<DraftService>,
     /// Ephemeral (disappearing-message) local-expiry engine.
     pub ephemeral_service: Arc<EphemeralService>,
     /// Pin service for pinned messages.
@@ -128,22 +124,18 @@ impl ServiceContainer {
         ));
 
         // 2. Mailbox manager for DM privacy
-        let mailbox_manager = Arc::new(MailboxManager::new(
-            infra.grpc_pool.clone(),
-            infra.settings_repo.clone(),
-        ));
+        let mailbox_manager = Arc::new(MailboxManager::new(infra.grpc_pool.clone()));
 
         // 2b. Ephemeral (disappearing-message) local-expiry engine. Shared by
         // the send path (MessageService — arms the sender's copy), the receive
         // path (MessageGateway — arms the recipient's copy), and the periodic
-        // reaper (ChatterClient::start — calls cleanup_expired).
+        // reaper (ChatterClient::start — calls disappearing::reap_expired).
         let ephemeral_service = Arc::new(EphemeralService::new(
             infra.settings_repo.clone(),
             infra.ephemeral_repo.clone(),
-            infra.message_repo.clone(),
         ));
 
-        // 3. Message service with group mailbox support and Sesame
+        // 3. Message service with group mailbox support
         let message_service = Arc::new(MessageService::new(
             infra.grpc_pool.clone(),
             infra.database.clone(),
@@ -154,31 +146,30 @@ impl ServiceContainer {
             infra.user_repo.clone(),
             signal_service.clone(),
             infra.group_mailbox_manager.clone(),
-            infra.sesame_manager.clone(),
+            infra.pending_dm_repo.clone(),
             infra.search_index.clone(),
             infra.token_manager.clone(),
             infra.event_bus.clone(),
             ephemeral_service.clone(),
+            mailbox_manager.clone(),
         ));
 
-        // 4. Message gateway with Sesame
-        let message_gateway = Arc::new(MessageGateway::with_sesame(
+        // 4. Message gateway
+        let message_gateway = Arc::new(MessageGateway::with_ephemeral(
             (*signal_service).clone(),
             infra.message_repo.clone(),
             infra.channel_repo.clone(),
             infra.user_repo.clone(),
             infra.settings_repo.clone(),
-            infra.sesame_manager.clone(),
             infra.ephemeral_repo.clone(),
+            message_service.solicited_resends.clone(),
         ));
 
         // 5. DM bootstrap service
         let dm_bootstrap_service = Arc::new(DmBootstrapService::new(
             message_service.clone(),
-            infra.channel_repo.clone(),
             infra.grpc_pool.clone(),
             mailbox_manager.clone(),
-            infra.database.clone(),
         ));
 
         // 6. Auth service
@@ -199,28 +190,49 @@ impl ServiceContainer {
             infra.user_repo.clone(),
             infra.anon_dm_repo.clone(),
             infra.anon_group_repo.clone(),
+            infra.event_bus.clone(),
         ));
 
-        // 8. Channel service
+        // 8. Channel service, on the signed membership log
+        let membership_log = Arc::new(crate::services::channel::membership_log::MembershipLog::new(
+            Arc::new(crate::services::channel::membership_log::SignalLogBackend::new(
+                infra.grpc_pool.clone(),
+                signal_service.clone(),
+                infra.settings_repo.clone(),
+            )),
+            Arc::new(crate::services::channel::membership_log::SignalKtVerifier::cached(
+                infra.grpc_pool.clone(),
+                signal_service.clone(),
+                infra.settings_repo.clone(),
+            )),
+            crate::storage::repositories::verified_membership_repo::VerifiedMembershipRepository::new(
+                infra.database.clone(),
+            ),
+        ));
+        message_service.set_channel_state_sync(membership_log.clone());
         let channel_service = Arc::new(ChannelService::new(
             infra.grpc_pool.clone(),
             infra.settings_repo.clone(),
             infra.channel_repo.clone(),
             infra.section_repo.clone(),
-            infra.user_repo.clone(),
             signal_service.clone(),
             infra.group_coordinator.clone(),
             message_service.clone(),
+            membership_log.clone(),
         ));
 
         // 9. Session service
         let session_service = Arc::new(SessionService::new(
             infra.grpc_pool.clone(),
             infra.settings_repo.clone(),
+            infra.key_store.clone(),
         ));
 
         // 10. Attachment service
-        let attachment_service = Arc::new(AttachmentService::new(infra.attachment_repo.clone(), infra.grpc_pool.clone()));
+        let attachment_service = Arc::new(AttachmentService::new(
+            infra.attachment_repo.clone(),
+            infra.grpc_pool.clone(),
+        ));
 
         // 11. Channel event service (for member join/leave)
         let channel_event_service = Arc::new(ChannelEventService::new(
@@ -229,18 +241,16 @@ impl ServiceContainer {
             infra.user_repo.clone(),
             infra.grpc_pool.clone(),
             infra.event_bus.clone(),
+            infra.settings_repo.clone(),
+            membership_log.clone(),
         ));
+        membership_log.set_observer(Arc::downgrade(&channel_event_service)
+            as std::sync::Weak<dyn crate::services::channel::membership_log::LogObserver>);
 
         // 12. AI service for AI integrations
         let ai_service = Arc::new(AIService::new(
             infra.settings_repo.clone(),
             infra.grpc_pool.clone(),
-        ));
-
-        // 14. Draft service for message drafts
-        let draft_service = Arc::new(DraftService::new(
-            infra.settings_repo.clone(),
-            infra.draft_repo.clone(),
         ));
 
         // 15. Pin service for pinned messages
@@ -307,26 +317,10 @@ impl ServiceContainer {
             .with_keyword_index(infra.search_index.clone(), infra.message_repo.clone()),
         );
 
-        // 19d. Message indexer — auto-index decrypted messages for semantic search
-        if http_local_ai_service.is_auto_index_enabled() {
-            let (indexer, _indexer_handle) = MessageIndexer::spawn(semantic_search_service.clone());
-            indexer.subscribe_events(infra.event_bus.subscribe_domain());
-            // Note: _indexer_handle is detached — runs until the event bus closes.
-
-            // Ensure the embedding model exists so semantic memory is never
-            // silently off: background pull-if-missing when Ollama is up.
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                let svc = http_local_ai_service.clone();
-                handle.spawn(async move {
-                    if svc.health_check().await {
-                        match svc.ensure_embedding_model().await {
-                            Ok(m) => tracing::info!(model = %m.name, "embedding model ready"),
-                            Err(e) => tracing::debug!("embedding model auto-pull skipped: {e}"),
-                        }
-                    }
-                });
-            }
-        }
+        // The service owns both indexer tasks, so opt-out cancels queued work.
+        http_local_ai_service
+            .configure_indexing(semantic_search_service.clone(), infra.event_bus.clone());
+        local_ai_service.attach_http_service(http_local_ai_service.clone());
 
         // 20. Jarvis AI assistant service, driven by the active local AI provider
         // The mesh. Constructed but not started — `start()` is the caller's,
@@ -334,23 +328,30 @@ impl ServiceContainer {
         #[cfg(feature = "mesh")]
         let mesh_service = {
             let db_path = infra.directories.database_path();
+            let (mesh_storage, mesh_sealer) =
+                crate::storage::mesh_store::sealed_store(infra.database.clone(), &db_path);
             let deps = MeshDeps {
+                key_store: infra.key_store.clone(),
+                binding_store: Arc::new(crate::storage::mesh_binding_store::MeshBindingStore::new(
+                    infra.database.clone(),
+                )),
+                private_channels: Arc::new(
+                    crate::services::mesh::private_channel::PrivateChannelStore::new(
+                        infra.database.clone(),
+                    ),
+                ),
                 identity_store: Arc::new(crate::storage::MeshIdentityStore::new(
                     infra.database.clone(),
                 )),
-                storage: Arc::new(crate::storage::mesh_store::MeshStorage::new(
-                    infra.database.clone(),
-                )),
+                storage: Arc::new(mesh_storage),
                 // Mesh messages are rows in the same unified message store as
                 // every other conversation type. See `MeshTimeline::record` for
                 // why they are stored at all — bitchat's stack is ephemeral by
                 // design and this one deliberately is not.
                 messages: infra.message_repo.clone(),
-                deliveries: Arc::new(
-                    crate::storage::repositories::MeshDeliveryRepository::new(
-                        infra.database.clone(),
-                    ),
-                ),
+                deliveries: Arc::new(crate::storage::repositories::MeshDeliveryRepository::new(
+                    infra.database.clone(),
+                )),
                 conversations: Arc::new(
                     crate::storage::repositories::MeshConversationRepository::new(
                         infra.database.clone(),
@@ -361,20 +362,13 @@ impl ServiceContainer {
                 // the messages are: a mesh file is not a second kind of
                 // attachment, it just never had a CDN behind it.
                 attachments: infra.attachment_repo.clone(),
-                favorites: Arc::new(
-                    crate::storage::repositories::MeshFavoritesRepository::new(
-                        infra.database.clone(),
-                    ),
-                ),
                 // Never fatal. `from_keyring` hands back a sealer that reports
                 // why it has no key rather than an error, and `MeshService::start`
                 // declines to start on that basis. A locked keyring used to abort
                 // initialization for the entire client here, so a Secret Service
                 // that did not answer meant nobody could log in — over one
                 // optional feature.
-                sealer: Arc::new(crate::storage::mesh_store::MeshSealer::from_keyring(
-                    &db_path,
-                )),
+                sealer: Arc::new(mesh_sealer),
                 // Relay traffic rides the Tor client the gRPC pool already owns,
                 // on its own isolation group. Without the `onion` feature there is
                 // no connector at all and the mesh runs radio-only.
@@ -388,10 +382,37 @@ impl ServiceContainer {
                 relay_connector: None,
                 radio_factory: None,
             };
-            Arc::new(
-                MeshService::new(deps, MeshConfig::default())
-                    .map_err(|e| ContextError::Mesh(e.to_string()))?,
-            )
+            let mut config = MeshConfig::default();
+            if let Ok(Some(nickname)) =
+                crate::storage::repositories::settings_repo::SettingsRepository::new(
+                    infra.database.clone(),
+                )
+                .get_string(crate::storage::repositories::settings_repo::keys::MESH_NICKNAME)
+            {
+                config.nickname = nickname;
+            }
+            let service =
+                MeshService::new(deps, config).map_err(|e| ContextError::Mesh(e.to_string()))?;
+            let settings = crate::storage::repositories::settings_repo::SettingsRepository::new(
+                infra.database.clone(),
+            );
+            use crate::storage::repositories::settings_repo::keys;
+            if let Ok(Some(names)) = settings.get::<Vec<String>>(keys::MESH_MUTED_CHANNELS) {
+                for name in names {
+                    let _ = service.set_channel_muted(&name, true);
+                }
+            }
+            if let Ok(Some(peers)) = settings.get::<Vec<String>>(keys::MESH_BLOCKED_PEERS) {
+                for peer in peers {
+                    service.set_peer_blocked(&chatter_mesh::ids::PeerId::from_str(&peer), true);
+                }
+            }
+            if let Ok(Some(peers)) = settings.get::<Vec<String>>(keys::MESH_MUTED_PEERS) {
+                for peer in peers {
+                    service.set_peer_muted(&chatter_mesh::ids::PeerId::from_str(&peer), true);
+                }
+            }
+            Arc::new(service)
         };
 
         #[cfg(feature = "jarvis")]
@@ -405,36 +426,34 @@ impl ServiceContainer {
             // answers ("what did alex say", "summarize general").
             let ctx_channels = channel_service.clone();
             let ctx_users = user_service.clone();
-            let app_context: crate::services::jarvis::service::AppContextFn =
-                Arc::new(move || {
-                    use crate::domain::channel::ChannelType;
-                    let mut s = String::new();
-                    if let Ok(channels) = ctx_channels.get_channels_mru() {
-                        let names: Vec<_> = channels
-                            .iter()
-                            .filter(|c| {
-                                matches!(c.channel_type, ChannelType::Public | ChannelType::Private)
-                                    && !c.id.0.is_nil()
-                            })
-                            .take(15)
-                            .map(|c| c.name.clone())
-                            .collect();
-                        if !names.is_empty() {
-                            s.push_str(&format!("User's channels: {}.\n", names.join(", ")));
-                        }
+            let app_context: crate::services::jarvis::service::AppContextFn = Arc::new(move || {
+                use crate::domain::channel::ChannelType;
+                let mut s = String::new();
+                if let Ok(channels) = ctx_channels.get_channels_mru() {
+                    let names: Vec<_> = channels
+                        .iter()
+                        .filter(|c| {
+                            matches!(c.channel_type, ChannelType::Public | ChannelType::Private)
+                                && !c.id.0.is_nil()
+                        })
+                        .take(15)
+                        .map(|c| c.name.clone())
+                        .collect();
+                    if !names.is_empty() {
+                        s.push_str(&format!("User's channels: {}.\n", names.join(", ")));
                     }
-                    let friends = ctx_users.friend_usernames_local();
-                    if !friends.is_empty() {
-                        s.push_str(&format!("User's friends: {}.\n", friends.join(", ")));
-                    }
-                    s
-                });
+                }
+                let friends = ctx_users.friend_usernames_local();
+                if !friends.is_empty() {
+                    s.push_str(&format!("User's friends: {}.\n", friends.join(", ")));
+                }
+                s
+            });
             Arc::new(
                 JarvisService::new(
                     infra.jarvis_memory_repo.clone(),
                     infra.jarvis_graph_repo.clone(),
                     jarvis_engine.clone(),
-                    infra.event_bus.clone(),
                     Some(semantic_search_service.clone()),
                 )
                 .with_app_context(app_context),
@@ -484,7 +503,6 @@ impl ServiceContainer {
             attachment_service,
             channel_event_service,
             ai_service,
-            draft_service,
             pin_service,
             ephemeral_service,
             pairwise_service,

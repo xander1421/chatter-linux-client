@@ -1,5 +1,6 @@
 // EditProfileModal - Modal for editing user profile
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -7,107 +8,185 @@ import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
+import { AvatarPicker, AvatarOption } from "../components/avatar_picker.slint";
+import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
 
 export component EditProfileModal inherits Rectangle {
     in property <bool> show-modal: false;
     in-out property <string> display-name: "";
     in-out property <string> bio: "";
     in property <image> avatar;
+    in property <[AvatarOption]> avatar-options: [];
+    in property <color> avatar-color: Colors.avatar-teal;
+    in property <int> selected-default-idx: -1;
+    in property <bool> has-photo: false;
+    property <bool> avatar-menu-open: false;
     in property <bool> loading: false;
     in property <string> error-message: "";
 
     callback close();
     callback save(string, string); // display-name, bio
     callback change-avatar();
+    callback select-default-avatar(int);
+    callback remove-avatar();
 
     Modal {
         show: root.show-modal;
-        title: "Edit Profile";
-        modal-width: 400px;
+        title: "Edit profile";
+        modal-width: 440px;
+        max-modal-height: 640px;
+        fill-height: true;
 
         close => {
             root.close();
         }
 
         VerticalLayout {
-            spacing: Spacing.lg;
-            padding: Spacing.md;
+            spacing: Spacing.md;
 
-            // Avatar Section
-            VerticalLayout {
-                spacing: Spacing.sm;
-                alignment: center;
+            Flickable {
+                vertical-stretch: 1;
+                viewport-height: profile-fields.preferred-height;
+                viewport-width: self.width;
 
-                HorizontalLayout {
-                    alignment: center;
-                    Avatar {
-                        size: 80px;
-                        fallback-text: root.display-name;
-                        source: root.avatar;
+                profile-fields := VerticalLayout {
+                    width: parent.width;
+                    spacing: Spacing.lg;
+                    padding: Spacing.md;
+
+                    // Avatar Section
+                    VerticalLayout {
+                        spacing: Spacing.sm;
+                        alignment: center;
+
+                        HorizontalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 96px;
+                                height: 96px;
+                                background: transparent;
+                                accessible-role: button;
+                                accessible-label: "Edit profile photo";
+                                accessible-action-default => { root.avatar-menu-open = !root.avatar-menu-open; }
+                                // The preview is a 96px circle; without this the ring inherits the
+                                // transparent parent's 0 radius and boxes the round avatar.
+                                KeyFocus { border-radius: parent.width / 2; activate => { root.avatar-menu-open = !root.avatar-menu-open; } }
+                                Avatar {
+                                    size: 96px;
+                                    name: root.display-name;
+                                    source: root.avatar;
+                                    fallback-text: "?";
+                                    fallback-bg: root.avatar-color;
+                                    fallback-fg: Colors.on-action;
+                                }
+                                Rectangle {
+                                    x: parent.width - self.width;
+                                    y: parent.height - self.height;
+                                    width: 30px;
+                                    height: 30px;
+                                    border-radius: 15px;
+                                    background: Colors.action-fill;
+                                    border-width: Spacing.stroke;
+                                    border-color: Colors.surface;
+                                    Image { source: Icons.edit; width: 16px; height: 16px; colorize: Colors.on-action; }
+                                }
+                                TouchArea { enabled: !root.loading; clicked => { root.avatar-menu-open = !root.avatar-menu-open; } }
+                            }
+                        }
+                        if root.avatar-menu-open: HorizontalLayout {
+                            alignment: center;
+                            spacing: Spacing.sm;
+                            Button {
+                                text: "Choose photo";
+                                variant: "secondary";
+                                clicked => { root.avatar-menu-open = false; root.change-avatar(); }
+                            }
+                            if root.has-photo: Button {
+                                text: "Remove photo";
+                                variant: "secondary";
+                                clicked => { root.avatar-menu-open = false; root.remove-avatar(); }
+                            }
+                        }
+                    }
+
+                    AvatarPicker {
+                        choices: root.avatar-options;
+                        selected-index: root.selected-default-idx;
+                        name: root.display-name;
+                        disabled: root.loading;
+                        selected(i) => { root.select-default-avatar(i); }
+                    }
+
+                    // Display Name Section
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+                        Text {
+                            text: "Display name";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                        }
+                        Input {
+                            text <=> root.display-name;
+                            placeholder: "Your name";
+                        }
+                    }
+
+                    // Bio Section
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+                        Text {
+                            text: "Bio";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                        }
+                        // Using a manual multi-line text input — Neo inset
+                        Rectangle {
+                            height: 80px;
+                            border-radius: Spacing.radius-md;
+                            background: Colors.inset;
+                            border-width: Spacing.stroke;
+                            border-color: bio-input.has-focus ? Colors.primary : Colors.border;
+                            animate border-color { duration: Materials.motion-quick; easing: Materials.settle; }
+
+                            bio-input := TextInput {
+                                x: Spacing.md;
+                                y: Spacing.sm;
+                                width: parent.width - Spacing.md * 2;
+                                height: parent.height - Spacing.sm * 2;
+                                color: Colors.text-primary;
+                                font-size: Typography.base;
+                                text <=> root.bio;
+                                wrap: word-wrap;
+                                single-line: false;
+                            }
+                        }
                     }
                 }
-
-                Button {
-                    text: "Change Avatar";
-                    variant: "ghost";
-                    clicked => { root.change-avatar(); }
-                }
             }
 
-            // Display Name Section
-            VerticalLayout {
-                spacing: Spacing.xs;
-                Text {
-                    text: "Display Name";
-                    color: Colors.text-secondary;
+            // Outside the scroll so a failed save shows next to its button.
+            Rectangle {
+                height: root.error-message != "" ? error-label.preferred-height : 0px;
+                opacity: root.error-message != "" ? 1 : 0;
+                clip: true;
+                animate height { duration: Materials.motion-standard; easing: root.error-message != "" ? Materials.spring : Materials.glide; }
+                animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                error-label := Text {
+                    x: Spacing.md;
+                    width: parent.width - Spacing.md * 2;
+                    text: root.error-message;
+                    color: Colors.error;
                     font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
                 }
-                Input {
-                    text <=> root.display-name;
-                    placeholder: "Your name";
-                }
-            }
-
-            // Bio Section
-            VerticalLayout {
-                spacing: Spacing.xs;
-                Text {
-                    text: "Bio";
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
-                }
-                // Using a manual multi-line text input — Neo inset
-                Rectangle {
-                    height: 80px;
-                    border-radius: Spacing.radius-md;
-                    background: Colors.neo-inset-bg;
-                    border-width: 1px;
-                    border-color: Colors.neo-inset-shadow;
-
-                    TextInput {
-                        x: Spacing.md;
-                        y: Spacing.sm;
-                        width: parent.width - Spacing.md * 2;
-                        height: parent.height - Spacing.sm * 2;
-                        color: Colors.text-primary;
-                        font-size: Typography.base;
-                        text <=> root.bio;
-                        wrap: word-wrap;
-                        single-line: false;
-                    }
-                }
-            }
-
-            if root.error-message != "": Text {
-                text: root.error-message;
-                color: Colors.error;
-                font-size: Typography.sm;
-                horizontal-alignment: center;
-                wrap: word-wrap;
             }
 
             // Action Buttons
             HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
                 spacing: Spacing.md;
                 alignment: end;
                 
@@ -118,9 +197,10 @@ export component EditProfileModal inherits Rectangle {
                 }
 
                 Button {
-                    text: "Save Changes";
+                    text: "Save changes";
                     variant: "primary";
                     loading: root.loading;
+                    disabled: root.loading;
                     clicked => { root.save(root.display-name, root.bio); }
                 }
             }

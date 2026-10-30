@@ -10,6 +10,7 @@ import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
+import { Materials } from "../theme/materials.slint";
 
 export component LinkDeviceApproveModal inherits Rectangle {
     in property <bool> show-modal: false;
@@ -24,106 +25,152 @@ export component LinkDeviceApproveModal inherits Rectangle {
     // the user's gate against MITM substitution of the QR ephemeral key.
     in property <string> verification-code: "";
     in property <bool> preview-ready: false;
+    property <bool> preview-entered: false;
+    changed preview-ready => { if !root.preview-ready { root.preview-entered = false; } }
+    Timer {
+        interval: 16ms;
+        running: root.preview-ready && !root.preview-entered;
+        triggered => { root.preview-entered = true; }
+    }
     // Status / error from core.
     in property <string> error: "";
     in property <string> status: "";
     in property <bool> approving: false;
+    // In-app camera scanner exists (Android).
+    in property <bool> can-scan: false;
 
     callback close();
+    callback scan();                  // camera → link-url, then paste-changed
     callback paste-changed(string);   // URL textbox changed → core re-parses
     callback approve(string);         // password (pending link is held in core)
 
     Modal {
         show: root.show-modal;
-        title: "Link a New Device";
+        title: "Link a new device";
         modal-width: 520px;
+        max-modal-height: 640px;
+        fill-height: true;
 
         close => { root.close(); }
 
         VerticalLayout {
             spacing: Spacing.md;
 
-            Text {
-                text: "Paste the link from your new device. You'll be asked to confirm with your password or PIN to authorize.";
-                color: Colors.text-secondary;
-                font-size: Typography.sm;
-                wrap: word-wrap;
-            }
+            Flickable {
+                vertical-stretch: 1;
+                viewport-height: link-fields.preferred-height;
+                viewport-width: self.width;
 
-            Input {
-                placeholder: "chatter://link?uuid=…";
-                text <=> root.link-url;
-                disabled: root.approving;
-                edited(t) => { root.paste-changed(t); }
-            }
+                link-fields := VerticalLayout {
+                    width: parent.width;
+                    spacing: Spacing.md;
 
-            // Preview panel — appears once parse succeeds
-            if root.preview-ready: Rectangle {
-                background: Colors.surface-hover;
-                border-radius: Spacing.radius-sm;
-                VerticalLayout {
-                    padding: Spacing.sm;
-                    spacing: Spacing.xs;
                     Text {
-                        text: "About to link:";
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                    }
-                    Text {
-                        text: root.preview-device-name != "" ? root.preview-device-name : "Unnamed device";
-                        color: Colors.text-primary;
-                        font-size: Typography.base;
-                        font-weight: Typography.medium;
-                    }
-                    if root.preview-server-url != "": Text {
-                        text: "Server: " + root.preview-server-url;
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        wrap: word-wrap;
-                    }
-
-                    // Verification-code gate. The user MUST eyeball this
-                    // against the code displayed on the new device before
-                    // approving — it confirms there's no MITM swapping
-                    // ephemeral keys.
-                    Rectangle {
-                        height: 1px;
-                        background: Colors.border;
-                    }
-                    Text {
-                        text: "Verify this code matches the new device:";
+                        width: parent.width;
+                        text: root.can-scan
+                            ? "Scan the QR code on your new device, or paste its link. You'll be asked to confirm with your password or PIN to authorize."
+                            : "Paste the link from your new device. You'll be asked to confirm with your password or PIN to authorize.";
                         color: Colors.text-secondary;
-                        font-size: Typography.xs;
+                        font-size: Typography.sm;
                         wrap: word-wrap;
                     }
-                    Text {
-                        text: root.verification-code;
-                        color: Colors.text-primary;
-                        font-size: Typography.lg;
-                        font-weight: Typography.bold;
+
+                    if root.can-scan: Button {
+                        text: "Scan QR code";
+                        variant: "secondary";
+                        disabled: root.approving;
+                        clicked => { root.scan(); }
                     }
+
+                    Input {
+                        placeholder: "chatter://link?uuid=…";
+                        text <=> root.link-url;
+                        disabled: root.approving;
+                        edited(t) => { root.paste-changed(t); }
+                    }
+
+                    // Preview panel — appears once parse succeeds
+                    if root.preview-ready: Rectangle {
+                        background: Colors.surface-hover;
+                        border-radius: Spacing.radius-sm;
+                        transform-origin: { x: self.width / 2, y: 0px };
+                        transform-scale-y: root.preview-entered ? 100% : 88%;
+                        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+                        VerticalLayout {
+                            padding: Spacing.sm;
+                            spacing: Spacing.xs;
+                            Text {
+                                text: "About to link:";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                            }
+                            Text {
+                                text: root.preview-device-name != "" ? root.preview-device-name : "Unnamed device";
+                                color: Colors.text-primary;
+                                font-size: Typography.base;
+                                font-weight: Typography.medium;
+                            }
+                            if root.preview-server-url != "": Text {
+                                width: max(0px, parent.width - parent.padding * 2);
+                                text: "Server: " + root.preview-server-url;
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                wrap: word-wrap;
+                            }
+
+                            // Verification-code gate. The user MUST eyeball this
+                            // against the code displayed on the new device before
+                            // approving — it confirms there's no MITM swapping
+                            // ephemeral keys.
+                            Rectangle {
+                                height: 1px;
+                                background: Colors.divider;
+                            }
+                            Text {
+                                width: max(0px, parent.width - parent.padding * 2);
+                                text: "Verify this code matches the new device:";
+                                color: Colors.text-secondary;
+                                font-size: Typography.xs;
+                                wrap: word-wrap;
+                            }
+                            Text {
+                                text: root.verification-code;
+                                color: Colors.text-primary;
+                                font-size: Typography.lg;
+                                font-weight: Typography.bold;
+                            }
+                        }
+                    }
+
+                    Input {
+                        placeholder: "Password or PIN";
+                        password: true;
+                        text <=> root.password;
+                        disabled: root.approving || !root.preview-ready;
+                        accepted(value) => {
+                            if !root.approving && root.preview-ready && value != "" {
+                                root.approve(value);
+                            }
+                        }
+                    }
+
+                    if status != "": Text {
+                        width: parent.width;
+                        text: root.status;
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        wrap: word-wrap;
+                    }
+
+                    if error != "": Text {
+                        width: parent.width;
+                        text: root.error;
+                        color: Colors.error;
+                        font-size: Typography.sm;
+                        wrap: word-wrap;
+                    }
+
                 }
-            }
-
-            Input {
-                placeholder: "Password or PIN";
-                password: true;
-                text <=> root.password;
-                disabled: root.approving || !root.preview-ready;
-            }
-
-            if status != "": Text {
-                text: root.status;
-                color: Colors.text-secondary;
-                font-size: Typography.sm;
-                wrap: word-wrap;
-            }
-
-            if error != "": Text {
-                text: root.error;
-                color: Colors.error;
-                font-size: Typography.sm;
-                wrap: word-wrap;
             }
 
             HorizontalLayout {

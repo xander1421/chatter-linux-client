@@ -41,7 +41,7 @@
 //! Encryption here is bitchat's variant, not the published NIP-44 v2 — see the
 //! crate docs. These DMs interoperate with bitchat and with nothing else.
 
-use rand_core::CryptoRngCore;
+use rand_core::CryptoRng;
 
 use crate::crypto::{decrypt, encrypt};
 use crate::error::NostrError;
@@ -74,7 +74,7 @@ pub fn gift_wrap(
     recipient_pubkey_hex: &str,
     sender: &NostrIdentity,
     created_at: i64,
-    rng: &mut impl CryptoRngCore,
+    rng: &mut impl CryptoRng,
 ) -> Result<NostrEvent, NostrError> {
     let rumor = make_rumor(sender.public_key_hex(), rumor_content, created_at);
     let seal = make_seal(&rumor, recipient_pubkey_hex, sender, created_at, &mut *rng)?;
@@ -147,7 +147,7 @@ fn make_rumor(sender_pubkey_hex: &str, content: &str, created_at: i64) -> NostrE
 }
 
 /// The kind-13 seal: the encrypted rumor, signed by the sender's real key.
-fn make_seal<R: CryptoRngCore>(
+fn make_seal<R: CryptoRng>(
     rumor: &NostrEvent,
     recipient_pubkey_hex: &str,
     sender: &NostrIdentity,
@@ -155,7 +155,12 @@ fn make_seal<R: CryptoRngCore>(
     rng: &mut R,
 ) -> Result<NostrEvent, NostrError> {
     let rumor_json = to_json(rumor)?;
-    let ciphertext = encrypt(&rumor_json, recipient_pubkey_hex, sender.secret(), &mut *rng)?;
+    let ciphertext = encrypt(
+        &rumor_json,
+        recipient_pubkey_hex,
+        sender.secret(),
+        &mut *rng,
+    )?;
 
     let seal = NostrEvent::unsigned(
         sender.public_key_hex().to_string(),
@@ -168,7 +173,7 @@ fn make_seal<R: CryptoRngCore>(
 }
 
 /// The kind-1059 gift wrap: the encrypted seal, signed by a fresh throwaway key.
-fn make_wrap<R: CryptoRngCore>(
+fn make_wrap<R: CryptoRng>(
     seal: &NostrEvent,
     recipient_pubkey_hex: &str,
     created_at: i64,
@@ -176,7 +181,12 @@ fn make_wrap<R: CryptoRngCore>(
 ) -> Result<NostrEvent, NostrError> {
     let seal_json = to_json(seal)?;
     let throwaway = throwaway_identity(&mut *rng)?;
-    let ciphertext = encrypt(&seal_json, recipient_pubkey_hex, throwaway.secret(), &mut *rng)?;
+    let ciphertext = encrypt(
+        &seal_json,
+        recipient_pubkey_hex,
+        throwaway.secret(),
+        &mut *rng,
+    )?;
 
     let wrap = NostrEvent::unsigned(
         throwaway.public_key_hex().to_string(),
@@ -189,9 +199,7 @@ fn make_wrap<R: CryptoRngCore>(
 }
 
 /// A single-use key for one wrap. Discarded the moment the wrap is signed.
-fn throwaway_identity<R: CryptoRngCore>(
-    rng: &mut R,
-) -> Result<NostrIdentity, NostrError> {
+fn throwaway_identity<R: CryptoRng>(rng: &mut R) -> Result<NostrIdentity, NostrError> {
     for _ in 0..MAX_KEY_ATTEMPTS {
         let mut secret = [0u8; 32];
         rng.fill_bytes(&mut secret);
@@ -203,7 +211,7 @@ fn throwaway_identity<R: CryptoRngCore>(
 }
 
 /// `created_at` jittered by ±[`TIMESTAMP_JITTER_SECS`].
-fn randomized_timestamp<R: CryptoRngCore>(created_at: i64, rng: &mut R) -> i64 {
+fn randomized_timestamp<R: CryptoRng>(created_at: i64, rng: &mut R) -> i64 {
     let span = (TIMESTAMP_JITTER_SECS as u64) * 2 + 1;
     let offset = (rng.next_u64() % span) as i64 - TIMESTAMP_JITTER_SECS;
     created_at.saturating_add(offset)
@@ -213,7 +221,7 @@ fn randomized_timestamp<R: CryptoRngCore>(created_at: i64, rng: &mut R) -> i64 {
 mod tests {
     use super::*;
     use crate::identity::derive_for_geohash;
-    use rand_core::RngCore;
+    use rand_core::Rng;
 
     const NOW: i64 = 1_700_000_000;
 
@@ -222,35 +230,32 @@ mod tests {
     /// Only ever used in tests — production callers pass a real CSPRNG.
     struct TestRng(u64);
 
-    impl RngCore for TestRng {
-        fn next_u32(&mut self) -> u32 {
-            (self.next_u64() >> 32) as u32
+    impl rand_core::TryRng for TestRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({ (self.next_u64() >> 32) as u32 })
         }
-
-        fn next_u64(&mut self) -> u64 {
-            // SplitMix64.
-            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = self.0;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^ (z >> 31)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                // SplitMix64.
+                self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = self.0;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                z ^ (z >> 31)
+            })
         }
-
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
             for chunk in dest.chunks_mut(8) {
                 let bytes = self.next_u64().to_le_bytes();
                 let n = chunk.len();
                 chunk.copy_from_slice(&bytes[..n]);
             }
-        }
-
-        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
-            self.fill_bytes(dest);
             Ok(())
         }
     }
 
-    impl rand_core::CryptoRng for TestRng {}
+    impl rand_core::TryCryptoRng for TestRng {}
 
     fn rng(seed: u64) -> TestRng {
         TestRng(seed)
@@ -293,8 +298,8 @@ mod tests {
         let (alice, bob) = (alice(), bob());
         let long = "a".repeat(4096);
         for message in ["", "héllo 🌍 / \\ \" \n\t", long.as_str()] {
-            let wrap = gift_wrap(message, bob.public_key_hex(), &alice, NOW, &mut rng(2))
-                .expect("wraps");
+            let wrap =
+                gift_wrap(message, bob.public_key_hex(), &alice, NOW, &mut rng(2)).expect("wraps");
             let (content, _, _) = unwrap_gift(&wrap, bob.secret()).expect("unwraps");
             assert_eq!(content, message);
         }
@@ -303,11 +308,13 @@ mod tests {
     #[test]
     fn the_wrap_is_kind_1059_signed_and_tagged_to_the_recipient() {
         let (alice, bob) = (alice(), bob());
-        let wrap =
-            gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(3)).expect("wraps");
+        let wrap = gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(3)).expect("wraps");
 
         assert_eq!(wrap.kind, 1059);
-        assert_eq!(wrap.tags, vec![vec!["p".to_string(), bob.public_key_hex().to_string()]]);
+        assert_eq!(
+            wrap.tags,
+            vec![vec!["p".to_string(), bob.public_key_hex().to_string()]]
+        );
         assert!(wrap.sig.is_some());
         assert!(verify_event(&wrap));
     }
@@ -315,8 +322,7 @@ mod tests {
     #[test]
     fn the_wrap_pubkey_is_a_throwaway_belonging_to_neither_party() {
         let (alice, bob) = (alice(), bob());
-        let wrap =
-            gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(4)).expect("wraps");
+        let wrap = gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(4)).expect("wraps");
 
         assert_ne!(wrap.pubkey, alice.public_key_hex());
         assert_ne!(wrap.pubkey, bob.public_key_hex());
@@ -325,8 +331,7 @@ mod tests {
     #[test]
     fn every_wrap_uses_a_fresh_throwaway_key() {
         let (alice, bob) = (alice(), bob());
-        let first =
-            gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(5)).expect("wraps");
+        let first = gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(5)).expect("wraps");
         let second =
             gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(6)).expect("wraps");
         assert_ne!(
@@ -358,8 +363,8 @@ mod tests {
         let mut saw_a_different_timestamp = false;
 
         for seed in 0..32u64 {
-            let wrap = gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(seed))
-                .expect("wraps");
+            let wrap =
+                gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(seed)).expect("wraps");
             assert!(
                 (wrap.created_at - NOW).abs() <= TIMESTAMP_JITTER_SECS,
                 "jitter escaped the window: {}",
@@ -385,8 +390,8 @@ mod tests {
         assert_eq!(rumor.created_at, NOW);
         assert!(rumor.sig.is_none(), "the rumor must never be signed");
 
-        let seal = make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(8))
-            .expect("seals");
+        let seal =
+            make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(8)).expect("seals");
         assert!(seal.sig.is_some(), "the seal must be signed by the sender");
         assert_eq!(seal.pubkey, alice.public_key_hex());
     }
@@ -394,8 +399,7 @@ mod tests {
     #[test]
     fn the_recipient_is_the_only_one_who_can_unwrap() {
         let (alice, bob, mallory) = (alice(), bob(), mallory());
-        let wrap =
-            gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(9)).expect("wraps");
+        let wrap = gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(9)).expect("wraps");
 
         assert!(unwrap_gift(&wrap, bob.secret()).is_ok());
         assert!(unwrap_gift(&wrap, mallory.secret()).is_err());
@@ -433,8 +437,8 @@ mod tests {
         // The flip side: if Mallory does not lie about the rumor author, the DM
         // is valid — and attributed to her.
         let (bob, mallory) = (bob(), mallory());
-        let wrap = gift_wrap("hi", bob.public_key_hex(), &mallory, NOW, &mut rng(12))
-            .expect("wraps");
+        let wrap =
+            gift_wrap("hi", bob.public_key_hex(), &mallory, NOW, &mut rng(12)).expect("wraps");
         let (_, sender, _) = unwrap_gift(&wrap, bob.secret()).expect("unwraps");
         assert_eq!(sender, mallory.public_key_hex());
         assert_ne!(sender, alice().public_key_hex());
@@ -444,8 +448,8 @@ mod tests {
     fn a_seal_with_a_broken_signature_is_rejected() {
         let (alice, bob) = (alice(), bob());
         let rumor = make_rumor(alice.public_key_hex(), "hi", NOW);
-        let mut seal = make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(13))
-            .expect("seals");
+        let mut seal =
+            make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(13)).expect("seals");
         seal.sig = Some("0".repeat(128));
 
         let wrap = make_wrap(&seal, bob.public_key_hex(), NOW, &mut rng(14)).expect("wraps");
@@ -456,8 +460,8 @@ mod tests {
     fn an_unsigned_seal_is_rejected() {
         let (alice, bob) = (alice(), bob());
         let rumor = make_rumor(alice.public_key_hex(), "hi", NOW);
-        let mut seal = make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(15))
-            .expect("seals");
+        let mut seal =
+            make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(15)).expect("seals");
         seal.sig = None;
 
         let wrap = make_wrap(&seal, bob.public_key_hex(), NOW, &mut rng(16)).expect("wraps");
@@ -470,8 +474,8 @@ mod tests {
         // signing must not survive verification.
         let (alice, bob) = (alice(), bob());
         let rumor = make_rumor(alice.public_key_hex(), "hi", NOW);
-        let mut seal = make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(17))
-            .expect("seals");
+        let mut seal =
+            make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(17)).expect("seals");
         seal.created_at += 1;
 
         let wrap = make_wrap(&seal, bob.public_key_hex(), NOW, &mut rng(18)).expect("wraps");
@@ -522,8 +526,8 @@ mod tests {
     fn a_round_tripped_event_survives_json() {
         let (alice, bob) = (alice(), bob());
         let rumor = make_rumor(alice.public_key_hex(), "hi / there \"quoted\"", NOW);
-        let seal = make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(23))
-            .expect("seals");
+        let seal =
+            make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(23)).expect("seals");
         let parsed = from_json(&to_json(&seal).expect("serializes")).expect("parses");
         assert_eq!(parsed, seal);
     }

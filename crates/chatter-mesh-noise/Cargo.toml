@@ -6,7 +6,7 @@ authors = ["xander1421"]
 description = "Noise XX sessions, one-way seals, and Ed25519 signing for the bitchat mesh"
 license = "GPL-3.0"
 repository = "https://github.com/xander1421/chatter"
-rust-version = "1.85"
+rust-version = "1.99"
 
 [lib]
 name = "chatter_mesh_noise"
@@ -17,6 +17,9 @@ path = "src/lib.rs"
 # drive the canonical specification vectors. Never enable in a shipped build: a
 # predictable ephemeral is a handshake an observer can decrypt.
 vectors = []
+# Exposes `NoiseSession::set_messages_sent_for_testing`, so a caller's tests can
+# reach the rekey threshold without 900 million encryptions.
+testing = []
 
 [dependencies]
 chatter-mesh = { path = "../chatter-mesh" }
@@ -47,10 +50,10 @@ snow = { version = "0.10", default-features = false, features = [
     "use-getrandom",
 ] }
 
-ed25519-dalek = { version = "2", features = ["rand_core"] }
-x25519-dalek = { version = "2", features = ["static_secrets"] }
-sha2 = "0.10"
-rand_core = "0.6"
+ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
+x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
+sha2 = "0.11.0"
+rand_core = "0.10.1"
 thiserror = "2"
 
 [dev-dependencies]
@@ -62,3 +65,5 @@ chatter-mesh-noise = { path = ".", features = ["vectors"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
+# OsRng for the prekey generation test.
+getrandom = { version = "0.4.3", features = ["sys_rng"] }

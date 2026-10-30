@@ -5,12 +5,12 @@
 
 use std::str::FromStr;
 
-use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, AnonDmStatus};
 use crate::domain::UserId;
+use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, AnonDmStatus, RequestState};
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use std::sync::Arc;
 
 /// Anonymous DM data repository.
@@ -34,8 +34,8 @@ impl AnonDmRepository {
     pub fn insert_conversation(&self, dm: &AnonDm) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
-            "INSERT INTO anon_dm_conversations (id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO anon_dm_conversations (id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, peer_device_id, request_state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 dm.id.to_string(),
                 dm.peer_id.to_string(),
@@ -47,8 +47,85 @@ impl AnonDmRepository {
                 dm.peer_avatar.as_deref(),
                 dm.created_at.to_rfc3339(),
                 dm.updated_at.to_rfc3339(),
+                dm.peer_device_id,
+                dm.request as i32,
             ],
         )?;
+        Ok(())
+    }
+
+    /// Keep a peer's previous chat and its messages, but let a new incoming
+    /// request become the only live chat. Both changes must commit together.
+    pub fn insert_incoming_replacing_live(&self, dm: &AnonDm) -> Result<(), StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "UPDATE anon_dm_conversations SET status = ?1, updated_at = ?2
+             WHERE peer_id = ?3 AND status IN (?4, ?5)",
+            params![
+                AnonDmStatus::Superseded.to_i32(),
+                Utc::now().to_rfc3339(),
+                dm.peer_id.to_string(),
+                AnonDmStatus::Active.to_i32(),
+                AnonDmStatus::Pending.to_i32(),
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO anon_dm_conversations (id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, peer_device_id, request_state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                dm.id.to_string(),
+                dm.peer_id.to_string(),
+                dm.initiated_by_us as i32,
+                dm.status.to_i32(),
+                dm.peer_mailbox_pk.as_ref().map(|k| k.as_slice()),
+                dm.peer_profile_key.as_ref().map(|k| k.as_slice()),
+                dm.peer_display_name.as_deref(),
+                dm.peer_avatar.as_deref(),
+                dm.created_at.to_rfc3339(),
+                dm.updated_at.to_rfc3339(),
+                dm.peer_device_id,
+                dm.request as i32,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Bind the conversation to `device_id` of the peer. First pin wins: a
+    /// conversation already bound to another device is refused — a secret
+    /// chat never moves to another of the peer's devices. Not part of
+    /// `update_conversation`, so a stale snapshot can never unpin or re-pin it.
+    pub fn pin_peer_device(&self, id: &AnonDmId, device_id: u32) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE anon_dm_conversations SET peer_device_id = ?1
+             WHERE id = ?2 AND (peer_device_id IS NULL OR peer_device_id = ?1)",
+            params![device_id, id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(StorageError::InvalidData(format!(
+                "AnonDm {id} is missing or bound to another peer device"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Record how far our request for this conversation got
+    /// ([`RequestState`]).
+    pub fn set_request_state(
+        &self,
+        id: &AnonDmId,
+        state: RequestState,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE anon_dm_conversations SET request_state = ?2 WHERE id = ?1",
+            params![id.to_string(), state as i32],
+        )?;
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!("AnonDm {id}")));
+        }
         Ok(())
     }
 
@@ -58,7 +135,7 @@ impl AnonDmRepository {
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_message_at, \
-             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
              FROM anon_dm_conversations WHERE id = ?1",
         )?;
 
@@ -71,23 +148,57 @@ impl AnonDmRepository {
         }
     }
 
-    /// Get an anonymous DM conversation by peer ID.
-    pub fn get_conversation_by_peer(&self, peer_id: &UserId) -> Result<Option<AnonDm>, StorageError> {
+    /// The live secret chat with `peer_id`: Active first, then Blocked, then
+    /// a pending request, preferring message history within each status. Declined
+    /// and Superseded chats are never live. One peer can hold several rows
+    /// (a declined request next to a new one, a chat per peer device, requests
+    /// crossing), so this is a
+    /// deterministic pick for peer-level questions ("is there a chat with
+    /// them?"). Anything acting on one specific chat goes by its id.
+    pub fn get_live_conversation_by_peer(
+        &self,
+        peer_id: &UserId,
+    ) -> Result<Option<AnonDm>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_message_at, \
-             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count \
-             FROM anon_dm_conversations WHERE peer_id = ?1",
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
+             FROM anon_dm_conversations WHERE peer_id = ?1 AND status IN (?2, ?3, ?4) \
+             ORDER BY CASE status WHEN ?2 THEN 0 WHEN ?3 THEN 1 ELSE 2 END, last_message_at DESC NULLS LAST, created_at DESC, id DESC LIMIT 1",
         )?;
+        stmt.query_row(
+            params![
+                peer_id.to_string(),
+                AnonDmStatus::Active.to_i32(),
+                AnonDmStatus::Blocked.to_i32(),
+                AnonDmStatus::Pending.to_i32(),
+            ],
+            row_to_conversation,
+        )
+        .optional()
+        .map_err(StorageError::Database)
+    }
 
-        let result = stmt.query_row(params![peer_id.to_string()], row_to_conversation);
-
-        match result {
-            Ok(dm) => Ok(Some(dm)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
-        }
+    /// Ids of the Declined chats with `peer_id`.
+    pub fn declined_conversation_ids_by_peer(
+        &self,
+        peer_id: &UserId,
+    ) -> Result<Vec<AnonDmId>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn
+            .prepare("SELECT id FROM anon_dm_conversations WHERE peer_id = ?1 AND status = ?2")?;
+        let ids = stmt
+            .query_map(
+                params![peer_id.to_string(), AnonDmStatus::Declined.to_i32()],
+                |row| {
+                    row.get::<_, String>(0)?
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
     }
 
     /// Update an anonymous DM conversation.
@@ -112,38 +223,15 @@ impl AnonDmRepository {
         Ok(())
     }
 
-    /// Update peer's display name.
-    pub fn update_peer_display_name(
-        &self,
-        id: &AnonDmId,
-        display_name: &str,
-    ) -> Result<(), StorageError> {
+    /// Set the peer's avatar alone.
+    pub fn set_peer_avatar(&self, id: &AnonDmId, avatar: &[u8]) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        let now = Utc::now();
-        let rows = conn.execute(
-            "UPDATE anon_dm_conversations SET peer_display_name = ?1, updated_at = ?2 WHERE id = ?3",
-            params![display_name, now.to_rfc3339(), id.to_string()],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!("AnonDm {}", id)));
-        }
-        Ok(())
-    }
-
-    /// Update peer's avatar.
-    pub fn update_peer_avatar(
-        &self,
-        id: &AnonDmId,
-        avatar: &[u8],
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        let now = Utc::now();
         let rows = conn.execute(
             "UPDATE anon_dm_conversations SET peer_avatar = ?1, updated_at = ?2 WHERE id = ?3",
-            params![avatar, now.to_rfc3339(), id.to_string()],
+            params![avatar, Utc::now().to_rfc3339(), id.to_string()],
         )?;
         if rows == 0 {
-            return Err(StorageError::NotFound(format!("AnonDm {}", id)));
+            return Err(StorageError::NotFound(format!("AnonDm {id}")));
         }
         Ok(())
     }
@@ -155,42 +243,6 @@ impl AnonDmRepository {
         let rows = conn.execute(
             "UPDATE anon_dm_conversations SET status = ?1, updated_at = ?2 WHERE id = ?3",
             params![status.to_i32(), now.to_rfc3339(), id.to_string()],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!("AnonDm {}", id)));
-        }
-        Ok(())
-    }
-
-    /// Update peer's mailbox public key.
-    pub fn update_peer_mailbox(
-        &self,
-        id: &AnonDmId,
-        mailbox_pk: &[u8; 32],
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        let now = Utc::now();
-        let rows = conn.execute(
-            "UPDATE anon_dm_conversations SET peer_mailbox_pk = ?1, updated_at = ?2 WHERE id = ?3",
-            params![mailbox_pk.as_slice(), now.to_rfc3339(), id.to_string()],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!("AnonDm {}", id)));
-        }
-        Ok(())
-    }
-
-    /// Update peer's profile key.
-    pub fn update_peer_profile_key(
-        &self,
-        id: &AnonDmId,
-        profile_key: &[u8; 32],
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        let now = Utc::now();
-        let rows = conn.execute(
-            "UPDATE anon_dm_conversations SET peer_profile_key = ?1, updated_at = ?2 WHERE id = ?3",
-            params![profile_key.as_slice(), now.to_rfc3339(), id.to_string()],
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("AnonDm {}", id)));
@@ -217,18 +269,14 @@ impl AnonDmRepository {
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_msg_at, \
-             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
              FROM anon_dm_conversations ORDER BY last_msg_at DESC NULLS LAST, updated_at DESC",
         )?;
 
         let mut rows = stmt.query([])?;
-        let mut dms = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            dms.push(row_to_conversation(row)?);
-        }
-
-        Ok(dms)
+        super::repo_utils::collect_decoded_rows(&mut rows, "anonymous_dm", |row| {
+            row_to_conversation(row).map_err(StorageError::Database)
+        })
     }
 
     /// List active conversations only.
@@ -237,18 +285,14 @@ impl AnonDmRepository {
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_msg_at, \
-             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
              FROM anon_dm_conversations WHERE status = ?1 ORDER BY last_msg_at DESC NULLS LAST, updated_at DESC",
         )?;
 
         let mut rows = stmt.query(params![AnonDmStatus::Active.to_i32()])?;
-        let mut dms = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            dms.push(row_to_conversation(row)?);
-        }
-
-        Ok(dms)
+        super::repo_utils::collect_decoded_rows(&mut rows, "anonymous_dm", |row| {
+            row_to_conversation(row).map_err(StorageError::Database)
+        })
     }
 
     /// List pending message requests (incoming only).
@@ -265,18 +309,14 @@ impl AnonDmRepository {
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_msg_at, \
-             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count \
-             FROM anon_dm_conversations WHERE status = ?1 AND initiated_by_us = 0 ORDER BY created_at DESC",
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
+             FROM anon_dm_conversations WHERE status = ?1 AND initiated_by_us = 0 ORDER BY created_at ASC, id ASC",
         )?;
 
         let mut rows = stmt.query(params![AnonDmStatus::Pending.to_i32()])?;
-        let mut dms = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            dms.push(row_to_conversation(row)?);
-        }
-
-        Ok(dms)
+        super::repo_utils::collect_decoded_rows(&mut rows, "anonymous_dm", |row| {
+            row_to_conversation(row).map_err(StorageError::Database)
+        })
     }
 
     /// List outgoing pending requests (initiated by the local user, awaiting
@@ -290,18 +330,14 @@ impl AnonDmRepository {
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_msg_at, \
-             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count \
-             FROM anon_dm_conversations WHERE status = ?1 AND initiated_by_us = 1 ORDER BY created_at DESC",
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
+             FROM anon_dm_conversations WHERE status = ?1 AND initiated_by_us = 1 ORDER BY created_at ASC, id ASC",
         )?;
 
         let mut rows = stmt.query(params![AnonDmStatus::Pending.to_i32()])?;
-        let mut dms = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            dms.push(row_to_conversation(row)?);
-        }
-
-        Ok(dms)
+        super::repo_utils::collect_decoded_rows(&mut rows, "anonymous_dm", |row| {
+            row_to_conversation(row).map_err(StorageError::Database)
+        })
     }
 
     /// Get total unread count across all conversations.
@@ -318,12 +354,6 @@ impl AnonDmRepository {
             |row| row.get(0),
         )?;
         Ok(count as u32)
-    }
-
-    /// Increment unread count for a conversation.
-    pub fn increment_unread(&self, _id: &AnonDmId) -> Result<(), StorageError> {
-        // No-op: unread count is computed dynamically from the messages table
-        Ok(())
     }
 
     // ========================================================================
@@ -350,7 +380,10 @@ impl AnonDmRepository {
     }
 
     /// Get mailbox for a conversation.
-    pub fn get_mailbox(&self, conversation_id: &AnonDmId) -> Result<Option<AnonDmMailbox>, StorageError> {
+    pub fn get_mailbox(
+        &self,
+        conversation_id: &AnonDmId,
+    ) -> Result<Option<AnonDmMailbox>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, conversation_id, public_key, private_key, token_id, created_at, expires_at
@@ -376,25 +409,6 @@ impl AnonDmRepository {
         Ok(())
     }
 
-    /// Get expired mailboxes that need renewal.
-    pub fn get_expired_mailboxes(&self) -> Result<Vec<AnonDmMailbox>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let now = Utc::now().to_rfc3339();
-        let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, public_key, private_key, token_id, created_at, expires_at
-             FROM anon_dm_mailboxes WHERE expires_at < ?1",
-        )?;
-
-        let mut rows = stmt.query(params![now])?;
-        let mut mailboxes = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            mailboxes.push(row_to_mailbox(row)?);
-        }
-
-        Ok(mailboxes)
-    }
-
     /// Get all active (non-expired) mailboxes for polling.
     ///
     /// Returns mailboxes for:
@@ -412,20 +426,18 @@ impl AnonDmRepository {
         )?;
 
         let mut rows = stmt.query(params![now])?;
-        let mut mailboxes = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            mailboxes.push(row_to_mailbox(row)?);
-        }
-
-        Ok(mailboxes)
+        super::repo_utils::collect_decoded_rows(&mut rows, "anonymous_dm_mailbox", |row| {
+            row_to_mailbox(row).map_err(StorageError::Database)
+        })
     }
 
     /// Get mailbox keys for all active conversations (for polling).
     ///
     /// Returns (conversation_id, public_key, private_key) tuples.
     #[allow(clippy::type_complexity)]
-    pub fn get_active_mailbox_keys(&self) -> Result<Vec<(AnonDmId, [u8; 32], [u8; 64])>, StorageError> {
+    pub fn get_active_mailbox_keys(
+        &self,
+    ) -> Result<Vec<(AnonDmId, [u8; 32], [u8; 64])>, StorageError> {
         let mailboxes = self.get_active_mailboxes()?;
         Ok(mailboxes
             .into_iter()
@@ -448,12 +460,7 @@ impl AnonDmRepository {
         conn.execute(
             "INSERT OR REPLACE INTO anon_dm_blocked_users (id, user_id, blocked_at, reason)
              VALUES (?1, ?2, ?3, ?4)",
-            params![
-                id,
-                user_id.as_bytes().as_slice(),
-                now.to_rfc3339(),
-                reason,
-            ],
+            params![id, user_id.as_bytes().as_slice(), now.to_rfc3339(), reason,],
         )?;
         Ok(())
     }
@@ -477,6 +484,38 @@ impl AnonDmRepository {
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    /// Remember a blocked peer's name on their block row, so it outlives the
+    /// conversation row that normally holds it. No-op for an unblocked peer.
+    pub fn set_blocked_display_name(
+        &self,
+        user_id: &UserId,
+        name: &str,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "UPDATE anon_dm_blocked_users SET display_name = ?2 WHERE user_id = ?1",
+            params![user_id.as_bytes().as_slice(), name],
+        )?;
+        Ok(())
+    }
+
+    /// The name stored on a blocked peer's block row, if any.
+    pub fn get_blocked_display_name(
+        &self,
+        user_id: &UserId,
+    ) -> Result<Option<String>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let name = conn
+            .query_row(
+                "SELECT display_name FROM anon_dm_blocked_users WHERE user_id = ?1",
+                params![user_id.as_bytes().as_slice()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(name)
     }
 
     /// Get all globally blocked users.
@@ -515,7 +554,12 @@ impl AnonDmRepository {
         conversation_id: &AnonDmId,
         window_duration: chrono::Duration,
     ) -> Result<u32, StorageError> {
-        super::repo_utils::increment_rate_limit(&self.db, "dm", conversation_id.to_string().as_bytes(), window_duration)
+        super::repo_utils::increment_rate_limit(
+            &self.db,
+            "dm",
+            conversation_id.to_string().as_bytes(),
+            window_duration,
+        )
     }
 }
 
@@ -536,6 +580,8 @@ fn row_to_conversation(row: &rusqlite::Row) -> Result<AnonDm, rusqlite::Error> {
     let updated_at_str: String = row.get(9)?;
     let last_message_at_str: Option<String> = row.get(10)?;
     let unread_count: u32 = row.get(11)?;
+    let peer_device_id: Option<u32> = row.get(12)?;
+    let request_state: i32 = row.get(13)?;
 
     let peer_mailbox_pk_arr = vec_to_array_32(peer_mailbox_pk);
     let peer_profile_key_arr = vec_to_array_32(peer_profile_key);
@@ -559,6 +605,8 @@ fn row_to_conversation(row: &rusqlite::Row) -> Result<AnonDm, rusqlite::Error> {
             .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
             .map(|dt| dt.with_timezone(&Utc)),
         unread_count,
+        peer_device_id,
+        request: RequestState::from_i32(request_state),
     })
 }
 
@@ -576,7 +624,9 @@ fn row_to_mailbox(row: &rusqlite::Row) -> Result<AnonDmMailbox, rusqlite::Error>
 
     Ok(AnonDmMailbox {
         id,
-        conversation_id: conversation_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
+        conversation_id: conversation_id_str
+            .parse()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
         public_key,
         private_key,
         token_id,
@@ -590,3 +640,42 @@ fn row_to_mailbox(row: &rusqlite::Row) -> Result<AnonDmMailbox, rusqlite::Error>
 }
 
 use super::repo_utils::{require_array_32, require_array_64, vec_to_array_32};
+
+#[cfg(test)]
+mod corrupt_mailbox_tests {
+    use super::*;
+    #[test]
+    fn corrupt_mailbox_key_does_not_hide_other_polling_mailboxes() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("mailboxes.db"), "fixture").unwrap());
+        db.run_migrations().unwrap();
+        let repo = AnonDmRepository::new(db.clone());
+        let mut conversations = Vec::new();
+        for id in ["good", "bad"] {
+            let conversation = AnonDm::new_initiated(UserId::new());
+            repo.insert_conversation(&conversation).unwrap();
+            repo.insert_mailbox(&AnonDmMailbox {
+                id: id.into(),
+                conversation_id: conversation.id,
+                public_key: [1; 32],
+                private_key: [2; 64],
+                token_id: "fixture".into(),
+                created_at: Utc::now(),
+                expires_at: Utc::now() + chrono::Duration::days(1),
+            })
+            .unwrap();
+            conversations.push(conversation.id);
+        }
+        db.connection()
+            .unwrap()
+            .execute(
+                "UPDATE anon_dm_mailboxes SET private_key=X'00' WHERE id='bad'",
+                [],
+            )
+            .unwrap();
+        let mailboxes = repo.get_active_mailboxes().unwrap();
+        assert_eq!(mailboxes.len(), 1);
+        assert_eq!(mailboxes[0].id, "good");
+        assert!(repo.get_mailbox(&conversations[1]).is_err());
+    }
+}

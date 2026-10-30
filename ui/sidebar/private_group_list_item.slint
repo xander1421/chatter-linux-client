@@ -3,30 +3,47 @@
 // Displays a single private group in the sidebar list.
 // Neo states: flat default, highlight hover, inset active with purple glow.
 
+import { Avatar } from "../components/avatar.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { HoldArea } from "../components/hold_area.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
-import { Icons } from "../theme/icons.slint";
 import { TooltipArea } from "../components/tooltip.slint";
+import { Icons } from "../theme/icons.slint";
 
 export component PrivateGroupListItem inherits Rectangle {
+    in property <image> avatar-source;
     in property <string> group-id;
     in property <string> name;
     in property <int> member-count: 0;
     in property <int> unread-count: 0;
+    in property <int> mention-count: 0;
     // Core-composed preview of the latest activity: text, "🖼️ Photo",
     // "📎 report.pdf", "📌 …" for a pinned one. Never assembled here.
     in property <string> last-message: "";
+    in property <string> draft-preview: "";
     in property <string> timestamp: "";
     in property <bool> is-typing: false;
+    in property <string> typing-text;
     in property <bool> selected: false;
     in property <bool> collapsed: false;
+    in property <bool> is-muted: false;
 
     callback clicked();
     callback context-menu-requested(/* x */ length, /* y */ length);
+    callback swipe-down(length, length);
+    callback swipe-moved(length, length);
+    callback swipe-ended(bool);
 
     // Typing animation (0.0 to 1.0 cycling)
+    // The dots fade through their background's alpha, not `opacity`: Slint
+    // wraps an element with `opacity` in an Opacity item that is rendered even
+    // when clipped away, which read this animated value, and so kept the
+    // animation (and a frame every vsync) running for a row scrolled out of
+    // the sidebar. A background is read only when the dot is drawn, so the
+    // animation ticks only while a dot is on screen.
     property <float> typing-animation-progress: 0.0;
 
     // Animation states
@@ -35,8 +52,9 @@ export component PrivateGroupListItem inherits Rectangle {
             typing-animation-progress: 1.0;
             in {
                 animate typing-animation-progress {
-                    duration: 600ms;
-                    iteration-count: -1;
+                    // Reduce animations: the dots hold one static mark.
+                    duration: Appearance.reduce-motion ? 0ms : 600ms / Appearance.animation-speed;
+                    iteration-count: Appearance.reduce-motion ? 1 : -1;
                 }
             }
         }
@@ -70,20 +88,53 @@ export component PrivateGroupListItem inherits Rectangle {
     // below. Expanded takes the shared row height at both densities — see the
     // DM row for why one number, not one per row kind.
     height: root.collapsed ? 48px : (root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop);
-    border-radius: Spacing.radius-sm;
+    border-radius: Spacing.radius-md;
+    clip: true;
 
     // Use purple accent for private groups
     property <color> accent-color: Colors.group-accent;
+
+    // A Flickable cancels the pointer grab when scrolling begins. Release the
+    // visual press as soon as the finger moves past the shared gesture slop.
+    property <bool> press-active: false;
+    property <length> press-x: 0px;
+    property <length> press-y: 0px;
+    function press-down(x: length, y: length) {
+        root.press-x = x;
+        root.press-y = y;
+        root.press-active = true;
+    }
+    function press-moved(x: length, y: length) {
+        if (abs(x - root.press-x) > Spacing.sm || abs(y - root.press-y) > Spacing.sm) {
+            root.press-active = false;
+        }
+    }
+    // The whole row compresses under the finger, then springs back from its
+    // own center. This keeps the avatar, text and badge moving as one surface.
+    transform-scale-x: root.press-active ? 98% : 100%;
+    transform-scale-y: root.press-active ? 96% : 100%;
+    animate transform-scale-x { duration: root.press-active ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+    animate transform-scale-y { duration: root.press-active ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+    animate background { duration: Materials.motion-standard; easing: Materials.glide; }
 
     // Neo 2.0 states: flat → highlight hover → inset selected with purple glow.
     // Collapsed, the state fill belongs to the slot below, not to a
     // full-width plate across the rail.
     background: root.collapsed ? transparent
-              : root.selected ? Colors.neo-inset-bg
-              : touch.has-hover ? Colors.surface-hover
+              : root.selected ? Colors.row-selected
+              : root.press-active ? Colors.surface-control-hover
+              : (!root.mobile-mode && touch.has-hover) ? Colors.row-hover
               : transparent;
-    border-width: !root.collapsed && (root.selected || touch.has-hover) ? 1px : 0px;
-    border-color: root.selected ? accent-color.with-alpha(0.2) : Colors.neo-highlight;
+
+    Rectangle {
+        opacity: root.selected && !root.collapsed ? 1 : 0;
+        animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+        x: 0px;
+        width: 3px;
+        height: parent.height;
+        border-radius: self.width / 2;
+        background: Colors.selected-indicator;
+    }
 
     // Expanded layout
     if !root.collapsed: HorizontalLayout {
@@ -94,20 +145,13 @@ export component PrivateGroupListItem inherits Rectangle {
         // timestamp and badge sit on the right edge like every DM row's do.
         alignment: stretch;
 
-        // Shield icon with purple background
-        Rectangle {
-            width: 32px;
-            height: 32px;
-            border-radius: Spacing.radius-sm;
-            background: accent-color.with-alpha(0.15);
-
-            Image {
-                source: Icons.shield;
-                width: 16px;
-                height: 16px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                colorize: accent-color;
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                size: root.mobile-mode ? Spacing.row-avatar-touch : Spacing.row-avatar-desktop;
+                source: root.avatar-source;
+                name: root.name;
+                anonymous: true;
             }
         }
 
@@ -115,7 +159,7 @@ export component PrivateGroupListItem inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
-            spacing: 2px;
+            spacing: Spacing.xxs;
 
             HorizontalLayout {
                 spacing: Spacing.xs;
@@ -124,6 +168,7 @@ export component PrivateGroupListItem inherits Rectangle {
                     // Same rule as the DM and channel rows: name full-strength
                     // at all times, preview muted below it.
                     text: root.name;
+                    wrap: no-wrap;
                     color: Colors.text-primary;
                     font-size: root.name-size;
                     font-weight: root.selected ? Typography.semibold : 500;
@@ -131,62 +176,64 @@ export component PrivateGroupListItem inherits Rectangle {
                     horizontal-stretch: 1;
                 }
 
-                // Member count badge
-                if root.member-count > 0: Rectangle {
-                    width: member-text.preferred-width + 8px;
-                    height: 16px;
-                    border-radius: 8px;
-                    background: Colors.text-muted.with-alpha(0.2);
-
-                    member-text := Text {
-                        text: root.member-count;
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                if root.is-muted: VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Image {
+                        source: Icons.bell-off;
+                        width: 12px;
+                        height: 12px;
+                        colorize: Colors.text-muted;
+                        accessible-role: text;
+                        accessible-label: "Muted";
                     }
                 }
+
             }
 
             // Typing indicator or last message preview
             if root.is-typing: HorizontalLayout {
-                spacing: 3px;
+                spacing: Spacing.xs;
                 alignment: start;
 
-                Rectangle {
-                    width: 4px;
-                    height: 4px;
-                    border-radius: 2px;
-                    background: accent-color;
-                    opacity: root.dot-opacity(0);
-                }
-                Rectangle {
-                    width: 4px;
-                    height: 4px;
-                    border-radius: 2px;
-                    background: accent-color;
-                    opacity: root.dot-opacity(1);
-                }
-                Rectangle {
-                    width: 4px;
-                    height: 4px;
-                    border-radius: 2px;
-                    background: accent-color;
-                    opacity: root.dot-opacity(2);
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: Spacing.xs;
+                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: accent-color.with-alpha(root.dot-opacity(0)); }
+                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: accent-color.with-alpha(root.dot-opacity(1)); }
+                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: accent-color.with-alpha(root.dot-opacity(2)); }
+                    }
                 }
 
                 Text {
-                    text: "typing";
+                    text: root.typing-text != "" ? root.typing-text : "typing";
                     color: accent-color;
                     font-size: Typography.xs;
+                    min-width: 0px;
+                    overflow: elide;
                 }
             }
 
-            if !root.is-typing && root.last-message != "": Text {
-                text: root.last-message;
-                color: Colors.text-muted;
-                font-size: root.preview-size;
-                overflow: elide;
+            if !root.is-typing && root.last-message != "": Rectangle {
+                horizontal-stretch: 1;
+                height: root.preview-size * 1.4;
+                clip: true;
+                if root.draft-preview != "": HorizontalLayout {
+                    width: parent.width;
+                    spacing: 3px;
+                    Text { text: "Draft:"; color: Colors.danger; font-size: root.preview-size; }
+                    Text { text: root.draft-preview; color: Colors.text-muted; font-size: root.preview-size; overflow: elide; horizontal-stretch: 1; }
+                }
+                if root.draft-preview == "": Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.last-message;
+                    wrap: no-wrap;
+                    color: Colors.text-muted;
+                    font-size: root.preview-size;
+                    overflow: elide;
+                }
             }
         }
 
@@ -194,28 +241,46 @@ export component PrivateGroupListItem inherits Rectangle {
         // timestamp reached this component but was never rendered.
         if root.timestamp != "" || root.unread-count > 0: VerticalLayout {
             alignment: center;
-            spacing: 4px;
+            spacing: Spacing.xs;
             horizontal-stretch: 0;
 
             Text {
                 text: root.timestamp;
+                wrap: no-wrap;
                 color: Colors.text-muted;
                 font-size: Typography.xs2;
                 horizontal-alignment: right;
             }
 
-            if root.unread-count > 0: HorizontalLayout {
+            HorizontalLayout {
+                visible: root.unread-count > 0 || self.opacity > 0;
+                opacity: root.unread-count > 0 ? 1 : 0;
+                transform-scale-x: root.unread-count > 0 ? 100% : 55%;
+                transform-scale-y: root.unread-count > 0 ? 100% : 55%;
+                animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
                 alignment: end;
+                spacing: Spacing.xs;
+
+                if root.mention-count > 0: Text {
+                    text: root.mention-count > 99 ? "@99+" : "@" + root.mention-count;
+                    min-width: self.preferred-width;
+                    color: Colors.primary;
+                    font-size: Typography.xs2;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
 
                 Rectangle {
-                    width: max(18px, unread-text.preferred-width + 8px);
-                    height: 18px;
-                    border-radius: 9px;
-                    background: accent-color;
+                    width: max(self.height, unread-text.preferred-width + 8px);
+                    height: Spacing.badge-md;
+                    border-radius: self.height / 2;
+                    background: root.is-muted ? Colors.text-muted : accent-color;
 
                     unread-text := Text {
                         text: root.unread-count > 99 ? "99+" : root.unread-count;
-                        color: Colors.text-primary;
+                        color: Colors.on-action;
                         font-size: Typography.xs;
                         font-weight: Typography.semibold;
                         horizontal-alignment: center;
@@ -225,18 +290,7 @@ export component PrivateGroupListItem inherits Rectangle {
             }
         }
 
-        // Encryption indicator on the far-right — purple shield marks a
-        // private (anonymous) group. Sits after the unread badge so the
-        // presence of a badge doesn't push it out of sight.
-        VerticalLayout {
-            alignment: center;
-            Image {
-                source: Icons.shield;
-                width: 12px;
-                height: 12px;
-                colorize: accent-color;
-            }
-        }
+
     }
 
     // Collapsed layout — one rail slot, self-contained tooltip. The purple
@@ -266,16 +320,16 @@ export component PrivateGroupListItem inherits Rectangle {
             y: (parent.height - self.height) / 2;
             border-radius: Spacing.radius-lg;
             background: root.selected ? accent-color
-                      : touch.has-hover ? Colors.neo-highlight-strong
+                      : (!root.mobile-mode && touch.has-hover) ? Colors.fill-secondary
                       : Colors.surface-hover;
 
-            Image {
-                source: Icons.shield;
-                width: root.slot-glyph;
-                height: root.slot-glyph;
+            Avatar {
+                size: 40px;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                colorize: root.selected ? Colors.text-primary : accent-color;
+                source: root.avatar-source;
+                name: root.name;
+                anonymous: true;
             }
 
             // Unread badge overlay — ringed in the sidebar surface so it reads
@@ -283,16 +337,16 @@ export component PrivateGroupListItem inherits Rectangle {
             if root.unread-count > 0: Rectangle {
                 x: parent.width - self.width + 4px;
                 y: -4px;
-                width: max(16px, collapsed-unread-text.preferred-width + 10px);
-                height: 16px;
-                border-radius: 8px;
+                width: max(self.height, collapsed-unread-text.preferred-width + 10px);
+                height: Spacing.badge-sm;
+                border-radius: self.height / 2;
                 border-width: 2px;
                 border-color: Colors.surface;
-                background: accent-color;
+                background: root.is-muted ? Colors.text-muted : accent-color;
 
                 collapsed-unread-text := Text {
                     text: root.unread-count > 99 ? "99+" : root.unread-count;
-                    color: Colors.text-primary;
+                    color: Colors.on-action;
                     font-size: Typography.xxs;
                     font-weight: Typography.semibold;
                     horizontal-alignment: center;
@@ -306,9 +360,13 @@ export component PrivateGroupListItem inherits Rectangle {
 
     touch := HoldArea {
         clicked => {
-            // A hold already acted; swallow its release so it is not also a tap.
-            if (!self.hold-fired) { root.clicked(); }
+            // A hold already acted, or the finger swiped the row: swallow the
+            // release so it is not also a tap.
+            if (!self.hold-fired && !self.dragged) { root.clicked(); }
         }
         held => { root.context-menu-requested(self.anchor-x, self.anchor-y); }
+        gesture-down(x, y) => { root.press-down(x, y); root.swipe-down(x, y); }
+        gesture-moved(x, y) => { root.press-moved(x, y); root.swipe-moved(x, y); }
+        gesture-ended(cancelled) => { root.press-active = false; root.swipe-ended(cancelled); }
     }
 }

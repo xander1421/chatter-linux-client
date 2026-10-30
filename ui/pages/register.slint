@@ -1,13 +1,19 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { Materials } from "../theme/materials.slint";
 // Register page component with multi-step onboarding flow
 
 import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
-import { Icons } from "../theme/icons.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
+import { AvatarPicker, AvatarOption } from "../components/avatar_picker.slint";
 import { OfflineMeshNotice } from "../components/offline_mesh_notice.slint";
+import { DismissButton } from "../components/dismiss_button.slint";
+import { ShieldOnboardingToggle } from "../anon_mode/shield_onboarding.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 
 export component RegisterPage inherits Rectangle {
     in-out property <string> display-name: "";
@@ -22,17 +28,37 @@ export component RegisterPage inherits Rectangle {
     in property <string> error: "";
     in property <image> avatar-source;
     in property <bool> has-avatar: false;
-    in property <int> selected-default-idx: -1;
+    in property <int> selected-default-idx: 0;
+    in property <[AvatarOption]> avatar-options: [];
+    in-out property <color> avatar-color: Colors.avatar-teal;
+    property <bool> avatar-menu-open: false;
+    // Touch density for the Shield header control.
+    in property <bool> touch: false;
     
     // Task 1: Username availability
-    in property <string> username-status: "none"; // "none", "checking", "available", "taken"
     
     // Internal navigation state (Task 2)
     // Steps: 1: Profile, 2: Password, 3: PIN, 4: Server/Review
     property <int> current-step: 1;
     property <int> total-steps: 4;
+    changed current-step => { root.clear-error(); flick.viewport-y = 0px; }
 
     property <bool> submitted: false;
+    property <float> arrival: 0;
+    animate arrival { duration: Materials.motion-standard; easing: Materials.glide; }
+    init => { root.arrival = 1; }
+    property <length> error-nudge: 0px;
+    changed error => {
+        if root.error != "" {
+            root.error-nudge = -8px;
+            error-settle.start(); error-settle.restart();
+        }
+    }
+    error-settle := Timer {
+        interval: 16ms;
+        running: false;
+        triggered => { self.running = false; root.error-nudge = 0px; }
+    }
     property <bool> passwords-match: password == confirm-password;
     property <bool> pins-match: pin == confirm-pin;
     
@@ -41,15 +67,20 @@ export component RegisterPage inherits Rectangle {
 
     // PIN strength — computed in chatter-core, set from Rust
     in property <int> pin-strength: 0;
+    property <string> pin-error: root.pin == "" ? "" : root.pin-validation(root.pin);
+    property <int> visible-pin-strength: root.pin-error != "" ? 1 : root.pin-strength;
     
-    property <bool> show-advanced: false;
 
     callback register(string, string, string, string, string);
-    callback check-username(string);
+    pure callback username-validation(string) -> string;
+    pure callback pin-validation(string) -> string;
+    callback clear-error();
+    property <string> username-error: root.username-validation(root.username);
     callback password-changed(string);
     callback pin-changed(string);
     callback select-avatar();
     callback select-default-avatar(int);
+    callback remove-avatar();
     callback go-to-login();
     callback continue-without-account();
 
@@ -62,7 +93,7 @@ export component RegisterPage inherits Rectangle {
     in property <bool> server-unreachable: false;
     in property <bool> account-free-surfaces: false;
 
-    background: Colors.background;
+    background: Materials.ambient;
 
     VerticalLayout {
         // TopAppBar / Header (Task 2)
@@ -76,34 +107,15 @@ export component RegisterPage inherits Rectangle {
                 spacing: Spacing.md;
                 
                 // Back button (shown after step 1)
-                if current-step > 1: Rectangle {
-                    width: 40px;
-                    height: 40px;
-                    y: (parent.height - self.height) / 2;
-                    border-radius: 20px;
-                    background: back-touch.has-hover ? Colors.surface-hover : transparent;
-                    
-                    Image {
-                        source: Icons.arrow-left;
-                        width: 20px;
-                        height: 20px;
-                        colorize: Colors.text-primary;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-                    
-                    back-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            current-step -= 1;
-                        }
-                    }
+                if current-step > 1: DismissButton {
+                    back: true;
+                    clicked => { current-step -= 1; }
                 }
                 
-                if current-step == 1: Rectangle { width: 40px; } // Spacer
+                if current-step == 1: Rectangle { width: Spacing.header-action-box-touch; } // Spacer
                 
                 Text {
-                    text: "Create Account";
+                    text: "Create account";
                     color: Colors.text-primary;
                     font-size: Typography.lg;
                     font-weight: Typography.semibold;
@@ -131,41 +143,62 @@ export component RegisterPage inherits Rectangle {
                     height: 100%;
                     width: parent.width * (current-step / total-steps);
                     background: Colors.primary;
-                    animate width { duration: 250ms; easing: ease-out; }
+                    animate width { duration: Materials.motion-standard; easing: Materials.glide; }
                 }
             }
         }
 
-        Flickable {
+        flick := Flickable {
+            vertical-stretch: 1;
+            // The outer app shrinks for the IME. Keep the card at its preferred
+            // height so the lower fields and Continue become scrollable.
             viewport-height: content.preferred-height;
             interactive: content.preferred-height > self.height;
 
             content := VerticalLayout {
                 padding: Spacing.lg;
-                spacing: 0px;
-
-                Rectangle { height: Spacing.xl; }
+                spacing: Spacing.none;
+                cross-axis-alignment: center;
 
                 Rectangle {
-                    max-width: 400px;
-                    horizontal-stretch: 0;
+                    width: min(480px, flick.width - 2 * Spacing.lg);
                     background: Colors.surface;
                     border-radius: Spacing.radius-lg;
+                    transform-origin: { x: self.width / 2, y: 0px };
+                    transform-scale-x: 96% + root.arrival * 4%;
+                    transform-scale-y: 94% + root.arrival * 6%;
+                    opacity: 0.5 + root.arrival * 0.5;
 
                     VerticalLayout {
                         spacing: Spacing.lg;
                         padding: Spacing.lg;
+
+                        // On every step, so Shield is chosen before anything
+                        // is sent — not discovered on the last page.
+                        ShieldOnboardingToggle {
+                            busy: root.loading;
+                            touch: root.touch;
+                        }
 
                         // Both of these used to live inside step 4, which meant a
                         // registration that failed while the user was on any other
                         // step reported nothing at all — and dev-mode
                         // auto-register submits from step 1. The condition is not
                         // step-specific, so neither is where it is said.
-                        if error != "": Text {
-                            text: root.error;
-                            color: Colors.error;
-                            font-size: Typography.sm;
-                            wrap: word-wrap;
+                        if error != "": Rectangle {
+                            min-height: error-copy.preferred-height + Spacing.sm * 2;
+                            background: Colors.error.with-alpha(0.1);
+                            border-radius: Spacing.radius-sm;
+                            error-copy := Text {
+                                x: Spacing.sm + root.error-nudge;
+                                y: Spacing.sm;
+                                width: parent.width - Spacing.sm * 2;
+                                text: root.error;
+                                color: Colors.error;
+                                font-size: Typography.sm;
+                                wrap: word-wrap;
+                                animate x { duration: Materials.motion-quick; easing: Materials.spring; }
+                            }
                         }
 
                         if root.server-unreachable: OfflineMeshNotice {
@@ -185,63 +218,81 @@ export component RegisterPage inherits Rectangle {
                                 horizontal-alignment: center;
                             }
 
-                            // Avatar selection
-                            HorizontalLayout {
+                            // The preview follows the selected default or an overriding photo.
+                            VerticalLayout {
                                 alignment: center;
-                                spacing: Spacing.md;
+                                spacing: Spacing.sm;
 
-                                Rectangle {
-                                    accessible-role: button;
-                                    accessible-label: "Upload custom avatar";
-                                    width: 80px;
-                                    height: 80px;
-                                    border-radius: 40px;
-                                    background: Colors.surface-hover;
-                                    clip: true;
+                                HorizontalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        accessible-role: button;
+                                        accessible-label: "Edit profile photo";
+                                        accessible-action-default => { root.avatar-menu-open = !root.avatar-menu-open; }
+                                        KeyFocus { border-radius: parent.border-radius; activate => { root.avatar-menu-open = !root.avatar-menu-open; } }
+                                        width: 96px;
+                                        height: 96px;
+                                        background: transparent;
+                                        transform-scale-x: avatar-touch.pressed ? 94% : 100%;
+                                        transform-scale-y: avatar-touch.pressed ? 94% : 100%;
+                                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
-                                    Avatar {
-                                        size: 80px;
-                                        source: root.has-avatar ? root.avatar-source : @image-url("../../assets/icon-256.png");
-                                        fallback-text: "+";
-                                    }
+                                        Avatar {
+                                            size: 96px;
+                                            source: root.avatar-source;
+                                            name: root.display-name;
+                                            fallback-text: "?";
+                                            fallback-bg: root.avatar-color;
+                                            fallback-fg: Colors.on-action;
+                                        }
 
-                                    TouchArea {
-                                        enabled: !root.loading;
-                                        clicked => { root.select-avatar(); }
-                                    }
-                                }
+                                        Rectangle {
+                                            x: parent.width - self.width;
+                                            y: parent.height - self.height;
+                                            width: 30px;
+                                            height: 30px;
+                                            border-radius: 15px;
+                                            background: Colors.action-fill;
+                                            border-width: Spacing.stroke;
+                                            border-color: Colors.surface;
+                                            Image {
+                                                source: Icons.edit;
+                                                width: 16px;
+                                                height: 16px;
+                                                colorize: Colors.on-action;
+                                            }
+                                        }
 
-                                // Default avatar color presets
-                                for preset[i] in [
-                                    { color: Colors.primary, letter: "A" },
-                                    { color: Colors.info, letter: "B" },
-                                    { color: Colors.group-accent, letter: "C" },
-                                ]: Rectangle {
-                                    accessible-role: button;
-                                    accessible-label: "Default avatar " + preset.letter;
-                                    width: 44px;
-                                    height: 44px;
-                                    border-radius: 22px;
-                                    background: preset.color;
-                                    border-width: 2px;
-                                    border-color: root.selected-default-idx == i ? Colors.text-primary : transparent;
-
-                                    Text {
-                                        text: preset.letter;
-                                        color: Colors.text-primary;
-                                        font-size: Typography.lg;
-                                        font-weight: Typography.semibold;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
-                                    }
-
-                                    TouchArea {
-                                        enabled: !root.loading;
-                                        clicked => { root.select-default-avatar(i); }
+                                        avatar-touch := TouchArea {
+                                            enabled: !root.loading;
+                                            clicked => { root.avatar-menu-open = !root.avatar-menu-open; }
+                                        }
                                     }
                                 }
+
+                                if root.avatar-menu-open: HorizontalLayout {
+                                    alignment: center;
+                                    spacing: Spacing.md;
+                                    Button {
+                                        text: "Choose photo";
+                                        variant: "secondary";
+                                        clicked => { root.avatar-menu-open = false; root.select-avatar(); }
+                                    }
+                                    if root.has-avatar: Button {
+                                        text: "Remove photo";
+                                        variant: "secondary";
+                                        clicked => { root.avatar-menu-open = false; root.remove-avatar(); }
+                                    }
+                                }
+                            }
+
+                            AvatarPicker {
+                                choices: root.avatar-options;
+                                selected-index: root.selected-default-idx;
+                                name: root.display-name;
+                                disabled: root.loading;
+                                selected(i) => { root.select-default-avatar(i); }
                             }
 
                             // Display name
@@ -249,47 +300,30 @@ export component RegisterPage inherits Rectangle {
                                 placeholder: "Display name";
                                 text <=> root.display-name;
                                 disabled: root.loading;
+                                edited(text) => { root.clear-error(); }
                             }
 
-                            // Username with availability check (Task 1)
-                            VerticalLayout {
-                                spacing: Spacing.xs;
-                                
-                                Input {
-                                    placeholder: "Username";
-                                    text <=> root.username;
-                                    disabled: root.loading;
-                                    edited(text) => { root.check-username(text); }
-                                }
-                                
-                                if username != "": HorizontalLayout {
-                                    spacing: 4px;
-                                    alignment: start;
-                                    
-                                    if username-status == "checking": Text {
-                                        text: "Checking availability...";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xxs;
-                                    }
-                                    if username-status == "available": Text {
-                                        text: "\u{2713} Available";
-                                        color: Colors.success;
-                                        font-size: Typography.xxs;
-                                        font-weight: 600;
-                                    }
-                                    if username-status == "taken": Text {
-                                        text: "\u{00D7} Already taken";
-                                        color: Colors.error;
-                                        font-size: Typography.xxs;
-                                        font-weight: 600;
-                                    }
-                                }
+                            // No availability check: the server exposes no
+                            // username-lookup RPC, so the field is a plain
+                            // input and registration reports a clash
+                            // (OPEN-ITEMS §82).
+                            Input {
+                                placeholder: "Username";
+                                text <=> root.username;
+                                disabled: root.loading;
+                                edited(text) => { root.clear-error(); }
+                            }
+
+                            if root.username != "" && root.username-error != "": Text {
+                                text: root.username-error;
+                                color: Colors.error;
+                                wrap: word-wrap;
                             }
 
                             Button {
                                 text: "Continue";
                                 variant: "primary";
-                                disabled: display-name == "" || username == "" || username-status == "taken";
+                                disabled: display-name == "" || username == "" || root.username-error != "";
                                 clicked => { current-step = 2; }
                             }
                         }
@@ -312,7 +346,7 @@ export component RegisterPage inherits Rectangle {
                                 password: true;
                                 text <=> root.password;
                                 disabled: root.loading;
-                                edited(text) => { root.password-changed(text); }
+                                edited(text) => { root.clear-error(); root.password-changed(text); }
                             }
 
                             // Password strength meter (4 segments)
@@ -321,7 +355,7 @@ export component RegisterPage inherits Rectangle {
                                 accessible-label: "Password strength: " + (root.password-strength == 1 ? "Weak" :
                                     root.password-strength == 2 ? "Fair" :
                                     root.password-strength == 3 ? "Good" : "Strong");
-                                spacing: 4px;
+                                spacing: Spacing.xs;
                                 HorizontalLayout {
                                     spacing: Spacing.xs;
                                     height: 6px;
@@ -356,6 +390,7 @@ export component RegisterPage inherits Rectangle {
                                 disabled: root.loading;
                                 error: password != "" && confirm-password != "" && !passwords-match;
                                 error-message: "Passwords do not match";
+                                edited(text) => { root.clear-error(); }
                             }
 
                             Button {
@@ -384,6 +419,11 @@ export component RegisterPage inherits Rectangle {
                                 font-size: Typography.sm;
                                 horizontal-alignment: center;
                                 wrap: word-wrap;
+                                // A wrapped Text inside an `if` under-reports its
+                                // height to the enclosing layout (Slint 1.17 sizes
+                                // it at the wrong width), so the card came out
+                                // ~2 lines short and Continue hung off its bottom.
+                                min-height: self.preferred-height;
                             }
 
                             Input {
@@ -391,27 +431,35 @@ export component RegisterPage inherits Rectangle {
                                 password: true;
                                 text <=> root.pin;
                                 disabled: root.loading;
-                                edited(text) => { root.pin-changed(text); }
+                                edited(text) => { root.clear-error(); root.pin-changed(text); }
+                            }
+
+                            if root.pin-error != "": Text {
+                                text: root.pin-error;
+                                color: Colors.error;
+                                font-size: Typography.sm;
+                                wrap: word-wrap;
+                                min-height: self.preferred-height;
                             }
 
                             // PIN strength (3 segments: weak/fair/strong)
                             if root.pin-strength > 0: HorizontalLayout {
                                 accessible-role: text;
-                                accessible-label: "PIN strength: " + (root.pin-strength == 1 ? "Weak" :
-                                    root.pin-strength == 2 ? "Fair" : "Strong");
+                                accessible-label: "PIN strength: " + (root.visible-pin-strength == 1 ? "Weak" :
+                                    root.visible-pin-strength == 2 ? "Fair" : "Strong");
                                 spacing: Spacing.xs;
                                 height: 8px;
                                 Rectangle {
                                     horizontal-stretch: 1; height: 4px; border-radius: 2px;
-                                    background: root.pin-strength == 1 ? Colors.error : (root.pin-strength == 2 ? Colors.warning : Colors.success);
+                                    background: root.visible-pin-strength == 1 ? Colors.error : (root.visible-pin-strength == 2 ? Colors.warning : Colors.success);
                                 }
                                 Rectangle {
                                     horizontal-stretch: 1; height: 4px; border-radius: 2px;
-                                    background: root.pin-strength >= 2 ? (root.pin-strength == 3 ? Colors.success : Colors.warning) : Colors.surface-hover;
+                                    background: root.visible-pin-strength >= 2 ? (root.visible-pin-strength == 3 ? Colors.success : Colors.warning) : Colors.surface-hover;
                                 }
                                 Rectangle {
                                     horizontal-stretch: 1; height: 4px; border-radius: 2px;
-                                    background: root.pin-strength == 3 ? Colors.success : Colors.surface-hover;
+                                    background: root.visible-pin-strength == 3 ? Colors.success : Colors.surface-hover;
                                 }
                             }
 
@@ -423,12 +471,13 @@ export component RegisterPage inherits Rectangle {
                                 disabled: root.loading;
                                 error: pin != "" && confirm-pin != "" && !root.pins-match;
                                 error-message: "PINs do not match";
+                                edited(text) => { root.clear-error(); }
                             }
 
                             Button {
                                 text: "Continue";
                                 variant: "primary";
-                                disabled: pin == "" || !pins-match || pin-strength < 2;
+                                disabled: pin == "" || !pins-match || root.pin-error != "";
                                 clicked => { current-step = 4; }
                             }
                         }
@@ -438,36 +487,64 @@ export component RegisterPage inherits Rectangle {
                             spacing: Spacing.md;
                             
                             Text {
-                                text: "Finalize Registration";
+                                text: "Finalize registration";
                                 color: Colors.text-primary;
                                 font-size: Typography.xl;
                                 font-weight: Typography.bold;
                                 horizontal-alignment: center;
                             }
 
-                            // Server selection
-                            Input {
-                                placeholder: "Server URL";
-                                text <=> root.server-url;
-                                disabled: root.loading;
+                            // Direct endpoint configuration. Shield registers over Tor to
+                            // the pinned onion service, so it has no URL to choose (§134).
+                            if !AnonMode.enabled: Text {
+                                text: "Direct server URL";
+                                color: Colors.text-secondary;
+                                font-size: Typography.sm;
                             }
 
-                            HorizontalLayout {
+                            if !AnonMode.enabled: Input {
+                                placeholder: "Direct server URL";
+                                text <=> root.server-url;
+                                disabled: root.loading;
+                                edited(text) => { root.clear-error(); }
+                            }
+
+                            if !AnonMode.enabled: HorizontalLayout {
                                 spacing: Spacing.sm;
-                                Rectangle {
-                                    height: 32px; horizontal-stretch: 1; background: Colors.surface-hover; border-radius: Spacing.radius-sm;
-                                    Text { text: "Localhost"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
-                                    TouchArea { clicked => { root.server-url = "http://localhost:50051"; } }
+                                Button {
+                                    text: "Localhost";
+                                    variant: "secondary";
+                                    horizontal-stretch: 1;
+                                    disabled: root.loading;
+                                    clicked => { root.server-url = "http://localhost:50051"; root.clear-error(); }
                                 }
-                                Rectangle {
-                                    height: 32px; horizontal-stretch: 1; background: Colors.surface-hover; border-radius: Spacing.radius-sm;
-                                    Text { text: "Official"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
-                                    TouchArea { clicked => { root.server-url = "https://api.chatter.example.com"; } }
+                                Button {
+                                    text: "Official";
+                                    variant: "secondary";
+                                    horizontal-stretch: 1;
+                                    disabled: root.loading;
+                                    clicked => { root.server-url = "https://api.chatter.example.com"; root.clear-error(); }
                                 }
+                            }
+
+                            if AnonMode.enabled: Text {
+                                text: "Shield is on: registration goes over Tor to the configured onion service.";
+                                color: Colors.text-muted;
+                                font-size: Typography.xxs;
+                                wrap: word-wrap;
+                                min-height: self.preferred-height;
+                            }
+
+                            if root.loading && AnonMode.onboarding-progress != "": Text {
+                                text: AnonMode.onboarding-progress;
+                                color: Colors.text-secondary;
+                                font-size: Typography.sm;
+                                wrap: word-wrap;
+                                horizontal-alignment: center;
                             }
 
                             Button {
-                                text: loading ? "" : "Create Account";
+                                text: loading ? "" : "Create account";
                                 variant: "primary";
                                 loading: root.loading;
                                 disabled: root.loading || server-url == "";
@@ -488,14 +565,16 @@ export component RegisterPage inherits Rectangle {
                                 color: Colors.primary;
                                 font-size: Typography.sm;
                                 font-weight: Typography.medium;
+                                accessible-role: button;
+                                accessible-label: "Sign in";
+                                accessible-action-default => { root.go-to-login(); }
+                                KeyFocus { activate => { root.go-to-login(); } }
                                 TouchArea { clicked => { root.go-to-login(); } }
                             }
                         }
                     }
                 }
 
-                // Bottom spacer
-                Rectangle { height: Spacing.xl; }
             }
         }
     }

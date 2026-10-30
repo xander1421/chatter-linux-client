@@ -1,13 +1,22 @@
-# Dockerfile for cross-compiling Chatter to Windows 11
+# Dockerfile for cross-compiling Chatter to Windows (MinGW).
 #
-# Build from the PARENT directory (chatter/) to include slint-code-view:
+# This is the no-LiveKit `windows-cross` artifact, not the native MSVC
+# build in build-windows.ps1. Calls are absent. Production pins are required;
+# dev-trust-root is not selected.
+#
 #   cd /path/to/chatter
 #   docker build -f linux-client/Dockerfile.windows -t chatter-windows-builder .
+#   docker run --rm \
+#     -e CHATTER_TLS_ROOT_CA_PEM \
+#     -e CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX \
+#     -e CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX \
+#     -e CHATTER_KT_VRF_PUBLIC_KEY_HEX \
+#     -e CHATTER_SERVER_URL \
+#     -v $(pwd)/linux-client/output:/output \
+#     chatter-windows-builder
 #
-# Run:
-#   docker run --rm -v $(pwd)/linux-client/output:/output chatter-windows-builder
-#
-# Output: ./linux-client/output/chatter.exe
+# Output: ./linux-client/output/chatter.exe plus the MinGW GStreamer DLLs
+# copied beside it. Plugin discovery for that flat layout was not executed.
 
 FROM rust:bookworm
 
@@ -79,39 +88,12 @@ ENV PROTOC=/usr/bin/protoc
 # compile for the host (Linux) but pick up Windows .a files from GStreamer,
 # causing linker failures. Instead, we set them target-scoped at build time.
 
-# Copy both projects (build context should be parent chatter/ directory)
+# Build context is the parent chatter/ directory. slint-code-view is gone.
 WORKDIR /build
 COPY linux-client /build/linux-client
-COPY slint-code-view /build/slint-code-view
 
 WORKDIR /build/linux-client
 
-# Build for Windows
-# Target-scoped env vars ensure Windows GStreamer libs only affect the target build,
-# not host-compiled build scripts.
-CMD ["sh", "-c", "\
-    echo '=== Chatter Windows Cross-Compilation ===' && \
-    echo 'Target: x86_64-pc-windows-gnu' && \
-    export RUSTC_WRAPPER= && \
-    export PKG_CONFIG_PATH_x86_64_pc_windows_gnu=${GST_ROOT_DIR}/lib/pkgconfig && \
-    export PKG_CONFIG_SYSROOT_DIR_x86_64_pc_windows_gnu=${GST_ROOT_DIR} && \
-    export OPENSSL_DIR_x86_64_pc_windows_gnu=${GST_ROOT_DIR} && \
-    export OPENSSL_INCLUDE_DIR_x86_64_pc_windows_gnu=${GST_ROOT_DIR}/include && \
-    export OPENSSL_LIB_DIR_x86_64_pc_windows_gnu=${GST_ROOT_DIR}/lib && \
-    export OPENSSL_STATIC_x86_64_pc_windows_gnu=1 && \
-    export CFLAGS_x86_64_pc_windows_gnu=\"-I${GST_ROOT_DIR}/include\" && \
-    # Fix paths in pkg-config files \
-    find ${GST_ROOT_DIR}/lib/pkgconfig -name '*.pc' -exec sed -i \"s|^prefix=.*|prefix=$GST_ROOT_DIR|\" {} + && \
-    cargo build --release --target x86_64-pc-windows-gnu --no-default-features --features windows-cross 2>&1 | tee /tmp/build.log && \
-    if [ -f target/x86_64-pc-windows-gnu/release/chatter-ui.exe ]; then \
-        echo '=== Build Successful ===' && \
-        mkdir -p /output && \
-        cp target/x86_64-pc-windows-gnu/release/chatter-ui.exe /output/chatter.exe && \
-        echo 'Output: /output/chatter.exe' && \
-        ls -lh /output/; \
-    else \
-        echo '=== Build Failed ===' && \
-        tail -100 /tmp/build.log; \
-        exit 1; \
-    fi \
-"]
+# Target-scoped env vars are set by packaging/windows-cross-build.sh so they
+# do not leak into host build scripts.
+CMD ["./packaging/windows-cross-build.sh"]

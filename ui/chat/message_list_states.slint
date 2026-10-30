@@ -1,0 +1,112 @@
+// Loading and empty states for the virtualized conversation list.
+import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Skeleton } from "../components/skeleton.slint";
+
+export component MessageListLoading inherits VerticalLayout {
+    in property <length> top-inset;
+    in property <length> bottom-inset;
+    padding: Spacing.md;
+    padding-top: root.top-inset + Spacing.md;
+    padding-bottom: root.bottom-inset + Spacing.md;
+    spacing: Spacing.lg;
+    for _ in [1, 2, 3, 4, 5]: HorizontalLayout {
+        spacing: Spacing.sm;
+        // Avatar skeleton
+        Skeleton {
+            width: Spacing.avatar-sm;
+            height: Spacing.avatar-sm;
+            border-radius: Spacing.avatar-sm / 2;
+        }
+        // Content skeleton
+        VerticalLayout {
+            spacing: Spacing.xs;
+            // Name and timestamp
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                Skeleton {
+                    width: 80px;
+                    height: 14px;
+                    border-radius: 4px;
+                }
+                Skeleton {
+                    width: 40px;
+                    height: 12px;
+                    border-radius: 4px;
+                }
+            }
+            // Message content (2 lines)
+            Skeleton {
+                width: 200px;
+                height: 14px;
+                border-radius: 4px;
+            }
+            Skeleton {
+                width: 150px;
+                height: 14px;
+                border-radius: 4px;
+            }
+        }
+    }
+
+}
+
+export component MessageListEmpty inherits Rectangle {
+    in property <bool> public-broadcast;
+    in property <string> privacy-line;
+    in property <bool> saved-messages;
+    VerticalLayout {
+        alignment: center;
+        spacing: Spacing.md;
+        Text {
+            text: "\u{1F4AC}\u{FE0F}"; // Speech bubbles emoji (with emoji variant selector)
+            font-family: Typography.font-family-emoji;
+            font-size: Typography.huge;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.saved-messages ? "Your saved messages" : "No messages yet";
+            color: Colors.text-secondary;
+            font-size: Typography.lg;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.saved-messages ? "Forward messages here or write notes to yourself."
+                : "Be the first to say something!";
+            color: Colors.text-muted;
+            font-size: Typography.sm;
+            horizontal-alignment: center;
+        }
+        // Encryption indicator in empty state
+        Rectangle {
+            height: Spacing.lg;
+        }
+        // What is true about this conversation's privacy, which is not the
+        // same sentence everywhere. A mesh room and a geohash cell are
+        // plaintext broadcasts with no recipient to be encrypted *to*;
+        // saying otherwise here, in green, under a lock, is the one error on
+        // this screen that could get somebody hurt.
+        HorizontalLayout {
+            alignment: center;
+            spacing: Spacing.sm;
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    source: root.public-broadcast ? Icons.globe : Icons.lock;
+                    width: 14px;
+                    height: 14px;
+                    colorize: root.public-broadcast ? Colors.warning : Colors.success;
+                }
+            }
+            Text {
+                text: root.privacy-line;
+                color: root.public-broadcast ? Colors.warning : Colors.success;
+                font-size: Typography.sm;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+}

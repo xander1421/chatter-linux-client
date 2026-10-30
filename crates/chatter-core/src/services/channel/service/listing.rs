@@ -2,12 +2,15 @@
 //!
 //! List, search, and archive methods for ChannelService.
 
-use crate::domain::channel::{Channel, ChannelType};
+use crate::domain::channel::{
+    Channel, ChannelType, MemberRole, Membership, NotificationPreference,
+};
 use crate::domain::ids::ChannelId;
 use crate::proto::chat_v1;
-use crate::services::current_user::CurrentUserProvider;
 
-use crate::services::channel::converters::{domain_channel_type_to_proto, proto_to_domain_channel, proto_to_domain_membership};
+use crate::services::channel::converters::{
+    domain_channel_type_to_proto, proto_to_domain_channel, proto_to_domain_membership,
+};
 use crate::services::channel::error::ChannelError;
 
 use super::ChannelService;
@@ -82,7 +85,7 @@ impl ChannelService {
         offset: u32,
         archived: Option<bool>,
     ) -> Result<Vec<Channel>, ChannelError> {
-        let _ = self.settings_repo.current_user_id()?;
+        let me = self.settings_repo.current_user_id()?;
 
         let mut channel_client = self.channel_client();
         let response = channel_client
@@ -94,6 +97,28 @@ impl ChannelService {
             let channel = proto_to_domain_channel(proto)?;
 
             self.channel_repo.upsert(&channel)?;
+
+            // The server lists only channels we are a member of, but omits
+            // rosters, and the sidebar lists channels by local membership. A
+            // channel created on a linked device would otherwise never appear
+            // here. Ignored when a richer row already exists.
+            let own = Membership {
+                channel_id: channel.id,
+                user_id: me,
+                role: if channel.owner_id == me {
+                    MemberRole::Owner
+                } else {
+                    MemberRole::Member
+                },
+                joined_at: channel.created_at,
+                last_read_message_id: None,
+                is_muted: false,
+                muted_until: None,
+                notification_preference: NotificationPreference::All,
+            };
+            if let Err(e) = self.channel_repo.insert_or_ignore_membership(&own) {
+                tracing::warn!(channel_id = %channel.id, error = %e, "Failed to record own membership");
+            }
 
             // Sync memberships from the proto response
             for proto_member in &proto.members {
@@ -141,7 +166,13 @@ impl ChannelService {
 
         let mut channel_client = self.channel_client();
         let response = channel_client
-            .search_channels(query, limit as i32, offset as i32, vec![], proto_type_filter)
+            .search_channels(
+                query,
+                limit as i32,
+                offset as i32,
+                vec![],
+                proto_type_filter,
+            )
             .await?;
 
         let mut channels = Vec::with_capacity(response.results.len());
@@ -160,13 +191,22 @@ impl ChannelService {
         Ok(channels)
     }
 
-    /// Get channels for the current user, excluding any that belong to a
-    /// custom sidebar section.
+    /// The channels the sidebar lists, excluding any that belong to a custom
+    /// sidebar section: the ones we are in, and the ones we used to be in
+    /// (left, removed, banned, deleted), which stay listed read-only until
+    /// their chat is deleted, as Signal keeps an ended group.
     pub fn get_unsectioned_channels_for_user(&self) -> Result<Vec<Channel>, ChannelError> {
-        let channels = self.get_channels_for_user()?;
-        let sectioned = self.section_repo.all_conversation_ids()
+        let current_user = self.settings_repo.current_user_id()?;
+        let mut channels = self.channel_repo.list_for_user(&current_user)?;
+        channels.extend(self.channel_repo.list_former_for_user(&current_user)?);
+        let sectioned = self
+            .section_repo
+            .all_conversation_ids()
             .map_err(ChannelError::Storage)?;
-        Ok(channels.into_iter().filter(|ch| !sectioned.contains(&ch.id.to_string())).collect())
+        Ok(channels
+            .into_iter()
+            .filter(|ch| !sectioned.contains(&ch.id.to_string()))
+            .collect())
     }
 
     /// Get channels sorted by most recently used (last_message_at DESC).
@@ -175,13 +215,11 @@ impl ChannelService {
     /// Channels without messages appear at the end (sorted by creation time).
     pub fn get_channels_mru(&self) -> Result<Vec<Channel>, ChannelError> {
         let mut channels = self.get_unsectioned_channels_for_user()?;
-        channels.sort_by(|a, b| {
-            match (&b.last_message_at, &a.last_message_at) {
-                (Some(b_time), Some(a_time)) => b_time.cmp(a_time),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => b.created_at.cmp(&a.created_at),
-            }
+        channels.sort_by(|a, b| match (&b.last_message_at, &a.last_message_at) {
+            (Some(b_time), Some(a_time)) => b_time.cmp(a_time),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => b.created_at.cmp(&a.created_at),
         });
         Ok(channels)
     }
@@ -204,57 +242,15 @@ impl ChannelService {
         Ok(members)
     }
 
-    /// List channel members with profile information (display name, avatar).
-    ///
-    /// Joins membership data with user profiles from local storage.
-    /// Members without a stored profile get a fallback display name from their user ID.
-    pub fn list_members_with_profiles(
-        &self,
-        channel_id: &ChannelId,
-    ) -> Result<Vec<crate::domain::channel::MemberWithProfile>, ChannelError> {
-        let members = self.channel_repo.list_members(channel_id)?;
-        let mut result = Vec::with_capacity(members.len());
-        for membership in members {
-            let profile = self.user_repo.get_profile(&membership.user_id).ok().flatten();
-            let display_name = profile.as_ref()
-                .map(|p| p.display_name.clone())
-                .unwrap_or_else(|| format!("User {}", &membership.user_id.to_string()[..8]));
-            let avatar_bytes = profile.and_then(|p| p.avatar_bytes);
-            result.push(crate::domain::channel::MemberWithProfile {
-                membership,
-                display_name,
-                avatar_bytes,
-            });
-        }
-        Ok(result)
-    }
-
     /// Get the set of member user IDs for a channel (local query).
     ///
     /// Used for filtering invite candidates — callers can check which users
     /// are already members without loading full membership objects.
-    pub fn get_member_ids(&self, channel_id: &ChannelId) -> Result<std::collections::HashSet<crate::domain::ids::UserId>, ChannelError> {
+    pub fn get_member_ids(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<std::collections::HashSet<crate::domain::ids::UserId>, ChannelError> {
         let members = self.channel_repo.list_members(channel_id)?;
         Ok(members.into_iter().map(|m| m.user_id).collect())
     }
-
-    /// Get the peer's user ID from a DM channel (local query).
-    ///
-    /// DM channels have exactly 2 members - returns the one that's not the current user.
-    pub fn get_dm_peer_local(
-        &self,
-        channel_id: &ChannelId,
-    ) -> Result<Option<crate::domain::ids::UserId>, ChannelError> {
-        let current_user_id = self.settings_repo.current_user_id()?;
-        let memberships = self.channel_repo.list_members(channel_id)?;
-
-        for membership in memberships {
-            if membership.user_id != current_user_id {
-                return Ok(Some(membership.user_id));
-            }
-        }
-
-        Ok(None)
-    }
-
 }

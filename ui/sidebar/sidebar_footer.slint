@@ -1,0 +1,377 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { ActivityUi } from "../activity/activity_bell.slint";
+import { ActivityGlobal } from "../activity/activity_global.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { TooltipArea } from "../components/tooltip.slint";
+import { Avatar } from "../components/avatar.slint";
+import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
+import { MeshGlobal } from "../mesh/mesh_global.slint";
+
+export component SidebarFooter inherits GlassSurface {
+    in property <length> panel-width;
+    in property <length> panel-height;
+    in property <bool> collapsed;
+    in property <bool> touch;
+    in property <bool> mesh-available;
+    in property <string> active-tab;
+    in property <int> rail-button-count;
+    in property <length> rail-icon-size;
+    in property <length> rail-slot-size;
+    in property <length> rail-slot-radius;
+    in property <brush> rail-slot-bg;
+    in property <length> footer-icon-size;
+    in property <image> user-avatar-source;
+    in property <string> user-initials;
+    in property <string> user-presence-status;
+    in property <string> user-display-name;
+    in property <bool> server-unreachable;
+    callback profile-clicked();
+    callback settings-clicked();
+    callback toggle-collapsed();
+    callback anon-mode-clicked();
+    callback channel-selected(string);
+    callback tab-selected(string);
+
+            // Bound backdrop and shadow painting to this chrome silhouette.
+            clip: true;
+            x: 0;
+            width: root.panel-width;
+            y: root.panel-height - self.height;
+            material-level: 2;
+            elevation: 3;
+
+            // Derived, not a magic number: this was hardcoded at 140px, which
+            // fit the three 32px buttons the rail used to have and silently
+            // clipped everything past them off the bottom of the screen once
+            // the cluster grew. 8px inter-item spacing + 8px padding-bottom,
+            // matching the layout below.
+            height: root.collapsed
+                ? root.rail-button-count * root.rail-icon-size
+                    + (root.rail-button-count - 1) * 8px + 16px
+                    // The 13px divider between the tabs and the tools, and its gap.
+                    + 13px + 8px
+                : 44px;
+
+            // Top edge only — the one side that separates this strip from the
+            // list. The four-sided border it replaces doubled up against the
+            // panel's own left/right edges and closed a box around the footer.
+
+
+            // Expanded view: Profile + Jarvis + Settings on same row
+            // No `alignment` — under any alignment other than stretch, Slint
+            // sizes every child to its PREFERRED width and ignores
+            // horizontal-stretch, so the display name pushed the icons past the
+            // right edge and the last one (collapse) was clipped away entirely.
+            // Stretching lets the name elide and keeps the buttons on screen.
+            if !root.collapsed: HorizontalLayout {
+                padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm;
+                // Profile moved to the bottom tab bar's rightmost tab on mobile,
+                // where it carries the user's avatar — a name-and-avatar strip
+                // wedged between the last conversation and the tab bar was
+                // neither a list row nor navigation, and read as leftover.
+                if !false: Rectangle {
+                    horizontal-stretch: 1;
+                    accessible-role: button; accessible-label: "Profile";
+                    accessible-action-default => { root.profile-clicked(); }
+                    border-width: profile-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                    profile-keys := FocusScope { width: 0px; height: 0px;
+                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.profile-clicked(); return accept; } return reject; }
+                    }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.profile-clicked(); } }
+                    HorizontalLayout {
+                        spacing: Spacing.sm; alignment: start;
+                        VerticalLayout { alignment: center; horizontal-stretch: 0;
+                            Avatar { size: 24px; source: root.user-avatar-source; fallback-text: root.user-initials; alt-name: root.user-display-name; show-presence: true;
+                                presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
+                            }
+                        }
+                        // With touch-sized icons the name can be left a few pixels: an
+                        // ellipsis alone reads as broken, so show the avatar only.
+                        Text { text: root.user-display-name; color: Colors.text-secondary; font-size: Typography.xs; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; opacity: self.width < 28px ? 0 : 1; }
+                    }
+                }
+                // The expanded desktop sidebar keeps both list destinations
+                // reachable without first collapsing to the rail.
+                VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Rectangle {
+                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
+                        background: root.active-tab == "chats" ? Colors.row-selected : chats-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button; accessible-label: "Chats";
+                        accessible-action-default => { root.tab-selected("chats"); }
+                        border-width: chats-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        chats-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.tab-selected("chats"); return accept; } return reject; }
+                        }
+                        Image { source: Icons.message-circle; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        chats-touch := TouchArea { clicked => { root.tab-selected("chats"); } }
+                    }
+                }
+                if root.mesh-available: VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Rectangle {
+                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
+                        background: root.active-tab == "mesh" ? Colors.row-selected : mesh-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button; accessible-label: "Mesh";
+                        accessible-action-default => { root.tab-selected("mesh"); }
+                        border-width: mesh-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        mesh-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.tab-selected("mesh"); return accept; } return reject; }
+                        }
+                        Image { source: Icons.radio; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        mesh-touch := TouchArea { clicked => { root.tab-selected("mesh"); } }
+                    }
+                }
+                // Activity: mentions, replies and server status (ActivityUi
+                // bridges to the modal host). The status dot lives here now.
+                VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Rectangle {
+                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
+                        background: bell-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button;
+                        accessible-label: ActivityGlobal.unread-count > 0 ? "Activity, " + ActivityGlobal.unread-count + " unread" : "Activity";
+                        accessible-action-default => { ActivityUi.open(); }
+                        border-width: bell-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        bell-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { ActivityUi.open(); return accept; } return reject; }
+                        }
+                        Image { source: Icons.bell; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        if root.server-unreachable || ActivityGlobal.unread-count > 0: Rectangle {
+                            x: parent.width - self.width - 1px; y: 1px;
+                            width: 7px; height: 7px; border-radius: 3.5px;
+                            border-width: 1px; border-color: Colors.surface;
+                            background: root.server-unreachable ? Colors.error : Colors.primary;
+                        }
+                        bell-touch := TouchArea { clicked => { ActivityUi.open(); } }
+                    }
+                }
+                // The gear opens Settings; the avatar opens the account menu.
+                if !false: VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Rectangle {
+                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
+                        background: sett-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button; accessible-label: "Settings";
+                        accessible-action-default => { root.settings-clicked(); }
+                        border-width: sett-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        sett-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.settings-clicked(); return accept; } return reject; }
+                        }
+
+                        Image { source: Icons.settings; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                        sett-touch := TouchArea { clicked => { root.settings-clicked(); } }
+                    }
+                }
+                // Collapse back to the rail. The expanded panel needs its own
+                // copy: the rail's cluster only exists while collapsed, so
+                // without this, expanding was a one-way trip.
+                //
+                // There is no rail on mobile to collapse into — the list either
+                // is the screen or the conversation is — so the control has
+                // nothing to do there.
+                if !false: VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Rectangle {
+                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
+                        background: collapse-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button; accessible-label: "Collapse sidebar";
+                        accessible-action-default => { root.toggle-collapsed(); }
+                        border-width: collapse-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        collapse-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.toggle-collapsed(); return accept; } return reject; }
+                        }
+                        Image { source: Icons.chevron-left; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                        collapse-touch := TouchArea { clicked => { root.toggle-collapsed(); } }
+                    }
+                }
+            }
+
+            // Collapsed view: Vertical stack of icons
+            if root.collapsed: VerticalLayout {
+                alignment: end; spacing: Spacing.sm; padding-bottom: Spacing.sm;
+                // Ungated, like the expanded header shield.
+                TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: AnonMode.enabled ? "Anon mode (active) - tap to disable" : "Anon mode";
+                    tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button; accessible-label: "Anon mode";
+                        accessible-action-default => { root.anon-mode-clicked(); }
+                        border-width: rail-anon-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-anon-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.anon-mode-clicked(); return accept; } return reject; }
+                        }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius;
+                        background: AnonMode.enabled ? Colors.row-selected : root.rail-slot-bg;
+                        Image { source: Icons.shield; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                            colorize: AnonMode.enabled ? Colors.selected-indicator : Colors.text-secondary; }
+                        // Tor status dot: green=connected, amber=CONNECTING ONLY,
+                        // red=error, muted=off. See the expanded shield above.
+                        Rectangle {
+                            visible: AnonMode.enabled && AnonMode.onion-built;
+                            width: 10px; height: 10px; border-radius: 5px;
+                            x: parent.width - self.width - 2px; y: 2px;
+                            border-width: 1px; border-color: Colors.surface;
+                            background: TorStatus.state == 2 ? Colors.success
+                                : TorStatus.state >= 3 ? Colors.error
+                                : TorStatus.state == 1 ? Colors.warning
+                                : Colors.text-muted;
+                        }
+                        TouchArea { clicked => { root.anon-mode-clicked(); } }
+                    } }
+                }
+                // Bottom cluster, in order: AI, Chats, Mesh, expand, Settings.
+                // The expand chevron lives here rather than in the panel header
+                // so the list destinations stay beside the other shortcuts.
+                TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: "AI"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button; accessible-label: "AI";
+                        accessible-action-default => { root.channel-selected("00000000-0000-0000-0000-000000000000"); }
+                        border-width: rail-ai-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-ai-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.channel-selected("00000000-0000-0000-0000-000000000000"); return accept; } return reject; }
+                        }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                        Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        // The local AI channel's fixed id is the nil UUID
+                        // (chatter-core client/jarvis.rs jarvis_channel_id).
+                        TouchArea { clicked => { root.channel-selected("00000000-0000-0000-0000-000000000000"); } }
+                    } }
+                }
+
+                TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: "Chats"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button; accessible-label: "Chats";
+                        accessible-action-default => { root.tab-selected("chats"); }
+                        border-width: rail-chats-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-chats-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.tab-selected("chats"); return accept; } return reject; }
+                        }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius;
+                        background: root.active-tab == "chats" ? Colors.row-selected : root.rail-slot-bg;
+                        Image { source: Icons.message-circle; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        TouchArea { clicked => { root.tab-selected("chats"); } }
+                    } }
+                }
+
+                if root.mesh-available: TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: "Mesh"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button; accessible-label: "Mesh";
+                        accessible-action-default => { root.tab-selected("mesh"); }
+                        border-width: rail-mesh-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-mesh-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.tab-selected("mesh"); return accept; } return reject; }
+                        }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.active-tab == "mesh" ? Colors.row-selected : root.rail-slot-bg;
+                        Image { source: Icons.radio; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                            colorize: !MeshGlobal.radio-running ? Colors.warning
+                                : MeshGlobal.peer-count > 0 ? Colors.primary
+                                : Colors.text-secondary; }
+                        TouchArea { clicked => { root.tab-selected("mesh"); } }
+                    } }
+                }
+
+                // Activity, as in the expanded footer: the rail had no way in.
+                TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: "Activity"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button;
+                        accessible-label: ActivityGlobal.unread-count > 0 ? "Activity, " + ActivityGlobal.unread-count + " unread" : "Activity";
+                        accessible-action-default => { ActivityUi.open(); }
+                        border-width: rail-bell-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-bell-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { ActivityUi.open(); return accept; } return reject; }
+                        }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                        Image { source: Icons.bell; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        if ActivityGlobal.unread-count > 0: Rectangle {
+                            x: parent.width - self.width - 4px; y: 4px;
+                            width: 8px; height: 8px; border-radius: 4px;
+                            border-width: 1px; border-color: Colors.surface;
+                            background: Colors.primary;
+                        }
+                        TouchArea { clicked => { ActivityUi.open(); } }
+                    } }
+                }
+
+                // A visible seam between list destinations and the panel
+                // controls below. Several identical unlabeled slots
+                // in one unbroken stack read as one big undifferentiated
+                // block; a hairline plus extra breathing room lets the eye
+                // parse two small groups instead, without hiding anything.
+                Rectangle {
+                    height: 13px;
+                    Rectangle {
+                        y: parent.height / 2;
+                        width: root.rail-slot-size * 0.6;
+                        x: (parent.width - self.width) / 2;
+                        height: 1px;
+                        background: Colors.divider;
+                    }
+                }
+
+                TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: root.collapsed ? "Expand sidebar" : "Collapse sidebar"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button; accessible-label: "Expand sidebar";
+                        accessible-action-default => { root.toggle-collapsed(); }
+                        KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-collapsed(); } }
+                        border-width: rail-expand-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-expand-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.toggle-collapsed(); return accept; } return reject; }
+                        }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                        Image { source: root.collapsed ? Icons.chevron-right : Icons.chevron-left; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                        TouchArea { clicked => { root.toggle-collapsed(); } }
+                    } }
+                }
+
+                TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Settings"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button; accessible-label: "Settings";
+                        accessible-action-default => { root.settings-clicked(); }
+                        KeyFocus { border-radius: parent.border-radius; activate => { root.settings-clicked(); } }
+                        border-width: rail-settings-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-settings-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.settings-clicked(); return accept; } return reject; }
+                        }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                        Image { source: Icons.settings; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        if root.server-unreachable: Rectangle {
+                            x: parent.width - self.width - 1px; y: 1px;
+                            width: 7px; height: 7px; border-radius: 3.5px;
+                            border-width: 1px; border-color: Colors.surface;
+                            background: Colors.error;
+                            accessible-role: text;
+                            accessible-label: "Server unreachable";
+                        }
+                        TouchArea { clicked => { root.settings-clicked(); } }
+                    } }
+                }
+                Rectangle {
+                    height: root.rail-icon-size;
+                    accessible-role: button; accessible-label: "Profile";
+                    accessible-action-default => { root.profile-clicked(); }
+                    border-width: rail-profile-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                    rail-profile-keys := FocusScope { width: 0px; height: 0px;
+                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.profile-clicked(); return accept; } return reject; }
+                    }
+                    TouchArea { clicked => { root.profile-clicked(); } }
+                    HorizontalLayout { alignment: center;
+                        Avatar { size: 28px; source: root.user-avatar-source; fallback-text: root.user-initials; alt-name: root.user-display-name; show-presence: true;
+                            presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
+                        }
+                    }
+                }
+
+            }
+}

@@ -48,9 +48,24 @@ impl SectionService {
         }
     }
 
-    /// Create a new custom section.
-    pub fn create_section(&self, name: &str, icon: &str) -> Result<CustomSection, SectionError> {
+    /// Create a custom section, optionally filing the conversation that opened the flow.
+    pub fn create_section(
+        &self,
+        name: &str,
+        icon: &str,
+        conversation: Option<(&str, ConversationType)>,
+    ) -> Result<CustomSection, SectionError> {
         let section = self.section_repo.create_section(name, icon)?;
+        if let Some((conversation_id, conversation_type)) = conversation {
+            if let Err(error) = self.move_conversation_to_section(
+                conversation_id,
+                conversation_type,
+                &section.id,
+            ) {
+                self.section_repo.delete_section(&section.id)?;
+                return Err(error);
+            }
+        }
         Ok(CustomSection {
             id: section.id,
             name: section.name,
@@ -105,10 +120,7 @@ impl SectionService {
 
     /// List all custom sections with their conversations, enriched and ordered.
     ///
-    /// Metadata (name, unread, last-message time) comes from two whole-table
-    /// queries, not one `get_conversation` per membership. That N+1 is why
-    /// folder badges could not be refreshed on message arrival without making
-    /// the sidebar crawl.
+    /// Names come from conversation tables, while message stats are read once.
     /// Conversations come back already sorted by the section's `sort_mode`,
     /// pinned first — the UI renders the order it is handed.
     pub fn list_sections_with_conversations(&self) -> Result<Vec<CustomSection>, SectionError> {
@@ -117,23 +129,18 @@ impl SectionService {
             return Ok(Vec::new());
         }
 
-        // Two queries total, regardless of how many folders or rows exist.
-        // Names come from the unified view; unread + last-message come straight
+        // Names come from conversation tables; unread + last-message come straight
         // from the messages table, which also covers channel-free server DMs —
         // those have no `channels` row, so the unified view cannot emit them and
         // a foldered DM would show no badge at all.
-        let names: std::collections::HashMap<(String, ConversationType), String> = self
-            .conversation_repo
-            .list_all()?
-            .into_iter()
-            .map(|c| ((c.id, c.conversation_type), c.name))
-            .collect();
+        let names = self.conversation_repo.conversation_names()?;
         let stats = self.conversation_repo.conversation_stats()?;
         let pinned = self.pins.pinned_ids();
+        let mut memberships_by_section = self.section_repo.all_section_conversations()?;
 
         let mut result = Vec::with_capacity(sections.len());
         for section in sections {
-            let memberships = self.section_repo.get_section_conversations(&section.id)?;
+            let memberships = memberships_by_section.remove(&section.id).unwrap_or_default();
             let mut unread_count: u32 = 0;
 
             let mut conversations: Vec<SectionConversation> = memberships
@@ -170,13 +177,27 @@ impl SectionService {
         Ok(result)
     }
 
+    /// Folder keys for badge visibility; row names and message stats are not
+    /// needed when the caller only asks whether a row exists.
+    pub fn all_conversation_keys(
+        &self,
+    ) -> Result<std::collections::HashSet<(String, ConversationType)>, SectionError> {
+        Ok(self.section_repo.all_section_conversations()?
+            .into_values()
+            .flatten()
+            .map(|m| (m.conversation_id, m.conversation_type))
+            .collect())
+    }
+
     /// Get unified metadata for a specific conversation.
     pub fn get_conversation_metadata(
         &self,
         conversation_id: &str,
         conversation_type: &ConversationType,
     ) -> Result<Option<crate::domain::UnifiedConversation>, SectionError> {
-        Ok(self.conversation_repo.get_conversation(conversation_id, conversation_type)?)
+        Ok(self
+            .conversation_repo
+            .get_conversation(conversation_id, conversation_type)?)
     }
 
     /// Move a conversation into a section.
@@ -189,7 +210,10 @@ impl SectionService {
         section_id: &SectionId,
     ) -> Result<(), SectionError> {
         // Remove from any existing section first
-        if let Some(old_section_id) = self.section_repo.get_conversation_section(conversation_id)? {
+        if let Some(old_section_id) = self
+            .section_repo
+            .get_conversation_section(conversation_id)?
+        {
             self.section_repo
                 .remove_from_section(&old_section_id, conversation_id)?;
         }
@@ -206,7 +230,9 @@ impl SectionService {
     pub fn reorder_sections(&self, ids: &[SectionId]) -> Result<(), SectionError> {
         let existing = self.section_repo.list_sections()?;
         for (idx, id) in ids.iter().enumerate() {
-            let Some(section) = existing.iter().find(|s| s.id == *id) else { continue };
+            let Some(section) = existing.iter().find(|s| s.id == *id) else {
+                continue;
+            };
             self.section_repo
                 .update_section(id, &section.name, &section.icon_emoji, idx as i32)
                 .map_err(|e| match e {
@@ -243,10 +269,12 @@ impl SectionService {
 
     /// Set how a section orders the conversations inside it.
     pub fn set_sort_mode(&self, id: &SectionId, mode: SectionSortMode) -> Result<(), SectionError> {
-        self.section_repo.set_sort_mode(id, mode).map_err(|e| match e {
-            StorageError::NotFound(_) => SectionError::NotFound,
-            other => SectionError::Storage(other),
-        })
+        self.section_repo
+            .set_sort_mode(id, mode)
+            .map_err(|e| match e {
+                StorageError::NotFound(_) => SectionError::NotFound,
+                other => SectionError::Storage(other),
+            })
     }
 
     /// Toggle the expanded/collapsed state of a section.
@@ -268,7 +296,9 @@ impl SectionService {
     }
 
     /// Return the set of all conversation IDs that belong to any section.
-    pub fn all_sectioned_conversation_ids(&self) -> Result<std::collections::HashSet<String>, SectionError> {
+    pub fn all_sectioned_conversation_ids(
+        &self,
+    ) -> Result<std::collections::HashSet<String>, SectionError> {
         Ok(self.section_repo.all_conversation_ids()?)
     }
 
@@ -277,7 +307,10 @@ impl SectionService {
         &self,
         conversation_id: &str,
     ) -> Result<(), SectionError> {
-        if let Some(section_id) = self.section_repo.get_conversation_section(conversation_id)? {
+        if let Some(section_id) = self
+            .section_repo
+            .get_conversation_section(conversation_id)?
+        {
             self.section_repo
                 .remove_from_section(&section_id, conversation_id)?;
         }
@@ -287,7 +320,7 @@ impl SectionService {
 
 /// Order one section's conversations. Pinned rows always come first; the mode
 /// decides the order within each group.
-fn sort_conversations(conversations: &mut [SectionConversation], mode: SectionSortMode) {
+pub(crate) fn sort_conversations(conversations: &mut [SectionConversation], mode: SectionSortMode) {
     conversations.sort_by(|a, b| {
         b.is_pinned
             .cmp(&a.is_pinned)
@@ -311,7 +344,13 @@ fn sort_conversations(conversations: &mut [SectionConversation], mode: SectionSo
 mod tests {
     use super::*;
 
-    fn conv(id: &str, name: &str, unread: u32, at: Option<i64>, pinned: bool) -> SectionConversation {
+    fn conv(
+        id: &str,
+        name: &str,
+        unread: u32,
+        at: Option<i64>,
+        pinned: bool,
+    ) -> SectionConversation {
         SectionConversation {
             conversation_id: id.to_string(),
             conversation_type: ConversationType::Channel,

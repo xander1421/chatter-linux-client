@@ -9,7 +9,6 @@ use std::time::Instant;
 // SQLCipher links webrtc's BoringSSL). Pipeline throughput is still covered by
 // test_attachment_crypto_performance below.
 
-
 /// Test full attachment encryption/decryption pipeline.
 #[test]
 fn test_attachment_crypto_performance() {
@@ -32,7 +31,8 @@ fn test_attachment_crypto_performance() {
         &encrypted.key,
         &encrypted.digest,
         encrypted.plaintext_size,
-    ).unwrap();
+    )
+    .unwrap();
     let decrypt_time = start.elapsed();
     let decrypt_throughput = size as f64 / decrypt_time.as_secs_f64() / (1024.0 * 1024.0);
 
@@ -43,8 +43,16 @@ fn test_attachment_crypto_performance() {
     println!("(AES-256-CBC + HMAC-SHA256 + SHA256)");
     println!("========================================");
     println!("Data size:          {} MB", size / (1024 * 1024));
-    println!("Encrypt time:       {:.3}s ({:.1} MB/s)", encrypt_time.as_secs_f64(), encrypt_throughput);
-    println!("Decrypt time:       {:.3}s ({:.1} MB/s)", decrypt_time.as_secs_f64(), decrypt_throughput);
+    println!(
+        "Encrypt time:       {:.3}s ({:.1} MB/s)",
+        encrypt_time.as_secs_f64(),
+        encrypt_throughput
+    );
+    println!(
+        "Decrypt time:       {:.3}s ({:.1} MB/s)",
+        decrypt_time.as_secs_f64(),
+        decrypt_throughput
+    );
     println!("----------------------------------------");
 
     if decrypt_throughput > 300.0 {
@@ -81,7 +89,8 @@ fn test_parallel_decryption_with_rayon() {
         &encrypted.key,
         &encrypted.digest,
         encrypted.plaintext_size,
-    ).unwrap();
+    )
+    .unwrap();
     let decrypt_time = start.elapsed();
     let decrypt_throughput = size as f64 / decrypt_time.as_secs_f64() / (1024.0 * 1024.0);
 

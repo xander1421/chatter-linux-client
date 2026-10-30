@@ -66,7 +66,7 @@ fn test_anon_group_join_ack_content_serialization() {
         timestamp,
         profile_key: None,
         encrypted_display_name: None,
-        encrypted_avatar: None,
+        avatar: None,
     };
 
     let content = Content {
@@ -101,12 +101,13 @@ fn test_sealed_sender_result_has_join_ack_variant() {
     // This compiles only if the variant exists
     let result = SealedSenderResult::AnonGroupJoinAckReceived {
         sender_id,
+        sender_device_id: 2,
         group_id: group_id.clone(),
         joiner_mailbox_pk: joiner_mailbox_pk.clone(),
         timestamp,
         profile_key: None,
         encrypted_display_name: None,
-        encrypted_avatar: None,
+        avatar: None,
     };
 
     // Verify we can pattern match on it
@@ -149,9 +150,9 @@ fn test_all_content_types_listed() {
         "CallKey",
         "CallHangup",
         "DeleteForMeSync",
-        "GroupCallKey",
+        "GroupCallSignal",
         "AnonGroupInvite",
-        "AnonGroupJoinAck",     // <-- This was the one missing handling
+        "AnonGroupJoinAck", // <-- This was the one missing handling
         "AnonGroupMemberList",
         "AnonGroupLeave",
         "AnonGroupKick",
@@ -176,12 +177,13 @@ fn test_inbox_event_has_join_ack_variant() {
     // This compiles only if the variant exists
     let event = InboxEvent::AnonGroupJoinAck {
         peer_id,
+        sender_device_id: 2,
         group_id: group_id.clone(),
         joiner_mailbox_pk: joiner_mailbox_pk.clone(),
         timestamp,
         profile_key: None,
         encrypted_display_name: None,
-        encrypted_avatar: None,
+        avatar: None,
     };
 
     // Verify we can pattern match

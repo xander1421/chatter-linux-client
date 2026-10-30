@@ -22,26 +22,23 @@
 //!
 //! The tokio-side frame subscriber (`timers.rs`) never touches GL: it only
 //! publishes the latest `Arc<Vec<u8>>` RGBA + dimensions into
-//! [`publish_frame`] (a cheap Arc clone, no 30 MB copy). [`on_before_rendering`]
+//! [`publish_batch`] (a cheap Arc clone, no 30 MB copy). [`on_before_rendering`]
 //! drains that inbox on the GL thread and does the in-place upload.
 //!
 //! # Fallback
 //!
 //! If the graphics API is not `NativeOpenGL`, or the GL function table fails
-//! to load, this module degrades to a no-op: [`is_active`] stays false,
-//! `timers.rs` keeps publishing into the inbox but nothing is uploaded and
-//! the remote-video model simply isn't updated via GL. We never panic in
-//! the notifier (that would take down rendering). A CPU fallback (the old
-//! `from_rgba8` path) could be reinstated in `timers.rs` keyed off
-//! [`is_active`] if a platform is found where GL texture borrow fails; see
-//! the note in `timers.rs`.
+//! to load, uploads are skipped. `timers.rs` still publishes into the inbox
+//! and nothing is uploaded. We never panic in the notifier (that would take
+//! down rendering).
 
+use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ffi::{c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_void};
 use std::num::NonZeroU32;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use slint::{Model, ModelRc, VecModel};
 
@@ -197,33 +194,12 @@ thread_local! {
 /// One published frame: (rgba, width, height, rotation_degrees, generation).
 type InboxEntry = (Arc<Vec<u8>>, u32, u32, u32, u64);
 
-static CALL_FRAME_INBOX: OnceLock<Arc<Mutex<HashMap<String, InboxEntry>>>> = OnceLock::new();
+// `HashMap::new` is not const, so the mutex cannot be a plain static.
+static CALL_FRAME_INBOX: LazyLock<Mutex<HashMap<String, InboxEntry>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn inbox() -> &'static Arc<Mutex<HashMap<String, InboxEntry>>> {
-    CALL_FRAME_INBOX.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
-}
-
-/// Publish the latest frame for a single participant into the shared inbox.
-///
-/// Cheap: stores an `Arc` clone + dimensions. The GL upload happens later, on
-/// the render thread, in [`on_before_rendering`]. `timers.rs` uses
-/// [`publish_batch`] instead (so vanished participants are also pruned); this
-/// per-participant variant is retained for callers that update one tile.
-#[allow(dead_code)]
-pub fn publish_frame(
-    participant_id: &str,
-    rgba: Arc<Vec<u8>>,
-    width: u32,
-    height: u32,
-    rotation_degrees: u32,
-    generation: u64,
-) {
-    if let Ok(mut map) = inbox().lock() {
-        map.insert(
-            participant_id.to_string(),
-            (rgba, width, height, rotation_degrees, generation),
-        );
-    }
+fn inbox() -> &'static Mutex<HashMap<String, InboxEntry>> {
+    &CALL_FRAME_INBOX
 }
 
 /// Replace the whole inbox with the given stable-ordered batch.
@@ -248,14 +224,6 @@ pub fn clear_inbox() {
     }
 }
 
-/// Whether the GL uploader is live (function table loaded). When false,
-/// `publish_*` still works but nothing is uploaded. Reserved for a future
-/// CPU fallback in `timers.rs` if a platform is found where GL borrow fails.
-#[allow(dead_code)]
-pub fn is_active() -> bool {
-    CALL_GL.with(|cell| cell.borrow().is_some())
-}
-
 // ---------------------------------------------------------------------------
 // Notifier entry points (called from gl_linux.rs's rendering notifier).
 // ---------------------------------------------------------------------------
@@ -264,7 +232,7 @@ pub fn is_active() -> bool {
 ///
 /// Safe to call repeatedly; only the first successful load takes effect.
 /// On a non-OpenGL graphics API, or if symbol resolution fails, this is a
-/// no-op and [`is_active`] stays false (graceful degrade).
+/// no-op and frames are not uploaded (graceful degrade).
 pub fn on_rendering_setup(graphics_api: &slint::GraphicsAPI<'_>) {
     let already = CALL_GL.with(|cell| cell.borrow().is_some());
     if already {
@@ -329,7 +297,12 @@ pub fn on_before_rendering(window: &crate::MainWindow) {
         // Destructure into disjoint field borrows so we can call GL functions
         // (`&gl`) while mutating the texture map (`&mut textures`) in the same
         // scope — a single `&state` borrow would forbid that.
-        let CallGlState { gl, textures, model, .. } = state;
+        let CallGlState {
+            gl,
+            textures,
+            model,
+            ..
+        } = state;
 
         // Save GL state we are about to clobber.
         let mut prev_tex_binding: i32 = 0;
@@ -494,7 +467,10 @@ pub fn on_before_rendering(window: &crate::MainWindow) {
         // off while still screen-sharing) or a tile is a video-off avatar.
         // The local participant is pinned last and draws local-video-frame, so
         // it is excluded here.
-        let participants = window.get_active_call_data().participants;
+        let participants = window
+            .global::<crate::CallView>()
+            .get_active_call_data()
+            .participants;
         let remote_count = participants.row_count().saturating_sub(1);
         let images: Vec<slint::Image> = (0..remote_count)
             .map(|i| {
@@ -530,7 +506,9 @@ pub fn on_before_rendering(window: &crate::MainWindow) {
             Some(m) => m.clone(),
             None => {
                 let m = Rc::new(VecModel::<slint::Image>::default());
-                window.set_call_remote_video_frames(ModelRc::from(m.clone()));
+                window
+                    .global::<crate::CallView>()
+                    .set_call_remote_video_frames(ModelRc::from(m.clone()));
                 *model = Some(m.clone());
                 m
             }
@@ -557,19 +535,26 @@ pub fn on_before_rendering(window: &crate::MainWindow) {
         let local_img = participants
             .row_data(participants.row_count().saturating_sub(1))
             .map(|p| p.user_id.to_string())
-            .and_then(|pid| textures.get(&pid).filter(|t| t.width != 0 && t.height != 0).map(|tex| {
-                // SAFETY: same invariants as the remote textures above — live,
-                // non-zero RGBA 2D texture kept in `state.textures` across the draw.
-                unsafe {
-                    slint::BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(
-                        tex.id,
-                        [tex.width, tex.height].into(),
-                    )
-                    .build()
-                }
-            }))
+            .and_then(|pid| {
+                textures
+                    .get(&pid)
+                    .filter(|t| t.width != 0 && t.height != 0)
+                    .map(|tex| {
+                        // SAFETY: same invariants as the remote textures above — live,
+                        // non-zero RGBA 2D texture kept in `state.textures` across the draw.
+                        unsafe {
+                            slint::BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(
+                                tex.id,
+                                [tex.width, tex.height].into(),
+                            )
+                            .build()
+                        }
+                    })
+            })
             .unwrap_or_default();
-        window.set_call_local_video_frame(local_img);
+        window
+            .global::<crate::CallView>()
+            .set_call_local_video_frame(local_img);
     });
 }
 
@@ -648,17 +633,29 @@ pub fn upload_media_player_frame(rgba: &[u8], width: u32, height: u32) -> Option
             let pixels = rgba.as_ptr() as *const c_void;
             if tex.width != width || tex.height != height {
                 (gl.TexImage2D)(
-                    GL_TEXTURE_2D, 0, GL_RGBA as i32,
-                    width as i32, height as i32, 0,
-                    GL_RGBA, GL_UNSIGNED_BYTE, pixels,
+                    GL_TEXTURE_2D,
+                    0,
+                    GL_RGBA as i32,
+                    width as i32,
+                    height as i32,
+                    0,
+                    GL_RGBA,
+                    GL_UNSIGNED_BYTE,
+                    pixels,
                 );
                 tex.width = width;
                 tex.height = height;
             } else {
                 (gl.TexSubImage2D)(
-                    GL_TEXTURE_2D, 0, 0, 0,
-                    width as i32, height as i32,
-                    GL_RGBA, GL_UNSIGNED_BYTE, pixels,
+                    GL_TEXTURE_2D,
+                    0,
+                    0,
+                    0,
+                    width as i32,
+                    height as i32,
+                    GL_RGBA,
+                    GL_UNSIGNED_BYTE,
+                    pixels,
                 );
             }
             let tex_id = tex.id;

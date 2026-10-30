@@ -9,9 +9,9 @@
 use rand::RngCore;
 
 use crate::proto::content_v1::{
-    AttachmentPointer, Content, DataMessage, Delete, DeleteForMeSync, EditMessage,
-    PinMessage, Quote, QuotedAttachment, Reaction, ReceiptMessage, SavedMessageSync, TypingMessage,
-    content, quote, receipt_message, typing_message,
+    AttachmentPointer, Content, DataMessage, Delete, DeleteForMeSync, EditMessage, PinMessage,
+    Quote, QuotedAttachment, Reaction, ReceiptMessage, SavedMessageSync, TypingMessage, content,
+    quote, receipt_message, typing_message,
 };
 use crate::util::time::TimestampNanos;
 
@@ -60,7 +60,11 @@ pub fn build_text_content(body: &str, sent_at: u64) -> Content {
 
 /// Create a Content proto for a message with text and/or attachments.
 /// `sent_at` should be the SAME timestamp used for Message.sent_at (nanoseconds).
-pub fn build_data_message_content(body: &str, attachments: Vec<AttachmentPointer>, sent_at: u64) -> Content {
+pub fn build_data_message_content(
+    body: &str,
+    attachments: Vec<AttachmentPointer>,
+    sent_at: u64,
+) -> Content {
     tracing::debug!(
         sent_at = sent_at,
         body_len = body.len(),
@@ -107,12 +111,12 @@ pub fn build_reply_content(
             timestamp: sent_at,
             attachments,
             quote: Some(Quote {
-                id: quote_timestamp,  // Signal uses timestamp as ID
+                id: quote_timestamp, // Signal uses timestamp as ID
                 text: quote_text.to_string(),
                 attachments: quote_attachments,
                 author_aci: quote_author_id.to_string(),
                 r#type: quote::Type::Normal as i32,
-                author_aci_binary: vec![],  // We use string format
+                author_aci_binary: vec![], // We use string format
             }),
             ..Default::default()
         })),
@@ -155,7 +159,11 @@ pub fn build_typing_content_with_channel(started: bool, channel_id: Option<&str>
     Content {
         timestamp: now,
         content: Some(content::Content::Typing(TypingMessage {
-            action: if started { typing_message::Action::Started as i32 } else { typing_message::Action::Stopped as i32 },
+            action: if started {
+                typing_message::Action::Started as i32
+            } else {
+                typing_message::Action::Stopped as i32
+            },
             timestamp: now,
             channel_id: channel_id.unwrap_or_default().to_string(),
         })),
@@ -169,7 +177,10 @@ pub fn build_read_receipt_content(message_timestamps: Vec<u64>) -> Content {
 }
 
 /// Create a Content proto for read receipt with optional channel context.
-pub fn build_read_receipt_content_with_channel(message_timestamps: Vec<u64>, channel_id: Option<&str>) -> Content {
+pub fn build_read_receipt_content_with_channel(
+    message_timestamps: Vec<u64>,
+    channel_id: Option<&str>,
+) -> Content {
     let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
@@ -189,7 +200,10 @@ pub fn build_delivery_receipt_content(message_timestamps: Vec<u64>) -> Content {
 }
 
 /// Create a Content proto for delivery receipt with optional channel context.
-pub fn build_delivery_receipt_content_with_channel(message_timestamps: Vec<u64>, channel_id: Option<&str>) -> Content {
+pub fn build_delivery_receipt_content_with_channel(
+    message_timestamps: Vec<u64>,
+    channel_id: Option<&str>,
+) -> Content {
     let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
@@ -210,7 +224,13 @@ pub fn build_reaction_content(
     target_author_aci: &str,
     target_sent_timestamp: u64,
 ) -> Content {
-    build_reaction_content_with_channel(emoji, remove, target_author_aci, target_sent_timestamp, None)
+    build_reaction_content_with_channel(
+        emoji,
+        remove,
+        target_author_aci,
+        target_sent_timestamp,
+        None,
+    )
 }
 
 /// Create a Content proto for reaction with optional channel context.
@@ -221,7 +241,27 @@ pub fn build_reaction_content_with_channel(
     target_sent_timestamp: u64,
     channel_id: Option<&str>,
 ) -> Content {
-    let now = TimestampNanos::now().as_u64();
+    build_reaction_content_with_channel_at(
+        emoji,
+        remove,
+        target_author_aci,
+        target_sent_timestamp,
+        channel_id,
+        TimestampNanos::now().as_u64(),
+    )
+}
+
+/// Build an immutable reaction action. Dispatch, local persistence and copies
+/// must retain this allocated clock, including across delayed completion.
+pub fn build_reaction_content_with_channel_at(
+    emoji: &str,
+    remove: bool,
+    target_author_aci: &str,
+    target_sent_timestamp: u64,
+    channel_id: Option<&str>,
+    action_ts: u64,
+) -> Content {
+    let now = action_ts;
     // Note: Reaction proto doesn't have channel_id field - we encode it in target_author_aci
     // as "channel:{channel_id}:{author_aci}" for channels, or just author_aci for DMs
     let encoded_author = if let Some(ch_id) = channel_id {
@@ -237,6 +277,7 @@ pub fn build_reaction_content_with_channel(
             target_author_aci: encoded_author,
             target_sent_timestamp,
             timestamp: now,
+            ..Default::default()
         })),
         ..Default::default()
     }
@@ -313,6 +354,7 @@ pub fn build_delete_for_me_content(
             target_author_aci: target_author_aci.to_string(),
             target_sent_timestamp,
             timestamp: now,
+            ..Default::default()
         })),
         ..Default::default()
     }
@@ -320,36 +362,22 @@ pub fn build_delete_for_me_content(
 
 /// Create a Content proto for saved message sync (Note to Self multi-device).
 ///
-/// Follows Signal's approach: the message content is sent as a sync message
-/// to the user's own devices. Signal Protocol device sessions provide encryption —
-/// no application-level encryption needed.
-pub fn build_saved_message_sync_content(
-    message_id: &str,
-    text: &str,
-    sent_at: u64,
-    attachment_ids: Vec<String>,
-) -> Content {
+/// `sync` is the full snapshot of one Saved record (see the proto): creation,
+/// edit and pin all send this. Signal Protocol device sessions provide the
+/// encryption — no application-level encryption needed. The envelope clock
+/// is the snapshot's newest part, so each change is a distinct transcript.
+pub fn build_saved_message_sync_content(sync: SavedMessageSync) -> Content {
     Content {
-        timestamp: sent_at,
-        content: Some(content::Content::SavedMessageSync(SavedMessageSync {
-            text: text.to_string(),
-            message_id: message_id.to_string(),
-            sent_at,
-            attachment_ids,
-        })),
+        timestamp: sync.sent_at.max(sync.edited_at).max(sync.pin_changed_at),
+        content: Some(content::Content::SavedMessageSync(sync)),
         ..Default::default()
     }
 }
 
-/// Create a Content proto for delete-for-everyone.
-/// This sends a DataMessage with a Delete field to notify the peer.
-pub fn build_delete_for_everyone_content(target_sent_timestamp: u64) -> Content {
-    build_delete_for_everyone_content_with_channel(target_sent_timestamp, None)
-}
-
-/// Create a Content proto for delete-for-everyone with optional channel context.
-pub fn build_delete_for_everyone_content_with_channel(
+/// Delete-for-everyone, routed to the exact target author.
+pub fn build_targeted_delete_content(
     target_sent_timestamp: u64,
+    target_author_aci: Option<&str>,
     channel_id: Option<&str>,
 ) -> Content {
     let now = TimestampNanos::now().as_u64();
@@ -360,11 +388,40 @@ pub fn build_delete_for_everyone_content_with_channel(
             channel_id: channel_id.unwrap_or_default().to_string(),
             delete: Some(Delete {
                 target_sent_timestamp,
+                target_author_aci: target_author_aci.map(str::to_owned),
+                destination_user_id: None,
+                target_call_id: None,
             }),
             ..Default::default()
         })),
         ..Default::default()
     }
+}
+
+/// Build a scoped DM delete from a stored record.
+pub(crate) fn build_stored_dm_delete_content(
+    target: &crate::domain::message::Message,
+) -> Result<Content, crate::error::StorageError> {
+    use crate::storage::repositories::message_modifier_repo::canonical_call_record_id;
+    let call_id = canonical_call_record_id(target);
+    if matches!(
+        target.content,
+        crate::domain::message::MessageContent::Call(_)
+    ) && call_id.is_none()
+    {
+        return Err(crate::error::StorageError::InvalidData(
+            "Noncanonical DM call record".into(),
+        ));
+    }
+    let author = target.sender_id.ok_or_else(|| {
+        crate::error::StorageError::InvalidData("Delete target has no author".into())
+    })?;
+    let mut content =
+        build_targeted_delete_content(target.sent_at, Some(&author.to_string()), None);
+    if let Some(content::Content::DataMessage(data)) = &mut content.content {
+        data.delete.as_mut().unwrap().target_call_id = call_id.map(|id| id.to_string());
+    }
+    Ok(content)
 }
 
 // =============================================================================
@@ -385,7 +442,6 @@ pub fn build_call_key_offer(
     call_id: &str,
     ephemeral_public_key: [u8; 32],
     call_type: &str,
-    channel_id: &str,
 ) -> Content {
     use crate::proto::content_v1::CallKeyExchange;
     let now = TimestampNanos::now().as_u64();
@@ -397,7 +453,6 @@ pub fn build_call_key_offer(
             timestamp: now,
             is_offer: true,
             call_type: call_type.to_string(),
-            channel_id: channel_id.to_string(),
         })),
         ..Default::default()
     }
@@ -411,10 +466,7 @@ pub fn build_call_key_offer(
 /// # Arguments
 /// * `call_id` - Call ID from the offer
 /// * `ephemeral_public_key` - Callee's ephemeral X25519 public key (32 bytes)
-pub fn build_call_key_answer(
-    call_id: &str,
-    ephemeral_public_key: [u8; 32],
-) -> Content {
+pub fn build_call_key_answer(call_id: &str, ephemeral_public_key: [u8; 32]) -> Content {
     use crate::proto::content_v1::CallKeyExchange;
     let now = TimestampNanos::now().as_u64();
     Content {
@@ -425,45 +477,48 @@ pub fn build_call_key_answer(
             timestamp: now,
             is_offer: false,
             call_type: String::new(),
-            channel_id: String::new(),
         })),
         ..Default::default()
     }
 }
 
 // =============================================================================
-// Group Call Key Distribution (Pairwise sealed sender)
+// Group Call Signaling (pairwise sealed sender)
 // =============================================================================
 
-/// Create a Content proto for group call key distribution.
-///
-/// Distributes the symmetric call key to a single group member via pairwise
-/// sealed sender. Must be called once for each member (client-side fanout).
-///
-/// Per NDSS '21: Server cannot correlate these independent messages to a group.
-///
-/// # Arguments
-/// * `call_id` - Unique call identifier
-/// * `key` - AES-256 encryption key (32 bytes) for LiveKit E2EE
-/// * `epoch` - Key epoch (0 for initial, increments on rotation)
-/// * `channel_id` - Group channel ID
-pub fn build_group_call_key_content(
+/// Create a Content proto carrying one channel group-call signal for a single
+/// member (client-side fanout: the server cannot correlate the copies — NDSS
+/// '21). A ring carries no key; only a [`GroupCallSignal::Key`] does.
+pub fn build_group_call_signal_content(
     call_id: &str,
-    key: [u8; 32],
-    epoch: u32,
     channel_id: &str,
+    signal: crate::domain::call::GroupCallSignal,
 ) -> Content {
-    use crate::proto::content_v1::GroupCallKey;
+    use crate::domain::call::GroupCallSignal;
+    use crate::proto::content_v1::{
+        GroupCallKeyRequest, GroupCallKeyUpdate, GroupCallRing, group_call_signal,
+    };
     let now = TimestampNanos::now().as_u64();
-    Content {
-        timestamp: now,
-        content: Some(content::Content::GroupCallKey(GroupCallKey {
-            call_id: call_id.to_string(),
+    let signal = match signal {
+        GroupCallSignal::Ring => group_call_signal::Signal::Ring(GroupCallRing {}),
+        GroupCallSignal::Key { key, epoch } => group_call_signal::Signal::Key(GroupCallKeyUpdate {
             key_material: key.to_vec(),
             key_epoch: epoch,
-            timestamp: now,
-            channel_id: channel_id.to_string(),
-        })),
+        }),
+        GroupCallSignal::KeyRequest => {
+            group_call_signal::Signal::KeyRequest(GroupCallKeyRequest {})
+        }
+    };
+    Content {
+        timestamp: now,
+        content: Some(content::Content::GroupCallSignal(
+            crate::proto::content_v1::GroupCallSignal {
+                call_id: call_id.to_string(),
+                channel_id: channel_id.to_string(),
+                timestamp: now,
+                signal: Some(signal),
+            },
+        )),
         ..Default::default()
     }
 }
@@ -484,123 +539,86 @@ pub fn build_call_hangup_content(call_id: &str, reason: CallHangupReason) -> Con
                 CallHangupReason::Busy => call_hangup::Reason::Busy as i32,
                 CallHangupReason::Timeout => call_hangup::Reason::Timeout as i32,
                 CallHangupReason::NetworkError => call_hangup::Reason::NetworkError as i32,
+                CallHangupReason::AcceptedElsewhere => {
+                    call_hangup::Reason::AcceptedElsewhere as i32
+                }
+                CallHangupReason::DeclinedElsewhere => {
+                    call_hangup::Reason::DeclinedElsewhere as i32
+                }
             },
             timestamp: now,
+            device_id: 0,
         })),
         ..Default::default()
     }
 }
 
-// =============================================================================
-// Anonymous Call Signaling (Anon DM + Anon Group)
-// =============================================================================
-
-/// Generate a new anonymous call room ID and name.
+/// The copy of an outgoing 1:1 call message our OWN other devices get.
 ///
-/// Returns `(room_id_bytes, room_name, encryption_key)`.
-/// The room name has format `"anon-{uuid}"`.
-pub fn generate_anon_call_room() -> ([u8; 16], String, Vec<u8>) {
-    let call_room_id = uuid::Uuid::new_v4();
-    let room_id_bytes: [u8; 16] = *call_room_id.as_bytes();
-    let room_name = format!("anon-{}", call_room_id);
-
-    // Generate random 32-byte E2EE key
-    let mut encryption_key = vec![0u8; 32];
-    // SECURITY: call E2EE key must draw from the OS entropy pool, not a
-    // once-seeded userspace PRG (ThreadRng). Matches call_key_provider.
-    {
-        use rand::TryRngCore;
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng.unwrap_err(), &mut encryption_key);
-    }
-
-    (room_id_bytes, room_name, encryption_key)
-}
-
-/// Build an `AnonCallToken` proto from a `CallRoomToken`.
-pub fn build_anon_call_token(token: &crate::mailbox::CallRoomToken) -> crate::proto::content_v1::AnonCallToken {
-    crate::proto::content_v1::AnonCallToken {
-        public_key: token.public_key.clone(),
-        signature: token.signature.clone(),
-        message_randomizer: token.randomizer.clone().unwrap_or_default(),
-    }
-}
-
-/// Create a Content proto for an anonymous call offer.
-///
-/// Used by both anon DM and anon group call initiation.
-pub fn build_anon_call_offer_content(
-    call_room_id: &[u8; 16],
-    room_name: &str,
-    token: &crate::mailbox::CallRoomToken,
-    video: bool,
-    display_name: &str,
-    encryption_key: &[u8],
-) -> Content {
-    use crate::proto::content_v1::{AnonCallOffer, anon_call_offer::CallType};
-
-    let now = TimestampNanos::now().as_u64();
-    Content {
-        timestamp: now,
-        padding: generate_padding(PADDING_LARGE),
-        content: Some(content::Content::AnonCallOffer(AnonCallOffer {
-            call_room_id: call_room_id.to_vec(),
-            room_name: room_name.to_string(),
-            caller_token: Some(build_anon_call_token(token)),
-            call_type: if video { CallType::Video.into() } else { CallType::Voice.into() },
-            timestamp: now,
-            caller_display_name: display_name.to_string(),
-            call_encryption_key: encryption_key.to_vec(),
+/// Signal's `CallMessage.Hangup` ACCEPTED / DECLINED with `deviceId`: when this
+/// device answers (sends the key answer) or declines a call, our other devices
+/// — which are ringing for the same call id — are told to stop. Every other
+/// call message is for the peer's devices only (a synced offer would ring us
+/// with a call from ourselves), so it gets `None`.
+pub fn build_call_self_sync(content: &Content, our_device_id: u32) -> Option<Content> {
+    use crate::proto::content_v1::{CallHangup, call_hangup};
+    let (call_id, reason) = match &content.content {
+        Some(content::Content::CallKey(key)) if !key.is_offer => {
+            (&key.call_id, call_hangup::Reason::AcceptedElsewhere)
+        }
+        Some(content::Content::CallHangup(h))
+            if h.reason == call_hangup::Reason::Declined as i32 =>
+        {
+            (&h.call_id, call_hangup::Reason::DeclinedElsewhere)
+        }
+        _ => return None,
+    };
+    Some(Content {
+        timestamp: content.timestamp,
+        content: Some(content::Content::CallHangup(CallHangup {
+            call_id: call_id.clone(),
+            reason: reason as i32,
+            timestamp: content.timestamp,
+            device_id: our_device_id,
         })),
         ..Default::default()
-    }
+    })
 }
 
-/// Create a Content proto for an anonymous call answer.
-///
-/// Used by both anon DM and anon group call acceptance/decline.
-pub fn build_anon_call_answer_content(
-    call_room_id: &[u8; 16],
-    accept: bool,
-    token: Option<&crate::mailbox::CallRoomToken>,
-    decline_reason: i32,
-    display_name: &str,
-) -> Content {
-    use crate::proto::content_v1::AnonCallAnswer;
+#[cfg(test)]
+mod call_self_sync_tests {
+    use super::*;
+    use crate::proto::content_v1::call_hangup::Reason;
 
-    let now = TimestampNanos::now().as_u64();
-    Content {
-        timestamp: now,
-        padding: generate_padding(PADDING_LARGE),
-        content: Some(content::Content::AnonCallAnswer(AnonCallAnswer {
-            call_room_id: call_room_id.to_vec(),
-            accepted: accept,
-            callee_token: if accept { token.map(build_anon_call_token) } else { None },
-            timestamp: now,
-            callee_display_name: display_name.to_string(),
-            decline_reason,
-        })),
-        ..Default::default()
+    fn synced(c: &Content) -> Option<(String, i32, u32)> {
+        build_call_self_sync(c, 6).map(|s| match s.content {
+            Some(content::Content::CallHangup(h)) => (h.call_id, h.reason, h.device_id),
+            other => panic!("expected CallHangup, got {other:?}"),
+        })
     }
-}
 
-/// Create a Content proto for an anonymous call hangup.
-///
-/// Used by both anon DM and anon group call termination.
-pub fn build_anon_call_hangup_content(
-    call_room_id: &[u8; 16],
-    reason: i32,
-) -> Content {
-    use crate::proto::content_v1::AnonCallHangup;
+    /// Answering / declining tells our other devices; nothing else rings them.
+    #[test]
+    fn only_answer_and_decline_reach_our_other_devices() {
+        let answer = build_call_key_answer("c1", [1u8; 32]);
+        assert_eq!(
+            synced(&answer),
+            Some(("c1".into(), Reason::AcceptedElsewhere as i32, 6))
+        );
+        let decline = build_call_hangup_content("c2", CallHangupReason::Declined);
+        assert_eq!(
+            synced(&decline),
+            Some(("c2".into(), Reason::DeclinedElsewhere as i32, 6))
+        );
 
-    let now = TimestampNanos::now().as_u64();
-    Content {
-        timestamp: now,
-        padding: generate_padding(PADDING_MESSAGE),
-        content: Some(content::Content::AnonCallHangup(AnonCallHangup {
-            call_room_id: call_room_id.to_vec(),
-            reason,
-            timestamp: now,
-        })),
-        ..Default::default()
+        assert_eq!(synced(&build_call_key_offer("c3", [1u8; 32], "")), None);
+        assert_eq!(
+            synced(&build_call_hangup_content("c4", CallHangupReason::Normal)),
+            None
+        );
+        assert_eq!(
+            synced(&build_call_hangup_content("c5", CallHangupReason::Busy)),
+            None
+        );
     }
 }

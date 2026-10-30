@@ -6,11 +6,11 @@
 //! - Multi-device sync detection
 //! - Inbox processor message routing
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
 use chatter_core::proto::chat_v1::{
-    self, message::content::Type as ContentType, message::Content, ChannelType, EncryptedData,
+    self, ChannelType, EncryptedData, message::Content, message::content::Type as ContentType,
 };
 use tokio_stream::StreamExt;
 
@@ -133,64 +133,6 @@ fn test_encryption_content_structure() {
 }
 
 // ============================================================================
-// Multi-Device Sync Detection Tests
-// ============================================================================
-
-/// Test that we can detect when multi-device sync is needed.
-#[test]
-fn test_multi_device_detection() {
-    // Simulate device list response
-    struct MockDevice {
-        device_id: u32,
-        name: String,
-    }
-
-    let devices = vec![
-        MockDevice {
-            device_id: 1,
-            name: "Primary".to_string(),
-        },
-        MockDevice {
-            device_id: 2,
-            name: "Laptop".to_string(),
-        },
-        MockDevice {
-            device_id: 3,
-            name: "Tablet".to_string(),
-        },
-    ];
-
-    let current_device_id = 1;
-    let device_count = devices.len();
-
-    // Multi-device sync needed when count > 1
-    let needs_sync = device_count > 1;
-    assert!(needs_sync);
-
-    // Get other device IDs for sync
-    let other_device_ids: Vec<u32> = devices
-        .iter()
-        .filter(|d| d.device_id != current_device_id)
-        .map(|d| d.device_id)
-        .collect();
-
-    assert_eq!(other_device_ids, vec![2, 3]);
-}
-
-/// Test single device doesn't need sync.
-#[test]
-fn test_single_device_no_sync() {
-    struct MockDevice {
-        device_id: u32,
-    }
-
-    let devices = vec![MockDevice { device_id: 1 }];
-
-    let needs_sync = devices.len() > 1;
-    assert!(!needs_sync);
-}
-
-// ============================================================================
 // Inbox Processor Message Type Tests
 // ============================================================================
 
@@ -275,7 +217,10 @@ fn test_prekey_requires_sender_context() {
 // ============================================================================
 
 /// Helper to create a test channel and return its ID.
-async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool) -> String {
+async fn create_test_channel(
+    pool: &chatter_core::network::grpc::GrpcClientPool,
+    user: &TestUser,
+) -> String {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("content_test_{}", unique_username());
 
@@ -284,10 +229,9 @@ async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool)
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
-            None,
             Some("Test channel for content processing"),
             None,
+            Some(membership::genesis(user, true).1),
         )
         .await
         .expect("Failed to create channel");
@@ -322,19 +266,30 @@ async fn test_server_text_message_roundtrip() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-    let channel_id = create_test_channel(&pool).await;
+    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let channel_id = create_test_channel(&pool, &user).await;
 
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
 
     // Send a text message
     let content = Content {
-        r#type: Some(ContentType::Text("Test message for content processing".to_string())),
+        r#type: Some(ContentType::Text(
+            "Test message for content processing".to_string(),
+        )),
     };
 
     let sent_message = assert_ok(
         msg_client
-            .send_message(&channel_id, content, None, false, None, None, vec![], false, vec![])
+            .send_message(
+                &channel_id,
+                content,
+                None,
+                false,
+                None,
+                vec![],
+                false,
+                vec![],
+            )
             .await,
     );
 

@@ -20,7 +20,7 @@
 //!
 //! - [`packet`], [`codec`], [`padding`], [`compress`] — the frame itself
 //! - [`tlv`] — the payload formats carried inside frames
-//! - [`relay`], [`dedup`], [`fragment`], [`topology`] — forwarding policy
+//! - [`relay`], [`dedup`], [`fragment`] — forwarding policy
 //! - [`gcs`], [`sync_flags`] — gossip-sync set reconciliation
 //! - [`ids`] — peer and packet identity
 
@@ -33,8 +33,12 @@
 #![allow(clippy::collapsible_match)]
 // Production code must never panic on radio input. Tests are exempt: asserting a
 // well-formed fixture decodes is exactly what `expect` is for.
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![cfg_attr(
+    not(test),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
 
+pub mod channel;
 pub mod codec;
 pub mod compress;
 pub mod dedup;
@@ -47,7 +51,6 @@ pub mod padding;
 pub mod relay;
 pub mod sync_flags;
 pub mod tlv;
-pub mod topology;
 
 pub use error::MeshError;
 pub use packet::{

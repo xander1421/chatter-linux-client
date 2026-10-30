@@ -1,3 +1,4 @@
+import { GlassSurface } from "glass_surface.slint";
 // Code preview panel component
 //
 // Displays syntax-highlighted code with line numbers in a scrollable panel.
@@ -5,6 +6,9 @@
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Icons } from "../theme/icons.slint";
+import { HeaderButton } from "header_button.slint";
+import { DismissButton } from "dismiss_button.slint";
 import { Typography } from "../theme/typography.slint";
 
 export component CodePreviewPanel inherits Rectangle {
@@ -13,26 +17,13 @@ export component CodePreviewPanel inherits Rectangle {
     in property <string> language: "";
     in property <int> line-count: 0;
 
-    // Rendered code image from slint-code-view
-    in property <image> code-image;
-
     // Plain text for copy-all functionality
     in property <string> plain-text: "";
-
-    // Selection state (for UI feedback)
-    in property <bool> has-selection: false;
-    in property <string> selected-text: "";
 
     // Callbacks
     callback close-clicked();
     callback copy-clicked();
-    callback copy-selection-clicked();
     callback open-external-clicked();
-
-    // Pointer events for selection handling
-    callback pointer-down(/* x */ length, /* y */ length, /* shift */ bool, /* ctrl */ bool);
-    callback pointer-move(/* x */ length, /* y */ length);
-    callback pointer-up(/* x */ length, /* y */ length);
 
     // Code preview background
     property <color> code-background: Colors.code-bg;
@@ -44,9 +35,12 @@ export component CodePreviewPanel inherits Rectangle {
 
     VerticalLayout {
         // Header bar
-        Rectangle {
-            height: 40px;
-            background: Colors.surface;
+        GlassSurface {
+            material-level: 2;
+            elevation: 3;
+
+            // As tall as the header buttons, so the file name shares their axis.
+            height: Spacing.header-action-box;
 
             HorizontalLayout {
                 padding-left: Spacing.md;
@@ -56,12 +50,15 @@ export component CodePreviewPanel inherits Rectangle {
 
                 // Left side: file info
                 HorizontalLayout {
+                    horizontal-stretch: 1;
                     spacing: Spacing.sm;
                     alignment: start;
 
                     // File name
                     Text {
                         text: root.file-name;
+                        horizontal-stretch: 1;
+                        overflow: elide;
                         color: Colors.text-primary;
                         font-size: Typography.sm;
                         vertical-alignment: center;
@@ -94,105 +91,26 @@ export component CodePreviewPanel inherits Rectangle {
 
                 // Right side: action buttons
                 HorizontalLayout {
-                    spacing: Spacing.xs;
+                    spacing: Spacing.header-action-gap;
                     alignment: end;
 
-                    // Copy selection button (only visible when there's a selection)
-                    if root.has-selection: Rectangle {
-                        width: 32px;
-                        height: 32px;
-                        background: copy-sel-touch.has-hover ? Colors.primary.transparentize(0.8) : transparent;
-                        border-radius: Spacing.radius-sm;
-
-                        Text {
-                            width: 100%;
-                            height: 100%;
-                            text: "\u{2702}"; // Scissors
-                            font-size: Typography.sm;
-                            color: Colors.primary;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        copy-sel-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.copy-selection-clicked();
-                            }
-                        }
-                    }
-
                     // Copy all button
-                    Rectangle {
-                        width: 32px;
-                        height: 32px;
-                        background: copy-touch.has-hover ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-sm;
-
-                        Text {
-                            width: 100%;
-                            height: 100%;
-                            text: "\u{1F4CB}"; // Clipboard
-                            font-size: Typography.sm;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        copy-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.copy-clicked();
-                            }
-                        }
+                    HeaderButton {
+                        icon: Icons.copy;
+                        label: "Copy";
+                        clicked => { root.copy-clicked(); }
                     }
 
                     // Open external button
-                    Rectangle {
-                        width: 32px;
-                        height: 32px;
-                        background: open-touch.has-hover ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-sm;
-
-                        Text {
-                            width: 100%;
-                            height: 100%;
-                            text: "\u{1F517}"; // Link
-                            font-size: Typography.sm;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        open-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.open-external-clicked();
-                            }
-                        }
+                    HeaderButton {
+                        icon: Icons.link;
+                        label: "Open externally";
+                        clicked => { root.open-external-clicked(); }
                     }
 
                     // Close button
-                    Rectangle {
-                        width: 32px;
-                        height: 32px;
-                        background: close-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
-                        border-radius: Spacing.radius-sm;
-
-                        Text {
-                            width: 100%;
-                            height: 100%;
-                            text: "\u{00D7}"; // X mark
-                            font-size: Typography.sm;
-                            color: close-touch.has-hover ? Colors.error : Colors.text-secondary;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        close-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.close-clicked();
-                            }
-                        }
+                    DismissButton {
+                        clicked => { root.close-clicked(); }
                     }
                 }
             }
@@ -212,7 +130,7 @@ export component CodePreviewPanel inherits Rectangle {
                 read-only: true;
                 single-line: false;
                 color: Colors.text-primary;
-                font-family: "monospace";
+                font-family: Typography.font-family-mono;
                 font-size: Typography.sm;
                 wrap: no-wrap;
             }

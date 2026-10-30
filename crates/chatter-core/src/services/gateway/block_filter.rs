@@ -24,8 +24,8 @@
 
 use crate::domain::ids::UserId;
 use crate::error::ServiceError;
-use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::UserRepository;
+use crate::storage::repositories::settings_repo::SettingsRepository;
 
 /// Has the logged-in user blocked `sender_id`?
 ///
@@ -53,7 +53,6 @@ pub fn sender_is_blocked(
     settings_repo: &SettingsRepository,
     sender_id: &UserId,
 ) -> Result<bool, ServiceError> {
-    use crate::services::current_user::CurrentUserProvider;
     let me = settings_repo.current_user_id()?;
     Ok(user_repo.is_blocked(&me, sender_id)?)
 }
@@ -62,12 +61,17 @@ pub fn sender_is_blocked(
 mod tests {
     use super::*;
     use crate::domain::user::{Friendship, FriendshipStatus};
-    use crate::storage::repositories::settings_repo::keys;
     use crate::storage::Database;
+    use crate::storage::repositories::settings_repo::keys;
     use chrono::Utc;
     use std::sync::Arc;
 
-    fn setup() -> (tempfile::TempDir, UserRepository, SettingsRepository, UserId) {
+    fn setup() -> (
+        tempfile::TempDir,
+        UserRepository,
+        SettingsRepository,
+        UserId,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(Database::open(&dir.path().join("gw.db"), "testpass").unwrap());
         db.run_migrations().unwrap();

@@ -1,0 +1,47 @@
+import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Colors } from "../theme/colors.slint";
+import { Typography } from "../theme/typography.slint";
+import { UpdateGlobal } from "../update/update_global.slint";
+import { Button } from "../components/button.slint";
+
+export component UpdateBanner inherits GlassSurface {
+    material-level: 2;
+    // The update notice grows from its reserved sidebar slot. A one-frame
+    // start lets the card keep its layout size while the surface springs in.
+    property <float> arrival: 0;
+    init => { reveal.start(); }
+    reveal := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => { self.running = false; root.arrival = 1; }
+    }
+    animate arrival { duration: Materials.motion-standard; easing: Materials.spring; }
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale-x: 88% + root.arrival * 12%;
+    transform-scale-y: 88% + root.arrival * 12%;
+    opacity: min(1, max(0, root.arrival));
+    HorizontalLayout {
+        padding: Spacing.sm;
+        spacing: Spacing.sm;
+        VerticalLayout {
+            alignment: center;
+            Text { text: UpdateGlobal.state == "ready" ? "Ready to restart" : UpdateGlobal.state == "installing" ? "Confirm system install" : UpdateGlobal.state == "error" ? "Update failed" : "Update available";
+                color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; }
+            Text { text: UpdateGlobal.state == "downloading" ? UpdateGlobal.progress : UpdateGlobal.state == "confirm-cellular" ? "Cellular download?" : UpdateGlobal.state == "error" ? UpdateGlobal.error : UpdateGlobal.version;
+                color: UpdateGlobal.state == "error" ? Colors.error : Colors.text-secondary;
+                font-size: Typography.xs; wrap: word-wrap; }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Button { text: UpdateGlobal.state == "error" ? "Retry" : UpdateGlobal.play-distribution ? "Update in Play Store" : UpdateGlobal.state == "ready" ? "Restart" : UpdateGlobal.state == "confirm-cellular" ? "Download now" : "Update";
+                disabled: UpdateGlobal.state == "downloading" || UpdateGlobal.state == "installing";
+                clicked => { UpdateGlobal.update(); }
+            }
+        }
+    }
+}
+

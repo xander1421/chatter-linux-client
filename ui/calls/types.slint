@@ -19,14 +19,16 @@ export struct ActiveCallData {
     channel-id: string,
     title: string,
     is-video-call: bool,
-    is-anonymous-call: bool,
     is-encrypted: bool,
     is-identity-verified: bool,
     identity-warning: string,
     participant-count: int,
     duration-seconds: int,
+    is-connected: bool,
     participants: [CallParticipantData],
     // Verification emojis (SAS) - both parties should see the same emojis
+    // Empty for handshake SAS or while waiting for the group media key.
+    verification-key-version: string,
     verification-emoji-1: string,
     verification-emoji-2: string,
     verification-emoji-3: string,
@@ -42,7 +44,6 @@ export struct IncomingCallData {
     caller-avatar-source: image,
     channel-name: string,
     is-video-call: bool,
-    is-anonymous-call: bool,
     is-identity-verified: bool,
     identity-warning: string,
     // Encryption key from caller (base64 encoded for UI transport)
@@ -61,12 +62,17 @@ export struct CallHistoryRow {
     conversation-type: string,   // "channel" | "server_dm" | "anon_dm" | "anon_group" | ...
     name: string,
     initials: string,
+    avatar-source: image,
+    private-channel: bool,
     timestamp: string,           // "Yesterday 4:12 PM"
     detail: string,              // "Outgoing · 3:42" | "Missed"
     is-missed: bool,
     is-video: bool,
     is-incoming: bool,
     can-call-back: bool,
+    // Calls-screen selection mark. UI state only, owned by
+    // `features/calls/history.rs`; core always builds rows unselected.
+    selected: bool,
 }
 
 // Device/source selection types

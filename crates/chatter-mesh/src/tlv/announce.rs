@@ -243,14 +243,8 @@ mod tests {
     #[test]
     fn neighbors_are_capped_at_ten_on_encode() {
         let neighbors: Vec<[u8; 8]> = (0..20u8).map(|i| [i; 8]).collect();
-        let packet = AnnouncementPacket::new(
-            "n".to_string(),
-            vec![],
-            vec![],
-            Some(neighbors),
-            None,
-            None,
-        );
+        let packet =
+            AnnouncementPacket::new("n".to_string(), vec![], vec![], Some(neighbors), None, None);
         let decoded = AnnouncementPacket::decode(&packet.encode().unwrap()).unwrap();
         let got = decoded.direct_neighbors.unwrap();
         assert_eq!(got.len(), MAX_DIRECT_NEIGHBORS);
@@ -267,7 +261,9 @@ mod tests {
         // nickname (2 + 1) + noise key (2 + 0) + signing key (2 + 0) = 7.
         assert_eq!(encoded.len(), 7);
         assert_eq!(
-            AnnouncementPacket::decode(&encoded).unwrap().direct_neighbors,
+            AnnouncementPacket::decode(&encoded)
+                .unwrap()
+                .direct_neighbors,
             None
         );
     }
@@ -362,7 +358,17 @@ mod tests {
         assert_eq!(packet.encode().unwrap().len(), 7);
 
         // Decode side: a 13-byte value is skipped.
-        let mut bytes = vec![0x01, 0x01, b'n', 0x02, 0x00, 0x03, 0x00, TLV_BRIDGE_GEOHASH, 13];
+        let mut bytes = vec![
+            0x01,
+            0x01,
+            b'n',
+            0x02,
+            0x00,
+            0x03,
+            0x00,
+            TLV_BRIDGE_GEOHASH,
+            13,
+        ];
         bytes.extend_from_slice(b"0123456789abc");
         assert_eq!(
             AnnouncementPacket::decode(&bytes).unwrap().bridge_geohash,
@@ -386,8 +392,7 @@ mod tests {
 
     #[test]
     fn absent_capabilities_stay_absent() {
-        let packet =
-            AnnouncementPacket::new("n".to_string(), vec![], vec![], None, None, None);
+        let packet = AnnouncementPacket::new("n".to_string(), vec![], vec![], None, None, None);
         let decoded = AnnouncementPacket::decode(&packet.encode().unwrap()).unwrap();
         assert_eq!(decoded.capabilities, None);
     }
@@ -408,14 +413,7 @@ mod tests {
 
     #[test]
     fn oversize_field_fails_the_encode() {
-        let packet = AnnouncementPacket::new(
-            "x".repeat(256),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-        );
+        let packet = AnnouncementPacket::new("x".repeat(256), vec![], vec![], None, None, None);
         assert!(matches!(
             packet.encode(),
             Err(MeshError::LengthExceeded {

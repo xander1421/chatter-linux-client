@@ -10,14 +10,16 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
+use crate::{ChannelInviteData, MainWindow};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::ChannelId;
-use crate::{FriendRequestData, MainWindow};
 
 /// Send-safe intermediate type for channel invite display data.
 struct ChannelInviteSendData {
     channel_id: String,
     channel_name: String,
+    private_channel: bool,
+    invited_by: String,
     sent_at: String,
     note: String,
 }
@@ -41,21 +43,16 @@ fn format_created_at(created_at: u64) -> String {
 pub fn load_channel_invites(weak: Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     tokio::spawn(async move {
-        let invites = ui_ctx.list_pending_channel_invites().await;
+        let invites = ui_ctx.channel_invite_rows().await;
         let send_items: Vec<ChannelInviteSendData> = invites
             .into_iter()
-            .map(|inv| {
-                let channel_name = if inv.channel_name.is_empty() {
-                    "Channel invite".to_string()
-                } else {
-                    inv.channel_name
-                };
-                ChannelInviteSendData {
-                    channel_id: inv.channel_id,
-                    channel_name,
-                    sent_at: format_created_at(inv.created_at),
-                    note: inv.message,
-                }
+            .map(|invite| ChannelInviteSendData {
+                channel_id: invite.channel_id,
+                channel_name: invite.channel_name,
+                private_channel: invite.private_channel,
+                invited_by: invite.invited_by,
+                sent_at: format_created_at(invite.created_at),
+                note: invite.note,
             })
             .collect();
 
@@ -63,20 +60,23 @@ pub fn load_channel_invites(weak: Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>)
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                let items: Vec<FriendRequestData> = send_items
+                let items: Vec<ChannelInviteData> = send_items
                     .into_iter()
-                    .map(|d| FriendRequestData {
+                    .map(|d| ChannelInviteData {
                         user_id: d.channel_id.into(),
                         display_name: d.channel_name.into(),
-                        username: "Channel invite".into(),
+                        private_channel: d.private_channel,
+                        username: d.invited_by.into(),
                         avatar_source: slint::Image::default(),
                         has_avatar: false,
                         sent_at: d.sent_at.into(),
                         note: d.note.into(),
                     })
                     .collect();
-                w.set_friends_channel_invites(ModelRc::new(VecModel::from(items)));
-                w.set_pending_channel_invites(count);
+                w.global::<crate::ModalHostState>()
+                    .set_friends_channel_invites(ModelRc::new(VecModel::from(items)));
+                w.global::<crate::ModalHostState>()
+                    .set_pending_channel_invites(count);
             }
         });
     });
@@ -92,9 +92,11 @@ pub fn wire_channel_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterCl
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
 
-        window.on_friends_accept_channel_invite(move |channel_id_str: SharedString| {
-            respond(&weak, &ui_ctx, channel_id_str, true);
-        });
+        window
+            .global::<crate::ModalHostState>()
+            .on_friends_accept_channel_invite(move |channel_id_str: SharedString| {
+                respond(&weak, &ui_ctx, channel_id_str, true);
+            });
     }
 
     // Decline channel invite
@@ -102,9 +104,11 @@ pub fn wire_channel_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterCl
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
 
-        window.on_friends_decline_channel_invite(move |channel_id_str: SharedString| {
-            respond(&weak, &ui_ctx, channel_id_str, false);
-        });
+        window
+            .global::<crate::ModalHostState>()
+            .on_friends_decline_channel_invite(move |channel_id_str: SharedString| {
+                respond(&weak, &ui_ctx, channel_id_str, false);
+            });
     }
 }
 
@@ -116,9 +120,11 @@ pub fn wire_channel_invites_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
-    window.on_channel_invites_clicked(move || {
-        load_channel_invites(weak.clone(), &ui_ctx);
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_invites_clicked(move || {
+            load_channel_invites(weak.clone(), &ui_ctx);
+        });
 }
 
 /// Parse the channel id, respond to the invite, then refresh the list/count.
@@ -142,11 +148,39 @@ fn respond(
         };
 
         match ui_ctx.respond_to_channel_invite(&cid, accept).await {
-            Ok(()) => {
+            Ok(joined) => {
                 tracing::info!(channel_id = %cid_str, accept, "Responded to channel invite");
+                // An accepted invite is a join: the channel exists locally now
+                // (core writes the rows), but the sidebar was built before it
+                // did. Rebuild it the same way a created or deleted channel
+                // does, so the channel the user just accepted appears without
+                // waiting for the next sync (OPEN-ITEMS §69).
+                if let Some(channel) = joined {
+                    crate::bin_ui::features::auth::load_initial_data(weak.clone(), &ui_ctx).await;
+                    let open = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = open.upgrade() {
+                            w.global::<crate::SidebarPane>()
+                                .invoke_channel_selected(channel.id.to_string().into());
+                        }
+                    });
+                }
             }
             Err(e) => {
                 tracing::error!(channel_id = %cid_str, error = %e, "Failed to respond to channel invite");
+                let text = format!(
+                    "Couldn't {} the invite. {}",
+                    if accept { "accept" } else { "decline" },
+                    e.user_message()
+                );
+                let toast = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = toast.upgrade() {
+                        w.set_toast_message(text.into());
+                        w.set_toast_variant("error".into());
+                        w.set_toast_visible(true);
+                    }
+                });
             }
         }
 

@@ -1,23 +1,4 @@
-// What is left of the strip above a mesh conversation.
-//
-// It used to carry four things: no server and no internet, the peer count, the
-// geohash cell, and what "sent" means over couriers. Three of them fit on one
-// line, and now sit in the header next to the conversation name — three stacked
-// lines above the first message was most of the screen on a phone.
-//
-// What stays is the fourth, because it is the one that cannot be shortened
-// without changing what it says: an empty mesh room is *normal*, and a message
-// sent into one waits for a carrier rather than failing. Elided to one line it
-// reads "Nobody is in range" and drops the part that explains that is expected.
-//
-// So it is now conditional as well as short. It appears when there is something
-// the user could act on or would otherwise misread — nobody in range, no route
-// to a peer, the radio off, a failed send — and not at all when the mesh is
-// simply working, which is when a permanent explanation is just furniture.
-//
-// Every value here comes from `MeshGlobal`, which Rust fills from
-// `chatter-core`. The bar chooses wording, never facts.
-
+// A compact action or status notice above the open mesh conversation.
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -25,125 +6,89 @@ import { Icons } from "../theme/icons.slint";
 import { MeshGlobal } from "mesh_global.slint";
 
 export component MeshContextBar inherits Rectangle {
+    property <bool> can-turn-on: !MeshGlobal.mesh-on;
+    property <string> message:
+        MeshGlobal.notice != "" ? MeshGlobal.notice
+      : !MeshGlobal.mesh-on ? "Mesh is off"
+      : MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth is off"
+      : MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-rekey-pending
+            ? "Waiting for the creator to rotate the group key"
+      : MeshGlobal.active-kind == "dm" && !MeshGlobal.active-reachable
+            ? "No route to this person · waiting for a carrier"
+      : "";
+    height: 40px;
+    background: Colors.surface;
 
-    property <bool> radio-down: !MeshGlobal.radio-running;
-
-    // What "sent" means here, which is not what it means anywhere else.
-    property <string> delivery-line:
-        !MeshGlobal.mesh-on
-            ? "The mesh is switched off, so nothing is sent or received over Bluetooth. Earlier messages are still here."
-      : MeshGlobal.active-kind == "dm"
-            ? (MeshGlobal.active-reachable
-                ? "Best-effort: sent means handed on, not arrived."
-                : "No route right now. What you send is kept and offered to passing devices — it may arrive hours later.")
-            : (MeshGlobal.peer-count == 0
-                ? "Nobody is in range. What you send waits to be carried, and may be read hours from now."
-                : "Best-effort: reaches whoever is in range now, and travels further as devices move.");
-
-    // Still not a fixed height, and still for the original reason: the sentence
-    // wraps to two lines on a narrow screen, and cutting it in half leaves
-    // "Nobody is in range" without the part that says so is expected. What has
-    // changed is that it is one paragraph rather than three stacked rows, so the
-    // floor is a single line instead of three.
-    min-height: 24px;
-    background: Colors.surface.with-alpha(0.7);
-
-    // Bottom hairline, matching the other in-chat strips.
     Rectangle {
-        y: parent.height - 1px;
-        width: 100%;
-        height: 1px;
-        background: Colors.neo-highlight;
-    }
-
-    HorizontalLayout {
-        padding-left: Spacing.md;
-        padding-right: Spacing.md;
-        padding-top: 5px;
-        padding-bottom: 5px;
-        spacing: Spacing.sm;
-
-        VerticalLayout {
-            alignment: center;
-            horizontal-stretch: 0;
-            Image {
-                source: Icons.radio;
-                width: 16px;
-                height: 16px;
-                colorize: root.radio-down ? Colors.warning
-                    : MeshGlobal.peer-count > 0 ? Colors.glow-cyan
-                    : Colors.text-muted;
+        x: Spacing.md;
+        y: Spacing.xs;
+        width: parent.width - Spacing.md * 2;
+        height: parent.height - Spacing.xs * 2;
+        border-radius: Spacing.radius-full;
+        background: Colors.primary.with-alpha(0.10);
+        HorizontalLayout {
+            padding-left: Spacing.md;
+            padding-right: Spacing.md;
+            spacing: Spacing.sm;
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    source: Icons.radio;
+                    width: 15px;
+                    height: 15px;
+                    colorize: Colors.primary;
+                }
             }
-        }
-
-        VerticalLayout {
-            horizontal-stretch: 1;
-            alignment: center;
-            spacing: 1px;
-
             Text {
-                text: root.delivery-line;
-                color: Colors.text-muted;
+                text: root.message;
+                color: Colors.text-secondary;
                 font-size: Typography.xs;
-                wrap: word-wrap;
+                overflow: elide;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                min-width: 0px;
+                accessible-role: text;
+                accessible-label: root.message;
             }
-
-            // A send that failed outright. This is the only place it can be
-            // seen on a phone: the sidebar copy renders inside the expanded
-            // sidebar, which is collapsed by default on a narrow screen — so a
-            // failed send was reported to nobody. Tap to dismiss.
-            if MeshGlobal.notice != "": Rectangle {
-                height: notice-text.preferred-height + 6px;
-                border-radius: Spacing.radius-sm;
-                background: notice-touch.has-hover
-                    ? Colors.warning.with-alpha(0.16)
-                    : Colors.warning.with-alpha(0.10);
-                notice-text := Text {
-                    x: 6px;
-                    y: 3px;
-                    width: parent.width - 12px;
-                    text: MeshGlobal.notice;
-                    color: Colors.warning;
+            if root.can-turn-on: Rectangle {
+                width: 62px;
+                height: parent.height;
+                Text {
+                    text: "Turn on";
+                    color: Colors.primary;
                     font-size: Typography.xs;
-                    wrap: word-wrap;
-                    accessible-role: text;
-                    accessible-label: MeshGlobal.notice;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
                 }
-                notice-touch := TouchArea {
+                TouchArea {
                     mouse-cursor: pointer;
-                    clicked => {
-                        MeshGlobal.notice = "";
-                    }
+                    accessible-role: button;
+                    accessible-label: "Turn on mesh";
+                    accessible-action-default => { MeshGlobal.set-mesh-on(true); }
+                    y: -Spacing.xs;
+                    height: Spacing.button-height;
+                    clicked => { MeshGlobal.set-mesh-on(true); }
                 }
             }
-        }
-
-        // Leaving a cell belongs next to the cell name, where it is
-        // unambiguous which one is being left.
-        if MeshGlobal.active-kind == "geohash": VerticalLayout {
-            alignment: center;
-            horizontal-stretch: 0;
-            Rectangle {
-                width: leave-label.preferred-width + Spacing.md;
-                // The control that stops you broadcasting your location should
-                // not be the hardest thing on the screen to hit.
-                height: Spacing.touch-target-min;
-                border-radius: Spacing.radius-sm;
-                background: leave-touch.has-hover ? Colors.surface-hover : transparent;
-                border-width: 1px;
-                border-color: Colors.neo-highlight;
-                leave-label := Text {
-                    text: "Leave cell";
-                    color: leave-touch.has-hover ? Colors.text-primary : Colors.text-muted;
-                    font-size: Typography.xxs;
-                    horizontal-alignment: center;
+            if MeshGlobal.notice != "" && !root.can-turn-on: Rectangle {
+                width: 24px;
+                height: parent.height;
+                Text {
+                    text: "×";
+                    color: Colors.text-muted;
+                    font-size: Typography.base;
                     vertical-alignment: center;
-                    width: 100%;
-                    height: 100%;
+                    horizontal-alignment: center;
                 }
-                leave-touch := TouchArea {
+                TouchArea {
                     mouse-cursor: pointer;
-                    clicked => { MeshGlobal.leave-geohash(MeshGlobal.active-scope); }
+                    accessible-role: button;
+                    accessible-label: "Dismiss mesh notice";
+                    accessible-action-default => { MeshGlobal.notice = ""; }
+                    y: -Spacing.xs;
+                    height: Spacing.button-height;
+                    clicked => { MeshGlobal.notice = ""; }
                 }
             }
         }

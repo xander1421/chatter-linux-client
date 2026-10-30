@@ -4,8 +4,8 @@
 //! them to Slint-compatible images for display.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::StreamExt;
 use livekit::track::RemoteVideoTrack;
@@ -87,7 +87,12 @@ impl VideoPlayback {
     }
 
     /// Add a remote video track for playback.
-    pub fn add_track(&self, participant_id: String, track: RemoteVideoTrack, is_screen_share: bool) {
+    pub fn add_track(
+        &self,
+        participant_id: String,
+        track: RemoteVideoTrack,
+        is_screen_share: bool,
+    ) {
         let track_sid = track.sid().to_string();
         // Camera and screen share are separate tracks from the SAME peer. Store
         // them under distinct frame keys so they don't overwrite each other (one
@@ -374,14 +379,17 @@ impl VideoPlayback {
             .iter()
             .filter(|(_, frame)| !frame.is_screen_share)
             .map(|(participant_id, frame)| {
-                (participant_id.clone(), VideoFrameData {
-                    rgba_data: frame.rgba_data.clone(),
-                    width: frame.width,
-                    height: frame.height,
-                    is_screen_share: frame.is_screen_share,
-                    frame_id: 0,
-                    rotation_degrees: frame.rotation_degrees,
-                })
+                (
+                    participant_id.clone(),
+                    VideoFrameData {
+                        rgba_data: frame.rgba_data.clone(),
+                        width: frame.width,
+                        height: frame.height,
+                        is_screen_share: frame.is_screen_share,
+                        frame_id: 0,
+                        rotation_degrees: frame.rotation_degrees,
+                    },
+                )
             })
             .collect()
     }
@@ -393,14 +401,17 @@ impl VideoPlayback {
             .iter()
             .filter(|(_, frame)| frame.is_screen_share)
             .map(|(participant_id, frame)| {
-                (participant_id.clone(), VideoFrameData {
-                    rgba_data: frame.rgba_data.clone(),
-                    width: frame.width,
-                    height: frame.height,
-                    is_screen_share: frame.is_screen_share,
-                    frame_id: 0,
-                    rotation_degrees: frame.rotation_degrees,
-                })
+                (
+                    participant_id.clone(),
+                    VideoFrameData {
+                        rgba_data: frame.rgba_data.clone(),
+                        width: frame.width,
+                        height: frame.height,
+                        is_screen_share: frame.is_screen_share,
+                        frame_id: 0,
+                        rotation_degrees: frame.rotation_degrees,
+                    },
+                )
             })
             .collect()
     }
@@ -520,7 +531,8 @@ pub fn screen_share_frame_id(participant_id: &str, is_screen_share: bool) -> Str
 /// Convert I420 (YUV 4:2:0) buffer to RGBA8 (memory byte order R, G, B, A).
 ///
 /// Uses libwebrtc's vendored libyuv (SIMD-accelerated on x86_64/ARMv8).
-/// Verified by `examples/yuv_check.rs`: libyuv names destinations by the
+/// Verified by a one-off example (`examples/yuv_check.rs`, since removed; see
+/// `git log -- crates/chatter-core/examples`): libyuv names destinations by the
 /// little-endian 32-bit word value, so the in-memory byte order is the
 /// reverse of the function name. `i420_to_abgr` writes bytes in
 /// R, G, B, A order — exactly what Slint's `Rgba8Pixel` consumes.
@@ -529,7 +541,8 @@ pub fn screen_share_frame_id(participant_id: &str, is_screen_share: bool) -> Str
 /// the per-chunk slice splitting + rayon dispatch overhead beat the gain,
 /// pushing 5120×1440 convert from 5ms to 17–53ms. Single-thread libyuv
 /// already lands ~0.8 ms in release / ~5 ms in debug at 5120×1440 — both
-/// under one 60-fps frame budget. See `examples/yuv_threaded_bench.rs`.
+/// under one 60-fps frame budget (measured by `examples/yuv_threaded_bench.rs`,
+/// since removed; see `git log -- crates/chatter-core/examples`).
 ///
 /// Writes into a caller-provided destination of exactly `width*height*4` bytes
 /// (so the receive loop can recycle a pooled buffer instead of allocating).
@@ -544,11 +557,16 @@ fn i420_to_rgba_buf(
     let dst_stride = width * 4;
 
     livekit::webrtc::native::yuv_helper::i420_to_abgr(
-        y_data, y_stride,
-        u_data, u_stride,
-        v_data, v_stride,
-        dst, dst_stride,
-        width as i32, height as i32,
+        y_data,
+        y_stride,
+        u_data,
+        u_stride,
+        v_data,
+        v_stride,
+        dst,
+        dst_stride,
+        width as i32,
+        height as i32,
     );
 }
 
@@ -567,10 +585,14 @@ fn nv12_to_rgba_buf(
     let dst_stride = width * 4;
 
     livekit::webrtc::native::yuv_helper::nv12_to_abgr(
-        y_data, y_stride,
-        uv_data, uv_stride,
-        dst, dst_stride,
-        width as i32, height as i32,
+        y_data,
+        y_stride,
+        uv_data,
+        uv_stride,
+        dst,
+        dst_stride,
+        width as i32,
+        height as i32,
     );
 }
 
@@ -602,8 +624,9 @@ pub(crate) fn convert_i420_into(
     }
 }
 
-/// Convert an NV12 buffer to RGBA, reusing `recycled` in place when present.
-fn convert_nv12_into(
+/// Convert an NV12 buffer to RGBA for playback or camera preview, reusing
+/// `recycled` in place when present.
+pub(crate) fn convert_nv12_into(
     recycled: Option<Arc<Vec<u8>>>,
     buffer: &livekit::webrtc::video_frame::NV12Buffer,
     width: u32,

@@ -12,37 +12,40 @@
 //! - `blocking` - Blocking and rate limiting
 //! - `helpers` - Misc helpers (profile key, avatar, etc.)
 
-mod initiation;
 mod acceptance;
+mod blocking;
+mod helpers;
+mod infrastructure;
+mod initiation;
 mod messaging;
 mod processing;
 mod queries;
-mod infrastructure;
-mod blocking;
-mod helpers;
-mod calls;
 
-// Re-export call types for external use
-pub use calls::{AnonCallOfferResult, AnonCallRoomCredentials, ReceivedCallOffer, ReceivedCallAnswer, PendingAnonCall};
+pub const SECRET_CHAT_SCREENSHOT_BLOCKING_ENABLED: bool = false;
+
+pub use blocking::PeerEnd;
 
 use std::sync::Arc;
 
-use crate::domain::anon_dm::AnonDmId;
 use crate::domain::UserId;
+use crate::domain::anon_dm::AnonDmId;
 use crate::error::StorageError;
 use crate::mailbox::token_manager::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::pairwise::PairwiseService;
-use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::AnonDmRepository;
 use crate::storage::repositories::AttachmentRepository;
-use crate::storage::repositories::SettingsRepository;
 use crate::storage::repositories::MessageRepository;
+use crate::storage::repositories::SettingsRepository;
 
 /// Anonymous DM service errors.
 #[derive(Debug, thiserror::Error)]
 pub enum AnonDmError {
+    #[error("message not submitted: {0}")]
+    NotSubmitted(String),
+    #[error("Delivery unconfirmed; the original ciphertext is retained for retry")]
+    DeliveryUnconfirmed,
     /// Not logged in.
     #[error("not logged in")]
     NotLoggedIn,
@@ -81,6 +84,14 @@ pub enum AnonDmError {
     #[error("message error: {0}")]
     MessageError(String),
 
+    /// The peer's secret-chat mailbox no longer exists on the server (it
+    /// expired, or the peer ended the chat and deleted it).
+    #[error("peer mailbox is gone")]
+    PeerMailboxGone,
+
+    #[error("Secret chat is getting ready — will start automatically")]
+    TokensPending,
+
     /// Crypto error.
     #[error("crypto error: {0}")]
     CryptoError(String),
@@ -106,6 +117,20 @@ pub enum AnonDmError {
     InvalidFriendCode(String),
 }
 
+impl From<crate::services::pairwise::PairwiseError> for AnonDmError {
+    fn from(e: crate::services::pairwise::PairwiseError) -> Self {
+        use crate::services::pairwise::PairwiseError;
+        match e {
+            PairwiseError::Network(e) => Self::MessageError(e.to_string()),
+            PairwiseError::Storage(e) => Self::Storage(e),
+            PairwiseError::Token(crate::error::MailboxError::NoTokensAvailable) => {
+                Self::TokensPending
+            }
+            e => Self::CryptoError(e.to_string()),
+        }
+    }
+}
+
 /// Decrypted profile data from an anonymous DM request or acceptance.
 #[derive(Debug, Clone)]
 pub struct DecryptedPeerProfile {
@@ -121,6 +146,12 @@ pub struct DecryptedPeerProfile {
 ///
 /// Handles all anonymous DM operations following the NDSS'21 model.
 pub struct AnonDmService {
+    start_locks: std::sync::Mutex<
+        std::collections::HashMap<UserId, std::sync::Weak<tokio::sync::Mutex<()>>>,
+    >,
+    decision_locks: std::sync::Mutex<
+        std::collections::HashMap<AnonDmId, std::sync::Weak<tokio::sync::Mutex<()>>>,
+    >,
     pub(crate) settings_repo: Arc<SettingsRepository>,
     pub(crate) anon_dm_repo: Arc<AnonDmRepository>,
     /// Unified message repository for all message CRUD operations.
@@ -148,6 +179,8 @@ impl AnonDmService {
         token_manager: Arc<TokenManager>,
     ) -> Self {
         Self {
+            start_locks: Default::default(),
+            decision_locks: Default::default(),
             settings_repo,
             anon_dm_repo,
             message_repo,
@@ -185,8 +218,9 @@ impl AnonDmService {
 
     /// Persist the user's avatar bytes locally.
     ///
-    /// Bytes are never uploaded to the server; they only travel over
-    /// already-established Signal sessions via `send_profile_update`.
+    /// Secret chats share it as an encrypted upload whose pointer travels
+    /// end-to-end (see [`crate::services::secret_avatar`]); the server sees
+    /// only ciphertext.
     /// Callers must size-check; we enforce [`crate::domain::anon_dm_init::MAX_AVATAR_SIZE`]
     /// as defense in depth.
     pub fn set_my_avatar_bytes(&self, bytes: &[u8]) -> Result<(), AnonDmError> {
@@ -205,124 +239,17 @@ impl AnonDmService {
         Ok(())
     }
 
-    /// Store the new avatar then broadcast a profile update over every
-    /// ready anonymous DM.
-    ///
-    /// Best-effort broadcast: failures to push to individual conversations
-    /// are logged — the local store already succeeded, and peers see the
-    /// new avatar on the next profile update that happens to ride along.
-    pub async fn update_avatar_and_broadcast(&self, bytes: &[u8]) -> Result<(), AnonDmError> {
-        self.set_my_avatar_bytes(bytes)?;
-
-        let conversations = match self.list_ready_conversations() {
-            Ok(convs) => convs,
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to enumerate anon DMs for avatar broadcast");
-                return Ok(());
-            }
-        };
-
-        let total = conversations.len();
-        let mut sent = 0usize;
-        for conv in conversations {
-            match self.send_profile_update(&conv.id, None, None, None).await {
-                Ok(()) => sent += 1,
-                Err(e) => tracing::warn!(
-                    conversation_id = %conv.id,
-                    error = %e,
-                    "Failed to broadcast avatar update to conversation"
-                ),
-            }
-        }
-        tracing::info!(sent, total, "Broadcast avatar update to active anon DMs");
-        Ok(())
-    }
-    
-    /// Direct (non-Tor) avatar fetch with a 15s timeout. Used only when the
-    /// transport is not routed over Tor.
-    async fn download_avatar_direct(&self, url: &str) -> Result<Vec<u8>, AnonDmError> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-            .map_err(|e| AnonDmError::MessageError(format!("HTTP client error: {}", e)))?;
-
-        let response = client.get(url).send().await
-            .map_err(|e| AnonDmError::MessageError(format!("Avatar download failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            return Err(AnonDmError::MessageError(
-                format!("Avatar download HTTP {}", response.status())
-            ));
-        }
-
-        Ok(response.bytes().await
-            .map_err(|e| AnonDmError::MessageError(format!("Avatar read failed: {}", e)))?
-            .to_vec())
-    }
-
-    /// Download avatar from URL and store it in the conversation record.
-    ///
-    /// Returns the downloaded bytes on success (for UI display).
-    pub async fn download_and_store_avatar(
-        &self,
-        conversation_id: &crate::domain::anon_dm::AnonDmId,
-        url: &str,
-    ) -> Result<Vec<u8>, AnonDmError> {
-        // Avatar bytes are anon-DM content: in anon mode they MUST ride the Tor
-        // circuit (a direct request would leak the real IP to the avatar host);
-        // direct otherwise.
-        #[cfg(feature = "onion")]
-        let bytes = if self.grpc_pool.transport_mode()
-            == crate::network::grpc::client_pool::TransportMode::Onion
-        {
-            let tor = self.grpc_pool.onion_tor();
-            crate::network::anon_http::get(&tor, url)
-                .await
-                .map_err(|e| AnonDmError::MessageError(format!("Avatar download over Tor failed: {}", e)))?
-        } else {
-            self.download_avatar_direct(url).await?
-        };
-        #[cfg(not(feature = "onion"))]
-        let bytes = self.download_avatar_direct(url).await?;
-
-        if bytes.is_empty() {
-            return Err(AnonDmError::MessageError("Empty avatar response".into()));
-        }
-
-        // Persist to DB
-        if let Ok(Some(mut conv)) = self.anon_dm_repo.get_conversation(conversation_id) {
-            conv.peer_avatar = Some(bytes.clone());
-            self.anon_dm_repo.update_conversation(&conv)
-                .map_err(|e| AnonDmError::MessageError(format!("Avatar store failed: {}", e)))?;
-        }
-
-        Ok(bytes)
-    }
-
-    /// Get an available call room token.
-    pub fn get_available_call_room_token(&self) -> Result<Option<crate::mailbox::CallRoomToken>, AnonDmError> {
-        self.token_manager
-            .get_available_call_room_token()
-            .map_err(|e| AnonDmError::MessageError(format!("Failed to get call room token: {}", e)))
-    }
-    
-    /// Mark a call room token as used.
-    pub fn mark_call_room_token_used(&self, token_id: &str) -> Result<(), AnonDmError> {
-        self.token_manager
-            .mark_call_room_token_used(token_id)
-            .map_err(|e| AnonDmError::MessageError(format!("Failed to mark token as used: {}", e)))
-    }
-    
-    /// Request new call room tokens.
-    pub async fn request_call_room_tokens(&self, count: u32) -> Result<u32, AnonDmError> {
-        if !self.grpc_pool.is_connected() {
-            return Err(AnonDmError::MessageError("No gRPC connection available".to_string()));
-        }
-        let mut client = self.grpc_pool.mailbox_client();
-        self.token_manager
-            .request_call_room_tokens(&mut client, count)
-            .await
-            .map_err(|e| AnonDmError::MessageError(format!("Failed to request tokens: {}", e)))
-    }
-    
+    // CRYPTO-2: there used to be `download_avatar_direct` / `download_and_store_avatar`
+    // here, which GETted a URL chosen by an anonymous DM peer with no user
+    // interaction, no scheme allowlist, no size cap (`response.bytes()` buffers
+    // whatever the host sends), no digest to check the bytes against, and — on
+    // the direct path — reqwest's default root store rather than the CA this
+    // build pins. A peer picked the host, so the fetch was an SSRF and an
+    // IP-disclosure primitive against whoever received their profile update, and
+    // an unbounded allocation besides.
+    //
+    // Nothing is lost by deleting it: a profile update carries an attachment
+    // pointer whose URL our own server mints, fetched over Tor and bounded,
+    // MAC- and digest-checked (`services::secret_avatar`). Peer-supplied URLs
+    // are ignored.
 }

@@ -1,3 +1,4 @@
+import { GlassSurface } from "../components/glass_surface.slint";
 // Thread panel component for viewing replies to a message
 //
 // Displays as a right-side panel with root message preview, reply list, and composer.
@@ -10,40 +11,150 @@ import { DismissButton } from "../components/dismiss_button.slint";
 import { Skeleton } from "../components/skeleton.slint";
 import { MessageItemData } from "message_list.slint";
 import { MessageItem } from "message_item.slint";
+import { DateSeparator } from "message_row_separators.slint";
+import { ConversationKind } from "conversation_kind.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { MessageComposer, PendingAttachmentData } from "message_composer.slint";
+import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
+import { MentionAutocomplete, MentionSuggestion } from "../components/mention_autocomplete.slint";
+
+// Slint virtualizes direct `for` children of this Flickable shape.
+component ListView inherits Flickable {
+    out property <length> visible-height: self.height;
+    out property <length> visible-width: self.width;
+    @children
+}
 
 export component ThreadPanel inherits Rectangle {
+    out property <length> composer-top: composer.absolute-position.y;
+    property <bool> entered: false;
+    property <float> panel-progress: 0;
+    animate panel-progress { duration: Materials.motion-standard; easing: Materials.glide; }
+    init => { if (Appearance.reduce-motion && root.visible) { root.panel-progress = 1; } }
+    // Desktop: Reply in thread goes straight to typing, as Slack/Discord.
+    // Touch keeps the keyboard down until the field is tapped.
+    in property <bool> touch: false;
+    changed visible => {
+        root.entered = false;
+        root.panel-progress = Appearance.reduce-motion && root.visible ? 1 : 0;
+        if root.visible && !root.touch { composer.focus-reply-input(); }
+    }
+    // Asked again once the panel has entered: opened from a message menu,
+    // the first request landed while the menu was closing and focus ended
+    // nowhere, so typing and Esc did nothing until a click (desktop).
+    changed entered => { if root.entered && root.visible && !root.touch { composer.focus-reply-input(); } }
+    // The app keeps this panel mounted while hidden. A visibility binding can
+    // settle after initialization, so clear a premature entrance before the
+    // next open even if no change callback fired during mounting.
+    Timer {
+        interval: 16ms;
+        running: !root.visible && root.entered;
+        triggered => { root.entered = false; root.panel-progress = 0; }
+    }
+    Timer {
+        interval: 16ms;
+        running: root.visible && !root.entered && !Appearance.reduce-motion;
+        triggered => { root.entered = true; root.panel-progress = 1; }
+    }
     // Root message data
     in property <string> root-message-id;
     in property <string> root-sender-name;
     in property <string> root-content-preview;
     in property <int> reply-count: 0;
     in property <string> channel-name;
+    // Same kind as ChatHeader's. Only channels get the "#":
+    // a thread in Saved Messages or a DM read "# Saved Messages".
+    in property <ConversationKind> conversation-kind;
+    // Private groups carry no "#": that marks a public channel, as in the sidebar.
+    in property <bool> private-channel: false;
 
     // Replies list (reuses MessageItemData pattern)
     in property <[MessageItemData]> replies: [];
 
     // State
     in property <bool> loading: false;
+    // Explicit intent for first-page replacement and a successfully sent reply.
+    in property <int> tail-serial: 0;
+    // Open on reply `focus-index` (a jump to it) instead of the tail.
+    in property <int> focus-index: -1;
+    in property <int> focus-serial: 0;
+    in property <string> highlighted-id: "";
 
     // Touch input / small screen. On a phone this panel takes the whole width
     // and the chat column behind it is hidden (app.slint `thread-panel-w`), so
     // it is a pushed PAGE, not a side panel — and a page is left with a back
     // chevron on the leading edge, not an X on the trailing one.
     in property <bool> mobile: false;
+    in property <bool> composer-enter-sends: !root.mobile;
 
     // Composer text (two-way binding)
     in-out property <string> composer-text;
+    in property <[PendingAttachmentData]> pending-attachments: [];
+    in property <bool> keyboard-open: false;
+    in property <[EmojiData]> emoji-list: [];
+    in-out property <int> emoji-category: 0;
+    in-out property <string> emoji-search: "";
+    in-out property <int> emoji-skin-tone: 0;
+    in property <[MentionSuggestion]> mention-suggestions: [];
+    in property <bool> mention-visible: false;
+    in-out property <int> mention-selected-index: 0;
+    in-out property <bool> is-replying: false;
+    in-out property <bool> is-editing: false;
+    in-out property <string> edit-message-id: "";
+    in property <string> reply-to-sender-name: "";
+    in property <string> reply-preview: "";
+    in property <bool> reply-has-thumbnail: false;
+    in property <image> reply-thumbnail;
+    in property <int> attachment-prepare-serial: 0;
+    in property <int> attachment-restore-serial: 0;
+    in property <int> composer-caret-end-seq: 0;
+    private property <bool> emoji-open: false;
 
     // Callbacks
     callback close-clicked;
-    callback send-reply(string);
+    callback send-reply(string) -> bool;
+    callback attachment-clicked();
+    callback remove-attachment(string);
+    callback paste-image();
+    callback mention-triggered(string);
+    callback mention-selected(string, string);
+    callback cancel-reply();
+    callback send-edit(string, string);  // (message_id, new_text)
+    callback cancel-edit();
+    callback edit-last-requested();
+    callback emoji-category-changed(int);
+    callback emoji-search-changed(string);
+    callback emoji-skin-tone-changed(int);
     callback load-more-replies;
+    callback open-message-link(string, string);
     callback message-clicked(string);
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    out property <length> menu-anchor-top: 0px;
+    out property <length> menu-anchor-bottom: 0px;
+    out property <length> menu-anchor-left: 0px;
+    out property <length> menu-anchor-right: 0px;
+    out property <MessageItemData> menu-preview-message;
+    out property <length> menu-preview-row-x: 0px;
+    out property <length> menu-preview-row-y: 0px;
+    out property <length> menu-preview-row-width: 0px;
+    callback quote-clicked(string);  // parent message id
+    callback sender-profile-requested(string);
+    // Media, exactly as the main list forwards it (message_list.slint).
+    callback view-attachment(string);
+    callback audio-seek(string, float);
+    in property <string> current-playing-attachment-id: "";
+    in property <bool> is-media-playing: false;
+    in property <float> audio-progress: 0.0;
+    in property <string> audio-elapsed: "0:00";
+    in property <bool> menu-open: false;
+    callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
 
     // Panel sizing — adjustable width with drag handle
     in-out property <length> panel-width: Spacing.thread-panel-width;
-    property <length> min-panel-width: 240px;
+    property <length> min-panel-width: 320px;
     property <length> max-panel-width: 500px;
 
     width: root.panel-width;
@@ -51,15 +162,16 @@ export component ThreadPanel inherits Rectangle {
 
     // Left resize handle (draggable)
     Rectangle {
+        visible: !root.mobile;
         x: 0;
-        width: 6px;
+        width: 18px;
         height: 100%;
         background: resize-handle.has-hover || resize-handle.pressed ? Colors.primary.with-alpha(0.3) : transparent;
 
         // Visual indicator line
         Rectangle {
             x: 0;
-            width: 1px;
+            width: 2px;
             height: 100%;
             background: resize-handle.has-hover || resize-handle.pressed
                 ? Colors.primary
@@ -83,14 +195,25 @@ export component ThreadPanel inherits Rectangle {
     }
 
     VerticalLayout {
+        x: (1 - root.panel-progress) * (root.mobile ? 36px : 24px);
+        width: 100%;
+        height: 100%;
+        opacity: 0.72 + 0.28 * root.panel-progress;
         // Header — same height as the conversation header it sits beside, so
         // the two panes share one top row instead of stepping.
-        Rectangle {
+        GlassSurface {
+            material-level: 2;
+            elevation: 3;
+
             height: root.mobile ? Spacing.header-height-touch : Spacing.header-height;
-            background: Colors.surface;
 
             HorizontalLayout {
-                padding: Spacing.sm;
+                // Horizontal padding only: vertical padding squeezed the 48dp
+                // chevron below its box and pulled the title off its centre.
+                // The phone chevron brings its own inset; without it the title
+                // lines up with the root-message strip below.
+                padding-left: root.mobile ? Spacing.xs : Spacing.sm;
+                padding-right: Spacing.sm;
                 spacing: Spacing.sm;
 
                 // Full-screen on a phone → back chevron, leading edge.
@@ -102,7 +225,7 @@ export component ThreadPanel inherits Rectangle {
                 VerticalLayout {
                     horizontal-stretch: 1;
                     alignment: center;
-                    spacing: 2px;
+                    spacing: Spacing.xxs;
 
                     // Title with reply count badge
                     HorizontalLayout {
@@ -120,9 +243,10 @@ export component ThreadPanel inherits Rectangle {
                         // Reply count badge
                         if root.reply-count > 0: Rectangle {
                             width: badge-text.preferred-width + Spacing.sm;
-                            height: 18px;
+                            height: Spacing.badge-md;
+                            y: (parent.height - self.height) / 2;
                             background: Colors.primary.with-alpha(0.15);
-                            border-radius: 9px;
+                            border-radius: self.height / 2;
 
                             badge-text := Text {
                                 text: root.reply-count;
@@ -136,7 +260,8 @@ export component ThreadPanel inherits Rectangle {
 
                     // Channel name (small, muted)
                     if root.channel-name != "": Text {
-                        text: "# " + root.channel-name;
+                        text: (root.conversation-kind == ConversationKind.channel && !root.private-channel ? "# " : "")
+                            + root.channel-name;
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
@@ -154,16 +279,24 @@ export component ThreadPanel inherits Rectangle {
             Rectangle {
                 height: 1px;
                 y: parent.height - 1px;
-                background: Colors.text-muted.with-alpha(0.15);
+                background: Colors.divider;
             }
         }
 
         // Root message preview (64px max)
         Rectangle {
+            x: (1 - root.panel-progress) * 12px;
             height: 64px;
             background: Colors.surface-hover;
+            transform-scale-x: root-preview-touch.pressed ? 98% : 100%;
+            transform-scale-y: root-preview-touch.pressed ? 96% : 100%;
+            animate transform-scale-x { duration: root-preview-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+            animate transform-scale-y { duration: root-preview-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+            accessible-role: button;
+            accessible-label: "Original message from " + root.root-sender-name + ": " + root.root-content-preview;
+            accessible-action-default => { root.message-clicked(root.root-message-id); }
 
-            TouchArea {
+            root-preview-touch := TouchArea {
                 width: 100%;
                 height: 100%;
                 clicked => {
@@ -173,10 +306,11 @@ export component ThreadPanel inherits Rectangle {
 
             VerticalLayout {
                 padding: Spacing.sm;
-                spacing: 2px;
+                spacing: Spacing.xxs;
 
                 // Sender name
                 Text {
+                    accessible-role: none;
                     text: root.root-sender-name;
                     color: Colors.text-primary;
                     font-size: Typography.sm;
@@ -186,6 +320,7 @@ export component ThreadPanel inherits Rectangle {
 
                 // Content preview (truncated)
                 Text {
+                    accessible-role: none;
                     text: root.root-content-preview;
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
@@ -198,13 +333,13 @@ export component ThreadPanel inherits Rectangle {
         // Divider
         Rectangle {
             height: 1px;
-            background: Colors.text-muted.with-alpha(0.15);
+            background: Colors.divider;
         }
 
         // Reply list area
         Rectangle {
             vertical-stretch: 1;
-            background: Colors.background;
+            background: Materials.ambient;
 
             // Loading state
             if root.loading: VerticalLayout {
@@ -244,11 +379,15 @@ export component ThreadPanel inherits Rectangle {
                     alignment: center;
                     spacing: Spacing.sm;
 
-                    Text {
-                        text: "\u{1F4AC}\u{FE0F}"; // Speech bubble emoji (with emoji variant selector)
-                        font-family: Typography.font-family-emoji;
-                        font-size: 32px;
-                        horizontal-alignment: center;
+                    // A line icon, like every other empty state in the app.
+                    HorizontalLayout {
+                        alignment: center;
+                        Image {
+                            source: Icons.message-circle;
+                            width: 32px;
+                            height: 32px;
+                            colorize: Colors.text-muted;
+                        }
                     }
 
                     Text {
@@ -267,18 +406,189 @@ export component ThreadPanel inherits Rectangle {
                 }
             }
 
-            // Replies list
-            if !root.loading && root.replies.length > 0: Flickable {
+            // Keep the load control outside the virtualized rows. It remains
+            // visible while earlier pages are available.
+            if !root.loading && root.replies.length > 0
+                    && root.replies.length < root.reply-count: Rectangle {
+                // A plain Rectangle parent centres fixed-size children; pin it
+                // to the top, where the list leaves room (replies-view.y).
+                x: 0px;
+                y: 0px;
+                height: Spacing.button-height;
                 width: 100%;
-                height: 100%;
-                viewport-height: replies-layout.preferred-height;
+                accessible-role: button;
+                accessible-label: "Load earlier replies";
+                accessible-action-default => {
+                    replies-view.following-tail = false;
+                    replies-view.anchor-count = root.replies.length;
+                    replies-view.anchor-first = root.replies[0].message-id;
+                    replies-view.anchor-index = replies-view.top-row();
+                    replies-view.anchor-offset = replies-view.viewport-y
+                        + replies-view.anchor-index * replies-view.viewport-height / root.replies.length;
+                    replies-view.preserving-anchor = true;
+                    root.load-more-replies();
+                }
+                Text {
+                    accessible-role: none;
+                    text: "Load earlier replies";
+                    color: more-touch.has-hover ? Colors.text-primary : Colors.primary;
+                    font-size: Typography.xs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                more-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        replies-view.following-tail = false;
+                        replies-view.anchor-count = root.replies.length;
+                        replies-view.anchor-first = root.replies[0].message-id;
+                        replies-view.anchor-index = replies-view.top-row();
+                        replies-view.anchor-offset = replies-view.viewport-y
+                            + replies-view.anchor-index * replies-view.viewport-height / root.replies.length;
+                        replies-view.preserving-anchor = true;
+                        root.load-more-replies();
+                    }
+                }
+            }
 
-                replies-layout := VerticalLayout {
-                    width: 100%;
-                    padding: Spacing.sm;
-                    spacing: 2px;
+            anchor-settled := Timer {
+                interval: 16ms;
+                running: false;
+                triggered => { self.running = false; replies-view.preserving-anchor = false; }
+            }
+            at-rest := Timer {
+                interval: 120ms;
+                running: false;
+                triggered => {
+                    self.running = false;
+                    if (replies-view.user-scrolling) {
+                        replies-view.following-tail = replies-view.viewport-height + replies-view.viewport-y <= replies-view.height + 40px;
+                        replies-view.user-scrolling = false;
+                    }
+                }
+            }
+            settle := Timer {
+                interval: 1ms;
+                running: false;
+                triggered => {
+                    self.running = false;
+                    if (replies-view.following-tail && !replies-view.focus-hold) {
+                        replies-view.viewport-y = Math.min(0px, replies-view.height - replies-view.viewport-height);
+                    }
+                }
+            }
+            focus-settle := Timer {
+                interval: 1ms;
+                running: false;
+                triggered => {
+                    self.running = false;
+                    if (root.focus-index >= 0 && root.replies.length > 0) {
+                        // Rows are virtualized: place the reply a third of
+                        // the way down by the average row height.
+                        replies-view.viewport-y = Math.max(
+                            Math.min(0px, replies-view.height - replies-view.viewport-height),
+                            Math.min(0px, replies-view.height / 3
+                                - root.focus-index * replies-view.viewport-height / root.replies.length));
+                    }
+                }
+            }
 
-                    for item in root.replies: MessageItem {
+            // Replies list
+            replies-view := ListView {
+                visible: !root.loading && root.replies.length > 0;
+                y: root.replies.length < root.reply-count ? Spacing.button-height : 0px;
+                width: 100%;
+                height: parent.height - self.y;
+                property <bool> following-tail: true;
+                // A jump to a reply holds the list on it: the open sequence's
+                // visible/thread-id handlers may run after the focus request
+                // and would otherwise send the list back to the tail.
+                property <bool> focus-hold: false;
+                property <bool> user-scrolling: false;
+                property <bool> preserving-anchor: false;
+                property <bool> restoring-anchor: false;
+                property <int> anchor-count: 0;
+                property <string> anchor-first: "";
+                property <int> anchor-index: 0;
+                property <length> anchor-offset: 0px;
+                pure function top-row() -> int {
+                    return root.replies.length > 0 && self.viewport-height > 0px
+                        ? Math.floor(-self.viewport-y * root.replies.length / self.viewport-height) : 0;
+                }
+                function restore-anchor() {
+                    if (!self.preserving-anchor || self.restoring-anchor
+                            || root.replies.length <= self.anchor-count
+                            || root.replies[0].message-id == self.anchor-first) { return; }
+                    let expected = self.anchor-index + root.replies.length - self.anchor-count;
+                    // Slint keeps live rows in place when history lands above
+                    // them. At the first live row it may instead expose the
+                    // new rows; use the main timeline's index correction.
+                    if (Math.abs(self.top-row() - expected) > 1) {
+                        self.restoring-anchor = true;
+                        self.viewport-y = Math.min(0px, -expected * self.viewport-height
+                            / root.replies.length + self.anchor-offset);
+                        self.restoring-anchor = false;
+                    }
+                    anchor-settled.start(); anchor-settled.restart();
+                }
+                property <int> focus-request: root.focus-serial;
+                changed focus-request => {
+                    self.user-scrolling = false;
+                    self.preserving-anchor = false;
+                    self.focus-hold = true;
+                    self.following-tail = false;
+                    focus-settle.start(); focus-settle.restart();
+                }
+                property <int> tail-request: root.tail-serial;
+                property <string> thread-id: root.root-message-id;
+                changed thread-id => {
+                    self.user-scrolling = false;
+                    self.preserving-anchor = false;
+                    self.following-tail = !self.focus-hold;
+                    settle.start(); settle.restart();
+                }
+                changed tail-request => {
+                    self.user-scrolling = false;
+                    self.preserving-anchor = false;
+                    self.focus-hold = false;
+                    self.following-tail = true;
+                    settle.start(); settle.restart();
+                }
+                changed visible => {
+                    if (self.visible) { self.following-tail = !self.focus-hold; settle.start(); settle.restart(); }
+                }
+                flicked => {
+                    self.focus-hold = false;
+                    self.following-tail = self.viewport-height + self.viewport-y <= self.height + 40px;
+                    self.preserving-anchor = false;
+                    self.user-scrolling = true;
+                    at-rest.start(); at-rest.restart();
+                }
+                changed viewport-y => {
+                    if (self.user-scrolling) { at-rest.start(); at-rest.restart(); }
+                    self.restore-anchor();
+                }
+                changed viewport-height => {
+                    self.restore-anchor();
+                    if (self.following-tail) { settle.start(); settle.restart(); }
+                    if (self.focus-hold) { focus-settle.start(); focus-settle.restart(); }
+                }
+                changed height => { if (self.following-tail) { settle.start(); settle.restart(); } }
+
+                for item[idx] in root.replies: reply-row := VerticalLayout {
+                    width: replies-view.width;
+                    height: self.preferred-height;
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    padding-top: idx == 0 ? Spacing.sm : Spacing.none;
+                    padding-bottom: idx == root.replies.length - 1 ? Spacing.sm : Spacing.xxs;
+                    // Day label where it changes, as the main list does.
+                    if item.date-separator-text != ""
+                        && (idx == 0 || root.replies[idx - 1].date-separator-text != item.date-separator-text): DateSeparator {
+                        width: 100%;
+                        label: item.date-separator-text;
+                    }
+                    MessageItem {
                         width: 100%;
                         message-id: item.message-id;
                         sender-id: item.sender-id;
@@ -297,13 +607,67 @@ export component ThreadPanel inherits Rectangle {
                         attachment-count: item.attachment-count;
                         has-reactions: item.has-reactions;
                         reaction-summary: item.reaction-summary;
+                        reactions: item.reactions;
                         reply-count: 0;
                         // Inside the thread panel the context is obvious —
                         // false suppresses the "Thread reply" chip the main
                         // list uses to mark thread messages.
                         is-thread-reply: false;
                         show-sender: item.show-sender;
+                        // The same row as the main list: touch rules, media,
+                        // continuation grouping and delivery state; no thread
+                        // inside a thread. The platform flag, as the main list:
+                        // the panel's `mobile` is its layout.
+                        mobile: root.touch;
+                        menu-open: root.menu-open;
+                        attachments: item.attachments;
+                        standalone-attachment-indices: item.standalone-attachment-indices;
+                        is-continuation: item.is-continuation;
+                        highlighted: item.message-id == root.highlighted-id;
+                        delivery-status: item.delivery-status;
+                        failure-reason: item.failure-reason;
+                        can-thread: false;
+                        has-avatar: item.has-avatar;
+                        sender-avatar-source: item.sender-avatar-source;
+                        is-pinned: item.is-pinned;
+                        // Quoted parents: the converter fills these for every
+                        // row, thread replies included.
+                        is-reply: item.is-reply;
+                        reply-to-not-found: item.reply-to-not-found;
+                        reply-to-message-id: item.reply-to-message-id;
+                        reply-to-sender-name: item.reply-to-sender-name;
+                        reply-to-preview: item.reply-to-preview;
+                        reply-to-category: item.reply-to-category;
+                        reply-to-attachment-id: item.reply-to-attachment-id;
+                        reply-to-duration: item.reply-to-duration;
+                        reply-to-filename: item.reply-to-filename;
+                        reply-to-waveform: item.reply-to-waveform;
+                        reply-to-has-thumbnail: item.reply-to-has-thumbnail;
+                        reply-to-thumbnail: item.reply-to-thumbnail;
+                        reply-to-thumbnail-width: item.reply-to-thumbnail-width;
+                        reply-to-thumbnail-height: item.reply-to-thumbnail-height;
+                        quote-clicked(id) => { root.quote-clicked(id); }
+                        sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
+                        current-playing-attachment-id: root.current-playing-attachment-id;
+                        is-media-playing: root.is-media-playing;
+                        audio-progress: root.audio-progress;
+                        audio-elapsed: root.audio-elapsed;
+                        attachment-clicked(id) => { root.view-attachment(id); }
+                        audio-seek(id, pos) => { root.audio-seek(id, pos); }
+                        reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
+                        more-clicked(sender-id, timestamp-ns, x, y) => {
+                            root.menu-preview-message = item;
+                            root.menu-preview-row-x = self.absolute-position.x;
+                            root.menu-preview-row-y = self.absolute-position.y;
+                            root.menu-preview-row-width = self.width;
+                            root.menu-anchor-top = self.menu-anchor-top;
+                            root.menu-anchor-bottom = self.menu-anchor-bottom;
+                            root.menu-anchor-left = self.menu-anchor-left;
+                            root.menu-anchor-right = self.menu-anchor-right;
+                            root.more-clicked(sender-id, timestamp-ns, x, y);
+                        }
 
+                        open-message-link(url, display-text) => { root.open-message-link(url, display-text); }
                         message-clicked(id) => {
                             root.message-clicked(id);
                         }
@@ -311,97 +675,86 @@ export component ThreadPanel inherits Rectangle {
                         react-clicked(sender-id, timestamp-ns, x, y) => {
                             root.react-clicked(sender-id, timestamp-ns, x, y);
                         }
-                    }
-                }
-            }
-        }
 
-        // Composer at bottom (simplified)
-        Rectangle {
-            height: 56px;
-            background: Colors.surface;
-
-            // Top border
-            Rectangle {
-                height: 1px;
-                background: Colors.text-muted.with-alpha(0.15);
-            }
-
-            HorizontalLayout {
-                padding: Spacing.sm;
-                spacing: Spacing.sm;
-
-                // Text input area
-                Rectangle {
-                    horizontal-stretch: 1;
-                    height: 40px;
-                    background: Colors.background;
-                    border-radius: Spacing.radius-md;
-                    border-width: 1px;
-                    border-color: composer-input.has-focus ? Colors.primary : Colors.text-muted.with-alpha(0.3);
-
-                    HorizontalLayout {
-                        padding-left: Spacing.sm;
-                        padding-right: Spacing.sm;
-
-                        composer-input := TextInput {
-                            horizontal-stretch: 1;
-                            height: parent.height;
-                            color: Colors.text-primary;
-                            font-size: Typography.sm;
-                            vertical-alignment: center;
-                            text <=> root.composer-text;
-
-                            accepted => {
-                                if root.composer-text != "" {
-                                    root.send-reply(root.composer-text);
-                                    root.composer-text = "";
-                                }
-                            }
-                        }
-                    }
-
-                    // Placeholder
-                    if root.composer-text == "": Text {
-                        x: Spacing.sm;
-                        text: "Reply in thread...";
-                        color: Colors.text-muted;
-                        font-size: Typography.sm;
-                        vertical-alignment: center;
-                    }
-                }
-
-                // Send button
-                Rectangle {
-                    width: 40px;
-                    height: 40px;
-                    border-radius: Spacing.radius-md;
-                    background: root.composer-text != "" ? Colors.primary : Colors.text-muted.with-alpha(0.3);
-
-                    // Icons.send, not U+27A4: Inter has no glyph for that
-                    // dingbat, so the thread reply button drew a notdef box —
-                    // and it is the only way to post a reply in this panel.
-                    Image {
-                        source: Icons.send;
-                        colorize: root.composer-text != "" ? Colors.text-primary : Colors.text-muted;
-                        width: 18px;
-                        height: 18px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-
-                    TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            if root.composer-text != "" {
-                                root.send-reply(root.composer-text);
-                                root.composer-text = "";
-                            }
+                        reaction-toggled(sender-id, timestamp-ns, emoji) => {
+                            root.reaction-toggled(sender-id, timestamp-ns, emoji);
                         }
                     }
                 }
             }
         }
+
+        composer := MessageComposer {
+            width: 100%;
+            vertical-stretch: 0;
+            // The platform, not the layout: a narrow desktop window covers the
+            // chat with the thread (`mobile`) but still has a keyboard, and the
+            // composer's Up-to-edit and hover affordances follow `mobile`.
+            mobile: root.touch;
+            enter-sends: root.composer-enter-sends;
+            keyboard-open: root.keyboard-open;
+            available-pane-height: root.height;
+            composer-scope: "thread";
+            thread-root-id: root.root-message-id;
+            picker-open: root.emoji-open;
+            attachment-prepare-serial: root.attachment-prepare-serial;
+            attachment-restore-serial: root.attachment-restore-serial;
+            caret-end-seq: root.composer-caret-end-seq;
+            text <=> root.composer-text;
+            placeholder: "Reply in thread...";
+            pending-attachments: root.pending-attachments;
+            is-replying: root.is-replying;
+            is-editing <=> root.is-editing;
+            edit-message-id <=> root.edit-message-id;
+            reply-to-sender: root.reply-to-sender-name;
+            reply-to-preview: root.reply-preview;
+            reply-has-thumbnail: root.reply-has-thumbnail;
+            reply-thumbnail: root.reply-thumbnail;
+            send(text) => { return root.send-reply(text); }
+            cancel-reply => { root.cancel-reply(); }
+            send-edit(msg-id, text) => { root.send-edit(msg-id, text); }
+            cancel-edit => { root.cancel-edit(); }
+            edit-last-requested => { root.edit-last-requested(); }
+            attachment-clicked => { root.attachment-clicked(); }
+            remove-attachment(id) => { root.remove-attachment(id); }
+            paste-image => { root.paste-image(); }
+            emoji-clicked => { root.emoji-open = !root.emoji-open; }
+            input-focused => { root.emoji-open = false; }
+            mention-triggered(query) => { root.mention-triggered(query); }
+        }
+        if root.mobile: Rectangle { height: Spacing.sm; }
+    }
+
+    if root.emoji-open: EmojiPicker {
+        show: true;
+        touch: root.mobile;
+        x: max(0px, root.width - self.width - Spacing.sm);
+        y: max(root.mobile ? Spacing.header-height-touch : Spacing.header-height,
+            root.height - composer.height - self.height - Spacing.sm);
+        max-picker-width: min(280px, root.width - 2 * Spacing.sm);
+        max-picker-height: max(0px, min(320px,
+            root.height - composer.height - (root.mobile ? Spacing.header-height-touch : Spacing.header-height) - Spacing.sm));
+        emoji-list: root.emoji-list;
+        selected-category <=> root.emoji-category;
+        search-query <=> root.emoji-search;
+        selected-skin-tone <=> root.emoji-skin-tone;
+        emoji-selected(emoji) => { composer.insert-emoji(emoji); root.emoji-open = false; }
+        close => { root.emoji-open = false; }
+        category-changed(category) => { root.emoji-category-changed(category); }
+        search-changed(query) => { root.emoji-search-changed(query); }
+        skin-tone-changed(tone) => { root.emoji-skin-tone-changed(tone); }
+    }
+    if root.mention-visible: MentionAutocomplete {
+        show: root.mention-visible;
+        x: Spacing.sm;
+        y: max(root.mobile ? Spacing.header-height-touch : Spacing.header-height,
+            root.height - composer.height - self.height);
+        max-popup-width: min(240px, root.width - 2 * Spacing.sm);
+        max-popup-height: max(0px, root.height - composer.height
+            - (root.mobile ? Spacing.header-height-touch : Spacing.header-height));
+        suggestions: root.mention-suggestions;
+        selected-index: root.mention-selected-index;
+        suggestion-selected(id, display) => { root.mention-selected(id, display); }
+        close => { root.mention-triggered(""); }
     }
 }

@@ -4,11 +4,12 @@
 //!
 //! Run with: cargo bench --bench attachment_decrypt
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use sha2::{Digest, Sha256};
-use hmac::{Hmac, Mac};
 use aes::Aes256;
-use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use cbc::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use hmac::{Hmac, Mac};
+use sha2::{Digest, Sha256};
+use std::hint::black_box;
 
 type Aes256CbcEnc = cbc::Encryptor<Aes256>;
 type Aes256CbcDec = cbc::Decryptor<Aes256>;
@@ -47,10 +48,12 @@ fn generate_test_data(size: usize) -> (Vec<u8>, [u8; KEY_SET_LENGTH], [u8; 32], 
     // Encrypt
     let cipher = Aes256CbcEnc::new_from_slices(aes_key, &iv).unwrap();
     let mut encrypted = padded.clone();
-    cipher.encrypt_padded_mut::<block_padding::NoPadding>(&mut encrypted, padded_size).unwrap();
+    cipher
+        .encrypt_padded::<block_padding::NoPadding>(&mut encrypted, padded_size)
+        .unwrap();
 
     // Compute HMAC
-    let mut mac = HmacSha256::new_from_slice(mac_key).unwrap();
+    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(mac_key).unwrap();
     mac.update(&iv);
     mac.update(&encrypted);
     let hmac_result = mac.finalize().into_bytes();
@@ -109,7 +112,7 @@ fn bench_hmac_verify(c: &mut Criterion) {
             &(iv, encrypted, mac_key),
             |b, (iv, encrypted, mac_key)| {
                 b.iter(|| {
-                    let mut mac = HmacSha256::new_from_slice(mac_key).unwrap();
+                    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(mac_key).unwrap();
                     mac.update(black_box(*iv));
                     mac.update(black_box(*encrypted));
                     let _result = mac.finalize();
@@ -139,7 +142,9 @@ fn bench_aes_decrypt(c: &mut Criterion) {
                 b.iter(|| {
                     let cipher = Aes256CbcDec::new_from_slices(aes_key, iv).unwrap();
                     let mut decrypted = (*encrypted).to_vec();
-                    cipher.decrypt_padded_mut::<block_padding::NoPadding>(&mut decrypted).unwrap();
+                    cipher
+                        .decrypt_padded::<block_padding::NoPadding>(&mut decrypted)
+                        .unwrap();
                     black_box(decrypted)
                 });
             },
@@ -176,7 +181,7 @@ fn bench_full_decrypt(c: &mut Criterion) {
                     let expected_hmac = &ciphertext[ciphertext.len() - HMAC_LENGTH..];
 
                     // Step 3: Verify HMAC
-                    let mut mac = HmacSha256::new_from_slice(mac_key).unwrap();
+                    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(mac_key).unwrap();
                     mac.update(iv);
                     mac.update(encrypted);
                     let computed_hmac = mac.finalize().into_bytes();
@@ -185,7 +190,9 @@ fn bench_full_decrypt(c: &mut Criterion) {
                     // Step 4: Decrypt
                     let cipher = Aes256CbcDec::new_from_slices(aes_key, iv).unwrap();
                     let mut decrypted = encrypted.to_vec();
-                    cipher.decrypt_padded_mut::<block_padding::NoPadding>(&mut decrypted).unwrap();
+                    cipher
+                        .decrypt_padded::<block_padding::NoPadding>(&mut decrypted)
+                        .unwrap();
 
                     // Step 5: Truncate
                     decrypted.truncate(*plaintext_size);
@@ -264,7 +271,7 @@ fn bench_single_pass_decrypt(c: &mut Criterion) {
 
                     // Combined pass over data
                     let mut digest_hasher = Sha256::new();
-                    let mut mac = HmacSha256::new_from_slice(mac_key).unwrap();
+                    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(mac_key).unwrap();
 
                     digest_hasher.update(black_box(iv));
                     mac.update(black_box(iv));
@@ -278,13 +285,15 @@ fn bench_single_pass_decrypt(c: &mut Criterion) {
                     digest_hasher.update(expected_hmac);
 
                     let actual_digest: [u8; 32] = digest_hasher.finalize().into();
-                    let computed_hmac = mac.finalize();
+                    black_box(mac.finalize());
                     assert_eq!(&actual_digest, expected_digest);
 
                     // Decrypt
                     let cipher = Aes256CbcDec::new_from_slices(aes_key, iv).unwrap();
                     let mut decrypted = encrypted.to_vec();
-                    cipher.decrypt_padded_mut::<block_padding::NoPadding>(&mut decrypted).unwrap();
+                    cipher
+                        .decrypt_padded::<block_padding::NoPadding>(&mut decrypted)
+                        .unwrap();
                     decrypted.truncate(*plaintext_size);
                     black_box(decrypted)
                 });

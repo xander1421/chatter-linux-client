@@ -45,7 +45,10 @@ impl MeshDeliveryRepository {
     /// States for a batch of messages. Absent IDs are simply missing from the
     /// map — a message with no recorded state is not an error, it is one whose
     /// send predates this table or never reported.
-    pub fn get_many(&self, message_ids: &[String]) -> Result<HashMap<String, String>, StorageError> {
+    pub fn get_many(
+        &self,
+        message_ids: &[String],
+    ) -> Result<HashMap<String, String>, StorageError> {
         if message_ids.is_empty() {
             return Ok(HashMap::new());
         }
@@ -130,6 +133,10 @@ mod tests {
         let (repo, _dir) = repo();
         repo.set("msg-1", "carried").expect("set");
         repo.wipe().expect("wipe");
-        assert!(repo.get_many(&["msg-1".to_string()]).expect("get").is_empty());
+        assert!(
+            repo.get_many(&["msg-1".to_string()])
+                .expect("get")
+                .is_empty()
+        );
     }
 }

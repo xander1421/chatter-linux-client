@@ -221,11 +221,9 @@ impl VectorRepository {
     /// Count total embeddings.
     pub fn count_total(&self) -> Result<u32, StorageError> {
         let conn = self.db.read_connection()?;
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM vector_embeddings",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM vector_embeddings", [], |row| {
+            row.get(0)
+        })?;
         Ok(count as u32)
     }
 }

@@ -38,13 +38,11 @@
 //!   QR payload, builds a [`ProvisionMessage`] from local identity/profile
 //!   state, and calls [`encrypt_envelope`] before uploading.
 
-use aes::cipher::{
-    block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit,
-};
+use crate::crypto::os_rng;
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use prost::Message;
-use rand_core_06::OsRng;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -83,7 +81,7 @@ pub struct ProvisioningKeypair {
 impl ProvisioningKeypair {
     /// Generate a fresh ephemeral keypair.
     pub fn generate() -> Self {
-        let secret = StaticSecret::random_from_rng(OsRng);
+        let secret = StaticSecret::random_from_rng(&mut os_rng());
         let public = PublicKey::from(&secret).to_bytes();
         Self { secret, public }
     }
@@ -119,7 +117,7 @@ pub fn encrypt_envelope(
     recipient_pub: &[u8; PUB_LEN],
     message: &ProvisionMessage,
 ) -> Result<ProvisionEnvelope, CryptoError> {
-    let ephemeral = StaticSecret::random_from_rng(OsRng);
+    let ephemeral = StaticSecret::random_from_rng(&mut os_rng());
     let ephemeral_pub = PublicKey::from(&ephemeral).to_bytes();
 
     let peer = PublicKey::from(*recipient_pub);
@@ -139,13 +137,19 @@ pub fn encrypt_envelope(
     let (aes_key, mac_key) = derive_keys(&shared)?;
 
     let mut iv = [0u8; IV_LEN];
-    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut iv).expect("OS CSPRNG must not fail");}
+    {
+        use rand::TryRngCore;
+        rand::rngs::OsRng
+            .try_fill_bytes(&mut iv)
+            .expect("OS CSPRNG must not fail");
+    }
 
-    let plaintext = message.encode_to_vec();
-    let ct = Aes256CbcEnc::new(aes_key.as_ref().into(), (&iv).into())
-        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+    // Carries the identity private key.
+    let plaintext = Zeroizing::new(message.encode_to_vec());
+    let ct =
+        Aes256CbcEnc::new((&*aes_key).into(), (&iv).into()).encrypt_padded_vec::<Pkcs7>(&plaintext);
 
-    let mut mac = HmacSha256::new_from_slice(mac_key.as_ref())
+    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(mac_key.as_ref())
         .map_err(|e| CryptoError::EncryptionFailed(format!("HMAC init: {e}")))?;
     mac.update(&[VERSION]);
     mac.update(&iv);
@@ -230,7 +234,7 @@ pub fn decrypt_envelope(
     let ct = &envelope.body[VERSION_LEN + IV_LEN..VERSION_LEN + IV_LEN + ct_len];
     let received_mac = &envelope.body[VERSION_LEN + IV_LEN + ct_len..];
 
-    let mut mac = HmacSha256::new_from_slice(mac_key.as_ref())
+    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(mac_key.as_ref())
         .map_err(|e| CryptoError::DecryptionFailed(format!("HMAC init: {e}")))?;
     mac.update(version);
     mac.update(iv);
@@ -241,10 +245,14 @@ pub fn decrypt_envelope(
         return Err(CryptoError::DecryptionFailed("MAC mismatch".into()));
     }
 
-    let mut buf = ct.to_vec();
-    let plaintext = Aes256CbcDec::new(aes_key.as_ref().into(), iv.into())
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
-        .map_err(|_| CryptoError::DecryptionFailed("AES-CBC unpad".into()))?;
+    // Decrypted in place: ends up holding the identity private key.
+    let mut buf = Zeroizing::new(ct.to_vec());
+    let plaintext = Aes256CbcDec::new(
+        (&*aes_key).into(),
+        iv.try_into().expect("validated IV length"),
+    )
+    .decrypt_padded::<Pkcs7>(&mut buf)
+    .map_err(|_| CryptoError::DecryptionFailed("AES-CBC unpad".into()))?;
 
     ProvisionMessage::decode(plaintext)
         .map_err(|e| CryptoError::DecryptionFailed(format!("proto decode: {e}")))
@@ -281,10 +289,11 @@ mod tests {
             master_key: vec![],
             read_receipts: true,
             typing_indicators: true,
-            link_previews: false,
             provisioning_user_agent: "linux-client/0.1".into(),
             primary_device_registration_id: 1234,
             ephemeral_backup_key: None,
+            svr_salt_username: "alice".into(),
+            full_username: "alice.1234".into(),
         }
     }
 
@@ -299,7 +308,10 @@ mod tests {
         assert_eq!(decoded.aci, msg.aci);
         assert_eq!(decoded.provisioning_code, msg.provisioning_code);
         assert_eq!(decoded.profile_key, msg.profile_key);
-        assert_eq!(decoded.aci_identity_key_private, msg.aci_identity_key_private);
+        assert_eq!(
+            decoded.aci_identity_key_private,
+            msg.aci_identity_key_private
+        );
         assert_eq!(
             decoded.primary_device_registration_id,
             msg.primary_device_registration_id

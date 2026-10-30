@@ -6,11 +6,10 @@
 //!    - Other client hasn't received/processed the mailbox announcement yet
 //!    - Fanout shows delivered=1 but only to known members (not the new one)
 //! 2. Key mismatch detection - stored keys differ from announced keys
-//! 3. Concurrent setup races
 //!
 //! All tests use real server connections to simulate production conditions.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,11 +17,13 @@ use std::time::Duration;
 use ed25519_dalek::Signer;
 
 use chatter_core::domain::ids::ChannelId;
-use chatter_core::mailbox::group::{GroupCoordinator, GroupMailboxManager, MemberMailbox};
 use chatter_core::mailbox::TokenManager;
-use chatter_core::network::grpc::{AnonymousMailboxClient, ChannelClient, GrpcClientPool, MailboxClient, MessageClient};
+use chatter_core::mailbox::group::{GroupMailboxManager, MemberMailbox};
+use chatter_core::network::grpc::{
+    AnonymousMailboxClient, ChannelClient, GrpcClientPool, MailboxClient, MessageClient,
+};
 use chatter_core::proto::chat_v1::{
-    message::content::Type as ContentType, message::Content, ChannelType,
+    ChannelType, message::Content, message::content::Type as ContentType,
 };
 use chatter_core::storage::Database;
 use tokio::time::sleep;
@@ -34,10 +35,8 @@ use common::*;
 struct MailboxTestContext {
     user: TestUser,
     pool: Arc<GrpcClientPool>,
-    db: Arc<Database>,
     mailbox_manager: Arc<GroupMailboxManager>,
     token_manager: TokenManager,
-    group_coordinator: GroupCoordinator,
 }
 
 impl MailboxTestContext {
@@ -53,24 +52,17 @@ impl MailboxTestContext {
 
         let mailbox_manager = Arc::new(GroupMailboxManager::new(db.clone()));
         let token_manager = TokenManager::new(db.clone());
-        let group_coordinator = GroupCoordinator::new(db.clone(), mailbox_manager.clone());
 
         Ok(Self {
             user,
             pool,
-            db,
             mailbox_manager,
             token_manager,
-            group_coordinator,
         })
     }
 
     fn channel_client(&self) -> ChannelClient {
         ChannelClient::new(self.pool.channel(), self.pool.auth_clone())
-    }
-
-    fn message_client(&self) -> MessageClient {
-        MessageClient::new(self.pool.channel(), self.pool.auth_clone())
     }
 
     fn mailbox_client(&self) -> MailboxClient {
@@ -83,9 +75,16 @@ impl MailboxTestContext {
 }
 
 /// Helper to create a channel and wait for completion.
-async fn create_test_channel(client: &mut ChannelClient, name: &str) -> String {
+async fn create_test_channel(client: &mut ChannelClient, user: &TestUser, name: &str) -> String {
     let stream = client
-        .create_channel(name, ChannelType::ChannelPublic, None, vec![], None, None, None)
+        .create_channel(
+            name,
+            ChannelType::ChannelPublic,
+            None,
+            None,
+            None,
+            Some(membership::genesis(user, true).1),
+        )
         .await
         .expect("Failed to start channel creation");
 
@@ -110,99 +109,6 @@ async fn create_test_channel(client: &mut ChannelClient, name: &str) -> String {
     }
 
     channel_id
-}
-
-// ============================================================================
-// Regression Test: Stale Database State
-// ============================================================================
-
-/// Test: Messages fail when local database has old mailbox keys that don't match server.
-///
-/// Scenario:
-/// 1. User creates channel and sets up mailbox
-/// 2. Mailbox keys stored locally
-/// 3. Simulate "stale state" by creating new mailbox (old keys still in DB)
-/// 4. Send message - should detect key mismatch or re-sync
-#[tokio::test]
-async fn test_stale_mailbox_key_detection() {
-    skip_if_no_server!();
-
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .with_test_writer()
-        .try_init();
-
-    tracing::info!("=== Starting regression test: stale mailbox key detection ===");
-
-    let ctx = assert_ok(MailboxTestContext::new().await);
-    let mut channel_client = ctx.channel_client();
-
-    // Step 1: Create channel
-    let channel_name = format!("stale_key_test_{}", unique_username());
-    let channel_id_str = create_test_channel(&mut channel_client, &channel_name).await;
-    let channel_id: ChannelId = channel_id_str.parse().expect("Valid channel ID");
-
-    tracing::info!(channel_id = %channel_id, "Created test channel");
-
-    // Step 2: Request tokens and setup first mailbox
-    let mut mailbox_client = ctx.mailbox_client();
-    let tokens_acquired = assert_ok(ctx.token_manager.request_tokens(&mut mailbox_client, 3).await);
-    assert!(tokens_acquired > 0, "Should acquire at least one token");
-
-    let mut anon_mailbox_client = ctx.anon_mailbox_client();
-    let first_setup = assert_ok(
-        ctx.group_coordinator
-            .setup_group_mailbox(&channel_id, &mut mailbox_client, &mut anon_mailbox_client)
-            .await,
-    );
-
-    let first_mailbox_pk = first_setup.mailbox.public_key;
-    tracing::info!(
-        mailbox_id = %first_setup.mailbox.id,
-        pk_hex = %hex::encode(&first_mailbox_pk),
-        "First mailbox created"
-    );
-
-    // Step 3: Simulate stale state by clearing and creating new mailbox
-    // This simulates what happens when app restarts but server state changed
-    ctx.mailbox_manager.delete_group_state(&channel_id).ok();
-
-    // Get more tokens for second mailbox
-    let _ = ctx.token_manager.request_tokens(&mut mailbox_client, 3).await;
-
-    let second_setup = assert_ok(
-        ctx.group_coordinator
-            .setup_group_mailbox(&channel_id, &mut mailbox_client, &mut anon_mailbox_client)
-            .await,
-    );
-
-    let second_mailbox_pk = second_setup.mailbox.public_key;
-    tracing::info!(
-        mailbox_id = %second_setup.mailbox.id,
-        pk_hex = %hex::encode(&second_mailbox_pk),
-        "Second mailbox created (simulating stale recovery)"
-    );
-
-    // Step 4: Verify keys are different (proves stale state was simulated)
-    assert_ne!(
-        first_mailbox_pk, second_mailbox_pk,
-        "New mailbox should have different keys (simulating key rotation/stale state)"
-    );
-
-    // Step 5: Verify announcement contains correct (new) key
-    let announcement = ctx
-        .group_coordinator
-        .get_announcement(&channel_id)
-        .expect("Should get announcement")
-        .expect("Should have announcement");
-
-    assert_eq!(
-        announcement.mailbox_pk.as_slice(),
-        &second_mailbox_pk,
-        "Announcement should contain current (new) mailbox key"
-    );
-
-    tracing::info!("=== Stale key detection test passed ===");
 }
 
 // ============================================================================
@@ -255,14 +161,15 @@ async fn test_message_before_mailbox_exchange() {
     // User 1 creates channel
     let mut channel_client1 = ChannelClient::new(pool1.channel(), pool1.auth_clone());
     let channel_name = format!("timing_test_{}", unique_username());
-    let channel_id = create_test_channel(&mut channel_client1, &channel_name).await;
+    let channel_id = create_test_channel(&mut channel_client1, &user1, &channel_name).await;
 
     tracing::info!(channel_id = %channel_id, "User 1 created channel");
 
     // User 2 joins channel
     let mut channel_client2 = ChannelClient::new(pool2.channel(), pool2.auth_clone());
+    let join = membership::open_join(&user2, &mut channel_client2, &channel_id).await;
     let join_stream = channel_client2
-        .join_channel(&channel_id, None, false)
+        .join_channel(&channel_id, join, false)
         .await
         .expect("Join should start");
 
@@ -275,11 +182,22 @@ async fn test_message_before_mailbox_exchange() {
     // This tests the race condition
     let mut msg_client1 = MessageClient::new(pool1.channel(), pool1.auth_clone());
     let content = Content {
-        r#type: Some(ContentType::Text("Quick message before mailbox exchange!".to_string())),
+        r#type: Some(ContentType::Text(
+            "Quick message before mailbox exchange!".to_string(),
+        )),
     };
 
     let send_result = msg_client1
-        .send_message(&channel_id, content, None, false, None, None, vec![], false, vec![])
+        .send_message(
+            &channel_id,
+            content,
+            None,
+            false,
+            None,
+            vec![],
+            false,
+            vec![],
+        )
         .await;
 
     // The message should either:
@@ -329,20 +247,30 @@ async fn test_send_with_partial_member_list() {
 
     let ctx = assert_ok(MailboxTestContext::new().await);
 
-    let channel_id: ChannelId = uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
+    let channel_id: ChannelId = uuid::Uuid::new_v4()
+        .to_string()
+        .parse()
+        .expect("Valid UUID");
 
     // Simulate having only ONE member's mailbox (User A)
-    let user_a: chatter_core::domain::UserId =
-        uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
-    let user_b: chatter_core::domain::UserId =
-        uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
+    let user_a: chatter_core::domain::UserId = uuid::Uuid::new_v4()
+        .to_string()
+        .parse()
+        .expect("Valid UUID");
+    let user_b: chatter_core::domain::UserId = uuid::Uuid::new_v4()
+        .to_string()
+        .parse()
+        .expect("Valid UUID");
 
     let mut key_a = [0u8; 32];
     rand::fill(&mut key_a[..]);
     let mailbox_a = MemberMailbox::new(user_a, key_a, None);
 
     // Store only User A's mailbox
-    assert_ok(ctx.mailbox_manager.save_member_mailbox(&channel_id, &mailbox_a));
+    assert_ok(
+        ctx.mailbox_manager
+            .save_member_mailbox(&channel_id, &mailbox_a),
+    );
 
     // Check is_ready_to_send - will return TRUE even though User B is missing
     let state = ctx
@@ -374,7 +302,10 @@ async fn test_send_with_partial_member_list() {
     rand::fill(&mut key_b[..]);
     let mailbox_b = MemberMailbox::new(user_b, key_b, None);
 
-    assert_ok(ctx.mailbox_manager.save_member_mailbox(&channel_id, &mailbox_b));
+    assert_ok(
+        ctx.mailbox_manager
+            .save_member_mailbox(&channel_id, &mailbox_b),
+    );
 
     let state2 = ctx
         .mailbox_manager
@@ -421,16 +352,24 @@ async fn test_member_mailbox_key_update() {
 
     let ctx = assert_ok(MailboxTestContext::new().await);
 
-    let channel_id: ChannelId = uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
-    let member_id: chatter_core::domain::UserId =
-        uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
+    let channel_id: ChannelId = uuid::Uuid::new_v4()
+        .to_string()
+        .parse()
+        .expect("Valid UUID");
+    let member_id: chatter_core::domain::UserId = uuid::Uuid::new_v4()
+        .to_string()
+        .parse()
+        .expect("Valid UUID");
 
     // Step 1: Store first mailbox key for member
     let mut first_key = [0u8; 32];
     rand::fill(&mut first_key[..]);
 
     let first_mailbox = MemberMailbox::new(member_id, first_key, None);
-    assert_ok(ctx.mailbox_manager.save_member_mailbox(&channel_id, &first_mailbox));
+    assert_ok(
+        ctx.mailbox_manager
+            .save_member_mailbox(&channel_id, &first_mailbox),
+    );
 
     tracing::info!(
         channel_id = %channel_id,
@@ -446,7 +385,10 @@ async fn test_member_mailbox_key_update() {
         .expect("Should load state")
         .expect("State should exist");
 
-    let stored1 = state1.member_mailboxes.get(&member_id).expect("Member should exist");
+    let stored1 = state1
+        .member_mailboxes
+        .get(&member_id)
+        .expect("Member should exist");
     assert_eq!(stored1.public_key, first_key, "First key should be stored");
 
     // Step 3: Store second (different) mailbox key for same member
@@ -456,7 +398,10 @@ async fn test_member_mailbox_key_update() {
     assert_ne!(first_key, second_key, "Keys should be different");
 
     let second_mailbox = MemberMailbox::new(member_id, second_key, None);
-    assert_ok(ctx.mailbox_manager.save_member_mailbox(&channel_id, &second_mailbox));
+    assert_ok(
+        ctx.mailbox_manager
+            .save_member_mailbox(&channel_id, &second_mailbox),
+    );
 
     tracing::info!(
         channel_id = %channel_id,
@@ -472,118 +417,16 @@ async fn test_member_mailbox_key_update() {
         .expect("Should load state")
         .expect("State should exist");
 
-    let stored2 = state2.member_mailboxes.get(&member_id).expect("Member should exist");
+    let stored2 = state2
+        .member_mailboxes
+        .get(&member_id)
+        .expect("Member should exist");
     assert_eq!(
         stored2.public_key, second_key,
         "Second key should replace first (key rotation handling)"
     );
 
     tracing::info!("=== Member mailbox key update test passed ===");
-}
-
-// ============================================================================
-// Regression Test: Concurrent Mailbox Setup Race
-// ============================================================================
-
-/// Test: Multiple concurrent mailbox setup attempts should not corrupt state.
-///
-/// Scenario:
-/// 1. Multiple async tasks try to setup mailbox for same channel
-/// 2. Only one should succeed, others should reuse existing
-/// 3. No state corruption should occur
-#[tokio::test]
-async fn test_concurrent_mailbox_setup() {
-    skip_if_no_server!();
-
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .with_test_writer()
-        .try_init();
-
-    tracing::info!("=== Starting regression test: concurrent mailbox setup ===");
-
-    let ctx = Arc::new(assert_ok(MailboxTestContext::new().await));
-    let mut channel_client = ctx.channel_client();
-
-    // Create channel
-    let channel_name = format!("concurrent_test_{}", unique_username());
-    let channel_id_str = create_test_channel(&mut channel_client, &channel_name).await;
-    let channel_id: ChannelId = channel_id_str.parse().expect("Valid channel ID");
-
-    // Pre-request tokens
-    let mut mailbox_client = ctx.mailbox_client();
-    let _ = ctx.token_manager.request_tokens(&mut mailbox_client, 10).await;
-
-    // Spawn multiple concurrent setup attempts
-    let mut handles = Vec::new();
-    for i in 0..5 {
-        let ctx_clone = ctx.clone();
-        let channel_id_clone = channel_id;
-        handles.push(tokio::spawn(async move {
-            let mut client = ctx_clone.mailbox_client();
-            let mut anon_client = ctx_clone.anon_mailbox_client();
-            let result = ctx_clone
-                .group_coordinator
-                .setup_group_mailbox(&channel_id_clone, &mut client, &mut anon_client)
-                .await;
-            (i, result)
-        }));
-    }
-
-    // Wait for all to complete
-    let results: Vec<_> = futures::future::join_all(handles)
-        .await
-        .into_iter()
-        .map(|r| r.expect("Task should not panic"))
-        .collect();
-
-    // Count successes
-    let successes: Vec<_> = results.iter().filter(|(_, r)| r.is_ok()).collect();
-
-    tracing::info!(
-        total_attempts = results.len(),
-        successes = successes.len(),
-        "Concurrent setup completed"
-    );
-
-    // All attempts should succeed (either creating new or reusing existing)
-    for (i, result) in &results {
-        match result {
-            Ok(setup) => {
-                tracing::info!(
-                    attempt = i,
-                    mailbox_id = %setup.mailbox.id,
-                    "Setup succeeded"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    attempt = i,
-                    error = %e,
-                    "Setup failed (may be expected for some race conditions)"
-                );
-            }
-        }
-    }
-
-    // Verify final state is consistent
-    let final_state = ctx
-        .mailbox_manager
-        .load_group_state(&channel_id)
-        .expect("Should load state");
-
-    assert!(
-        final_state.is_some(),
-        "Should have mailbox state after concurrent setup"
-    );
-
-    let state = final_state.unwrap();
-    assert!(
-        state.our_mailbox.is_some(),
-        "Should have our mailbox after concurrent setup"
-    );
-
-    tracing::info!("=== Concurrent mailbox setup test passed ===");
 }
 
 // ============================================================================
@@ -611,36 +454,43 @@ async fn test_server_rejects_wrong_credentials() {
     let mut mailbox_client = ctx.mailbox_client();
 
     // Request tokens and create a real mailbox
-    let _ = ctx.token_manager.request_tokens(&mut mailbox_client, 3).await;
+    let _ = ctx
+        .token_manager
+        .request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 3)
+        .await;
 
-    let channel_id: ChannelId = uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
+    let token = assert_ok(ctx.token_manager.claim_prefetched_token());
     let mut anon_mailbox_client = ctx.anon_mailbox_client();
-    let setup = assert_ok(
-        ctx.group_coordinator
-            .setup_group_mailbox(&channel_id, &mut mailbox_client, &mut anon_mailbox_client)
-            .await,
-    );
-
-    let correct_pk = setup.mailbox.public_key;
-    let correct_private_key = setup.mailbox.private_key;
-    tracing::info!(
-        mailbox_id = %setup.mailbox.id,
-        correct_pk_hex = %hex::encode(&correct_pk),
-        "Created real mailbox for testing"
-    );
+    let mailbox = assert_ok(anon_mailbox_client.create_ephemeral_mailbox(
+        token.public_key.clone(),
+        token.signature.clone(),
+        chatter_core::mailbox::group::coordination::DEFAULT_GROUP_MAILBOX_TTL_SECONDS,
+    ).await);
+    let correct_pk: [u8; 32] = token.public_key.try_into().expect("32-byte mailbox key");
+    let correct_private_key = token.private_key;
+    tracing::info!(mailbox_id = %mailbox.mailbox_id, "Created real mailbox for testing");
 
     // Test 1: Challenge request with non-existent public key
     let mut wrong_pk = [0u8; 32];
     rand::fill(&mut wrong_pk[..]);
 
-    let challenge_wrong_pk = mailbox_client.get_mailbox_challenge(wrong_pk.to_vec()).await;
+    let challenge_wrong_pk = mailbox_client
+        .get_mailbox_challenge(wrong_pk.to_vec())
+        .await;
     match &challenge_wrong_pk {
-        Ok(_) => tracing::warn!("[TEST 1] Server returned challenge for NON-EXISTENT mailbox - SECURITY CONCERN"),
-        Err(e) => tracing::info!("[TEST 1] Server REJECTED challenge for non-existent mailbox: {}", e),
+        Ok(_) => tracing::warn!(
+            "[TEST 1] Server returned challenge for NON-EXISTENT mailbox - SECURITY CONCERN"
+        ),
+        Err(e) => tracing::info!(
+            "[TEST 1] Server REJECTED challenge for non-existent mailbox: {}",
+            e
+        ),
     }
 
     // Test 2: Get real challenge, but sign with wrong key
-    let real_challenge = mailbox_client.get_mailbox_challenge(correct_pk.to_vec()).await;
+    let real_challenge = mailbox_client
+        .get_mailbox_challenge(correct_pk.to_vec())
+        .await;
     match real_challenge {
         Ok(challenge_resp) => {
             tracing::info!(
@@ -649,7 +499,9 @@ async fn test_server_rejects_wrong_credentials() {
             );
 
             // Sign with a random key instead of our real private key
-            let wrong_signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core_06::OsRng);
+            let wrong_signing_key = ed25519_dalek::SigningKey::generate(
+                &mut rand_core_10::UnwrapErr(getrandom::SysRng),
+            );
             let wrong_signature = wrong_signing_key.sign(&challenge_resp.challenge);
 
             let poll_wrong_sig = mailbox_client
@@ -676,12 +528,14 @@ async fn test_server_rejects_wrong_credentials() {
     }
 
     // Test 3: Sign with correct key but use stale/wrong challenge bytes
-    let real_challenge2 = mailbox_client.get_mailbox_challenge(correct_pk.to_vec()).await;
+    let real_challenge2 = mailbox_client
+        .get_mailbox_challenge(correct_pk.to_vec())
+        .await;
     match real_challenge2 {
         Ok(challenge_resp) => {
             // Create signing key from stored private key
             let signing_key = ed25519_dalek::SigningKey::from_bytes(
-                &correct_private_key[..32].try_into().expect("32 bytes")
+                &correct_private_key[..32].try_into().expect("32 bytes"),
             );
 
             // Sign a DIFFERENT challenge (not the one server gave us)
@@ -713,11 +567,13 @@ async fn test_server_rejects_wrong_credentials() {
     }
 
     // Test 4: Correct credentials - should work
-    let real_challenge3 = mailbox_client.get_mailbox_challenge(correct_pk.to_vec()).await;
+    let real_challenge3 = mailbox_client
+        .get_mailbox_challenge(correct_pk.to_vec())
+        .await;
     match real_challenge3 {
         Ok(challenge_resp) => {
             let signing_key = ed25519_dalek::SigningKey::from_bytes(
-                &correct_private_key[..32].try_into().expect("32 bytes")
+                &correct_private_key[..32].try_into().expect("32 bytes"),
             );
             let correct_signature = signing_key.sign(&challenge_resp.challenge);
 
@@ -770,22 +626,23 @@ async fn test_e2e_message_with_mailbox_exchange() {
 
     // Setup two users
     let pool1 = assert_ok(create_test_pool().await);
-    let _user1 = assert_ok(setup_authenticated_test(&pool1).await);
+    let user1 = assert_ok(setup_authenticated_test(&pool1).await);
 
     let pool2 = assert_ok(create_test_pool().await);
-    let _user2 = assert_ok(setup_authenticated_test(&pool2).await);
+    let user2 = assert_ok(setup_authenticated_test(&pool2).await);
 
     // User 1 creates public channel
     let mut channel_client1 = ChannelClient::new(pool1.channel(), pool1.auth_clone());
     let channel_name = format!("e2e_mailbox_test_{}", unique_username());
-    let channel_id = create_test_channel(&mut channel_client1, &channel_name).await;
+    let channel_id = create_test_channel(&mut channel_client1, &user1, &channel_name).await;
 
     tracing::info!(channel_id = %channel_id, "User 1 created channel");
 
     // User 2 joins
     let mut channel_client2 = ChannelClient::new(pool2.channel(), pool2.auth_clone());
+    let join = membership::open_join(&user2, &mut channel_client2, &channel_id).await;
     let join_stream = channel_client2
-        .join_channel(&channel_id, None, false)
+        .join_channel(&channel_id, join, false)
         .await
         .expect("Join should start");
 
@@ -805,7 +662,16 @@ async fn test_e2e_message_with_mailbox_exchange() {
 
     let msg1 = assert_ok(
         msg_client1
-            .send_message(&channel_id, content1, None, false, None, None, vec![], false, vec![])
+            .send_message(
+                &channel_id,
+                content1,
+                None,
+                false,
+                None,
+                vec![],
+                false,
+                vec![],
+            )
             .await,
     );
 
@@ -819,7 +685,16 @@ async fn test_e2e_message_with_mailbox_exchange() {
 
     let msg2 = assert_ok(
         msg_client2
-            .send_message(&channel_id, content2, None, false, None, None, vec![], false, vec![])
+            .send_message(
+                &channel_id,
+                content2,
+                None,
+                false,
+                None,
+                vec![],
+                false,
+                vec![],
+            )
             .await,
     );
 

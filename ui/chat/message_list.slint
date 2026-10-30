@@ -1,22 +1,100 @@
 // Virtualized message list component
 //
 // Displays a scrollable list of messages with loading and empty states.
-// Features: animated scrolling, scroll-to-bottom button, auto-scroll on new messages.
+// Only the rows that fit on screen exist at any time (see the list below);
+// features: scroll-to-bottom / "N new messages" pill, open on the unread
+// divider, auto-follow of new messages, older history on reaching the top.
 
-import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
-import { Typography } from "../theme/typography.slint";
-import { Icons } from "../theme/icons.slint";
-import { Skeleton } from "../components/skeleton.slint";
 import { MessageItem } from "message_item.slint";
+import { MessageScrollPill, MessageHistoryError } from "message_list_overlays.slint";
+import { UnreadDivider, DateSeparator } from "message_row_separators.slint";
+import { MessageListLoading, MessageListEmpty } from "message_list_states.slint";
 import { MessageAttachmentData, MessageItemData, ReactionEntry } from "types.slint";
 
 // Re-export types for parent components
 export { MessageAttachmentData, MessageItemData, ReactionEntry }
 
+// The bare Flickable with Slint's lazy row runtime enabled. The compiler turns
+// a `for` into a virtualized one when its parent element is named `ListView`
+// and carries these length properties (i-slint-compiler object_tree.rs,
+// "Custom ListView is OK"); defining it here rather than importing the
+// std-widgets one keeps out the ScrollView chrome and its scrollbars.
+component ListView inherits Flickable {
+    out property <length> visible-height: self.height;
+    out property <length> visible-width: self.width;
+    @children
+}
+
 export component MessageList inherits Rectangle {
+    in property <bool> page-active: true;
+    // Insets are part of the first/last virtual row, so the runtime includes
+    // them in viewport-height and its bottom clamp. Chrome overlays the view.
+    in property <length> top-inset: 0px;
+    in property <length> bottom-inset: 0px;
+    // Room under the last row for the scroll-to-bottom FAB. The host drops
+    // it while the keyboard is up, where it left a blank band above the composer.
+    in property <length> tail-clearance: Spacing.md + Spacing.touch-target-min;
+    property <bool> bubble-swiping: false;
     // Properties
     in property <[MessageItemData]> messages: [];
+    // Last tapped image thumbnail in window coordinates. The parent reads
+    // these synchronously in attachment-clicked before opening the viewer.
+    out property <length> viewer-origin-x: 0px;
+    out property <length> viewer-origin-y: 0px;
+    out property <length> viewer-origin-width: 0px;
+    out property <length> viewer-origin-height: 0px;
+    // Captured synchronously with more-clicked so the overlay can avoid the
+    // pressed bubble even when a row is recycled by the virtual list.
+    out property <length> menu-anchor-top: 0px;
+    out property <length> menu-anchor-bottom: 0px;
+    out property <length> menu-anchor-left: 0px;
+    out property <length> menu-anchor-right: 0px;
+    out property <MessageItemData> menu-preview-message;
+    out property <length> menu-preview-row-x: 0px;
+    out property <length> menu-preview-row-y: 0px;
+    out property <length> menu-preview-row-width: 0px;
+    private property <int> observed-message-count: 0;
+    private property <string> observed-last-message-id: "";
+    private property <bool> ready-for-arrivals: false;
+    // A virtualized row seek can briefly report a bottom-sized viewport before
+    // the unread row is measured. Keep the opening anchor until user input.
+    private property <bool> opening-on-unread: false;
+    // The unread divider was left behind by a user scroll into older history.
+    // Keep this across virtual row recycling; its rendered position, rather
+    // than the list's average-height estimate, decides where the pill goes.
+    private property <bool> unread-above: false;
+    private property <length> unread-row-y: 0px;
+    // The opening unread tail was already visible. A later keyboard resize
+    // must not turn those same loaded rows into a "new messages" pill.
+    private property <bool> seen-opening-tail: false;
+    arrival-ready := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            // Model/row-count notifications are deferred. Establish the loaded
+            // page as the baseline before accepting live arrivals, even when
+            // its row-count notification has not run yet (notably after a
+            // jump replaces the page). Loading existing rows is never unread.
+            root.observed-message-count = root.messages.length;
+            root.observed-last-message-id = root.messages.length > 0
+                ? root.messages[root.messages.length - 1].message-id : "";
+            root.ready-for-arrivals = true;
+        }
+    }
+    private property <int> arrival-start-index: -1;
+    private property <int> arrival-end-index: -1;
+    arrival-clear := Timer {
+        interval: Materials.motion-emphasized;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.arrival-start-index = -1;
+            root.arrival-end-index = -1;
+        }
+    }
     in property <bool> loading: false;
     /// Every message here rode the mesh, so delivery is reported in words
     /// rather than ticks.
@@ -27,8 +105,22 @@ export component MessageList inherits Rectangle {
     /// The one sentence the empty state makes about privacy. Set by the caller
     /// so this component never has to know what a geohash cell is.
     in property <string> privacy-line: "Messages are end-to-end encrypted";
+    in property <bool> saved-messages: false;
+    in property <bool> is-anonymous: false;
     in property <bool> is-dm: false;  // When true, messages show minimal UI (no avatars/names in DMs)
+    in property <bool> can-thread: true;
+    // How far the list is scrolled from its top, as of the last layout pass
+    // (the runtime's estimate, see below). Written here, read by tests; never
+    // bound to `viewport-y`, because a binding there disables both clamps
+    // that keep a short conversation from opening pushed down from the top
+    // (the ListView runtime's and the Flickable's own — each checks
+    // `has_binding` first).
     in-out property <length> scroll-position: 0;
+    // Rows on screen as of the last layout pass, by the same estimate (each
+    // within a row). Written here, read by Rust, which animates inline GIFs
+    // only on these rows. -1 = no list.
+    in-out property <int> first-visible-row: 0;
+    in-out property <int> last-visible-row: -1;
     in property <int> scroll-to-index: -1;  // Set to message index to scroll to it
     in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
     in property <string> current-playing-attachment-id: "";
@@ -36,11 +128,14 @@ export component MessageList inherits Rectangle {
     in property <float> audio-progress: 0.0;
     in property <string> audio-elapsed: "0:00";
 
-    // Scroll state - exposed for parent to detect and control auto-scroll.
-    // in-out, not out: opening a conversation has to be able to reset it. When
-    // it was write-only-upward, a list left scrolled up in one conversation
-    // stayed "not at bottom" in the next one, and the next one opened wherever
-    // the previous scroll happened to leave the viewport.
+    // Following the newest message: within 50px of it when the list last came
+    // to rest. Only a scroll (finger, wheel, fling) or a jump takes it away —
+    // never the content growing underneath, which is the one moment it is
+    // needed. in-out, not out: opening a conversation has to be able to reset
+    // it, and a send sets it. When it was write-only-upward, a list left
+    // scrolled up in one conversation stayed "not at bottom" in the next one,
+    // and the next one opened wherever the previous scroll happened to leave
+    // the viewport.
     in-out property <bool> is-at-bottom: true;
     in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll behavior
 
@@ -53,14 +148,6 @@ export component MessageList inherits Rectangle {
     // Unread total behind that boundary — the pill's number. May exceed the
     // loaded page.
     in-out property <int> unread-count: 0;
-    // y of the unread row within the message layout. 0 until that row has been
-    // laid out; learned from the row itself so the open lands on the real
-    // boundary rather than an index-proportional guess.
-    private property <length> unread-divider-y: 0px;
-    // Anchoring is a once-per-open event. After it, the viewport belongs to the
-    // user — otherwise every later content resize (a GIF registering, a
-    // thumbnail swapping in) would yank them back to the divider.
-    private property <bool> anchor-consumed: false;
 
     // Every conversation open raises `loading` before it installs a model, and
     // only the server-backed opens then supply an anchor. Clearing on that one
@@ -68,186 +155,372 @@ export component MessageList inherits Rectangle {
     // previous DM's divider and opening three rows from the top.
     changed loading => {
         if (root.loading) {
+            root.observed-message-count = 0;
+            root.observed-last-message-id = "";
+            root.ready-for-arrivals = false;
+            root.opening-on-unread = false;
+            root.unread-above = false;
+            root.unread-row-y = 0px;
+            root.seen-opening-tail = false;
+            arrival-ready.running = false;
+            root.arrival-start-index = -1;
+            root.arrival-end-index = -1;
+            arrival-clear.running = false;
             root.unread-index = -1;
             root.unread-count = 0;
-            root.unread-divider-y = 0px;
-            root.anchor-consumed = false;
+            root.end-pending = false;
+            root.following-tail = false;
+            root.jump-row = -1;
+            // Root state, so it outlives the list: left true from a previous
+            // conversation, it would drag the next one to its end on the
+            // first layout pass, over its unread divider.
+            root.at-end = false;
+            root.scrolling = false;
+            // The initial bottom seek can transiently look close to row zero.
+            // Paging starts only after a real scroll in this conversation.
+            root.load-more-armed = false;
+            root.load-failed = false;
+            root.seen-rows = 0;
+            root.first-visible-row = 0;
+            root.last-visible-row = -1;
+        } else {
+            arrival-ready.running = true;
+            root.visible-media-rows(root.first-visible-row, root.last-visible-row);
         }
     }
 
-    // Internal animated scroll target
-    property <length> scroll-target: 0px;
-    // Opening a conversation fills the viewport in one step, and animating that
-    // snap is what made a channel appear to load from the top and then scroll
-    // itself down to the newest message. An append (a message arriving, or a
-    // page of history) grows the viewport by less than a screen and still
-    // animates. So: no animation when the growth is bigger than the screen.
-    property <length> previous-viewport-height: 0px;
-    property <bool> jump-without-animation: false;
-    property <bool> animating: false;
+    // ── Navigation targets ──────────────────────────────────────────────────
+    // Virtualization estimates materialize rows; navigation completes only
+    // against geometry from the rendered message bubble.
+    private property <bool> end-pending: false;
+    // A seek to the newest row owns the bottom anchor through row insertion
+    // and its settle animation. Only an actual user scroll releases it.
+    private property <bool> following-tail: false;
+    private property <int> end-passes: 0;
+    // Sitting exactly on the newest message, as of the last layout pass.
+    private property <bool> at-end: false;
+    // Row to land at the top edge. Re-issued over a few passes: the first
+    // seek goes by the average row height, the next ones walk the rows that
+    // seek made live and close on the exact row.
+    private property <int> jump-row: -1;
+    private property <bool> jump-measured: false;
+    private property <int> jump-stable-passes: 0;
+    private property <length> jump-bubble-y: 0px;
+    private property <int> jump-measurement-serial: 0;
+    // One frame's materialized geometry, discarded after every correction.
+    private property <bool> jump-bootstrapped: false;
+    private property <int> jump-sample-index: -1;
+    private property <length> jump-sample-y: 0px;
+    private property <length> jump-height-sum: 0px;
+    private property <int> jump-sample-count: 0;
+    callback measured-navigation-row(int, length, length);
+    measured-navigation-row(index, y, height) => {
+        if (root.jump-row >= 0 && !root.jump-measured) {
+            root.jump-height-sum += height;
+            root.jump-sample-count += 1;
+            if (root.jump-sample-index < 0
+                    || Math.abs(index - root.jump-row) < Math.abs(root.jump-sample-index - root.jump-row)) {
+                root.jump-sample-index = index;
+                root.jump-sample-y = y;
+            }
+        }
+        if (index == root.jump-row) { root.measured-jump-row(index, y); }
+    }
+    callback measured-jump-row(int, length);
+    measured-jump-row(index, y) => {
+        if (index == root.jump-row) {
+            root.jump-bubble-y = y;
+            root.jump-measured = true;
+            root.jump-measurement-serial += 1;
+        }
+    }
+    // Older history is requested once per approach to the top.
+    private property <bool> load-more-armed: true;
+    // The last older page did not load (a storage read failed, header.rs
+    // `load_history`). The rows and the scroll anchor are untouched; the banner
+    // below says so and offers Retry, because the top is already reached and
+    // asks for nothing more until the user scrolls away and back. Written by
+    // Rust, cleared here on retry and on a conversation open.
+    in-out property <bool> load-failed: false;
+    function retry-load-more() {
+        root.load-failed = false;
+        root.load-more-armed = false;
+        root.load-more();
+    }
+    // The user is scrolling: a finger, the wheel, or the fling either leaves
+    // behind (Flickable `flicked`, until the viewport has been still a moment).
+    // Out so the chrome floating over the list can stop sampling its backdrop
+    // while the rows move (GlassSurface.backdrop-paused).
+    out property <bool> scrolling: false;
+    // What the last layout pass saw, so the next one can tell a message
+    // arriving or a page of history from a scroll. 0 rows = no pass yet.
+    private property <int> seen-rows: 0;
+    private property <string> seen-first: "";
+    private property <length> seen-height: 0;
+    private property <length> seen-view-height: 0;
+    private property <length> seen-y: 0;
+    private property <int> seen-top: 0;
+    // The divider's row moved because history was inserted above it, not
+    // because a conversation opened on it.
+    private property <bool> unread-index-shifted: false;
+    // A mirror `changed` can watch: a message arriving, or a page of history.
+    // The list does the same from its layout pass; whichever runs first.
+    property <int> row-count: root.messages.length;
+    changed row-count => {
+        let count = root.row-count;
+        let last-id = count > 0 ? root.messages[count - 1].message-id : "";
+        let new-tail = count > root.observed-message-count
+            && last-id != root.observed-last-message-id
+            // A replacement history/search page is not incoming traffic.
+            // The first arrival into an already-open empty list still counts.
+            && (root.observed-message-count == 0
+                || root.messages[root.observed-message-count - 1].message-id == root.observed-last-message-id)
+            && root.ready-for-arrivals && !root.loading;
+        // Older history is inserted above the existing last message. Only a
+        // changed tail represents new traffic that should rise into view.
+        if (new-tail) {
+            root.arrival-start-index = root.observed-message-count;
+            root.arrival-end-index = count;
+            arrival-clear.running = false;
+            arrival-clear.running = true;
+        }
+        root.observed-message-count = count;
+        root.observed-last-message-id = last-id;
+        // A live incoming tail stays below the reader while they are looking
+        // at history. Count only new remote rows, never a sent/pending row or
+        // a history page inserted above the existing tail.
+        if (new-tail && !root.is-at-bottom && !root.messages[count - 1].is-own) {
+            root.unread-count += count - root.arrival-start-index;
+        }
+        if (new-tail && root.is-at-bottom && !root.opening-on-unread
+                && (root.should-auto-scroll || root.messages[count - 1].is-own)
+                && root.jump-row < 0) {
+            root.go-to-end();
+        }
+    }
+
+    // The send path sets this true before appending its pending bubble. An
+    // unread opening anchor must be consumed at that moment; otherwise the
+    // row-count observer refuses the tail seek and the new bubble stays hidden.
+    changed is-at-bottom => {
+        if (root.is-at-bottom && !root.loading) {
+            root.opening-on-unread = false;
+            root.unread-index = -1;
+            root.unread-count = 0;
+            root.go-to-end();
+        }
+    }
+
+    // Jump-to-message (quote click, search result, pinned bar). Watched here,
+    // not inside the list: a search result opens its conversation first, and
+    // the index can land before the list exists.
+    changed scroll-to-index => {
+        if (root.scroll-to-index >= 0) {
+            root.go-to-row(root.scroll-to-index);
+        }
+    }
+
+    // The list lives under `!loading`, out of reach of root functions, so a
+    // target is recorded here and the list pursues it on `changed nav-serial`.
+    private property <int> nav-serial: 0;
+
+    // Newest message flush with the bottom edge, and stay there.
+    function go-to-end() {
+        root.jump-row = -1;
+        root.following-tail = true;
+        root.end-pending = true;
+        root.end-passes = 0;
+        root.nav-serial += 1;
+    }
+
+    // Row `i` at the top edge. Leaves the end, so nothing may pull back to it.
+    function go-to-row(i: int) {
+        if (i == root.unread-index) { root.unread-above = false; }
+        root.end-pending = false;
+        root.following-tail = false;
+        root.at-end = false;
+        root.is-at-bottom = false;
+        root.jump-measured = false;
+        root.jump-bootstrapped = false;
+        root.jump-sample-index = -1;
+        root.jump-height-sum = 0px;
+        root.jump-sample-count = 0;
+        root.jump-stable-passes = 0;
+        root.jump-row = i;
+        root.nav-serial += 1;
+    }
 
     // Callbacks - Signal-style identification (sender_id, timestamp_ns)
     // Multi-select: while on, a plain tap toggles selection instead of opening
     // the message, and each bubble renders its `selected` flag.
     in property <bool> selection-mode: false;
+    // The context menu or reaction picker is open: rows hide their hover bar.
+    in property <bool> menu-open: false;
     // Touch platform — gates the press-and-hold gesture so a desktop
     // left-button hold does not open the message menu.
     in property <bool> mobile: false;
+    in property <bool> can-forward: false;
     callback selection-toggled(string);
+    callback open-message-link(string, string);
     callback message-clicked(string);
+    callback sender-profile-requested(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback forward-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
     callback load-more();
     callback attachment-clicked(string);  // attachment ID
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
-    callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button clicked
+    callback list-geometry(float, float, bool); // visible height, content height, tail seek
+    callback visible-media-rows(int, int);
 
-    // Layout — flat background to avoid neomorphic fatigue in scrolling content.
-    // The messages themselves carry the depth; the list stays neutral.
-    background: Colors.background;
+    // A resize (keyboard, emoji panel) keeps the newest row in view when the
+    // reader was at the bottom — including a chat opened on its unread
+    // divider whose newest rows were already showing and that has not been
+    // scrolled since (`flicked` clears both flags). That case keeps
+    // is-at-bottom false so the divider stays; without it the panel covered
+    // the unread rows.
+    pure function keeps-tail() -> bool {
+        return !root.scrolling && root.jump-row < 0
+            && ((root.is-at-bottom && !root.opening-on-unread)
+                || (root.opening-on-unread && root.seen-opening-tail));
+    }
+
+    changed bottom-inset => {
+        if (root.keeps-tail()) { root.go-to-end(); }
+    }
+
+    // The same ambient page as the chat list, so a conversation is not a
+    // flat slab; the wash is static, it does not scroll with the rows.
+    background: Materials.ambient;
 
     // Loading state: skeleton placeholders
-    if root.loading: VerticalLayout {
-        padding: Spacing.md;
-        spacing: Spacing.lg;
-
-        for _ in [1, 2, 3, 4, 5]: HorizontalLayout {
-            spacing: Spacing.sm;
-
-            // Avatar skeleton
-            Skeleton {
-                width: Spacing.avatar-sm;
-                height: Spacing.avatar-sm;
-                border-radius: Spacing.avatar-sm / 2;
-            }
-
-            // Content skeleton
-            VerticalLayout {
-                spacing: Spacing.xs;
-
-                // Name and timestamp
-                HorizontalLayout {
-                    spacing: Spacing.sm;
-
-                    Skeleton {
-                        width: 80px;
-                        height: 14px;
-                        border-radius: 4px;
-                    }
-
-                    Skeleton {
-                        width: 40px;
-                        height: 12px;
-                        border-radius: 4px;
-                    }
-                }
-
-                // Message content (2 lines)
-                Skeleton {
-                    width: 200px;
-                    height: 14px;
-                    border-radius: 4px;
-                }
-
-                Skeleton {
-                    width: 150px;
-                    height: 14px;
-                    border-radius: 4px;
-                }
-            }
-        }
+    if root.loading: MessageListLoading {
+        top-inset: root.top-inset;
+        bottom-inset: root.bottom-inset;
     }
 
     // Empty state
-    if !root.loading && root.messages.length == 0: Rectangle {
-        VerticalLayout {
-            alignment: center;
-            spacing: Spacing.md;
-
-            Text {
-                text: "\u{1F4AC}\u{FE0F}"; // Speech bubbles emoji (with emoji variant selector)
-                font-family: Typography.font-family-emoji;
-                font-size: Typography.huge;
-                horizontal-alignment: center;
-            }
-
-            Text {
-                text: "No messages yet";
-                color: Colors.text-secondary;
-                font-size: Typography.lg;
-                horizontal-alignment: center;
-            }
-
-            Text {
-                text: "Be the first to say something!";
-                color: Colors.text-muted;
-                font-size: Typography.sm;
-                horizontal-alignment: center;
-            }
-
-            // Encryption indicator in empty state
-            Rectangle {
-                height: Spacing.lg;
-            }
-
-            // What is true about this conversation's privacy, which is not the
-            // same sentence everywhere. A mesh room and a geohash cell are
-            // plaintext broadcasts with no recipient to be encrypted *to*;
-            // saying otherwise here, in green, under a lock, is the one error on
-            // this screen that could get somebody hurt.
-            HorizontalLayout {
-                alignment: center;
-                spacing: 6px;
-
-                Image {
-                    source: root.public-broadcast ? Icons.globe : Icons.lock;
-                    width: 14px;
-                    height: 14px;
-                    colorize: root.public-broadcast ? Colors.warning : Colors.success;
-                    vertical-alignment: center;
-                }
-
-                Text {
-                    text: root.privacy-line;
-                    color: root.public-broadcast ? Colors.warning : Colors.success;
-                    font-size: Typography.sm;
-                    vertical-alignment: center;
-                }
-            }
-        }
+    if !root.loading && root.messages.length == 0: MessageListEmpty {
+        y: root.top-inset;
+        height: max(0px, root.height - root.top-inset - root.bottom-inset);
+        public-broadcast: root.public-broadcast;
+        privacy-line: root.privacy-line;
+        saved-messages: root.saved-messages;
     }
 
-    // Message list with animated scrolling
+    // ── The list ─────────────────────────────────────────────────────────────
+    // Rows exist only while they fit the viewport: the Slint runtime creates
+    // and destroys them as the user scrolls, measures each one for real, and
+    // estimates the total height from their average. Two consequences:
+    //   - `viewport-y` is a scrollbar-grade estimate, rewritten by the runtime
+    //     after every layout pass. Nothing here animates it — the next pass
+    //     would cancel the animation anyway — and every navigation is a target
+    //     the runtime is asked to refine (`go-to-end`, `go-to-row`), not a
+    //     pixel offset. Those passes all run inside one frame's instantiation
+    //     loop, so an open is drawn already sitting on the newest message or
+    //     the unread divider.
+    //   - rows inserted above the first live row shift its index without
+    //     moving anything on screen, which is what lets older history load at
+    //     the top without a jump.
     if !root.loading && root.messages.length > 0: Rectangle {
         width: 100%;
         height: 100%;
 
-        flickable := Flickable {
-            // Explicit width constraints for proper text wrapping
+        // A fling reports its release, not its end: `scrolling` lasts until
+        // the viewport has been still this long. Runs only after a scroll.
+        at-rest := Timer {
+            interval: 300ms;
+            running: false;
+            triggered => {
+                self.running = false;
+                root.scrolling = false;
+            }
+        }
+
+        // Correct from deferred live-row geometry after layout, rather than
+        // synchronous viewport callbacks whose height and y update separately.
+        // Only the first seek may bootstrap from the global height estimate.
+        Timer {
+            interval: 16ms;
+            running: root.page-active && root.jump-row >= 0 && !root.jump-measured;
+            triggered => { list.seek-row(root.jump-row); }
+        }
+
+        // Android can restore the surface after the opening seek. Reapply the
+        // tail against the completed layout whenever either dimension changes.
+        follow-layout := Timer {
+            interval: 16ms;
+            running: false;
+            triggered => {
+                self.running = false;
+                if (root.following-tail && !root.scrolling && root.jump-row < 0
+                        && list.height > 0px && list.viewport-height > 0px) {
+                    list.seek-end();
+                }
+            }
+        }
+
+        list := ListView {
             width: 100%;
             height: 100%;
-            // Constrain horizontal viewport to prevent content from expanding beyond visible width
-            viewport-width: self.width;
-            viewport-height: messages-layout.preferred-height;
-            viewport-y <=> root.scroll-position;
+            immediate-child-press: true;
+            interactive: !root.bubble-swiping;
 
-            // Animate scroll position for smooth scrolling — except when the
-            // content arrived all at once, see `jump-without-animation`.
-            animate viewport-y {
-                duration: root.jump-without-animation ? 0ms : 300ms;
-                easing: ease-out;
+            // How far the content extends below the bottom edge. Exact once the
+            // last row is live (the runtime's estimate then closes on the real
+            // bottom edge), and at least one average row while any row is
+            // still below — so "at bottom" cannot be claimed early.
+            pure function bottom-gap() -> length {
+                // viewport-height includes bottom-inset in the last row: subtract
+                // it from both content and visible bottom to compare message edges.
+                return (self.viewport-height - root.bottom-inset) + self.viewport-y
+                    - (self.height - root.bottom-inset);
             }
 
-            // Update is-at-bottom when scroll position changes
-            changed viewport-y => {
-                // Calculate if we're at bottom (within 50px threshold)
-                // viewport-y is negative, so at bottom means:
-                // viewport-y >= -(viewport-height - self.height)
-                // Rearranged: viewport-height + viewport-y <= self.height + threshold
-                root.is-at-bottom = (self.viewport-height + self.viewport-y) <= (self.height + 50px);
+            // Opening on the unread divider deliberately leaves is-at-bottom
+            // false. Once that row has been measured and the seek has settled,
+            // the pill is unnecessary if the newest messages are already in
+            // view (including a conversation too short to scroll).
+            property <bool> unread-tail-in-view: root.opening-on-unread
+                && root.jump-measured && root.jump-row < 0
+                && self.bottom-gap() <= root.bottom-inset + Spacing.md + Spacing.touch-target-min;
+            changed unread-tail-in-view => {
+                if (self.unread-tail-in-view) {
+                    root.seen-opening-tail = true;
+                    root.unread-count = 0;
+                }
+            }
+
+            // The virtualizer's total height is an estimate until the tail
+            // has settled. A live last bubble gives us its actual position.
+            // The unread boundary can be the tail itself, with its seek still
+            // pending even though that bubble is already in the viewport.
+            function newest-visible(y: length, height: length) {
+                if ((root.jump-row < 0 || root.jump-row == root.messages.length - 1)
+                        && y < self.height - root.bottom-inset
+                        && y + height > root.top-inset) {
+                    root.seen-opening-tail = true;
+                    root.unread-count = 0;
+                    if (root.opening-on-unread) {
+                        root.is-at-bottom = true;
+                    }
+                }
+            }
+
+            // Where the viewport came to rest.
+            function read-position() {
+                // Keyboard reveal and row remeasurement can update viewport-y
+                // before height. That transient gap is not a user leaving the
+                // bottom: retain the anchor until a scroll or explicit jump.
+                root.at-end = !root.opening-on-unread && (self.bottom-gap() <= 1px
+                    || (root.at-end && !root.scrolling && root.jump-row < 0));
+                root.is-at-bottom = !root.opening-on-unread && (root.following-tail
+                    || self.bottom-gap() <= (root.is-at-bottom ? 70px : 40px)
+                    || (root.is-at-bottom && !root.scrolling && root.jump-row < 0));
                 // Reaching the newest message is what "caught up" means; the
                 // pill must stop claiming N new messages after that, including
                 // when the user scrolls back up later in the same session.
@@ -256,339 +529,497 @@ export component MessageList inherits Rectangle {
                 }
             }
 
-            // Auto-snap to bottom when content grows AND user is currently at bottom.
-            // Slint 1.16 does not clamp programmatic viewport-y writes, so the prior
-            // approach (Rust setting scroll-position = -99999 sentinel) parked the
-            // viewport offscreen and content only re-appeared after a manual drag.
-            // Reacting to viewport-height changes lets Slint own the math inside
-            // Flickable scope, where `self.height` and `self.viewport-height` are
-            // both concrete.
-            // One place decides where the viewport sits after the content
-            // resizes: the unread boundary if this open has one, otherwise the
-            // bottom. Two callers (content grew; the divider row reported its
-            // position) so the two cannot race each other to a different answer.
-            function settle() {
-                if (root.unread-index >= 0 && !root.anchor-consumed) {
-                    // Wait for the divider row to report a real y, unless it is
-                    // the very first row (y == 0 is its correct answer).
-                    if (root.unread-divider-y > 0px || root.unread-index == 0) {
-                        // Telegram parity: the divider sits just under the top
-                        // edge, so you read forward from where you stopped with
-                        // a sliver of the last-read message still above it.
-                        self.viewport-y = min(0px,
-                            max(self.height - self.viewport-height,
-                                -root.unread-divider-y + Spacing.xl));
-                        root.anchor-consumed = true;
-                    }
-                } else if (root.should-auto-scroll && root.is-at-bottom) {
-                    self.viewport-y = min(0px, self.height - self.viewport-height);
+            // The runtime's estimate of the row at the top edge, within one.
+            pure function top-row() -> int {
+                return Math.floor(-self.viewport-y * root.messages.length / self.viewport-height);
+            }
+
+            // Likewise for the row at the bottom edge.
+            pure function bottom-row() -> int {
+                return Math.floor((self.height - self.viewport-y) * root.messages.length / self.viewport-height);
+            }
+
+            function seek-end() {
+                root.list-geometry(self.height / 1px, self.viewport-height / 1px, true);
+                self.viewport-y = Math.min(0px, self.height - self.viewport-height);
+            }
+
+            // True once the runtime has written its first estimate. Before
+            // that `viewport-height` still holds the Flickable default (the
+            // list's own height), and a row seek computed from it lands on
+            // row 0.
+            property <bool> measured: false;
+
+            // A finger, the wheel or a fling's release. Whatever was being
+            // pursued, the user has taken over.
+            flicked => {
+                root.opening-on-unread = false;
+                if (root.unread-index >= 0) {
+                    root.unread-above = root.unread-row-y > root.top-inset + 1px;
+                }
+                root.seen-opening-tail = false;
+                root.following-tail = false;
+                root.scrolling = true;
+                root.load-more-armed = true;
+                root.end-pending = false;
+                root.jump-row = -1;
+                self.read-position();
+                at-rest.start(); at-rest.restart();
+            }
+
+            // Carry out whatever root just recorded.
+            property <int> nav: root.nav-serial;
+            changed nav => {
+                self.pursue();
+            }
+            function pursue() {
+                if (root.end-pending) {
+                    self.seek-end();
+                } else if (root.jump-row >= 0) {
+                    self.seek-row(root.jump-row);
                 }
             }
 
+            // Estimates only materialize a distant row. Landing uses the actual
+            // MessageItem position produced by the same layout that renders it:
+            // dividers, call/media/emoji/system heights need no parallel formula.
+            // Slint rebases content coordinates whenever its live-row average
+            // changes. Apply each deferred measurement only once: viewport
+            // callbacks must not reuse geometry from the previous layout.
+            property <length> row-y;
+            property <int> target-measurement: root.jump-measurement-serial;
+            changed target-measurement => {
+                if (root.jump-row >= 0 && root.jump-measured) {
+                    // The delegate reports window geometry relative to this
+                    // list. Its public y is NOT its rendered y: Slint's
+                    // flickable pass exposes actual-y - viewport-y there.
+                    // Apply the visible error to the current scrollbar offset.
+                    self.row-y = Math.min(0px, Math.max(
+                        Math.min(0px, self.height - self.viewport-height),
+                        self.viewport-y + root.top-inset - root.jump-bubble-y));
+                    if (Math.abs((self.row-y - self.viewport-y) / 1px) < 1) {
+                        // Keep measuring across frames: a newly materialized
+                        // row can still change height as its layout settles.
+                        root.jump-stable-passes += 1;
+                        if (root.jump-stable-passes >= 3) {
+                            root.jump-row = -1;
+                            self.read-position();
+                        }
+                    } else {
+                        root.jump-stable-passes = 0;
+                        self.viewport-y = self.row-y;
+                        // The move can take the target off screen (its last
+                        // position may predate a layout pass): steer from the
+                        // live rows again until it reports from the new offset.
+                        root.jump-measured = false;
+                    }
+                }
+            }
+            function seek-row(i: int) {
+                if (root.messages.length > 0 && self.measured && !root.jump-measured) {
+                    if (root.jump-sample-count > 0) {
+                        // Anchor to a real bubble, then walk at most one screen
+                        // per pass so intervening rows supply fresh heights.
+                        let average = root.jump-height-sum / root.jump-sample-count;
+                        let error = root.jump-sample-y + (i - root.jump-sample-index) * average - root.top-inset;
+                        let step = Math.max(-self.height, Math.min(self.height, error));
+                        self.viewport-y = Math.min(0px, Math.max(
+                            Math.min(0px, self.height - self.viewport-height),
+                            self.viewport-y - step));
+                        root.jump-bootstrapped = true;
+                    } else if (!root.jump-bootstrapped) {
+                        // One initial estimate only; subsequent seeks must use
+                        // rendered geometry rather than reset to this offset.
+                        self.viewport-y = Math.min(0px, Math.max(
+                            Math.min(0px, self.height - self.viewport-height),
+                            -(i * self.viewport-height / root.messages.length) - 1px));
+                        root.jump-bootstrapped = true;
+                    }
+                    root.jump-sample-index = -1;
+                    root.jump-height-sum = 0px;
+                    root.jump-sample-count = 0;
+                }
+            }
+
+            // Every layout pass ends with the runtime rewriting viewport-y
+            // and/or viewport-height, which says nothing about who moved:
+            // the same two properties change for a finger, for a message
+            // arriving and for a row being measured. So each pass is told
+            // apart by what changed since the last one.
+            property <int> grown;
+            property <bool> prepended;
+            function settle() {
+                // Runtime viewport callbacks may arrive before changed height.
+                // Preserve the pre-resize anchor before either callback can
+                // classify the new geometry as a user scroll away from bottom.
+                if (root.seen-view-height != self.height) {
+                    root.seen-view-height = self.height;
+                    if (root.keeps-tail()) {
+                        root.go-to-end();
+                    }
+                }
+                // The runtime's "content shorter than the view" fix-up can
+                // leave viewport-y positive (rows pushed down from the top,
+                // blank above them); the Flickable's own clamp does not
+                // always catch it. Rows start at the top edge, always.
+                if (self.viewport-y > 0px) {
+                    self.viewport-y = 0px;
+                    return;
+                }
+                root.scroll-position = -self.viewport-y;
+                if (root.scrolling && self.viewport-y != root.seen-y) {
+                    at-rest.start(); at-rest.restart();
+                }
+                self.grown = root.seen-rows > 0 ? root.messages.length - root.seen-rows : 0;
+                self.prepended = self.grown > 0 && root.messages[0].message-id != root.seen-first;
+                if (self.grown != 0) {
+                    // Rows moved under a jump still being refined: its index
+                    // is no longer that row.
+                    root.jump-row = -1;
+                }
+                if (self.prepended && root.unread-index >= 0) {
+                    root.unread-index-shifted = true;
+                    root.unread-index += self.grown;
+                }
+                if (self.prepended && !root.is-at-bottom
+                        && Math.abs(self.top-row() - root.seen-top - self.grown) > 1) {
+                    // History landed while row 0 was live: the runtime put the
+                    // new rows on screen instead of above it. Back to the row
+                    // that was at the top.
+                    root.go-to-row(root.seen-top + self.grown);
+                } else if (root.end-pending) {
+                    if (self.bottom-gap() <= 1px || root.end-passes >= 6) {
+                        root.end-pending = false;
+                        self.read-position();
+                    } else {
+                        root.end-passes += 1;
+                        self.seek-end();
+                    }
+                } else if (root.jump-row >= 0) {
+                    // The geometry timer or a fresh delegate measurement owns
+                    // navigation; this callback's coordinates may be transient.
+                } else if ((root.at-end || root.following-tail || root.is-at-bottom)
+                        && !root.opening-on-unread && !root.scrolling
+                        && self.viewport-height != root.seen-height && self.bottom-gap() > 1px) {
+                    // Content grew under a reader at the bottom: a row
+                    // measured, a thumbnail grown, a reaction added to the
+                    // last bubble, a row inserted above the tail (an
+                    // own-device sync copy whose sender clock runs behind).
+                    // `is-at-bottom` counts too: it is what hides the pill,
+                    // and a wheel stop a few px short of the end leaves it
+                    // true with neither `at-end` nor `following-tail`.
+                    // go-to-end, not one seek: the runtime re-estimates after
+                    // the seek, and only end-pending retries until the tail
+                    // is flush.
+                    root.go-to-end();
+                } else {
+                    self.read-position();
+                    // Not while a jump is landing: the page it opened was grown
+                    // back to the target, so the target sits near the top, and
+                    // a prepend there would cancel the jump (`grown` above).
+                    if (root.load-more-armed && !root.at-end && root.jump-row < 0
+                            && self.viewport-y > -self.height * 1.5) {
+                        // Approaching the top, early enough that the page is
+                        // in before row 0 is on screen: rows inserted above
+                        // the live ones move nothing.
+                        root.load-more-armed = false;
+                        root.load-more();
+                    } else if (self.viewport-y < -self.height * 3) {
+                        // Left the top; the next approach asks again.
+                        root.load-more-armed = true;
+                    }
+                }
+                // Row 0 is read only when the row count moved (`prepended`
+                // above short-circuits the same way): reading it copies a whole
+                // MessageItemData out of the model, and a scroll frame cannot
+                // change which row is first — a prepend changes the count.
+                if (root.messages.length != root.seen-rows) {
+                    root.seen-first = root.messages[0].message-id;
+                }
+                root.seen-rows = root.messages.length;
+                root.seen-height = self.viewport-height;
+                root.seen-y = self.viewport-y;
+                root.seen-top = self.top-row();
+                let first = root.seen-top;
+                let last = Math.min(self.bottom-row(), root.messages.length - 1);
+                if (first != root.first-visible-row || last != root.last-visible-row) {
+                    root.first-visible-row = first;
+                    root.last-visible-row = last;
+                    root.visible-media-rows(first, last);
+                }
+            }
+
+            changed viewport-y => {
+                self.settle();
+            }
             changed viewport-height => {
-                // Decide before writing viewport-y: the animation reads its
-                // duration at the moment the property changes.
-                root.jump-without-animation =
-                    (self.viewport-height - root.previous-viewport-height) > self.height;
-                root.previous-viewport-height = self.viewport-height;
+                self.measured = true;
+                root.list-geometry(self.height / 1px, self.viewport-height / 1px, false);
+                if (root.following-tail) { follow-layout.start(); follow-layout.restart(); }
                 self.settle();
             }
 
-            // Mirror the root properties locally so `changed` fires inside
-            // Flickable scope (same trick as `jump-index` below).
-            property <length> anchor-y: root.unread-divider-y;
-            changed anchor-y => {
+            changed height => {
+                root.list-geometry(self.height / 1px, self.viewport-height / 1px, false);
+                if (root.following-tail) { follow-layout.start(); follow-layout.restart(); }
                 self.settle();
             }
+
+            // Mirror the root property locally so `changed` fires inside
+            // list scope.
             property <int> open-index: root.unread-index;
             changed open-index => {
-                root.anchor-consumed = false;
-                self.settle();
-            }
-
-            // Jump-to-message (quote click, search result): move the viewport to
-            // the target index. Item heights vary and we can't measure each one
-            // here, so approximate proportionally — the target lands in view and
-            // the green highlight pins exactly which message it is. `animate
-            // viewport-y` (below the fold) makes it a smooth glide. Mirror the
-            // root property locally so `changed` fires inside Flickable scope.
-            property <int> jump-index: root.scroll-to-index;
-            changed jump-index => {
-                if (self.jump-index >= 0 && root.messages.length > 1) {
-                    self.viewport-y = (self.jump-index / (root.messages.length - 1))
-                        * min(0px, self.height - self.viewport-height);
+                if (root.unread-index-shifted) {
+                    root.unread-index-shifted = false;
+                } else if (self.open-index >= 0) {
+                    root.go-to-row(self.open-index);
+                } else {
+                    root.opening-on-unread = false;
                 }
             }
 
-            messages-layout := VerticalLayout {
-            // Explicit width from parent for proper text wrapping
-            width: parent.width;
-            padding: Spacing.md;
-            // Extra bottom clearance so the scroll-to-bottom FAB (44px, docked
-            // bottom-right) never covers the last message's corner.
-            padding-bottom: Spacing.md + 48px;
-            spacing: 2px;
-
-            // Load more trigger at top (for infinite scroll)
-            Rectangle {
-                height: Spacing.lg;
-
-                load-trigger := TouchArea {
-                    // This area triggers load-more when scrolled to top
-                    // In practice, you'd detect scroll position
-                }
-            }
-
-            for item[idx] in root.messages: VerticalLayout {
-                width: parent.width - Spacing.md * 2;
-                spacing: 2px;
-
-                // Report where the unread boundary actually ended up, so the
-                // open scrolls to the real row instead of guessing from the
-                // index (an image bubble is ten times a text bubble tall).
-                changed y => {
-                    if (idx == root.unread-index) {
-                        root.unread-divider-y = self.y;
+            // The list is created fresh on every open (it lives under
+            // `!loading`), before any row is laid out: record the intent and
+            // let the first layout pass, inside this same frame, carry it out.
+            // A jump already recorded (a search result) outranks both.
+            init => {
+                root.opening-on-unread = root.unread-index >= 0 && root.jump-row < 0;
+                if (root.jump-row < 0) {
+                    if (root.unread-index >= 0) {
+                        root.go-to-row(root.unread-index);
+                    } else {
+                        root.go-to-end();
                     }
+                }
+                self.pursue();
+            }
+
+            for item[idx] in root.messages: message-row := VerticalLayout {
+                property <length> unread-position:
+                    message-row.absolute-position.y - list.absolute-position.y;
+                changed unread-position => {
+                    if (idx == root.unread-index) {
+                        root.unread-row-y = self.unread-position;
+                        if (root.scrolling && !root.opening-on-unread && root.jump-row < 0) {
+                            root.unread-above = self.unread-position > root.top-inset + 1px;
+                        }
+                    }
+                }
+                // absolute-position follows the actual render geometry, including
+                // the virtualizer's anchor and all row separators/padding.
+                property <length> bubble-position:
+                    message-bubble.absolute-position.y - list.absolute-position.y;
+                // Every live row helps find an unmaterialized target. Once it
+                // exists, only that row reports the exact three-pass landing.
+                // Defer a frame so new delegates have rendered positions.
+                Timer {
+                    interval: 16ms;
+                    running: root.page-active && root.jump-row >= 0 && (!root.jump-measured || idx == root.jump-row);
+                    triggered => {
+                        if (message-bubble.height > 0px) {
+                            root.measured-navigation-row(idx, message-row.bubble-position, message-row.height);
+                        }
+                    }
+                }
+                Timer {
+                    // Only the tail row while a pill shows; a pill need not clear within a frame.
+                    interval: 100ms;
+                    running: root.page-active && idx == root.messages.length - 1 && root.unread-count > 0;
+                    triggered => {
+                        if (message-bubble.height > 0px) {
+                            list.newest-visible(message-row.bubble-position, message-bubble.height);
+                        }
+                    }
+                }
+                width: root.width;
+                height: self.preferred-height;
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                padding-top: idx == 0 ? root.top-inset + Spacing.md : Spacing.none;
+                // Extra bottom clearance under the last row so the
+                // scroll-to-bottom FAB (44px, docked bottom-right) never
+                // covers its corner.
+                padding-bottom: idx == root.messages.length - 1
+                    ? root.bottom-inset + root.tail-clearance
+                    : Spacing.message-gap;
+                spacing: Spacing.xxs;
+
+                // Date separator: wherever core's day label changes from the
+                // row above. Derived here from the neighbour rather than stored
+                // per row, so no insert/prepend/delete path can leave it stale.
+                if item.date-separator-text != ""
+                    && (idx == 0 || root.messages[idx - 1].date-separator-text != item.date-separator-text): DateSeparator {
+                    width: 100%;
+                    label: item.date-separator-text;
                 }
 
                 // Unread divider — everything below this line arrived while
-                // the user was away.
-                if idx == root.unread-index: HorizontalLayout {
+                // the user was away. Under the day label, directly above the
+                // first unread message.
+                if idx == root.unread-index: UnreadDivider { width: 100%; }
+
+                message-bubble := MessageItem {
                     width: 100%;
-                    height: 32px;
-                    spacing: Spacing.md;
-                    alignment: center;
-                    padding-top: Spacing.sm;
-                    padding-bottom: Spacing.sm;
+                    chrome-bottom: root.absolute-position.y + root.top-inset;
+                    swipe-engaged(on) => { root.bubble-swiping = on; }
+                    animate-arrival: idx >= root.arrival-start-index && idx < root.arrival-end-index;
+                    arrival-stagger-index: idx - root.arrival-start-index;
+                    message-id: item.message-id;
+                    sender-id: item.sender-id;
+                    sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
+                    timestamp-ns: item.timestamp-ns;
+                    sender-name: item.sender-name;
+                    sender-initials: item.sender-initials;
+                    sender-avatar-source: item.sender-avatar-source;
+                    has-avatar: item.has-avatar;
+                    content: item.content;
+                    rich-content: item.rich-content;
+                    timestamp: item.timestamp;
+                    is-own: item.is-own;
+                    is-edited: item.is-edited;
+                    disappearing: item.disappearing;
+                    is-pinned: item.is-pinned;
+                    is-deleted: item.is-deleted;
+                    is-system: item.is-system;
+                    is-ai: item.is-ai;
+                    is-dm: root.is-dm;
+                    is-anonymous: root.is-anonymous;
+                    can-thread: root.can-thread;
+                    is-mesh: root.is-mesh;
+                    is-call: item.is-call;
+                    call-type: item.call-type;
+                    call-duration: item.call-duration;
+                    has-attachments: item.has-attachments;
+                    attachment-count: item.attachment-count;
+                    attachments: item.attachments;
+                    standalone-attachment-indices: item.standalone-attachment-indices;
+                    current-playing-attachment-id: root.current-playing-attachment-id;
+                    is-media-playing: root.is-media-playing;
+                    audio-progress: root.audio-progress;
+                    audio-elapsed: root.audio-elapsed;
+                    has-reactions: item.has-reactions;
+                    reaction-summary: item.reaction-summary;
+                    reactions: item.reactions;
+                    reply-count: item.reply-count;
+                    reply-count-text: item.reply-count-text;
+                    is-thread-reply: item.is-thread-reply;
+                    is-reply: item.is-reply;
+                    reply-to-not-found: item.reply-to-not-found;
+                    reply-to-message-id: item.reply-to-message-id;
+                    highlighted: item.message-id == root.highlighted-message-id;
+                    reply-to-sender-name: item.reply-to-sender-name;
+                    reply-to-preview: item.reply-to-preview;
+                    reply-to-category: item.reply-to-category;
+                    reply-to-attachment-id: item.reply-to-attachment-id;
+                    reply-to-duration: item.reply-to-duration;
+                    reply-to-filename: item.reply-to-filename;
+                    reply-to-waveform: item.reply-to-waveform;
+                    reply-to-has-thumbnail: item.reply-to-has-thumbnail;
+                    reply-to-thumbnail: item.reply-to-thumbnail;
+                    reply-to-thumbnail-width: item.reply-to-thumbnail-width;
+                    reply-to-thumbnail-height: item.reply-to-thumbnail-height;
+                    show-sender: item.show-sender;
+                    delivery-status: item.delivery-status;
+                    failure-reason: item.failure-reason;
+                    is-continuation: item.is-continuation;
+                    selected: item.selected;
+                    selection-mode: root.selection-mode;
+                    mobile: root.mobile;
+                    can-forward: root.can-forward;
+                    menu-open: root.menu-open;
 
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        height: 1px;
-                        background: Colors.primary;
-                        opacity: 0.5;
+                    selection-toggled(id) => {
+                        root.selection-toggled(id);
                     }
 
-                    Text {
-                        text: "Unread messages";
-                        color: Colors.primary;
-                        font-size: Typography.xs;
-                        font-weight: Typography.medium;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    open-message-link(url, display-text) => { root.open-message-link(url, display-text); }
+                    message-clicked(id) => {
+                        root.message-clicked(id);
                     }
 
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        height: 1px;
-                        background: Colors.primary;
-                        opacity: 0.5;
-                    }
-                }
-
-                // Date separator bar
-                if item.show-date-separator: HorizontalLayout {
-                    width: 100%;
-                    height: 32px;
-                    spacing: Spacing.md;
-                    alignment: center;
-                    padding-top: Spacing.sm;
-                    padding-bottom: Spacing.sm;
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        height: 1px;
-                        background: Colors.surface-hover;
+                    reply-clicked(sender-id, timestamp-ns) => {
+                        root.reply-clicked(sender-id, timestamp-ns);
                     }
 
-                    Text {
-                        text: item.date-separator-text;
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        font-weight: Typography.medium;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    forward-clicked(sender-id, timestamp-ns) => {
+                        root.forward-clicked(sender-id, timestamp-ns);
                     }
 
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        height: 1px;
-                        background: Colors.surface-hover;
+                    react-clicked(sender-id, timestamp-ns, x, y) => {
+                        root.react-clicked(sender-id, timestamp-ns, x, y);
                     }
-                }
 
-            MessageItem {
-                width: 100%;
-                message-id: item.message-id;
-                sender-id: item.sender-id;
-                timestamp-ns: item.timestamp-ns;
-                sender-name: item.sender-name;
-                sender-initials: item.sender-initials;
-                sender-avatar-source: item.sender-avatar-source;
-                has-avatar: item.has-avatar;
-                content: item.content;
-                rich-content: item.rich-content;
-                timestamp: item.timestamp;
-                is-own: item.is-own;
-                is-edited: item.is-edited;
-                is-pinned: item.is-pinned;
-                is-deleted: item.is-deleted;
-                is-system: item.is-system;
-                is-ai: item.is-ai;
-                is-dm: root.is-dm;
-                is-mesh: root.is-mesh;
-                is-call: item.is-call;
-                call-type: item.call-type;
-                call-duration: item.call-duration;
-                has-attachments: item.has-attachments;
-                attachment-count: item.attachment-count;
-                attachments: item.attachments;
-                current-playing-attachment-id: root.current-playing-attachment-id;
-                is-media-playing: root.is-media-playing;
-                audio-progress: root.audio-progress;
-                audio-elapsed: root.audio-elapsed;
-                has-reactions: item.has-reactions;
-                reaction-summary: item.reaction-summary;
-                reactions: item.reactions;
-                reply-count: item.reply-count;
-                reply-count-text: item.reply-count-text;
-                is-thread-reply: item.is-thread-reply;
-                is-reply: item.is-reply;
-                reply-to-not-found: item.reply-to-not-found;
-                reply-to-message-id: item.reply-to-message-id;
-                highlighted: item.message-id == root.highlighted-message-id;
-                reply-to-sender-name: item.reply-to-sender-name;
-                reply-to-preview: item.reply-to-preview;
-                reply-to-category: item.reply-to-category;
-                reply-to-attachment-id: item.reply-to-attachment-id;
-                reply-to-duration: item.reply-to-duration;
-                reply-to-filename: item.reply-to-filename;
-                reply-to-waveform: item.reply-to-waveform;
-                reply-to-has-thumbnail: item.reply-to-has-thumbnail;
-                reply-to-thumbnail: item.reply-to-thumbnail;
-                reply-to-thumbnail-width: item.reply-to-thumbnail-width;
-                reply-to-thumbnail-height: item.reply-to-thumbnail-height;
-                show-sender: item.show-sender;
-                delivery-status: item.delivery-status;
-                is-continuation: item.is-continuation;
-                selected: item.selected;
-                selection-mode: root.selection-mode;
-                mobile: root.mobile;
+                    reaction-toggled(sender-id, timestamp-ns, emoji) => {
+                        root.reaction-toggled(sender-id, timestamp-ns, emoji);
+                    }
 
-                selection-toggled(id) => {
-                    root.selection-toggled(id);
-                }
+                    thread-clicked(id) => {
+                        root.thread-clicked(id);
+                    }
 
-                message-clicked(id) => {
-                    root.message-clicked(id);
-                }
+                    more-clicked(sender-id, timestamp-ns, x, y) => {
+                        root.menu-preview-message = item;
+                        root.menu-preview-row-x = message-bubble.absolute-position.x;
+                        root.menu-preview-row-y = message-bubble.absolute-position.y;
+                        root.menu-preview-row-width = message-bubble.width;
+                        root.menu-anchor-top = message-bubble.menu-anchor-top;
+                        root.menu-anchor-bottom = message-bubble.menu-anchor-bottom;
+                        root.menu-anchor-left = message-bubble.menu-anchor-left;
+                        root.menu-anchor-right = message-bubble.menu-anchor-right;
+                        root.more-clicked(sender-id, timestamp-ns, x, y);
+                    }
 
-                reply-clicked(sender-id, timestamp-ns) => {
-                    root.reply-clicked(sender-id, timestamp-ns);
-                }
+                    quote-clicked(id) => {
+                        root.quote-clicked(id);
+                    }
 
-                react-clicked(sender-id, timestamp-ns, x, y) => {
-                    root.react-clicked(sender-id, timestamp-ns, x, y);
-                }
+                    attachment-clicked(id) => {
+                        root.viewer-origin-x = message-bubble.viewer-origin-x;
+                        root.viewer-origin-y = message-bubble.viewer-origin-y;
+                        root.viewer-origin-width = message-bubble.viewer-origin-width;
+                        root.viewer-origin-height = message-bubble.viewer-origin-height;
+                        root.attachment-clicked(id);
+                    }
 
-                thread-clicked(id) => {
-                    root.thread-clicked(id);
-                }
-
-                more-clicked(sender-id, timestamp-ns, x, y) => {
-                    root.more-clicked(sender-id, timestamp-ns, x, y);
-                }
-
-                quote-clicked(id) => {
-                    root.quote-clicked(id);
-                }
-
-                attachment-clicked(id) => {
-                    root.attachment-clicked(id);
-                }
-
-                audio-seek(id, pos) => {
-                    root.audio-seek(id, pos);
+                    audio-seek(id, pos) => {
+                        root.audio-seek(id, pos);
+                    }
                 }
             }
-            } // end VerticalLayout wrapper (date separator + message)
-        }
         }
 
-        // Scroll-to-bottom floating button
-        // Appears when user has scrolled up from the bottom
-        // Scroll-to-bottom — Neo convex floating button
-        // Scroll-to-bottom, which becomes a "N new messages" pill when the
-        // conversation opened on an unread boundary — the affordance that says
-        // how much is below you and takes you there in one tap.
-        if !root.is-at-bottom: Rectangle {
+        // Scroll-to-bottom floating button; an unread count appears when
+        // the conversation opened on an unread boundary.
+        MessageScrollPill {
+            hide-pill: root.is-at-bottom || list.unread-tail-in-view
+                || (root.seen-opening-tail && root.unread-count == 0);
+            scrolling: root.scrolling;
+            unread-count: root.unread-count;
             x: root.width - self.width - 16px;
-            y: root.height - 60px;
-            width: pill-content.preferred-width + Spacing.lg * 2;
-            height: 44px;
-            border-radius: 22px;
-            background: Colors.primary;
-            border-width: 1px;
-            border-color: Colors.neo-highlight-strong;
-            accessible-role: button;
-            accessible-label: root.unread-count > 0
-                ? root.unread-count + " new messages, jump to newest"
-                : "Scroll to bottom";
-            drop-shadow-blur: Spacing.neo-blur-lg;
-            drop-shadow-offset-x: Spacing.neo-offset-md;
-            drop-shadow-offset-y: Spacing.neo-offset-md;
-            drop-shadow-color: Colors.neo-shadow-strong;
-
-            // Fade in animation
-            opacity: 1.0;
-            animate opacity {
-                duration: 200ms;
-                easing: ease-out;
-            }
-
-            pill-content := HorizontalLayout {
-                alignment: center;
-                spacing: Spacing.sm;
-
-                if root.unread-count > 0: Text {
-                    text: root.unread-count == 1
-                        ? "1 new message"
-                        : root.unread-count + " new messages";
-                    color: Colors.text-primary;
-                    font-size: Typography.sm;
-                    font-weight: Typography.medium;
-                    vertical-alignment: center;
-                }
-
-                // Down arrow icon
-                Text {
-                    text: "↓";
-                    color: Colors.text-primary;
-                    font-size: Typography.xl;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-
-            scroll-btn := TouchArea {
-                clicked => {
-                    // Scroll to bottom: viewport-y = -(viewport-height - visible-height)
-                    root.scroll-position = -(flickable.viewport-height - flickable.height);
-                    root.is-at-bottom = true;
+            y: root.height - root.bottom-inset - 60px;
+            clicked => {
+                root.opening-on-unread = false;
+                if (root.unread-index >= 0 && root.unread-above) {
+                    // Scrolled up past the unread boundary: that is
+                    // where reading resumes.
+                    root.go-to-row(root.unread-index);
+                } else {
                     // Consume the anchor: the user has chosen the newest
                     // message, so no later relayout may drag them back up.
                     root.unread-index = -1;
                     root.unread-count = 0;
-                    root.scroll-to-bottom-clicked();
+                    root.is-at-bottom = true;
+                    root.go-to-end();
                 }
             }
-
-            // Hover effect
-            states [
-                hover when scroll-btn.has-hover: {
-                    background: Colors.primary-hover;
-                }
-            ]
         }
+    }
+
+    // Older history failed to load; offer retry over the list.
+    if root.load-failed && !root.loading && root.messages.length > 0: MessageHistoryError {
+        x: (parent.width - self.width) / 2;
+        y: root.top-inset + Spacing.sm;
+        available-width: root.width;
+        retry => { root.retry-load-more(); }
     }
 }

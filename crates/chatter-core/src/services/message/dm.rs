@@ -3,24 +3,19 @@
 //! Signal Protocol encryption for DM messages, including bootstrap,
 //! session management, and pending message queue.
 
-use std::path::Path;
-use std::sync::Arc;
-
 use prost::Message as ProstMessage;
 
 use crate::crypto::encrypt_dm_bytes;
-use crate::domain::ids::{ChannelId, UserId};
-use crate::domain::message::{ConversationType, Message};
-use crate::mailbox::dm::DmConversationManager;
+use crate::domain::ids::UserId;
+use crate::mailbox::dm::{DmConversation, DmConversationManager, PeerMailbox};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::mailbox_v1::EnvelopeType;
-use crate::services::attachment::AttachmentService;
-use crate::services::current_user::CurrentUserProvider;
 use crate::services::mailbox_manager::MailboxManager;
-use crate::util::time::TimestampNanos;
 
-use super::{DmSendResult, MessageError, MessageService, SendDmContentParams, SendDmMsgParams};
+use super::{
+    MessageError, MessageService, PendingFlush, SendDmContentParams, queued_bubble_timestamp,
+};
 
 impl MessageService {
     /// Send a Content proto to a DM peer via two-layer encryption.
@@ -66,8 +61,7 @@ impl MessageService {
             peer_id = %peer_id,
             conversation_exists = conversation.is_some(),
             has_our_mailbox = conversation.as_ref().map(|c| c.our_mailbox.is_some()).unwrap_or(false),
-            has_peer_mailbox = conversation.as_ref().map(|c| c.peer_mailbox.is_some()).unwrap_or(false),
-            has_shared_secret = conversation.as_ref().map(|c| c.conversation_key.as_ref().map(|k| k.shared_secret.is_some()).unwrap_or(false)).unwrap_or(false),
+            peer_devices = conversation.as_ref().map(|c| c.peer_mailboxes.len()).unwrap_or(0),
             is_ready = conversation.as_ref().map(|c| c.is_ready_to_send()).unwrap_or(false),
             "MessageService: conversation state loaded"
         );
@@ -87,69 +81,457 @@ impl MessageService {
                 conversation_exists = conversation.is_some(),
                 "[DM_TRANSPORT] mailbox send needs bootstrap — content queued, not delivered now"
             );
-            return self.handle_dm_bootstrap(
-                auth_client,
-                peer_id,
-                content,
-                grpc_pool,
-                attachment_ids,
-                channel_id,
-                conversation.as_ref(),
-            ).await;
+            return self
+                .handle_dm_bootstrap(
+                    auth_client,
+                    peer_id,
+                    content,
+                    grpc_pool,
+                    attachment_ids,
+                    channel_id,
+                )
+                .await;
         }
 
         // Conversation is ready - proceed with sending
         let conversation = conversation.unwrap();
-
-        let peer_mailbox = conversation
-            .peer_mailbox
-            .as_ref()
-            .ok_or_else(|| MessageError::DmError("No peer mailbox address".into()))?;
-
-        // Per-direction key: outbound mailbox-layer encryption uses our
-        // send_key (XChaCha20-Poly1305). Peer's matching recv_key is
-        // derived deterministically from the same shared root.
-        let shared_secret = conversation
-            .conversation_key
-            .as_ref()
-            .and_then(|k| k.send_key())
-            .ok_or_else(|| MessageError::DmError("No shared secret".into()))?;
-
-        // Serialize Content proto
+        self.snapshot_dm_content_targets(
+            *peer_id,
+            &content,
+            &conversation
+                .ready_devices()
+                .into_iter()
+                .map(|(mailbox, _)| mailbox.device_id)
+                .collect::<Vec<_>>(),
+        )?;
         let plaintext = content.encode_to_vec();
 
-        // Layer 1: Signal Protocol encryption for ALL peer devices (forward secrecy)
-        let peer_id_str = peer_id.to_string();
-
-        let peer_ciphertexts = self
-            .signal_service
-            .encrypt_message_all_devices(auth_client, &peer_id_str, &plaintext)
-            .await
-            .map_err(|e| MessageError::from_signal_send(e, "Multi-device encrypt"))?;
-
-        tracing::info!(
-            peer_id = %peer_id,
-            device_count = peer_ciphertexts.len(),
-            "Encrypted DM for all peer devices"
-        );
-
-        // Layer 2: Mailbox encryption for each device (sender anonymity)
-        // All ciphertexts go to same mailbox - server fans out to devices
-        for (device_id, signal_ciphertext) in peer_ciphertexts {
-            let mailbox_encrypted = encrypt_dm_bytes(&signal_ciphertext, &shared_secret)
-                .map_err(|e| MessageError::EncryptionFailed(format!("Mailbox encrypt: {}", e)))?;
-
-            self.send_to_mailbox_retried(
-                mailbox_manager, &peer_mailbox.public_key, mailbox_encrypted, peer_id, device_id,
-            ).await?;
-
-            tracing::debug!(
-                peer_id = %peer_id,
-                device_id,
-                "Sent DM to device via two-layer encryption"
+        // Every ready peer device gets its own copy: sealed for that device
+        // only (Layer 1, Signal), wrapped under that device's secret (Layer 2)
+        // and deposited in that device's mailbox, the one only it polls.
+        // Delivered once any device has it, as Signal counts a send.
+        //
+        // Never a prekey-bundle fetch: in Shield that identified RPC names the
+        // recipient at the moment we message them — the link the mailbox
+        // exists to hide. The sessions exist (each bootstrap made one).
+        let mut delivered = 0usize;
+        let mut last_error = None;
+        for (mailbox, send_key) in conversation.ready_devices() {
+            crate::services::gateway::submission::mark_submission_started()?;
+            match self
+                .send_to_peer_device(
+                    auth_client,
+                    mailbox_manager,
+                    peer_id,
+                    mailbox,
+                    &send_key,
+                    &plaintext,
+                )
+                .await
+            {
+                Ok(()) => delivered += 1,
+                Err(e) => {
+                    tracing::warn!(peer_id = %peer_id, device_id = mailbox.device_id, error = %e, "Mailbox DM to a peer device failed");
+                    // One earlier ambiguous deposit keeps the whole send
+                    // ambiguous even if a later device failed at preconnect.
+                    if last_error.as_ref().is_none_or(|previous: &MessageError| {
+                        matches!(previous, MessageError::Network(crate::error::NetworkError::RequestNotSent(_)))
+                    }) || !matches!(&e, MessageError::Network(crate::error::NetworkError::RequestNotSent(_))) {
+                        last_error = Some(e);
+                    }
+                }
+            }
+        }
+        if delivered == 0 {
+            return Err(
+                last_error.unwrap_or_else(|| MessageError::DmError("No ready peer device".into()))
             );
         }
+        tracing::debug!(peer_id = %peer_id, delivered, "Sent DM to the peer's ready devices");
 
+        if !is_ephemeral_content(&content) {
+            self.owe_unready_devices(auth_client, peer_id, &conversation, &plaintext, grpc_pool)
+                .await;
+        }
+        self.sync_sent_to_own_devices(auth_client, peer_id, &content)
+            .await;
+        Ok(())
+    }
+
+    /// Copy `content`, just delivered to `peer_id`, to our own other devices
+    /// if [`own_device_copy`] gives it one. Every DM delivery — Shield, normal
+    /// mode, the responder's post-bootstrap flush — ends here: one policy.
+    pub(crate) async fn sync_sent_to_own_devices(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        content: &crate::proto::content_v1::Content,
+    ) -> usize {
+        match own_device_copy(peer_id, content, self.current_device_id_or_zero()) {
+            Some(copy) => self.sync_to_own_devices(auth_client, copy).await,
+            None => 0,
+        }
+    }
+
+    /// Send `sync` to our own devices other than this one — every own-device
+    /// copy (`SyncSent`, `ReadSync`, the call ACCEPTED/DECLINED_ELSEWHERE
+    /// hangup) goes through here. Returns how many devices it reached.
+    ///
+    /// Identified (Basic auth) on the authenticated channel, never with our
+    /// UAK on the anonymous channel: that channel carries our mailbox
+    /// deposits/polls and our sealed sends, and a deposit to our OWN account
+    /// on it would tie them to us. Signal sends sync transcripts identified
+    /// for the same reason — the sender is no secret to ourselves.
+    ///
+    /// Shield: no prekey-bundle fetch, only own devices we already hold a
+    /// session with (`session_devices`, local), so a linked device we have
+    /// never messaged is skipped until a normal-mode send makes a session.
+    /// Normal mode fetches our own bundles (identified, naming only us), which
+    /// is how a newly linked device gets its first session, and names its
+    /// device set so the server reports one linked since
+    /// (`deposit_sealed_to_all_devices`).
+    ///
+    /// Best effort, like Signal's sync: failures are logged.
+    pub(crate) async fn sync_to_own_devices(
+        &self,
+        auth_client: &mut AuthClient,
+        sync: crate::proto::content_v1::Content,
+    ) -> usize {
+        self.sync_to_own_devices_result(auth_client, sync, false)
+            .await
+            .0
+    }
+
+    /// A durable Saved obligation needs acknowledgement of the entire own-device set.
+    pub(crate) async fn sync_to_own_devices_acknowledged(
+        &self,
+        auth_client: &mut AuthClient,
+        sync: crate::proto::content_v1::Content,
+    ) -> (usize, bool) {
+        if crate::services::gateway::submission::check_send_session().is_err() {
+            return (0, false);
+        }
+        self.sync_to_own_devices_result(auth_client, sync, true)
+            .await
+    }
+
+    async fn sync_to_own_devices_result(
+        &self,
+        auth_client: &mut AuthClient,
+        mut sync: crate::proto::content_v1::Content,
+        strict: bool,
+    ) -> (usize, bool) {
+        use crate::storage::repositories::settings_repo::keys;
+
+        if let Err(error) = self.populate_sync_receipt_targets(&mut sync) {
+            tracing::warn!(%error, "Could not snapshot own-device receipt targets");
+            return (0, false);
+        }
+        let Ok(me_id) = self.current_user_id() else {
+            return (0, false);
+        };
+        let me = me_id.to_string();
+        if !self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            Self::pad_content_to_bucket(&mut sync);
+            let outcome = self
+                .deposit_sealed_to_all_devices(
+                    auth_client,
+                    &mut self.message_client(),
+                    &me,
+                    &sync.encode_to_vec(),
+                    None,
+                )
+                .await;
+            // What that device's DecryptionErrorMessage will name
+            // (`resend_dm_on_decryption_error`): Signal logs its sync
+            // transcripts in the send log as it does the message
+            // (`SendMessage.preload.ts` `sendSyncMessage`, Resendable).
+            self.record_dm_send(me_id, &sync, &outcome.deposits);
+            let acknowledged = outcome.error.is_none()
+                && outcome.registration_ids.keys().all(|device| {
+                    outcome
+                        .deposits
+                        .iter()
+                        .any(|(delivered, _)| delivered == device)
+                });
+            return (outcome.delivered, acknowledged);
+        }
+        let this_device = self
+            .settings_repo
+            .get::<u32>(keys::CURRENT_DEVICE_ID)
+            .ok()
+            .flatten();
+        // Shield can send only existing sessions, but those cannot stand in
+        // for the full registered set when acknowledging a durable obligation.
+        let expected = if strict {
+            match auth_client.list_devices().await {
+                Ok(response) => Some(
+                    response
+                        .devices
+                        .into_iter()
+                        .filter(|device| {
+                            !device.is_current && Some(device.device_id) != this_device
+                        })
+                        .map(|device| device.device_id)
+                        .collect::<std::collections::HashSet<_>>(),
+                ),
+                Err(_) => return (0, false),
+            }
+        } else {
+            None
+        };
+        let devices = self
+            .signal_service
+            .session_devices(&me)
+            .await
+            .map(|devices| {
+                devices
+                    .into_iter()
+                    .filter(|d| Some(*d) != this_device)
+                    .collect()
+            });
+        let devices: Vec<u32> = match devices {
+            Ok(devices) => devices,
+            Err(e) => {
+                tracing::warn!(error = %e, "Own-device sync: device lookup failed");
+                return (0, false);
+            }
+        };
+        if devices.is_empty() {
+            return (
+                0,
+                expected.as_ref().is_some_and(|devices| devices.is_empty()),
+            );
+        }
+        Self::pad_content_to_bucket(&mut sync);
+        let ciphertexts = match self
+            .signal_service
+            .encrypt_message_session_devices(auth_client, &me, devices, &sync.encode_to_vec())
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "Own-device sync: encrypt failed");
+                return (0, false);
+            }
+        };
+        let outcome = self
+            .deposit_sealed_ciphertexts(&mut self.message_client(), &me, ciphertexts, None)
+            .await;
+        // What that device's DecryptionErrorMessage will name
+        // (`resend_dm_on_decryption_error`).
+        self.record_dm_send(me_id, &sync, &outcome.deposits);
+        let acknowledged = outcome.error.is_none()
+            && expected.as_ref().is_some_and(|devices| {
+                devices.iter().all(|device| {
+                    outcome
+                        .deposits
+                        .iter()
+                        .any(|(delivered, _)| delivered == device)
+                })
+            });
+        (outcome.delivered, acknowledged)
+    }
+
+    /// Seal `plaintext` for one peer device and deposit it in its mailbox.
+    async fn send_to_peer_device(
+        &self,
+        auth_client: &mut AuthClient,
+        mailbox_manager: &MailboxManager,
+        peer_id: &UserId,
+        mailbox: &PeerMailbox,
+        send_key: &[u8; 32],
+        plaintext: &[u8],
+    ) -> Result<(), MessageError> {
+        let device_id = mailbox.device_id;
+        let peer_ciphertexts = self
+            .signal_service
+            .encrypt_message_session_devices(
+                auth_client,
+                &peer_id.to_string(),
+                vec![device_id],
+                plaintext,
+            )
+            .await
+            .map_err(|e| MessageError::from_signal_send(e, "Mailbox DM encrypt"))?;
+        for signal_ciphertext in peer_ciphertexts.into_values() {
+            let mailbox_encrypted = encrypt_dm_bytes(&signal_ciphertext, send_key)
+                .map_err(|e| MessageError::EncryptionFailed(format!("Mailbox encrypt: {}", e)))?;
+            self.send_to_mailbox_retried(
+                mailbox_manager,
+                &mailbox.public_key,
+                mailbox_encrypted,
+                peer_id,
+                device_id,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Hold `plaintext` for every live peer device that has no half of the
+    /// conversation yet, flushed when it answers the bootstrap
+    /// ([`Self::send_pending_messages`], `dm_bootstrap_handler`). A device
+    /// is asked to answer until an ask reaches it (`was_device_asked`), and
+    /// only on a live send (`grpc_pool`); the post-bootstrap flush follows a
+    /// bootstrap that already asked every device. No RPC beyond that ask.
+    pub(super) async fn owe_unready_devices(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        conversation: &DmConversation,
+        plaintext: &[u8],
+        grpc_pool: Option<&std::sync::Arc<GrpcClientPool>>,
+    ) {
+        let devices = match self.live_session_devices(peer_id).await {
+            Ok(devices) => devices,
+            Err(e) => {
+                tracing::warn!(peer_id = %peer_id, error = %e, "Owed copies: device lookup failed");
+                return;
+            }
+        };
+        let conversations = DmConversationManager::new(self.database.clone());
+        for device in devices {
+            if conversation
+                .peer_mailboxes
+                .iter()
+                .any(|m| m.device_id == device)
+            {
+                continue;
+            }
+            // Asked only if an ask actually reached it: one that failed
+            // (empty token batch) is repeated on the next send.
+            let asked = conversations
+                .was_device_asked(peer_id, device)
+                .unwrap_or(true);
+            if let Err(e) = conversations.queue_for_device(peer_id, device, plaintext) {
+                tracing::warn!(peer_id = %peer_id, device, error = %e, "Owed copies: queue failed");
+                continue;
+            }
+            if let (false, Some(grpc_pool)) = (asked, grpc_pool) {
+                if let Err(e) = self
+                    .prompt_peer_device(auth_client, peer_id, device, grpc_pool)
+                    .await
+                {
+                    tracing::warn!(peer_id = %peer_id, device, error = %e, "Owed copies: could not ask the device to bootstrap");
+                }
+            }
+        }
+    }
+
+    /// Deliver what is owed to every peer device that is ready now. Failures
+    /// are logged, not announced: each of these messages already reached
+    /// another device, so its bubble is already "sent".
+    async fn flush_owed_copies(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        mailbox_manager: &MailboxManager,
+    ) {
+        let conversations = DmConversationManager::new(self.database.clone());
+        let conversation = match conversations.load_conversation(peer_id) {
+            Ok(Some(conversation)) => conversation,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(peer_id = %peer_id, error = %e, "Owed copies: conversation load failed");
+                return;
+            }
+        };
+        for (mailbox, send_key) in conversation.ready_devices() {
+            let owed = match conversations.drain_device_queue(peer_id, mailbox.device_id) {
+                Ok(owed) => owed,
+                Err(e) => {
+                    tracing::warn!(peer_id = %peer_id, device = mailbox.device_id, error = %e, "Owed copies: drain failed");
+                    continue;
+                }
+            };
+            for plaintext in owed {
+                if let Err(e) = self
+                    .send_to_peer_device(
+                        auth_client,
+                        mailbox_manager,
+                        peer_id,
+                        mailbox,
+                        &send_key,
+                        &plaintext,
+                    )
+                    .await
+                {
+                    tracing::warn!(peer_id = %peer_id, device = mailbox.device_id, error = %e, "Owed copy to a late device lost");
+                }
+            }
+        }
+    }
+
+    /// Shield retry to `devices` only: the peer mailboxes from the original
+    /// send that are still ready. A missing mailbox is a failure, not a
+    /// bootstrap. Bootstrap would queue the content and a later flush would
+    /// deliver it to every ready device, including ones linked since.
+    pub(super) async fn send_shield_dm_to_devices(
+        &self,
+        peer_id: &UserId,
+        content: crate::proto::content_v1::Content,
+        devices: &[u32],
+    ) -> Result<(), MessageError> {
+        if devices.is_empty() {
+            return Err(MessageError::InvalidContent(
+                "no original device of this message can be retried".into(),
+            ));
+        }
+        let content = self.inject_profile_key_if_sharing(peer_id, content)?;
+        let conversation = DmConversationManager::new(self.database.clone())
+            .load_conversation(peer_id)
+            .map_err(|e| MessageError::DmError(format!("Failed to load conversation: {e}")))?;
+        let Some(conversation) = conversation.filter(|c| c.is_ready_to_send()) else {
+            return Err(MessageError::DmError(
+                "secure channel is not ready; the retry stays unsent".into(),
+            ));
+        };
+        let wanted: std::collections::HashSet<u32> = devices.iter().copied().collect();
+        let ready: Vec<_> = conversation
+            .ready_devices()
+            .into_iter()
+            .filter(|(mailbox, _)| wanted.contains(&mailbox.device_id))
+            .collect();
+        if ready.is_empty() {
+            return Err(MessageError::DmError(
+                "no original device of this message still has a mailbox".into(),
+            ));
+        }
+        let mut auth_client = self.auth_client();
+        let plaintext = content.encode_to_vec();
+        let mut delivered = 0usize;
+        let mut last_error = None;
+        for (mailbox, send_key) in &ready {
+            crate::services::gateway::submission::mark_submission_started()?;
+            match self
+                .send_to_peer_device(
+                    &mut auth_client,
+                    &self.mailbox_manager,
+                    peer_id,
+                    mailbox,
+                    send_key,
+                    &plaintext,
+                )
+                .await
+            {
+                Ok(()) => delivered += 1,
+                Err(e) => {
+                    tracing::warn!(
+                        peer_id = %peer_id,
+                        device_id = mailbox.device_id,
+                        error = %e,
+                        "Shield DM retry to an original device failed"
+                    );
+                    last_error = Some(e);
+                }
+            }
+        }
+        if delivered == 0 {
+            return Err(last_error.unwrap_or_else(|| {
+                MessageError::DmError("no original device accepted the retry".into())
+            }));
+        }
         Ok(())
     }
 
@@ -174,530 +556,45 @@ impl MessageService {
         .await
     }
 
-    /// Send a text message to a DM peer.
-    pub async fn send_dm_text(
-        &self,
-        auth_client: &mut AuthClient,
-        peer_id: &UserId,
-        text: &str,
-        mailbox_manager: &MailboxManager,
-        grpc_pool: &Arc<GrpcClientPool>,
-    ) -> Result<(), MessageError> {
-        tracing::info!(
-            peer_id = %peer_id,
-            text_len = text.len(),
-            "MessageService: send_dm_text called"
-        );
-        let sent_at = TimestampNanos::now().as_u64();
-        let content = crate::services::build_text_content(text, sent_at);
-        self.send_dm_content(SendDmContentParams {
-            auth_client,
-            peer_id,
-            content,
-            mailbox_manager,
-            grpc_pool: Some(grpc_pool),
-            attachment_ids: None,
-            channel_id: None,
-        })
-        .await?;
-
-        // Store the message locally
-        let our_user_id = self.settings_repo.current_user_id()?;
-        if let Ok(Some(dm_channel)) = self.channel_repo.get_dm_channel_by_peer(&our_user_id, peer_id) {
-            let message = Message::new_text(dm_channel.id, ConversationType::MailboxDm, Some(our_user_id), text.to_string(), sent_at);
-            if let Err(e) = self.message_repo.insert_outgoing(&message) {
-                tracing::warn!(peer_id = %peer_id, error = %e, "Failed to store sent text DM");
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Send a DM with text and/or attachments.
-    pub async fn send_dm_message(
-        &self,
-        auth_client: &mut AuthClient,
-        peer_id: &UserId,
-        text: &str,
-        attachment_pointers: Vec<crate::proto::content_v1::AttachmentPointer>,
-        mailbox_manager: &MailboxManager,
-        grpc_pool: &Arc<GrpcClientPool>,
-    ) -> Result<(), MessageError> {
-        tracing::info!(
-            peer_id = %peer_id,
-            text_len = text.len(),
-            attachment_count = attachment_pointers.len(),
-            "MessageService: send_dm_message called"
-        );
-        let sent_at = TimestampNanos::now().as_u64();
-        let content = crate::services::build_data_message_content(text, attachment_pointers, sent_at);
-        self.send_dm_content(SendDmContentParams {
-            auth_client,
-            peer_id,
-            content,
-            mailbox_manager,
-            grpc_pool: Some(grpc_pool),
-            attachment_ids: None,
-            channel_id: None,
-        })
-        .await
-    }
-
-    /// Send a DM message with attachments (simplified API - no client params).
-    pub async fn send_dm_msg(
-        &self,
-        params: SendDmMsgParams<'_>,
-    ) -> Result<Message, MessageError> {
-        let SendDmMsgParams {
-            peer_id,
-            text,
-            attachment_pointers,
-            attachment_ids,
-            dm_channel_id,
-            mailbox_manager,
-            sent_at,
-            quote,
-        } = params;
-
-        // Resolve the reply once (shared assembler) so the quote rides the wire
-        // AND the local echo keeps its reply fields — mirrors the ServerDm path.
-        let reply_ctx = quote.map(|q| {
-            let parts = self.assemble_reply_parts(
-                &q.target_author_id,
-                q.target_timestamp,
-                q.target_preview.as_deref().unwrap_or(""),
-            );
-            (q, parts)
-        });
-
-        // Use caller-provided timestamp for proto AND storage
-        let content = match &reply_ctx {
-            Some((q, parts)) => crate::services::build_reply_content(
-                text,
-                attachment_pointers,
-                &q.target_author_id.to_string(),
-                q.target_timestamp,
-                // Send the core-computed preview (media label / truncated text),
-                // NOT the raw UI preview — the latter is empty for image/gif/
-                // video parents, so the receiver's quote bubble came up blank.
-                parts.reply_to_text.as_deref().unwrap_or(""),
-                parts.quote_attachments.clone(),
-                sent_at,
-            ),
-            None => crate::services::build_data_message_content(text, attachment_pointers, sent_at),
-        };
-
-        // Send the message via Signal Protocol - pass attachment_ids for storage
-        let mut auth_client = self.auth_client();
-        let send_result = self.send_dm_content(SendDmContentParams {
-            auth_client: &mut auth_client,
-            peer_id,
-            content,
-            mailbox_manager,
-            grpc_pool: Some(&self.grpc_pool),
-            attachment_ids: None,
-            channel_id: None,
-        }).await;
-
-        // Build the message for storage
-        let current_user_id = self.settings_repo.current_user_id()?;
-        let mut message = Message::new_text(*dm_channel_id, ConversationType::MailboxDm, Some(current_user_id), text.to_string(), sent_at);
-        message.attachments = attachment_ids;
-
-        if let Some((q, parts)) = reply_ctx {
-            message.reply_to = Some(parts.reply_to);
-            message.reply_to_author_id = Some(q.target_author_id);
-            message.reply_to_text = parts.reply_to_text;
-            message.reply_to_thumbnail = parts.reply_to_thumbnail;
-            message.reply_to_thumbnail_mime = parts.reply_to_thumbnail_mime;
-        }
-
-        // Handle send result - save to DB for both success and bootstrap cases
-        match send_result {
-            Ok(()) => {
-                // Message sent successfully - save to DB
-                if let Err(e) = self.message_repo.insert_outgoing(&message) {
-                    tracing::warn!(
-                        peer_id = %peer_id,
-                        error = %e,
-                        "Failed to store sent DM with attachments"
-                    );
-                }
-                Ok(message)
-            }
-            Err(MessageError::BootstrapInitiated) => {
-                // Bootstrap initiated - message queued, but STILL save to DB
-                // so it persists when switching conversations
-                if let Err(e) = self.message_repo.insert_outgoing(&message) {
-                    tracing::warn!(
-                        peer_id = %peer_id,
-                        error = %e,
-                        "Failed to store queued DM during bootstrap"
-                    );
-                }
-                tracing::info!(
-                    peer_id = %peer_id,
-                    sent_at = sent_at,
-                    "Saved queued message to DB during bootstrap"
-                );
-                Err(MessageError::BootstrapInitiated)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Send a DM with file attachments (high-level API).
-    ///
-    /// This method handles the complete flow:
-    /// 1. Upload each file to CDN with encryption
-    /// 2. Build AttachmentPointer protos
-    /// 3. Send message via Signal Protocol with two-layer encryption
-    /// 4. Store message locally
-    ///
-    /// # Arguments
-    /// * `peer_id` - The peer's user ID
-    /// * `dm_channel_id` - The DM channel ID for local storage
-    /// * `text` - Message text
-    /// * `file_paths` - Local file paths to upload as attachments
-    /// * `mailbox_manager` - For sending to peer's mailbox
-    pub async fn send_dm_with_reply(
-        &self,
-        peer_id: &UserId,
-        dm_channel_id: &ChannelId,
-        text: &str,
-        file_paths: Vec<&Path>,
-        quote_author_id: &UserId,
-        quote_timestamp: u64,
-        quote_text: &str,
-        mailbox_manager: &MailboxManager,
-    ) -> Result<DmSendResult, MessageError> {
-        // Upload attachments with encryption
-        let attachment_service = AttachmentService::new(self.attachment_repo.clone(), self.grpc_pool.clone());
-        let mut attachment_ids = Vec::with_capacity(file_paths.len());
-        let mut attachment_pointers = Vec::with_capacity(file_paths.len());
-        let mut gif_attachment_ids = Vec::new();
-        
-        for path in file_paths {
-            match attachment_service.upload_to_cdn_encrypted(path).await {
-                Ok(result) => {
-                    attachment_ids.push(result.attachment_id);
-                    
-                    // Track GIF attachments for animation
-                    if result.content_type.starts_with("image/gif") {
-                        gif_attachment_ids.push(result.attachment_id);
-                    }
-                    
-                    // Build AttachmentPointer proto with all required fields
-                    let pointer = crate::proto::content_v1::AttachmentPointer {
-                        cdn_key: result.cdn_key,
-                        encryption_key: result.encryption_key.to_vec(),
-                        digest: result.digest.to_vec(),
-                        plaintext_size: result.plaintext_size,
-                        content_type: result.content_type,
-                        file_name: result.file_name,
-                        thumbnail_cdn_key: result.thumbnail_cdn_key,
-                        thumbnail_key: result.thumbnail_key,
-                        thumbnail_digest: result.thumbnail_digest,
-                        thumbnail_plaintext_size: result.thumbnail_plaintext_size,
-                        thumbnail_width: result.thumbnail_width,
-                        thumbnail_height: result.thumbnail_height,
-                        blur_hash: String::new(),
-                        width: result.width,
-                        height: result.height,
-                        duration_ms: result.duration_ms,
-                        voice_note: false,
-                        ciphertext_size: result.ciphertext_size,
-                        plaintext_hash: String::new(),
-                        waveform: result.waveform,
-                    };
-                    attachment_pointers.push(pointer);
-                }
-                Err(e) => {
-                    tracing::error!("Failed to upload attachment: {}", e);
-                    return Err(MessageError::AttachmentError(e.to_string()));
-                }
-            }
-        }
-        
-        // Resolve the quoted message once (shared with the ServerDm path) —
-        // feeds both the wire Quote and the local reply metadata.
-        let parts = self.assemble_reply_parts(quote_author_id, quote_timestamp, quote_text);
-
-        // Build reply content with Quote proto
-        let sent_at = TimestampNanos::now().as_u64();
-        let content = crate::services::build_reply_content(
-            text,
-            attachment_pointers,
-            &quote_author_id.to_string(),
-            quote_timestamp,
-            // Core-computed preview (media label / truncated text), not the raw
-            // UI `quote_text` which is empty for image/gif/video parents.
-            parts.reply_to_text.as_deref().unwrap_or(""),
-            parts.quote_attachments,
-            sent_at,
-        );
-
-        // Send the message
-        self.send_dm(peer_id, content, mailbox_manager).await?;
-
-        // Store the message locally
-        let our_user_id = self.settings_repo.current_user_id()?;
-        let mut message = Message::new_text(*dm_channel_id, ConversationType::MailboxDm, Some(our_user_id), text.to_string(), sent_at);
-        message.attachments = attachment_ids.clone();
-
-        message.reply_to = Some(parts.reply_to);
-        message.reply_to_author_id = Some(*quote_author_id);
-        message.reply_to_text = parts.reply_to_text;
-        message.reply_to_thumbnail = parts.reply_to_thumbnail;
-        message.reply_to_thumbnail_mime = parts.reply_to_thumbnail_mime;
-
-        // Store in database
-        if let Err(e) = self.message_repo.insert_outgoing(&message) {
-            tracing::warn!(
-                peer_id = %peer_id,
-                error = %e,
-                "Failed to store sent reply DM"
-            );
-        }
-        
-        Ok(DmSendResult {
-            message: Some(message),
-            attachment_ids,
-            gif_attachment_ids,
-            sent_at,
-            bootstrap_initiated: false,
-        })
-    }
-    
-    pub async fn send_dm_with_files(
-        &self,
-        peer_id: &UserId,
-        dm_channel_id: &ChannelId,
-        text: &str,
-        file_paths: Vec<&Path>,
-        mailbox_manager: &MailboxManager,
-    ) -> Result<DmSendResult, MessageError> {
-        // Upload attachments with encryption
-        let attachment_service = AttachmentService::new(self.attachment_repo.clone(), self.grpc_pool.clone());
-        let mut attachment_ids = Vec::with_capacity(file_paths.len());
-        let mut attachment_pointers = Vec::with_capacity(file_paths.len());
-        let mut gif_attachment_ids = Vec::new();
-
-        for file_path in &file_paths {
-            // Detect GIF by extension or content type
-            let is_gif = file_path
-                .extension()
-                .map(|ext| ext.eq_ignore_ascii_case("gif"))
-                .unwrap_or(false);
-
-            tracing::info!(
-                path = %file_path.display(),
-                is_gif = is_gif,
-                "Encrypting and uploading DM attachment to CDN"
-            );
-
-            match attachment_service.upload_to_cdn_encrypted(file_path).await {
-                Ok(result) => {
-                    tracing::info!(
-                        cdn_key = %result.cdn_key,
-                        attachment_id = %result.attachment_id,
-                        filename = %result.file_name,
-                        "DM attachment uploaded to CDN"
-                    );
-                    if is_gif {
-                        gif_attachment_ids.push(result.attachment_id);
-                    }
-                    attachment_ids.push(result.attachment_id);
-                    attachment_pointers.push(result.to_attachment_pointer());
-                }
-                Err(e) => {
-                    tracing::error!(
-                        path = %file_path.display(),
-                        error = %e,
-                        "Failed to upload DM attachment to CDN"
-                    );
-                    return Err(MessageError::AttachmentError(e.to_string()));
-                }
-            }
-        }
-
-        // Generate timestamp for proto AND storage
-        let sent_at = TimestampNanos::now().as_u64();
-
-        tracing::info!(
-            peer_id = %peer_id,
-            text_len = text.len(),
-            attachment_count = attachment_pointers.len(),
-            sent_at = sent_at,
-            "Sending DM with files via send_dm_msg"
-        );
-
-        // Clone IDs before passing to send (needed for result in all cases)
-        let result_attachment_ids = attachment_ids.clone();
-        let result_gif_ids = gif_attachment_ids.clone();
-
-        // Send message with uploaded attachments
-        match self
-            .send_dm_msg(SendDmMsgParams {
-                peer_id,
-                text,
-                attachment_pointers,
-                attachment_ids,
-                dm_channel_id,
-                mailbox_manager,
-                sent_at,
-                quote: None,
-            })
-            .await
-        {
-            Ok(message) => Ok(DmSendResult {
-                message: Some(message),
-                attachment_ids: result_attachment_ids,
-                gif_attachment_ids: result_gif_ids,
-                sent_at,
-                bootstrap_initiated: false,
-            }),
-            Err(MessageError::BootstrapInitiated) => {
-                // First DM - bootstrap was initiated, message was queued
-                // Return success with bootstrap flag so UI can show the message
-                tracing::info!(
-                    peer_id = %peer_id,
-                    attachment_count = result_attachment_ids.len(),
-                    "DM bootstrap initiated - message queued, attachments uploaded"
-                );
-                Ok(DmSendResult {
-                    message: None,
-                    attachment_ids: result_attachment_ids,
-                    gif_attachment_ids: result_gif_ids,
-                    sent_at,
-                    bootstrap_initiated: true,
-                })
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Send a DM with pre-uploaded attachment pointers.
-    ///
-    /// Like `send_dm_with_files` but skips the upload step — caller provides
-    /// already-uploaded `AttachmentPointer`s and their `AttachmentId`s.
-    /// Used when attachments are pre-uploaded via `upload_pending_attachments()`.
-    pub async fn send_dm_with_pointers(
-        &self,
-        peer_id: &UserId,
-        dm_channel_id: &ChannelId,
-        text: &str,
-        attachment_pointers: Vec<crate::proto::content_v1::AttachmentPointer>,
-        attachment_ids: Vec<crate::domain::AttachmentId>,
-        mailbox_manager: &MailboxManager,
-        quote: Option<&crate::services::gateway::outgoing::QuoteIntent>,
-    ) -> Result<DmSendResult, MessageError> {
-        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
-
-        let result_attachment_ids = attachment_ids.clone();
-
-        match self
-            .send_dm_msg(SendDmMsgParams {
-                peer_id,
-                text,
-                attachment_pointers,
-                attachment_ids,
-                dm_channel_id,
-                mailbox_manager,
-                sent_at,
-                quote,
-            })
-            .await
-        {
-            Ok(message) => Ok(DmSendResult {
-                message: Some(message),
-                attachment_ids: result_attachment_ids,
-                gif_attachment_ids: vec![],
-                sent_at,
-                bootstrap_initiated: false,
-            }),
-            Err(MessageError::BootstrapInitiated) => {
-                Ok(DmSendResult {
-                    message: None,
-                    attachment_ids: result_attachment_ids,
-                    gif_attachment_ids: vec![],
-                    sent_at,
-                    bootstrap_initiated: true,
-                })
-            }
-            Err(e) => Err(e),
-        }
-    }
-
     /// Send pending messages after bootstrap completes.
+    ///
+    /// Every queued message is attempted, and the outcome of each is in the
+    /// returned [`PendingFlush`] — the queue is already drained, so the caller
+    /// must announce it (`PendingFlush::emit`) or a failure is a message lost
+    /// without a word.
     pub async fn send_pending_messages(
         &self,
         auth_client: &mut AuthClient,
         peer_id: &UserId,
         mailbox_manager: &MailboxManager,
-    ) -> Result<usize, MessageError> {
-        tracing::info!(
-            peer_id = %peer_id,
-            "PENDING_MESSAGES: Draining Sesame queue for peer"
-        );
-
-        // Drain pending messages from Sesame queue
-        let pending = self
-            .sesame_manager
-            .drain_pending_messages(peer_id)
-            .map_err(|e| {
-                tracing::error!(
-                    peer_id = %peer_id,
-                    error = %e,
-                    "PENDING_MESSAGES: Failed to drain pending messages"
-                );
-                MessageError::Storage(e)
-            })?;
-
-        if pending.is_empty() {
-            tracing::info!(
-                peer_id = %peer_id,
-                "PENDING_MESSAGES: Queue empty - no messages to send"
-            );
-            return Ok(0);
-        }
-
+    ) -> PendingFlush {
+        let mut flush = PendingFlush::default();
+        let pending = match self.pending_dms.drain(peer_id) {
+            Ok(pending) => pending,
+            Err(e) => {
+                tracing::error!(peer_id = %peer_id, error = %e, "PENDING_MESSAGES: Failed to drain pending messages");
+                flush.error = Some(format!("queued messages could not be read: {e}"));
+                return flush;
+            }
+        };
         let pending_count = pending.len();
-        tracing::info!(
-            peer_id = %peer_id,
-            count = pending_count,
-            "PENDING_MESSAGES: Found {} message(s) to send",
-            pending_count
-        );
-
-        let mut sent_count = 0;
+        tracing::info!(peer_id = %peer_id, count = pending_count, "PENDING_MESSAGES: draining pending-DM queue");
 
         for msg in pending {
-            // Deserialize the content
             let content = match crate::proto::content_v1::Content::decode(msg.content.as_slice()) {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::error!(
-                        peer_id = %peer_id,
-                        error = %e,
-                        "Failed to deserialize pending message content"
-                    );
+                    tracing::error!(peer_id = %peer_id, error = %e, "Failed to deserialize pending message content");
+                    flush.record(None, Err(format!("undecodable queued message: {e}")));
                     continue;
                 }
             };
+            if !self.queued_read_receipt_allowed(&content) {
+                continue;
+            }
+            let bubble = queued_bubble_timestamp(&content);
 
-            let original_sent_at = content.timestamp;
-
-            tracing::debug!(
-                peer_id = %peer_id,
-                msg_index = sent_count + 1,
-                timestamp = content.timestamp,
-                has_channel_id = msg.channel_id.is_some(),
-                attachment_count = msg.attachment_ids.len(),
-                "PENDING_MESSAGES: Sending message via send_dm_content"
-            );
-
-            match self
+            let result = match self
                 .send_dm_content(SendDmContentParams {
                     auth_client,
                     peer_id,
@@ -709,117 +606,75 @@ impl MessageService {
                 })
                 .await
             {
-                Ok(()) => {
-                    sent_count += 1;
-                    tracing::info!(
-                        peer_id = %peer_id,
-                        sent = sent_count,
-                        timestamp = original_sent_at,
-                        channel_id = ?msg.channel_id,
-                        "PENDING_MESSAGES: Successfully sent message #{}", sent_count
-                    );
-                }
+                // Re-queued behind a bootstrap still in progress: still "sending".
+                Err(MessageError::BootstrapInitiated) => continue,
                 Err(e) => {
-                    tracing::error!(
-                        peer_id = %peer_id,
-                        error = %e,
-                        "PENDING_MESSAGES: FAILED to send message"
-                    );
+                    tracing::error!(peer_id = %peer_id, error = %e, "PENDING_MESSAGES: FAILED to send message");
+                    Err(e.to_string())
                 }
-            }
+                Ok(()) => Ok(()),
+            };
+            flush.record(bubble, result);
         }
+
+        // A device that answered after another got these copies catches up.
+        self.flush_owed_copies(auth_client, peer_id, mailbox_manager)
+            .await;
 
         tracing::info!(
             peer_id = %peer_id,
-            sent = sent_count,
+            sent = flush.sent.len(),
+            failed = flush.failed.len(),
             total = pending_count,
-            "PENDING_MESSAGES: Complete - sent {}/{} messages",
-            sent_count,
-            pending_count
+            "PENDING_MESSAGES: Complete"
         );
-
-        Ok(sent_count)
+        flush
     }
 
-    /// Reset session with a peer and attempt to re-establish.
-    pub async fn reset_and_establish_session(
+    /// A read preference changed while the mailbox was bootstrapping must
+    /// still take effect before its queued receipt goes on the wire.
+    pub(crate) fn queued_read_receipt_allowed(
         &self,
-        auth_client: &mut AuthClient,
-        peer_id: &UserId,
-        device_id: u32,
-    ) -> Result<(), MessageError> {
-        tracing::info!(
-            peer_id = %peer_id,
-            device_id,
-            "Resetting session with peer"
-        );
-
-        // Archive all sessions in Sesame
-        if let Err(e) = self.sesame_manager.archive_all_sessions(peer_id, device_id) {
-            tracing::warn!(
-                peer_id = %peer_id,
-                error = %e,
-                "Failed to archive Sesame sessions (continuing anyway)"
-            );
+        content: &crate::proto::content_v1::Content,
+    ) -> bool {
+        let Some(crate::proto::content_v1::content::Content::Receipt(receipt)) = &content.content
+        else {
+            return true;
+        };
+        if receipt.r#type != crate::proto::content_v1::receipt_message::Type::Read as i32 {
+            return true;
         }
-
-        // Mark peer as stale
-        if let Err(e) = self.sesame_manager.mark_user_stale(peer_id) {
-            tracing::warn!(
-                peer_id = %peer_id,
-                error = %e,
-                "Failed to mark peer as stale (continuing anyway)"
-            );
-        }
-
-        // Establish a fresh session by fetching their prekey bundle
-        self.signal_service
-            .ensure_session(auth_client, &peer_id.to_string(), device_id)
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    peer_id = %peer_id,
-                    error = %e,
-                    "Failed to establish new session after reset"
-                );
-                MessageError::from_signal_send(e, "Session establishment failed")
-            })?;
-
-        tracing::info!(
-            peer_id = %peer_id,
-            device_id,
-            "Successfully reset and established new session"
-        );
-
-        Ok(())
+        self.settings_repo
+            .get_bool(crate::storage::repositories::settings_repo::keys::SEND_READ_RECEIPTS)
+            .map(|enabled| enabled.unwrap_or(true))
+            .unwrap_or(false)
     }
 
-    /// Reset sessions with ALL devices of a peer and re-establish.
+    /// Replace every session with `peer_id` and re-establish fresh ones.
     ///
-    /// Used for convergence failure recovery in multi-device scenarios.
-    /// Archives existing sessions and establishes fresh ones for all known devices.
+    /// Signal's `lightSessionReset` (Signal-Desktop
+    /// `SignalProtocolStore.preload.ts` `lightSessionReset`): archive first, so
+    /// the rebuild below finds no usable session and fetches a bundle per
+    /// device — `ensure_sessions_all_devices` skips any device that still has
+    /// one, which made a reset without the archive a no-op. Archived states
+    /// stay in each `SessionRecord`, so in-flight messages under them still
+    /// decrypt.
     pub async fn reset_and_establish_sessions_all_devices(
         &self,
         auth_client: &mut AuthClient,
         peer_id: &UserId,
     ) -> Result<Vec<u32>, MessageError> {
-        tracing::info!(
-            peer_id = %peer_id,
-            "Resetting sessions for all peer devices"
-        );
+        let peer = peer_id.to_string();
+        let archived = self
+            .signal_service
+            .archive_peer_sessions(&peer)
+            .await
+            .map_err(|e| MessageError::from_signal_send(e, "Session archive failed"))?;
+        tracing::info!(peer_id = %peer_id, archived, "Archived sessions with peer for reset");
 
-        // Mark peer as stale (affects all devices)
-        if let Err(e) = self.sesame_manager.mark_user_stale(peer_id) {
-            tracing::warn!(
-                peer_id = %peer_id,
-                error = %e,
-                "Failed to mark peer as stale (continuing anyway)"
-            );
-        }
-
-        // Establish fresh sessions for ALL devices
-        let device_ids = self.signal_service
-            .ensure_sessions_all_devices(auth_client, &peer_id.to_string())
+        let device_ids = self
+            .signal_service
+            .ensure_sessions_all_devices(auth_client, &peer)
             .await
             .map_err(|e| {
                 tracing::error!(
@@ -836,7 +691,96 @@ impl MessageService {
             "Reset sessions for all peer devices"
         );
 
+        // Signal's lightSessionReset then sends a NullMessage, so the peer
+        // gets a PreKey message on the new session now instead of when the
+        // user next types.
+        let reached = self
+            .send_null_messages(auth_client, peer_id, &device_ids)
+            .await;
+        tracing::info!(peer_id = %peer_id, reached, "Sent post-reset NullMessage to the peer's devices");
+
         Ok(device_ids)
+    }
+
+    /// Send [`null_message_content`] to `devices` of `peer_id` — the devices
+    /// whose sessions a reset just rebuilt — over the transport a DM to them
+    /// takes now: the mailbox of each ready device in Shield, otherwise
+    /// sealed sender. Signal-Desktop `jobs/helpers/sendNullMessage.preload.ts`
+    /// (sent with `messageIds: []`): nothing to store, show, sync to our own
+    /// devices or resend, so it skips the receipt snapshot and the send log.
+    /// Best effort; returns how many devices it reached.
+    async fn send_null_messages(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        devices: &[u32],
+    ) -> usize {
+        if devices.is_empty() {
+            return 0;
+        }
+        let plaintext = null_message_content().encode_to_vec();
+
+        if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            let conversation = match DmConversationManager::new(self.database.clone())
+                .load_conversation(peer_id)
+            {
+                Ok(Some(conversation)) => conversation,
+                Ok(None) => return 0,
+                Err(e) => {
+                    tracing::warn!(peer_id = %peer_id, error = %e, "NullMessage: conversation load failed");
+                    return 0;
+                }
+            };
+            let mut reached = 0;
+            for (mailbox, send_key) in conversation.ready_devices() {
+                if !devices.contains(&mailbox.device_id) {
+                    continue;
+                }
+                match self
+                    .send_to_peer_device(
+                        auth_client,
+                        &self.mailbox_manager,
+                        peer_id,
+                        mailbox,
+                        &send_key,
+                        &plaintext,
+                    )
+                    .await
+                {
+                    Ok(()) => reached += 1,
+                    Err(e) => {
+                        tracing::warn!(peer_id = %peer_id, device_id = mailbox.device_id, error = %e, "NullMessage to a peer device failed")
+                    }
+                }
+            }
+            return reached;
+        }
+
+        let peer = peer_id.to_string();
+        let ciphertexts = match self
+            .signal_service
+            .encrypt_message_session_devices(auth_client, &peer, devices.to_vec(), &plaintext)
+            .await
+        {
+            Ok(ciphertexts) => ciphertexts,
+            Err(e) => {
+                tracing::warn!(peer_id = %peer_id, error = %e, "NullMessage: encrypt failed");
+                return 0;
+            }
+        };
+        let uak = self.sealed_access_key(&peer, false);
+        let outcome = self
+            .deposit_sealed_ciphertexts(
+                &mut self.message_client(),
+                &peer,
+                ciphertexts,
+                uak.as_ref(),
+            )
+            .await;
+        if outcome.delivered == 0 {
+            tracing::warn!(peer_id = %peer_id, error = ?outcome.error, "NullMessage: no device reached");
+        }
+        outcome.delivered
     }
 
     /// Send to a mailbox with retry for transient network failures.
@@ -855,6 +799,7 @@ impl MessageService {
         use crate::services::mailbox_manager::MailboxError;
 
         const MAX_ATTEMPTS: u32 = 4; // 1 initial + 3 retries
+        let mut earlier_ambiguous = false;
 
         for attempt in 0..MAX_ATTEMPTS {
             if attempt > 0 {
@@ -862,18 +807,29 @@ impl MessageService {
                 tokio::time::sleep(delay).await;
             }
 
-            match mailbox_manager
-                .send_to_mailbox(
-                    public_key,
-                    encrypted_envelope.clone(),
-                    EnvelopeType::SealedSender,
-                )
-                .await
-            {
+            let deposit = if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+                mailbox_manager
+                    .send_to_secret_mailbox(
+                        public_key,
+                        encrypted_envelope.clone(),
+                        EnvelopeType::SealedSender,
+                    )
+                    .await
+            } else {
+                mailbox_manager
+                    .send_to_mailbox(
+                        public_key,
+                        encrypted_envelope.clone(),
+                        EnvelopeType::SealedSender,
+                    )
+                    .await
+            };
+            match deposit {
                 Ok(()) => return Ok(()),
                 Err(MailboxError::Network(net_err))
                     if net_err.is_retryable() && attempt + 1 < MAX_ATTEMPTS =>
                 {
+                    earlier_ambiguous |= !matches!(net_err, crate::error::NetworkError::RequestNotSent(_));
                     tracing::warn!(
                         peer_id = %peer_id,
                         device_id,
@@ -883,12 +839,13 @@ impl MessageService {
                         "Mailbox send failed, retrying"
                     );
                 }
-                Err(e) => {
-                    return Err(MessageError::DmError(format!(
-                        "Failed to send to mailbox: {}",
-                        e
-                    )));
+                Err(MailboxError::Network(crate::error::NetworkError::RequestNotSent(_)))
+                    if earlier_ambiguous =>
+                {
+                    // A previous deposit attempt may already have arrived.
+                    return Err(MessageError::Network(crate::error::NetworkError::Unavailable));
                 }
+                Err(MailboxError::Network(e)) => return Err(MessageError::Network(e)),
             }
         }
 
@@ -905,71 +862,40 @@ impl MessageService {
         peer_id: &UserId,
         mut content: crate::proto::content_v1::Content,
     ) -> Result<crate::proto::content_v1::Content, MessageError> {
-        use crate::domain::user::FriendshipStatus;
         use crate::proto::content_v1::content;
-        use crate::storage::repositories::settings_repo::keys;
 
-        // Get current user ID
         let our_user_id = self.settings_repo.current_user_id()?;
-
-        // Check if this is a friendship
-        let friendship = self
-            .user_repo
-            .get_friendship(&our_user_id, peer_id)
-            .ok()
-            .flatten();
-
-        // Only share profile key with accepted friends
-        let is_friend = friendship
-            .as_ref()
-            .map(|f| matches!(f.status, FriendshipStatus::Accepted))
-            .unwrap_or(false);
-
-        if !is_friend {
-            tracing::trace!(
-                peer_id = %peer_id,
-                "Not a friend, skipping profile key injection"
-            );
+        // Sharing is enabled automatically for accepted friends. Update the
+        // actual stored request direction, including incoming friendships.
+        let friendship = [(our_user_id, *peer_id), (*peer_id, our_user_id)]
+            .iter()
+            .find_map(|(a, b)| {
+                self.user_repo
+                    .get_friendship(a, b)
+                    .ok()
+                    .flatten()
+                    .filter(|f| f.status == crate::domain::user::FriendshipStatus::Accepted)
+            });
+        let Some(friendship) = friendship else {
             return Ok(content);
-        }
-
-        // Check if profile sharing is enabled for this friendship
-        let is_sharing = self
-            .user_repo
-            .is_profile_sharing(&our_user_id, peer_id)
-            .unwrap_or(false);
-
-        // Auto-enable profile sharing on first message to a friend
-        if !is_sharing {
-            if let Err(e) = self.user_repo.set_profile_sharing(&our_user_id, peer_id, true) {
-                tracing::warn!(
-                    peer_id = %peer_id,
-                    error = %e,
-                    "Failed to auto-enable profile sharing"
-                );
-                return Ok(content);
-            }
-            tracing::info!(
-                peer_id = %peer_id,
-                "Auto-enabled profile sharing for friendship"
-            );
-        }
-
-        // Get our profile key from settings
-        let profile_key = match self.settings_repo.get_bytes(keys::PROFILE_KEY)? {
-            Some(key) if key.len() == 32 => key,
-            Some(key) => {
-                tracing::warn!(
-                    key_len = key.len(),
-                    "Profile key has unexpected length, skipping injection"
-                );
-                return Ok(content);
-            }
-            None => {
-                tracing::trace!("No profile key in settings, skipping injection");
-                return Ok(content);
-            }
         };
+        self.user_repo.set_profile_sharing(
+            &friendship.requester_id,
+            &friendship.addressee_id,
+            true,
+        )?;
+
+        // Whether this friend may hold it is the visibility setting's call
+        // ("nobody", a block, a rotation in flight).
+        let Some(profile_key) = crate::services::profile_visibility::shareable_profile_key(
+            &self.settings_repo,
+            &self.user_repo,
+            peer_id,
+        ) else {
+            tracing::trace!(peer_id = %peer_id, "Profile key not shareable, skipping injection");
+            return Ok(content);
+        };
+        let profile_key = profile_key.to_vec();
 
         // Inject profile key into DataMessage or EditMessage
         match &mut content.content {
@@ -1009,6 +935,110 @@ impl MessageService {
 
         Ok(content)
     }
+}
+
+/// The `Content` a session reset sends each rebuilt peer device: a
+/// `NullMessage` and nothing else, padded to a bucket like every DM so its
+/// size does not single it out.
+pub(crate) fn null_message_content() -> crate::proto::content_v1::Content {
+    use crate::proto::content_v1::{Content, NullMessage, content};
+
+    let mut null = Content {
+        content: Some(content::Content::NullMessage(NullMessage::default())),
+        timestamp: crate::util::time::TimestampNanos::now().as_u64(),
+        ..Default::default()
+    };
+    MessageService::pad_content_to_bucket(&mut null);
+    null
+}
+
+/// What our own other devices get for `content` sent to `peer_id` over
+/// either DM transport, or `None`: the `SyncSent` for a message
+/// ([`sync_sent_copy`]), the ACCEPTED/DECLINED_ELSEWHERE hangup when this
+/// device answers or declines a call, so our other devices stop ringing, or
+/// the bare copy of a message-anchored control ([`bare_self_copy`]).
+pub(super) fn own_device_copy(
+    peer_id: &UserId,
+    content: &crate::proto::content_v1::Content,
+    our_device_id: u32,
+) -> Option<crate::proto::content_v1::Content> {
+    sync_sent_copy(peer_id, content)
+        .or_else(|| crate::services::gateway::build_call_self_sync(content, our_device_id))
+        .or_else(|| bare_self_copy(peer_id, content))
+}
+
+/// The bare copy our own other devices get of a reaction, pin, edit or
+/// delete-for-everyone. DM deletes additionally carry the destination inside
+/// authenticated self-device content so the linked device can apply the exact
+/// author in the exact ServerDm conversation.
+///
+/// An allow-list, never "everything else": mailbox-internal and anon content
+/// (bootstrap `KeyExchange`, `DmMailboxRotation`, `AnonGroup*`/`AnonDm*`,
+/// `SenderKey*`, `GroupMailboxAddress`) would hand our devices state that is
+/// this conversation's, not theirs; typing and receipts are not synced
+/// (Signal does not); `ReadSync`/`SyncSent` already are own-device content.
+fn bare_self_copy(
+    peer_id: &UserId,
+    content: &crate::proto::content_v1::Content,
+) -> Option<crate::proto::content_v1::Content> {
+    use crate::proto::content_v1::{Content, content};
+
+    let inner = match &content.content {
+        Some(
+            content::Content::Reaction(_) | content::Content::Pin(_) | content::Content::Edit(_),
+        ) => content.content.clone(),
+        Some(content::Content::DataMessage(dm)) if dm.delete.is_some() => {
+            let mut dm = dm.clone();
+            // Channel controls already carry their scope. DM copies require the
+            // destination inside the encrypted, authenticated self-device content.
+            if dm.channel_id.is_empty() {
+                dm.delete.as_mut()?.destination_user_id = Some(peer_id.to_string());
+            }
+            Some(content::Content::DataMessage(dm))
+        }
+        _ => return None,
+    };
+    Some(Content {
+        timestamp: content.timestamp,
+        content: inner,
+        ..Default::default()
+    })
+}
+
+/// The `SyncSent` our own other devices get for `content` sent to `peer_id`,
+/// or `None` when it is not a message they should file (F8, V13): a
+/// text/attachment `DataMessage` or a timer update, never a delete carrier.
+pub(super) fn sync_sent_copy(
+    peer_id: &UserId,
+    content: &crate::proto::content_v1::Content,
+) -> Option<crate::proto::content_v1::Content> {
+    use crate::proto::content_v1::{Content, SyncSent, content, sync_sent::Destination};
+
+    let Some(content::Content::DataMessage(dm)) = &content.content else {
+        return None;
+    };
+    let is_message = !dm.body.is_empty()
+        || !dm.attachments.is_empty()
+        || crate::services::disappearing::is_timer_update(dm);
+    (is_message && dm.delete.is_none()).then(|| Content {
+        timestamp: content.timestamp,
+        content: Some(content::Content::SyncSent(SyncSent {
+            destination: Some(Destination::DestinationUserId(peer_id.to_string())),
+            timestamp: dm.timestamp,
+            message: Some(dm.clone()),
+            receipt_targets: Vec::new(),
+        })),
+        ..Default::default()
+    })
+}
+
+/// Typing indicators are stale after a bootstrap; receipts still describe the
+/// peer's message and must survive until the private mailbox is ready.
+pub(super) fn is_ephemeral_content(content: &crate::proto::content_v1::Content) -> bool {
+    matches!(
+        &content.content,
+        Some(crate::proto::content_v1::content::Content::Typing(_))
+    )
 }
 
 /// Reply metadata assembled from a quoted message, feeding both the outgoing
@@ -1061,7 +1091,9 @@ impl MessageService {
             .map(|m| m.id)
             .unwrap_or_else(|| crate::domain::ids::MessageId::from_timestamp(quote_timestamp));
         let reply_to_text = if !quote_preview.is_empty() {
-            Some(crate::services::gateway::shared::truncate_preview(quote_preview))
+            Some(crate::services::gateway::shared::truncate_preview(
+                quote_preview,
+            ))
         } else {
             original.as_ref().map(|m| {
                 crate::services::gateway::shared::message_reply_preview(m, &original_attachments)
@@ -1075,6 +1107,124 @@ impl MessageService {
             reply_to_text,
             reply_to_thumbnail,
             reply_to_thumbnail_mime,
+        }
+    }
+}
+
+#[cfg(test)]
+mod null_message_tests {
+    use crate::domain::ids::UserId;
+    use crate::proto::content_v1::content;
+    use prost::Message as _;
+
+    /// The post-reset content is a bucket-padded `NullMessage` alone, and is
+    /// never copied to our own devices.
+    #[test]
+    fn reset_sends_a_padded_null_message() {
+        let null = super::null_message_content();
+        assert!(matches!(
+            null.content,
+            Some(content::Content::NullMessage(_))
+        ));
+        assert_eq!(null.encoded_len(), 256, "padded to the smallest bucket");
+        assert!(null.ephemeral_reply_to.is_none());
+        assert!(super::own_device_copy(&UserId::new(), &null, 1).is_none());
+    }
+}
+
+#[cfg(test)]
+mod sync_sent_copy_tests {
+    use crate::domain::ids::UserId;
+    use crate::proto::content_v1::{Content, DataMessage, content};
+
+    #[test]
+    fn wraps_messages_only_and_names_the_peer() {
+        let peer = UserId::new();
+        let copy =
+            super::sync_sent_copy(&peer, &crate::services::build_text_content("hi", 7)).unwrap();
+        let Some(content::Content::SyncSent(sync)) = copy.content else {
+            panic!("not a SyncSent")
+        };
+        assert_eq!(
+            sync.destination,
+            Some(
+                crate::proto::content_v1::sync_sent::Destination::DestinationUserId(
+                    peer.to_string()
+                )
+            )
+        );
+        assert_eq!(sync.message.unwrap().body, "hi");
+
+        let empty = Content {
+            content: Some(content::Content::DataMessage(DataMessage::default())),
+            ..Default::default()
+        };
+        assert!(super::sync_sent_copy(&peer, &empty).is_none());
+        assert!(super::sync_sent_copy(&peer, &Content::default()).is_none());
+    }
+
+    /// F62: reactions, pins, edits and deletes-for-everyone reach our own
+    /// devices bare; nothing mailbox-internal, anon or ephemeral does.
+    #[test]
+    fn bare_copies_only_the_allow_list() {
+        use crate::proto::content_v1::*;
+        let peer = UserId::new();
+        let wrap = |c| Content {
+            timestamp: 9,
+            content: Some(c),
+            ephemeral_reply_to: Some(vec![1; 32]),
+            ..Default::default()
+        };
+        let delete = DataMessage {
+            delete: Some(Delete {
+                target_sent_timestamp: 3,
+                target_author_aci: None,
+                destination_user_id: None,
+                target_call_id: None,
+            }),
+            ..Default::default()
+        };
+
+        for allowed in [
+            content::Content::Reaction(Reaction::default()),
+            content::Content::Pin(PinMessage::default()),
+            content::Content::Edit(EditMessage::default()),
+            content::Content::DataMessage(delete),
+        ] {
+            let copy = super::own_device_copy(&peer, &wrap(allowed.clone()), 1)
+                .expect("allowed variant not copied");
+            let mut expected = allowed;
+            if let content::Content::DataMessage(dm) = &mut expected {
+                dm.delete.as_mut().unwrap().destination_user_id = Some(peer.to_string());
+            }
+            assert_eq!(copy.content, Some(expected));
+            assert_eq!(copy.timestamp, 9);
+            assert!(
+                copy.ephemeral_reply_to.is_none(),
+                "our mailbox address must not ride the copy"
+            );
+        }
+
+        for internal in [
+            content::Content::KeyExchange(KeyExchange::default()),
+            content::Content::DmMailboxRotation(DmMailboxRotation::default()),
+            content::Content::AnonGroupInvite(AnonGroupInvite::default()),
+            content::Content::AnonDmRequest(AnonDmRequest::default()),
+            content::Content::AnonDmMessage(Box::default()),
+            content::Content::SenderKey(SenderKeyDistribution::default()),
+            content::Content::SenderKeyRequest(SenderKeyRequest::default()),
+            content::Content::GroupMailboxAddress(GroupMailboxAddress::default()),
+            content::Content::Typing(TypingMessage::default()),
+            content::Content::Receipt(ReceiptMessage::default()),
+            content::Content::ReadSync(ReadSync::default()),
+            content::Content::SyncSent(SyncSent::default()),
+            content::Content::DeleteForMeSync(DeleteForMeSync::default()),
+            content::Content::DataMessage(DataMessage::default()),
+        ] {
+            assert!(
+                super::own_device_copy(&peer, &wrap(internal.clone()), 1).is_none(),
+                "{internal:?} copied"
+            );
         }
     }
 }

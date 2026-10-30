@@ -25,10 +25,7 @@ impl<B: LocalAIBackend> EmbeddingGenerator<B> {
 
     /// Generate embeddings for a single text.
     pub async fn embed_one(&self, text: &str) -> Result<Vec<f32>, BackendError> {
-        let results = self
-            .backend
-            .embed(&self.model, &[text.to_string()])
-            .await?;
+        let results = self.backend.embed(&self.model, &[text.to_string()]).await?;
 
         results
             .into_iter()
@@ -77,7 +74,8 @@ mod tests {
     fn test_cosine_similarity_identical() {
         let a = vec![1.0, 0.0, 0.0];
         let b = vec![1.0, 0.0, 0.0];
-        let sim = EmbeddingGenerator::<super::super::ollama::OllamaBackend>::cosine_similarity(&a, &b);
+        let sim =
+            EmbeddingGenerator::<super::super::ollama::OllamaBackend>::cosine_similarity(&a, &b);
         assert!((sim - 1.0).abs() < f32::EPSILON);
     }
 
@@ -85,7 +83,8 @@ mod tests {
     fn test_cosine_similarity_orthogonal() {
         let a = vec![1.0, 0.0];
         let b = vec![0.0, 1.0];
-        let sim = EmbeddingGenerator::<super::super::ollama::OllamaBackend>::cosine_similarity(&a, &b);
+        let sim =
+            EmbeddingGenerator::<super::super::ollama::OllamaBackend>::cosine_similarity(&a, &b);
         assert!(sim.abs() < f32::EPSILON);
     }
 
@@ -93,7 +92,8 @@ mod tests {
     fn test_cosine_similarity_opposite() {
         let a = vec![1.0, 0.0];
         let b = vec![-1.0, 0.0];
-        let sim = EmbeddingGenerator::<super::super::ollama::OllamaBackend>::cosine_similarity(&a, &b);
+        let sim =
+            EmbeddingGenerator::<super::super::ollama::OllamaBackend>::cosine_similarity(&a, &b);
         assert!((sim - (-1.0)).abs() < f32::EPSILON);
     }
 
@@ -101,7 +101,8 @@ mod tests {
     fn test_cosine_similarity_empty() {
         let a: Vec<f32> = vec![];
         let b: Vec<f32> = vec![];
-        let sim = EmbeddingGenerator::<super::super::ollama::OllamaBackend>::cosine_similarity(&a, &b);
+        let sim =
+            EmbeddingGenerator::<super::super::ollama::OllamaBackend>::cosine_similarity(&a, &b);
         assert_eq!(sim, 0.0);
     }
 
@@ -109,7 +110,8 @@ mod tests {
     fn test_cosine_similarity_zero_vector() {
         let a = vec![0.0, 0.0];
         let b = vec![1.0, 0.0];
-        let sim = EmbeddingGenerator::<super::super::ollama::OllamaBackend>::cosine_similarity(&a, &b);
+        let sim =
+            EmbeddingGenerator::<super::super::ollama::OllamaBackend>::cosine_similarity(&a, &b);
         assert_eq!(sim, 0.0);
     }
 }

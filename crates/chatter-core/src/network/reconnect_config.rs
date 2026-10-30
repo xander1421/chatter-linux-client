@@ -209,7 +209,10 @@ mod tests {
             ..ReconnectConfig::default()
         };
         // 100ms * 10 = 1s, should clamp to 500ms
-        assert_eq!(cfg.next_delay(cfg.initial_delay), Duration::from_millis(500));
+        assert_eq!(
+            cfg.next_delay(cfg.initial_delay),
+            Duration::from_millis(500)
+        );
         // Still clamped on subsequent calls
         assert_eq!(
             cfg.next_delay(Duration::from_millis(500)),

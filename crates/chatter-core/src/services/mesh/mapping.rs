@@ -32,6 +32,8 @@ use super::events::MeshDelivery;
 const ROOM_KEY: &str = "chatter-mesh:room";
 /// Namespace prefix for a geohash channel conversation.
 const GEOHASH_KEY: &str = "chatter-mesh:geohash:";
+const CHANNEL_KEY: &str = "chatter-mesh:channel:";
+const PRIVATE_CHANNEL_KEY: &str = "chatter-mesh:private-channel:";
 /// Namespace prefix for a 1:1 mesh conversation.
 const DM_KEY: &str = "chatter-mesh:dm:";
 /// Namespace prefix for a mesh peer's derived account ID.
@@ -55,6 +57,10 @@ pub enum MeshConversation {
     Room,
     /// A public geohash channel, addressed by its cell.
     Geohash(String),
+    /// Open named BLE channel. The canonical slug is public on the wire.
+    Channel(String),
+    /// Creator-admitted private channel, addressed locally by its random id.
+    PrivateChannel(String),
     /// A 1:1 conversation with one peer, over Noise or over a gift wrap.
     Dm(PeerId),
 }
@@ -65,12 +71,12 @@ impl MeshConversation {
     pub fn conversation_id(&self) -> ChannelId {
         match self {
             Self::Room => ChannelId::from_uuid(derive(ROOM_KEY)),
-            Self::Geohash(cell) => {
-                ChannelId::from_uuid(derive(&format!("{GEOHASH_KEY}{cell}")))
+            Self::Geohash(cell) => ChannelId::from_uuid(derive(&format!("{GEOHASH_KEY}{cell}"))),
+            Self::Channel(name) => ChannelId::from_uuid(derive(&format!("{CHANNEL_KEY}{name}"))),
+            Self::PrivateChannel(id) => {
+                ChannelId::from_uuid(derive(&format!("{PRIVATE_CHANNEL_KEY}{id}")))
             }
-            Self::Dm(peer) => {
-                ChannelId::from_uuid(derive(&format!("{DM_KEY}{}", peer.as_str())))
-            }
+            Self::Dm(peer) => ChannelId::from_uuid(derive(&format!("{DM_KEY}{}", peer.as_str()))),
         }
     }
 
@@ -78,7 +84,9 @@ impl MeshConversation {
     #[must_use]
     pub fn conversation_type(&self) -> ConversationType {
         match self {
-            Self::Room | Self::Geohash(_) => ConversationType::Mesh,
+            Self::Room | Self::Geohash(_) | Self::Channel(_) | Self::PrivateChannel(_) => {
+                ConversationType::Mesh
+            }
             Self::Dm(_) => ConversationType::MeshDm,
         }
     }
@@ -86,7 +94,7 @@ impl MeshConversation {
     /// Whether this scope is public (broadcast) rather than 1:1.
     #[must_use]
     pub fn is_public(&self) -> bool {
-        matches!(self, Self::Room | Self::Geohash(_))
+        matches!(self, Self::Room | Self::Geohash(_) | Self::Channel(_))
     }
 
     /// The geohash cell, when this scope has one.
@@ -197,7 +205,7 @@ pub fn outbound_message(
     message.id = wire_message_id(wire_id);
 
     // A broadcast's delivery state is known the instant it is composed and never
-    // changes: nobody acknowledges a room or cell message, so there is no later
+    // changes: nobody acknowledges a room, cell, or channel message, so there is no later
     // event to correct it with. Setting it here is what stops the live row from
     // falling through to the converter's "own message with no status means sent"
     // default — which put the one-to-one word "sent" on a broadcast, and only
@@ -211,7 +219,10 @@ pub fn outbound_message(
     // storing, because there it would mean something else — see V060.
     if matches!(
         conversation,
-        MeshConversation::Room | MeshConversation::Geohash(_)
+        MeshConversation::Room
+            | MeshConversation::Geohash(_)
+            | MeshConversation::Channel(_)
+            | MeshConversation::PrivateChannel(_)
     ) {
         message.delivery_status = MeshDelivery::Broadcast.as_str().to_string();
     }
@@ -243,8 +254,7 @@ fn file_row(
         millis_to_nanos(timestamp_ms),
     );
     message.id = wire_message_id(wire_id);
-    message.content =
-        MessageContent::Mixed(MixedContent::attachments_only(vec![attachment]));
+    message.content = MessageContent::Mixed(MixedContent::attachments_only(vec![attachment]));
     // Both, because the two are read by different consumers. `content` is what
     // `attachments_of` and the storage layer go through; `attachments` is the field
     // the UI converter resolves against, and it is not derived from the content.
@@ -371,7 +381,10 @@ mod tests {
         let dm = MeshConversation::Dm(peer("abcdef0123456789")).conversation_id();
 
         assert_eq!(room, MeshConversation::Room.conversation_id());
-        assert_eq!(a, MeshConversation::Geohash("u4pruy".into()).conversation_id());
+        assert_eq!(
+            a,
+            MeshConversation::Geohash("u4pruy".into()).conversation_id()
+        );
         assert_ne!(a, b);
         assert_ne!(room, a);
         assert_ne!(dm, room);
@@ -449,7 +462,10 @@ mod tests {
 
     #[test]
     fn timestamps_become_nanoseconds_without_wrapping() {
-        assert_eq!(millis_to_nanos(1_700_000_000_000), 1_700_000_000_000_000_000);
+        assert_eq!(
+            millis_to_nanos(1_700_000_000_000),
+            1_700_000_000_000_000_000
+        );
         assert_eq!(millis_to_nanos(u64::MAX), u64::MAX);
     }
 

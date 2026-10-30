@@ -1,116 +1,502 @@
+import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
+import { IconAction } from "icon_action.slint";
+import { GlassSurface } from "glass_surface.slint";
 // Image viewer modal component
 //
 // Full-screen lightbox for viewing images within the app.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { DismissButton } from "dismiss_button.slint";
 import { Typography } from "../theme/typography.slint";
 
+export global ImageZoomMath {
+    public pure function focal-offset(pan: length, from: float, to: float, focal: length, viewport: length) -> length {
+        let ratio = to / from;
+        pan * ratio + (focal - viewport / 2) * (1.0 - ratio)
+    }
+    public pure function clamp-offset(pan: length, fit: length, viewport: length, zoom: float) -> length {
+        let bound = max(0px, (fit * zoom - viewport) / 2);
+        min(max(pan, -bound), bound)
+    }
+    public pure function double-tap-scale(zoom: float) -> float { zoom > 1.0 ? 1.0 : 2.5 }
+}
+
+// The one action row both media viewers show, so image and video match.
+export component MediaActions inherits HorizontalLayout {
+    in property <length> action-size;
+    in property <bool> can-copy;
+    in property <string> position-label;
+    in property <bool> has-previous;
+    in property <bool> has-next;
+    callback download();
+    callback copy-image();
+    callback open-downloads();
+    callback previous();
+    callback next();
+    alignment: center;
+    spacing: Spacing.xxs;
+    IconAction { size: root.action-size; icon: Icons.download; label: "Download"; clicked => { root.download(); } }
+    if root.can-copy: IconAction { size: root.action-size; icon: Icons.copy; label: "Copy image"; clicked => { root.copy-image(); } }
+    IconAction { size: root.action-size; icon: Icons.folder; label: "Open downloads"; clicked => { root.open-downloads(); } }
+    if root.has-previous || root.has-next: IconAction { size: root.action-size; icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.previous(); } }
+    if root.has-previous || root.has-next: Text { text: root.position-label; color: Colors.text-muted; vertical-alignment: center; horizontal-stretch: 0; }
+    if root.has-previous || root.has-next: IconAction { size: root.action-size; icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.next(); } }
+}
+
 export component ImageViewer inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
+    private property <bool> compact-layout: root.width < 600px;
+    // Touch platform: the media actions take the 48px Android minimum.
+    in property <bool> touch: false;
+    property <length> action-size: (root.touch ? Spacing.touch-target-min : Spacing.button-height) * Appearance.text-grow;
     // Properties
     in property <bool> show: false;
     in property <image> source;
     in property <string> filename: "";
     in property <string> size-display: "";
+    in property <string> sender: "";
+    in property <string> datetime: "";
+    // The message's text; shown above the actions, up to four lines.
+    in property <string> caption: "";
+    property <float> zoom: 1.0;
+    property <length> pan-x: 0px;
+    property <length> pan-y: 0px;
+    property <float> pinch-start-zoom: 1.0;
+    // Double tap is counted here, not by `double-clicked`: Slint 1.17 sends Exit
+    // after every touch release, which resets its click counter, so touch never
+    // produced a double click.
+    property <duration> last-tap-time: -1s;
+    property <length> last-tap-x: 0px;
+    property <length> last-tap-y: 0px;
+    property <length> pinch-center-x: 0px;
+    property <length> pinch-center-y: 0px;
+    property <length> drag-x: 0px;
+    property <length> drag-y: 0px;
+    property <length> drag-start-y: 0px;
+    property <length> drag-start-x: 0px;
+    property <length> dismiss-offset: 0px;
+    property <bool> dragging-to-dismiss: false;
+    property <length> visual-dismiss-offset: root.dismiss-offset;
+    animate visual-dismiss-offset { duration: root.dragging-to-dismiss ? 0ms : Materials.motion-standard; easing: Materials.spring; }
+    property <float> dismiss-progress: min(1.0, max(0.0, root.visual-dismiss-offset / 220px));
+    // Origin bounds arrive in window coordinates; convert to the image viewport below.
+    in property <length> thumbnail-x: 0px;
+    in property <length> thumbnail-y: 0px;
+    in property <length> thumbnail-width: 0px;
+    in property <length> thumbnail-height: 0px;
+    property <float> arrival: 0.0;
+    property <bool> closing: false;
+    animate arrival { duration: root.closing ? Materials.motion-standard : Materials.motion-emphasized; easing: root.closing ? Materials.glide : Materials.spring; }
+    arrival-timer := Timer {
+        interval: 1ms;
+        running: root.show && !root.closing && root.arrival == 0.0;
+        triggered => { root.arrival = 1.0; }
+    }
+    exit-timer := Timer {
+        interval: Materials.motion-standard;
+        running: false;
+        triggered => { self.stop(); root.close(); }
+    }
+    function request-close() {
+        if (root.closing) { return; }
+        root.closing = true;
+        root.arrival = 0.0;
+        exit-timer.start();
+    }
+
+    function reset-zoom() {
+        root.zoom = 1.0;
+        root.pan-x = 0px;
+        root.pan-y = 0px;
+    }
+
+    function clamp-pan() {
+        root.pan-x = ImageZoomMath.clamp-offset(root.pan-x, viewer-area.fit-width, viewer-area.width, root.zoom);
+        root.pan-y = ImageZoomMath.clamp-offset(root.pan-y, viewer-area.fit-height, viewer-area.height, root.zoom);
+    }
+
+    function zoom-at(target: float, x: length, y: length) {
+        let next = min(max(target, 1.0), 5.0);
+        root.pan-x = ImageZoomMath.focal-offset(root.pan-x, root.zoom, next, x, viewer-area.width);
+        root.pan-y = ImageZoomMath.focal-offset(root.pan-y, root.zoom, next, y, viewer-area.height);
+        root.zoom = next;
+        root.clamp-pan();
+    }
+
+    function toggle-zoom(x: length, y: length) {
+        if (root.zoom > 1.0) { root.reset-zoom(); }
+        else { root.zoom-at(ImageZoomMath.double-tap-scale(root.zoom), x, y); }
+    }
+
+    function move-page(direction: int) {
+        if (root.closing || root.settling-page || (direction == 1 && !root.has-next) || (direction == -1 && !root.has-previous)) { return; }
+        root.reset-zoom();
+        root.page-direction = direction;
+        root.page-offset = direction == 1 ? -root.page-distance : root.page-distance;
+        root.settling-page = true;
+    }
+
+    in property <image> previous-thumbnail;
+    in property <image> next-thumbnail;
+    property <image> page-image: root.source;
+    property <length> page-offset: 0px;
+    property <bool> dragging-page: false;
+    property <bool> gesture-moved: false;
+    property <bool> settling-page: false;
+    property <int> page-direction: 0;
+    property <bool> chrome-visible: true;
+    property <length> page-distance: viewer-area.width + Spacing.md;
+    animate page-offset { duration: root.dragging-page ? 0ms : Materials.motion-standard; easing: Materials.glide; }
+    page-timer := Timer {
+        interval: Materials.motion-standard;
+        running: root.settling-page;
+        triggered => {
+            root.settling-page = false;
+            // The neighbour is now at x=0. Rebase the same pixels as the
+            // current image without animating a second trip back to zero.
+            root.dragging-page = true;
+            if (root.page-direction == 1) {
+                if (root.next-thumbnail.width > 0) { root.page-image = root.next-thumbnail; }
+                root.next();
+            } else if (root.page-direction == -1) {
+                if (root.previous-thumbnail.width > 0) { root.page-image = root.previous-thumbnail; }
+                root.previous();
+            }
+            root.page-direction = 0;
+            root.page-offset = 0px;
+            page-rebase.start();
+        }
+    }
+    page-rebase := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => { self.stop(); root.dragging-page = false; }
+    }
+    changed source => { root.page-image = root.source; root.reset-zoom(); }
+
+    changed show => { if (!root.show) { root.reset-zoom(); root.dismiss-offset = 0px; root.dragging-to-dismiss = false; root.arrival = 0.0; root.page-offset = 0px; root.chrome-visible = true; root.closing = false; } }
 
     // Callbacks
+    in property <string> position-label;
+    in property <bool> has-previous;
+    in property <bool> has-next;
+    callback previous();
+    callback next();
+    callback download();
+    callback copy-image();
+    callback open-downloads();
     callback close();
+
+    forward-focus: viewer-keys;
+    init => { viewer-keys.focus(); }
 
     // Only render when show is true
     visible: root.show;
-    background: Colors.background.with-alpha(0.9);
+    background: transparent;
+    viewer-keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if (event.text == Key.Escape || event.text == Key.Back) {
+                root.request-close();
+                return accept;
+            }
+            if (event.text == Key.LeftArrow) { root.move-page(-1); return accept; }
+            if (event.text == Key.RightArrow) { root.move-page(1); return accept; }
+            return reject;
+        }
+        key-released(event) => {
+            return event.text == Key.Escape || event.text == Key.Back ? accept : reject;
+        }
+    }
+    Rectangle {
+        width: 100%; height: 100%;
+        background: root.touch ? #000000 : Materials.scrim-media;
+        opacity: root.arrival * (1.0 - root.dismiss-progress * 0.82);
+    }
 
     // Close on backdrop click
     backdrop := TouchArea {
+        width: 100%; height: 100%;
         clicked => {
-            root.close();
+            root.request-close();
         }
     }
 
-    // Image container - centered
-    VerticalLayout {
-        alignment: center;
-        padding: Spacing.xl;
+    // The image owns the layout. Chrome is anchored to its fitted bounds,
+    // with an overlay fallback for portrait media that reaches the safe edge.
+    viewer-area := Rectangle {
+        x: root.touch ? 0px : root.compact-layout ? Spacing.sm : Spacing.xl;
+        y: root.touch ? 0px : root.compact-layout ? Spacing.sm : Spacing.xl;
+        width: root.width - 2 * self.x;
+        height: root.height - 2 * self.y;
+        clip: true;
+        property <length> fit-width: root.page-image.width <= 0 || root.page-image.height <= 0
+            ? self.width : min(self.width, self.height * root.page-image.width / root.page-image.height);
+        property <length> fit-height: root.page-image.width <= 0 || root.page-image.height <= 0
+            ? self.height : min(self.height, self.width * root.page-image.height / root.page-image.width);
 
-        // Header with filename and close button
-        HorizontalLayout {
-            height: 48px;
-            padding-left: Spacing.md;
-            padding-right: Spacing.md;
-            alignment: space-between;
+        if root.has-previous && root.previous-thumbnail.width > 0: Image {
+            source: root.previous-thumbnail;
+            image-fit: contain;
+            width: viewer-area.width;
+            height: viewer-area.height;
+            x: -root.page-distance + root.page-offset;
+        }
+        if root.has-next && root.next-thumbnail.width > 0: Image {
+            source: root.next-thumbnail;
+            image-fit: contain;
+            width: viewer-area.width;
+            height: viewer-area.height;
+            x: root.page-distance + root.page-offset;
+        }
+        main-image := Image {
+            source: root.page-image;
+            image-fit: contain;
+            property <length> final-width: viewer-area.fit-width * root.zoom;
+            property <length> final-height: viewer-area.fit-height * root.zoom;
+            width: root.thumbnail-width > 0px
+                ? root.thumbnail-width + (self.final-width - root.thumbnail-width) * root.arrival
+                : self.final-width * (0.78 + 0.22 * root.arrival);
+            height: root.thumbnail-height > 0px
+                ? root.thumbnail-height + (self.final-height - root.thumbnail-height) * root.arrival
+                : self.final-height * (0.78 + 0.22 * root.arrival);
+            x: (root.thumbnail-width > 0px
+                ? (root.thumbnail-x - viewer-area.absolute-position.x)
+                    + ((viewer-area.width - self.final-width) / 2 + root.pan-x
+                        - (root.thumbnail-x - viewer-area.absolute-position.x)) * root.arrival
+                : (viewer-area.width - self.width) / 2 + root.pan-x) + root.page-offset;
+            y: (root.thumbnail-height > 0px
+                ? (root.thumbnail-y - viewer-area.absolute-position.y)
+                    + ((viewer-area.height - self.final-height) / 2 + root.pan-y
+                        - (root.thumbnail-y - viewer-area.absolute-position.y)) * root.arrival
+                : (viewer-area.height - self.height) / 2 + root.pan-y) + root.visual-dismiss-offset;
+        }
 
-            // File info
-            VerticalLayout {
-                alignment: center;
-
-                Text {
-                    text: root.filename;
-                    color: Colors.text-primary;
-                    font-size: Typography.base;
-                    font-weight: Typography.medium;
-                }
-
-                if root.size-display != "": Text {
-                    text: root.size-display;
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                }
+        gesture := ScaleRotateGestureHandler {
+            started => {
+                root.gesture-moved = true;
+                root.pinch-start-zoom = root.zoom;
+                root.pinch-center-x = self.center.x;
+                root.pinch-center-y = self.center.y;
+                root.page-offset = 0px;
             }
-
-            // Close button
-            Rectangle {
-                width: 40px;
-                height: 40px;
-                border-radius: 20px;
-                background: close-touch.has-hover ? Colors.surface-hover : transparent;
-
-                Text {
-                    width: 100%;
-                    height: 100%;
-                    text: "\u{00D7}";  // X mark
-                    color: Colors.text-primary;
-                    font-size: Typography.xl;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-
-                close-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.close();
+            updated => {
+                root.pan-x += self.center.x - root.pinch-center-x;
+                root.pan-y += self.center.y - root.pinch-center-y;
+                root.pinch-center-x = self.center.x;
+                root.pinch-center-y = self.center.y;
+                root.zoom-at(root.pinch-start-zoom * self.scale, self.center.x, self.center.y);
+            }
+            drag := TouchArea {
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down) {
+                        root.drag-x = self.mouse-x;
+                        root.drag-y = self.mouse-y;
+                        root.drag-start-x = self.mouse-x;
+                        root.drag-start-y = self.mouse-y;
+                        root.dismiss-offset = 0px;
+                        root.dragging-to-dismiss = true;
+                        root.dragging-page = true;
+                        root.gesture-moved = false;
+                    }
+                    if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                        let should-close = event.kind == PointerEventKind.up && root.zoom == 1.0 && root.dismiss-offset > 100px;
+                        let direction = event.kind == PointerEventKind.up && root.page-offset < -viewer-area.width * 0.20 && root.has-next ? 1
+                            : event.kind == PointerEventKind.up && root.page-offset > viewer-area.width * 0.20 && root.has-previous ? -1 : 0;
+                        root.dragging-to-dismiss = false;
+                        root.dragging-page = false;
+                        root.dismiss-offset = 0px;
+                        if (should-close) { root.request-close(); }
+                        else if (direction != 0 && root.zoom == 1.0) {
+                            root.page-direction = direction;
+                            root.page-offset = direction == 1 ? -root.page-distance : root.page-distance;
+                            root.settling-page = true;
+                        } else { root.page-offset = 0px; }
                     }
                 }
+                moved => {
+                    if (self.pressed && (abs(self.mouse-x - root.drag-start-x) > 8px
+                        || abs(self.mouse-y - root.drag-start-y) > 8px)) {
+                        root.gesture-moved = true;
+                    }
+                    if (root.zoom > 1.0 && !gesture.active && self.pressed) {
+                        root.pan-x += self.mouse-x - root.drag-x;
+                        root.pan-y += self.mouse-y - root.drag-y;
+                        root.clamp-pan();
+                    } else if (root.zoom == 1.0 && self.pressed && !gesture.active) {
+                        let dx = self.mouse-x - root.drag-start-x;
+                        let dy = self.mouse-y - root.drag-start-y;
+                        if (dy > 0px && dy > abs(dx)) {
+                            root.dismiss-offset = dy * 0.78;
+                            root.page-offset = 0px;
+                        } else if (abs(dx) > abs(dy)) {
+                            root.dismiss-offset = 0px;
+                            // Ends resist the finger rather than presenting an empty page.
+                            root.page-offset = ((dx > 0px && !root.has-previous) || (dx < 0px && !root.has-next)) ? dx * 0.22 : dx;
+                        }
+                    }
+                    root.drag-x = self.mouse-x;
+                    root.drag-y = self.mouse-y;
+                }
+                clicked => {
+                    if (!root.gesture-moved) {
+                        if (self.mouse-x < main-image.x || self.mouse-x > main-image.x + main-image.width
+                            || self.mouse-y < main-image.y || self.mouse-y > main-image.y + main-image.height) {
+                            root.request-close();
+                        } else if (root.last-tap-time >= 0ms && animation-tick() - root.last-tap-time < 400ms
+                            && abs(self.mouse-x - root.last-tap-x) < 24px && abs(self.mouse-y - root.last-tap-y) < 24px) {
+                            // Second tap: undo the first tap's chrome toggle and zoom instead.
+                            root.last-tap-time = -1s;
+                            root.chrome-visible = !root.chrome-visible;
+                            root.toggle-zoom(self.mouse-x, self.mouse-y);
+                        } else {
+                            root.last-tap-time = animation-tick();
+                            root.last-tap-x = self.mouse-x;
+                            root.last-tap-y = self.mouse-y;
+                            root.chrome-visible = !root.chrome-visible;
+                        }
+                    }
+                }
+                scroll-event(event) => {
+                    root.zoom-at(root.zoom * (event.delta-y < 0px ? 1.12 : 1.0 / 1.12), self.mouse-x, self.mouse-y);
+                    return accept;
+                }
             }
         }
+    }
 
-        // Image display area
-        Rectangle {
-            vertical-stretch: 1;
+    property <float> page-progress: min(1.0, abs(root.page-offset) / root.page-distance);
+    property <image> target-image: root.page-offset < 0px ? root.next-thumbnail : root.previous-thumbnail;
+    property <length> target-fit-width: root.target-image.width <= 0 || root.target-image.height <= 0
+        ? viewer-area.fit-width : min(viewer-area.width, viewer-area.height * root.target-image.width / root.target-image.height);
+    property <length> target-fit-height: root.target-image.width <= 0 || root.target-image.height <= 0
+        ? viewer-area.fit-height : min(viewer-area.height, viewer-area.width * root.target-image.height / root.target-image.width);
+    // Desktop chrome follows the fitted image; touch chrome occupies the safe edges.
+    property <length> shown-width: min(viewer-area.width, viewer-area.fit-width * root.zoom);
+    property <length> shown-height: min(viewer-area.height, viewer-area.fit-height * root.zoom);
+    property <length> chrome-fit-width: root.shown-width + (root.target-fit-width - root.shown-width) * root.page-progress;
+    property <length> chrome-fit-height: root.shown-height + (root.target-fit-height - root.shown-height) * root.page-progress;
+    property <length> chrome-width: min(viewer-area.width, max(300px, root.chrome-fit-width));
+    property <length> chrome-x: viewer-area.x + (viewer-area.width - root.chrome-width) / 2;
+    property <length> chrome-top: (viewer-area.height - root.chrome-fit-height) / 2;
+    property <length> header-y: max(viewer-area.y, viewer-area.y + root.chrome-top - 48px * Appearance.text-grow - Spacing.sm);
+    property <length> footer-y: min(root.height - root.action-size - viewer-area.y,
+        viewer-area.y + root.chrome-top + root.chrome-fit-height + Spacing.sm);
+    property <float> chrome-alpha: root.chrome-visible ? 1.0 : 0.0;
+    animate chrome-alpha { duration: Materials.motion-quick; easing: Materials.settle; }
 
-            // Prevent clicks from closing
-            TouchArea {
-                // Consume click to prevent backdrop close
+    GlassSurface {
+        x: root.touch ? 0px : root.chrome-x;
+        y: root.touch ? 0px : root.header-y + root.visual-dismiss-offset - (1.0 - root.arrival) * 12px;
+        width: root.touch ? root.width : root.chrome-width;
+        height: root.touch ? 64px * Appearance.text-grow : 48px * Appearance.text-grow;
+        material-enabled: !root.touch;
+        background: root.touch ? #101010e8 : transparent;
+        border-radius: root.touch ? 0px : Spacing.radius-lg;
+        opacity: root.chrome-alpha * root.arrival;
+        visible: root.chrome-visible || self.opacity > 0;
+        TouchArea { width: 100%; height: 100%; }
+        HorizontalLayout {
+            width: parent.width;
+            height: parent.height;
+            padding-left: Spacing.md;
+            padding-right: Spacing.md;
+            spacing: Spacing.sm;
+            if root.touch: DismissButton { back: true; clicked => { root.request-close(); } }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                height: parent.height;
+                alignment: center;
+                if root.touch: Text { text: root.sender; overflow: elide; color: Colors.on-media; font-size: Typography.base; font-weight: Typography.medium; }
+                if root.touch: Text { text: root.datetime; overflow: elide; color: Colors.on-media-muted; font-size: Typography.xs; }
+                if !root.touch: Text { text: root.filename; overflow: elide; color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.medium; }
+                if !root.touch && root.size-display != "": Text { text: root.size-display; color: Colors.text-muted; font-size: Typography.xs; }
             }
-
-            Image {
-                source: root.source;
-                image-fit: contain;
-                width: 100%;
-                height: 100%;
-            }
+            if !root.touch: DismissButton { clicked => { root.request-close(); } }
         }
+    }
 
-        // Footer with hint
-        Rectangle {
-            height: 32px;
+    if root.caption != "": Rectangle {
+        x: root.touch ? 0px : root.chrome-x;
+        y: footer.y - self.height - (root.touch ? 0px : Spacing.xs);
+        width: root.touch ? root.width : root.chrome-width;
+        height: min(caption-text.preferred-height, 4 * Typography.base * 1.4) + 2 * Spacing.sm;
+        background: #101010e8;
+        border-radius: root.touch ? 0px : Spacing.radius-lg;
+        opacity: root.chrome-alpha * root.arrival;
+        visible: root.chrome-visible || self.opacity > 0;
+        TouchArea { width: 100%; height: 100%; }
+        caption-text := Text {
+            x: Spacing.md;
+            y: Spacing.sm;
+            width: parent.width - 2 * Spacing.md;
+            height: parent.height - 2 * Spacing.sm;
+            text: root.caption;
+            color: Colors.on-media;
+            font-size: Typography.base;
+            wrap: word-wrap;
+            overflow: elide;
+        }
+    }
 
+    footer := GlassSurface {
+        x: root.touch ? 0px : root.chrome-x;
+        y: root.touch ? root.height - self.height : root.footer-y + root.visual-dismiss-offset + (1.0 - root.arrival) * 12px;
+        width: root.touch ? root.width : root.chrome-width;
+        height: root.touch ? root.action-size + 28px * Appearance.text-grow : root.action-size;
+        material-enabled: !root.touch;
+        background: root.touch ? #101010e8 : transparent;
+        border-radius: root.touch ? 0px : Spacing.radius-lg;
+        visible: root.chrome-visible || self.opacity > 0;
+        opacity: root.chrome-alpha * root.arrival;
+        TouchArea { width: 100%; height: 100%; }
+        if root.touch: VerticalLayout {
+            width: parent.width;
+            height: parent.height;
+            alignment: center;
+            MediaActions {
+                width: parent.width;
+                height: root.action-size;
+                action-size: root.action-size;
+                can-copy: true;
+                position-label: root.position-label;
+                has-previous: root.has-previous;
+                has-next: root.has-next;
+                download => { root.download(); }
+                copy-image => { root.copy-image(); }
+                open-downloads => { root.open-downloads(); }
+                previous => { root.move-page(-1); }
+                next => { root.move-page(1); }
+            }
             Text {
-                text: "Click outside or press X to close";
-                color: Colors.text-muted;
+                width: parent.width;
+                height: 24px * Appearance.text-grow;
+                text: root.filename + (root.size-display != "" ? " · " + root.size-display : "");
+                color: Colors.on-media-muted;
                 font-size: Typography.xs;
+                overflow: elide;
                 horizontal-alignment: center;
-                vertical-alignment: center;
             }
+        }
+        if !root.touch: MediaActions {
+            action-size: root.action-size;
+            can-copy: true;
+            position-label: root.position-label;
+            has-previous: root.has-previous;
+            has-next: root.has-next;
+            download => { root.download(); }
+            copy-image => { root.copy-image(); }
+            open-downloads => { root.open-downloads(); }
+            previous => { root.move-page(-1); }
+            next => { root.move-page(1); }
         }
     }
 }
+

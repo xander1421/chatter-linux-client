@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use futures::StreamExt;
 use tokio::sync::broadcast;
 
 use crate::domain::ids::ChannelId;
@@ -55,6 +56,7 @@ pub(crate) fn group_failure_decision(
     )
 }
 use crate::mailbox::group::{GroupCoordinator, GroupFanout};
+use crate::mailbox::group::fanout::GroupPollOutcome;
 use crate::proto::chat_v1::SealedSenderMessage;
 use crate::services::attachment::AttachmentService;
 use crate::services::gateway::{MessageGateway, SealedSenderResult};
@@ -72,6 +74,7 @@ use crate::storage::{AttachmentRepository, ChannelRepository};
 /// This method handles:
 /// - Sealed sender encrypted messages (sender revealed via SSDecVer)
 /// - GroupMailboxAddress announcements (member mailbox exchange)
+/// Returns whether at least one secret mailbox fetch succeeded.
 pub async fn poll_group_mailboxes(
     group_fanout: &Arc<GroupFanout>,
     group_coordinator: &Arc<GroupCoordinator>,
@@ -82,13 +85,19 @@ pub async fn poll_group_mailboxes(
     message_repo: &Arc<MessageRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
     retry_budget: &ack_policy::RetryBudget,
-) {
-    match group_fanout.poll_all_group_mailboxes().await {
-        Ok(poll_results) => {
+    content_handoff: Option<&Arc<crate::inbox::content_handoff::ContentHandoff>>,
+) -> bool {
+    if let Some(handoff) = content_handoff {
+        handoff.replay(message_repo).await;
+    }
+    match group_fanout.poll_all_group_mailboxes() {
+        Ok((mailbox_count, polls)) => {
             let mut total_groups = 0u32;
             let mut total_messages = 0u32;
-
-            if poll_results.is_empty() {
+            let mut timed_out = 0usize;
+            let mut failed = 0usize;
+            let mut secret_healthy = false;
+            if mailbox_count == 0 {
                 // Only log occasionally to avoid spam
                 static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                 let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -97,30 +106,61 @@ pub async fn poll_group_mailboxes(
                 }
             }
 
-            for (group_id, poll_result) in poll_results {
+            tokio::pin!(polls);
+            while let Some(outcome) = polls.next().await {
+                let (group_id, poll_result) = match outcome {
+                    GroupPollOutcome::Received(group_id, secret, result) => {
+                        secret_healthy |= secret;
+                        (group_id, result)
+                    }
+                    GroupPollOutcome::Failed(group_id, error) => {
+                        failed += 1;
+                        tracing::warn!(%group_id, %error, "Failed to poll group mailbox");
+                        continue;
+                    }
+                    GroupPollOutcome::TimedOut(group_id) => {
+                        timed_out += 1;
+                        tracing::warn!(%group_id, "Group mailbox poll timed out after 95 seconds");
+                        continue;
+                    }
+                };
                 total_groups += 1;
                 let message_count = poll_result.messages.len();
-                tracing::info!(
-                    group_id = %group_id,
-                    message_count = message_count,
-                    "[GROUP_POLL] Polled group mailbox"
-                );
-
                 if message_count == 0 {
+                    tracing::debug!(group_id = %group_id, "[GROUP_POLL] Polled empty group mailbox");
                     continue;
                 }
+                tracing::info!(group_id = %group_id, message_count,
+                    "[GROUP_POLL] Polled group mailbox");
 
                 // Acking makes the SERVER DELETE the message, so ids go in here
                 // per-message, only once the policy has decided this one is
                 // safe to destroy. `poll_result.message_ids()` collected them
                 // all up front, which acked failures too.
                 let mut message_ids: Vec<String> = Vec::with_capacity(message_count);
+                let mut ack_bindings = Vec::new();
 
                 for msg in poll_result.messages {
                     total_messages += 1;
 
                     // Per NDSS '21: Group mailbox messages are sealed sender encrypted.
                     // The sender identity is revealed during SSDecVer (decryption).
+                    let binding = message_repo
+                        .reaction_receive_key(
+                            "anon_group",
+                            group_id,
+                            &msg.message_id,
+                            msg.server_timestamp,
+                        )
+                        .ok()
+                        .map(|key| {
+                            (
+                                key,
+                                crate::storage::receive_artifact::envelope_digest(
+                                    &msg.encrypted_envelope,
+                                ),
+                            )
+                        });
                     let decision = process_sealed_sender_group_message(
                         &msg.encrypted_envelope,
                         &msg.message_id,
@@ -134,21 +174,26 @@ pub async fn poll_group_mailboxes(
                         domain_tx,
                         msg.server_timestamp,
                         retry_budget,
+                        content_handoff,
                     )
                     .await;
 
                     if decision.should_ack() {
                         retry_budget.forget(&msg.message_id);
                         message_ids.push(msg.message_id.clone());
+                        if let Some(binding) = binding {
+                            ack_bindings.push(binding);
+                        }
                     }
                 }
 
                 // Acknowledge processed messages using mailbox_id (works for both server-managed and anon groups)
                 if !message_ids.is_empty() {
-                    if let Err(e) = group_fanout
+                    let ack_ids_for_log = message_ids.clone();
+                    let ack_result = group_fanout
                         .acknowledge_by_mailbox_id(&poll_result.mailbox_id, message_ids)
-                        .await
-                    {
+                        .await;
+                    if let Err(e) = &ack_result {
                         tracing::warn!(
                             group_id = %group_id,
                             mailbox_id = %poll_result.mailbox_id,
@@ -156,18 +201,51 @@ pub async fn poll_group_mailboxes(
                             "Failed to acknowledge group mailbox messages"
                         );
                     }
+                    if ack_result.is_ok() {
+                        for id in &ack_ids_for_log {
+                            if let Some((key, digest)) =
+                                ack_bindings.iter().find(|(key, _)| &key.envelope_id == id)
+                            {
+                                if let Ok(Some(kind)) =
+                                    message_repo.receive_artifact_kind(key, digest)
+                                {
+                                    tracing::info!(envelope_id = %id, kind = kind.as_str(), "secret mailbox ACK succeeded");
+                                } else {
+                                    tracing::info!(envelope_id = %id, "secret mailbox ACK succeeded");
+                                }
+                            } else {
+                                tracing::info!(envelope_id = %id, "secret mailbox ACK succeeded");
+                            }
+                        }
+                        for (key, digest) in ack_bindings {
+                            if crate::inbox::reaction_handoff::acknowledge(
+                                message_repo,
+                                &key,
+                                &digest,
+                                true,
+                            )
+                            .is_err()
+                            {
+                                tracing::warn!("Group ACK receipt awaits storage recovery");
+                            }
+                        }
+                    }
                 }
             }
 
+            tracing::debug!(mailbox_count, completed = total_groups, timed_out, failed,
+                "[GROUP_POLL] Group mailbox polling cycle completed");
             if total_messages > 0 || total_groups > 0 {
                 let _ = event_tx.send(InboxEvent::GroupMailboxPollCompleted {
                     total_groups,
                     total_messages,
                 });
             }
+            secret_healthy
         }
         Err(e) => {
             tracing::warn!(error = %e, "Group mailbox poll failed");
+            false
         }
     }
 }
@@ -191,12 +269,24 @@ async fn process_sealed_sender_group_message(
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
     envelope_ts_ns: u64,
     retry_budget: &ack_policy::RetryBudget,
+    content_handoff: Option<&Arc<crate::inbox::content_handoff::ContentHandoff>>,
 ) -> AckDecision {
+    crate::inbox::reaction_handoff::replay(message_repo, domain_tx);
+    let key =
+        match message_repo.reaction_receive_key("anon_group", group_id, message_id, envelope_ts_ns)
+        {
+            Ok(key) => key,
+            Err(_) => {
+                tracing::warn!("Group receive binding unavailable");
+                return AckDecision::Retain;
+            }
+        };
     // Create SealedSenderMessage from raw envelope
     let sealed_sender_msg = SealedSenderMessage {
         sealed_body: envelope.to_vec(),
         server_key_id: 0,
-        timestamp: 0,
+        // What a DecryptionErrorMessage for this envelope names.
+        timestamp: envelope_ts_ns,
     };
 
     // Process via message gateway - SSDecVer reveals sender identity.
@@ -205,10 +295,35 @@ async fn process_sealed_sender_group_message(
     // LOSE the message: everything the match below handles was handled, so the
     // envelope is safe to drain.
     let outcome = match message_gateway
-        .process_incoming_message(sealed_sender_msg)
+        .process_incoming_reaction_durable(sealed_sender_msg, &key)
         .await
     {
-        Ok(outcome) => outcome,
+        Ok((Some(artifact), _)) => {
+            if artifact.kind.is_content() {
+                let Some(handoff) = content_handoff else {
+                    tracing::warn!("Group data handoff unavailable; envelope retained");
+                    return AckDecision::Retain;
+                };
+                if let Err(error) = handoff.apply(message_repo, &artifact).await {
+                    tracing::warn!(envelope_id = %artifact.key.envelope_id, %error, "Group post awaits replay");
+                }
+                return AckDecision::Ack;
+            }
+            return match crate::inbox::reaction_handoff::apply(message_repo, &artifact, domain_tx) {
+                Ok(()) => AckDecision::Ack,
+                Err(_) => {
+                    tracing::warn!("Group reaction application failed; envelope retained");
+                    AckDecision::Retain
+                }
+            };
+        }
+        Ok((None, Some(outcome))) => outcome,
+        Ok((None, None)) => return AckDecision::Retain,
+        Err(crate::error::ServiceError::Storage(_))
+        | Err(crate::error::ServiceError::Crypto(crate::error::CryptoError::Storage(_))) => {
+            tracing::warn!("Atomic group receive storage failed; envelope retained");
+            return AckDecision::Retain;
+        }
         Err(e) => {
             tracing::error!(
                 group_id = %group_id,
@@ -232,6 +347,7 @@ async fn process_sealed_sender_group_message(
     };
 
     match outcome {
+        SealedSenderResult::ChannelReceiptTargetsSynced { .. } => {}
         SealedSenderResult::MessageStored => {
             tracing::debug!(
                 group_id = %group_id,
@@ -239,21 +355,30 @@ async fn process_sealed_sender_group_message(
                 "Group mailbox message stored (no UI event)"
             );
         }
-        // 1:1 self-heal results are dispatched on the DEVICE inbox path
-        // (polling/device.rs), which carries the event/domain senders. The
-        // anonymous group mailbox has neither — log and drop. (The sender-side
-        // archive in SessionHealed already happened inside the gateway.)
-        SealedSenderResult::DecryptionErrorNeedsReport { sender_id, .. } => {
+        // The pairwise session with this member is desynced. Same self-heal
+        // as the device inbox (polling/device.rs): the InboxEventProcessor
+        // ships the DecryptionErrorMessage back to the sending device.
+        SealedSenderResult::DecryptionErrorNeedsReport {
+            sender_id,
+            sender_device_id,
+            dem_serialized,
+            ..
+        } => {
             tracing::warn!(
                 group_id = %group_id,
                 message_id = %message_id,
                 sender_id = %sender_id,
-                "Session desync detected on group mailbox path — DEM report not dispatched here"
+                sender_device_id,
+                "Session desync on group mailbox path — dispatching DecryptionErrorMessage report to sender"
             );
-            // The ciphertext is dead and this path cannot even ship the
-            // DecryptionErrorMessage that would heal the session for next
-            // time, so this is the one arm below that is a LOSS rather than a
-            // handled outcome. Mark it in the group, then drain.
+            let _ = event_tx.send(InboxEvent::DmDecryptionErrorNeedsReport {
+                peer_id: sender_id,
+                peer_device_id: sender_device_id,
+                dem_serialized,
+            });
+            // The report heals the SESSION; this ciphertext is dead, so it
+            // is the one arm below that is a LOSS rather than a handled
+            // outcome. Mark it in the group, then drain.
             return ack_policy::record_marker_then_ack(
                 message_repo,
                 domain_tx,
@@ -266,7 +391,25 @@ async fn process_sealed_sender_group_message(
                 ack_policy::FailureMarker::DeliveryIssue,
             );
         }
-        SealedSenderResult::SessionHealed { peer_id, archived, .. } => {
+        // A member's retry request that arrived here rather than in the
+        // device inbox is answered all the same.
+        SealedSenderResult::ResendRequested {
+            peer_id,
+            peer_device_id,
+            timestamp_ms,
+        } => {
+            let _ = event_tx.send(InboxEvent::GroupResendRequested {
+                peer_id,
+                peer_device_id,
+                timestamp_ms,
+            });
+        }
+        SealedSenderResult::SessionHealed {
+            peer_id,
+            peer_device_id,
+            archived,
+            timestamp_ms,
+        } => {
             tracing::info!(
                 group_id = %group_id,
                 message_id = %message_id,
@@ -274,6 +417,18 @@ async fn process_sealed_sender_group_message(
                 archived,
                 "DecryptionErrorMessage processed via group mailbox path"
             );
+            if let Some(tx) = domain_tx {
+                let _ = tx.send(DomainEvent::DmSessionHealed {
+                    peer_user_id: peer_id,
+                    peer_device_id,
+                    archived,
+                });
+            }
+            let _ = event_tx.send(InboxEvent::DmResendRequested {
+                peer_id,
+                peer_device_id,
+                timestamp_ms,
+            });
         }
         // SKDMs ride the device inbox (sealed sender), not the group mailbox;
         // if one lands here the key is still installed by the gateway. There is
@@ -293,6 +448,7 @@ async fn process_sealed_sender_group_message(
             body,
             timestamp,
             attachments,
+            ..
         } => {
             // Increment unread count
             if let Ok(new_count) = channel_repo.increment_unread_count(&channel_id) {
@@ -306,12 +462,14 @@ async fn process_sealed_sender_group_message(
             // Create attachment records from pointers (service layer responsibility)
             if !attachments.is_empty() {
                 let attachment_service = AttachmentService::new_local(attachment_repo.clone());
-                let created_ids = attachment_service.create_from_pointers(&attachments);
-                tracing::debug!(
-                    channel_id = %channel_id,
-                    attachment_count = created_ids.len(),
-                    "Created attachment records from pointers"
-                );
+                match attachment_service.create_from_pointers(&attachments) {
+                    Ok(created_ids) => tracing::debug!(
+                        channel_id = %channel_id,
+                        attachment_count = created_ids.len(),
+                        "Created attachment records from pointers"
+                    ),
+                    Err(error) => tracing::warn!(%error, "Failed to store attachment records"),
+                }
             }
 
             // Emit UI event so message appears in chat
@@ -334,8 +492,7 @@ async fn process_sealed_sender_group_message(
         SealedSenderResult::KeyExchange {
             sender_id,
             conversation_id,
-            ephemeral_public_key: _,
-            timestamp: _,
+            ..
         } => {
             // KeyExchange in group context is unexpected but log it
             tracing::warn!(
@@ -349,18 +506,14 @@ async fn process_sealed_sender_group_message(
             requester_id,
             channel_id,
         } => {
-            // Note: With pairwise encryption, sender key requests are deprecated.
-            // Keep for backwards compatibility during transition.
-            tracing::info!(
+            // Sender-key requests travel sealed to the target's devices, never
+            // through a group mailbox.
+            tracing::warn!(
                 group_id = %group_id,
                 channel_id = %channel_id,
                 requester_id = %requester_id,
-                "Sender key request via group mailbox (legacy)"
+                "Unexpected sender key request in group mailbox"
             );
-            let _ = event_tx.send(InboxEvent::SenderKeyNeeded {
-                channel_id,
-                sender_id: requester_id,
-            });
         }
         SealedSenderResult::MailboxAnnouncement {
             sender_id,
@@ -381,12 +534,6 @@ async fn process_sealed_sender_group_message(
                     sender_id = %sender_id,
                     "Processed group mailbox announcement via sealed sender"
                 );
-                let _ = event_tx.send(InboxEvent::GroupMailboxAnnouncement {
-                    channel_id,
-                    member_id: sender_id,
-                    mailbox_pk: announcement.mailbox_pk.clone(),
-                    timestamp: announcement.timestamp,
-                });
             }
         }
         SealedSenderResult::AnonGroupMessageReceived {
@@ -394,51 +541,58 @@ async fn process_sealed_sender_group_message(
             group_id: anon_group_id,
             inner_content,
         } => {
+            if !crate::inbox::reaction_handoff::group_destination_matches(group_id, &anon_group_id)
+            {
+                tracing::warn!("Rejected group content claiming a different mailbox destination");
+                return AckDecision::Ack;
+            }
             tracing::info!(
                 sender_id = %sender_id,
                 group_id_hex = %hex::encode(&anon_group_id),
                 "Received anonymous group message, emitting UI event"
             );
 
-            // Emit UI event for the anonymous group message
-            let _ = event_tx.send(InboxEvent::AnonGroupMessage {
+            let event = InboxEvent::AnonGroupMessage {
                 peer_id: sender_id,
                 group_id: anon_group_id,
                 inner_content,
-            });
+            };
+            let _ = event_tx.send(event);
         }
         SealedSenderResult::AnonGroupJoinAckReceived {
             sender_id,
+            sender_device_id,
             group_id: anon_group_id,
             joiner_mailbox_pk,
             timestamp,
             profile_key,
             encrypted_display_name,
-            encrypted_avatar,
+            avatar,
         } => {
             tracing::info!(
-                sender_id = %sender_id,
-                group_id_hex = %hex::encode(&anon_group_id),
-                joiner_mailbox_pk_len = joiner_mailbox_pk.len(),
-                timestamp = timestamp,
                 has_profile = profile_key.is_some(),
-                "Received anonymous group join ack, emitting event to update member mailbox"
+                "Received secret group join ack, emitting event to update member mailbox"
             );
 
-            // Emit event to update the joiner's mailbox key and profile
+            // Emit event to update the joiner's mailbox key, device and profile
             let _ = event_tx.send(InboxEvent::AnonGroupJoinAck {
                 peer_id: sender_id,
+                sender_device_id,
                 group_id: anon_group_id,
                 joiner_mailbox_pk,
                 timestamp,
                 profile_key,
                 encrypted_display_name,
-                encrypted_avatar,
+                avatar,
             });
         }
         SealedSenderResult::ControlContent { .. } => {
             // ControlContent rides the device inbox, not the group mailbox.
             // Drop if it lands here — match must stay exhaustive.
+        }
+        SealedSenderResult::SecretChatBootstrap { .. } => {
+            // Requests and invites ride the device inbox, not the group
+            // mailbox. Drop if it lands here.
         }
         SealedSenderResult::ProfileKeyReceived { .. } => {
             // Friend-DM profile-key handshake rides the device inbox, not
@@ -464,4 +618,3 @@ async fn process_sealed_sender_group_message(
     // Every arm above is a handled outcome.
     AckDecision::Ack
 }
-

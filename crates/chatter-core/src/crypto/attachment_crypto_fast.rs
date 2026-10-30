@@ -4,16 +4,17 @@
 //! - Hardware-accelerated AES-256-CBC via OpenSSL (AES-NI)
 //! - Hardware-accelerated SHA-256 via OpenSSL (SHA-NI)
 //! - Hardware-accelerated HMAC-SHA256 via OpenSSL
-//! - Parallel SHA256 + HMAC + AES using rayon for large files
+//! - Parallel SHA256 + HMAC using rayon for large files
 //!
-//! ## Performance (AMD Ryzen 7 5800X)
+//! ## Ordering
 //!
-//! - AES-256-CBC: ~2.2 GB/s (AES-NI)
-//! - SHA-256: ~2.1 GB/s (SHA-NI)
-//! - Combined pipeline: ~1.2 GB/s (with rayon parallelization)
+//! Verify, then decrypt. AES used to run inside the same `rayon::join` as the
+//! hashes, which produced plaintext for ciphertext that had not been
+//! authenticated yet; CBC decrypts every untampered block correctly, so that
+//! buffer held real plaintext even when the tags then failed.
 
 use aes::cipher::block_padding::NoPadding;
-use aes::cipher::{BlockDecryptMut, KeyIvInit};
+use aes::cipher::{BlockModeDecrypt, KeyIvInit};
 use subtle::ConstantTimeEq;
 
 use crate::crypto::hmac_compat::Sha256Stream;
@@ -33,19 +34,7 @@ const MIN_CIPHERTEXT_LENGTH: usize = IV_LENGTH + 16 + HMAC_LENGTH;
 /// Below this, sequential is faster due to thread overhead
 const PARALLEL_THRESHOLD: usize = 1024 * 1024;
 
-/// Hardware-accelerated AES-256-CBC decryption using OpenSSL.
-///
-/// Uses AES-NI instructions on x86_64 for ~100x faster decryption.
-fn decrypt_aes_cbc_openssl(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
-    // Raw AES-256-CBC, no block padding (caller pads). Block-aligned → in place.
-    let mut buf = ciphertext.to_vec();
-    Aes256CbcDec::new_from_slices(key, iv)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES init: {e}")))?
-        .decrypt_padded_mut::<NoPadding>(&mut buf)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES decrypt: {e}")))?;
-    Ok(buf)
-}
-
+/// SHA-256 over the whole ciphertext and HMAC-SHA256 over `IV || encrypted`.
 #[inline]
 fn verify_sequential(
     ciphertext: &[u8],
@@ -53,13 +42,13 @@ fn verify_sequential(
     iv_end: usize,
     hmac_start: usize,
 ) -> ([u8; 32], [u8; 32]) {
-    let mut digest_hasher = Sha256Stream::new()
-        .expect("SHA256 init failed");
-    let mut hmac = crate::crypto::hmac_compat::hmac_init(mac_key)
-        .expect("HMAC init");
+    let mut digest_hasher = Sha256Stream::new().expect("SHA256 init failed");
+    let mut hmac = crate::crypto::hmac_compat::hmac_init(mac_key).expect("HMAC init");
 
     // Process IV
-    digest_hasher.update(&ciphertext[..iv_end]).expect("SHA256 update");
+    digest_hasher
+        .update(&ciphertext[..iv_end])
+        .expect("SHA256 update");
     hmac.update(&ciphertext[..iv_end]).expect("HMAC update");
 
     // Process encrypted data in cache-friendly chunks
@@ -70,7 +59,9 @@ fn verify_sequential(
     }
 
     // HMAC bytes only for digest
-    digest_hasher.update(&ciphertext[hmac_start..]).expect("SHA256 update");
+    digest_hasher
+        .update(&ciphertext[hmac_start..])
+        .expect("SHA256 update");
 
     let digest_result = digest_hasher.finish().expect("SHA256 finalize");
     let hmac_result = hmac.finalize().expect("HMAC finalize");
@@ -83,61 +74,36 @@ fn verify_sequential(
     (actual_digest, computed_hmac)
 }
 
-/// Sequential decryption for small files (avoids rayon overhead).
-fn decrypt_zero_copy_sequential(
-    ciphertext: Vec<u8>,
-    key: &[u8; KEY_SET_LENGTH],
-    expected_digest: &[u8; 32],
-    plaintext_size: usize,
-) -> Result<Vec<u8>, CryptoError> {
-    let aes_key = &key[..AES_KEY_LENGTH];
-    let mac_key = &key[AES_KEY_LENGTH..];
-
-    let iv_end = IV_LENGTH;
-    let hmac_start = ciphertext.len() - HMAC_LENGTH;
-
-    // Sequential verification
-    let (actual_digest, computed_hmac) = verify_sequential(&ciphertext, mac_key, iv_end, hmac_start);
-
-    // Verify digest
-    if actual_digest.ct_eq(expected_digest).unwrap_u8() != 1 {
-        return Err(CryptoError::AttachmentDigestMismatch);
-    }
-
-    // Verify HMAC
-    let expected_hmac = &ciphertext[hmac_start..];
-    if computed_hmac.ct_eq(expected_hmac).unwrap_u8() != 1 {
-        return Err(CryptoError::AttachmentMacMismatch);
-    }
-
-    // Decrypt
-    let iv = &ciphertext[..IV_LENGTH];
-    let encrypted = &ciphertext[iv_end..hmac_start];
-    let mut decrypted = decrypt_aes_cbc_openssl(aes_key, iv, encrypted)?;
-
-    if plaintext_size > decrypted.len() {
-        return Err(CryptoError::AttachmentDecryptionFailed(
-            "plaintext_size exceeds decrypted data".to_string(),
-        ));
-    }
-    decrypted.truncate(plaintext_size);
-
-    Ok(decrypted)
+/// Same tags as [`verify_sequential`], with SHA-256 and HMAC on separate
+/// rayon threads. AES is deliberately NOT part of this join: it runs only
+/// after both tags have been checked.
+fn verify_parallel(ciphertext: &[u8], mac_key: &[u8], hmac_start: usize) -> ([u8; 32], [u8; 32]) {
+    rayon::join(
+        || {
+            let mut hasher = Sha256Stream::new().expect("SHA256 init");
+            hasher.update(ciphertext).expect("SHA256"); // IV + encrypted + HMAC bytes
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&hasher.finish().expect("SHA256 finalize"));
+            arr
+        },
+        || {
+            let mut signer = crate::crypto::hmac_compat::hmac_init(mac_key).expect("HMAC init");
+            signer.update(&ciphertext[..hmac_start]).expect("HMAC"); // IV + encrypted
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&signer.finalize().expect("HMAC finalize"));
+            arr
+        },
+    )
 }
 
-/// Zero-copy decryption with full parallelization.
+/// Verify-then-decrypt, in place.
 ///
-/// Runs SHA-256, HMAC-SHA256, and AES decryption ALL in parallel using rayon.
-/// Verification happens at the end - if it fails, we discard the decrypted data.
-///
-/// # Performance
-///
-/// For a 100MB file on AMD Ryzen 7 5800X:
-/// - Sequential: ~150ms (SHA256 + HMAC + AES = 50+50+50ms)
-/// - Parallel: ~50ms (all three run simultaneously)
-/// - Throughput: ~2 GB/s (limited by memory bandwidth)
+/// Checks the SHA-256 digest and the HMAC (in parallel with each other above
+/// [`PARALLEL_THRESHOLD`]) and only then runs AES-256-CBC, overwriting the
+/// ciphertext buffer it was handed. No plaintext exists for a ciphertext that
+/// fails authentication, and no second buffer is allocated.
 pub fn decrypt_zero_copy(
-    ciphertext: Vec<u8>,
+    mut ciphertext: Vec<u8>,
     key: &[u8; KEY_SET_LENGTH],
     expected_digest: &[u8; 32],
     plaintext_size: usize,
@@ -159,55 +125,11 @@ pub fn decrypt_zero_copy(
     let data_len = hmac_start - iv_end;
 
     // For small files, use sequential processing (thread overhead not worth it)
-    if data_len < PARALLEL_THRESHOLD {
-        return decrypt_zero_copy_sequential(ciphertext, key, expected_digest, plaintext_size);
-    }
-
-    // Run ALL THREE operations in parallel: SHA-256, HMAC, and AES decryption
-    let iv = &ciphertext[..IV_LENGTH];
-    let encrypted = &ciphertext[iv_end..hmac_start];
-
-    // Create owned copies for parallel threads
-    let iv_owned: [u8; 16] = iv.try_into().unwrap();
-    let aes_key_owned: [u8; 32] = aes_key.try_into().unwrap();
-    let mac_key_owned: Vec<u8> = mac_key.to_vec();
-    let ciphertext_ref = &ciphertext;
-
-    let ((actual_digest, computed_hmac), decrypted) = rayon::join(
-        // Thread 1+2: SHA-256 and HMAC in parallel
-        || {
-            rayon::join(
-                || {
-                    // SHA256: hash IV + encrypted + HMAC bytes
-                    let mut hasher = Sha256Stream::new()
-                        .expect("SHA256 init");
-                    hasher.update(&ciphertext_ref[..hmac_start]).expect("SHA256"); // IV + encrypted
-                    hasher.update(&ciphertext_ref[hmac_start..]).expect("SHA256"); // HMAC bytes
-                    let result = hasher.finish().expect("SHA256 finalize");
-                    let mut arr = [0u8; 32];
-                    arr.copy_from_slice(&result);
-                    arr
-                },
-                || {
-                    // HMAC: hash IV + encrypted only
-                    let mut signer = crate::crypto::hmac_compat::hmac_init(&mac_key_owned)
-                        .expect("HMAC init");
-                    signer.update(&ciphertext_ref[..hmac_start]).expect("HMAC"); // IV + encrypted
-                    let result = signer.finalize().expect("HMAC finalize");
-                    let mut arr = [0u8; 32];
-                    arr.copy_from_slice(&result);
-                    arr
-                },
-            )
-        },
-        // Thread 3: AES decryption (runs concurrently with hashing)
-        || {
-            decrypt_aes_cbc_openssl(&aes_key_owned, &iv_owned, encrypted)
-        },
-    );
-
-    // Handle AES decryption result
-    let mut decrypted = decrypted?;
+    let (actual_digest, computed_hmac) = if data_len < PARALLEL_THRESHOLD {
+        verify_sequential(&ciphertext, mac_key, iv_end, hmac_start)
+    } else {
+        verify_parallel(&ciphertext, mac_key, hmac_start)
+    };
 
     // Verify digest (constant-time)
     if actual_digest.ct_eq(expected_digest).unwrap_u8() != 1 {
@@ -215,20 +137,29 @@ pub fn decrypt_zero_copy(
     }
 
     // Verify HMAC (constant-time)
-    let expected_hmac = &ciphertext[hmac_start..];
-    if computed_hmac.ct_eq(expected_hmac).unwrap_u8() != 1 {
+    if computed_hmac.ct_eq(&ciphertext[hmac_start..]).unwrap_u8() != 1 {
         return Err(CryptoError::AttachmentMacMismatch);
     }
 
-    // Truncate to original plaintext size
-    if plaintext_size > decrypted.len() {
+    if plaintext_size > data_len {
         return Err(CryptoError::AttachmentDecryptionFailed(
             "plaintext_size exceeds decrypted data".to_string(),
         ));
     }
-    decrypted.truncate(plaintext_size);
 
-    Ok(decrypted)
+    // Authenticated. Raw AES-256-CBC, no block padding (caller pads).
+    let mut iv = [0u8; IV_LENGTH];
+    iv.copy_from_slice(&ciphertext[..IV_LENGTH]);
+    Aes256CbcDec::new_from_slices(aes_key, &iv)
+        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES init: {e}")))?
+        .decrypt_padded::<NoPadding>(&mut ciphertext[iv_end..hmac_start])
+        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES decrypt: {e}")))?;
+
+    // Drop the padding and HMAC from the tail, then the IV from the head.
+    ciphertext.truncate(iv_end + plaintext_size);
+    ciphertext.drain(..iv_end);
+
+    Ok(ciphertext)
 }
 
 #[cfg(test)]
@@ -247,7 +178,8 @@ mod tests {
             &encrypted.key,
             &encrypted.digest,
             encrypted.plaintext_size,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(decrypted.as_slice(), plaintext);
     }
@@ -264,7 +196,8 @@ mod tests {
             &encrypted.key,
             &encrypted.digest,
             encrypted.plaintext_size,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(decrypted, plaintext);
     }
@@ -300,7 +233,8 @@ mod tests {
             &encrypted.key,
             &encrypted.digest,
             encrypted.plaintext_size,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(decrypted, plaintext);
     }
@@ -317,10 +251,53 @@ mod tests {
             &encrypted.key,
             &encrypted.digest,
             encrypted.plaintext_size,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(decrypted, plaintext);
     }
 
-    // TODO: Add test_verify_functions_match when parallel verification is implemented
+    /// Pins verify-then-decrypt on the parallel path. A body that is not
+    /// block-aligned makes AES fail, so whichever of AES and authentication
+    /// runs first decides the error: it must be the authentication one.
+    #[test]
+    fn parallel_path_authenticates_before_aes() {
+        let plaintext: Vec<u8> = (0..2 * 1024 * 1024).map(|i| (i % 256) as u8).collect();
+        let encrypted = AttachmentCrypto::encrypt(&plaintext).unwrap();
+
+        let mut tampered = encrypted.ciphertext.clone();
+        tampered.insert(IV_LENGTH, 0);
+        assert!(tampered.len() - IV_LENGTH - HMAC_LENGTH >= PARALLEL_THRESHOLD);
+
+        let result = decrypt_zero_copy(
+            tampered,
+            &encrypted.key,
+            &encrypted.digest,
+            encrypted.plaintext_size,
+        );
+        assert!(
+            matches!(result, Err(CryptoError::AttachmentDigestMismatch)),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn tampered_body_is_rejected_on_both_paths() {
+        for size in [100 * 1024, 2 * 1024 * 1024] {
+            let plaintext = vec![7u8; size];
+            let encrypted = AttachmentCrypto::encrypt(&plaintext).unwrap();
+            let mut tampered = encrypted.ciphertext.clone();
+            tampered[IV_LENGTH + 5] ^= 1;
+
+            // Digest recomputed over the tampered bytes so the digest check
+            // passes and the HMAC check is the one under test.
+            let digest = AttachmentCrypto::compute_digest(&tampered);
+            let result =
+                decrypt_zero_copy(tampered, &encrypted.key, &digest, encrypted.plaintext_size);
+            assert!(
+                matches!(result, Err(CryptoError::AttachmentMacMismatch)),
+                "{result:?}"
+            );
+        }
+    }
 }

@@ -7,20 +7,18 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use slint::{ComponentHandle, Timer, TimerMode};
+use slint::{ComponentHandle, Timer};
 #[cfg(not(target_os = "linux"))]
 use slint::{Model, ModelRc, VecModel};
 
-use chatter_core::calls::SharedVideoFrames;
 use crate::MainWindow;
+use chatter_core::calls::SharedVideoFrames;
+use chatter_core::client::ChatterClient;
 
 thread_local! {
-    /// Call duration timer (must be on UI thread).
-    static CALL_TIMER: RefCell<Option<Timer>> = const { RefCell::new(None) };
-    /// Call start timestamp (nanoseconds since epoch) for synchronized duration.
-    static CALL_START_NS: RefCell<Option<u64>> = const { RefCell::new(None) };
+    /// Cancels an in-flight core snapshot when this call ends or is replaced.
+    static CALL_TIMER_STOP: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
     /// Video frame keepalive timer (low-rate poll alongside the push subscriber).
     static VIDEO_FRAME_TIMER: RefCell<Option<Timer>> = const { RefCell::new(None) };
     /// Stop flag for the push-driven video frame subscriber task.
@@ -44,97 +42,128 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
-/// Get current time in nanoseconds since epoch.
-pub fn current_time_ns() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0)
+/// Start presentation ticks from core's connected-time snapshot.
+/// Must run on the UI thread. Signaling timestamps are key-exchange metadata,
+/// not the duration baseline, and delayed UI mounting must not restart the clock.
+pub fn start_call_timer(window: &MainWindow, ui_ctx: Arc<ChatterClient>) {
+    start_call_presentation_with(window, move || {
+        let ui_ctx = ui_ctx.clone();
+        async move { ui_ctx.call_room_snapshot().await }
+    });
 }
 
-/// Start the call duration timer.
-///
-/// # Arguments
-/// * `call_start_ns` - Optional call start timestamp in nanoseconds since epoch.
-///                     If None, uses current time (caller side).
-///                     If Some, uses provided timestamp (receiver side for sync).
-pub fn start_call_timer(window: &MainWindow, call_start_ns: Option<u64>) {
+#[cfg(test)]
+fn start_call_timer_with<F, Fut>(window: &MainWindow, snapshot: F)
+where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Option<chatter_core::domain::call::Call>> + Send,
+{
+    start_call_presentation_with(window, move || {
+        let read = snapshot();
+        async move {
+            read.await
+                .map(|call| chatter_core::client::calls::CallRoomSnapshot {
+                    call,
+                    remotes: None,
+                    verification: chatter_core::services::call_worker::CallEncryptionVerification::ExistingHandshake,
+                })
+        }
+    });
+}
+
+// Poll even when the first read has no active call or is still ringing: room
+// connection and UI mounting arrive through independent event streams.
+fn start_call_presentation_with<F, Fut>(window: &MainWindow, snapshot: F)
+where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Option<chatter_core::client::calls::CallRoomSnapshot>> + Send,
+{
+    stop_call_timer();
     let weak = window.as_weak();
-
-    // Use provided timestamp or current time
-    let start_timestamp = call_start_ns.unwrap_or_else(current_time_ns);
-
-    CALL_START_NS.with(|start| {
-        *start.borrow_mut() = Some(start_timestamp);
-    });
-
-    // Update UI immediately with current elapsed time
-    let now = current_time_ns();
-    let initial_elapsed = if now > start_timestamp {
-        ((now - start_timestamp) / 1_000_000_000) as i32
-    } else {
-        0
-    };
-
-    if let Some(w) = weak.upgrade() {
-        let mut data = w.get_active_call_data();
-        data.duration_seconds = initial_elapsed;
-        w.set_active_call_data(data);
-    }
-
-    CALL_TIMER.with(|timer_cell| {
-        // Stop existing timer if any
-        if let Some(ref timer) = *timer_cell.borrow() {
-            timer.stop();
-        }
-
-        // Create new timer that updates every second
-        let timer = Timer::default();
-        timer.start(
-            TimerMode::Repeated,
-            std::time::Duration::from_secs(1),
-            move || {
-                if let Some(w) = weak.upgrade() {
-                    CALL_START_NS.with(|start| {
-                        if let Some(start_timestamp) = *start.borrow() {
-                            let now = current_time_ns();
-                            let elapsed = if now > start_timestamp {
-                                ((now - start_timestamp) / 1_000_000_000) as i32
-                            } else {
-                                0
-                            };
-                            let mut data = w.get_active_call_data();
-                            data.duration_seconds = elapsed;
-                            w.set_active_call_data(data);
-                        }
-                    });
+    let presentation = window.global::<crate::CallView>().get_active_call_data();
+    let expected_call_id = presentation.call_id;
+    let expected_channel_id = presentation.channel_id;
+    let stop = Arc::new(AtomicBool::new(false));
+    CALL_TIMER_STOP.with(|cell| *cell.borrow_mut() = Some(stop.clone()));
+    crate::rt_handle().spawn(async move {
+        let mut ticks = tokio::time::interval(std::time::Duration::from_secs(1));
+        let mut snapshot_call_id = None;
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            ticks.tick().await;
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            let call = snapshot().await;
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            let Some(snapshot) = call else { continue };
+            let call = snapshot.call;
+            // Presentation IDs are domain call IDs.
+            if call.id.to_string() != expected_call_id.as_str()
+                || snapshot_call_id.is_some_and(|id| id != call.id)
+            {
+                continue;
+            }
+            snapshot_call_id = Some(call.id);
+            let weak = weak.clone();
+            let stop = stop.clone();
+            let expected_call_id = expected_call_id.clone();
+            let expected_channel_id = expected_channel_id.clone();
+            if slint::invoke_from_event_loop(move || {
+                if stop.load(Ordering::Relaxed) {
+                    return;
                 }
-            },
-        );
-        *timer_cell.borrow_mut() = Some(timer);
+                let Some(w) = weak.upgrade() else { return };
+                let mut data = w.global::<crate::CallView>().get_active_call_data();
+                if data.call_id != expected_call_id || data.channel_id != expected_channel_id {
+                    return;
+                }
+                if let Some(remotes) = snapshot.remotes {
+                    super::room_events::reconcile_roster(&mut data, remotes);
+                }
+                use chatter_core::services::call_worker::CallEncryptionVerification;
+                match snapshot.verification {
+                    CallEncryptionVerification::ExistingHandshake => {
+                        // DM SAS belongs to the existing handshake.
+                        data.verification_key_version = "".into();
+                    }
+                    CallEncryptionVerification::WaitingForKey => {
+                        data.verification_emoji_1 = "".into();
+                        data.verification_emoji_2 = "".into();
+                        data.verification_emoji_3 = "".into();
+                        data.verification_emoji_4 = "".into();
+                        data.verification_key_version = "".into();
+                    }
+                    CallEncryptionVerification::MediaKey { epoch, emojis } => {
+                        let [e1, e2, e3, e4] = emojis;
+                        data.verification_emoji_1 = e1.into();
+                        data.verification_emoji_2 = e2.into();
+                        data.verification_emoji_3 = e3.into();
+                        data.verification_emoji_4 = e4.into();
+                        data.verification_key_version = epoch.to_string().into();
+                    }
+                }
+                data.is_connected = call.connected_at.is_some();
+                data.duration_seconds = call.duration_seconds().min(i32::MAX as i64) as i32;
+                w.global::<crate::CallView>().set_active_call_data(data);
+            })
+            .is_err()
+            {
+                break;
+            }
+        }
     });
-
-    tracing::debug!(
-        start_timestamp_ns = start_timestamp,
-        initial_elapsed_secs = initial_elapsed,
-        "Call timer started"
-    );
 }
 
-/// Stop the call duration timer.
+/// Stop ticks and invalidate any outstanding core snapshot request.
 pub fn stop_call_timer() {
-    CALL_TIMER.with(|timer_cell| {
-        if let Some(ref timer) = *timer_cell.borrow() {
-            timer.stop();
+    CALL_TIMER_STOP.with(|cell| {
+        if let Some(stop) = cell.borrow_mut().take() {
+            stop.store(true, Ordering::Relaxed);
         }
-        *timer_cell.borrow_mut() = None;
     });
-
-    CALL_START_NS.with(|start| {
-        *start.borrow_mut() = None;
-    });
-
-    tracing::debug!("Call timer stopped");
 }
 
 /// Start the video frame UI subscriber.
@@ -171,11 +200,16 @@ pub fn stop_call_timer() {
 const VIDEO_PUSH_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(4);
 
 pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFrames) {
+    stop_video_frame_timer();
     let weak = window.as_weak();
     let first_frame_logged = Arc::new(AtomicBool::new(false));
     let first_for_cb = first_frame_logged.clone();
     let ui_busy = Arc::new(AtomicBool::new(false));
     let ui_busy_for_cb = ui_busy.clone();
+    // Frame id last handed to the UI per participant: an unchanged frame is
+    // neither copied nor re-wrapped (CPU path only).
+    #[cfg(not(target_os = "linux"))]
+    let mut pushed_ids = std::collections::HashMap::<String, u64>::new();
 
     let stop = shared_frames.subscribe(
         crate::rt_handle(),
@@ -187,22 +221,15 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                 return;
             }
 
-            // Stable tile order. The core snapshot iterates a HashMap, so its
-            // order is unspecified and can shuffle between frames; the Slint
-            // side indexes `remote-video-frames` positionally ([0], [1], …),
-            // so an unstable order would swap participants' tiles. Sort by
-            // participant id once, off-thread, to pin each participant to a
-            // row.
-            let mut ordered: Vec<&(String, _)> = snapshot.iter().collect();
-            ordered.sort_by(|a, b| a.0.cmp(&b.0));
-            let snapshot_len = ordered.len();
+            // Core supplies stable participant order for positional tiles.
+            let snapshot_len = snapshot.len();
 
             #[cfg(target_os = "linux")]
             {
                 // GL path: publish Arc-cloned frames into the gl_call inbox
                 // (no pixel copy), then request a redraw so the notifier
                 // drains the inbox and uploads on the GL thread.
-                let batch: Vec<(String, Arc<Vec<u8>>, u32, u32, u32, u64)> = ordered
+                let batch: Vec<(String, Arc<Vec<u8>>, u32, u32, u32, u64)> = snapshot
                     .iter()
                     .map(|(id, frame)| {
                         (
@@ -247,12 +274,21 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                 // build `slint::Image` here because it isn't `Send`. Keep the
                 // participant id with each buffer so the local self-preview
                 // frame can be split out on the UI thread.
-                let buffers: Vec<(String, slint::SharedPixelBuffer<slint::Rgba8Pixel>)> = ordered
-                    .iter()
-                    .map(|(id, frame)| ((*id).clone(), slint::SharedPixelBuffer::clone_from_slice(
-                        &frame.rgba_data, frame.width, frame.height,
-                    )))
-                    .collect();
+                // `None` = this participant's frame is unchanged since the
+                // last push; the UI keeps the image it already shows.
+                let buffers: Vec<(String, Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>)> = {
+                    let pushed = &mut pushed_ids;
+                    pushed.retain(|id, _| snapshot.iter().any(|(sid, _)| sid == id));
+                    snapshot
+                        .iter()
+                        .map(|(id, frame)| {
+                            let changed = pushed.insert(id.clone(), frame.frame_id) != Some(frame.frame_id);
+                            (id.clone(), changed.then(|| slint::SharedPixelBuffer::clone_from_slice(
+                                &frame.rgba_data, frame.width, frame.height,
+                            )))
+                        })
+                        .collect()
+                };
 
                 let weak_invoke = weak.clone();
                 let first_inner = first_for_cb.clone();
@@ -267,25 +303,38 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                         }
                         // The last tile is the local "You" participant; its
                         // frame draws into `local-video-frame`, not a remote row.
-                        let participants = w.get_active_call_data().participants;
-                        let local_id = participants
-                            .row_data(participants.row_count().saturating_sub(1))
-                            .map(|p| p.user_id.to_string());
-                        let mut local_img = slint::Image::default();
-                        let mut remote_images: Vec<slint::Image> = Vec::with_capacity(buffers.len());
-                        for (id, buf) in buffers {
-                            if Some(&id) == local_id.as_ref() {
-                                local_img = slint::Image::from_rgba8(buf);
-                            } else {
-                                remote_images.push(slint::Image::from_rgba8(buf));
-                            }
+                        // Remote slots MIRROR the tiles (same order, looked up by
+                        // user_id, blank where a peer has no frame) — as the GL
+                        // path does — so a video-off peer can't shift everyone
+                        // else's frame onto the wrong tile.
+                        let participants = w.global::<crate::CallView>().get_active_call_data().participants;
+                        let tile_ids: Vec<String> = participants.iter()
+                            .map(|p| p.user_id.to_string())
+                            .collect();
+                        let mut frames: std::collections::HashMap<String, _> = buffers.into_iter().collect();
+                        let (remote_ids, local_id) = tile_ids.split_at(tile_ids.len().saturating_sub(1));
+                        // Some(None): frame unchanged, keep the shown image.
+                        match local_id.first().and_then(|id| frames.remove(id)) {
+                            Some(Some(buffer)) => w.global::<crate::CallView>()
+                                .set_call_local_video_frame(slint::Image::from_rgba8(buffer)),
+                            Some(None) => {}
+                            None => w.global::<crate::CallView>()
+                                .set_call_local_video_frame(slint::Image::default()),
                         }
-                        w.set_call_local_video_frame(local_img);
+                        let remote_images: Vec<Option<slint::Image>> = remote_ids
+                            .iter()
+                            .map(|id| match frames.remove(id) {
+                                Some(Some(buffer)) => Some(slint::Image::from_rgba8(buffer)),
+                                Some(None) => None,
+                                None => Some(slint::Image::default()),
+                            })
+                            .collect();
                         apply_remote_video_frames(&w, remote_images);
                     }
                     ui_busy_for_invoke.store(false, Ordering::Relaxed);
                 });
                 if dispatch.is_err() {
+                    pushed_ids.clear();
                     ui_busy_for_cb.store(false, Ordering::Relaxed);
                 }
             }
@@ -299,7 +348,7 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
 /// Apply a new batch of remote video frames to the UI, reusing the persistent
 /// `VecModel` and updating rows in place.
 ///
-/// `images` is already in stable participant order (sorted off-thread). We
+/// `images` is one slot per remote tile, in tile order (blank = no frame). We
 /// `set_row_data` for existing rows, `push` for new participants and `remove`
 /// trailing rows when a participant leaves — never rebuilding the model. This
 /// keeps the `call_remote_video_frames` property bound to one `ModelRc` for
@@ -310,7 +359,7 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
 ///
 /// CPU path only; on Linux the GL texture path owns its own model.
 #[cfg(not(target_os = "linux"))]
-fn apply_remote_video_frames(w: &MainWindow, images: Vec<slint::Image>) {
+fn apply_remote_video_frames(w: &MainWindow, images: Vec<Option<slint::Image>>) {
     REMOTE_VIDEO_MODEL.with(|cell| {
         let mut slot = cell.borrow_mut();
         let model = match slot.as_ref() {
@@ -319,7 +368,8 @@ fn apply_remote_video_frames(w: &MainWindow, images: Vec<slint::Image>) {
                 // First batch of this call: create the stable model and bind
                 // it to the property exactly once.
                 let m = Rc::new(VecModel::<slint::Image>::default());
-                w.set_call_remote_video_frames(ModelRc::from(m.clone()));
+                w.global::<crate::CallView>()
+                    .set_call_remote_video_frames(ModelRc::from(m.clone()));
                 *slot = Some(m.clone());
                 m
             }
@@ -329,11 +379,13 @@ fn apply_remote_video_frames(w: &MainWindow, images: Vec<slint::Image>) {
         let old_len = model.row_count();
 
         // Overwrite / append.
+        // `None` keeps an existing row's image (its frame did not change).
         for (i, img) in images.into_iter().enumerate() {
-            if i < old_len {
-                model.set_row_data(i, img);
-            } else {
-                model.push(img);
+            match img {
+                Some(img) if i < old_len => model.set_row_data(i, img),
+                Some(img) => model.push(img),
+                None if i < old_len => {}
+                None => model.push(slint::Image::default()),
             }
         }
 
@@ -379,20 +431,419 @@ pub fn stop_video_frame_timer() {
     tracing::debug!("Video frame subscriber stopped");
 }
 
-/// Get the current call duration in seconds.
-///
-/// Returns 0 if no call is active or timer hasn't started.
-pub fn get_call_duration_secs() -> i64 {
-    CALL_START_NS.with(|start| {
-        if let Some(start_ns) = *start.borrow() {
-            let now = current_time_ns();
-            if now > start_ns {
-                ((now - start_ns) / 1_000_000_000) as i64
+#[cfg(test)]
+pub(super) mod tests {
+    use super::*;
+    use chatter_core::domain::call::{Call, CallType};
+    use chatter_core::domain::ids::{ChannelId, UserId};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
+        static RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
+            std::sync::LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
+        crate::init_rt_handle(RUNTIME.handle().clone());
+        &RUNTIME
+    }
+
+    pub(crate) fn timer_started() -> bool {
+        CALL_TIMER_STOP.with(|cell| cell.borrow().is_some())
+    }
+
+    fn pump(window: &MainWindow, millis: u64) {
+        Timer::single_shot(Duration::from_millis(millis), || {
+            slint::quit_event_loop().unwrap();
+        });
+        window.show().unwrap();
+        slint::run_event_loop().unwrap();
+    }
+
+    fn room_roster_restores_mount_overwrite_and_tracks_departures_and_rejoin() {
+        use chatter_core::client::calls::CallRoomSnapshot;
+        use chatter_core::ui::chat_data::CallParticipantInfo;
+        use slint::{Model, ModelRc, VecModel};
+        let window = MainWindow::new().unwrap();
+        let mut call = Call::new(ChannelId::new(), UserId::new(), CallType::Group);
+        call.start();
+        let roster = |ids: &[&str]| {
+            ids.iter()
+                .map(|id| {
+                    (
+                        id.to_string(),
+                        CallParticipantInfo {
+                            display_name: id.to_string(),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect()
+        };
+        // Room joins already happened; mounting the outgoing view overwrites
+        // them with its local-only placeholder. No more join events arrive.
+        let mut data = window.global::<crate::CallView>().get_active_call_data();
+        data.call_id = call.id.to_string().into();
+        data.channel_id = call.channel_id.to_string().into();
+        data.participants = ModelRc::new(VecModel::from(vec![crate::CallParticipantData {
+            user_id: "me".into(),
+            is_muted: true,
+            ..Default::default()
+        }]));
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(data.clone());
+        let source = Arc::new(Mutex::new(Some(CallRoomSnapshot {
+            call: call.clone(),
+            verification:
+                chatter_core::services::call_worker::CallEncryptionVerification::ExistingHandshake,
+            remotes: Some(roster(&["b", "a"])),
+        })));
+        let read = source.clone();
+        start_call_presentation_with(&window, move || {
+            let snapshot = read.lock().unwrap().clone();
+            async move { snapshot }
+        });
+        pump(&window, 100);
+        let mounted = window.global::<crate::CallView>().get_active_call_data();
+        assert_eq!(mounted.participant_count, 3);
+        assert_eq!(mounted.participants.row_data(0).unwrap().user_id, "a");
+        assert_eq!(mounted.participants.row_data(2).unwrap().user_id, "me");
+        assert!(mounted.participants.row_data(2).unwrap().is_muted);
+        // Retain remote controls/media through reconciliation, remove a
+        // departed peer and its screen tile without counting screens as peers.
+        let mut a = mounted.participants.row_data(0).unwrap();
+        a.is_video_enabled = true;
+        a.is_audio_muted_locally = true;
+        let mut with_media = mounted;
+        with_media.participants = ModelRc::new(VecModel::from(vec![
+            a,
+            crate::CallParticipantData {
+                user_id: "b".into(),
+                ..Default::default()
+            },
+            crate::CallParticipantData {
+                user_id: "b\u{1}screen".into(),
+                is_screen_sharing: true,
+                ..Default::default()
+            },
+            with_media.participants.row_data(2).unwrap(),
+        ]));
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(with_media);
+        source.lock().unwrap().as_mut().unwrap().remotes = Some(roster(&["a"]));
+        pump(&window, 1100);
+        let departed = window.global::<crate::CallView>().get_active_call_data();
+        assert_eq!(departed.participant_count, 2);
+        assert_eq!(departed.participants.row_count(), 2);
+        assert!(departed.participants.row_data(0).unwrap().is_video_enabled);
+        assert!(
+            departed
+                .participants
+                .row_data(0)
+                .unwrap()
+                .is_audio_muted_locally
+        );
+        // Re-mount/rejoin repeats the overwrite; the immediate read repairs it.
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(data);
+        let read = source.clone();
+        start_call_presentation_with(&window, move || {
+            let snapshot = read.lock().unwrap().clone();
+            async move { snapshot }
+        });
+        pump(&window, 100);
+        assert_eq!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .participant_count,
+            2
+        );
+        let mut other = call.clone();
+        other.id = chatter_core::domain::ids::CallId::new();
+        *source.lock().unwrap() = Some(CallRoomSnapshot {
+            call: other,
+            verification:
+                chatter_core::services::call_worker::CallEncryptionVerification::ExistingHandshake,
+            remotes: Some(roster(&["wrong-room"])),
+        });
+        pump(&window, 1100);
+        assert_eq!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .participants
+                .row_data(0)
+                .unwrap()
+                .user_id,
+            "a"
+        );
+        stop_call_timer();
+    }
+
+    fn verification_tracks_snapshot_with_identity_fences() {
+        use chatter_core::client::calls::CallRoomSnapshot;
+        use chatter_core::services::call_worker::CallEncryptionVerification as Verification;
+        let window = MainWindow::new().unwrap();
+        let call = Call::new(ChannelId::new(), UserId::new(), CallType::Group);
+        let mut data = window.global::<crate::CallView>().get_active_call_data();
+        data.call_id = call.id.to_string().into();
+        data.channel_id = call.channel_id.to_string().into();
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(data);
+        let code = |epoch| Verification::MediaKey {
+            epoch,
+            emojis: if epoch == u32::MAX {
+                ["🌟", "🐶", "🚲", "🍎"].map(String::from)
             } else {
-                0
+                ["🐱", "🌳", "🚀", "🍋"].map(String::from)
+            },
+        };
+        let source = Arc::new(Mutex::new(Some(CallRoomSnapshot {
+            call: call.clone(),
+            remotes: None,
+            verification: code(7),
+        })));
+        let read = source.clone();
+        start_call_presentation_with(&window, move || {
+            let snapshot = read.lock().unwrap().clone();
+            async move { snapshot }
+        });
+        let assert_code = |version: &str, expected: [&str; 4]| {
+            let data = window.global::<crate::CallView>().get_active_call_data();
+            assert_eq!(data.verification_key_version.as_str(), version);
+            assert_eq!(
+                [
+                    data.verification_emoji_1.as_str(),
+                    data.verification_emoji_2.as_str(),
+                    data.verification_emoji_3.as_str(),
+                    data.verification_emoji_4.as_str(),
+                ],
+                expected
+            );
+        };
+        pump(&window, 100);
+        assert_code("7", ["🐱", "🌳", "🚀", "🍋"]);
+        source.lock().unwrap().as_mut().unwrap().verification = code(u32::MAX);
+        pump(&window, 1100);
+        assert_code("4294967295", ["🌟", "🐶", "🚲", "🍎"]);
+        source.lock().unwrap().as_mut().unwrap().verification = Verification::WaitingForKey;
+        pump(&window, 1100);
+        assert_code("", ["", "", "", ""]);
+        // A fresh key must replace every slot after pending, in the wire order.
+        source.lock().unwrap().as_mut().unwrap().verification = code(9);
+        pump(&window, 1100);
+        assert_code("9", ["🐱", "🌳", "🚀", "🍋"]);
+        // Handshake snapshots preserve the existing SAS.
+        source.lock().unwrap().as_mut().unwrap().verification = Verification::ExistingHandshake;
+        let read = source.clone();
+        start_call_presentation_with(&window, move || {
+            let snapshot = read.lock().unwrap().clone();
+            async move { snapshot }
+        });
+        pump(&window, 100);
+        assert_code("", ["🐱", "🌳", "🚀", "🍋"]);
+        // A pending result from another core call cannot erase this code.
+        source.lock().unwrap().as_mut().unwrap().call.id = chatter_core::domain::ids::CallId::new();
+        source.lock().unwrap().as_mut().unwrap().verification = Verification::WaitingForKey;
+        pump(&window, 1100);
+        assert_code("", ["🐱", "🌳", "🚀", "🍋"]);
+        stop_call_timer();
+        // Hold a real production snapshot in flight, replace UI, then release it.
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let receive = Arc::new(Mutex::new(Some(receive)));
+        start_call_presentation_with(&window, move || {
+            let receive = receive.lock().unwrap().take();
+            async move {
+                match receive {
+                    Some(receive) => receive.await.unwrap(),
+                    None => None,
+                }
             }
-        } else {
+        });
+        pump(&window, 100);
+        let mut replacement = window.global::<crate::CallView>().get_active_call_data();
+        replacement.call_id = "replacement".into();
+        replacement.verification_key_version = "123".into();
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(replacement);
+        send.send(Some(CallRoomSnapshot {
+            call,
+            remotes: None,
+            verification: Verification::WaitingForKey,
+        }))
+        .unwrap();
+        pump(&window, 100);
+        assert_code("123", ["🐱", "🌳", "🚀", "🍋"]);
+        stop_call_timer();
+    }
+
+    #[test]
+    fn call_presentation_restores_roster_and_refreshes_timer_with_identity_and_cancellation_guards()
+    {
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let _runtime = runtime();
+        verification_tracks_snapshot_with_identity_fences();
+        room_roster_restores_mount_overwrite_and_tracks_departures_and_rejoin();
+        let window = MainWindow::new().unwrap();
+        let mut call = Call::new(ChannelId::new(), UserId::new(), CallType::Group);
+        call.ring();
+        let mut data = window.global::<crate::CallView>().get_active_call_data();
+        data.call_id = call.id.to_string().into();
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(data);
+        let snapshot = Arc::new(Mutex::new(None::<Call>));
+        let source = snapshot.clone();
+        start_call_timer_with(&window, move || {
+            let call = source.lock().unwrap().clone();
+            async move { call }
+        });
+        pump(&window, 100);
+        assert!(
+            !window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .is_connected
+        );
+        *snapshot.lock().unwrap() = Some(call.clone());
+        pump(&window, 1100);
+        assert_eq!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds,
             0
-        }
-    })
+        );
+        assert!(
+            !window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .is_connected
+        );
+        call.start();
+        call.connected_at = Some(chrono::Utc::now() - chrono::Duration::seconds(40));
+        *snapshot.lock().unwrap() = Some(call.clone());
+        pump(&window, 1100);
+        let data = window.global::<crate::CallView>().get_active_call_data();
+        assert!(data.is_connected);
+        assert!(
+            data.duration_seconds >= 40,
+            "late connection must replace the ringing snapshot"
+        );
+        let before = data.duration_seconds;
+        pump(&window, 1100);
+        assert!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds
+                > before
+        );
+
+        // Core may replace its call before the corresponding UI mount.
+        let mut other = Call::new(ChannelId::new(), UserId::new(), CallType::Group);
+        other.start();
+        other.connected_at = Some(chrono::Utc::now() - chrono::Duration::seconds(500));
+        *snapshot.lock().unwrap() = Some(other);
+        let before = window
+            .global::<crate::CallView>()
+            .get_active_call_data()
+            .duration_seconds;
+        pump(&window, 1100);
+        assert_eq!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds,
+            before
+        );
+        *snapshot.lock().unwrap() = Some(call.clone());
+
+        // A queued result for this call cannot paint a replacement UI.
+        let mut replacement = window.global::<crate::CallView>().get_active_call_data();
+        replacement.call_id = "replacement".into();
+        replacement.duration_seconds = 0;
+        replacement.is_connected = false;
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(replacement);
+        pump(&window, 1100);
+        assert_eq!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds,
+            0
+        );
+        assert!(
+            !window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .is_connected
+        );
+        stop_call_timer();
+
+        // The UI back on this call adopts its snapshot.
+        let mut restored = window.global::<crate::CallView>().get_active_call_data();
+        restored.call_id = call.id.to_string().into();
+        restored.channel_id = call.channel_id.to_string().into();
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(restored);
+        let source = snapshot.clone();
+        start_call_timer_with(&window, move || {
+            let call = source.lock().unwrap().clone();
+            async move { call }
+        });
+        pump(&window, 100);
+        assert!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .is_connected
+        );
+        assert!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds
+                >= 40
+        );
+        stop_call_timer();
+        let mut data = window.global::<crate::CallView>().get_active_call_data();
+        data.duration_seconds = 0;
+        data.is_connected = false;
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(data);
+
+        // Cancel while the core read is in flight, then let that read finish.
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let receive = Arc::new(Mutex::new(Some(receive)));
+        start_call_timer_with(&window, move || {
+            let receive = receive.lock().unwrap().take().unwrap();
+            async move { receive.await.unwrap() }
+        });
+        pump(&window, 100);
+        stop_call_timer();
+        send.send(Some(call)).unwrap();
+        pump(&window, 100);
+        assert_eq!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds,
+            0
+        );
+        assert!(
+            !window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .is_connected
+        );
+    }
 }

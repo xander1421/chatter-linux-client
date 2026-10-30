@@ -2,12 +2,12 @@
 //!
 //! Provides fluent builders for creating test fixtures.
 
-mod user;
-mod message;
 mod channel;
 mod crypto;
+mod message;
+mod user;
 
-pub use user::UserBuilder;
-pub use message::MessageBuilder;
 pub use channel::ChannelBuilder;
-pub use crypto::{CryptoBuilder, SessionBuilder, AttachmentBuilder};
+pub use crypto::{AttachmentBuilder, CryptoBuilder, SessionBuilder};
+pub use message::MessageBuilder;
+pub use user::UserBuilder;

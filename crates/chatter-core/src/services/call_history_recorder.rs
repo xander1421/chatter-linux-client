@@ -1,42 +1,46 @@
 //! Bridge: call orchestrator events → the local `call_history` table.
 //!
 //! The orchestrator is the one place that sees *every* call, on every
-//! transport, from ring to hangup — DM, anon DM, anon group and group
-//! channel all funnel through the same `CallOrchestratorEvent` stream. So
+//! transport, from ring to hangup — DM and group channel calls both
+//! funnel through the same `CallOrchestratorEvent` stream. So
 //! that stream, not the per-transport signalling paths, is where history is
 //! written: one recorder covers every conversation type that can host a
 //! call, and a new transport gets history for free the moment it emits
 //! orchestrator events.
 //!
-//! Outgoing calls are the one thing the orchestrator does not announce
-//! (nothing calls `orch_register_outgoing`), so `ChatterClient::start_call`
-//! writes the opening row for those itself. Both sides converge on the same
-//! `id` — the orchestrator's `CallHandle` string — so the terminal events
-//! below finish either row.
-//
-// ponytail: a *DM* call that ends before it connects (peer declines, or we
-// cancel while it rings) emits no terminal event — the worker derives its
-// handle from `active_call`, which is still empty at that point. The row is
-// written and readable, but it stays open and reads "No answer" rather than
-// "Declined"/"Cancelled". (Anon calls are fine: they go through
-// `orch_mark_ended`, which now forwards untracked terminals.) The fix is to
-// register outgoing calls with the orchestrator — `orch_register_outgoing`
-// exists and has no callers — which also unsticks the "Calling…" view on the
-// same path; do that when the outgoing-call lifecycle is next touched.
+//! Outgoing calls are not all announced — only DM calls are
+//! registered while they ring (`orch_register_outgoing`, `OutgoingStarted`),
+//! and that event carries no conversation — so `ChatterClient::start_call`
+//! writes the opening row for every outgoing call itself. Both sides converge
+//! on the same `id` — the orchestrator's `CallHandle` string — so the terminal
+//! events below finish either row. A DM call cancelled while it
+//! rings, or rung out (`NoAnswer`), ends with an `ActiveEnded` like any other.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::broadcast::error::RecvError;
-
 use crate::domain::call::{CallDirection, CallHistoryEntry, CallResult};
+use crate::domain::ids::{ChannelId, MessageId, UserId};
+use crate::domain::message::{
+    CallMessage, CallMessageType, ConversationType, Message, MessageContent,
+};
+use crate::events::DomainEvent;
 use crate::services::call_worker::{
     CallEndReason, CallHandle, CallOrchestratorEvent, CallWorkerHandle,
 };
-use crate::storage::repositories::{CallHistoryRepository, UnifiedConversationRepository};
+use crate::services::message::MessageService;
 use crate::storage::Database;
+use crate::storage::repositories::{CallHistoryRepository, UnifiedConversationRepository};
 
-/// Spawn the call-history recorder. Exits when the orchestrator's broadcast
+/// When this process began recording calls. An open history row (no
+/// `ended_at`) that started earlier was left by an earlier run — killed
+/// mid-call — and nothing will ever close it; one that started later may be a
+/// live call. Calls-screen deletes keep the latter (`CallHistoryRepository::
+/// delete_ids`). Unset (no recorder) leaves every open row protected.
+pub(crate) static LIVE_SINCE: std::sync::OnceLock<chrono::DateTime<chrono::Utc>> =
+    std::sync::OnceLock::new();
+
+/// Spawn the call-history recorder. Exits when the orchestrator's event
 /// channel closes.
 ///
 /// Its own thread, not a tokio task, for the same reason `RouterHandle` and
@@ -45,8 +49,21 @@ use crate::storage::Database;
 /// A tokio task would have to hand each individual write to `spawn_blocking`
 /// — the same blocking, with an await point and a closure around every
 /// statement. `blocking_recv` is exactly the blocking take this loop wants.
-pub fn spawn_call_history_recorder(call: &CallWorkerHandle, database: Arc<Database>) {
-    let mut rx = call.subscribe_call_events();
+///
+/// It also files the Call bubble a finished 1:1 call leaves in the DM
+/// (`file_dm_bubble`): the terminal events here are the one point
+/// every end of such a call passes — our hangup, the peer's, the peer leaving
+/// the room, a decline, a miss — on both sides.
+pub fn spawn_call_history_recorder(
+    call: &CallWorkerHandle,
+    database: Arc<Database>,
+    messages: Arc<MessageService>,
+) {
+    LIVE_SINCE.get_or_init(chrono::Utc::now);
+    // Lossless, not the lagging broadcast: a dropped `ActiveConnected` would
+    // file a talked call as "No answer", a dropped terminal event leave its
+    // row open for good.
+    let mut rx = call.subscribe_call_events_lossless();
     let history = CallHistoryRepository::new(database.clone());
     let conversations = UnifiedConversationRepository::new(database);
 
@@ -59,15 +76,52 @@ pub fn spawn_call_history_recorder(call: &CallWorkerHandle, database: Arc<Databa
             let mut connected: HashMap<CallHandle, chrono::DateTime<chrono::Utc>> = HashMap::new();
 
             loop {
-                match rx.blocking_recv() {
-                    Ok(CallOrchestratorEvent::IncomingPresented {
+                let Some(event) = rx.blocking_recv() else {
+                    tracing::debug!("call history recorder: channel closed, exiting");
+                    break;
+                };
+                // A too-late offer is over as it arrives: no terminal event
+                // ever follows it, so its row is written closed and its
+                // bubble is filed with it.
+                let missed_on_arrival =
+                    matches!(event, CallOrchestratorEvent::IncomingMissed { .. });
+                match event {
+                    // A too-late offer never rings but writes the same row:
+                    // missed, which is what a presented call starts as too —
+                    // except that the expired one is stamped `ended_at` here,
+                    // where a presented one stays open until it is withdrawn.
+                    CallOrchestratorEvent::IncomingPresented {
                         call,
                         kind,
                         peer_name,
                         is_video,
                         conversation_id,
                         ..
-                    }) => {
+                    }
+                    | CallOrchestratorEvent::IncomingMissed {
+                        call,
+                        kind,
+                        peer_name,
+                        is_video,
+                        conversation_id,
+                    } => {
+                        // A ring for a call this device is already in (a
+                        // group ring presented while we joined the channel's
+                        // call) would replace our live row with a missed one.
+                        if connected.contains_key(&call) {
+                            tracing::debug!(call = %call.as_str(), "call history: ring for a connected call ignored");
+                            continue;
+                        }
+                        // A replayed stale offer for a call this device already
+                        // has a row for (rung, answered, declined, or an earlier
+                        // expiry): `insert_entry` replaces on conflict, which
+                        // would reopen or overwrite a final fact. Keep the row.
+                        if missed_on_arrival {
+                            if let Ok(Some(_)) = history.get(call.as_str()) {
+                                tracing::debug!(call = %call.as_str(), "call history: expired offer already recorded");
+                                continue;
+                            }
+                        }
                         let conversation_type = kind.conversation_type();
                         // The conversation's own name beats the caller's
                         // self-reported one — it is what the sidebar shows,
@@ -80,13 +134,14 @@ pub fn spawn_call_history_recorder(call: &CallWorkerHandle, database: Arc<Databa
                             .map(|c| c.name)
                             .filter(|n| !n.is_empty())
                             .unwrap_or(peer_name);
+                        let now = chrono::Utc::now();
                         let entry = CallHistoryEntry {
                             id: call.as_str().to_string(),
                             conversation_id,
                             conversation_type,
                             peer_name: name,
-                            started_at: chrono::Utc::now(),
-                            ended_at: None,
+                            started_at: now,
+                            ended_at: missed_on_arrival.then_some(now),
                             direction: CallDirection::Incoming,
                             // Pessimistic on purpose: a ringing call that is
                             // never resolved (app killed mid-ring) is a
@@ -98,30 +153,63 @@ pub fn spawn_call_history_recorder(call: &CallWorkerHandle, database: Arc<Databa
                         if let Err(e) = history.insert_entry(&entry) {
                             tracing::warn!(error = %e, "call history: incoming insert failed");
                         }
+                        if missed_on_arrival {
+                            announce_closed(&messages);
+                            file_dm_bubble(&history, &messages, &call);
+                        }
                     }
 
-                    Ok(CallOrchestratorEvent::ActiveConnected { call, .. })
-                    | Ok(CallOrchestratorEvent::AnonCallConnected { call, .. }) => {
+                    CallOrchestratorEvent::ActiveConnected { call, .. } => {
                         connected.insert(call, chrono::Utc::now());
                     }
 
-                    Ok(CallOrchestratorEvent::ActiveEnded { call, reason })
-                    | Ok(CallOrchestratorEvent::IncomingWithdrawn { call, reason }) => {
-                        finish(&history, &call, connected.remove(&call), &reason);
+                    CallOrchestratorEvent::IncomingWithdrawn { call, .. }
+                        if !withdrawal_closes_row(&history, &connected, &call) =>
+                    {
+                        tracing::debug!(call = %call.as_str(), "call history: withdrawn ring left the row alone");
                     }
 
-                    Ok(_) => {}
-                    Err(RecvError::Lagged(n)) => {
-                        tracing::warn!(dropped_count = n, "call history recorder lagged");
+                    CallOrchestratorEvent::ActiveEnded { call, reason }
+                    | CallOrchestratorEvent::IncomingWithdrawn { call, reason } => {
+                        finish(&history, &call, connected.remove(&call), &reason);
+                        announce_closed(&messages);
+                        // Answered on another of our devices: that device has
+                        // the call; here it is only a Calls-screen row.
+                        if reason != CallEndReason::AnsweredElsewhere {
+                            file_dm_bubble(&history, &messages, &call);
+                        }
                     }
-                    Err(RecvError::Closed) => {
-                        tracing::debug!("call history recorder: channel closed, exiting");
-                        break;
-                    }
+
+                    _ => {}
                 }
             }
         })
         .expect("Failed to spawn call history thread");
+}
+
+/// Whether a withdrawn ring is the end of `call`'s history row. It is only
+/// when the row is still the open incoming row that ring wrote. A ring for a
+/// call this device is connected to, a ring that outlived our hangup (its
+/// expiry fires after `ActiveEnded` closed the row), or a ring for a call we
+/// placed or joined ourselves says nothing about how that call went — and
+/// finishing it there took the connected timestamp with it, so the real
+/// hangup later filed a talked-through call as "No answer".
+fn withdrawal_closes_row(
+    history: &CallHistoryRepository,
+    connected: &HashMap<CallHandle, chrono::DateTime<chrono::Utc>>,
+    call: &CallHandle,
+) -> bool {
+    if connected.contains_key(call) {
+        return false;
+    }
+    match history.get(call.as_str()) {
+        Ok(Some(entry)) => {
+            entry.ended_at.is_none() && entry.direction == CallDirection::Incoming
+        }
+        // No row (or no reading it): `finish` has nothing to close either,
+        // and the bubble/badge paths read the row themselves.
+        _ => true,
+    }
 }
 
 /// Close out a history row. `connected_at` is `None` for a call that never
@@ -136,10 +224,12 @@ fn finish(
     let Some(connected_at) = connected_at else {
         // Never connected. `Declined` is an explicit "no" from either side;
         // everything else (caller gave up, ring timed out, setup blew up)
-        // reads as missed. `mark_ended` refuses to overwrite a terminal
-        // result, so stamp it directly.
+        // reads as missed. Stamped directly: `mark_completed` is only for a
+        // call that connected.
         let result = match reason {
             CallEndReason::Declined => CallResult::Declined,
+            // Signal files it as an answered incoming call, not a missed one.
+            CallEndReason::AnsweredElsewhere => CallResult::Completed,
             CallEndReason::Error(_) => CallResult::Failed,
             _ => CallResult::Missed,
         };
@@ -150,7 +240,288 @@ fn finish(
     };
 
     let duration = (chrono::Utc::now() - connected_at).num_seconds().max(0);
-    if let Err(e) = history.mark_ended(call.as_str(), duration) {
+    if let Err(e) = history.mark_completed(call.as_str(), duration) {
         tracing::debug!(error = %e, call = %call.as_str(), "call history: no row to end");
+    }
+}
+
+/// Tell the UI a call's row was closed — already written, so the reads that
+/// follow see it — so the Calls list and its missed badge repaint. A ringing
+/// row is not announced: it only counts once the call is over.
+fn announce_closed(messages: &MessageService) {
+    messages
+        .event_bus
+        .emit_domain(DomainEvent::CallHistoryChanged);
+}
+
+/// File the Call bubble for a finished call, when it was a 1:1 call, and
+/// show it in the open chat. Built from the closed history row, so the bubble
+/// and the Calls screen can never disagree.
+pub(super) fn file_dm_bubble(
+    history: &CallHistoryRepository,
+    messages: &MessageService,
+    call: &CallHandle,
+) {
+    let entry = match history.get(call.as_str()) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!(error = %e, call = %call.as_str(), "call bubble: history read failed");
+            return;
+        }
+    };
+    let Ok(me) = messages.current_user_id() else {
+        return;
+    };
+    let Some(bubble) = dm_call_bubble(&entry, me) else {
+        return;
+    };
+    // The id is the call's, so a second terminal event for the same call
+    // files nothing and says nothing.
+    match messages.store_message_local_once(&bubble) {
+        Ok(true) => {
+            messages
+                .event_bus
+                .emit_domain(DomainEvent::MessageReceived { message: bubble });
+        }
+        Ok(false) => {}
+        Err(e) => tracing::warn!(error = %e, call = %call.as_str(), "call bubble not filed"),
+    }
+}
+
+/// The Call bubble a closed history row leaves in the 1:1 DM with the peer,
+/// or `None` for a group call (they file their own).
+///
+/// * Filed under the conversation's `ChannelId` and type — the key and
+///   bucket its own messages use: `ChannelId::from(peer)`.
+/// * `initiator_id` decides "Incoming" / "Outgoing" in the chat; only an
+///   incoming call nobody answered reads as missed. Our own unanswered call
+///   is still an outgoing call, as in Signal. A declined call reads
+///   "Declined" on both sides, as the Calls screen says.
+/// * `sender_id` is the peer, as for the DM's failure markers: the chat and
+///   sidebar route a `ServerDm` message by its sender. A Call record raises
+///   no notification (`should_notify_message`) and is filed read.
+/// * The id is the call's: the handle's UUID, so every terminal event of one
+///   call names one bubble.
+pub(super) fn dm_call_bubble(entry: &CallHistoryEntry, me: UserId) -> Option<Message> {
+    if entry.conversation_type != ConversationType::ServerDm {
+        return None;
+    }
+    let peer: UserId = entry.conversation_id.parse().ok()?;
+    let channel = ChannelId::from(peer);
+    let incoming = entry.direction == CallDirection::Incoming;
+    let call_type = match entry.result {
+        CallResult::Missed if incoming => CallMessageType::Missed,
+        CallResult::Declined => CallMessageType::Declined,
+        _ => CallMessageType::Ended,
+    };
+    let now = chrono::Utc::now();
+    let mut bubble = Message::new_text(
+        channel,
+        entry.conversation_type.clone(),
+        Some(peer),
+        String::new(),
+        crate::util::time::TimestampNanos::now().as_u64(),
+    );
+    bubble.id = MessageId::from_uuid(entry.id.parse().ok()?);
+    bubble.is_read = true;
+    bubble.content = MessageContent::Call(CallMessage {
+        call_id: entry.id.clone(),
+        call_type,
+        initiator_id: if incoming { peer } else { me },
+        initiator_name: if incoming {
+            entry.peer_name.clone()
+        } else {
+            String::new()
+        },
+        started_at: Some(entry.started_at),
+        ended_at: Some(entry.ended_at.unwrap_or(now)),
+        duration: entry
+            .duration_secs
+            .filter(|s| *s > 0)
+            .map(chrono::Duration::seconds),
+        participant_count: 2,
+    });
+    Some(bubble)
+}
+
+#[cfg(test)]
+mod dm_call_bubble_tests {
+    use super::*;
+
+    fn row(
+        peer: UserId,
+        direction: CallDirection,
+        result: CallResult,
+        duration: Option<i64>,
+    ) -> CallHistoryEntry {
+        CallHistoryEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            conversation_id: peer.to_string(),
+            conversation_type: ConversationType::ServerDm,
+            peer_name: "Peer".into(),
+            started_at: chrono::Utc::now(),
+            ended_at: Some(chrono::Utc::now()),
+            direction,
+            result,
+            duration_secs: duration,
+            has_video: false,
+        }
+    }
+
+    fn call(bubble: &Message) -> &CallMessage {
+        match &bubble.content {
+            MessageContent::Call(c) => c,
+            other => panic!("not a call bubble: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn both_sides_file_the_call_in_the_dm_with_the_other() {
+        let (caller, callee) = (UserId::new(), UserId::new());
+
+        // The caller's row names the callee; the callee's names the caller.
+        let caller_row = row(
+            callee,
+            CallDirection::Outgoing,
+            CallResult::Completed,
+            Some(10),
+        );
+        let mut callee_row = row(
+            caller,
+            CallDirection::Incoming,
+            CallResult::Completed,
+            Some(10),
+        );
+        callee_row.id = caller_row.id.clone();
+
+        let out = dm_call_bubble(&caller_row, caller).expect("caller bubble");
+        let inc = dm_call_bubble(&callee_row, callee).expect("callee bubble");
+
+        assert_eq!(out.conversation_id, ChannelId::from(callee));
+        assert_eq!(inc.conversation_id, ChannelId::from(caller));
+        for (b, me) in [(&out, caller), (&inc, callee)] {
+            assert_eq!(b.conversation_type, ConversationType::ServerDm);
+            let peer = if me == caller { callee } else { caller };
+            assert_eq!(b.sender_id, Some(peer), "routed like the peer's messages");
+            assert_eq!(b.id.to_string(), caller_row.id, "one bubble per call");
+            assert_eq!(call(b).call_type, CallMessageType::Ended);
+            assert_eq!(call(b).duration, Some(chrono::Duration::seconds(10)));
+        }
+        assert_eq!(
+            call(&out).initiator_id,
+            caller,
+            "outgoing on the caller's side"
+        );
+        assert_eq!(
+            call(&inc).initiator_id,
+            caller,
+            "incoming on the callee's side"
+        );
+    }
+
+    #[test]
+    fn only_an_incoming_call_reads_as_missed_but_both_sides_read_declined() {
+        let (me, peer) = (UserId::new(), UserId::new());
+        let kind = |d, r| {
+            call(&dm_call_bubble(&row(peer, d, r, None), me).unwrap())
+                .call_type
+                .clone()
+        };
+        assert_eq!(
+            kind(CallDirection::Incoming, CallResult::Missed),
+            CallMessageType::Missed
+        );
+        assert_eq!(
+            kind(CallDirection::Incoming, CallResult::Declined),
+            CallMessageType::Declined
+        );
+        // Our call nobody picked up is still an outgoing call.
+        assert_eq!(
+            kind(CallDirection::Outgoing, CallResult::Missed),
+            CallMessageType::Ended
+        );
+        // The peer said no: the bubble agrees with the Calls screen's "Declined".
+        assert_eq!(
+            kind(CallDirection::Outgoing, CallResult::Declined),
+            CallMessageType::Declined
+        );
+    }
+
+    #[test]
+    fn group_calls_are_not_dm_bubbles() {
+        let (me, peer) = (UserId::new(), UserId::new());
+        for ct in [ConversationType::Channel, ConversationType::AnonGroup] {
+            let mut r = row(
+                peer,
+                CallDirection::Incoming,
+                CallResult::Completed,
+                Some(3),
+            );
+            r.conversation_type = ct;
+            assert!(dm_call_bubble(&r, me).is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod incoming_expiry_history_tests {
+    use super::*;
+    use crate::services::call_worker::OrchestratedCallKind;
+
+    #[test]
+    fn incoming_expiry_no_answer_finishes_one_missed_history_row() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(crate::storage::Database::open(&directory.path().join("expiry.db"), "fixture-passphrase").unwrap());
+        db.run_migrations().unwrap();
+        let history = CallHistoryRepository::new(db);
+        for kind in [OrchestratedCallKind::DmStandard, OrchestratedCallKind::GroupChannel] {
+            let call = CallHandle::new(uuid::Uuid::new_v4().to_string());
+            history.insert_entry(&CallHistoryEntry {
+                id: call.as_str().into(), conversation_id: "fixture-peer".into(),
+                conversation_type: kind.conversation_type(), peer_name: "Fixture".into(),
+                started_at: chrono::Utc::now(), ended_at: None,
+                direction: CallDirection::Incoming, result: CallResult::Missed,
+                duration_secs: None, has_video: false,
+            }).unwrap();
+            finish(&history, &call, None, &CallEndReason::NoAnswer);
+            let row = history.get(call.as_str()).unwrap().unwrap();
+            assert_eq!(row.result, CallResult::Missed);
+            assert!(row.ended_at.is_some());
+            assert_eq!(row.duration_secs, None);
+        }
+    }
+
+    #[test]
+    fn a_withdrawn_ring_only_closes_its_own_open_incoming_row() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(crate::storage::Database::open(&directory.path().join("withdraw.db"), "fixture-passphrase").unwrap());
+        db.run_migrations().unwrap();
+        let history = CallHistoryRepository::new(db);
+        let row = |direction, ended: bool| {
+            let call = CallHandle::new(uuid::Uuid::new_v4().to_string());
+            history.insert_entry(&CallHistoryEntry {
+                id: call.as_str().into(), conversation_id: "fixture-channel".into(),
+                conversation_type: OrchestratedCallKind::GroupChannel.conversation_type(),
+                peer_name: "Fixture".into(), started_at: chrono::Utc::now(),
+                ended_at: ended.then(chrono::Utc::now), direction, result: CallResult::Missed,
+                duration_secs: None, has_video: false,
+            }).unwrap();
+            call
+        };
+        let mut connected = HashMap::new();
+
+        let ringing = row(CallDirection::Incoming, false);
+        assert!(withdrawal_closes_row(&history, &connected, &ringing));
+
+        // Joined the channel's call ourselves while its ring was up.
+        let joined = row(CallDirection::Outgoing, false);
+        assert!(!withdrawal_closes_row(&history, &connected, &joined));
+        connected.insert(joined.clone(), chrono::Utc::now());
+        assert!(!withdrawal_closes_row(&history, &connected, &joined));
+
+        // The ring expiring after our hangup already closed the row.
+        let ended = row(CallDirection::Incoming, true);
+        assert!(!withdrawal_closes_row(&history, &connected, &ended));
     }
 }

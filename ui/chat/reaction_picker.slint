@@ -1,15 +1,32 @@
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // Reaction picker popup component
 //
 // Wraps EmojiPicker with quick reaction bar and message context.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Typography } from "../theme/typography.slint";
 import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
+import { QuickReactions } from "types.slint";
 
 export component ReactionPicker inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     // Visibility
     in property <bool> show: false;
+    // Opened from the message menu, whose focused item then closes: without
+    // this nothing held focus, so typing and Escape did nothing (desktop).
+    changed show => { if root.show && !root.touch { picker.focus(); } }
+    // Touch platform: minimum 48px quick controls and picker cells.
+    in property <bool> touch: false;
+    private property <length> quick-target: root.touch
+        ? max(Spacing.touch-target-min, Spacing.touch-target-min * Appearance.text-grow)
+        : Spacing.button-height;
+    private property <length> quick-row-height: root.touch ? root.quick-target : Spacing.touch-target-min;
 
     // Message being reacted to (Signal-style identification)
     in property <string> message-id: "";
@@ -26,6 +43,7 @@ export component ReactionPicker inherits Rectangle {
     // Positioning
     in property <length> position-x: 0;
     in property <length> position-y: 0;
+    in property <length> bottom-limit: root.height;
 
     // Callbacks
     callback reaction-selected(string, string, string, string); // (sender_id, timestamp_ns, message_id, emoji)
@@ -33,42 +51,46 @@ export component ReactionPicker inherits Rectangle {
     callback category-changed(int);
     callback search-changed(string);
 
-    // Quick reaction emoji (with emoji variant selectors for colorful rendering)
-    property <[string]> quick-reactions: ["\u{1F44D}\u{FE0F}", "\u{2764}\u{FE0F}", "\u{1F602}\u{FE0F}", "\u{1F62E}\u{FE0F}", "\u{1F622}\u{FE0F}", "\u{1F621}\u{FE0F}"];
-    // thumbs up, heart, joy, surprised, crying, angry
-
-    // Only render when visible
+    // Logical close is immediate; the fade finishes before the surface goes.
     opacity: root.show ? 1 : 0;
-    visible: root.show;
+    animate opacity { duration: Materials.motion-standard; easing: Materials.glide; }
+    visible: root.show || self.opacity > 0;
 
-    // Full screen backdrop
+    // Full screen backdrop, dimmed like the message menu it replaces.
     width: 100%;
     height: 100%;
-    background: transparent;
+    background: Materials.scrim;
 
     // Backdrop touch area (click outside to close)
     backdrop := TouchArea {
         width: 100%;
         height: 100%;
+        enabled: root.show;
         clicked => {
             root.close();
         }
     }
 
     // Picker container — Neo convex popup with strong shadow
-    Rectangle {
-        x: root.position-x;
-        y: root.position-y;
-        width: min(280px, parent.width - 32px);
-        height: min(352px, parent.height - 48px);
-        background: Colors.surface;
+    picker-shell := GlassSurface {
+        enter-distance: 20px;
+        enter-duration: Materials.motion-standard;
+        shown: root.show;
+        transform-origin: { x: max(0px, min(root.position-x - self.x, self.width)), y: max(0px, min(root.position-y - self.y, self.height)) };
+        transform-scale-x: root.show ? 100% : 84%;
+        transform-scale-y: root.show ? 100% : 84%;
+        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+
+        material-level: 3;
+        elevation: 4;
+
+        x: max(Spacing.sm, min(root.position-x, parent.width - self.width - Spacing.sm));
+        y: max(Spacing.sm, min(root.position-y + self.entrance-offset,
+            root.bottom-limit - self.height - Spacing.sm));
+        width: min(320px, parent.width - Spacing.xxl);
+        height: max(0px, min(400px, root.bottom-limit - Spacing.xxxl));
         border-radius: Spacing.radius-xl;
-        border-width: 1px;
-        border-color: Colors.neo-highlight-strong;
-        drop-shadow-blur: Spacing.neo-blur-lg;
-        drop-shadow-offset-x: Spacing.neo-offset-lg;
-        drop-shadow-offset-y: Spacing.neo-offset-lg;
-        drop-shadow-color: Colors.neo-shadow-strong;
 
         // Block backdrop clicks when clicking picker
         TouchArea {
@@ -77,30 +99,69 @@ export component ReactionPicker inherits Rectangle {
         }
 
         VerticalLayout {
-            // Quick reactions bar — Neo inset tray
-            Rectangle {
-                height: 32px;
-                background: Colors.neo-inset-bg;
-                border-radius: Spacing.radius-xl;
-                border-width: 1px;
-                border-color: Colors.neo-inset-shadow;
+            // The shell may fade, but closed content must lose focus and actions.
+            visible: root.show;
+            // Keep every touch target whole when text growth or a narrow
+            // panel requires more width; desktop retains its existing geometry.
+            Flickable {
+                height: root.quick-row-height;
+                viewport-height: root.quick-row-height;
+                viewport-width: root.touch
+                    ? max(self.width, QuickReactions.emojis.length * root.quick-target + 2 * Spacing.sm)
+                    : self.width;
+                interactive: root.touch;
 
                 HorizontalLayout {
+                    width: parent.viewport-width;
+                    height: root.quick-row-height;
                     padding-left: Spacing.sm;
                     padding-right: Spacing.sm;
                     spacing: 0;
 
-                    for emoji in root.quick-reactions: Rectangle {
+                    for emoji[index] in QuickReactions.emojis: Rectangle {
                         horizontal-stretch: 1;
-                        height: 32px;
+                        height: root.quick-row-height;
+                        min-width: root.touch ? root.quick-target : 0px;
+                        transform-scale-x: root.show ? 100% : 64%;
+                        transform-scale-y: root.show ? 100% : 64%;
+                        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : index * 18ms / Appearance.animation-speed; }
+                        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : index * 18ms / Appearance.animation-speed; }
 
                         Rectangle {
-                            width: 28px;
-                            height: 28px;
+                            width: root.quick-target;
+                            height: root.quick-target;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             border-radius: Spacing.radius-sm;
-                            background: quick-area.has-hover ? Colors.background : transparent;
+                            background: quick-area.pressed ? Materials.pressed : quick-area.has-hover ? Colors.background : transparent;
+                            transform-scale-x: quick-area.pressed ? 88% : 100%;
+                            transform-scale-y: quick-area.pressed ? 88% : 100%;
+                            animate transform-scale-x { duration: quick-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                            animate transform-scale-y { duration: quick-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                            border-width: keys.has-focus ? Spacing.stroke : 0px;
+                            border-color: Colors.primary;
+                            accessible-role: button;
+                            accessible-label: "React with " + QuickReactions.names[index];
+                            accessible-action-default => {
+                                if !root.show { return; }
+                                root.reaction-selected(root.sender-id, root.timestamp-ns, root.message-id, emoji);
+                                root.close();
+                            }
+
+                            keys := FocusScope {
+                                width: 0px;
+                                height: 0px;
+                                enabled: root.show;
+                                key-pressed(event) => {
+                                    if !root.show { return reject; }
+                                    if event.text == Key.Space || event.text == Key.Return {
+                                        root.reaction-selected(root.sender-id, root.timestamp-ns, root.message-id, emoji);
+                                        root.close();
+                                        return accept;
+                                    }
+                                    return reject;
+                                }
+                            }
 
                             Text {
                                 text: emoji;
@@ -113,7 +174,9 @@ export component ReactionPicker inherits Rectangle {
                             quick-area := TouchArea {
                                 width: 100%;
                                 height: 100%;
+                                enabled: root.show;
                                 clicked => {
+                                    if !root.show { return; }
                                     root.reaction-selected(root.sender-id, root.timestamp-ns, root.message-id, emoji);
                                     root.close();
                                 }
@@ -125,18 +188,25 @@ export component ReactionPicker inherits Rectangle {
 
             // Divider — neo edge
             Rectangle {
-                height: 1px;
-                background: Colors.neo-highlight;
+                height: Spacing.stroke;
+                background: Colors.divider;
             }
 
             // EmojiPicker
-            EmojiPicker {
+            picker := EmojiPicker {
+                // The outer reaction panel already supplies the material.
+                material-enabled: false;
+                touch: root.touch;
+                max-picker-width: picker-shell.width;
+                max-picker-height: max(0px, picker-shell.height - root.quick-row-height - Spacing.stroke);
                 show: true;
                 emoji-list: root.emoji-list;
                 selected-category <=> root.selected-category;
                 search-query <=> root.search-query;
 
                 emoji-selected(emoji) => {
+                    // Not after a logical close: the picker is only fading.
+                    if !root.show { return; }
                     root.reaction-selected(root.sender-id, root.timestamp-ns, root.message-id, emoji);
                     root.close();
                 }
@@ -154,5 +224,11 @@ export component ReactionPicker inherits Rectangle {
                 }
             }
         }
+    }
+
+    // The fade-out is presentation only: swallow taps until it is gone.
+    if !root.show: TouchArea {
+        width: 100%;
+        height: 100%;
     }
 }

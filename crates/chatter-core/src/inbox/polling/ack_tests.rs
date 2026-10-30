@@ -21,10 +21,10 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
+use crate::domain::UserId;
 use crate::domain::anon_dm::AnonDmId;
 use crate::domain::ids::ChannelId;
 use crate::domain::message::{ConversationType, MessageContent, SystemMessage};
-use crate::domain::UserId;
 use crate::error::{CryptoError, IdentityChangeSource, ServiceError, StorageError};
 use crate::inbox::ack_policy::AckDecision;
 use crate::storage::{Database, MessageRepository};
@@ -53,7 +53,9 @@ fn markers(
 
 /// A dead ciphertext: deterministic in the bytes, so redelivery cannot help.
 fn permanent_error() -> ServiceError {
-    ServiceError::Crypto(CryptoError::DecryptionFailed("MAC verification failed".into()))
+    ServiceError::Crypto(CryptoError::DecryptionFailed(
+        "MAC verification failed".into(),
+    ))
 }
 
 /// The peer's pinned key changed. Also permanent, but a different resolution.
@@ -142,8 +144,11 @@ fn device_inbox_transient_failure_is_not_acked() {
 // handle — including the failures the policy classifies transient by name.
 // ---------------------------------------------------------------------------
 
-fn channel_repo() -> (TempDir, Arc<crate::storage::MessageRepository>, Arc<crate::storage::ChannelRepository>)
-{
+fn channel_repo() -> (
+    TempDir,
+    Arc<crate::storage::MessageRepository>,
+    Arc<crate::storage::ChannelRepository>,
+) {
     let dir = TempDir::new().unwrap();
     let db = Arc::new(Database::open(&dir.path().join("test.db"), "test_passphrase").unwrap());
     db.run_migrations().unwrap();
@@ -236,7 +241,7 @@ fn a_dead_sender_key_envelope_is_marked_in_the_channel_before_it_is_acked() {
 
     assert_eq!(decision, AckDecision::Ack);
     assert_eq!(
-        markers(&repo, &channel, ConversationType::AnonGroup),
+        markers(&repo, &channel, ConversationType::Channel),
         vec![SystemMessage::DeliveryIssue],
         "the group message is gone from the server; without an entry in the \
          channel the user sees an unexplained gap"
@@ -504,6 +509,7 @@ fn an_anon_dm_message_with_no_inner_content_cannot_be_left_to_redeliver_forever(
             padding: Vec::new(),
         },
         UserId::new(),
+        1,
         conversation,
     );
 
@@ -823,11 +829,8 @@ fn a_blocked_senders_message_is_drained_from_the_server() {
     // exactly the state a repeat sender puts us in.
     budget.record_attempt("envelope-blocked-1", crate::inbox::ack_policy::now_ns());
 
-    let decision = super::device::blocked_sender_decision(
-        UserId::new(),
-        "envelope-blocked-1",
-        &budget,
-    );
+    let decision =
+        super::device::blocked_sender_decision(UserId::new(), "envelope-blocked-1", &budget);
 
     assert_eq!(
         decision,
@@ -863,4 +866,49 @@ fn a_blocked_senders_message_leaves_nothing_behind_in_the_conversation() {
          delivery-issue marker — nothing was lost, and a marker is itself a \
          notification from the person the user blocked"
     );
+}
+
+/// §5: a pairwise channel control that cannot be decrypted names its channel
+/// in the sealed-sender group id, so the loss is marked in that channel — but
+/// only one we hold with the sender as a member; anything else stays in the
+/// DM with the sender, as before.
+#[test]
+fn a_desync_naming_a_channel_is_marked_in_that_channel_only_for_its_member() {
+    use crate::domain::channel::{
+        Channel, ChannelType, MemberRole, Membership, NotificationPreference,
+    };
+    let (_d, _repo, channels) = channel_repo();
+    let member = UserId::new();
+    let outsider = UserId::new();
+    let id = ChannelId::new();
+    channels
+        .insert(&Channel::new(id, "c".into(), ChannelType::Private, member))
+        .unwrap();
+    channels
+        .insert_membership(&Membership {
+            channel_id: id,
+            user_id: member,
+            role: MemberRole::Member,
+            joined_at: chrono::Utc::now(),
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+            notification_preference: NotificationPreference::default(),
+        })
+        .unwrap();
+
+    let target = super::device::desync_marker_target(&channels, Some(id), member, 5);
+    assert_eq!(target.conversation_id, id);
+    assert_eq!(target.conversation_type, ConversationType::Channel);
+    assert_eq!(target.peer_id, Some(member));
+
+    for (channel, sender) in [
+        (Some(id), outsider),
+        (Some(ChannelId::new()), member),
+        (None, member),
+    ] {
+        let target = super::device::desync_marker_target(&channels, channel, sender, 5);
+        assert_eq!(target.conversation_type, ConversationType::ServerDm);
+        assert_eq!(target.conversation_id, ChannelId::from(sender));
+    }
 }

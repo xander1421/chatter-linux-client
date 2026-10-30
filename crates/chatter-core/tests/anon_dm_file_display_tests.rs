@@ -13,8 +13,8 @@
 //! conversation_type instead of the old AnonDmMessageReceived variant.
 
 use chatter_core::domain::anon_dm::AnonDmId;
-use chatter_core::domain::ids::{ChannelId, MessageId, UserId};
-use chatter_core::domain::message::{ConversationType, Message, MessageContent};
+use chatter_core::domain::ids::{ChannelId, UserId};
+use chatter_core::domain::message::{ConversationType, Message};
 use chatter_core::events::EventBus;
 use chatter_core::inbox::handlers::DomainEvent;
 
@@ -23,7 +23,9 @@ use tokio::sync::broadcast;
 /// Helper to create a unified Message for anon DM tests.
 fn make_anon_dm_message(conversation_id: AnonDmId, sender_id: UserId, sent_at: u64) -> Message {
     let mut msg = Message::new_text(
-        conversation_id.into(), ConversationType::AnonDm, Some(sender_id),
+        conversation_id.into(),
+        ConversationType::AnonDm,
+        Some(sender_id),
         String::new(),
         sent_at,
     );
@@ -65,10 +67,15 @@ async fn test_anon_dm_message_event_reaches_ui_via_cloned_bus() {
         message: message.clone(),
     });
 
-    assert!(receivers >= 1, "At least one subscriber should receive the event");
+    assert!(
+        receivers >= 1,
+        "At least one subscriber should receive the event"
+    );
 
     // UI handler receives the event — message displays without navigation
-    let event = ui_rx.try_recv().expect("UI subscriber must receive MessageReceived for AnonDm");
+    let event = ui_rx
+        .try_recv()
+        .expect("UI subscriber must receive MessageReceived for AnonDm");
     match event {
         DomainEvent::MessageReceived { message: msg } => {
             assert_eq!(msg.conversation_id, ChannelId::from(conversation_id));
@@ -133,6 +140,7 @@ async fn test_handler_survives_broadcast_lag_and_receives_next_event() {
         let _ = tx.send(DomainEvent::TypingStarted {
             user_id: UserId::new(),
             channel_id: ChannelId::new(),
+            timestamp: 0,
         });
     }
 
@@ -166,7 +174,10 @@ async fn test_handler_survives_broadcast_lag_and_receives_next_event() {
         }
     }
 
-    assert!(lag_count > 0, "Should have experienced at least one lag event");
+    assert!(
+        lag_count > 0,
+        "Should have experienced at least one lag event"
+    );
     assert!(
         received_target,
         "Handler must receive MessageReceived after recovering from lag"
@@ -186,6 +197,7 @@ async fn test_while_let_ok_pattern_exits_on_lag() {
         let _ = tx.send(DomainEvent::TypingStarted {
             user_id: UserId::new(),
             channel_id: ChannelId::new(),
+            timestamp: 0,
         });
     }
 
@@ -243,13 +255,21 @@ async fn test_optimistic_file_message_event_is_immediately_receivable() {
     // The UI handler receives the event BEFORE network send completes
     let event = ui_rx.try_recv().expect(
         "UI must receive the optimistic event immediately — \
-         file should display without waiting for server echo"
+         file should display without waiting for server echo",
     );
 
     match event {
         DomainEvent::MessageReceived { message: msg } => {
-            assert_eq!(msg.conversation_id, ChannelId::from(conversation_id), "Conversation ID must match");
-            assert_eq!(msg.sender_id, Some(our_user_id), "Sender should be our own user (optimistic)");
+            assert_eq!(
+                msg.conversation_id,
+                ChannelId::from(conversation_id),
+                "Conversation ID must match"
+            );
+            assert_eq!(
+                msg.sender_id,
+                Some(our_user_id),
+                "Sender should be our own user (optimistic)"
+            );
             assert_eq!(msg.id, message_id, "Message ID must match");
             assert_eq!(msg.sent_at, sent_at, "Timestamp must match for ordering");
             assert_eq!(msg.conversation_type, ConversationType::AnonDm);
@@ -327,9 +347,7 @@ async fn test_file_events_from_multiple_conversations_all_delivered() {
     while let Ok(event) = ui_rx.try_recv() {
         if let DomainEvent::MessageReceived { message } = event {
             if message.conversation_type == ConversationType::AnonDm {
-                received_convs.push(
-                    AnonDmId::from_uuid(*message.conversation_id.as_uuid())
-                );
+                received_convs.push(AnonDmId::from_uuid(*message.conversation_id.as_uuid()));
             }
         }
     }

@@ -3,11 +3,12 @@
 //! Audio playback using rodio for voice messages and audio files.
 //! Uses streaming playback with native seeking support.
 
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source, source::SeekError};
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source, source::SeekError};
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::error::MediaError;
@@ -56,9 +57,11 @@ enum AudioSource {
 /// Can load audio from files or from memory for secure playback.
 pub struct AudioPlayer {
     /// Output stream (must be kept alive for playback).
-    _stream: OutputStream,
+    stream: Option<MixerDeviceSink>,
+    /// Output errors are reported on the audio thread; retire it on the caller.
+    output_failed: Arc<AtomicBool>,
     /// Current playback sink.
-    sink: Option<Sink>,
+    sink: Option<Player>,
     /// Currently loaded audio source.
     current_source: Option<AudioSource>,
     /// Duration of the current audio file.
@@ -66,7 +69,7 @@ pub struct AudioPlayer {
 }
 
 // cpal's CoreAudio backend holds a `Box<dyn FnMut()>` property-listener callback
-// without a Send bound, so `OutputStream` is !Send on macOS. All access to
+// without a Send bound, so `MixerDeviceSink` is !Send on macOS. All access to
 // AudioPlayer goes through the global Mutex in audio_state.rs, which already
 // serializes it, so moving it across threads is sound.
 unsafe impl Send for AudioPlayer {}
@@ -76,13 +79,11 @@ impl AudioPlayer {
     ///
     /// # Errors
     ///
-    /// Returns an error if the audio output stream cannot be created.
+    /// Hardware output is opened lazily by `play`, which reports output errors.
     pub fn new() -> Result<Self, MediaError> {
-        let stream = OutputStreamBuilder::open_default_stream()
-            .map_err(|e| MediaError::PlaybackError(format!("failed to create audio output: {}", e)))?;
-
         Ok(Self {
-            _stream: stream,
+            stream: None,
+            output_failed: Arc::new(AtomicBool::new(false)),
             sink: None,
             current_source: None,
             current_duration: None,
@@ -140,7 +141,11 @@ impl AudioPlayer {
     ///
     /// * `data` - Audio data bytes
     /// * `mime_type` - Optional MIME type hint (e.g., "audio/mpeg")
-    pub fn load_from_memory_with_mime(&mut self, data: Vec<u8>, mime_type: Option<String>) -> Result<Duration, MediaError> {
+    pub fn load_from_memory_with_mime(
+        &mut self,
+        data: Vec<u8>,
+        mime_type: Option<String>,
+    ) -> Result<Duration, MediaError> {
         // Stop any current playback
         self.stop();
 
@@ -161,7 +166,10 @@ impl AudioPlayer {
             "Loaded audio for streaming playback"
         );
 
-        self.current_source = Some(AudioSource::Stream { data: data_arc, mime_type });
+        self.current_source = Some(AudioSource::Stream {
+            data: data_arc,
+            mime_type,
+        });
         self.current_duration = Some(duration);
 
         Ok(duration)
@@ -218,7 +226,10 @@ impl AudioPlayer {
         // Mutex<AudioPlayer> guard and poison it for every future playback.
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| builder.build())) {
             Ok(Ok(decoder)) => Ok(decoder),
-            Ok(Err(e)) => Err(MediaError::InvalidFormat(format!("failed to decode audio: {}", e))),
+            Ok(Err(e)) => Err(MediaError::InvalidFormat(format!(
+                "failed to decode audio: {}",
+                e
+            ))),
             Err(_) => Err(MediaError::InvalidFormat(
                 "failed to decode audio: decoder panicked on malformed data".to_string(),
             )),
@@ -240,6 +251,13 @@ impl AudioPlayer {
     ///
     /// Returns an error if no audio is loaded or playback fails.
     pub fn play(&mut self) -> Result<(), MediaError> {
+        if self.current_source.is_none() {
+            return Err(MediaError::PlaybackError("no audio loaded".to_string()));
+        }
+        if self.output_failed.load(Ordering::Acquire) {
+            tracing::warn!("Retiring failed audio output; replay starts at the beginning");
+            self.stop();
+        }
         // If we have a sink and it's paused, just resume
         if let Some(ref sink) = self.sink {
             if sink.is_paused() {
@@ -253,11 +271,43 @@ impl AudioPlayer {
         }
 
         // Need to create new sink and start playback
-        let source = self.current_source.as_ref().ok_or_else(|| {
-            MediaError::PlaybackError("no audio loaded".to_string())
-        })?.clone();
+        let source = self
+            .current_source
+            .as_ref()
+            .ok_or_else(|| MediaError::PlaybackError("no audio loaded".to_string()))?
+            .clone();
 
-        let sink = Sink::connect_new(self._stream.mixer());
+        if self.stream.is_none() && crate::system::null_audio() {
+            return Err(MediaError::PlaybackError(
+                "audio devices disabled (CHATTER_NULL_AUDIO)".to_string(),
+            ));
+        }
+        if self.stream.is_none() {
+            // Each output owns its flag, so an old callback cannot invalidate
+            // a replacement stream. Never close/reopen on the audio thread.
+            let failed = Arc::new(AtomicBool::new(false));
+            let callback_failed = failed.clone();
+            let stream = DeviceSinkBuilder::from_default_device()
+                .map_err(|e| {
+                    MediaError::PlaybackError(format!("failed to select audio output: {e}"))
+                })?
+                .with_error_callback(move |error| {
+                    callback_failed.store(true, Ordering::Release);
+                    tracing::error!(%error, "Attachment audio output stream failed");
+                })
+                .open_sink_or_fallback()
+                .map_err(|e| {
+                    MediaError::PlaybackError(format!("failed to create audio output: {e}"))
+                })?;
+            self.output_failed = failed;
+            self.stream = Some(stream);
+        }
+        let sink = Player::connect_new(
+            self.stream
+                .as_ref()
+                .ok_or_else(|| MediaError::PlaybackError("no audio output".to_string()))?
+                .mixer(),
+        );
 
         match source {
             AudioSource::File(ref path) => {
@@ -268,23 +318,37 @@ impl AudioPlayer {
                 let decoder = self.build_seekable_decoder(reader, byte_len, None)?;
                 sink.append(decoder);
             }
-            AudioSource::Stream { ref data, ref mime_type } => {
+            AudioSource::Stream {
+                ref data,
+                ref mime_type,
+            } => {
                 tracing::info!(data_size = data.len(), "Streaming audio from memory");
                 let byte_len = data.len() as u64;
                 let cursor = Cursor::new(data.as_ref().clone());
-                let decoder = self.build_seekable_decoder(cursor, byte_len, mime_type.as_deref())?;
+                let decoder =
+                    self.build_seekable_decoder(cursor, byte_len, mime_type.as_deref())?;
                 sink.append(decoder);
             }
-            AudioSource::Range { ref dec, ref mime_type } => {
+            AudioSource::Range {
+                ref dec,
+                ref mime_type,
+            } => {
                 let reader = crate::services::attachment::CbcRangeReader::new(dec.clone());
                 let byte_len = reader.len();
                 tracing::info!(data_size = byte_len, "Streaming audio from range decryptor");
-                let decoder = self.build_seekable_decoder(reader, byte_len, mime_type.as_deref())?;
+                let decoder =
+                    self.build_seekable_decoder(reader, byte_len, mime_type.as_deref())?;
                 sink.append(decoder);
             }
         }
 
         self.sink = Some(sink);
+        if self.output_failed.load(Ordering::Acquire) {
+            self.stop();
+            return Err(MediaError::PlaybackError(
+                "audio output stream failed".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -300,6 +364,10 @@ impl AudioPlayer {
         if let Some(sink) = self.sink.take() {
             sink.stop();
         }
+        // A route change can disconnect Android's retained AAudio output.
+        // Loading another source must open fresh hardware instead of queueing
+        // it onto a mixer whose device callback no longer runs.
+        self.stream.take();
     }
 
     /// Seeks to a specific position.
@@ -310,6 +378,11 @@ impl AudioPlayer {
     ///
     /// Returns an error if no audio is loaded or seek fails.
     pub fn seek(&mut self, position: Duration) -> Result<(), MediaError> {
+        if self.output_failed.load(Ordering::Acquire) {
+            return Err(MediaError::PlaybackError(
+                "audio output stream failed".to_string(),
+            ));
+        }
         if self.current_source.is_none() {
             return Err(MediaError::PlaybackError("no audio loaded".to_string()));
         }
@@ -331,7 +404,9 @@ impl AudioPlayer {
             }
         }
 
-        Err(MediaError::PlaybackError("no active playback to seek".to_string()))
+        Err(MediaError::PlaybackError(
+            "no active playback to seek".to_string(),
+        ))
     }
 
     /// Sets the playback volume.
@@ -347,6 +422,9 @@ impl AudioPlayer {
 
     /// Gets the current playback state.
     pub fn state(&self) -> PlaybackState {
+        if self.output_failed.load(Ordering::Acquire) {
+            return PlaybackState::Stopped;
+        }
         let duration = match self.current_duration {
             Some(d) => d,
             None => return PlaybackState::Stopped,
@@ -370,7 +448,11 @@ impl AudioPlayer {
     ///
     /// Uses rodio's native `get_pos()` for accurate position tracking.
     pub fn position(&self) -> Duration {
-        self.sink.as_ref()
+        if self.output_failed.load(Ordering::Acquire) {
+            return Duration::ZERO;
+        }
+        self.sink
+            .as_ref()
             .map(|s| s.get_pos())
             .unwrap_or(Duration::ZERO)
     }
@@ -382,16 +464,21 @@ impl AudioPlayer {
 
     /// Returns true if audio is currently playing.
     pub fn is_playing(&self) -> bool {
-        self.sink.as_ref()
+        if self.output_failed.load(Ordering::Acquire) {
+            return false;
+        }
+        self.sink
+            .as_ref()
             .map(|s| !s.is_paused() && !s.empty())
             .unwrap_or(false)
     }
 
     /// Returns true if audio is paused.
     pub fn is_paused(&self) -> bool {
-        self.sink.as_ref()
-            .map(|s| s.is_paused())
-            .unwrap_or(false)
+        if self.output_failed.load(Ordering::Acquire) {
+            return false;
+        }
+        self.sink.as_ref().map(|s| s.is_paused()).unwrap_or(false)
     }
 
     /// Get the duration of an audio file without creating a full player.
@@ -415,7 +502,10 @@ fn decode_catching_panics<R: Read + Seek + Send + Sync + 'static>(
 ) -> Result<Decoder<R>, MediaError> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Decoder::new(reader))) {
         Ok(Ok(decoder)) => Ok(decoder),
-        Ok(Err(e)) => Err(MediaError::InvalidFormat(format!("failed to decode audio: {}", e))),
+        Ok(Err(e)) => Err(MediaError::InvalidFormat(format!(
+            "failed to decode audio: {}",
+            e
+        ))),
         Err(_) => Err(MediaError::InvalidFormat(
             "failed to decode audio: decoder panicked on malformed data".to_string(),
         )),

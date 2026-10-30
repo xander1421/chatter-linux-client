@@ -1,4 +1,12 @@
-//! Input validation utilities (password strength, PIN strength).
+//! Registration input validation and password/PIN strength.
+
+/// Validate the bare registration nickname with the same libsignal rules used
+/// to generate the username and its server-verified proof at registration.
+pub fn validate_registration_username(nickname: &str) -> Result<(), String> {
+    crate::crypto::auth_crypto::username_candidates(nickname)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
 
 /// Password strength level (0–4).
 /// 0 = empty, 1 = weak, 2 = fair, 3 = good, 4 = strong.
@@ -53,6 +61,19 @@ pub fn pin_strength(pin: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registration_nickname_uses_the_registration_rules() {
+        for valid in ["alice", "Alice_123", "_abc", &"a".repeat(32)] {
+            assert!(validate_registration_username(valid).is_ok(), "{valid}");
+        }
+        for invalid in ["", "ab", "a-b", "123abc", "a.b", "éclair", &"a".repeat(33)] {
+            assert!(
+                validate_registration_username(invalid).is_err(),
+                "{invalid}"
+            );
+        }
+    }
 
     #[test]
     fn empty_password() {

@@ -89,37 +89,15 @@ impl<T: Clone + Send + Sync + 'static> Store<T> {
         self.state.read().clone()
     }
 
-    /// Get an Arc-wrapped snapshot of the current state.
+    /// Read the current state under the lock without cloning all of `T`.
     ///
-    /// More efficient than `get()` when you only need read access,
-    /// as it avoids cloning the state data.
-    #[must_use]
-    pub fn snapshot(&self) -> StateSnapshot<T> {
-        Arc::new(self.state.read().clone())
-    }
-
-    /// Replace the current state with a new value.
-    ///
-    /// Broadcasts an Arc-wrapped snapshot to all subscribers.
-    pub fn set(&self, value: T) {
-        // Create Arc snapshot for broadcasting (one clone, shared by all subscribers)
-        let snapshot = Arc::new(value.clone());
-
-        {
-            let mut state = self.state.write();
-            *state = value;
-        }
-
-        // Broadcast Arc - subscribers share this single allocation
-        let _ = self.sender.send(snapshot);
-    }
-
-    /// Replace the current state without broadcasting.
-    ///
-    /// Use for initialization or batch operations.
-    pub fn set_silent(&self, value: T) {
-        let mut state = self.state.write();
-        *state = value;
+    /// `get()` deep-clones the entire state (every `HashMap`/`Vec` inside it) and
+    /// is wasteful when the caller only needs one small field. `with` holds the
+    /// read lock for the closure and lets the caller extract just what it needs,
+    /// so a hot single-field read copies that field, not the whole snapshot.
+    /// Keep the closure cheap and non-blocking — it runs under the read lock.
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        f(&self.state.read())
     }
 
     /// Update the state in place using a closure.
@@ -161,44 +139,6 @@ impl<T: Clone + Send + Sync + 'static> Store<T> {
         if let Some(snapshot) = snapshot {
             let _ = self.sender.send(snapshot);
         }
-    }
-
-    /// Update the state without broadcasting to subscribers.
-    ///
-    /// Use this for batch updates or internal state changes where
-    /// subscribers will be notified separately (e.g., via explicit `notify()`).
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // Batch multiple updates without intermediate broadcasts
-    /// store.update_silent(|state| state.field1 = value1);
-    /// store.update_silent(|state| state.field2 = value2);
-    /// store.notify(); // Single broadcast at the end
-    /// ```
-    pub fn update_silent<F>(&self, f: F)
-    where
-        F: FnOnce(&mut T),
-    {
-        let mut state = self.state.write();
-        f(&mut state);
-    }
-
-    /// Broadcast the current state to all subscribers.
-    ///
-    /// Use after `update_silent()` to notify subscribers of accumulated changes.
-    /// Creates one Arc snapshot shared by all subscribers.
-    pub fn notify(&self) {
-        if self.sender.receiver_count() > 0 {
-            let snapshot = Arc::new(self.state.read().clone());
-            let _ = self.sender.send(snapshot);
-        }
-    }
-
-    /// Check if there are any active subscribers.
-    #[must_use]
-    pub fn has_subscribers(&self) -> bool {
-        self.sender.receiver_count() > 0
     }
 
     /// Subscribe to state changes.
@@ -261,20 +201,6 @@ mod tests {
     }
 
     #[test]
-    fn test_store_set() {
-        let store = Store::new(TestState::default());
-
-        store.set(TestState {
-            value: 100,
-            name: "updated".to_string(),
-        });
-
-        let state = store.get();
-        assert_eq!(state.value, 100);
-        assert_eq!(state.name, "updated");
-    }
-
-    #[test]
     fn test_store_update() {
         let store = Store::new(TestState {
             value: 0,
@@ -289,23 +215,6 @@ mod tests {
         let state = store.get();
         assert_eq!(state.value, 10);
         assert_eq!(state.name, "modified");
-    }
-
-    #[tokio::test]
-    async fn test_store_subscribe() {
-        let store = Store::new(TestState::default());
-        let mut rx = store.subscribe();
-
-        // Update state
-        store.set(TestState {
-            value: 99,
-            name: "subscribed".to_string(),
-        });
-
-        // Subscriber receives Arc-wrapped state
-        let received = rx.recv().await.unwrap();
-        assert_eq!(received.value, 99);
-        assert_eq!(received.name, "subscribed");
     }
 
     #[tokio::test]
@@ -328,7 +237,10 @@ mod tests {
 
     #[test]
     fn test_store_clone() {
-        let store1 = Store::new(TestState { value: 1, name: "one".to_string() });
+        let store1 = Store::new(TestState {
+            value: 1,
+            name: "one".to_string(),
+        });
         let store2 = store1.clone();
 
         // Both stores share the same state
@@ -342,47 +254,6 @@ mod tests {
         let state = store.get();
         assert_eq!(state.value, 0);
         assert_eq!(state.name, "");
-    }
-
-    #[test]
-    fn test_update_silent() {
-        let store = Store::new(TestState::default());
-        let _rx = store.subscribe();
-
-        // Silent update should not trigger broadcast
-        store.update_silent(|s| s.value = 42);
-
-        // State should be updated
-        assert_eq!(store.get().value, 42);
-    }
-
-    #[test]
-    fn test_set_silent() {
-        let store = Store::new(TestState::default());
-
-        store.set_silent(TestState {
-            value: 123,
-            name: "silent".to_string(),
-        });
-
-        assert_eq!(store.get().value, 123);
-        assert_eq!(store.get().name, "silent");
-    }
-
-    #[tokio::test]
-    async fn test_notify() {
-        let store = Store::new(TestState::default());
-        let mut rx = store.subscribe();
-
-        // Silent updates
-        store.update_silent(|s| s.value = 1);
-        store.update_silent(|s| s.value = 2);
-
-        // Explicit notify sends current state as Arc
-        store.notify();
-
-        let received = rx.recv().await.unwrap();
-        assert_eq!(received.value, 2); // Final value after all updates
     }
 
     #[tokio::test]
@@ -409,16 +280,6 @@ mod tests {
 
         // Strong count should be 3 (one per subscriber)
         assert_eq!(Arc::strong_count(&snap1), 3);
-    }
-
-    #[test]
-    fn test_has_subscribers() {
-        let store = Store::new(TestState::default());
-
-        assert!(!store.has_subscribers());
-
-        let _rx = store.subscribe();
-        assert!(store.has_subscribers());
     }
 
     #[test]

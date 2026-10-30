@@ -31,7 +31,7 @@
 
 use crate::domain::anon_dm::AnonDmId;
 use crate::domain::anon_group::AnonGroupId;
-use crate::domain::ids::{ChannelId, UserId};
+use crate::domain::ids::UserId;
 
 /// Typed payloads for anonymous DM request / acceptance / init events.
 ///
@@ -79,6 +79,8 @@ pub struct AnonGroupInviteEvent {
     pub group_id: AnonGroupId,
     pub group_name: String,
     pub inviter_id: UserId,
+    /// The inviter's device the invite came from (pass back on accept).
+    pub inviter_device_id: u32,
     pub inviter_mailbox_pk: [u8; 32],
     pub profile_key: Option<[u8; 32]>,
     pub inviter_display_name: Option<String>,
@@ -96,14 +98,6 @@ pub enum CallKeyEvent {
         peer_id: UserId,
         ephemeral_public_key: [u8; 32],
     },
-    /// Group call key distributed via pairwise sealed sender.
-    GroupKeyReceived {
-        call_id: String,
-        sender_id: UserId,
-        key_material: [u8; 32],
-        key_epoch: u32,
-        channel_id: ChannelId,
-    },
 }
 
 /// Typed payload for a remote call hangup.
@@ -113,5 +107,5 @@ pub enum CallKeyEvent {
 pub struct RemoteCallHangup {
     pub call_id: String,
     pub peer_id: UserId,
-    pub reason: String,
+    pub reason: crate::services::gateway::CallHangupReason,
 }

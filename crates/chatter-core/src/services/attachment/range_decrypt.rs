@@ -17,9 +17,8 @@
 //! whole-file HMAC (via [`crate::crypto::streaming_decrypt::StreamingDecryptor::verify`])
 //! before constructing this — see `AttachmentService::open_range_decryptor`.
 
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecrypt, KeyInit};
 use aes::Aes256;
+use aes::cipher::{BlockCipherDecrypt, KeyInit};
 use memmap2::Mmap;
 
 const IV_LEN: usize = 16;
@@ -45,14 +44,16 @@ impl CbcRangeDecryptor {
         }
         let encrypted_len = total - IV_LEN - HMAC_LEN;
         if encrypted_len % AES_BLOCK != 0 {
-            return Err(format!("ciphertext not block-aligned: {encrypted_len} bytes"));
+            return Err(format!(
+                "ciphertext not block-aligned: {encrypted_len} bytes"
+            ));
         }
         if plaintext_size > encrypted_len {
             return Err(format!(
                 "plaintext_size {plaintext_size} exceeds ciphertext {encrypted_len}"
             ));
         }
-        let cipher = Aes256::new(GenericArray::from_slice(aes_key));
+        let cipher = Aes256::new(aes_key.into());
         Ok(Self {
             mmap,
             cipher,
@@ -91,27 +92,34 @@ impl CbcRangeDecryptor {
         if off >= self.plaintext_size || len == 0 {
             return Vec::new();
         }
-        let end = (off + len).min(self.plaintext_size);
+        let mut result = vec![0; len.min(self.plaintext_size - off)];
+        self.read_range_into(off, &mut result);
+        result
+    }
+
+    /// Fill a caller-owned buffer from an authenticated attachment range.
+    pub fn read_range_into(&self, off: usize, output: &mut [u8]) -> usize {
+        if off >= self.plaintext_size || output.is_empty() {
+            return 0;
+        }
+        let end = off.saturating_add(output.len()).min(self.plaintext_size);
         let start_block = off / AES_BLOCK;
         let end_block = (end - 1) / AES_BLOCK; // inclusive; end <= encrypted_len so in range
-
-        let mut window = Vec::with_capacity((end_block - start_block + 1) * AES_BLOCK);
         for b in start_block..=end_block {
             let mut blk = [0u8; AES_BLOCK];
             blk.copy_from_slice(self.cipher_block(b));
-            self.cipher
-                .decrypt_block(GenericArray::from_mut_slice(&mut blk));
+            self.cipher.decrypt_block((&mut blk).into());
             let chain = self.chain_block(b);
             for i in 0..AES_BLOCK {
                 blk[i] ^= chain[i];
             }
-            window.extend_from_slice(&blk);
+            let block_start = b * AES_BLOCK;
+            let from = off.max(block_start);
+            let to = end.min(block_start + AES_BLOCK);
+            output[from - off..to - off].copy_from_slice(&blk[from - block_start..to - block_start]);
+            blk.fill(0);
         }
-
-        // Slice the requested sub-range out of the block-aligned window.
-        let lo = off - start_block * AES_BLOCK;
-        let hi = lo + (end - off);
-        window[lo..hi].to_vec()
+        end - off
     }
 }
 
@@ -142,7 +150,9 @@ impl CbcRangeReader {
 
 impl std::io::Read for CbcRangeReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let chunk = self.dec.read_range(self.pos as usize, buf.len());
+        // Seeking past EOF is allowed, so `pos` can exceed usize on 32-bit.
+        let off = usize::try_from(self.pos).unwrap_or(usize::MAX);
+        let chunk = self.dec.read_range(off, buf.len());
         let n = chunk.len();
         buf[..n].copy_from_slice(&chunk);
         self.pos += n as u64;
@@ -153,20 +163,17 @@ impl std::io::Read for CbcRangeReader {
 impl std::io::Seek for CbcRangeReader {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
         use std::io::SeekFrom;
-        let size = self.dec.plaintext_size() as i64;
+        // Offsets come from a decoder parsing a file the sender chose, so the
+        // arithmetic is checked rather than trusted not to wrap.
         let new_pos = match pos {
-            SeekFrom::Start(o) => o as i64,
-            SeekFrom::End(o) => size + o,
-            SeekFrom::Current(o) => self.pos as i64 + o,
+            SeekFrom::Start(o) => Some(o),
+            SeekFrom::End(o) => (self.dec.plaintext_size() as u64).checked_add_signed(o),
+            SeekFrom::Current(o) => self.pos.checked_add_signed(o),
         };
-        if new_pos < 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "seek before start",
-            ));
-        }
         // Seeking past EOF is allowed; the next read returns 0 bytes.
-        self.pos = new_pos as u64;
+        self.pos = new_pos.ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek out of range")
+        })?;
         Ok(self.pos)
     }
 }
@@ -224,6 +231,8 @@ mod tests {
         ];
         for &(off, len) in cases {
             let got = dec.read_range(off, len);
+            let mut into = vec![0; len];
+            let filled = dec.read_range_into(off, &mut into);
             let end = (off + len).min(plaintext.len());
             let want = if off >= plaintext.len() {
                 &[][..]
@@ -231,6 +240,7 @@ mod tests {
                 &plaintext[off..end]
             };
             assert_eq!(got.as_slice(), want, "mismatch at off={off} len={len}");
+            assert_eq!(&into[..filled], want, "direct read mismatch at off={off} len={len}");
         }
 
         // A spread of deterministic pseudo-random windows (no rng dep).
@@ -283,7 +293,16 @@ mod tests {
         assert_eq!(&b[..n], &plaintext[plaintext.len() - 20..]);
 
         // Seek past EOF -> read returns 0.
-        reader.seek(SeekFrom::Start(plaintext.len() as u64 + 999)).unwrap();
+        reader
+            .seek(SeekFrom::Start(plaintext.len() as u64 + 999))
+            .unwrap();
         assert_eq!(reader.read(&mut b).unwrap(), 0);
+
+        // Offsets a hostile media file can steer a decoder into: errors or
+        // EOF, never a wrap or a panic.
+        reader.seek(SeekFrom::Start(u64::MAX)).unwrap();
+        assert_eq!(reader.read(&mut b).unwrap(), 0);
+        assert!(reader.seek(SeekFrom::Current(i64::MAX)).is_err());
+        assert!(reader.seek(SeekFrom::End(i64::MIN)).is_err());
     }
 }

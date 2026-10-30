@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Chatter
+Comment=Secure messaging with Signal Protocol
+Exec=chatter-ui
+Icon=chatter-linux
+Terminal=false
+Type=Application
+Categories=Network;InstantMessaging;Chat;
+Keywords=chat;messaging;signal;encrypted;secure;
+StartupWMClass=chatter-linux
+StartupNotify=true

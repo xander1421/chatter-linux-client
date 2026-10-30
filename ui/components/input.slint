@@ -1,27 +1,41 @@
 // Input component with focus states, placeholder, validation, and password mode
 
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { Appearance } from "../theme/appearance.slint";
 
 export component Input inherits Rectangle {
     in property <string> placeholder: "";
     in-out property <string> text: "";
+    in property <int> caret-end-seq: 0;
+    changed caret-end-seq => { input.set-selection-offsets(2147483647, 2147483647); }
     in property <bool> password: false;
     in property <bool> disabled: false;
+    in property <length> control-height: Spacing.touch-target-min;
+    property <length> effective-height: max(root.control-height, Spacing.touch-target-min);
     in property <bool> error: false;
     in property <string> error-message: "";
 
-    accessible-role: text-input;
-    accessible-label: root.placeholder;
-    accessible-enabled: !root.disabled;
+    // The inner TextInput is the accessible field (name + value); a second
+    // text-input node here read as an empty, nameless twin.
+
+    // What the field holds as the user sees it: the committed text plus the
+    // input method's preedit. `text` excludes the preedit, so on Android a
+    // word being composed is not in it yet — a primary action enabled on
+    // `text != ""` looked dead until the word was committed.
+    // preedit appended at the end; mid-text composition is rare.
+    out property <string> composed-text: root.text + input.preedit-text;
 
     callback accepted(string);
     callback edited(string);
 
     // Forward focus to input
     forward-focus: input;
+
+    public function select-all() { input.select-all(); }
 
     // Internal state
     property <bool> focused: input.has-focus;
@@ -34,12 +48,12 @@ export component Input inherits Rectangle {
         } else if focused {
             Colors.primary
         } else {
-            Colors.text-muted
+            Colors.border
         }
     };
 
     background: transparent;
-    height: error && error-message != "" ? 66px : 44px;
+    height: error && error-message != "" ? root.effective-height + 22px : root.effective-height;
 
     // Main container
     VerticalLayout {
@@ -47,36 +61,73 @@ export component Input inherits Rectangle {
 
         // Input container
         Rectangle {
-            height: 44px;
+            height: root.effective-height;
             border-radius: Spacing.radius-md;
             background: Colors.surface;
-            border-width: 1px;
+            border-width: Spacing.stroke;
             border-color: border-col;
+            animate border-color { duration: Materials.motion-quick; easing: Materials.settle; }
             opacity: disabled ? 0.5 : 1.0;
 
+            // The focus halo grows from the field edge; the TextInput stays in
+            // place so caret, selection, and IME composition survive focus.
+            Rectangle {
+                x: -2px;
+                y: -2px;
+                width: parent.width + 4px;
+                height: parent.height + 4px;
+                border-radius: parent.border-radius + 2px;
+                border-width: root.focused && !root.disabled && Appearance.keyboard-focus-visible ? 2px : 0px;
+                border-color: root.error ? Colors.error : Colors.focus-ring;
+                drop-shadow-blur: root.focused && !root.disabled && Appearance.keyboard-focus-visible ? 8px : 0px;
+                drop-shadow-color: root.error ? Colors.error.with-alpha(0.24) : Colors.primary.with-alpha(0.24);
+                animate border-width { duration: Materials.motion-standard; easing: Materials.spring; }
+                animate border-color { duration: Materials.motion-quick; easing: Materials.settle; }
+                animate drop-shadow-blur { duration: Materials.motion-standard; easing: Materials.settle; }
+            }
+
             // Placeholder text (shown when empty, fades on focus)
-            if root.text == "": Text {
+            // `root.text` excludes the input method's preedit, so while a word
+            // is being composed — which on Android is the whole time you type
+            // one — the placeholder stayed drawn underneath the composing
+            // characters (OPEN-ITEMS §112n).
+            if root.text == "" && input.preedit-text == "": Text {
                 x: Spacing.md;
-                width: parent.width - Spacing.md * 2 - (root.password ? 32px : 0px);
+                width: parent.width - Spacing.md * 2 - (root.password ? Spacing.touch-target-min : 0px);
                 height: 100%;
                 text: root.placeholder;
                 color: Colors.text-muted;
                 font-size: Typography.base;
                 vertical-alignment: center;
                 opacity: focused ? 0.5 : 1.0;
-                animate opacity { duration: 150ms; }
+                animate opacity { duration: Materials.feedback-duration; }
+            }
+
+            // Full-area touch target so a tap in the side padding still focuses
+            // the input (except on the eye toggle). It sits BENEATH the
+            // TextInput: declared after it, it took every tap first, so the
+            // TextInput never saw a press and the caret could not be placed by
+            // tapping, nor text selected by dragging (OPEN-ITEMS §112o).
+            TouchArea {
+                width: parent.width - (root.password ? Spacing.touch-target-min : 0px);
+                enabled: !root.disabled;
+                clicked => { input.focus(); }
             }
 
             // Actual text input (full width for reliable touch targeting)
             input := TextInput {
                 x: Spacing.md;
-                width: parent.width - Spacing.md * 2 - (root.password ? 32px : 0px);
+                width: parent.width - Spacing.md * 2 - (root.password ? Spacing.touch-target-min : 0px);
                 height: parent.height;
                 color: Colors.text-primary;
                 font-size: Typography.base;
                 text <=> root.text;
                 // Toggle between password and text type
                 input-type: root.password && !root.show-password ? InputType.password : InputType.text;
+                // TextInput's default accessible value is its text, password or
+                // not: never hand a PIN or password to accessibility services.
+                accessible-value: root.password ? "" : self.text;
+                accessible-label: root.placeholder;
                 enabled: !root.disabled;
                 vertical-alignment: center;
 
@@ -90,9 +141,42 @@ export component Input inherits Rectangle {
 
             // Password visibility toggle
             if root.password: Rectangle {
-                x: parent.width - 36px;
-                width: 32px;
+                x: parent.width - Spacing.touch-target-min;
+                width: Spacing.touch-target-min;
                 height: 100%;
+                accessible-role: button;
+                accessible-label: root.show-password ? "Hide password" : "Show password";
+                accessible-enabled: !root.disabled;
+                accessible-action-default => { if !root.disabled { root.show-password = !root.show-password; } }
+
+                eye-keys := FocusScope {
+                    width: 0px;
+                    height: 0px;
+                    enabled: !root.disabled;
+                    key-pressed(event) => {
+                        if event.text == Key.Space || event.text == Key.Return {
+                            root.show-password = !root.show-password;
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+
+                if eye-keys.has-focus: Rectangle {
+                    border-width: 2px;
+                    border-color: Colors.focus-ring;
+                    border-radius: self.height / 2;
+                }
+
+                Rectangle {
+                    width: 36px;
+                    height: 36px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: self.height / 2;
+                    background: eye-touch.pressed ? Materials.pressed : eye-touch.has-hover ? Materials.hover : transparent;
+                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                }
 
                 Image {
                     source: root.show-password ? Icons.eye-off : Icons.eye;
@@ -101,29 +185,27 @@ export component Input inherits Rectangle {
                     colorize: eye-touch.has-hover ? Colors.text-primary : Colors.text-muted;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
+                    transform-scale-x: eye-touch.pressed ? 90% : 100%;
+                    transform-scale-y: eye-touch.pressed ? 90% : 100%;
+                    animate transform-scale-x { duration: eye-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: eye-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                 }
 
                 eye-touch := TouchArea {
-                    mouse-cursor: pointer;
+                    enabled: !root.disabled;
+                    mouse-cursor: root.disabled ? default : pointer;
                     clicked => {
                         root.show-password = !root.show-password;
                         input.focus();
                     }
                 }
             }
-
-            // Full-area touch target to ensure tapping anywhere focuses the input
-            // (Except on the eye toggle area)
-            TouchArea {
-                width: parent.width - (root.password ? 36px : 0px);
-                enabled: !root.disabled;
-                clicked => { input.focus(); }
-            }
         }
 
         // Error message
         if error && error-message != "": Text {
             text: root.error-message;
+            overflow: elide;
             color: Colors.error;
             font-size: Typography.xs;
         }

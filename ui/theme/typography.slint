@@ -14,22 +14,31 @@ import "../../assets/fonts/Inter-Italic.ttf";
 import "../../assets/fonts/Inter-MediumItalic.ttf";
 import "../../assets/fonts/Inter-SemiBoldItalic.ttf";
 import "../../assets/fonts/Inter-BoldItalic.ttf";
+// Color emoji for Android versions whose system font lacks newer glyphs.
+import "../../assets/fonts/NotoColorEmoji.ttf";
+
+import { Appearance } from "appearance.slint";
 
 export global Typography {
-    // Inter everywhere. Sans-serif fallback only kicks in for glyphs Inter lacks
-    // (CJK, exotic emoji) — the system picks a substitute then.
-    out property <string> font-family: "Inter, sans-serif";
+    // Inter everywhere; glyphs Inter lacks fall back to bundled Noto Color
+    // Emoji, then the system fonts. ONE family name, not a CSS list: Slint 1.17
+    // passes the string to parley as a single named family
+    // (sharedparley.rs FontFamilyName::named), so "Inter, sans-serif" matched
+    // nothing and the whole app rendered in the platform fallback — whose
+    // Samsung set has no U+25CF, so every password mask was tofu.
+    out property <string> font-family: "Inter";
 
     // Monospace alias points at Inter too — keep one family across the app.
     // Inline code / code blocks lose fixed-width alignment by design.
-    out property <string> font-family-mono: "Inter, sans-serif";
+    out property <string> font-family-mono: "Inter";
 
     // Emoji-only Text elements pin this so color glyphs win. Without it,
     // fontconfig fallback can pick a monochrome symbol font (e.g. Font Awesome
     // covers U+1F600+) and emoji render as white outlines.
     out property <string> font-family-emoji: "Noto Color Emoji";
 
-    // Font sizes.
+    // Font sizes. Every step is drawn at `Appearance.text-scale` (Settings ›
+    // Appearance › Text size), so the whole scale moves together.
     //
     // Eight rendered steps — 12 / 14 / 16 / 18 / 20 / 24 / 32 / 48 — behind
     // eleven names. The names all survive because they are spread over ~700
@@ -51,18 +60,18 @@ export global Typography {
     // 14. Small text now separates from body text by a real 2px, and hierarchy
     // below `base` is carried by weight and colour — which is the right lever
     // at these sizes anyway, and which the components already vary.
-    out property <length> xxs: 12px;
-    out property <length> xs2: 12px;
-    out property <length> xs: 12px;
-    out property <length> sm2: 14px;
-    out property <length> sm: 14px;
-    out property <length> base: 16px;
-    out property <length> lg: 18px;
-    out property <length> xl: 20px;
-    out property <length> xxl: 24px;
-    out property <length> xxxl: 32px;
+    out property <length> xxs: 12px * Appearance.text-scale;
+    out property <length> xs2: 12px * Appearance.text-scale;
+    out property <length> xs: 12px * Appearance.text-scale;
+    out property <length> sm2: 14px * Appearance.text-scale;
+    out property <length> sm: 14px * Appearance.text-scale;
+    out property <length> base: 16px * Appearance.text-scale;
+    out property <length> lg: 18px * Appearance.text-scale;
+    out property <length> xl: 20px * Appearance.text-scale;
+    out property <length> xxl: 24px * Appearance.text-scale;
+    out property <length> xxxl: 32px * Appearance.text-scale;
     // Illustration tier — empty-state hero glyphs, not body text.
-    out property <length> huge: 48px;
+    out property <length> huge: 48px * Appearance.text-scale;
 
     // Font weights (as integers for Slint)
     out property <int> light: 300;

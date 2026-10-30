@@ -2,15 +2,14 @@
 //!
 //! gRPC clients for all backend services.
 
+pub mod ai_client;
 pub mod anonymous_client;
 pub mod anonymous_mailbox_client;
-pub mod ai_client;
 pub mod auth_client;
 pub mod call_client;
 pub mod channel_client;
 pub mod client_pool;
 pub mod file_client;
-pub mod retry;
 pub mod gif_client;
 pub mod integration_client;
 pub mod interceptors;
@@ -20,6 +19,8 @@ pub mod notification_client;
 #[cfg(feature = "onion")]
 pub mod onion_transport;
 pub mod provisioning_client;
+pub mod retry;
+pub mod response_codec;
 pub mod svr_client;
 pub mod transport;
 pub mod user_client;
@@ -38,7 +39,7 @@ pub use mailbox_client::MailboxClient;
 pub use message_client::MessageClient;
 pub use notification_client::NotificationClient;
 pub use provisioning_client::{ProvisioningClient, ProvisioningPollResult};
-pub use retry::{retry_unary, RetryConfig};
+pub use retry::{RetryConfig, retry_unary};
 pub use svr_client::{FetchBackupResult, SvrClient};
 pub use transport::GrpcTransport;
 pub use user_client::UserClient;

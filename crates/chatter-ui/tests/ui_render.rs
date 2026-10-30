@@ -33,15 +33,14 @@ use slint::ComponentHandle;
 
 /// Fail with the cause, not the symptom, when the element-query API is inert.
 ///
-/// Without `SLINT_EMIT_DEBUG_INFO=1` every query returns nothing, and a
+/// Without `ui-test-debug` every query returns nothing, and a
 /// render-smoke test then reports a totally blank UI — the exact thing it is
 /// hunting — when the only thing wrong is the command line.
 fn require_element_queries() {
-    assert_eq!(
-        env!("CHATTER_UI_SLINT_DEBUG_INFO"),
-        "1",
+    assert!(
+        chatter_ui::SLINT_DEBUG_INFO_ENABLED,
         "the ElementHandle query API is inert: chatter-ui was built without \
-         SLINT_EMIT_DEBUG_INFO=1, so every element query returns nothing and \
+         the ui-test-debug feature, so every element query returns nothing and \
          this suite would report a blank screen no matter what renders. Run:\n\n    \
          ./scripts/test-ui.sh"
     );
@@ -69,9 +68,10 @@ fn pump(w: &MainWindow) {
     for _ in 0..(SETTLE_MS / FRAME_MS) {
         let scale = w.window().scale_factor();
         let size = w.window().size().to_logical(scale);
-        w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-            size: slint::LogicalSize::new(size.width, size.height),
-        });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: slint::LogicalSize::new(size.width, size.height),
+            });
         slint::Timer::single_shot(std::time::Duration::from_millis(1), || {
             slint::quit_event_loop().unwrap();
         });
@@ -92,7 +92,12 @@ fn find(w: &MainWindow, ty: &str) -> Option<Box_> {
     let e = testing::ElementHandle::find_by_element_type_name(w, ty).next()?;
     let p = e.absolute_position();
     let s = e.size();
-    Some(Box_ { x: p.x, y: p.y, w: s.width, h: s.height })
+    Some(Box_ {
+        x: p.x,
+        y: p.y,
+        w: s.width,
+        h: s.height,
+    })
 }
 
 fn count(w: &MainWindow, ty: &str) -> usize {
@@ -124,9 +129,14 @@ fn main_view_renders_its_columns_and_they_cover_the_window() {
 
     let w = MainWindow::new().expect("MainWindow::new");
     w.set_current_view("main".into());
+    // A selected conversation mounts ChatLayout; no selection deliberately
+    // shows the welcome state without a composer. Exercise a real chat here.
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("Render smoke".into());
     // Default desktop shape: a real window, mouse input, sidebar expanded.
     w.set_is_mobile_platform(false);
-    w.set_sidebar_collapsed(false);
+    w.global::<chatter_ui::SidebarPane>()
+        .set_sidebar_collapsed(false);
     pump(&w);
 
     let win = w.window().size().to_logical(w.window().scale_factor());
@@ -199,9 +209,17 @@ fn main_view_renders_its_columns_and_they_cover_the_window() {
     // one of the two panes is in the tree and it covers the window. Both
     // failure modes are still "blank screen" — a list that only covers half
     // the width, or a chat column that quietly renders behind it.
+    // A phone: single-pane (compact-layout) needs a touch platform AND a
+    // window under 600 dp; a wider touch window is the tablet two-pane.
     w.set_is_mobile_platform(true);
-    w.set_mobile_show_chat(false);
+    w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(false);
     pump(&w);
+    // Mobile geometry is measured against the resized window, not the
+    // desktop width retained above.
+    let win = w.window().size().to_logical(w.window().scale_factor());
+    let (win_w, win_h) = (win.width, win.height);
     let list_side = find(&w, "Sidebar");
     assert_visible(&list_side, "Sidebar", "mobile, conversation list");
     let list_side = list_side.unwrap();
@@ -234,7 +252,8 @@ fn main_view_renders_its_columns_and_they_cover_the_window() {
     // The mirror image, and the one the push-navigation change could break:
     // tapping a row must swap the panes, not leave the list on top of a chat
     // that never becomes visible.
-    w.set_mobile_show_chat(true);
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
     pump(&w);
     let m_chat = find(&w, "ChatLayout");
     assert_visible(&m_chat, "ChatLayout", "mobile, conversation open");
@@ -263,33 +282,26 @@ fn main_view_renders_its_columns_and_they_cover_the_window() {
         "BLANK SCREEN on mobile: the conversation has no composer"
     );
 
-    // ---- 6. The composer does not resize on the first character -----------
-    // Geometry, because that is what the bug is. On Android the composer sits
-    // under a TextInput whose IME transaction is still in flight for a few
-    // hundred ms after the tap that focused it, and anything that grows
-    // `MessageComposer.height` inside that window hides the just-shown soft
-    // keyboard. Both gates tried so far for the formatting toolbar
-    // (`text-input.has-focus`, then `root.text != ""`) grew it there — the
-    // first mid-tap, the second on the first keystroke, which is why "press a
-    // key, keyboard vanishes, press again and it types fine".
+    // ---- 6. The first character does not raise the formatting bar ---------
+    // On Android the composer sits under a TextInput whose IME transaction is
+    // still in flight for a few hundred ms after the tap that focused it, and
+    // the formatting toolbar appearing there hid the just-shown soft keyboard
+    // (gates on `has-focus`, then on `text != ""`). It now shows only for a
+    // selection — see the show-formatting comment in
+    // ui/chat/message_composer.slint.
     //
-    // So: same conversation, empty draft vs. a one-character draft, same
-    // height. Nothing about a bare `if` on the draft text can satisfy this.
-    let empty_h = find(&w, "MessageComposer")
-        .expect("MessageComposer missing before typing")
-        .h;
-    w.set_composer_text("a".into());
+    // The composer itself does grow on the first character since 26ff21f2
+    // (actions rise above a populated field). That change keeps the same
+    // native input and its focus; ui_phone_layout.rs asserts that.
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("a".into());
     pump(&w);
-    let typed_h = find(&w, "MessageComposer")
-        .expect("MessageComposer missing after typing")
-        .h;
     assert!(
-        (typed_h - empty_h).abs() < 0.5,
-        "the composer grew {}px -> {}px on the FIRST character. On Android that \
+        testing::ElementHandle::find_by_accessible_label(&w, "Bold")
+            .next()
+            .is_none(),
+        "the formatting bar appeared on the FIRST character. On Android that \
          resize lands while the IME is still animating in and hides the soft \
-         keyboard — see the show-formatting comment in \
-         ui/chat/message_composer.slint",
-        empty_h,
-        typed_h
+         keyboard"
     );
 }

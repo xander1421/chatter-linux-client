@@ -8,10 +8,10 @@ pub mod two_way;
 
 // Re-export key types
 pub use bootstrap::{
-    release_bootstrap_lock, try_acquire_bootstrap_lock, BootstrapResponse, BootstrapResult,
-    DmBootstrap, DEFAULT_MAILBOX_TTL_SECONDS,
+    BootstrapResponse, BootstrapResult, DEFAULT_MAILBOX_TTL_SECONDS, DmBootstrap,
+    release_bootstrap_lock, try_acquire_bootstrap_lock,
 };
 pub use conversation::{
     ConversationKey, DmConversation, DmConversationManager, DmMailbox, PeerMailbox,
 };
-pub use two_way::{PollResult, ReceivedMessage, SendResult, TwoWayAnonymity};
+pub use two_way::{PollResult, ReceivedMessage, TwoWayAnonymity};

@@ -1,4 +1,6 @@
 [package]
+# All suites are registered explicitly below; tests/it.rs shares helper code.
+autotests = false
 name = "chatter-core"
 version = "0.1.0"
 edition = "2024"
@@ -6,32 +8,33 @@ authors = ["xander1421"]
 description = "Core library for Chatter secure messaging"
 license = "GPL-3.0"
 repository = "https://github.com/xander1421/chatter"
-rust-version = "1.85"
+rust-version = "1.99"
 
 [lib]
 name = "chatter_core"
 path = "src/lib.rs"
 
 [dependencies]
+unicode-segmentation = "1"
 # ============================================================================
-# bitchat mesh
+# bitchat mesh — every chatter-mesh* crate is optional, enabled only by the
+# `mesh` feature below. A default build links none of them.
 # ============================================================================
 # Noise sessions and the mesh identity type. The crate holds no key custody by
 # design — `storage/mesh_identity_store.rs` provides it, over SQLCipher.
-# Its `rand_core` is 0.6, which is why the mesh identity is generated with the
-# `rand_core_06` alias below rather than the crate's main `rand` 0.9.
-chatter-mesh-noise = { path = "../chatter-mesh-noise" }
+# Mesh and dalek 3 use rand_core 0.10; Signal still requires rand 0.9.
+chatter-mesh-noise = { path = "../chatter-mesh-noise", optional = true }
 # Store-and-forward (P5). Leaves `Storage` and `Sealer` open on purpose so the
 # sealing key never enters that crate — `storage/mesh_store.rs` implements both.
-chatter-mesh-store = { path = "../chatter-mesh-store" }
+chatter-mesh-store = { path = "../chatter-mesh-store", optional = true }
 # Wire format: packet codec, TLV payloads, relay policy, gossip-sync filters.
-chatter-mesh = { path = "../chatter-mesh" }
+chatter-mesh = { path = "../chatter-mesh", optional = true }
 # Link policy plus the MeshLink radio trait. The trait lives here rather than in
 # a platform crate so the Android backend needs no BlueZ.
-chatter-mesh-link = { path = "../chatter-mesh-link" }
+chatter-mesh-link = { path = "../chatter-mesh-link", optional = true }
 # Nostr transport: geohash channels and gift-wrapped DMs. Its RelayConnector is
 # injected, so no second Tor stack — the existing arti client backs it.
-chatter-mesh-nostr = { path = "../chatter-mesh-nostr" }
+chatter-mesh-nostr = { path = "../chatter-mesh-nostr", optional = true }
 
 # ============================================================================
 # Async Runtime
@@ -49,65 +52,84 @@ tonic = { version = "0.14", features = ["tls-ring"] }
 tonic-prost = "0.14"
 prost = "0.14"
 prost-types = "0.14"
+# Reflection over the generated descriptors: evaluates the buf.validate rules
+# declared on E2E content (network/validation/protovalidate.rs).
+prost-reflect = "0.16"
 tower = "0.5"
 
 # ============================================================================
 # Crypto - Signal Protocol (Official libsignal)
 # ============================================================================
-libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3" }
-libsignal-core = { git = "https://github.com/signalapp/libsignal", rev = "c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3" }
-signal-media = { git = "https://github.com/signalapp/libsignal", rev = "c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3" }
-# Same versions signal-media pins; used directly for the sync (file-streaming)
-# sanitize path, which signal-media's async-only wrapper doesn't expose.
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
+libsignal-core = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
+signal-media = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
+# RFC 9180 HPKE (base, X25519/HKDF-SHA256/AES-256-GCM) for the mailbox envelope.
+signal-crypto = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
+# Same version signal-media pins; used directly for the sync (file-streaming)
+# sanitize path, which signal-media's async-only wrapper doesn't expose. WebP
+# goes through signal_media::sanitize::webp, so webpsan is not a direct dep.
 mp4san = "0.5.3"
-webpsan = { version = "0.5.3", default-features = false }
 # Signal usernames crate (Ristretto255 + ZK proof of ownership for the
 # discovery hash). NOTE: licensed AGPL-3.0; combining with the rest of
 # chatter (GPL-3.0) means the combined work is effectively AGPL.
-usernames = { git = "https://github.com/signalapp/libsignal", rev = "c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3" }
+usernames = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
+# KT query-privacy VRF verifier (ECVRF-EDWARDS25519-SHA512-TAI, RFC 9381):
+# used as-is via its public `VrfPublicKey`. Also AGPL-3.0, same as `usernames`.
+libsignal-keytrans = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
 rand = { version = "0.9", features = ["os_rng"] }
+# OPAQUE 4's public RNG traits still require rand_core 0.6.
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
-blind-rsa-signatures = "0.14"
-rsa = "0.7"
-sha2 = "0.10"
-hmac = "0.12"
+rand_core_10 = { package = "rand_core", version = "0.10.1" }
+getrandom = { version = "0.4.3", features = ["sys_rng"] }
+blind-rsa-signatures = "0.18.0"
+rsa = "0.9.10"
+sha2 = "0.11.0"
+# opaque-ke 4.0.1 exposes digest 0.10 in its TripleDh cipher-suite bound.
+sha2_10 = { package = "sha2", version = "0.10" }
+hmac = "0.13.0"
 rayon = "1.10"
-hkdf = "0.12"
-aes-gcm = "0.10"
-aes = "0.8"
-cbc = "0.1"
-block-padding = "0.3"
-chacha20poly1305 = "0.10"
-hpke = "0.12"
-x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
-ed25519-dalek = { version = "2", features = ["rand_core", "pem"] }
-xeddsa = "1.0"
-curve25519-dalek = { version = "4", features = ["digest"] }
+hkdf = "0.13.0"
+aes-gcm = { version = "0.11.1", features = ["zeroize"] }
+aes = { version = "0.9.3", features = ["zeroize"] }
+# AES-256-CTR for Signal encrypted device names (crypto/device_name.rs).
+ctr = "0.10.1"
+# `alloc` gives cipher's encrypt_padded_vec / decrypt_padded_vec, which
+# crypto/provisioning.rs uses. It used to arrive transitively; a dependency
+# update stopped some other crate from enabling it, so it is named here rather
+# than left to feature unification.
+cbc = { version = "0.2.1", features = ["alloc", "zeroize"] }
+block-padding = "0.4.2"
+chacha20poly1305 = { version = "0.11.0", features = ["zeroize"] }
+x25519-dalek = { version = "3.0.0", features = ["static_secrets", "zeroize"] }
+ed25519-dalek = { version = "3.0.0", features = ["rand_core", "pem"] }
 subtle = "2.5"
-base64 = "0.22"
+base64 = "0.23.1"
 base32 = "0.5"
 hex = "0.4"
+tar = "0.4"
+flate2 = "1"
 qrcode = "0.14"
 
 # ============================================================================
 # Database (SQLite + SQLCipher)
 # ============================================================================
-rusqlite = { version = "0.36", features = ["bundled-sqlcipher", "unlock_notify", "blob"] }
+# 0.38+ bundles SQLCipher requiring OpenSSL3 EVP_MAC; the owner-pinned
+# WebRTC BoringSSL has HMAC_CTX instead. Keep one crypto provider on Android.
+rusqlite = { version = "=0.37.0", features = ["bundled-sqlcipher", "unlock_notify"] }
 memmap2 = "0.9"
 
 # ============================================================================
 # System Integration (cross-platform)
 # ============================================================================
-keyring = { version = "3", default-features = false }
+keyring = { package = "keyring-core", version = "1.0.0" }
 directories = "6"
-dirs = "5"
 
 # ============================================================================
 # Serialization
 # ============================================================================
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-bincode = "1.3"
+bincode = { version = "2.0.1", features = ["serde"] }
 
 # ============================================================================
 # Synchronization
@@ -120,39 +142,34 @@ parking_lot = "0.12"
 thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 bytes = "1"
 http = "1"
+http-body = "1"
 mime_guess = "2"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking", "stream", "charset", "http2", "macos-system-configuration"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json", "blocking", "stream", "charset", "http2", "system-proxy"] }
 url = "2"
-rodio = "0.21.1"
-cpal = "0.15"
+rodio = "0.22.2"
+cpal = "0.18.2"
 hound = "3.5"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-ringbuf = "0.4"
 # smol removed — was unused
 
 # ============================================================================
 # Video Decoding - GStreamer (desktop only, gated behind `desktop-media`)
 # ============================================================================
-gstreamer = { version = "0.23", optional = true }
-gstreamer-app = { version = "0.23", optional = true }
-gstreamer-video = { version = "0.23", optional = true }
-gstreamer-audio = { version = "0.23", optional = true }
-gstreamer-pbutils = { version = "0.23", optional = true }
-gstreamer-gl = { version = "0.23", optional = true }
-gstreamer-play = { version = "0.23", optional = true }
+gstreamer = { version = "0.25", optional = true }
+gstreamer-app = { version = "0.25", optional = true }
+gstreamer-video = { version = "0.25", optional = true }
+gstreamer-pbutils = { version = "0.25", optional = true }
 
 # ============================================================================
 # Media Utilities
 # ============================================================================
-bytemuck = { version = "1", features = ["derive"] }
 # once_cell removed — migrated to std::sync::LazyLock
 moka = { version = "0.12", features = ["sync"] }
-zeroize = { version = "1.8", features = ["derive"] }
+zeroize = { version = "1.8", features = ["derive", "serde"] }
 libc = "0.2"
 
 # ============================================================================
@@ -164,15 +181,13 @@ libc = "0.2"
 # screen picker never appears.
 livekit = { version = "0.7.52", default-features = false, features = ["tokio", "rustls-tls-webpki-roots", "glib-main-loop"], optional = true }
 # livekit-api dropped: the app never used it (server mints LiveKit tokens), and
-# its published version skews against livekit 0.7.52's livekit-protocol. The one
-# consumer (examples/screenshare_wire_bench) hand-mints its JWT via hmac+sha2.
+# its published version skews against livekit 0.7.52's livekit-protocol.
 # lazy_static removed — migrated to std::sync::LazyLock
-async-stream = "0.3.6"
 
 # ============================================================================
-# Local AI (optional - requires CUDA)
+# Local AI (optional; CPU by default, CUDA is an explicit opt-in)
 # ============================================================================
-mistralrs = { version = "0.7", optional = true, features = ["cuda", "flash-attn"] }
+mistralrs = { version = "0.8.1", optional = true, default-features = false }
 
 # ============================================================================
 # Tor onion transport (optional — gated behind `onion` feature, Stage 2)
@@ -180,11 +195,15 @@ mistralrs = { version = "0.7", optional = true, features = ["cuda", "flash-attn"
 # arti-client: pure-Rust Tor client. `tokio` gives DataStream the tokio
 # AsyncRead/AsyncWrite impls hyper-util's TokioIo needs; `rustls` avoids an
 # OpenSSL system dep. `onion-service-client` is REQUIRED for TorClient::connect
-# to a .onion (it's in arti's default set, which default-features=false drops —
-# without it the onion dial fails at runtime with a generic "unavailable").
+# to a .onion; without it the onion dial fails at runtime with a generic
+# "unavailable". Enable it explicitly alongside default-features=false.
 # tor-rtcompat provides PreferredRuntime.
-arti-client = { version = "0.32", default-features = false, features = ["tokio", "rustls", "onion-service-client"], optional = true }
-tor-rtcompat = { version = "0.32", default-features = false, features = ["tokio", "rustls"], optional = true }
+# The server advertises onion introduction PoW. Without hs-pow-full Arti's
+# v1 solver is a stub that always sends no proof, even when the descriptor
+# suggests effort or a retry should raise it under load.
+arti-client = { version = "0.47.0", default-features = false, features = ["tokio", "rustls", "onion-service-client", "hs-pow-full", "experimental-api"], optional = true }
+tor-rtcompat = { version = "0.47.0", default-features = false, features = ["tokio", "rustls"], optional = true }
+tor-netdir = { version = "0.47.0", optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 # HTTP-over-Tor client (anon_http): a hyper HTTP/1.1 client run over a rustls TLS
 # session tunnelled through the Arti DataStream. All already transitive deps of
@@ -192,14 +211,18 @@ hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 hyper = { version = "1", features = ["client", "http1"], optional = true }
 http-body-util = { version = "0.1", optional = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"], optional = true }
-webpki-roots = { version = "1", optional = true }
+webpki-roots = "1"
 # WebSocket framing for Nostr relays, over the Tor DataStream. Under `onion`
 # because that is the only build with a relay connector at all. Replaces a
 # hand-rolled RFC 6455 implementation: this code parses frames from relays we
 # neither control nor authenticate, which is not a place for bespoke framing.
-tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake"], optional = true }
-unicode-segmentation = "1.12.0"
-argon2 = "0.5.3"
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"], optional = true }
+argon2 = "0.6.0"
+# OPAQUE (RFC 9807) password authentication, client side (crypto/opaque.rs).
+# 4.0.x is the release synced to the final RFC; the server is
+# github.com/bytemare/opaque v0.18.0 and interop is pinned by tests on both
+# sides. ristretto255 only; the Argon2id KSF is ours (crypto/opaque.rs).
+opaque-ke = { version = "4.0.1", default-features = false, features = ["ristretto255"] }
 tempfile = "3"
 
 # ============================================================================
@@ -215,47 +238,52 @@ tempfile = "3"
 # the SAME crate instances, never a second mismatched copy.
 tonic-h3 = { version = "0.0.6", default-features = false, features = ["quinn"], optional = true }
 quinn = { version = "0.11", default-features = false, features = ["rustls-ring", "runtime-tokio"], optional = true }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 # ============================================================================
 # Desktop-only system deps (not available on Android or iOS)
 # ============================================================================
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-notify-rust = "4"
-arboard = { version = "3", features = ["wayland-data-control"] }
+notify-rust = { version = "4", optional = true }
 # gtk3 backend (in-process GtkFileChooserDialog) instead of the xdg-portal
 # default. Hyprland and other wlroots-derived compositors removed
 # `xdg_foreign`, which makes the portal FileChooser hang waiting for a
 # parent surface that can never be exported. gtk3 dialogs sidestep that.
-rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
-open = "5.3.3"
+rfd = { version = "0.17.2", default-features = false, features = ["gtk3"], optional = true }
+open = { version = "5.3.3", optional = true }
 
 # ============================================================================
 # Platform-specific: Linux
 # ============================================================================
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+apple-native-keyring-store = { version = "1.0.2", features = ["keychain", "protected"], optional = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-async-io-crypto-rust"], optional = true }
+# notify-rust's close() discards the daemon's error. Own the call D-Bus
+# exchange so failed withdrawal retains its identity for a later retry.
+zbus = { version = "5", default-features = false, features = ["async-io"] }
 # BlueZ radio for the mesh (Linux only, by construction).
-chatter-mesh-ble = { path = "../chatter-mesh-ble" }
-zbus = "5"
-ksni = "0.2"
+chatter-mesh-ble = { path = "../chatter-mesh-ble", optional = true }
+# Preserve the shared zbus blocking backend inside Chatter's Tokio tasks.
+# KSNI's default Tokio feature makes keyring/notification calls nest runtimes.
+ksni = { version = "0.3.6", default-features = false, features = ["async-io", "blocking"], optional = true }
 v4l = "0.14"
-gstreamer-gl-egl = { version = "0.23", optional = true }
-glutin_egl_sys = { version = "0.7", optional = true }
 
 # ============================================================================
 # Platform-specific: Windows
 # ============================================================================
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = [
+windows-native-keyring-store = { version = "1.1.0", optional = true }
+windows = { version = "0.62.2", features = [
     "Win32_UI_Shell",
     "Win32_Foundation",
     "Win32_System_Memory",
     "Win32_System_Threading",
     "Win32_System_Diagnostics_Debug",
 ] }
-winreg = "0.55"
-tray-icon = "0.21"
-muda = "0.17"
+tray-icon = { version = "0.26.1", optional = true }
+muda = { version = "0.21.2", optional = true }
 
 # ============================================================================
 # Platform-specific: Android
@@ -264,26 +292,33 @@ muda = "0.17"
 # Core is platform-neutral; UI crate injects platform impls via NotificationSink.
 [target.'cfg(target_os = "android")'.dependencies]
 # JNI radio for the mesh (Android only).
-chatter-mesh-android = { path = "../chatter-mesh-android" }
-gstreamer-gl-egl = { version = "0.23", optional = true }
-glutin_egl_sys = { version = "0.7", optional = true }
+chatter-mesh-android = { path = "../chatter-mesh-android", optional = true }
+# Call playback uses Oboe directly while CPAL uses AAudio. Oboe declares
+# USAGE_VOICE_COMMUNICATION: only that usage
+# follows the call route (earpiece / speaker / headset) AudioManager selects.
+oboe = { version = "0.6", features = ["java-interface"] }
+
+# SHA-2 0.11 selects ARMv8 SHA2 / x86 SHA-NI at runtime by default,
+# with a software fallback; Android needs no separate `asm` dependency.
 
 [dev-dependencies]
-tokio-test = "0.4"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Paused-clock tests (heartbeat.rs `start_paused`).
+tokio = { version = "1", features = ["test-util"] }
 tempfile = "3"
-criterion = { version = "0.5", features = ["html_reports"] }
-mockall = "0.13"
+criterion = { version = "0.8.2", features = ["html_reports"] }
+mockall = "0.15"
 paste = "1.0"
 proptest = "1"
 # Needed by tests/validated.rs V14 (KT) to construct raw PQXDH prekey bundles
 # directly, mirroring the crate's own pinned libsignal + rand. Same source/rev
 # and version so Cargo unifies with the normal deps (no duplicate build).
 rand = { version = "0.9", features = ["os_rng"] }
-libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3" }
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
 # Needed by tests/validated.rs V50/V51 to open the SQLCipher stores directly
 # and compare backup-restored rows byte-for-byte. Same version as the normal
 # dep so Cargo unifies the build.
-rusqlite = { version = "0.36", features = ["bundled-sqlcipher", "unlock_notify", "blob"] }
+rusqlite = { version = "=0.37.0", features = ["bundled-sqlcipher", "unlock_notify"] }
 
 [[bench]]
 name = "attachment_decrypt"
@@ -302,14 +337,16 @@ dev-trust-root = []
 # dependency (arti-client, added in Stage 2). Without it, switching to onion
 # transport returns an error and anon mode stays UI-filter-only.
 onion = [
-    "dep:arti-client", "dep:tor-rtcompat", "dep:hyper-util",
-    "dep:hyper", "dep:http-body-util", "dep:tokio-rustls", "dep:webpki-roots",
+    "dep:arti-client", "dep:tor-rtcompat", "dep:tor-netdir", "dep:hyper-util",
+    "dep:hyper", "dep:http-body-util", "dep:tokio-rustls",
     "dep:tokio-tungstenite",
 ]
-desktop-system = ["keyring/sync-secret-service", "keyring/windows-native", "keyring/apple-native"]
+desktop-system = ["dep:zbus-secret-service-keyring-store", "dep:windows-native-keyring-store", "dep:apple-native-keyring-store"]
+# Native UI capabilities are opt-in; credential stores keep their own contract.
+desktop-native = ["dep:notify-rust", "dep:rfd", "dep:open", "dep:ksni", "dep:tray-icon", "dep:muda"]
 # HTTP/3 (QUIC) gRPC transport. Off by default — pulls quinn/h3 via tonic-h3.
 # Without it, GrpcClientPool is TCP/HTTP2-only (today's behavior, unchanged).
-quic = ["dep:tonic-h3", "dep:quinn", "dep:rustls"]
+quic = ["dep:tonic-h3", "dep:quinn"]
 # Shared media stack (LiveKit + WebRTC) — works on every target the `livekit`
 # crate supports. Mobile bridges opt in via `--features media`; desktop pulls
 # it in transitively through `desktop-media`.
@@ -318,16 +355,14 @@ media = [
 ]
 # GStreamer — inline video playback, avatar decode, etc. Desktop-only.
 desktop-gstreamer = [
-    "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video",
-    "dep:gstreamer-audio", "dep:gstreamer-pbutils", "dep:gstreamer-gl",
-    "dep:gstreamer-play", "dep:gstreamer-gl-egl", "dep:glutin_egl_sys",
+    "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video", "dep:gstreamer-pbutils",
 ]
-# Compat alias — previous callers (desktop-cli, chatter-ui) keep working.
+# The full desktop media stack: calls (LiveKit) plus GStreamer.
 desktop-media = ["media", "desktop-gstreamer"]
-# iOS: no desktop system deps; keyring must use the Keychain, otherwise
-# keyring silently falls back to an in-memory mock (keyring lib.rs:286).
-ios = ["keyring/apple-native"]
+# iOS credentials use the native protected-data Keychain store.
+ios = ["dep:apple-native-keyring-store"]
 local-ai = ["dep:mistralrs"]
+local-ai-cuda = ["local-ai", "mistralrs/cuda", "mistralrs/flash-attn"]
 jarvis = []
 # The bitchat mesh. Off by default: the radio stack has never exchanged a byte
 # with another device, so it should be opted into rather than shipped live.
@@ -338,13 +373,87 @@ jarvis = []
 # Mesh-over-clearnet is not offered on purpose: publishing to public relays
 # without Tor would hand every relay operator the user's IP alongside the cell
 # they are sitting in, which is the correlation the design exists to prevent.
-mesh = []
+#
+# This is a real gate: the chatter-mesh* crates are optional dependencies and
+# `services::mesh`, `storage::mesh_store` and `storage::mesh_identity_store` are
+# `#[cfg(feature = "mesh")]`. The BLE radio crate is per-target (BlueZ on Linux,
+# JNI on Android); naming it here enables whichever one the target has.
+mesh = [
+    "dep:chatter-mesh", "dep:chatter-mesh-noise", "dep:chatter-mesh-link",
+    "dep:chatter-mesh-store", "dep:chatter-mesh-nostr",
+    "dep:chatter-mesh-ble", "dep:chatter-mesh-android",
+]
 # Widens `ChatterClient` service accessors to `pub` so integration tests in
 # this crate's `tests/` directory (which are external consumers) can wire
 # real services against a live server. Do NOT enable for application builds —
 # chatter-ui must stay behind the façade.
-testing = []
+#
+# ANCHOR-TESTING: this feature used to ALSO disarm all four fail-closed trust
+# anchor guards in src/config.rs, so `--features chatter-core/testing` on a
+# release build silently pinned the dev sealed-sender root, the dev TLS CA, the
+# dev KT tree-head key and the dev VRF key — defeating the guarantee those
+# guards exist for. Accessor widening and anchor selection are now separate
+# features; this one has no security effect (the mesh-noise `testing` hook it
+# forwards only sets a session's sent-message count).
+testing = ["chatter-mesh-noise?/testing"]
+# Falls the four pinned trust anchors back to their DEVELOPMENT values when
+# nothing is provisioned, so `cargo test` runs without `make provision-keys`.
+#
+# This is the ONLY thing it does, it is named for what it does, and
+# chatter-core's build.rs REFUSES to build it in a release profile — a
+# shippable artifact cannot be pinned to public keys by enabling a feature
+# whose name says "testing". Unit tests get the same fallback from `cfg(test)`
+# with no feature at all; this exists for the integration tests in `tests/`,
+# which link chatter-core as an ordinary dependency with `cfg(test)` unset.
+insecure-test-anchors = []
 
 [package.metadata.docs.rs]
-# Enable the `testing` feature in generated docs so accessors appear.
-features = ["testing"]
+# `testing` so the widened accessors appear; `insecure-test-anchors` so the
+# four fail-closed anchor guards do not stop a docs build that provisions
+# nothing (docs.rs builds in a dev profile, which build.rs permits).
+features = ["testing", "insecure-test-anchors"]
+
+# Keep process-global state and throughput measurements in their own binaries.
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+[[test]]
+name = "crypto_hwaccel_test"
+path = "tests/crypto_hwaccel_test.rs"
+
+[[test]]
+name = "e2e_two_user_suite"
+path = "tests/e2e_two_user_suite.rs"
+
+[[test]]
+name = "integration_calls"
+path = "tests/integration_calls.rs"
+
+[[test]]
+name = "startup_regression_test"
+path = "tests/startup_regression_test.rs"
+
+[[test]]
+name = "validated"
+path = "tests/validated.rs"
+
+# Onion sign-up proof of work over real Tor (server OPEN-ITEMS §130).
+[[test]]
+name = "onion_signup_pow"
+path = "tests/onion_signup_pow.rs"
+required-features = ["onion"]
+
+# Shield chosen before sign-in: onboarding over real Tor never dials direct
+# (server OPEN-ITEMS §132).
+[[test]]
+name = "shield_onboarding"
+path = "tests/shield_onboarding.rs"
+required-features = ["onion"]
+
+# Focused opt-in live own-avatar lifecycle proof; fixture users only.
+[[test]]
+name = "avatar_profile_live"
+path = "tests/avatar_profile_live.rs"
+required-features = ["testing", "dev-trust-root"]

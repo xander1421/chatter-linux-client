@@ -6,6 +6,8 @@
 // Neo states: flat default, highlight hover, inset active (selected).
 
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { HoldArea } from "../components/hold_area.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
@@ -17,23 +19,36 @@ export component ChannelListItem inherits Rectangle {
     in property <string> name: "channel";
     in property <string> channel-type: "public"; // "public", "private", "dm"
     in property <int> unread-count: 0;
+    in property <int> mention-count: 0;
     // Core-composed preview of the latest activity: text, "🖼️ Photo",
     // "📎 report.pdf", "📌 …" for a pinned one. Never assembled here.
     in property <string> last-message: "";
+    in property <string> draft-preview: "";
     in property <string> timestamp: "";
     in property <bool> is-typing: false;
+    in property <string> typing-text;
     in property <bool> selected: false;
     in property <bool> collapsed: false;
     in property <image> avatar-source;
     in property <bool> has-avatar: false;
     in property <bool> is-pinned: false;
+    in property <bool> is-muted: false;
     in property <bool> mobile-mode: false;
 
     // Callbacks
     callback clicked();
     callback context-menu-requested(/* x */ length, /* y */ length);
+    callback swipe-down(length, length);
+    callback swipe-moved(length, length);
+    callback swipe-ended(bool);
 
     // Typing animation (0.0 to 1.0 cycling), same as the DM row above it.
+    // The dots fade through their background's alpha, not `opacity`: Slint
+    // wraps an element with `opacity` in an Opacity item that is rendered even
+    // when clipped away, which read this animated value, and so kept the
+    // animation (and a frame every vsync) running for a row scrolled out of
+    // the sidebar. A background is read only when the dot is drawn, so the
+    // animation ticks only while a dot is on screen.
     property <float> typing-animation-progress: 0.0;
 
     states [
@@ -41,8 +56,9 @@ export component ChannelListItem inherits Rectangle {
             typing-animation-progress: 1.0;
             in {
                 animate typing-animation-progress {
-                    duration: 600ms;
-                    iteration-count: -1;
+                    // Reduce animations: the dots hold one static mark.
+                    duration: Appearance.reduce-motion ? 0ms : 600ms / Appearance.animation-speed;
+                    iteration-count: Appearance.reduce-motion ? 1 : -1;
                 }
             }
         }
@@ -78,17 +94,50 @@ export component ChannelListItem inherits Rectangle {
     // Layout. Collapsed rows are 48px so the 44px slot has breathing room
     // above and below.
     height: root.collapsed ? 48px : (root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop);
-    border-radius: Spacing.radius-sm;
+    border-radius: Spacing.radius-md;
+    clip: true;
+
+    // A Flickable cancels the pointer grab when scrolling begins. Release the
+    // visual press as soon as the finger moves past the shared gesture slop.
+    property <bool> press-active: false;
+    property <length> press-x: 0px;
+    property <length> press-y: 0px;
+    function press-down(x: length, y: length) {
+        root.press-x = x;
+        root.press-y = y;
+        root.press-active = true;
+    }
+    function press-moved(x: length, y: length) {
+        if (abs(x - root.press-x) > Spacing.sm || abs(y - root.press-y) > Spacing.sm) {
+            root.press-active = false;
+        }
+    }
+    // The whole row compresses under the finger, then springs back from its
+    // own center. This keeps the avatar, text and badge moving as one surface.
+    transform-scale-x: root.press-active ? 98% : 100%;
+    transform-scale-y: root.press-active ? 96% : 100%;
+    animate transform-scale-x { duration: root.press-active ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+    animate transform-scale-y { duration: root.press-active ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+    animate background { duration: Materials.motion-standard; easing: Materials.glide; }
 
     // Neo 2.0 states: flat → highlight hover → inset selected.
     // Collapsed, the state fill belongs to the slot below, not to a
     // full-width plate across the rail.
     background: root.collapsed ? transparent
-              : root.selected ? Colors.neo-inset-bg
-              : touch.has-hover ? Colors.surface-hover
+              : root.selected ? Colors.row-selected
+              : root.press-active ? Colors.surface-control-hover
+              : (!root.mobile-mode && touch.has-hover) ? Colors.row-hover
               : transparent;
-    border-width: !root.collapsed && (root.selected || touch.has-hover) ? 1px : 0px;
-    border-color: root.selected ? Colors.glow-primary : Colors.neo-highlight;
+
+    Rectangle {
+        opacity: root.selected && !root.collapsed ? 1 : 0;
+        animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+        x: 0px;
+        width: 3px;
+        height: parent.height;
+        border-radius: self.width / 2;
+        background: Colors.selected-indicator;
+    }
 
     // Expanded content layout
     if !root.collapsed: HorizontalLayout {
@@ -101,7 +150,8 @@ export component ChannelListItem inherits Rectangle {
         // On touch it takes the DM avatar's column width so both row kinds put
         // their text on the same left edge.
         Rectangle {
-            width: root.icon-box;
+            // + the DM avatar's 4px presence ring.
+            width: root.icon-box + 4px;
             height: parent.height;
 
             if root.has-avatar: Rectangle {
@@ -119,24 +169,28 @@ export component ChannelListItem inherits Rectangle {
                 }
             }
 
-            // Private channels render as a purple dot instead of an icon —
-            // visual encryption marker without taking up icon space.
-            if !root.has-avatar && root.channel-type == "private": Rectangle {
-                width: 8px;
-                height: 8px;
-                border-radius: 4px;
-                background: Colors.primary;
+            // Type glyph. A private (invite-only) channel is sender-key
+            // encrypted — core refuses to send it in cleartext
+            // (message/core.rs, F14a) — so its glyph is the lock; a public
+            // channel is plaintext by design and gets '#'. It used to be an
+            // 8px dot, which read as presence/unread, plus a second green
+            // lock at the row's far right.
+            // On a phone the glyph sits in an avatar-sized disc so the
+            // row lines up with DM rows' avatars.
+            if !root.has-avatar: Rectangle {
+                width: root.icon-box;
+                height: root.icon-box;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-            }
-
-            if !root.has-avatar && root.channel-type != "private": Image {
-                source: root.channel-type == "public" ? Icons.hash : Icons.users;
-                width: root.glyph-size;
-                height: root.glyph-size;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                colorize: root.selected ? Colors.primary : Colors.text-secondary;
+                border-radius: self.width / 2;
+                background: root.mobile-mode ? Colors.surface-control : transparent;
+                Image {
+                    source: root.channel-type == "public" ? Icons.hash
+                          : root.channel-type == "private" ? Icons.lock : Icons.users;
+                    width: root.glyph-size;
+                    height: root.glyph-size;
+                    colorize: root.selected ? Colors.primary : Colors.text-secondary;
+                }
             }
         }
 
@@ -144,20 +198,34 @@ export component ChannelListItem inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
-            spacing: root.mobile-mode ? 3px : 2px;
+            spacing: root.mobile-mode ? Spacing.xs : Spacing.xxs;
 
             HorizontalLayout {
-                spacing: 4px;
+                spacing: Spacing.xs;
 
                 Text {
                     // Same rule as the DM row: the name is the anchor and is
                     // always full-strength, the preview below is the muted one.
                     text: root.name;
+                    wrap: no-wrap;
                     color: Colors.text-primary;
                     font-size: root.name-size;
                     font-weight: root.unread-count > 0 ? 600 : 500;
                     overflow: elide;
                     horizontal-stretch: 1;
+                }
+
+                if root.is-muted: VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Image {
+                        source: Icons.bell-off;
+                        width: 12px;
+                        height: 12px;
+                        colorize: Colors.text-muted;
+                        accessible-role: text;
+                        accessible-label: "Muted";
+                    }
                 }
 
                 // Pin marker — explains why this row sits above the rest.
@@ -179,72 +247,96 @@ export component ChannelListItem inherits Rectangle {
             // posted in yet keeps its old one-line look instead of reserving a
             // blank second line.
             if root.is-typing: HorizontalLayout {
-                spacing: 3px;
+                spacing: Spacing.xs;
                 alignment: start;
 
                 // Animated dots with staggered opacity
-                Rectangle {
-                    width: 4px;
-                    height: 4px;
-                    border-radius: 2px;
-                    background: Colors.primary;
-                    opacity: root.dot-opacity(0);
-                }
-                Rectangle {
-                    width: 4px;
-                    height: 4px;
-                    border-radius: 2px;
-                    background: Colors.primary;
-                    opacity: root.dot-opacity(1);
-                }
-                Rectangle {
-                    width: 4px;
-                    height: 4px;
-                    border-radius: 2px;
-                    background: Colors.primary;
-                    opacity: root.dot-opacity(2);
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: Spacing.xs;
+                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: Colors.primary.with-alpha(root.dot-opacity(0)); }
+                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: Colors.primary.with-alpha(root.dot-opacity(1)); }
+                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: Colors.primary.with-alpha(root.dot-opacity(2)); }
+                    }
                 }
 
                 Text {
-                    text: "typing";
+                    text: root.typing-text != "" ? root.typing-text : "typing";
                     color: Colors.primary;
                     font-size: Typography.xs;
+                    // "Alpha is typing…" elides; at its natural width it
+                    // pushed the row's timestamp out past the edge.
+                    min-width: 0px;
+                    overflow: elide;
                 }
             }
 
-            if !root.is-typing && root.last-message != "": Text {
-                text: root.last-message;
-                color: Colors.text-muted;
-                font-size: root.preview-size;
-                overflow: elide;
+            if !root.is-typing && root.last-message != "": Rectangle {
+                horizontal-stretch: 1;
+                height: root.preview-size * 1.4;
+                clip: true;
+                if root.draft-preview != "": HorizontalLayout {
+                    width: parent.width;
+                    spacing: 3px;
+                    Text { text: "Draft:"; color: Colors.danger; font-size: root.preview-size; }
+                    Text { text: root.draft-preview; color: Colors.text-muted; font-size: root.preview-size; overflow: elide; horizontal-stretch: 1; }
+                }
+                if root.draft-preview == "": Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.last-message;
+                    wrap: no-wrap;
+                    color: Colors.text-muted;
+                    font-size: root.preview-size;
+                    overflow: elide;
+                }
             }
         }
 
         // Right side: timestamp above the unread badge, as on DM rows.
         if root.timestamp != "" || root.unread-count > 0: VerticalLayout {
             alignment: center;
-            spacing: 4px;
+            spacing: Spacing.xs;
             horizontal-stretch: 0;
 
             Text {
                 text: root.timestamp;
+                wrap: no-wrap;
                 color: Colors.text-muted;
                 font-size: Typography.xs2;
                 horizontal-alignment: right;
             }
 
-            if root.unread-count > 0: HorizontalLayout {
+            HorizontalLayout {
+                visible: root.unread-count > 0 || self.opacity > 0;
+                opacity: root.unread-count > 0 ? 1 : 0;
+                transform-scale-x: root.unread-count > 0 ? 100% : 55%;
+                transform-scale-y: root.unread-count > 0 ? 100% : 55%;
+                animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
                 alignment: end;
+                spacing: Spacing.xs;
+
+                if root.mention-count > 0: Text {
+                    text: root.mention-count > 99 ? "@99+" : "@" + root.mention-count;
+                    min-width: self.preferred-width;
+                    color: Colors.primary;
+                    font-size: Typography.xs2;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
 
                 Rectangle {
                     width: max(20px, badge-text.preferred-width + 12px);
                     height: 20px;
                     border-radius: Spacing.radius-full;
-                    background: Colors.primary;
+                    background: root.is-muted ? Colors.text-muted : Colors.action-fill;
 
                     badge-text := Text {
                         text: root.unread-count > 99 ? "99+" : root.unread-count;
-                        color: Colors.text-primary;
+                        color: Colors.on-action;
                         font-size: Typography.xs2;
                         font-weight: 600;
                         horizontal-alignment: center;
@@ -256,18 +348,6 @@ export component ChannelListItem inherits Rectangle {
             }
         }
 
-        // Invite-only indicator on the far-right — green lock marks a
-        // private (gated) channel. Placed after the unread badge so it's
-        // visible regardless of unread state.
-        if root.channel-type == "private": VerticalLayout {
-            alignment: center;
-            Image {
-                source: Icons.lock;
-                width: 12px;
-                height: 12px;
-                colorize: Colors.success;
-            }
-        }
     }
 
     // Collapsed content layout — one rail slot, self-contained tooltip
@@ -296,7 +376,7 @@ export component ChannelListItem inherits Rectangle {
             y: (parent.height - self.height) / 2;
             border-radius: Spacing.radius-lg;
             background: root.selected ? Colors.primary
-                      : touch.has-hover ? Colors.neo-highlight-strong
+                      : (!root.mobile-mode && touch.has-hover) ? Colors.fill-secondary
                       : Colors.surface-hover;
 
             if root.has-avatar: Rectangle {
@@ -312,18 +392,10 @@ export component ChannelListItem inherits Rectangle {
                 }
             }
 
-            // Collapsed view: private → purple dot, others → type icon.
-            if !root.has-avatar && root.channel-type == "private": Rectangle {
-                width: 12px;
-                height: 12px;
-                border-radius: 6px;
-                background: root.selected ? Colors.text-primary : Colors.primary;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-            }
-
-            if !root.has-avatar && root.channel-type != "private": Image {
-                source: root.channel-type == "public" ? Icons.hash : Icons.users;
+            // Collapsed view: the same type glyph as the expanded row.
+            if !root.has-avatar: Image {
+                source: root.channel-type == "public" ? Icons.hash
+                      : root.channel-type == "private" ? Icons.lock : Icons.users;
                 width: root.slot-glyph;
                 height: root.slot-glyph;
                 x: (parent.width - self.width) / 2;
@@ -336,16 +408,16 @@ export component ChannelListItem inherits Rectangle {
             if root.unread-count > 0: Rectangle {
                 x: parent.width - self.width + 4px;
                 y: -4px;
-                width: max(16px, collapsed-badge-text.preferred-width + 10px);
-                height: 16px;
+                width: max(self.height, collapsed-badge-text.preferred-width + 10px);
+                height: Spacing.badge-sm;
                 border-radius: Spacing.radius-full;
                 border-width: 2px;
                 border-color: Colors.surface;
-                background: Colors.primary;
+                background: root.is-muted ? Colors.text-muted : Colors.action-fill;
 
                 collapsed-badge-text := Text {
                     text: root.unread-count > 99 ? "99+" : root.unread-count;
-                    color: Colors.text-primary;
+                    color: Colors.on-action;
                     font-size: Typography.xxs;
                     font-weight: 600;
                     horizontal-alignment: center;
@@ -360,9 +432,13 @@ export component ChannelListItem inherits Rectangle {
     // Touch area for click + right-click handling
     touch := HoldArea {
         clicked => {
-            // A hold already acted; swallow its release so it is not also a tap.
-            if (!self.hold-fired) { root.clicked(); }
+            // A hold already acted, or the finger swiped the row: swallow the
+            // release so it is not also a tap.
+            if (!self.hold-fired && !self.dragged) { root.clicked(); }
         }
         held => { root.context-menu-requested(self.anchor-x, self.anchor-y); }
+        gesture-down(x, y) => { root.press-down(x, y); root.swipe-down(x, y); }
+        gesture-moved(x, y) => { root.press-moved(x, y); root.swipe-moved(x, y); }
+        gesture-ended(cancelled) => { root.press-active = false; root.swipe-ended(cancelled); }
     }
 }

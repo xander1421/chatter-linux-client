@@ -5,11 +5,11 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::framework::mocks::{
-    InMemoryStorage, InMemorySignalStores, MockGrpcServer, NetworkSimulator,
-};
-use crate::framework::fixtures::TestUser;
 use crate::framework::builders::UserBuilder;
+use crate::framework::fixtures::TestUser;
+use crate::framework::mocks::{
+    InMemorySignalStores, InMemoryStorage, MockGrpcServer, NetworkSimulator,
+};
 
 // ============================================================================
 // Configuration Types
@@ -18,8 +18,6 @@ use crate::framework::builders::UserBuilder;
 /// Network mode for tests.
 #[derive(Clone)]
 pub enum NetworkMode {
-    /// Use real network (requires server).
-    Real(String),
     /// Use mock in-process server.
     Mock,
     /// Simulate offline mode.
@@ -52,8 +50,6 @@ pub enum StorageMode {
     /// Use in-memory storage.
     #[default]
     Memory,
-    /// Use temporary SQLite database.
-    TempSqlite,
 }
 
 // ============================================================================
@@ -72,8 +68,6 @@ pub struct TestHarness {
     pub network: NetworkSimulator,
     /// Registered test users.
     users: RwLock<Vec<TestUser>>,
-    /// Configuration.
-    config: HarnessConfig,
 }
 
 #[derive(Clone, Default)]
@@ -99,26 +93,6 @@ impl TestHarness {
             .await
     }
 
-    /// Setup for integration tests - real server.
-    pub async fn integration() -> Self {
-        Self::builder()
-            .with_real_network()
-            .with_real_crypto()
-            .with_memory_storage()
-            .build()
-            .await
-    }
-
-    /// Setup for E2E tests.
-    pub async fn e2e() -> Self {
-        Self::builder()
-            .with_real_network()
-            .with_real_crypto()
-            .with_temp_sqlite()
-            .build()
-            .await
-    }
-
     /// Get the mock server (panics if not using mock network).
     pub fn mock_server(&self) -> &Arc<MockGrpcServer> {
         self.mock_server
@@ -140,7 +114,7 @@ impl TestHarness {
     }
 
     /// Create authenticated user context.
-    pub async fn as_user(&self, user: &TestUser) -> UserContext {
+    pub async fn as_user(&self, user: &TestUser) -> UserContext<'_> {
         UserContext {
             user: user.clone(),
             harness: self,
@@ -148,14 +122,14 @@ impl TestHarness {
     }
 
     /// Create two users for conversation tests.
-    pub async fn conversation_pair(&self) -> (UserContext, UserContext) {
+    pub async fn conversation_pair(&self) -> (UserContext<'_>, UserContext<'_>) {
         let alice = self.register_user("Alice").await;
         let bob = self.register_user("Bob").await;
         (self.as_user(&alice).await, self.as_user(&bob).await)
     }
 
     /// Create three users for group tests.
-    pub async fn conversation_trio(&self) -> (UserContext, UserContext, UserContext) {
+    pub async fn conversation_trio(&self) -> (UserContext<'_>, UserContext<'_>, UserContext<'_>) {
         let alice = self.register_user("Alice").await;
         let bob = self.register_user("Bob").await;
         let charlie = self.register_user("Charlie").await;
@@ -189,26 +163,11 @@ impl TestHarness {
 #[derive(Default)]
 pub struct TestHarnessBuilder {
     config: HarnessConfig,
-    server_url: Option<String>,
     network_latency: Option<std::time::Duration>,
     failure_rate: Option<f32>,
 }
 
 impl TestHarnessBuilder {
-    /// Use real network with specified server URL.
-    pub fn with_real_network(mut self) -> Self {
-        let url = std::env::var("SERVER_URL")
-            .unwrap_or_else(|_| "http://localhost:50051".to_string());
-        self.config.network_mode = NetworkMode::Real(url);
-        self
-    }
-
-    /// Use real network with specific URL.
-    pub fn with_server(mut self, url: impl Into<String>) -> Self {
-        self.config.network_mode = NetworkMode::Real(url.into());
-        self
-    }
-
     /// Use mock in-process server.
     pub fn with_mock_network(mut self) -> Self {
         self.config.network_mode = NetworkMode::Mock;
@@ -234,12 +193,6 @@ impl TestHarnessBuilder {
         self
     }
 
-    /// Use real Signal Protocol crypto.
-    pub fn with_real_crypto(mut self) -> Self {
-        self.config.crypto_mode = CryptoMode::Real;
-        self
-    }
-
     /// Skip encryption for faster tests.
     pub fn with_passthrough_crypto(mut self) -> Self {
         self.config.crypto_mode = CryptoMode::Passthrough;
@@ -258,12 +211,6 @@ impl TestHarnessBuilder {
         self
     }
 
-    /// Use temporary SQLite database.
-    pub fn with_temp_sqlite(mut self) -> Self {
-        self.config.storage_mode = StorageMode::TempSqlite;
-        self
-    }
-
     /// Build the test harness.
     pub async fn build(self) -> TestHarness {
         // Create storage
@@ -271,15 +218,12 @@ impl TestHarnessBuilder {
 
         // Create signal stores
         let signal_stores = match &self.config.crypto_mode {
-            CryptoMode::Deterministic(seed) => {
-                Arc::new(InMemorySignalStores::deterministic(*seed))
-            }
+            CryptoMode::Deterministic(seed) => Arc::new(InMemorySignalStores::deterministic(*seed)),
             _ => Arc::new(InMemorySignalStores::new()),
         };
 
         // Create network simulator
         let mut network = match &self.config.network_mode {
-            NetworkMode::Real(_) => NetworkSimulator::perfect(),
             NetworkMode::Mock => NetworkSimulator::perfect(),
             NetworkMode::Offline => NetworkSimulator::offline(),
             NetworkMode::Flaky(rate) => NetworkSimulator::flaky(*rate),
@@ -291,9 +235,9 @@ impl TestHarnessBuilder {
 
         // Create mock server if needed
         let mock_server = match &self.config.network_mode {
-            NetworkMode::Mock | NetworkMode::Flaky(_) => {
-                Some(Arc::new(MockGrpcServer::new().with_network(network.clone())))
-            }
+            NetworkMode::Mock | NetworkMode::Flaky(_) => Some(Arc::new(
+                MockGrpcServer::new().with_network(network.clone()),
+            )),
             _ => None,
         };
 
@@ -303,7 +247,6 @@ impl TestHarnessBuilder {
             mock_server,
             network,
             users: RwLock::new(Vec::new()),
-            config: self.config,
         }
     }
 }

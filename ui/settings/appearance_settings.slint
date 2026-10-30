@@ -1,0 +1,551 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { Colors } from "../theme/colors.slint";
+import { Elevation } from "../theme/elevation.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { ToggleRow } from "../components/toggle_row.slint";
+import { Appearance } from "../theme/appearance.slint";
+
+export component AppearanceSettings inherits VerticalLayout {
+    in property <bool> mobile-platform;
+    in-out property <string> search-shortcut;
+    callback search-shortcut-changed(string);
+
+
+    spacing: Spacing.lg;
+
+    // Section header
+    Text {
+        text: "Appearance";
+        color: Colors.text-primary;
+        font-size: Typography.xl;
+        font-weight: Typography.semibold;
+    }
+
+    // Theme. Kept on this device (core: `ThemeMode`),
+    // applied live through the `Appearance` global.
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            Text {
+                text: "Theme";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+
+            for opt in [
+                { key: "system", label: "System", hint: "Match this device's light or dark setting" },
+                { key: "light", label: "Light", hint: "" },
+                { key: "dark", label: "Dark", hint: "" },
+            ]: Rectangle {
+                property <bool> selected: Appearance.theme == opt.key;
+                min-height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-md;
+                background: theme-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: opt.label;
+                accessible-checkable: true;
+                accessible-checked: selected;
+                accessible-action-default => {
+                    Appearance.theme = opt.key;
+                    Appearance.theme-changed(opt.key);
+                }
+                KeyFocus {
+                    border-radius: parent.border-radius;
+                    activate => {
+                        Appearance.theme = opt.key;
+                        Appearance.theme-changed(opt.key);
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.md;
+                    alignment: start;
+
+                    // Radio indicator
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            border-radius: 9px;
+                            border-width: Spacing.stroke;
+                            border-color: selected ? Colors.primary : Colors.text-muted;
+
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: selected ? Colors.primary : transparent;
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: Spacing.xxs;
+
+                        Text {
+                            text: opt.label;
+                            color: selected ? Colors.text-primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: selected ? Typography.medium : Typography.normal;
+                        }
+
+                        if opt.hint != "": Text {
+                            text: opt.hint;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                theme-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        Appearance.theme = opt.key;
+                        Appearance.theme-changed(opt.key);
+                    }
+                }
+            }
+        }
+    }
+
+    // Text size. Kept on this device (core: `TextSize`); every
+    // Typography step is drawn at `Appearance.text-scale`.
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            Text {
+                text: "Text size";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+
+            for opt in [
+                { key: "small", label: "Small", hint: "" },
+                { key: "default", label: "Default", hint: "Match this device's font size" },
+                { key: "large", label: "Large", hint: "" },
+                { key: "largest", label: "Largest", hint: "" },
+            ]: Rectangle {
+                property <bool> selected: Appearance.text-size == opt.key;
+                min-height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-md;
+                background: text-size-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: opt.label;
+                accessible-checkable: true;
+                accessible-checked: selected;
+                accessible-action-default => {
+                    Appearance.text-size = opt.key;
+                    Appearance.text-size-changed(opt.key);
+                }
+                KeyFocus {
+                    border-radius: parent.border-radius;
+                    activate => {
+                        Appearance.text-size = opt.key;
+                        Appearance.text-size-changed(opt.key);
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.md;
+                    alignment: start;
+
+                    // Radio indicator
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            border-radius: 9px;
+                            border-width: Spacing.stroke;
+                            border-color: selected ? Colors.primary : Colors.text-muted;
+
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: selected ? Colors.primary : transparent;
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: Spacing.xxs;
+
+                        Text {
+                            text: opt.label;
+                            color: selected ? Colors.text-primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: selected ? Typography.medium : Typography.normal;
+                        }
+
+                        if opt.hint != "": Text {
+                            text: opt.hint;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                text-size-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        Appearance.text-size = opt.key;
+                        Appearance.text-size-changed(opt.key);
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        height: glass-effects-row.preferred-height;
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+
+        glass-effects-row := ToggleRow {
+            row-padding: Spacing.md;
+            row-spacing: Spacing.md;
+            label-spacing: Spacing.sm;
+            accessible-text: "Glass effects";
+            checked <=> Appearance.glass-effects;
+            toggled(value) => { Appearance.glass-effects-changed(value); }
+
+            Text {
+                text: "Glass effects";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+            Text {
+                width: glass-effects-row.label-width;
+                text: "Translucent navigation and controls. Turn off for a simpler appearance and better performance.";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    Rectangle {
+        height: reduce-motion-row.preferred-height;
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+
+        reduce-motion-row := ToggleRow {
+            row-padding: Spacing.md;
+            row-spacing: Spacing.md;
+            label-spacing: Spacing.sm;
+            accessible-text: "Reduce animations";
+            checked <=> Appearance.reduce-motion;
+            toggled(value) => { Appearance.reduce-motion-changed(value); }
+
+            Text {
+                text: "Reduce animations";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+            Text {
+                width: reduce-motion-row.label-width;
+                text: "Menus, sheets and switches change without motion; loading shimmer, typing dots and the ringing pulse hold still.";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            Text {
+                text: "Animation speed";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+            Text {
+                text: "How quickly menus and transitions move";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.xs;
+                for opt in [
+                    { value: 0.5, label: "0.5×" },
+                    { value: 1.0, label: "1×" },
+                    { value: 2.0, label: "2×" },
+                    { value: 4.0, label: "4×" },
+                    { value: 8.0, label: "8×" },
+                ]: Rectangle {
+                    property <bool> selected: Appearance.animation-speed == opt.value;
+                    horizontal-stretch: 1;
+                    height: Spacing.touch-target-min;
+                    border-radius: Spacing.radius-md;
+                    background: selected ? Colors.action-fill : Colors.surface-hover;
+                    accessible-role: button;
+                    accessible-label: "Animation speed " + opt.label;
+                    accessible-checkable: true;
+                    accessible-checked: selected;
+                    accessible-action-default => {
+                        Appearance.animation-speed = opt.value;
+                        Appearance.animation-speed-changed(opt.value);
+                    }
+                    KeyFocus {
+                        border-radius: parent.border-radius;
+                        activate => {
+                            Appearance.animation-speed = opt.value;
+                            Appearance.animation-speed-changed(opt.value);
+                        }
+                    }
+                    Text {
+                        text: opt.label;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        color: selected ? Colors.on-action : Colors.text-secondary;
+                        font-size: Typography.sm;
+                        font-weight: selected ? Typography.semibold : Typography.medium;
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            Appearance.animation-speed = opt.value;
+                            Appearance.animation-speed-changed(opt.value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Message spacing. Kept on this device (core: `MessageDensity`);
+    // read through the density tokens in `Spacing`.
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            Text {
+                text: "Message spacing";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+
+            for opt in [
+                { key: "comfortable", label: "Comfortable", hint: "" },
+                { key: "compact", label: "Compact", hint: "Fit more messages and conversations on screen" },
+            ]: Rectangle {
+                property <bool> selected: Appearance.density == opt.key;
+                min-height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-md;
+                background: density-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: opt.label;
+                accessible-checkable: true;
+                accessible-checked: selected;
+                accessible-action-default => {
+                    Appearance.density = opt.key;
+                    Appearance.density-changed(opt.key);
+                }
+                KeyFocus {
+                    border-radius: parent.border-radius;
+                    activate => {
+                        Appearance.density = opt.key;
+                        Appearance.density-changed(opt.key);
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.md;
+                    alignment: start;
+
+                    // Radio indicator
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            border-radius: 9px;
+                            border-width: Spacing.stroke;
+                            border-color: selected ? Colors.primary : Colors.text-muted;
+
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: selected ? Colors.primary : transparent;
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: Spacing.xxs;
+
+                        Text {
+                            text: opt.label;
+                            color: selected ? Colors.text-primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: selected ? Typography.medium : Typography.normal;
+                        }
+
+                        if opt.hint != "": Text {
+                            text: opt.hint;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                density-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        Appearance.density = opt.key;
+                        Appearance.density-changed(opt.key);
+                    }
+                }
+            }
+        }
+    }
+
+    // Search shortcut setting (3-way segmented selector).
+    // Keyboard shortcuts mean nothing on a phone.
+    if !root.mobile-platform: Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        HorizontalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.md;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Spacing.sm;
+
+                Text {
+                    text: "Search shortcut";
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    font-weight: Typography.medium;
+                }
+
+                Text {
+                    text: "Which keys open search";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.xs;
+                vertical-stretch: 0;
+                alignment: center;
+
+                for opt[idx] in [
+                    { key: "k", label: "Ctrl+K" },
+                    { key: "f", label: "Ctrl+F" },
+                    { key: "both", label: "Both" },
+                ]: Rectangle {
+                    property <bool> selected: root.search-shortcut == opt.key;
+                    accessible-role: button;
+                    accessible-label: "Search shortcut " + opt.label;
+                    accessible-checkable: true;
+                    accessible-checked: selected;
+                    accessible-action-default => {
+                        root.search-shortcut = opt.key;
+                        root.search-shortcut-changed(opt.key);
+                    }
+                    KeyFocus {
+                        border-radius: parent.border-radius;
+                        activate => {
+                            root.search-shortcut = opt.key;
+                            root.search-shortcut-changed(opt.key);
+                        }
+                    }
+                    height: Spacing.button-height;
+                    min-width: 56px;
+                    border-radius: Spacing.radius-md;
+                    background: selected ? Colors.action-fill : Colors.surface-hover;
+                    border-width: 0px;
+
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        Text {
+                            text: opt.label;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            color: selected ? Colors.on-action : Colors.text-secondary;
+                            font-size: Typography.xs;
+                            font-weight: selected ? Typography.semibold : Typography.medium;
+                        }
+                    }
+
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.search-shortcut = opt.key;
+                            root.search-shortcut-changed(opt.key);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

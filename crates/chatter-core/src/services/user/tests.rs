@@ -6,15 +6,91 @@ mod tests {
 
     use crate::domain::ids::UserId;
     use crate::domain::user::{FriendshipStatus, PresenceStatus};
-    use crate::proto::chat_v1::{friend_requests_filter, UserProfile};
+    use crate::proto::chat_v1::{UserProfile, friend_requests_filter};
     use crate::storage::repositories::settings_repo::SettingsRepository;
     use crate::storage::repositories::user_repo::UserRepository;
 
     use super::super::conversions::{
-        domain_presence_to_proto, presence_from_proto,
-        proto_friend_status_to_domain, proto_to_domain_profile,
+        domain_presence_to_proto, presence_from_proto, proto_friend_status_to_domain,
+        proto_to_domain_profile,
     };
-    use super::super::{FriendRequestFilter, UserError, UserService};
+    use super::super::{
+        FriendRequestFilter, UserError, UserService, friend_display_name_placeholder,
+    };
+
+    /// F30: a peer whose only live device is 6 (device 1 retired) must still
+    /// yield the account identity key — the friend request asks for all
+    /// devices and never names one.
+    #[test]
+    fn friend_request_identity_key_from_any_device() {
+        use super::super::friend_request_identity_key;
+        use crate::proto::chat_v1::{
+            GetPreKeyBundleResponse, PreKeyBundleDeviceList, SignalPreKeyBundle,
+            get_pre_key_bundle_response::Result as BundleResult,
+        };
+
+        let ik = vec![5u8; 33];
+        let only_device_6 = GetPreKeyBundleResponse {
+            result: Some(BundleResult::Devices(PreKeyBundleDeviceList {
+                bundles: vec![SignalPreKeyBundle {
+                    device_id: 6,
+                    identity_key: ik.clone(),
+                    ..Default::default()
+                }],
+                identity_key: ik.clone(),
+            })),
+        };
+        assert_eq!(friend_request_identity_key(only_device_6).unwrap(), ik);
+
+        let none = GetPreKeyBundleResponse { result: None };
+        let err = friend_request_identity_key(none).unwrap_err();
+        assert_eq!(err.user_message(), "This user has no registered devices");
+    }
+
+    #[test]
+    fn user_message_hides_the_error_chain() {
+        use crate::error::NetworkError;
+        let e = UserError::Network(NetworkError::ServerError(
+            "failed to get prekey bundle".into(),
+        ));
+        assert_eq!(e.user_message(), "Couldn't reach the server. Try again.");
+        assert!(
+            !UserError::Network(NetworkError::PermissionDenied)
+                .user_message()
+                .contains("error")
+        );
+    }
+
+    #[test]
+    fn lookup_handle_shape() {
+        use super::super::is_lookup_handle;
+        assert!(is_lookup_handle("alice.4711"));
+        assert!(is_lookup_handle(" alice.47 "));
+        assert!(!is_lookup_handle("alice"));
+        assert!(!is_lookup_handle("alice."));
+        assert!(!is_lookup_handle(".4711"));
+        assert!(!is_lookup_handle("alice.47x"));
+        assert!(!is_lookup_handle(""));
+    }
+
+    /// Mirrors Signal-Desktop's 5-minute `throttledGetProfiles`: never fetched
+    /// or fetched a full interval ago → refetch; anything newer → skip.
+    #[test]
+    fn profile_fetch_due_after_interval_only() {
+        use super::super::{PROFILE_REFRESH_INTERVAL, profile_fetch_due};
+        use std::time::{Duration, Instant};
+
+        let now = Instant::now() + PROFILE_REFRESH_INTERVAL * 2;
+        assert!(profile_fetch_due(None, now));
+        assert!(!profile_fetch_due(Some(now), now));
+        assert!(!profile_fetch_due(
+            Some(now - PROFILE_REFRESH_INTERVAL + Duration::from_secs(1)),
+            now
+        ));
+        assert!(profile_fetch_due(Some(now - PROFILE_REFRESH_INTERVAL), now));
+        // A clock that reads earlier than the stamp is not "stale".
+        assert!(!profile_fetch_due(Some(now + Duration::from_secs(1)), now));
+    }
 
     #[test]
     fn test_user_error_display() {
@@ -74,7 +150,6 @@ mod tests {
             encrypted_name: Vec::new(),
             encrypted_about: Vec::new(),
             encrypted_avatar: Vec::new(),
-            profile_key_version: String::new(),
         };
 
         let profile = proto_to_domain_profile(&proto).unwrap();
@@ -96,7 +171,6 @@ mod tests {
             encrypted_name: Vec::new(),
             encrypted_about: Vec::new(),
             encrypted_avatar: Vec::new(),
-            profile_key_version: String::new(),
         };
 
         let profile = proto_to_domain_profile(&proto).unwrap();
@@ -130,34 +204,241 @@ mod tests {
 
     #[test]
     fn test_proto_friend_status_conversion() {
-        assert_eq!(
-            proto_friend_status_to_domain(3),
-            FriendshipStatus::Accepted
+        assert_eq!(proto_friend_status_to_domain(3), FriendshipStatus::Accepted);
+        assert_eq!(proto_friend_status_to_domain(5), FriendshipStatus::Blocked);
+        assert_eq!(proto_friend_status_to_domain(2), FriendshipStatus::Pending);
+        assert_eq!(proto_friend_status_to_domain(0), FriendshipStatus::Pending);
+        assert_eq!(proto_friend_status_to_domain(1), FriendshipStatus::Pending);
+        assert_eq!(proto_friend_status_to_domain(4), FriendshipStatus::Pending);
+        assert_eq!(proto_friend_status_to_domain(99), FriendshipStatus::Pending);
+    }
+
+    /// F40: a block keeps the friendship but hides the contact everywhere a
+    /// friend is listed (`listed_friends`), and a DM with them drops out of
+    /// folders and search (`is_blocked_conversation`). Server blocks and
+    /// anon-DM blocks both count; either row direction resolves the peer.
+    #[tokio::test]
+    async fn blocked_friends_are_not_listed() {
+        use crate::client::ChatterClient;
+        use crate::domain::message::ConversationType;
+        use crate::domain::user::Friendship;
+        use crate::storage::repositories::settings_repo::keys;
+
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+
+        let (me, kept, blocked, anon_blocked) =
+            (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        let users = client.users();
+        users
+            .settings_repo
+            .set_string(keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
+        client.auth_state().set_logged_in(me, 1, "me".into());
+        let row = |from, to, status| Friendship {
+            requester_id: from,
+            addressee_id: to,
+            status,
+            created_at: chrono::Utc::now(),
+        };
+        for u in [me, kept, blocked, anon_blocked] {
+            users.user_repo.ensure_user_exists(&u).unwrap();
+        }
+        users
+            .user_repo
+            .insert_friendship(&row(me, kept, FriendshipStatus::Accepted))
+            .unwrap();
+        // Friend who sent the request, then was blocked by us: the Accepted row
+        // is theirs, the Blocked row ours.
+        users
+            .user_repo
+            .insert_friendship(&row(blocked, me, FriendshipStatus::Accepted))
+            .unwrap();
+        users
+            .user_repo
+            .insert_friendship(&row(me, blocked, FriendshipStatus::Blocked))
+            .unwrap();
+        users
+            .user_repo
+            .insert_friendship(&row(anon_blocked, me, FriendshipStatus::Accepted))
+            .unwrap();
+        users.anon_dm_repo.block_user(&anon_blocked, None).unwrap();
+
+        assert_eq!(client.listed_friends(), vec![kept]);
+        assert!(client.is_blocked_conversation(&ConversationType::ServerDm, &blocked.to_string()));
+        assert!(!client.is_blocked_conversation(&ConversationType::ServerDm, &kept.to_string()));
+        assert!(!client.is_blocked_conversation(&ConversationType::Channel, &blocked.to_string()));
+    }
+
+    /// F82: removing a contact never deletes the conversation (Signal). A
+    /// peer we wrote to keeps a row after the friendship goes; a blocked one
+    /// still drops out, and a stranger's unanswered message is not a chat.
+    #[tokio::test]
+    async fn dm_history_outlives_the_friendship() {
+        use crate::client::ChatterClient;
+        use crate::domain::ids::ChannelId;
+        use crate::domain::message::{ConversationType, Message};
+        use crate::domain::user::Friendship;
+        use crate::storage::repositories::settings_repo::keys;
+
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+
+        let (me, friend, former, blocked, stranger) = (
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
         );
+        let users = client.users();
+        users
+            .settings_repo
+            .set_string(keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
+        client.auth_state().set_logged_in(me, 1, "me".into());
+        for u in [me, friend, former, blocked, stranger] {
+            users.user_repo.ensure_user_exists(&u).unwrap();
+        }
+        users
+            .user_repo
+            .insert_friendship(&Friendship {
+                requester_id: me,
+                addressee_id: friend,
+                status: FriendshipStatus::Accepted,
+                created_at: chrono::Utc::now(),
+            })
+            .unwrap();
+        users
+            .user_repo
+            .insert_friendship(&Friendship {
+                requester_id: me,
+                addressee_id: blocked,
+                status: FriendshipStatus::Blocked,
+                created_at: chrono::Utc::now(),
+            })
+            .unwrap();
+        for (peer, sender) in [(former, me), (blocked, me), (stranger, stranger)] {
+            let m = Message::new_text(
+                ChannelId::from(peer),
+                ConversationType::ServerDm,
+                Some(sender),
+                "hi".into(),
+                1,
+            );
+            client.messages().message_repo.insert(&m).unwrap();
+        }
+
+        assert_eq!(client.dm_peers(), vec![friend, former]);
+    }
+
+    /// REVIEW-R4 P0-3: a profile row stored without the profile key holds
+    /// the `User <id8>` placeholder; Contacts and request rows must fall
+    /// through to a known username instead of showing it.
+    #[tokio::test]
+    async fn placeholder_profile_does_not_hide_a_username() {
+        use crate::client::ChatterClient;
+        use crate::domain::user::{Profile, User};
+
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+
+        let (bob, stranger) = (UserId::new(), UserId::new());
+        let users = client.users();
+        users
+            .user_repo
+            .insert(&User::new(bob, "bob".into(), Vec::new()))
+            .unwrap();
+        users
+            .user_repo
+            .upsert_profile(&Profile::new(bob, friend_display_name_placeholder(&bob)))
+            .unwrap();
+
+        assert_eq!(client.display_name(&bob), "bob");
+        assert_eq!(client.friend_request_peer_name(&stranger, "carol"), "carol");
         assert_eq!(
-            proto_friend_status_to_domain(5),
-            FriendshipStatus::Blocked
+            client.friend_request_peer_name(&stranger, ""),
+            friend_display_name_placeholder(&stranger)
         );
-        assert_eq!(
-            proto_friend_status_to_domain(2),
-            FriendshipStatus::Pending
-        );
-        assert_eq!(
-            proto_friend_status_to_domain(0),
-            FriendshipStatus::Pending
-        );
-        assert_eq!(
-            proto_friend_status_to_domain(1),
-            FriendshipStatus::Pending
-        );
-        assert_eq!(
-            proto_friend_status_to_domain(4),
-            FriendshipStatus::Pending
-        );
-        assert_eq!(
-            proto_friend_status_to_domain(99),
-            FriendshipStatus::Pending
-        );
+    }
+
+    /// Authentication failure must not fall through to a cached username
+    /// that was populated from the peer's previously decrypted profile.
+    #[tokio::test]
+    async fn failed_profile_authentication_does_not_restore_cached_name() {
+        use super::super::decrypt_friend_display_name;
+        use crate::client::ChatterClient;
+        use crate::domain::user::{Profile, User};
+        use base64::Engine;
+
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let (me, peer) = (UserId::new(), UserId::new());
+        let users = client.users();
+        users
+            .user_repo
+            .insert(&User::new(peer, "Old name".into(), Vec::new()))
+            .unwrap();
+        users
+            .user_repo
+            .set_friend_profile_key(&me, &peer, &[1; 32])
+            .unwrap();
+        let encrypted =
+            crate::crypto::profile_crypto::encrypt_display_name(&[2; 32], "New name").unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encrypted);
+
+        let unavailable =
+            decrypt_friend_display_name(&users.user_repo, &me, &peer, &encoded).unwrap();
+        assert_ne!(unavailable, friend_display_name_placeholder(&peer));
+        users
+            .user_repo
+            .upsert_profile(&Profile::new(peer, unavailable.clone()))
+            .unwrap();
+        assert_eq!(client.display_name(&peer), unavailable);
+
+        users
+            .user_repo
+            .set_friend_profile_key(&me, &peer, &[2; 32])
+            .unwrap();
+        let recovered =
+            decrypt_friend_display_name(&users.user_repo, &me, &peer, &encoded).unwrap();
+        users
+            .user_repo
+            .upsert_profile(&Profile::new(peer, recovered))
+            .unwrap();
+        assert_eq!(client.display_name(&peer), "New name");
     }
 
     #[test]
@@ -167,26 +448,26 @@ mod tests {
             settings_repo: Arc<SettingsRepository>,
             user_repo: Arc<UserRepository>,
             anon_dm_repo: Arc<crate::storage::repositories::anon_dm_repo::AnonDmRepository>,
-            anon_group_repo: Arc<crate::storage::repositories::anon_group_repo::AnonGroupRepository>,
+            anon_group_repo: Arc<
+                crate::storage::repositories::anon_group_repo::AnonGroupRepository,
+            >,
         ) {
-            let _service = UserService::new(grpc_pool, settings_repo, user_repo, anon_dm_repo, anon_group_repo);
+            let _service = UserService::new(
+                grpc_pool,
+                settings_repo,
+                user_repo,
+                anon_dm_repo,
+                anon_group_repo,
+                crate::events::EventBus::new(),
+            );
         }
     }
 
     #[test]
     fn test_blocked_status_mapping() {
-        assert_eq!(
-            proto_friend_status_to_domain(5),
-            FriendshipStatus::Blocked
-        );
-        assert_ne!(
-            proto_friend_status_to_domain(5),
-            FriendshipStatus::Pending
-        );
-        assert_ne!(
-            proto_friend_status_to_domain(5),
-            FriendshipStatus::Accepted
-        );
+        assert_eq!(proto_friend_status_to_domain(5), FriendshipStatus::Blocked);
+        assert_ne!(proto_friend_status_to_domain(5), FriendshipStatus::Pending);
+        assert_ne!(proto_friend_status_to_domain(5), FriendshipStatus::Accepted);
     }
 
     #[test]

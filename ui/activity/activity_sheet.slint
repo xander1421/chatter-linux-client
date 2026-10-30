@@ -1,0 +1,234 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { ModalContainer } from "../components/modal_container.slint";
+import { ActivityGlobal } from "activity_global.slint";
+import { MeshGlobal } from "../mesh/mesh_global.slint";
+import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
+import { UpdateGlobal } from "../update/update_global.slint";
+import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+
+component StatusRow inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    in property <color> tint: Colors.success;
+    in property <bool> touch: false;
+    min-height: root.title == "Server" && root.value == "Unreachable — messages will send later"
+        ? (root.touch ? 72px : 60px) : root.touch ? 56px : 48px;
+    preferred-height: max(self.min-height, status-content.preferred-height);
+    status-content := HorizontalLayout {
+        padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.md;
+        padding-top: Spacing.xs; padding-bottom: Spacing.xs;
+        VerticalLayout { alignment: center;
+            Rectangle { width: 9px; height: 9px; border-radius: Spacing.radius-full; background: root.tint; }
+        }
+        Text { text: root.title; color: Colors.text-primary; font-size: Typography.sm;
+            font-weight: Typography.semibold; vertical-alignment: center; }
+        Text { text: root.value; color: Colors.text-secondary; font-size: Typography.sm;
+            horizontal-stretch: 1; horizontal-alignment: right; vertical-alignment: center;
+            wrap: word-wrap; min-width: 0px; }
+    }
+}
+
+component ActivityFeedRow inherits Rectangle {
+    in property <string> item-id;
+    in property <string> kind;
+    in property <string> title;
+    in property <string> preview;
+    in property <string> time-label;
+    in property <bool> unread;
+    in property <bool> touch: false;
+    property <color> tint: root.kind == "server" ? Colors.warning
+        : root.kind == "server-ok" ? Colors.success
+        : root.kind == "missed-call" ? Colors.error : root.kind == "update" ? Colors.info : Colors.primary;
+    property <image> glyph: root.kind == "mention" ? Icons.megaphone
+        : root.kind == "reply" || root.kind == "thread" ? Icons.reply
+        : root.kind == "reaction" ? Icons.smile
+        : root.kind == "missed-call" ? Icons.phone
+        : root.kind == "contact-request" ? Icons.user-plus
+        : root.kind == "invite" || root.kind == "mesh-invite" ? Icons.users
+        : root.kind == "device-linked" ? Icons.smartphone
+        : root.kind == "server" ? Icons.alert-triangle
+        : root.kind == "server-ok" ? Icons.check : Icons.download;
+    height: root.touch ? 76px : 68px;
+    background: row-touch.has-hover ? Colors.surface-control-hover : transparent;
+    HorizontalLayout {
+        padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.md;
+        VerticalLayout { alignment: center;
+            Rectangle {
+                width: 40px; height: 40px; border-radius: Spacing.radius-md;
+                background: root.tint.with-alpha(0.14);
+                Image { source: root.glyph; width: 20px; height: 20px;
+                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                    colorize: root.tint; }
+            }
+        }
+        VerticalLayout { alignment: center; horizontal-stretch: 1; min-width: 0px;
+            Text { text: root.title; color: Colors.text-primary; font-size: Typography.sm;
+                font-weight: root.unread ? Typography.semibold : Typography.medium; overflow: elide; }
+            if root.preview != "": Text { text: root.preview; color: Colors.text-secondary;
+                font-size: Typography.xs; overflow: elide; }
+        }
+        VerticalLayout { alignment: center; spacing: Spacing.xs;
+            Text { text: root.time-label; color: Colors.text-muted; font-size: Typography.xs; }
+            if root.unread: HorizontalLayout { alignment: center;
+                Rectangle { width: 7px; height: 7px; border-radius: Spacing.radius-full; background: Colors.primary; }
+            }
+        }
+    }
+    // The row is the accessible button, so keyboard focus on it is
+    // reported as the row (on the TouchArea it read as the dialog).
+    accessible-role: button;
+    accessible-label: root.title;
+    accessible-action-default => { ActivityGlobal.open-item(root.item-id); }
+    KeyFocus { activate => { ActivityGlobal.open-item(root.item-id); } }
+    row-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { ActivityGlobal.open-item(root.item-id); }
+    }
+}
+
+export component ActivitySheet inherits Rectangle {
+    in property <bool> show-modal: false;
+    in property <bool> touch: false;
+    in property <string> connection-status: "connected";
+    in property <bool> server-unreachable: false;
+    in property <int> connection-reconnect-attempt: 0;
+    callback close();
+    property <string> server-value: root.server-unreachable ? "Unreachable — messages will send later"
+        : root.connection-status == "reconnecting" ? "Reconnecting (attempt " + root.connection-reconnect-attempt + ")"
+        : root.connection-status == "connecting" ? "Connecting…"
+        : root.connection-status == "connected" ? "Connected" : "Disconnected";
+    property <string> mesh-value: !MeshGlobal.enabled ? "Unavailable"
+        : !MeshGlobal.mesh-on ? "Off"
+        : MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth off"
+        : !MeshGlobal.running ? "Unavailable"
+        : !MeshGlobal.radio-running ? "Radio unavailable · " + MeshGlobal.relay-count + " relays"
+        : "On · " + MeshGlobal.peer-count + " nearby · " + MeshGlobal.relay-count + " relays";
+    property <bool> update-available: UpdateGlobal.state == "available" || UpdateGlobal.state == "confirm-cellular"
+        || UpdateGlobal.state == "downloading" || UpdateGlobal.state == "installing" || UpdateGlobal.state == "ready";
+
+    ModalContainer {
+        show: root.show-modal;
+        accessible-title: "Activity";
+        modal-width: 540px;
+        max-modal-height: 760px;
+        fill-height: true;
+        close => { root.close(); }
+        VerticalLayout {
+            padding-left: Spacing.lg; padding-right: Spacing.lg;
+            padding-top: Spacing.md; padding-bottom: Spacing.xl;
+            spacing: Spacing.md;
+            HorizontalLayout {
+                height: Spacing.touch-target-min;
+                Rectangle {
+                    width: 90px; height: Spacing.touch-target-min;
+                    accessible-role: button; accessible-label: "Close activity";
+                    accessible-action-default => { root.close(); }
+                    KeyFocus { border-radius: parent.border-radius; activate => { root.close(); } }
+                    Text { text: "Done"; color: Colors.primary; font-size: Typography.base;
+                        vertical-alignment: center; }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.close(); } }
+                }
+                Text { text: "Activity"; color: Colors.text-primary; font-size: Typography.lg;
+                    font-weight: Typography.semibold; horizontal-alignment: center;
+                    vertical-alignment: center; horizontal-stretch: 1; }
+                Rectangle {
+                    width: 90px; height: Spacing.touch-target-min;
+                    accessible-role: button; accessible-label: "Mark all read";
+                    accessible-enabled: ActivityGlobal.unread-count > 0;
+                    accessible-action-default => { if ActivityGlobal.unread-count > 0 { ActivityGlobal.mark-all-read(); } }
+                    KeyFocus { border-radius: parent.border-radius; activate => { if ActivityGlobal.unread-count > 0 { ActivityGlobal.mark-all-read(); } } }
+                    Text { text: "Mark all read"; color: ActivityGlobal.unread-count > 0 ? Colors.primary : Colors.text-muted;
+                        font-size: Typography.xs; font-weight: Typography.semibold;
+                        horizontal-alignment: right; vertical-alignment: center; }
+                    TouchArea { enabled: ActivityGlobal.unread-count > 0; mouse-cursor: pointer;
+                        clicked => { ActivityGlobal.mark-all-read(); } }
+                }
+            }
+            Flickable {
+                width: 100%; vertical-stretch: 1;
+                viewport-height: activity-content.preferred-height;
+                activity-content := VerticalLayout {
+                    width: parent.width; spacing: Spacing.lg; padding-bottom: Spacing.xl;
+                    VerticalLayout { spacing: Spacing.xs;
+                        Text { text: "STATUS"; color: Colors.text-muted; font-size: Typography.xs;
+                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg; clip: true;
+                            VerticalLayout {
+                                StatusRow { title: "Server"; value: root.server-value; touch: root.touch;
+                                    tint: root.server-unreachable || root.connection-status == "failed" || root.connection-status == "disconnected"
+                                        ? Colors.error : root.connection-status == "connected" ? Colors.success : Colors.warning; }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                StatusRow { title: "Server host"; value: ActivityGlobal.server-host; touch: root.touch; tint: Colors.info; }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                StatusRow { title: root.connection-status == "connected" ? "Connected since" : "Last connected"; value: ActivityGlobal.last-connected; touch: root.touch; tint: Colors.info; }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                StatusRow { title: "Push"; value: ActivityGlobal.push-status; touch: root.touch;
+                                    tint: ActivityGlobal.push-status == "Registered" ? Colors.success : Colors.warning; }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                StatusRow { title: "Mesh"; value: root.mesh-value; touch: root.touch;
+                                    tint: !MeshGlobal.enabled || !MeshGlobal.mesh-on ? Colors.text-muted
+                                        : MeshGlobal.radio-running ? Colors.success : Colors.warning; }
+                                if AnonMode.enabled: Rectangle { height: 1px; background: Colors.divider; }
+                                if AnonMode.enabled: StatusRow { title: "Shield / Tor"; touch: root.touch;
+                                    value: !AnonMode.onion-built ? "Unavailable" : TorStatus.state == 2 ? "Connected"
+                                        : TorStatus.state == 1 ? "Bootstrapping " + ActivityGlobal.tor-bootstrap
+                                        : TorStatus.state >= 3 ? "Failed" : "Off";
+                                    tint: TorStatus.state == 2 ? Colors.success : TorStatus.state == 1 ? Colors.warning : Colors.error; }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                StatusRow { title: "App version"; touch: root.touch;
+                                    value: UpdateGlobal.installed-version == "" ? "Unknown" : UpdateGlobal.installed-version;
+                                    tint: Colors.info; }
+                                if root.update-available: Rectangle { height: 1px; background: Colors.divider; }
+                                if root.update-available: StatusRow { title: "Update available"; touch: root.touch;
+                                    value: UpdateGlobal.version; tint: Colors.info; }
+                            }
+                        }
+                    }
+                    VerticalLayout { spacing: Spacing.xs;
+                        Text { text: "ACTIVITY"; color: Colors.text-muted; font-size: Typography.xs;
+                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        if ActivityGlobal.loading: Text {
+                            text: "Loading activity…"; color: Colors.text-muted;
+                            font-size: Typography.sm; horizontal-alignment: center;
+                            height: 160px; vertical-alignment: center;
+                        }
+                        if !ActivityGlobal.loading && ActivityGlobal.read-error: VerticalLayout {
+                            alignment: center; spacing: Spacing.sm; height: 160px;
+                            Text { text: "Could not load activity."; color: Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; }
+                            Button { text: "Retry"; clicked => { ActivityGlobal.retry(); } }
+                        }
+                        if !ActivityGlobal.loading && !ActivityGlobal.read-error && ActivityGlobal.items.length == 0: VerticalLayout {
+                            alignment: center; spacing: Spacing.sm; height: 160px;
+                            HorizontalLayout { alignment: center;
+                                Rectangle { width: 52px; height: 52px; border-radius: Spacing.radius-full;
+                                    background: Colors.primary.with-alpha(0.14);
+                                    Image { source: Icons.bell; width: 24px; height: 24px;
+                                        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                        colorize: Colors.primary; }
+                                }
+                            }
+                            Text { text: "No activity yet"; color: Colors.text-primary; font-size: Typography.base;
+                                font-weight: Typography.semibold; horizontal-alignment: center; }
+                            Text { text: "Mentions, replies, and updates will appear here.";
+                                color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; }
+                        }
+                        for item[i] in ActivityGlobal.items: VerticalLayout {
+                            spacing: 0px;
+                            if i == 0 || item.section != ActivityGlobal.items[i - 1].section: Text {
+                                text: item.section; color: Colors.text-muted; font-size: Typography.xs;
+                                font-weight: Typography.semibold; height: 28px; vertical-alignment: center; }
+                            Rectangle { height: feed-row.height; background: Colors.surface-section; border-radius: Spacing.radius-md; clip: true;
+                                feed-row := ActivityFeedRow { item-id: item.id; kind: item.kind; title: item.title;
+                                    preview: item.preview; time-label: item.time-label; unread: item.unread; touch: root.touch; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

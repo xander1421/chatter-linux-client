@@ -16,6 +16,7 @@
 //! [`RouterTransport::can_deliver_securely`]: chatter_mesh_store::RouterTransport::can_deliver_securely
 
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 use chatter_mesh::ids::PeerId;
 use chatter_mesh_noise::identity::MeshIdentity;
@@ -29,6 +30,14 @@ use chatter_mesh_noise::{NoiseError, fingerprint_of};
 /// empty payloads we send. A wrong guess here costs a handshake round trip, not
 /// correctness: the handshake state machine rejects anything it cannot read.
 const OPENING_MESSAGE_LEN: usize = 32;
+const MAX_PENDING_INBOUND_HANDSHAKES: usize = 32;
+const MAX_PENDING_HANDSHAKES_PER_LINK: usize = 4;
+const PENDING_HANDSHAKE_LIFETIME: Duration = Duration::from_secs(30);
+
+/// A session unused this long is renegotiated on its next use (bitchat
+/// `NoiseSecurityConstants.sessionTimeout`, the idle half of
+/// `needsRenegotiation()`; the other half is the nonce budget).
+pub const IDLE_REKEY_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// What a handshake message produced.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -46,7 +55,12 @@ pub struct HandshakeStep {
 #[derive(Default)]
 pub struct SessionManager {
     handshakes: BTreeMap<PeerId, (NoiseHandshake, HandshakeRole)>,
+    pending_inbound: BTreeMap<PeerId, (String, Instant)>,
     sessions: BTreeMap<PeerId, NoiseSession>,
+    handshake_hashes: BTreeMap<PeerId, [u8; 32]>,
+    /// Per session: when it last carried a message, and whether a use found
+    /// it idle past [`IDLE_REKEY_AFTER`] (a rekey is then due).
+    activity: BTreeMap<PeerId, (Instant, bool)>,
 }
 
 impl SessionManager {
@@ -67,10 +81,67 @@ impl SessionManager {
         self.handshakes.contains_key(peer)
     }
 
+    /// Reserve space for an unauthenticated XX opening on its physical link.
+    /// A restart by the same claimed peer on the same link reuses its slot.
+    pub fn admit_inbound(
+        &mut self,
+        peer: &PeerId,
+        local_peer: &PeerId,
+        link: &str,
+        message: &[u8],
+    ) -> bool {
+        if message.len() != OPENING_MESSAGE_LEN {
+            return self.handshakes.contains_key(peer);
+        }
+        if matches!(self.handshakes.get(peer), Some((_, HandshakeRole::Initiator)))
+            && local_peer < peer
+        {
+            return true;
+        }
+        if let Some((owner, _)) = self.pending_inbound.get(peer) {
+            return owner.as_str() == link;
+        }
+        if self.pending_inbound.len() >= MAX_PENDING_INBOUND_HANDSHAKES
+            || self
+                .pending_inbound
+                .values()
+                .filter(|entry| entry.0.as_str() == link)
+                .count()
+                >= MAX_PENDING_HANDSHAKES_PER_LINK
+        {
+            return false;
+        }
+        self.pending_inbound
+            .insert(peer.clone(), (link.to_owned(), Instant::now()));
+        true
+    }
+
+    pub fn release_inbound(&mut self, peer: &PeerId) {
+        self.pending_inbound.remove(peer);
+    }
+
+    pub fn expire_pending_handshakes(&mut self) {
+        let now = Instant::now();
+        let expired: Vec<_> = self
+            .pending_inbound
+            .iter()
+            .filter(|(_, (_, started))| now.duration_since(*started) >= PENDING_HANDSHAKE_LIFETIME)
+            .map(|(peer, _)| peer.clone())
+            .collect();
+        for peer in expired {
+            self.pending_inbound.remove(&peer);
+            self.handshakes.remove(&peer);
+        }
+    }
+
     /// The peer's Noise static key, once a session exists.
     #[must_use]
     pub fn remote_static(&self, peer: &PeerId) -> Option<[u8; 32]> {
         self.sessions.get(peer).map(NoiseSession::remote_static)
+    }
+
+    pub fn handshake_hash(&self, peer: &PeerId) -> Option<[u8; 32]> {
+        self.handshake_hashes.get(peer).copied()
     }
 
     /// The peer's fingerprint, once a session exists.
@@ -100,6 +171,7 @@ impl SessionManager {
     ) -> Result<Vec<u8>, NoiseError> {
         let mut handshake = NoiseHandshake::new(HandshakeRole::Initiator, identity)?;
         let message = handshake.write_message(&[])?;
+        self.pending_inbound.remove(peer);
         self.handshakes
             .insert(peer.clone(), (handshake, HandshakeRole::Initiator));
         Ok(message)
@@ -206,6 +278,9 @@ impl SessionManager {
         peer: &PeerId,
         handshake: NoiseHandshake,
     ) -> Result<[u8; 32], NoiseError> {
+        let hash = handshake
+            .handshake_hash()
+            .ok_or(NoiseError::WrongState("missing final handshake hash"))?;
         let session = handshake.into_session()?;
         let remote = session.remote_static();
         if PeerId::from_noise_key(&remote) != *peer {
@@ -218,54 +293,104 @@ impl SessionManager {
             ));
         }
         self.sessions.insert(peer.clone(), session);
+        self.handshake_hashes.insert(peer.clone(), hash);
+        self.activity.insert(peer.clone(), (Instant::now(), false));
         Ok(remote)
+    }
+
+    /// Record a use of `peer`'s session at `now`, flagging a rekey when the
+    /// session had sat idle past [`IDLE_REKEY_AFTER`].
+    fn touch(&mut self, peer: &PeerId, now: Instant) {
+        let (last, idle) = self.activity.entry(peer.clone()).or_insert((now, false));
+        if now.saturating_duration_since(*last) > IDLE_REKEY_AFTER {
+            *idle = true;
+        }
+        *last = now;
     }
 
     /// Encrypt for an established session.
     pub fn encrypt(&mut self, peer: &PeerId, plaintext: &[u8]) -> Result<Vec<u8>, NoiseError> {
-        self.sessions
+        self.encrypt_at(peer, plaintext, Instant::now())
+    }
+
+    fn encrypt_at(
+        &mut self,
+        peer: &PeerId,
+        plaintext: &[u8],
+        now: Instant,
+    ) -> Result<Vec<u8>, NoiseError> {
+        let sealed = self
+            .sessions
             .get_mut(peer)
             .ok_or(NoiseError::WrongState("no session for peer"))?
-            .encrypt(plaintext)
+            .encrypt(plaintext)?;
+        self.touch(peer, now);
+        Ok(sealed)
     }
 
     /// Decrypt for an established session.
     pub fn decrypt(&mut self, peer: &PeerId, ciphertext: &[u8]) -> Result<Vec<u8>, NoiseError> {
-        self.sessions
+        let opened = self
+            .sessions
             .get_mut(peer)
             .ok_or(NoiseError::WrongState("no session for peer"))?
-            .decrypt(ciphertext)
+            .decrypt(ciphertext)?;
+        self.touch(peer, Instant::now());
+        Ok(opened)
     }
 
-    /// Whether the session with this peer is close enough to its message limit
-    /// that it should be renegotiated.
+    /// Whether to open a renegotiation with this peer now: its session has
+    /// spent 90% of its nonce budget, or was used after sitting idle past
+    /// [`IDLE_REKEY_AFTER`] (both halves of bitchat `needsRenegotiation()`),
+    /// and no handshake is already replacing it.
+    ///
+    /// The handshake check matters: [`initiate`](Self::initiate) restarts a
+    /// handshake in flight, so re-opening on every send past the threshold would
+    /// never let one complete. The old session keeps carrying traffic until the
+    /// new handshake completes and [`establish`](Self::establish) swaps it out.
     #[must_use]
     pub fn needs_rekey(&self, peer: &PeerId) -> bool {
-        self.sessions
-            .get(peer)
-            .is_some_and(NoiseSession::needs_rekey)
+        !self.is_handshaking(peer)
+            && self.sessions.get(peer).is_some_and(|session| {
+                session.needs_rekey() || self.activity.get(peer).is_some_and(|(_, idle)| *idle)
+            })
+    }
+
+    /// Set a session's sent-message count, so tests can reach the rekey
+    /// threshold. Requires mesh-noise's `testing` hook.
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn set_messages_sent_for_testing(&mut self, peer: &PeerId, count: u64) {
+        if let Some(session) = self.sessions.get_mut(peer) {
+            session.set_messages_sent_for_testing(count);
+        }
     }
 
     /// Forget everything about one peer.
     pub fn forget(&mut self, peer: &PeerId) {
         self.handshakes.remove(peer);
+        self.pending_inbound.remove(peer);
         self.sessions.remove(peer);
+        self.handshake_hashes.remove(peer);
+        self.activity.remove(peer);
     }
 
     /// Forget every session. Used by the panic wipe and on shutdown.
     pub fn clear(&mut self) {
         self.handshakes.clear();
+        self.pending_inbound.clear();
         self.sessions.clear();
+        self.handshake_hashes.clear();
+        self.activity.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core_06::OsRng;
+    use crate::crypto::os_rng;
 
     fn identity() -> MeshIdentity {
-        MeshIdentity::generate(&mut OsRng)
+        MeshIdentity::generate(&mut os_rng())
     }
 
     /// Drive a full XX exchange between two managers.
@@ -311,8 +436,14 @@ mod tests {
         assert!(alice.has_session(&bob_peer));
         assert!(bob.has_session(&alice_peer));
         assert_eq!(alice.remote_static(&bob_peer), Some(bob_id.static_public()));
-        assert_eq!(bob.remote_static(&alice_peer), Some(alice_id.static_public()));
-        assert_eq!(alice.fingerprint(&bob_peer).as_deref(), Some(bob_id.fingerprint().as_str()));
+        assert_eq!(
+            bob.remote_static(&alice_peer),
+            Some(alice_id.static_public())
+        );
+        assert_eq!(
+            alice.fingerprint(&bob_peer).as_deref(),
+            Some(bob_id.fingerprint().as_str())
+        );
     }
 
     #[test]
@@ -357,7 +488,11 @@ mod tests {
         let step = low
             .on_handshake(&high_peer, &low_peer, low_id, &high_open)
             .expect("low handles the collision");
-        assert_eq!(step, HandshakeStep::default(), "low keeps its initiator role");
+        assert_eq!(
+            step,
+            HandshakeStep::default(),
+            "low keeps its initiator role"
+        );
 
         // The high side yields and answers as responder.
         let step = high
@@ -490,6 +625,99 @@ mod tests {
         assert!(
             !local.has_session(&victim_peer),
             "and no session may be keyed on the impersonated ID"
+        );
+    }
+
+    #[cfg(feature = "testing")]
+    #[test]
+    fn a_rekey_is_due_at_the_threshold_until_a_handshake_replaces_the_session() {
+        use chatter_mesh_noise::session::REKEY_MESSAGE_THRESHOLD;
+
+        let (alice_id, bob_id) = (identity(), identity());
+        let (mut alice, mut bob) = (SessionManager::new(), SessionManager::new());
+        let (alice_peer, bob_peer) = complete(&mut alice, &alice_id, &mut bob, &bob_id);
+        assert!(!alice.needs_rekey(&bob_peer));
+
+        alice.set_messages_sent_for_testing(&bob_peer, REKEY_MESSAGE_THRESHOLD);
+        assert!(alice.needs_rekey(&bob_peer));
+
+        // Opening the renegotiation suppresses the signal, so the next send does
+        // not restart it, and the old session keeps working meanwhile.
+        let m1 = alice.initiate(&bob_peer, &alice_id).expect("m1");
+        assert!(!alice.needs_rekey(&bob_peer));
+        let sealed = alice.encrypt(&bob_peer, b"mid-rekey").expect("old session");
+        assert_eq!(
+            bob.decrypt(&alice_peer, &sealed).expect("opens"),
+            b"mid-rekey"
+        );
+
+        let m2 = bob
+            .on_handshake(&alice_peer, &bob_peer, &bob_id, &m1)
+            .expect("bob reads m1")
+            .reply
+            .expect("m2");
+        let m3 = alice
+            .on_handshake(&bob_peer, &alice_peer, &alice_id, &m2)
+            .expect("alice reads m2")
+            .reply
+            .expect("m3");
+        bob.on_handshake(&alice_peer, &bob_peer, &bob_id, &m3)
+            .expect("bob completes");
+
+        // A fresh session: the count is back to zero, and both sides agree.
+        assert!(!alice.needs_rekey(&bob_peer));
+        let sealed = alice.encrypt(&bob_peer, b"rekeyed").expect("new session");
+        assert_eq!(
+            bob.decrypt(&alice_peer, &sealed).expect("opens"),
+            b"rekeyed"
+        );
+    }
+
+    /// bitchat's idle half: a session first used again after more than
+    /// 24 h asks for a rekey on that use, and a completed renegotiation
+    /// clears it. A use inside the window does not.
+    #[test]
+    fn a_session_used_after_24h_idle_is_rekeyed() {
+        let (alice_id, bob_id) = (identity(), identity());
+        let (mut alice, mut bob) = (SessionManager::new(), SessionManager::new());
+        let (alice_peer, bob_peer) = complete(&mut alice, &alice_id, &mut bob, &bob_id);
+        let start = alice.activity[&bob_peer].0;
+
+        alice
+            .encrypt_at(&bob_peer, b"soon", start + IDLE_REKEY_AFTER)
+            .expect("in window");
+        assert!(
+            !alice.needs_rekey(&bob_peer),
+            "exactly 24 h is not idle past it"
+        );
+
+        let later = start + IDLE_REKEY_AFTER * 2 + Duration::from_secs(1);
+        let sealed = alice
+            .encrypt_at(&bob_peer, b"after a day", later)
+            .expect("still usable");
+        assert_eq!(
+            bob.decrypt(&alice_peer, &sealed).expect("opens"),
+            b"after a day"
+        );
+        assert!(alice.needs_rekey(&bob_peer));
+
+        let m1 = alice.initiate(&bob_peer, &alice_id).expect("m1");
+        assert!(!alice.needs_rekey(&bob_peer), "one renegotiation at a time");
+        let m2 = bob
+            .on_handshake(&alice_peer, &bob_peer, &bob_id, &m1)
+            .expect("m1")
+            .reply
+            .expect("m2");
+        let m3 = alice
+            .on_handshake(&bob_peer, &alice_peer, &alice_id, &m2)
+            .expect("m2")
+            .reply
+            .expect("m3");
+        bob.on_handshake(&alice_peer, &bob_peer, &bob_id, &m3)
+            .expect("bob completes");
+        assert!(
+            !alice.needs_rekey(&bob_peer),
+            "the new session starts fresh"
         );
     }
 

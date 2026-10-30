@@ -9,6 +9,9 @@ use tonic::{Code, Status};
 /// Network error with gRPC status code classification.
 #[derive(Debug, Clone, Error)]
 pub enum NetworkError {
+    /// The connection or tonic readiness check failed before the request was sent.
+    #[error("request not sent: {0}")]
+    RequestNotSent(String),
     /// Connection to server failed.
     #[error("connection failed: {0}")]
     ConnectionFailed(String),
@@ -49,6 +52,22 @@ pub enum NetworkError {
     #[error("data loss: {0}")]
     DataLoss(String),
 
+    /// A sealed send named a device set that is not the recipient's
+    /// registered devices (`SendSealedMessageResponse.mismatched_devices`,
+    /// Signal-Server's 409 / 410). Nothing was queued.
+    #[error("recipient devices changed: missing {missing:?}, extra {extra:?}, stale {stale:?}")]
+    MismatchedDevices {
+        missing: Vec<u32>,
+        extra: Vec<u32>,
+        stale: Vec<u32>,
+    },
+
+    /// A secret-chat (anonymous DM / anonymous group) operation has no Tor
+    /// route: the build lacks the `onion` feature, or no server `.onion` is
+    /// pinned. Secret-chat traffic never falls back to the direct transport.
+    #[error("secret chats need Tor (onion): {0}")]
+    SecretChatNeedsTor(&'static str),
+
     /// Unknown or unclassified error.
     #[error("unknown error: {0}")]
     Unknown(String),
@@ -61,6 +80,22 @@ impl NetworkError {
     pub fn from_status(status: &Status) -> Self {
         let message = status.message().to_string();
         let code = status.code();
+
+        // tonic's readiness check precedes the RPC call. Its connect error
+        // cannot have delivered any request bytes, unlike an h2 error after
+        // the call starts. A bare Unavailable remains ambiguous.
+        let mut source = StdError::source(status);
+        let mut connect_error = false;
+        while let Some(error) = source {
+            if format!("{error:?}").contains("ConnectError") {
+                connect_error = true;
+                break;
+            }
+            source = error.source();
+        }
+        if message.starts_with("Service was not ready:") || connect_error {
+            return Self::RequestNotSent(message);
+        }
 
         // Log detailed error info for debugging
         tracing::debug!(
@@ -87,7 +122,8 @@ impl NetworkError {
                 // "Service was not ready: transport error" comes from tonic's .ready()
                 // check when the HTTP/2 connection is temporarily down. Treat as Unavailable
                 // so retry logic can recover.
-                if message.contains("transport error") || message.contains("Service was not ready") {
+                if message.contains("transport error") || message.contains("Service was not ready")
+                {
                     tracing::warn!(
                         message = %message,
                         "Transport-level error detected in Code::Unknown — treating as Unavailable"
@@ -100,15 +136,34 @@ impl NetworkError {
             Code::InvalidArgument => NetworkError::InvalidRequest(message),
             Code::DeadlineExceeded => NetworkError::Timeout,
             Code::NotFound => NetworkError::NotFound(message),
-            Code::AlreadyExists => NetworkError::InvalidRequest(format!("already exists: {}", message)),
+            Code::AlreadyExists => {
+                NetworkError::InvalidRequest(format!("already exists: {}", message))
+            }
             Code::PermissionDenied => NetworkError::PermissionDenied,
             Code::ResourceExhausted => NetworkError::RateLimited,
-            Code::FailedPrecondition => NetworkError::InvalidRequest(format!("precondition failed: {}", message)),
+            Code::FailedPrecondition => {
+                NetworkError::InvalidRequest(format!("precondition failed: {}", message))
+            }
             Code::Aborted => NetworkError::ServerError(format!("aborted: {}", message)),
             Code::OutOfRange => NetworkError::InvalidRequest(format!("out of range: {}", message)),
             Code::Unimplemented => NetworkError::ServerError(format!("unimplemented: {}", message)),
             Code::Internal => NetworkError::ServerError(message),
-            Code::Unavailable => NetworkError::Unavailable,
+            Code::Unavailable => {
+                // NetworkError::Unavailable is a unit variant, so everything the
+                // transport had to say is dropped here. That is why OPEN-ITEMS
+                // §73 could only report "Unavailable in 0.00s, server logs
+                // nothing" after eliminating six hypotheses: the answer was in
+                // this `message` and in `status`'s source chain, and neither ever
+                // reached a log. Say it before discarding it.
+                tracing::warn!(
+                    message = %message,
+                    source = ?StdError::source(status),
+                    metadata = ?status.metadata(),
+                    "gRPC UNAVAILABLE — the transport's own reason, which the \
+                     NetworkError variant cannot carry"
+                );
+                NetworkError::Unavailable
+            }
             Code::DataLoss => NetworkError::DataLoss(message),
             Code::Unauthenticated => NetworkError::Unauthenticated,
         }
@@ -124,10 +179,26 @@ impl NetworkError {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            NetworkError::Unavailable
+            NetworkError::RequestNotSent(_)
+                | NetworkError::Unavailable
                 | NetworkError::RateLimited
                 | NetworkError::ServerError(_)
                 | NetworkError::Timeout
+        )
+    }
+
+    /// The server answered and refused the request, so nothing it carried
+    /// was accepted. Transport failures, timeouts and server-side errors are
+    /// not definite: the server may have processed the request anyway.
+    pub fn is_definite_rejection(&self) -> bool {
+        matches!(
+            self,
+            NetworkError::InvalidRequest(_)
+                | NetworkError::PermissionDenied
+                | NetworkError::Unauthenticated
+                | NetworkError::NotFound(_)
+                | NetworkError::RateLimited
+                | NetworkError::MismatchedDevices { .. }
         )
     }
 
@@ -138,7 +209,9 @@ impl NetworkError {
     pub fn is_transport_error(&self) -> bool {
         matches!(
             self,
-            NetworkError::Unavailable | NetworkError::ConnectionFailed(_)
+            NetworkError::RequestNotSent(_)
+                | NetworkError::Unavailable
+                | NetworkError::ConnectionFailed(_)
         )
     }
 
@@ -153,11 +226,42 @@ impl NetworkError {
             NetworkError::Unauthenticated | NetworkError::PermissionDenied
         )
     }
+
+    /// The server refuses this caller the resource (`PermissionDenied`) or
+    /// says it is gone (`NotFound`): retrying the same request cannot help.
+    pub fn is_access_refused(&self) -> bool {
+        matches!(
+            self,
+            NetworkError::PermissionDenied | NetworkError::NotFound(_)
+        )
+    }
+
+    /// The server refused a sealed send because a device it names is not
+    /// registered (retired by Log Out / unlink): `MismatchedDevices` with
+    /// `extra` devices. The sender should stop encrypting to those devices.
+    pub fn is_unknown_destination_device(&self) -> bool {
+        matches!(self, NetworkError::MismatchedDevices { extra, .. } if !extra.is_empty())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A channel the server refuses us (left, removed, deleted, or never
+    /// authorized) is skipped by the syncs instead of failing every cycle.
+    #[test]
+    fn refused_channel_access_is_not_retried() {
+        for status in [
+            Status::permission_denied("no permission to read channel messages"),
+            Status::not_found("channel not found"),
+        ] {
+            let err = NetworkError::from_status(&status);
+            assert!(err.is_access_refused(), "{err}");
+            assert!(!err.is_retryable(), "{err}");
+        }
+        assert!(!NetworkError::from_status(&Status::internal("x")).is_access_refused());
+    }
 
     #[test]
     fn test_from_status_unavailable() {
@@ -272,5 +376,27 @@ mod tests {
 
         let err = NetworkError::NotFound("channel-123".to_string());
         assert_eq!(err.to_string(), "resource not found: channel-123");
+    }
+
+    #[test]
+    fn test_unknown_destination_device() {
+        let extra = NetworkError::MismatchedDevices {
+            missing: vec![],
+            extra: vec![3],
+            stale: vec![],
+        };
+        assert!(extra.is_unknown_destination_device());
+        let missing = NetworkError::MismatchedDevices {
+            missing: vec![3],
+            extra: vec![],
+            stale: vec![],
+        };
+        assert!(!missing.is_unknown_destination_device());
+        let err =
+            NetworkError::from_status(&Status::failed_precondition("unknown destination device"));
+        assert!(
+            !err.is_unknown_destination_device(),
+            "the server no longer answers with a status"
+        );
     }
 }

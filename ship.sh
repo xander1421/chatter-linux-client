@@ -19,7 +19,7 @@
 #                           address in ios/project.yml). main.m re-exports it as
 #                           an env var before Rust boots.
 #
-# ponytail: no Makefile, no just, no cargo-xtask — this is four commands in a
+# no Makefile, no just, no cargo-xtask — this is four commands in a
 # trenchcoat. If it grows a dependency graph, that's when it earns a real task
 # runner.
 set -euo pipefail

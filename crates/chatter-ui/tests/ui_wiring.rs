@@ -1,14 +1,21 @@
 //! VALIDATED-UI headless harness — smoke test.
 //!
-//! Boots the real `MainWindow` (the generated Slint root from `ui/main.slint`)
+//! Boots the real `MainWindow` (the generated Slint root, `ui/app.slint`)
 //! under the headless testing backend and proves basic round-trips. This is the
 //! LAYER-1 (headless-dynamic) foundation for VALIDATED-UI.md.
 //!
 //! Each `#[test]` runs on its own cargo test thread; `init_no_event_loop()`
 //! installs a per-thread testing platform, so tests do not collide.
 
-use i_slint_backend_testing as testing;
+// The real GIF/send route now includes durable admission and session guards;
+// compiling its generic test future needs more than the default query depth.
+#![recursion_limit = "256"]
+
 use chatter_ui::MainWindow;
+use i_slint_backend_testing as testing;
+use slint::ComponentHandle;
+// DROPPED-P1s: feature-mirror globals asserted by the anon-mode / AI-template tests.
+use chatter_ui::{AiIntegrationGlobal, AnonMode};
 
 /// Route the SQLCipher passphrase through the documented env override so offline
 /// `ChatterClient::build()` never touches the OS keyring / Secret Service (absent
@@ -23,12 +30,37 @@ fn headless_dialogs() {
     unsafe { std::env::set_var("CHATTER_HEADLESS", "1") };
 }
 
+///
+/// `CHATTER_DB_PASSPHRASE` covers only the database passphrase. With the
+/// `mesh` feature `ChatterClient::build` also opens the mesh seal key
+/// (`app/services.rs` -> `mesh_store::sealed_store` -> `MeshSealer::from_keyring`),
+/// which asked Secret Service directly and popped a desktop unlock prompt on
+/// every `--features mesh` run. `CHATTER_NO_KEYRING` is the opt-out both
+/// honour (`system::keyring::keyring_disabled`).
 fn no_keyring() {
     headless_dialogs();
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| unsafe {
+        std::env::set_var("CHATTER_NO_KEYRING", "1");
         std::env::set_var("CHATTER_DB_PASSPHRASE", "ui-wiring-harness-passphrase");
     });
+}
+
+/// Guard: the harness keeps every keyring reader off the OS keyring — the
+/// database passphrase and the mesh seal key alike — whatever directory a
+/// test's client is built in.
+#[test]
+fn harness_never_reaches_the_os_keyring() {
+    no_keyring();
+    let db = std::path::Path::new("/nonexistent-ui-wiring/chatter.db");
+    assert!(
+        chatter_core::system::keyring::keyring_disabled(db),
+        "a client built by this harness would ask Secret Service for its mesh seal key"
+    );
+    assert_eq!(
+        chatter_core::system::keyring::Keyring::new(db.to_path_buf()).passphrase_source(),
+        "CHATTER_DB_PASSPHRASE"
+    );
 }
 
 /// Install the headless backend for the current test thread. Safe to call once
@@ -42,29 +74,27 @@ fn boot() -> MainWindow {
 /// Fail with the cause, not the symptom, when the element-query API is inert.
 ///
 /// `ElementHandle` needs debug info that the Slint compiler only emits when
-/// `SLINT_EMIT_DEBUG_INFO=1` is set at build time. Without it every query
+/// the `ui-test-debug` feature is enabled at build time. Without it every query
 /// returns nothing, and the assertions here then report a UI that looks
 /// structurally broken -- "ThreadPanel was never instantiated", "there are no
 /// Rectangles" -- when the only thing wrong is the command line. Check the real
 /// precondition first.
 fn require_element_queries() {
-    assert_eq!(
-        env!("CHATTER_UI_SLINT_DEBUG_INFO"),
-        "1",
+    assert!(
+        chatter_ui::SLINT_DEBUG_INFO_ENABLED,
         "the ElementHandle query API is inert: chatter-ui was built without \
-         SLINT_EMIT_DEBUG_INFO=1, so every element query returns nothing and \
+         the ui-test-debug feature, so every element query returns nothing and \
          nothing asserted below can mean anything. Run the UI suites with:\n\n    \
          ./scripts/test-ui.sh\n\n  or directly:\n\n    \
-         SLINT_EMIT_DEBUG_INFO=1 cargo test -p chatter-ui --test ui_wiring --test ui_layout"
+         cargo test -p chatter-ui --features ui-test-debug --test ui_wiring --test ui_layout"
     );
 }
 
 #[test]
 fn smoke_boots_and_view_roundtrips() {
     let w = boot();
-    // current-view is an in-out property bridged App<=>MainWindow. Setting it and
-    // reading it back proves the two-way binding across the component boundary is
-    // live (not a dead alias).
+    // current-view is an in-out property on MainWindow. Setting it and reading it
+    // back proves the Rust-facing property is live.
     w.set_current_view("register".into());
     assert_eq!(w.get_current_view().as_str(), "register");
     w.set_current_view("login".into());
@@ -81,7 +111,10 @@ fn smoke_can_query_elements() {
     // element with a type name. If this returns empty, the whole query layer is
     // dead and every other dynamic assertion is vacuous.
     let any = testing::ElementHandle::find_by_element_type_name(&w, "Rectangle").count();
-    assert!(any > 0, "expected at least one Rectangle in the element tree");
+    assert!(
+        any > 0,
+        "expected at least one Rectangle in the element tree"
+    );
 }
 
 // ============================================================================
@@ -135,21 +168,137 @@ fn wired_offline() -> (
     (rt, tmp, client, w)
 }
 
+/// Settings > Privacy > Notification content: the selector's callback reaches
+/// core, the level is applied to the running NotificationService, and it
+/// survives a restart (core_services.rs loads NOTIFICATION_DETAIL_LEVEL at
+/// construction). Default is the private "none".
+#[test]
+fn settings_notification_detail_level_persists_across_restart() {
+    use chatter_core::services::notification_service::NotificationDetailLevel;
+    let (rt, tmp, client, w) = wired_offline();
+    assert_eq!(
+        client.notification_detail_level(),
+        NotificationDetailLevel::None,
+        "precondition"
+    );
+
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_notification_detail_changed("name_only".into());
+    assert_eq!(
+        client.notification_detail_level(),
+        NotificationDetailLevel::NameOnly
+    );
+    assert_eq!(
+        w.global::<chatter_ui::SettingsPane>()
+            .get_settings_notification_detail()
+            .as_str(),
+        "name_only"
+    );
+
+    drop(w);
+    drop(client);
+    let _guard = rt.enter();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build (restart)");
+    assert_eq!(
+        client.notification_detail_level(),
+        NotificationDetailLevel::NameOnly,
+        "detail level did not survive a restart"
+    );
+}
+
+/// Settings > Appearance > Theme: a pick reaches core, flips the palette the
+/// whole UI reads (`Appearance.dark` drives every `Colors` token), and survives
+/// a restart.
+#[test]
+fn settings_theme_pick_persists_and_flips_palette() {
+    use chatter_core::services::appearance::ThemeMode;
+    use slint::ComponentHandle;
+    let (rt, tmp, client, w) = wired_offline();
+    let appearance = w.global::<chatter_ui::Appearance>();
+    assert_eq!(client.theme_mode(), ThemeMode::System, "precondition");
+
+    appearance.invoke_theme_changed("light".into());
+    assert_eq!(client.theme_mode(), ThemeMode::Light);
+    assert!(
+        !appearance.get_dark(),
+        "light pick left the dark palette in force"
+    );
+    appearance.invoke_theme_changed("dark".into());
+    assert!(appearance.get_dark());
+
+    drop(w);
+    drop(client);
+    let _guard = rt.enter();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build (restart)");
+    assert_eq!(
+        client.theme_mode(),
+        ThemeMode::Dark,
+        "theme did not survive a restart"
+    );
+}
+
+#[test]
+fn settings_glass_effects_persists_and_restores_before_first_frame() {
+    use slint::ComponentHandle;
+    let (rt, tmp, client, w) = wired_offline();
+    let appearance = w.global::<chatter_ui::Appearance>();
+    assert!(client.glass_effects_enabled());
+    assert!(appearance.get_glass_effects());
+
+    appearance.invoke_glass_effects_changed(false);
+    assert!(!client.glass_effects_enabled());
+    assert!(!appearance.get_glass_effects());
+    drop(w);
+    drop(client);
+
+    let _guard = rt.enter();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline client restart");
+    let w = MainWindow::new().expect("restarted window");
+    chatter_ui::bin_ui::features::modals::settings::wire_settings_callbacks(&w, &client);
+    let appearance = w.global::<chatter_ui::Appearance>();
+    assert!(
+        !appearance.get_glass_effects(),
+        "saved preference must apply before showing the window"
+    );
+    appearance.invoke_glass_effects_changed(true);
+    assert!(client.glass_effects_enabled());
+    assert!(appearance.get_glass_effects());
+}
+
 #[test]
 fn settings_read_receipts_toggle_reaches_core() {
     require_element_queries();
     let (_rt, _tmp, client, w) = wired_offline();
     // Default is true (get_bool_setting.unwrap_or(true)).
-    assert_eq!(client.read_receipts_enabled().unwrap(), true, "precondition");
+    assert_eq!(
+        client.read_receipts_enabled().unwrap(),
+        true,
+        "precondition"
+    );
     // Fire the exact callback the read-receipts Toggle invokes.
-    w.invoke_settings_read_receipts_changed(false);
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_read_receipts_changed(false);
     assert_eq!(
         client.read_receipts_enabled().unwrap(),
         false,
         "read-receipts toggle did NOT reach core (dead/stub wire)"
     );
-    w.invoke_settings_read_receipts_changed(true);
-    assert_eq!(client.read_receipts_enabled().unwrap(), true, "toggle did not flip back on");
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_read_receipts_changed(true);
+    assert_eq!(
+        client.read_receipts_enabled().unwrap(),
+        true,
+        "toggle did not flip back on"
+    );
 }
 
 // ============================================================================
@@ -161,19 +310,19 @@ fn settings_read_receipts_toggle_reaches_core() {
 
 /// Crown-jewel end-to-end proof. Uses the INTEGRATION testing backend (has an
 /// event-loop provider) and pumps the loop once so the conditional SettingsScreen
-/// child (gated by active-modal=="settings") actually MATERIALIZES — a plain
+/// child (gated by settings-open) actually MATERIALIZES — a plain
 /// `init_no_event_loop` never renders, so conditional/repeated sub-trees never
 /// instantiate and the toggle can't be found. Then:
 ///   1. the accessible-label we added resolves to exactly one `switch` element,
 ///   2. its accessible-checked tracks the bound property (display wire), and
 ///   3. a REAL pointer click traverses the whole chain
-///      (Toggle.toggled → SettingsScreen.read-receipts-changed → App →
+///      (Toggle.toggled → SettingsScreen.read-receipts-changed →
 ///       MainWindow → Rust on_settings_read_receipts_changed) into chatter-core.
 ///
-/// Modal-routing wire, proven dynamically. Setting the `active-modal` property
-/// to "settings" must instantiate the conditional `SettingsScreen` sub-tree
-/// (`ui/app.slint:2038  if active-modal == "settings": SettingsScreen`); clearing
-/// it must tear the sub-tree down. If that `if`-binding were dead, the element
+/// Routing wire, proven dynamically. Pushing "settings" on the modal stack
+/// must instantiate the conditional `SettingsScreen` sub-tree
+/// (`ui/app.slint  if root.settings-open: SettingsScreen`); closing it must
+/// tear the sub-tree down. If that `if`-binding were dead, the element
 /// count would never change. The built-in negative control is the pre-set state
 /// (count 0).
 ///
@@ -200,9 +349,12 @@ fn settings_modal_routing_wire_instantiates_conditional() {
     // Force a layout pass (a headless `if` needs one to (de)materialise).
     let pump = |w: &MainWindow| {
         let scale = w.window().scale_factor();
-        w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-            size: slint::LogicalSize::new(1000.0, 800.0).to_physical(scale).to_logical(scale),
-        });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: slint::LogicalSize::new(1000.0, 800.0)
+                    .to_physical(scale)
+                    .to_logical(scale),
+            });
         slint::Timer::single_shot(std::time::Duration::from_millis(80), || {
             slint::quit_event_loop().unwrap();
         });
@@ -211,22 +363,39 @@ fn settings_modal_routing_wire_instantiates_conditional() {
 
     // Negative control: modal not open → SettingsScreen absent.
     pump(&w);
-    assert_eq!(count_settings(), 0, "SettingsScreen present before the modal was opened");
+    assert_eq!(
+        count_settings(),
+        0,
+        "SettingsScreen present before the modal was opened"
+    );
 
-    // Open the settings modal via the routing property → conditional must appear.
-    w.set_active_modal("settings".into());
+    // Push Settings → conditional must appear.
+    chatter_ui::bin_ui::features::back::push(&w, "settings");
     pump(&w);
     assert_eq!(
         count_settings(),
         1,
-        "setting active-modal='settings' did NOT instantiate SettingsScreen — the \
-         `if active-modal == \"settings\"` routing wire is dead"
+        "pushing 'settings' did NOT instantiate SettingsScreen — the \
+         `if root.settings-open` routing wire is dead"
     );
 
-    // Close it → conditional must tear down.
-    w.set_active_modal("none".into());
+    // Something Settings opens keeps it mounted underneath.
+    chatter_ui::bin_ui::features::back::push(&w, "sessions");
     pump(&w);
-    assert_eq!(count_settings(), 0, "clearing active-modal did NOT remove SettingsScreen");
+    assert_eq!(
+        count_settings(),
+        1,
+        "Sessions over Settings unmounted Settings"
+    );
+
+    // Close it → conditional must tear down (with what it opened).
+    chatter_ui::bin_ui::features::back::close(&w, "settings");
+    pump(&w);
+    assert_eq!(
+        count_settings(),
+        0,
+        "closing Settings did NOT remove SettingsScreen"
+    );
 }
 
 // ============================================================================
@@ -262,11 +431,17 @@ fn avatar_bytes_decode_and_bind_to_display_property() {
 
     // Real decrypted-shaped bytes → a real Image.
     let img = avatar_bytes_to_image(TINY_PNG).expect("valid PNG must decode to an Image");
-    assert!(img.size().width > 0 && img.size().height > 0, "decoded avatar has zero size");
+    assert!(
+        img.size().width > 0 && img.size().height > 0,
+        "decoded avatar has zero size"
+    );
 
     // Bind it to the display property the Avatar element reads.
-    w.set_user_avatar_source(img);
-    let bound = w.get_user_avatar_source();
+    w.global::<chatter_ui::SidebarPane>()
+        .set_user_avatar_source(img);
+    let bound = w
+        .global::<chatter_ui::SidebarPane>()
+        .get_user_avatar_source();
     assert!(
         bound.size().width > 0 && bound.size().height > 0,
         "user-avatar-source did not retain the bound Image (dead property alias)"
@@ -276,15 +451,25 @@ fn avatar_bytes_decode_and_bind_to_display_property() {
 #[test]
 fn settings_typing_indicators_toggle_reaches_core() {
     let (_rt, _tmp, client, w) = wired_offline();
-    assert_eq!(client.typing_indicators_enabled().unwrap(), true, "precondition");
-    w.invoke_settings_typing_indicators_changed(false);
+    assert_eq!(
+        client.typing_indicators_enabled().unwrap(),
+        true,
+        "precondition"
+    );
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_typing_indicators_changed(false);
     assert_eq!(
         client.typing_indicators_enabled().unwrap(),
         false,
         "typing-indicators toggle did NOT reach core (dead/stub wire)"
     );
-    w.invoke_settings_typing_indicators_changed(true);
-    assert_eq!(client.typing_indicators_enabled().unwrap(), true, "toggle did not flip back on");
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_typing_indicators_changed(true);
+    assert_eq!(
+        client.typing_indicators_enabled().unwrap(),
+        true,
+        "toggle did not flip back on"
+    );
 }
 
 // ============================================================================
@@ -317,12 +502,23 @@ fn settings_delete_account_is_wired_behind_confirmation() {
     // Must not panic: the confirmed-delete callback is wired to a Rust handler.
     // (Offline + no logged-in user → the handler's async delete resolves to a
     // NotLoggedIn error it surfaces on the loop; we only assert the wire runs.)
-    w.invoke_settings_delete_account_confirmed("irrelevant-password".into());
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_delete_account_confirmed("irrelevant-password".into());
     // The first-click (unconfirmed) callback must also be wired and safe to call.
-    w.invoke_settings_delete_account();
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_delete_account();
 
     // ---- L2: static — confirmed handler reaches the wrapper; gated by confirm -
-    let settings_src = include_str!("../src/bin_ui/features/modals/settings.rs");
+    let settings_src = concat!(
+        include_str!("../src/bin_ui/features/modals/settings/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/account.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/ai.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/appearance.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/message_backup.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/notifications.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/privacy.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/recovery.rs"),
+    );
     assert!(
         settings_src.contains("on_settings_delete_account_confirmed"),
         "settings.rs must register the confirmed-delete handler"
@@ -341,59 +537,15 @@ fn settings_delete_account_is_wired_behind_confirmation() {
     // The Slint layer must gate the confirmed callback behind an explicit confirm
     // reveal (`show-delete-confirm`) — no deletion without confirmation.
     let screen_src = include_str!("../../../ui/settings/settings_screen.slint");
+    let account_src = include_str!("../../../ui/settings/account_settings.slint");
     assert!(
-        screen_src.contains("show-delete-confirm")
-            && screen_src.contains("delete-account-confirmed(root.delete-password)"),
+        account_src.contains("if show-delete-confirm: VerticalLayout {")
+            && account_src.contains("root.delete-account-confirmed(root.delete-password)")
+            && screen_src.contains(
+                "delete-account-confirmed(arg0) => { root.delete-account-confirmed(arg0); }"
+            ),
         "the Delete button must reveal a confirm step whose Confirm action carries the \
          password to delete-account-confirmed — deletion must be gated behind confirmation"
-    );
-}
-
-// ============================================================================
-// F-UI-3 (RESOLVED): friends-modal user search is no longer a dead wire.
-//
-//  L1 (DYNAMIC): `on_friends_search_users` is now a registered handler — invoking
-//      the generated callback runs the REAL production handler (from
-//      wire_friends_modal) without panicking. Before, the callback fired into the
-//      void (no `.on_friends_search_users`). Offline (no server) the lookup yields
-//      nothing; we assert the WIRE runs, not a server result.
-//  L2 (STATIC): the handler reaches `ChatterClient::search_users` and populates the
-//      bound `friends-search-results` model. The real taken-vs-unknown effect is
-//      proven end-to-end by validated.rs::v31.
-// ============================================================================
-#[test]
-fn friends_search_users_is_wired_to_core() {
-    no_keyring();
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let _guard = rt.enter();
-    let tmp = tempfile::tempdir().unwrap();
-    testing::init_no_event_loop();
-    let client = chatter_core::client::ChatterClient::builder()
-        .data_dir(tmp.path().to_string_lossy().to_string())
-        .build()
-        .expect("offline ChatterClient::build");
-    let w = MainWindow::new().expect("MainWindow::new");
-
-    // Register the REAL friends-modal handlers, then fire the search callback.
-    chatter_ui::bin_ui::features::modals::wire_friends_modal(&w, &client);
-    // Must not panic: the callback is wired to a Rust handler (dead wire otherwise).
-    w.invoke_friends_search_users("someone.4242".into());
-
-    // ---- L2 static: handler reaches core + populates the results model -------
-    let src = include_str!("../src/bin_ui/features/modals/friends/friends_list.rs");
-    assert!(
-        src.contains("on_friends_search_users"),
-        "friends_list.rs must register the search handler"
-    );
-    let idx = src.find("on_friends_search_users").unwrap();
-    let after = &src[idx..];
-    assert!(
-        after.contains(".search_users("),
-        "the search handler must call ChatterClient::search_users (dead wire otherwise)"
-    );
-    assert!(
-        after.contains("set_friends_search_results"),
-        "the search handler must populate the bound friends-search-results model"
     );
 }
 
@@ -424,11 +576,19 @@ fn channel_settings_mute_toggle_reaches_core() {
     // persist task (the bool-set + persist are deferred onto the event loop /
     // tokio, which this no-event-loop harness does not pump — so we assert the
     // WIRE runs, and leave the persisted-state assertion to validated.rs::v33).
-    w.invoke_channel_settings_toggle_mute(true);
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_channel_settings_toggle_mute(true);
 
     // ---- L2 static: handler reaches the mute_conversation core method --------
-    let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
-    let idx = src.find("on_channel_settings_toggle_mute").expect("mute handler present");
+    let src = concat!(
+        include_str!("../src/bin_ui/features/modals/channel_settings/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/actions.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/invites.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/moderation.rs"),
+    );
+    let idx = src
+        .find("on_channel_settings_toggle_mute")
+        .expect("mute handler present");
     let after = &src[idx..];
     assert!(
         after.contains(".mute_conversation("),
@@ -437,24 +597,35 @@ fn channel_settings_mute_toggle_reaches_core() {
 }
 
 // ============================================================================
-// AVATAR CHANGE (RESOLVED for desktop): the picker now persists the picked bytes.
-//
-// The avatar picker is behind a native file dialog, so it can't be driven
-// headlessly. L2 (STATIC): `on_edit_profile_change_avatar` calls
-// `set_avatar_bytes` on the picked data, so Save (`update_user_profile`) uploads
-// THOSE bytes as `encrypted_avatar`. The full upload+server-store+decrypt
-// round-trip is proven by validated.rs::v32.
+// AVATAR CHANGE: profile registration routes into the guarded edit helper.
+// Behavior is exercised by avatar_edit's controlled completion fixtures;
+// this assertion checks the production registration and persistence boundary.
 // ============================================================================
 #[test]
-fn edit_profile_avatar_change_persists_picked_bytes() {
-    let src = include_str!("../src/bin_ui/features/modals/profile.rs");
-    let idx = src.find("on_edit_profile_change_avatar").expect("avatar handler present");
-    let after = &src[idx..];
-    assert!(
-        after.contains(".set_avatar_bytes(&data)") || after.contains(".set_avatar_bytes("),
-        "the avatar picker must persist the picked bytes via set_avatar_bytes \
-         (previously only wrote a write-never-read PENDING_AVATAR_PATH + preview)"
+fn edit_profile_avatar_change_persists_picked_bytes_on_save() {
+    let profile = concat!(
+        include_str!("../src/bin_ui/features/modals/profile/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/avatar_edit.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/navigation.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/open.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/relationship.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/safety.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/share_link.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/shared.rs"),
     );
+    assert!(profile.contains("avatar_edit::wire(window, ui_ctx)"));
+    let src = include_str!("../src/bin_ui/features/modals/profile/avatar_edit.rs");
+    let pick = src.find("window.on_edit_profile_change_avatar").unwrap();
+    let save = src.find("window.on_edit_profile_save").unwrap();
+    let pick_body = &src[pick..save];
+    assert!(pick_body.contains("finish_picker"));
+    assert!(
+        !pick_body.contains(".set_avatar_bytes("),
+        "Cancel must not persist a selection"
+    );
+    let save_body = &src[save..src.find("#[cfg(test)]").unwrap()];
+    assert!(save_body.contains("save_own_profile_in_session"));
+    assert!(save_body.contains("request.alive.clone()") && save_body.contains("finish_save"));
 }
 
 // ============================================================================
@@ -489,20 +660,42 @@ fn channel_settings_save_reaches_core_and_drafts_are_wired() {
     chatter_ui::bin_ui::features::modals::wire_channel_settings(&w, &client);
 
     // Draft properties exist and round-trip (Inputs write here; Save reads).
-    w.set_channel_settings_name_draft("Renamed Channel".into());
-    w.set_channel_settings_description_draft("New description".into());
-    assert_eq!(w.get_channel_settings_name_draft().as_str(), "Renamed Channel");
-    assert_eq!(w.get_channel_settings_description_draft().as_str(), "New description");
-
-    // L1 dynamic: the save callback runs the real handler without panicking.
-    w.invoke_channel_settings_save(
-        w.get_channel_settings_name_draft(),
-        w.get_channel_settings_description_draft(),
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_name_draft("Renamed Channel".into());
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_description_draft("New description".into());
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_name_draft()
+            .as_str(),
+        "Renamed Channel"
+    );
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_description_draft()
+            .as_str(),
+        "New description"
     );
 
+    // L1 dynamic: the save callback runs the real handler without panicking.
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_channel_settings_save(
+            w.global::<chatter_ui::ModalHostState>()
+                .get_channel_settings_name_draft(),
+            w.global::<chatter_ui::ModalHostState>()
+                .get_channel_settings_description_draft(),
+        );
+
     // L2 static (Rust): the handler reaches ChatterClient::update_channel.
-    let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
-    let idx = src.find("on_channel_settings_save").expect("save handler present");
+    let src = concat!(
+        include_str!("../src/bin_ui/features/modals/channel_settings/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/actions.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/invites.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/moderation.rs"),
+    );
+    let idx = src
+        .find("on_channel_settings_save")
+        .expect("save handler present");
     assert!(
         src[idx..].contains(".update_channel("),
         "the save handler must call ChatterClient::update_channel (was Slint-only / dead)"
@@ -557,8 +750,14 @@ fn channel_settings_icon_picker_is_wired() {
     chatter_ui::bin_ui::features::modals::wire_channel_settings(&w, &client);
 
     // The icon-path property exists and round-trips (Save reads it).
-    w.set_channel_settings_icon_path("/tmp/some-icon.png".into());
-    assert_eq!(w.get_channel_settings_icon_path().as_str(), "/tmp/some-icon.png");
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_icon_path("/tmp/some-icon.png".into());
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_icon_path()
+            .as_str(),
+        "/tmp/some-icon.png"
+    );
 
     // L1 dynamic: the pick callback runs without panicking. Under
     // CHATTER_HEADLESS (set by the harness) FilePicker resolves to "cancelled"
@@ -568,24 +767,40 @@ fn channel_settings_icon_picker_is_wired() {
         std::env::var_os("CHATTER_HEADLESS").is_some(),
         "the harness must force headless dialogs before invoking a picker"
     );
-    w.invoke_channel_settings_pick_icon();
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_channel_settings_pick_icon();
 
     // The picker resolved without a selection, so it must not have stashed a
     // path over the one set above.
     assert_eq!(
-        w.get_channel_settings_icon_path().as_str(),
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_icon_path()
+            .as_str(),
         "/tmp/some-icon.png",
         "a headless picker should cancel, not overwrite the stashed path"
     );
 
     // L2 static (Rust): pick handler stashes the path; Save reads it + uploads.
-    let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
-    let pick_idx = src.find("on_channel_settings_pick_icon").expect("pick-icon handler present");
-    assert!(
-        src[pick_idx..].contains(".set_channel_settings_icon_path("),
-        "the pick handler must stash the chosen path on channel-settings-icon-path"
+    let src = concat!(
+        include_str!("../src/bin_ui/features/modals/channel_settings/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/actions.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/invites.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/moderation.rs"),
     );
-    let save_idx = src.find("on_channel_settings_save").expect("save handler present");
+    let pick_idx = src
+        .find("on_channel_settings_pick_icon")
+        .expect("pick-icon handler present");
+    let finish_idx = src
+        .find("fn finish_icon_request(")
+        .expect("guarded picker completion helper present");
+    assert!(
+        src[pick_idx..].contains("finish_icon_request(&w, &ctx, generation, result)")
+            && src[finish_idx..pick_idx].contains(".set_channel_settings_icon_path("),
+        "the pick handler must route its result through the guarded path-staging helper"
+    );
+    let save_idx = src
+        .find("on_channel_settings_save")
+        .expect("save handler present");
     let save_body = &src[save_idx..];
     assert!(
         save_body.contains(".get_channel_settings_icon_path(")
@@ -643,11 +858,14 @@ fn message_reply_in_thread_button_is_wired() {
 
     // L1 dynamic: firing the thread callback runs the real handler (offline:
     // no active channel → warns + returns), no panic.
-    w.invoke_thread_clicked("00000000-0000-0000-0000-000000000000".into());
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_thread_clicked("00000000-0000-0000-0000-000000000000".into());
 
     // L2 static (Rust): the handler opens a thread (state + panel load).
     let src = include_str!("../src/bin_ui/features/chat_actions/message_actions.rs");
-    let idx = src.find("on_thread_clicked").expect("thread handler present");
+    let idx = src
+        .find("on_thread_clicked")
+        .expect("thread handler present");
     assert!(
         src[idx..].contains(".open_thread(") && src[idx..].contains("load_thread_data"),
         "the thread handler must open the thread state + load the thread panel"
@@ -655,11 +873,21 @@ fn message_reply_in_thread_button_is_wired() {
 
     // L2 static (Slint): a "Reply in thread" affordance exists in the message
     // action row (so ANY message can start a thread), firing thread-clicked.
-    let slint_src = include_str!("../../../ui/chat/message_item.slint");
+    let slint_src = include_str!("../../../ui/chat/message_actions.slint");
+    let item_src = include_str!("../../../ui/chat/message_item.slint");
     assert!(
-        slint_src.contains(r#"accessible-label: "Reply in thread""#),
+        slint_src.contains("thread-btn := IconAction {")
+            && slint_src.contains(r#"label: "Reply in thread""#)
+            && item_src.contains("if root.is-hovered: MessageActions {")
+            && item_src.contains("thread-clicked(a0) => { root.thread-clicked(a0); }"),
         "the message hover actions must include a Reply-in-thread button so a \
          message with zero replies can still START a thread"
+    );
+    let icon_action = include_str!("../../../ui/components/icon_action.slint");
+    assert!(icon_action.contains("accessible-label: root.label;"));
+    assert!(
+        icon_action
+            .contains("accessible-action-default => { if root.enabled { root.clicked(); } }")
     );
     assert!(
         slint_src.contains("root.thread-clicked(root.message-id)"),
@@ -696,37 +924,63 @@ fn message_react_edit_pin_actions_are_wired() {
     chatter_ui::bin_ui::features::chat::wire(&w, &client);
 
     // L1 dynamic: the four action callbacks run their real handlers, no panic.
-    w.invoke_reaction_selected("s".into(), "1".into(), "m".into(), "\u{1F44D}".into());
-    w.invoke_edit_message("s".into(), "1".into());
-    w.invoke_send_edit("s|1".into(), "edited".into());
-    w.invoke_pin_message("s".into(), "1".into());
+    w.global::<chatter_ui::ChatPane>().invoke_reaction_selected(
+        "s".into(),
+        "1".into(),
+        "m".into(),
+        "\u{1F44D}".into(),
+    );
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_edit_message("s".into(), "1".into());
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_send_edit("s|1".into(), "edited".into());
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_pin_message("s".into(), "1".into());
 
     // L2 static (Rust): each handler reaches the ConversationHandle core method.
     let react_src = include_str!("../src/bin_ui/features/chat/reactions.rs");
-    let ri = react_src.find("on_reaction_selected").expect("reaction handler present");
-    assert!(react_src[ri..].contains(".toggle_reaction("),
-        "the reaction picker must call ConversationHandle::toggle_reaction");
+    let ri = react_src
+        .find("on_reaction_selected")
+        .expect("reaction handler present");
+    assert!(
+        react_src[ri..].contains("selection_queue\n                .send(ReactionIntent {")
+            && react_src.contains("consume_fifo(intents,")
+            && react_src[..ri].contains(".toggle_reaction_for_scope("),
+        "the reaction picker must enqueue its scoped intent for the FIFO core consumer"
+    );
 
     let edit_src = include_str!("../src/bin_ui/features/chat/edit.rs");
-    let ei = edit_src.find("on_send_edit").expect("send-edit handler present");
-    assert!(edit_src[ei..].contains(".send_edit("),
-        "the composer edit must call ConversationHandle::send_edit");
+    let ei = edit_src
+        .find("on_send_edit")
+        .expect("send-edit handler present");
+    assert!(
+        edit_src[ei..].contains(".send_edit("),
+        "the composer edit must call ConversationHandle::send_edit"
+    );
 
     let pin_src = include_str!("../src/bin_ui/features/chat/pin.rs");
     let pi = pin_src.find("on_pin_message").expect("pin handler present");
-    assert!(pin_src[pi..].contains(".send_pin("),
-        "the pin action must call ConversationHandle::send_pin");
+    assert!(
+        pin_src[pi..].contains(".send_pin("),
+        "the pin action must call ConversationHandle::send_pin"
+    );
 
     // L2 static (Slint): the affordances actually invoke the callbacks.
     let picker = include_str!("../../../ui/chat/reaction_picker.slint");
-    assert!(picker.contains("root.reaction-selected("),
-        "the reaction picker must invoke reaction-selected");
+    assert!(
+        picker.contains("root.reaction-selected("),
+        "the reaction picker must invoke reaction-selected"
+    );
     let composer = include_str!("../../../ui/chat/message_composer.slint");
-    assert!(composer.contains("root.send-edit("),
-        "the composer must invoke send-edit when editing");
-    let app = include_str!("../../../ui/app.slint");
-    assert!(app.contains("root.edit-message(") && app.contains("root.pin-message("),
-        "the message actions must invoke edit-message and pin-message");
+    assert!(
+        composer.contains("root.send-edit("),
+        "the composer must invoke send-edit when editing"
+    );
+    let app = include_str!("../../../ui/app_top_overlays.slint");
+    assert!(
+        app.contains("ChatPane.edit-message(") && app.contains("ChatPane.pin-message("),
+        "the message actions must invoke edit-message and pin-message"
+    );
 }
 
 // ============================================================================
@@ -745,19 +999,36 @@ fn link_device_page_start_and_cancel_are_wired() {
     chatter_ui::bin_ui::features::auth::link_device::wire_link_device(&w, &client);
 
     // Negative control: nothing active before the callback fires.
-    assert!(!w.get_link_device_active(), "precondition: link flow inactive");
+    assert!(
+        !w.global::<chatter_ui::AuthFlow>().get_link_device_active(),
+        "precondition: link flow inactive"
+    );
 
     // The "Generate QR" button fires start → the handler must flip the bound
     // state synchronously (QR generation itself continues async and offline
     // will error later — the wire is what's under test here).
-    w.invoke_link_device_start();
-    assert!(w.get_link_device_active(), "start did NOT reach the handler (dead wire)");
-    assert_eq!(w.get_link_device_status().as_str(), "Generating QR code…");
+    w.global::<chatter_ui::AuthFlow>()
+        .invoke_link_device_start();
+    assert!(
+        w.global::<chatter_ui::AuthFlow>().get_link_device_active(),
+        "start did NOT reach the handler (dead wire)"
+    );
+    assert_eq!(
+        w.global::<chatter_ui::AuthFlow>()
+            .get_link_device_status()
+            .as_str(),
+        "Generating QR code…"
+    );
 
     // Cancel routes back to login.
     w.set_current_view("link-device".into());
-    w.invoke_link_device_cancel();
-    assert_eq!(w.get_current_view().as_str(), "login", "cancel did not route back to login");
+    w.global::<chatter_ui::AuthFlow>()
+        .invoke_link_device_cancel();
+    assert_eq!(
+        w.get_current_view().as_str(),
+        "login",
+        "cancel did not route back to login"
+    );
 }
 
 // ============================================================================
@@ -770,6 +1041,14 @@ fn link_device_page_start_and_cancel_are_wired() {
 
 /// The sidebar injects the virtual AI channel (nil-UUID) at the top when
 /// local AI is enabled — pure core logic, provable offline.
+///
+/// This test asserted "local AI defaults on" and so had been failing since
+/// 69fd7878 ("fix(client): local AI off by default", 2026-08-16) flipped
+/// `LocalAISettings::default().enabled` to false
+/// (`crates/chatter-core/src/local_ai/settings.rs:40`). Nothing ran the suite,
+/// so nobody saw it; CI now does. The property under test is unchanged — it
+/// just has to turn local AI on first, and the default-off case is now pinned
+/// too, since that is the state a fresh install is actually in.
 #[cfg(feature = "jarvis")]
 #[test]
 fn sidebar_injects_ai_channel_and_never_autoselects_it() {
@@ -777,13 +1056,41 @@ fn sidebar_injects_ai_channel_and_never_autoselects_it() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let _guard = rt.enter();
     let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().to_string_lossy().to_string();
     let client = chatter_core::client::ChatterClient::builder()
-        .data_dir(tmp.path().to_string_lossy().to_string())
+        .data_dir(data_dir.clone())
         .build()
         .expect("offline ChatterClient::build");
 
+    // Default-off: a fresh install shows no AI channel at all.
+    assert!(
+        client.sidebar_channels().is_empty(),
+        "local AI is off by default (settings.rs:40), so a fresh profile must \
+         show no AI channel — if this fails the default flipped back"
+    );
+
+    client
+        .set_local_ai_enabled(true)
+        .expect("enabling local AI is a settings write, not a network call");
+
+    // Rebuild the client rather than reusing it: LocalAIService holds a
+    // settings SNAPSHOT taken at construction
+    // (chatter-core/src/services/local_ai_service.rs:434), so a running client
+    // does not observe its own write and the AI channel appears only after a
+    // restart. That staleness is a separate bug — docs/OPEN-ITEMS.md §64 — and
+    // is deliberately NOT asserted here, so fixing it does not turn this test
+    // red. What is under test is the injection itself.
+    drop(client);
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(data_dir)
+        .build()
+        .expect("offline ChatterClient::build (restart)");
+
     let channels = client.sidebar_channels();
-    assert!(!channels.is_empty(), "AI channel missing from sidebar (local AI defaults on)");
+    assert!(
+        !channels.is_empty(),
+        "AI channel missing from sidebar with local AI ON"
+    );
     let first = &channels[0];
     assert!(
         chatter_core::client::is_jarvis_channel(&first.id),
@@ -819,16 +1126,17 @@ fn ai_channel_select_and_send_are_wired_to_jarvis() {
     // L1 dynamic: with the AI channel active, firing `send` runs the intercept
     // (spawns the Jarvis task; offline it errors later — the WIRE is under test).
     let nil: chatter_core::domain::ids::ChannelId = uuid::Uuid::nil().into();
-    client.chat_state().set_active_channel(nil);
-    client
-        .chat_state()
-        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(nil));
-    w.invoke_send("hello jarvis".into());
+    client.prepare_channel_selection(nil);
+    client.select_conversation(chatter_core::state::ActiveConversation::Channel(nil));
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_send("hello jarvis".into());
 
     // L2 static (Rust): the send handler branches on the AI channel BEFORE the
     // network pipeline and routes to the Jarvis channel handler.
     let send_src = include_str!("../src/bin_ui/features/chat/send_message.rs");
-    let idx = send_src.find("is_jarvis_channel").expect("send must branch on the AI channel");
+    let idx = send_src
+        .find("is_jarvis_channel")
+        .expect("send must branch on the AI channel");
     assert!(
         send_src[idx..].contains("handle_jarvis_channel_send"),
         "AI-channel sends must route to handle_jarvis_channel_send, not send_message_ui"
@@ -840,7 +1148,9 @@ fn ai_channel_select_and_send_are_wired_to_jarvis() {
 
     // L2 static (Rust): channel selection branches to the Jarvis history loader.
     let sel_src = include_str!("../src/bin_ui/features/sidebar/channel.rs");
-    let sidx = sel_src.find("is_jarvis_channel_str").expect("selection must branch on the AI channel");
+    let sidx = sel_src
+        .find("is_jarvis_channel_str")
+        .expect("selection must branch on the AI channel");
     assert!(
         sel_src[sidx..].contains("load_jarvis_channel_into_ui"),
         "selecting the AI channel must load Jarvis history, not the network channel loader"
@@ -848,13 +1158,16 @@ fn ai_channel_select_and_send_are_wired_to_jarvis() {
 
     // L2 static (Slint): Ctrl+J opens the channel (the old sidebar Jarvis
     // button is deleted — the channel-list row is the entry point).
-    let app_src = include_str!("../../../ui/app.slint");
+    let app_src = include_str!("../../../ui/app_shortcuts.slint");
     assert!(
-        app_src.contains(r#"root.channel-selected("00000000-0000-0000-0000-000000000000")"#),
+        app_src.contains(r#"SidebarPane.channel-selected("00000000-0000-0000-0000-000000000000")"#),
         "Ctrl+J must open the AI channel"
     );
     // The floating panel is gone.
-    assert!(!app_src.contains("JarvisPanel"), "the Jarvis floating panel must stay deleted");
+    assert!(
+        !app_src.contains("JarvisPanel"),
+        "the Jarvis floating panel must stay deleted"
+    );
 
     // The spawned Jarvis task parks on invoke_from_event_loop (this harness
     // never pumps the loop), so a plain Runtime::drop would hang waiting for
@@ -882,10 +1195,14 @@ fn settings_local_ai_section_is_wired_to_core() {
 
     // L1 dynamic: callbacks run their real handlers without panicking
     // (refresh spawns the probe; select-model persists synchronously).
-    w.invoke_settings_local_ai_refresh();
-    w.invoke_settings_local_ai_select_model("qwen3:4b".into());
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_local_ai_refresh();
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_local_ai_select_model("qwen3:4b".into());
     assert_eq!(
-        w.get_settings_local_ai_active_model().as_str(),
+        w.global::<chatter_ui::SettingsPane>()
+            .get_settings_local_ai_active_model()
+            .as_str(),
         "qwen3:4b",
         "select-model did not update the bound active-model property"
     );
@@ -905,7 +1222,10 @@ fn settings_local_ai_section_is_wired_to_core() {
         "local_ai_pull_model",
         "local_ai_hardware_profile",
     ] {
-        assert!(src.contains(needle), "local_ai.rs must call ChatterClient::{needle}");
+        assert!(
+            src.contains(needle),
+            "local_ai.rs must call ChatterClient::{needle}"
+        );
     }
 
     // L2 static (Slint): the section fires the callbacks.
@@ -916,7 +1236,10 @@ fn settings_local_ai_section_is_wired_to_core() {
         "root.local-ai-select-model(",
         "root.local-ai-download(",
     ] {
-        assert!(slint_src.contains(needle), "settings screen must invoke {needle}");
+        assert!(
+            slint_src.contains(needle),
+            "settings screen must invoke {needle}"
+        );
     }
 }
 
@@ -939,13 +1262,22 @@ fn jarvis_memory_browser_is_wired() {
 
     // L1 dynamic: both callbacks run their real handlers without panicking
     // (offline: empty facts/entities; the refresh task queues a UI update).
-    w.invoke_jarvis_memory_refresh();
-    w.invoke_jarvis_memory_select_entity("nonexistent-entity".into());
+    w.global::<chatter_ui::JarvisPane>()
+        .invoke_jarvis_memory_refresh();
+    w.global::<chatter_ui::JarvisPane>()
+        .invoke_jarvis_memory_select_entity("nonexistent-entity".into());
 
     // L2 static (Rust): handlers reach the memory façade.
     let src = include_str!("../src/bin_ui/features/jarvis/memory_view.rs");
-    for needle in ["jarvis_memory_facts", "jarvis_top_entities", "jarvis_entity_connections"] {
-        assert!(src.contains(needle), "memory_view.rs must call ChatterClient::{needle}");
+    for needle in [
+        "jarvis_memory_facts",
+        "jarvis_top_entities",
+        "jarvis_entity_connections",
+    ] {
+        assert!(
+            src.contains(needle),
+            "memory_view.rs must call ChatterClient::{needle}"
+        );
     }
 
     // L2 static (Slint): settings entry opens the modal; modal is routed.
@@ -954,13 +1286,13 @@ fn jarvis_memory_browser_is_wired() {
         settings_src.contains("root.local-ai-open-memory()"),
         "settings must have a View Memory button"
     );
-    let app_src = include_str!("../../../ui/app.slint");
+    let app_src = include_str!("../../../ui/app_secondary_modals.slint");
     assert!(
-        app_src.contains(r#"if active-modal == "jarvis-memory": JarvisMemoryModal"#),
+        app_src.contains(r#"if root.is-presented("jarvis-memory"): JarvisMemoryModal"#),
         "app must route active-modal='jarvis-memory' to the modal"
     );
     assert!(
-        app_src.contains("root.jarvis-memory-select-entity(id)"),
+        app_src.contains("JarvisPane.jarvis-memory-select-entity(id)"),
         "modal entity clicks must reach the Rust handler"
     );
     rt.shutdown_background();
@@ -974,21 +1306,35 @@ fn link_approve_paste_reaches_core_parser() {
 
     // Positive control: pre-set the preview flag so a dead wire cannot pass —
     // only the real handler resets it.
-    w.set_link_approve_preview_ready(true);
+    w.global::<chatter_ui::AuthFlow>()
+        .set_link_approve_preview_ready(true);
 
     // Garbage (>16 chars, per the handler's error threshold) → core's
     // prepare_link_from_url must reject; the handler resets the preview and
     // surfaces the parse error.
-    w.invoke_link_approve_paste_changed("chatter://not-a-real-provisioning-url".into());
+    w.global::<chatter_ui::AuthFlow>()
+        .invoke_link_approve_paste_changed("chatter://not-a-real-provisioning-url".into());
     assert!(
-        !w.get_link_approve_preview_ready(),
+        !w.global::<chatter_ui::AuthFlow>()
+            .get_link_approve_preview_ready(),
         "paste did NOT reach the core parser (dead wire)"
     );
-    assert!(!w.get_link_approve_error().is_empty(), "parse error was not surfaced");
+    assert!(
+        !w.global::<chatter_ui::AuthFlow>()
+            .get_link_approve_error()
+            .is_empty(),
+        "parse error was not surfaced"
+    );
 
     // Clearing the box resets the error — the documented empty-string branch.
-    w.invoke_link_approve_paste_changed("".into());
-    assert!(w.get_link_approve_error().is_empty(), "clearing input did not clear error");
+    w.global::<chatter_ui::AuthFlow>()
+        .invoke_link_approve_paste_changed("".into());
+    assert!(
+        w.global::<chatter_ui::AuthFlow>()
+            .get_link_approve_error()
+            .is_empty(),
+        "clearing input did not clear error"
+    );
 }
 
 // ============================================================================
@@ -1014,14 +1360,16 @@ fn settings_ai_prefer_cloud_toggle_reaches_core() {
         "precondition: cloud must be opt-in"
     );
 
-    w.invoke_settings_ai_prefer_cloud_changed(true);
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_ai_prefer_cloud_changed(true);
     assert_eq!(
         client.ai_silo_preference(),
         SiloPreference::PreferCloud,
         "prefer-cloud toggle did NOT reach core (dead/stub wire)"
     );
 
-    w.invoke_settings_ai_prefer_cloud_changed(false);
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_ai_prefer_cloud_changed(false);
     assert_eq!(
         client.ai_silo_preference(),
         SiloPreference::LocalOnly,
@@ -1042,14 +1390,16 @@ fn settings_cloud_ai_mode_reaches_core() {
         "precondition: bring-your-own-key is the default"
     );
 
-    w.invoke_settings_cloud_ai_mode_changed("server-broker".into());
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_cloud_ai_mode_changed("server-broker".into());
     assert_eq!(
         client.cloud_ai_settings().mode,
         CloudMode::ServerBroker,
         "'Buy tokens' did NOT reach core (dead/stub wire)"
     );
 
-    w.invoke_settings_cloud_ai_mode_changed("direct-anthropic".into());
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_cloud_ai_mode_changed("direct-anthropic".into());
     assert_eq!(
         client.cloud_ai_settings().mode,
         CloudMode::DirectAnthropic,
@@ -1064,7 +1414,8 @@ fn settings_cloud_ai_mode_ignores_an_unknown_value() {
     require_element_queries();
     let (_rt, _tmp, client, w) = wired_offline();
 
-    w.invoke_settings_cloud_ai_mode_changed("not-a-mode".into());
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_cloud_ai_mode_changed("not-a-mode".into());
 
     // Must not fall through to some default - an unparseable mode leaves the
     // stored setting exactly as it was.
@@ -1081,7 +1432,8 @@ fn settings_cloud_ai_api_key_reaches_core_and_blank_clears_it() {
         "precondition: no key configured"
     );
 
-    w.invoke_settings_cloud_ai_api_key_changed("sk-ant-test-key".into());
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_cloud_ai_api_key_changed("sk-ant-test-key".into());
     let saved = client.cloud_ai_settings();
     assert!(
         saved.is_available(),
@@ -1090,7 +1442,8 @@ fn settings_cloud_ai_api_key_reaches_core_and_blank_clears_it() {
     assert_eq!(saved.api_key.as_deref(), Some("sk-ant-test-key"));
 
     // Blank clears rather than storing an empty key that would 401 forever.
-    w.invoke_settings_cloud_ai_api_key_changed("   ".into());
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_cloud_ai_api_key_changed("   ".into());
     assert!(
         !client.cloud_ai_settings().is_available(),
         "blank key did not clear the stored key"
@@ -1109,8 +1462,10 @@ fn cloud_preference_does_not_override_the_dm_policy() {
     let (_rt, _tmp, client, w) = wired_offline();
 
     // User asks for cloud everywhere and configures a key.
-    w.invoke_settings_ai_prefer_cloud_changed(true);
-    w.invoke_settings_cloud_ai_api_key_changed("sk-ant-test-key".into());
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_ai_prefer_cloud_changed(true);
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_cloud_ai_api_key_changed("sk-ant-test-key".into());
     client.set_ai_enabled_for("dm-1", true).expect("enable");
     client.set_ai_enabled_for("chan-1", true).expect("enable");
 
@@ -1212,20 +1567,23 @@ fn channel_settings_ai_toggle_reaches_core() {
 
     // The handler reads the open channel from this property, exactly as the
     // mute toggle does.
-    w.set_channel_settings_id(channel_id.clone().into());
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_id(channel_id.clone().into());
 
     assert!(
         !client.ai_enabled_for(&channel_id),
         "precondition: AI is off in a channel until switched on"
     );
 
-    w.invoke_channel_settings_toggle_ai(true);
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_channel_settings_toggle_ai(true);
     assert!(
         client.ai_enabled_for(&channel_id),
         "channel AI toggle did NOT reach core (dead/stub wire)"
     );
 
-    w.invoke_channel_settings_toggle_ai(false);
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_channel_settings_toggle_ai(false);
     assert!(
         !client.ai_enabled_for(&channel_id),
         "channel AI toggle did not switch back off"
@@ -1256,7 +1614,9 @@ fn public_channels_do_not_claim_end_to_end_encryption() {
     let binding = &binding[..binding.find(';').expect("privacy-line binding terminated")];
 
     assert!(
-        binding.contains("channel-type == \"public\""),
+        binding.contains(
+            "root.conversation-kind == ConversationKind.channel && !root.private-channel"
+        ),
         "the privacy line does not branch on a public channel, so a plaintext \
          public channel is labelled end-to-end encrypted: {binding}"
     );
@@ -1269,7 +1629,9 @@ fn public_channels_do_not_claim_end_to_end_encryption() {
         .expect("public-broadcast binding present");
     let broadcast = &broadcast[..broadcast.find(';').expect("public-broadcast terminated")];
     assert!(
-        broadcast.contains("channel-type == \"public\""),
+        broadcast.contains(
+            "root.conversation-kind == ConversationKind.channel && !root.private-channel"
+        ),
         "public-broadcast does not include public channels, so the lock icon \
          contradicts the privacy text: {broadcast}"
     );
@@ -1282,8 +1644,8 @@ fn public_channels_do_not_claim_end_to_end_encryption() {
 //
 //  L1 (DYNAMIC, MainWindow boundary): the generate/reset/copy callbacks are
 //     declared, wired by the REAL `wire_profile_actions`, and safe to invoke;
-//     and the share-link display properties round-trip through the
-//     main.slint <=> app.slint aliases (a dead alias would read back empty).
+//     and the share-link display properties round-trip through the window
+//     (a property nothing binds would read back empty).
 //
 //  L2 (STATIC, reaches-core): the production handlers wire generate/reset to
 //     `create_username_link` (core) and the Slint modal fires the callbacks
@@ -1297,31 +1659,55 @@ fn profile_share_username_link_is_wired() {
     let _guard = rt.enter();
 
     // Property alias liveness: set through MainWindow, read back.
-    w.set_profile_share_link("chatter://u/test-id#AAAA".into());
+    w.global::<chatter_ui::ModalHostState>()
+        .set_profile_share_link("chatter://u/test-id#AAAA".into());
     assert_eq!(
-        w.get_profile_share_link().as_str(),
+        w.global::<chatter_ui::ModalHostState>()
+            .get_profile_share_link()
+            .as_str(),
         "chatter://u/test-id#AAAA",
-        "profile-share-link alias is dead (main.slint <=> app.slint)"
+        "profile-share-link does not round-trip on the window"
     );
-    w.set_profile_share_status("status-probe".into());
-    assert_eq!(w.get_profile_share_status().as_str(), "status-probe");
+    w.global::<chatter_ui::ModalHostState>()
+        .set_profile_share_status("status-probe".into());
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_profile_share_status()
+            .as_str(),
+        "status-probe"
+    );
 
     // The three wires must run the real handlers without panicking. (Offline +
     // unregistered → the async create resolves to an error surfaced on the
     // loop; we assert the wire runs, like the delete-account test.)
-    w.invoke_profile_generate_share_link();
-    w.invoke_profile_reset_share_link();
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_profile_generate_share_link();
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_profile_reset_share_link();
     // Copy with a non-empty link set: handler reads the property and sets the
     // "copied" status synchronously on the UI thread — assert THAT hop.
-    w.set_profile_share_status("".into());
-    w.invoke_profile_copy_share_link();
+    w.global::<chatter_ui::ModalHostState>()
+        .set_profile_share_status("".into());
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_profile_copy_share_link();
     assert!(
-        !w.get_profile_share_status().is_empty(),
+        !w.global::<chatter_ui::ModalHostState>()
+            .get_profile_share_status()
+            .is_empty(),
         "copy-share-link did NOT run the real handler (status not set)"
     );
 
     // ---- L2: static — handlers reach core; Slint fires the callbacks --------
-    let profile_src = include_str!("../src/bin_ui/features/modals/profile.rs");
+    let profile_src = concat!(
+        include_str!("../src/bin_ui/features/modals/profile/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/avatar_edit.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/navigation.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/open.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/relationship.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/safety.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/share_link.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/shared.rs"),
+    );
     assert!(
         profile_src.contains("on_profile_generate_share_link")
             && profile_src.contains("on_profile_reset_share_link")
@@ -1349,8 +1735,8 @@ fn profile_share_username_link_is_wired() {
 //
 //  L1 (DYNAMIC, MainWindow boundary): the four drawer callbacks are declared,
 //     wired by the REAL `wire_profile_actions`, and safe to invoke; and the
-//     tab/loading properties round-trip through the main.slint <=> app.slint
-//     aliases (a dead alias would read back empty).
+//     tab/loading properties round-trip through the window (a property
+//     nothing binds would read back empty).
 //
 //  L2 (STATIC, reaches-core): the handlers reach the core façade methods, and
 //     the Slint modal fires the callbacks from the tab strip and the grid.
@@ -1362,27 +1748,53 @@ fn profile_shared_content_drawer_is_wired() {
     let _guard = rt.enter();
 
     // Property alias liveness through MainWindow.
-    w.set_profile_shared_tab("media".into());
+    w.global::<chatter_ui::ModalHostState>()
+        .set_profile_shared_tab("photo".into());
     assert_eq!(
-        w.get_profile_shared_tab().as_str(),
-        "media",
-        "profile-shared-tab alias is dead (main.slint <=> app.slint)"
+        w.global::<chatter_ui::ModalHostState>()
+            .get_profile_shared_tab()
+            .as_str(),
+        "photo",
+        "profile-shared-tab does not round-trip on the window"
     );
-    w.set_profile_shared_loading(true);
-    assert!(w.get_profile_shared_loading());
-    w.set_profile_last_seen("last seen recently".into());
-    assert_eq!(w.get_profile_last_seen().as_str(), "last seen recently");
+    w.global::<chatter_ui::ModalHostState>()
+        .set_profile_shared_loading(true);
+    assert!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_profile_shared_loading()
+    );
+    w.global::<chatter_ui::ModalHostState>()
+        .set_profile_last_seen("last seen recently".into());
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_profile_last_seen()
+            .as_str(),
+        "last seen recently"
+    );
 
     // The wires must run the real handlers without panicking. No profile is
     // open, so each one takes its early-return path — which is exactly the
     // guard being asserted.
-    w.invoke_profile_shared_tab_selected("file".into());
-    w.invoke_profile_shared_load_more();
-    w.invoke_profile_open_shared_item("msg-1".into(), "".into(), "media".into());
-    w.invoke_profile_toggle_mute();
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_profile_shared_tab_selected("file".into());
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_profile_shared_load_more();
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_profile_open_shared_item("msg-1".into(), "".into(), "photo".into(), "".into());
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_profile_toggle_mute();
 
     // L2: static — handlers reach core; Slint fires the callbacks.
-    let profile_src = include_str!("../src/bin_ui/features/modals/profile.rs");
+    let profile_src = concat!(
+        include_str!("../src/bin_ui/features/modals/profile/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/avatar_edit.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/navigation.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/open.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/relationship.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/safety.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/share_link.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/shared.rs"),
+    );
     for needle in [
         "on_profile_shared_tab_selected",
         "on_profile_shared_load_more",
@@ -1396,9 +1808,9 @@ fn profile_shared_content_drawer_is_wired() {
         );
     }
     for needle in [
-        ".shared_content_tabs(",
-        ".shared_content_page(",
-        ".peer_last_seen_label(",
+        ".shared_content_tabs_scoped(",
+        ".shared_content_page_scoped(",
+        ".peer_last_seen(",
         ".mute_conversation(",
     ] {
         assert!(
@@ -1417,8 +1829,12 @@ fn profile_shared_content_drawer_is_wired() {
     // Full-screen on mobile must reuse ModalContainer's existing support, not
     // a second mechanism.
     assert!(
-        modal_src.contains("full-screen: root.mobile-mode")
-            && modal_src.contains("bottom-inset: root.bottom-inset"),
+        modal_src.contains("ModalContainer {")
+            && modal_src.contains("full-screen: root.mobile-mode")
+            && modal_src.contains("bottom-inset: root.mobile-mode ? 0px : root.bottom-inset;")
+            && modal_src.contains(
+                "padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;"
+            ),
         "user_profile.slint must go full-screen through ModalContainer"
     );
 }
@@ -1430,8 +1846,8 @@ fn profile_shared_content_drawer_is_wired() {
 // validated.rs V50 (local file) / V51 (server, PIN). Offline this proves the
 // modal wiring at two layers, and NAMES which:
 //
-//  L1 (DYNAMIC, MainWindow boundary): the status property alias survives the
-//     main.slint <=> app.slint hop, and the two server-mode callbacks are
+//  L1 (DYNAMIC, MainWindow boundary): the status property round-trips on the
+//     window, and the two server-mode callbacks are
 //     declared, wired by the REAL wire_settings_callbacks, and safe to invoke
 //     (their async half errors offline into the status property). The two
 //     file-mode callbacks are NOT invoked here — their handlers open a native
@@ -1447,24 +1863,50 @@ fn settings_message_backup_wires_reach_core() {
     let _guard = rt.enter(); // handlers tokio::spawn their async half
 
     // L1: status alias liveness through MainWindow.
-    w.set_settings_message_backup_status("status-probe".into());
+    w.global::<chatter_ui::SettingsPane>()
+        .set_settings_message_backup_status("status-probe".into());
     assert_eq!(
-        w.get_settings_message_backup_status().as_str(),
+        w.global::<chatter_ui::SettingsPane>()
+            .get_settings_message_backup_status()
+            .as_str(),
         "status-probe",
-        "settings-message-backup-status alias is dead (main.slint <=> app.slint)"
+        "settings-message-backup-status does not round-trip on the window"
     );
 
     // L1: server-mode wires run their real handlers without panicking.
-    w.invoke_settings_server_message_backup("Va1idPin!x9".into());
-    w.invoke_settings_restore_message_backup("Va1idPin!x9".into());
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_server_message_backup("Va1idPin!x9".into());
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_restore_message_backup("Va1idPin!x9".into());
 
     // L2 static (Rust): every handler reaches the core façade.
-    let src = include_str!("../src/bin_ui/features/modals/settings.rs");
+    let src = concat!(
+        include_str!("../src/bin_ui/features/modals/settings/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/account.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/ai.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/appearance.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/message_backup.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/notifications.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/privacy.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/recovery.rs"),
+    );
     for (handler, core_call) in [
-        ("on_settings_export_message_backup", ".export_message_backup("),
-        ("on_settings_import_message_backup", ".import_message_backup("),
-        ("on_settings_server_message_backup", ".enable_server_message_backup("),
-        ("on_settings_restore_message_backup", ".restore_server_message_backup("),
+        (
+            "on_settings_export_message_backup",
+            ".export_message_backup(",
+        ),
+        (
+            "on_settings_import_message_backup",
+            ".import_message_backup(",
+        ),
+        (
+            "on_settings_server_message_backup",
+            ".enable_server_message_backup(",
+        ),
+        (
+            "on_settings_restore_message_backup",
+            ".restore_server_message_backup(",
+        ),
     ] {
         let i = src
             .find(handler)
@@ -1498,20 +1940,52 @@ fn welcome_page_buttons_are_wired() {
 
     // Registration parks the user on the welcome view; every button must exit it.
     w.set_current_view("welcome".into());
-    w.invoke_welcome_get_started();
-    assert_eq!(w.get_current_view().as_str(), "main", "get-started did not reach main view");
+    w.global::<chatter_ui::AuthFlow>()
+        .invoke_welcome_get_started();
+    assert_eq!(
+        w.get_current_view().as_str(),
+        "main",
+        "get-started did not reach main view"
+    );
 
     w.set_current_view("welcome".into());
-    w.invoke_welcome_add_friends();
-    assert_eq!(w.get_current_view().as_str(), "main", "add-friends did not reach main view");
-    assert_eq!(w.get_active_modal().as_str(), "friends", "add-friends did not open friends modal");
-    assert_eq!(w.get_friends_modal_tab().as_str(), "find", "add-friends did not land on find tab");
+    w.global::<chatter_ui::AuthFlow>()
+        .invoke_welcome_add_friends();
+    assert_eq!(
+        w.get_current_view().as_str(),
+        "main",
+        "add-friends did not reach main view"
+    );
+    assert_eq!(
+        w.global::<chatter_ui::SidebarPane>()
+            .get_active_tab()
+            .as_str(),
+        "contacts",
+        "add-friends did not open the Contacts tab"
+    );
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_friends_modal_tab()
+            .as_str(),
+        "find",
+        "add-friends did not land on find tab"
+    );
 
-    w.set_active_modal("none".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .set_active_tab("chats".into());
     w.set_current_view("welcome".into());
-    w.invoke_welcome_browse_channels();
-    assert_eq!(w.get_current_view().as_str(), "main", "browse-channels did not reach main view");
-    assert_eq!(w.get_active_modal().as_str(), "create-channel", "browse-channels did not open create-channel modal");
+    w.global::<chatter_ui::AuthFlow>()
+        .invoke_welcome_browse_channels();
+    assert_eq!(
+        w.get_current_view().as_str(),
+        "main",
+        "browse-channels did not reach main view"
+    );
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "create-channel",
+        "browse-channels did not open create-channel modal"
+    );
 
     // Registration must route THROUGH welcome, not skip it (static wire proof —
     // the async register flow needs a live server, so assert on source).
@@ -1544,7 +2018,8 @@ fn friends_modal_tab_switch_is_wired() {
     // handlers tokio::spawn their refreshes, so a reactor must be entered.
     let _guard = _rt.enter();
     for tab in ["find", "friends", "requests", "blocked"] {
-        w.invoke_friends_modal_switch_tab(tab.into());
+        w.global::<chatter_ui::ModalHostState>()
+            .invoke_friends_modal_switch_tab(tab.into());
     }
 }
 
@@ -1571,7 +2046,8 @@ fn presence_status_picker_reaches_core() {
     );
 
     // The picker's Away pill fires change-user-status("away").
-    w.invoke_change_user_status("away".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .invoke_change_user_status("away".into());
     // Handler persists synchronously-adjacent on a spawned task; give it a beat.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
@@ -1587,15 +2063,17 @@ fn presence_status_picker_reaches_core() {
     }
 
     // Auto clears the manual override and persists as "auto".
-    w.invoke_change_user_status("auto".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .invoke_change_user_status("auto".into());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        if client.presence_mode().unwrap().as_deref()
-            == Some("auto")
-        {
+        if client.presence_mode().unwrap().as_deref() == Some("auto") {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "auto mode did not persist");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "auto mode did not persist"
+        );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
@@ -1605,9 +2083,9 @@ fn presence_status_picker_reaches_core() {
         modal.contains("root.change-status(opt.mode)"),
         "STATUS pills must fire change-status"
     );
-    let app = include_str!("../../../ui/app.slint");
+    let app = include_str!("../../../ui/app_modal_host.slint");
     assert!(
-        app.contains("root.change-user-status(mode)"),
+        app.contains("SidebarPane.change-user-status(mode)"),
         "app must forward modal change-status into change-user-status"
     );
 }
@@ -1639,15 +2117,21 @@ fn forward_message_confirm_is_wired_to_core() {
     use slint::{ModelRc, VecModel};
     let peer = "3f2c8a90-1111-2222-3333-444455556666";
     let targets = vec![chatter_ui::ForwardTarget {
+        avatar_source: slint::Image::default(),
+        is_anonymous: false,
         id: peer.into(),
         name: "Test Peer".into(),
         target_type: "dm".into(),
     }];
-    w.set_forward_targets(ModelRc::new(VecModel::from(targets)));
-    w.set_forward_source_sender_id(peer.into());
-    w.set_forward_source_timestamp("123456789".into());
-    w.set_active_modal("forward-message".into());
-    w.invoke_forward_message(peer.into());
+    w.global::<chatter_ui::ModalHostState>()
+        .set_forward_targets(ModelRc::new(VecModel::from(targets)));
+    w.global::<chatter_ui::ModalHostState>()
+        .set_forward_sources(ModelRc::new(VecModel::from(vec![
+            slint::SharedString::from(format!("{peer}:123456789")),
+        ])));
+    chatter_ui::bin_ui::features::back::push(&w, "forward-message");
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_forward_message(peer.into());
     assert_eq!(
         w.get_active_modal().as_str(),
         "forward-message",
@@ -1688,6 +2172,7 @@ fn session_revoke_routes_through_sender_key_rotation() {
 #[test]
 fn connection_banner_is_dismissible_without_hiding_the_outage() {
     let app = include_str!("../../../ui/app.slint");
+    let notices = include_str!("../../../ui/main_status_notices.slint");
     let banner = include_str!("../../../ui/components/connection_banner.slint");
     let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
 
@@ -1697,11 +2182,11 @@ fn connection_banner_is_dismissible_without_hiding_the_outage() {
         "connection banner has no dismissed callback — nothing to close it with"
     );
     assert!(
-        app.contains("dismissed => { root.connection-banner-dismissed = true; }"),
+        notices.contains("dismissed => { root.connection-banner-dismissed = true; }"),
         "app does not handle the banner's dismissed callback (dead close button)"
     );
     assert!(
-        app.contains("if !root.connection-banner-dismissed: ConnectionBanner"),
+        notices.contains("suppressed: root.connection-banner-dismissed;"),
         "the banner is not gated on the dismissal flag, so closing it does nothing"
     );
 
@@ -1717,7 +2202,9 @@ fn connection_banner_is_dismissible_without_hiding_the_outage() {
         "sidebar has no server-unreachable indicator, so a dismissed banner hides the outage"
     );
     assert_eq!(
-        sidebar.matches("accessible-label: \"Server unreachable\"").count(),
+        sidebar
+            .matches("accessible-label: \"Server unreachable\"")
+            .count(),
         2,
         "both the expanded and collapsed sidebar footers must carry the dot"
     );
@@ -1738,7 +2225,7 @@ fn back_press_closes_the_open_modal() {
     let w = boot();
     chatter_ui::bin_ui::features::back::wire(&w);
 
-    w.set_active_modal("settings".into());
+    chatter_ui::bin_ui::features::back::push(&w, "sessions");
     assert!(
         chatter_ui::bin_ui::features::back::handle_back(&w),
         "back with a modal open must report the press as consumed in-app"
@@ -1746,11 +2233,11 @@ fn back_press_closes_the_open_modal() {
     assert_eq!(
         w.get_active_modal().as_str(),
         "none",
-        "back did NOT close the open modal — the Settings trap is still live"
+        "back did NOT close the open modal"
     );
 
     // Through the Slint callback too (that is what the FocusScope invokes).
-    w.set_active_modal("create-channel".into());
+    chatter_ui::bin_ui::features::back::push(&w, "create-channel");
     w.invoke_back_pressed();
     assert_eq!(
         w.get_active_modal().as_str(),
@@ -1767,21 +2254,51 @@ fn back_press_closes_the_open_modal() {
     assert_eq!(w.get_active_modal().as_str(), "none");
 }
 
+/// Back with the message context menu open closes the menu and stays in the
+/// conversation. It used to pop the conversation and leave the menu floating
+/// over the conversation list.
+#[test]
+fn back_press_closes_the_message_context_menu_first() {
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_context_menu_visible(true);
+    assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
+    assert!(
+        !w.global::<chatter_ui::ChatPane>()
+            .get_context_menu_visible(),
+        "back did not close the context menu"
+    );
+    assert!(
+        w.global::<chatter_ui::SidebarPane>().get_mobile_show_chat(),
+        "back left the conversation instead of closing the menu"
+    );
+}
+
 /// Back inside a mobile conversation returns to the conversation list rather
 /// than leaving the app. On a phone the list and the chat are separate screens,
 /// and Back out of a chat backgrounding the whole app is the defect this pins.
 #[test]
 fn back_press_pops_the_mobile_conversation_pane() {
+    use slint::ComponentHandle;
     let w = boot();
+    // Compact (phone) layout: touch platform AND a window under 600 dp. On a
+    // two-pane tablet Back has no chat pane to pop.
+    w.set_is_mobile_platform(true);
+    w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
     chatter_ui::bin_ui::features::back::wire(&w);
 
-    w.set_mobile_show_chat(true);
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
     assert!(
         chatter_ui::bin_ui::features::back::handle_back(&w),
         "back inside a conversation must be consumed in-app, not fall through"
     );
     assert!(
-        !w.get_mobile_show_chat(),
+        !w.global::<chatter_ui::SidebarPane>().get_mobile_show_chat(),
         "back did NOT return to the conversation list"
     );
 
@@ -1793,13 +2310,363 @@ fn back_press_pops_the_mobile_conversation_pane() {
 
     // A modal over a conversation pops the MODAL first — the conversation is
     // the layer underneath and must survive that press.
-    w.set_mobile_show_chat(true);
-    w.set_active_modal("settings".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
+    chatter_ui::bin_ui::features::back::push(&w, "forward-message");
     assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
     assert_eq!(w.get_active_modal().as_str(), "none");
     assert!(
-        w.get_mobile_show_chat(),
+        w.global::<chatter_ui::SidebarPane>().get_mobile_show_chat(),
         "closing a modal must not also pop the conversation underneath it"
+    );
+}
+
+/// The composer emoji picker stays open across insertions, so Back has to be
+/// able to dismiss it — otherwise Back with the picker up backgrounds the app
+/// (§112u).
+#[test]
+fn back_press_closes_the_composer_emoji_picker() {
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_emoji_picker_visible(true);
+    assert!(
+        chatter_ui::bin_ui::features::back::handle_back(&w),
+        "back with the emoji picker open must be consumed in-app"
+    );
+    assert!(
+        !w.global::<chatter_ui::ChatPane>()
+            .get_composer_emoji_picker_visible(),
+        "back did NOT close the emoji picker"
+    );
+
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_gif_picker_visible(true);
+    assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
+    assert!(
+        !w.global::<chatter_ui::ChatPane>()
+            .get_composer_gif_picker_visible(),
+        "back did NOT close the GIF picker"
+    );
+}
+
+/// The unified search palette is an overlay, not a stacked screen, so
+/// Back fell through it and backgrounded the app with the palette still up
+/// (§112u).
+#[test]
+fn back_press_closes_the_unified_search_palette() {
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+
+    w.global::<chatter_ui::SearchPane>()
+        .set_unified_search_open(true);
+    assert!(
+        chatter_ui::bin_ui::features::back::handle_back(&w),
+        "back with the search palette open must be consumed in-app"
+    );
+    assert!(
+        !w.global::<chatter_ui::SearchPane>()
+            .get_unified_search_open(),
+        "back did NOT close the palette"
+    );
+}
+
+/// Back while a call rang popped the chat UNDER the full-screen ring (FX3).
+/// The ring is drawn over everything, so Back is its: it hides the ring
+/// (Signal) and the call keeps ringing — `incoming-call-visible` is what the
+/// call code reads, so it must stay set — with nothing underneath popped.
+#[test]
+fn back_while_ringing_hides_the_ring_and_pops_nothing_under_it() {
+    use slint::ComponentHandle;
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+    w.set_is_mobile_platform(true);
+    w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
+    assert!(w.get_compact_layout(), "precondition: a phone-width window");
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
+    w.global::<chatter_ui::CallView>()
+        .set_incoming_call_visible(true);
+
+    assert!(
+        chatter_ui::bin_ui::features::back::handle_back(&w),
+        "Back while ringing must be consumed"
+    );
+    assert!(
+        w.global::<chatter_ui::CallView>()
+            .get_incoming_call_minimized(),
+        "Back must hide the ring"
+    );
+    assert!(
+        w.global::<chatter_ui::CallView>()
+            .get_incoming_call_visible(),
+        "the call must keep ringing"
+    );
+    assert!(
+        w.global::<chatter_ui::SidebarPane>().get_mobile_show_chat(),
+        "Back while ringing popped the chat underneath"
+    );
+
+    // With the ring hidden, the next Back is the chat's again.
+    assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
+    assert!(!w.global::<chatter_ui::SidebarPane>().get_mobile_show_chat());
+}
+
+/// The palette's query field takes focus on open; picking a result closes the
+/// palette and destroys that field, leaving NOTHING focused — so the next Back
+/// key reached no FocusScope and did nothing (RC20: search → open chat → Back
+/// dead, 3/3). The real key event must still reach `back-pressed`.
+#[test]
+fn back_key_still_arrives_after_the_search_palette_closes() {
+    use slint::ComponentHandle;
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+    let scale = w.window().scale_factor();
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::Resized {
+            size: slint::LogicalSize::new(1000.0, 800.0)
+                .to_physical(scale)
+                .to_logical(scale),
+        });
+
+    w.global::<chatter_ui::SearchPane>()
+        .set_unified_search_open(true);
+    // A redraw instantiates the palette, whose field focuses itself on init.
+    w.window().request_redraw();
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::Resized {
+            size: slint::LogicalSize::new(1000.0, 801.0)
+                .to_physical(scale)
+                .to_logical(scale),
+        });
+    slint::platform::update_timers_and_animations();
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "r".into() });
+    assert_eq!(
+        w.global::<chatter_ui::SearchPane>()
+            .get_unified_search_query()
+            .as_str(),
+        "r",
+        "precondition: the palette's field must hold focus, or this test proves nothing"
+    );
+    // A result was picked: the palette closes itself (app.slint's
+    // `conversation-selected` handler).
+    w.global::<chatter_ui::SearchPane>()
+        .set_unified_search_open(false);
+    slint::platform::update_timers_and_animations();
+
+    // Any Back-consuming layer will do as the witness; selection mode needs
+    // no core.
+    w.global::<chatter_ui::ChatPane>().set_selection_mode(true);
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
+    assert!(
+        !w.global::<chatter_ui::ChatPane>().get_selection_mode(),
+        "Back after closing the search palette never reached back-pressed — the \
+         palette's field took focus with it"
+    );
+}
+
+/// On a phone the composer drops its focus when the emoji/GIF picker opens, so
+/// the panel replaces the keyboard. That left NOTHING focused, and the Back
+/// meant to close the picker went nowhere (S9 + S25). Opening a picker on a
+/// phone must hand focus to back-scope instead. The palette's field stands in
+/// for the composer as the focused text field.
+#[test]
+fn opening_a_composer_picker_on_a_phone_keeps_back_alive() {
+    use slint::ComponentHandle;
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+    w.set_is_mobile_platform(true);
+    let scale = w.window().scale_factor();
+    let resize = |h: f32| {
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: slint::LogicalSize::new(1000.0, h)
+                    .to_physical(scale)
+                    .to_logical(scale),
+            });
+    };
+    resize(800.0);
+
+    w.global::<chatter_ui::SearchPane>()
+        .set_unified_search_open(true);
+    w.window().request_redraw();
+    resize(801.0);
+    slint::platform::update_timers_and_animations();
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "r".into() });
+    assert_eq!(
+        w.global::<chatter_ui::SearchPane>()
+            .get_unified_search_query()
+            .as_str(),
+        "r",
+        "precondition: a text field must hold focus, or this test proves nothing"
+    );
+
+    for gif in [false, true] {
+        if gif {
+            w.global::<chatter_ui::ChatPane>()
+                .set_composer_gif_picker_visible(true);
+        } else {
+            w.global::<chatter_ui::ChatPane>()
+                .set_composer_emoji_picker_visible(true);
+        }
+        slint::platform::update_timers_and_animations();
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
+        assert_eq!(
+            w.global::<chatter_ui::SearchPane>()
+                .get_unified_search_query()
+                .as_str(),
+            "r",
+            "the text field kept focus while a picker opened on a phone (gif={gif})"
+        );
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::Back.into(),
+            });
+        assert!(
+            !w.global::<chatter_ui::ChatPane>()
+                .get_composer_emoji_picker_visible()
+                && !w
+                    .global::<chatter_ui::ChatPane>()
+                    .get_composer_gif_picker_visible(),
+            "a real Back did not close the picker (gif={gif})"
+        );
+    }
+}
+
+/// New Channel on a phone: the keyboard could not be put away, covering
+/// "Who can join?". The IME's Done (delivered as Return) on the name moves to
+/// Description, Done there drops focus, and `release-text-focus` (what
+/// Android's Back calls after hiding the keyboard) drops it too — each without
+/// stranding the Back key.
+#[test]
+fn new_channel_done_and_back_put_the_keyboard_away() {
+    use slint::ComponentHandle;
+    require_element_queries();
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+    w.set_is_mobile_platform(true);
+    let scale = w.window().scale_factor();
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::Resized {
+            size: slint::LogicalSize::new(400.0, 800.0)
+                .to_physical(scale)
+                .to_logical(scale),
+        });
+    chatter_ui::bin_ui::features::back::push(&w, "create-channel");
+    w.window().request_redraw();
+    // Let the card's entrance animation settle so clicks land on the fields.
+    testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+
+    let key = |t: slint::SharedString| {
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: t.clone() });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: t });
+    };
+    let ret: slint::SharedString = slint::platform::Key::Return.into();
+
+    let name = testing::ElementHandle::find_by_accessible_label(&w, "Channel name")
+        .next()
+        .expect("the New Channel name field is not on screen");
+    name.mock_single_click(slint::platform::PointerEventButton::Left);
+    key("a".into());
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_create_channel_name()
+            .as_str(),
+        "a",
+        "precondition: the name field must take typing"
+    );
+
+    key(ret.clone());
+    key("d".into());
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_create_channel_name()
+            .as_str(),
+        "a",
+        "Done on the name did not leave the name field"
+    );
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_create_channel_description()
+            .as_str(),
+        "d",
+        "Done on the name did not move focus to Description"
+    );
+
+    key(ret.clone());
+    key("z".into());
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_create_channel_description()
+            .as_str(),
+        "d",
+        "Done on Description did not drop focus — the keyboard stays up"
+    );
+
+    name.mock_single_click(slint::platform::PointerEventButton::Left);
+    key("b".into());
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_create_channel_name()
+            .as_str(),
+        "ab"
+    );
+    w.invoke_release_text_focus();
+    key("c".into());
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_create_channel_name()
+            .as_str(),
+        "ab",
+        "release-text-focus left the name field focused (Back hid the keyboard only on screen)"
+    );
+
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "none",
+        "Back stopped arriving after focus was released"
+    );
+}
+
+/// Back inside a thread returns to the conversation, not to the chat list.
+/// The thread panel covers the chat pane on a phone, so skipping this layer
+/// jumped two levels up (§112s).
+#[test]
+fn back_press_pops_the_thread_panel_before_the_conversation() {
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+
+    let closed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let flag = closed.clone();
+    w.global::<chatter_ui::ChatPane>()
+        .on_close_thread_clicked(move || flag.set(true));
+
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_thread_panel_visible(true);
+
+    assert!(
+        chatter_ui::bin_ui::features::back::handle_back(&w),
+        "back inside a thread must be consumed in-app"
+    );
+    assert!(closed.get(), "back did NOT close the thread panel");
+    assert!(
+        w.global::<chatter_ui::SidebarPane>().get_mobile_show_chat(),
+        "closing a thread must not also pop the conversation underneath it"
     );
 }
 
@@ -1816,20 +2683,24 @@ fn back_key_event_reaches_the_handler() {
     use slint::ComponentHandle;
     let w = boot();
     chatter_ui::bin_ui::features::back::wire(&w);
-    w.set_active_modal("settings".into());
+    chatter_ui::bin_ui::features::back::push(&w, "sessions");
 
     // Give the window a real geometry first. `process_key_input` drops the
     // focus item when `ItemRc::is_visible()` is false, and an unshown headless
     // window has a zero-size root — the key would be discarded before it ever
     // reached back-scope, for a reason that has nothing to do with the wire.
     let scale = w.window().scale_factor();
-    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-        size: slint::LogicalSize::new(1000.0, 800.0).to_physical(scale).to_logical(scale),
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::Resized {
+            size: slint::LogicalSize::new(1000.0, 800.0)
+                .to_physical(scale)
+                .to_logical(scale),
+        });
 
-    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
-        text: slint::platform::Key::Back.into(),
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
 
     assert_eq!(
         w.get_active_modal().as_str(),
@@ -1846,15 +2717,29 @@ fn back_key_event_reaches_the_handler() {
 /// requiring the scope to hold focus itself.
 #[test]
 fn back_scope_does_not_steal_focus_from_text_input() {
-    let main = include_str!("../../../ui/main.slint");
+    let app = include_str!("../../../ui/app.slint");
+    let at = app
+        .find("back-scope := FocusScope")
+        .expect("the top-level back FocusScope is gone; Back cannot be observed");
     assert!(
-        main.contains("back-scope := FocusScope"),
-        "the top-level back FocusScope is gone; Back cannot be observed"
-    );
-    assert!(
-        main.contains("forward-focus: back-scope;"),
+        app.contains("forward-focus: back-scope;"),
         "without forward-focus nothing holds focus at startup and Back is dropped"
     );
+    // back-scope must be an ANCESTOR of every focusable item: nothing may sit
+    // beside it at the window's top level, or Back is lost while that thing's
+    // TextInput holds focus.
+    let after = &app[at..];
+    assert!(
+        after
+            .lines()
+            .skip(1)
+            .filter(|l| l.starts_with("    ") && !l.starts_with("     "))
+            .all(|l| l == "    }"),
+        "an element was added beside back-scope instead of inside it"
+    );
+    let main = &after[..after
+        .find("Global keyboard shortcuts")
+        .expect("shortcut scope moved")];
     assert!(
         main.contains("focus-on-click: false;"),
         "back-scope would steal focus from the composer on every stray tap"
@@ -1863,10 +2748,13 @@ fn back_scope_does_not_steal_focus_from_text_input() {
         main.contains("focus-on-tab-navigation: false;"),
         "back-scope would swallow a Tab stop over the whole window"
     );
-    // Only Back is consumed; every other key is rejected so it keeps bubbling.
+    // Back and drawer Escape are consumed; ordinary typing keeps bubbling.
     assert!(
-        main.contains("if (event.text == Key.Back) {") && main.contains("return reject;"),
-        "back-scope must consume ONLY Key.Back and reject everything else, or it \
+        main.contains("if (event.text == Key.Back || (event.text == Key.Escape")
+            && main
+                .contains("root.composer-emoji-picker-visible || root.composer-gif-picker-visible")
+            && main.contains("return reject;"),
+        "back-scope must reject ordinary keys and limit Escape to the drawer, or it \
          would eat text input"
     );
     // The key-UP must be swallowed too. Android's default Back fires off
@@ -1874,7 +2762,7 @@ fn back_scope_does_not_steal_focus_from_text_input() {
     // close a modal AND finish the Activity.
     assert!(
         main.contains("key-released(event) => {")
-            && main.contains("event.text == Key.Back ? accept : reject"),
+            && main.contains("return event.text == Key.Back || (event.text == Key.Escape"),
         "back-scope does not consume the Back key-up; Android's default Back \
          handler can still fire behind us"
     );
@@ -1887,22 +2775,24 @@ fn back_scope_ignores_ordinary_typing() {
     use slint::ComponentHandle;
     let w = boot();
     chatter_ui::bin_ui::features::back::wire(&w);
-    w.set_active_modal("settings".into());
+    chatter_ui::bin_ui::features::back::push(&w, "sessions");
 
     let scale = w.window().scale_factor();
-    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-        size: slint::LogicalSize::new(1000.0, 800.0).to_physical(scale).to_logical(scale),
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::Resized {
+            size: slint::LogicalSize::new(1000.0, 800.0)
+                .to_physical(scale)
+                .to_logical(scale),
+        });
 
     for text in ["a", "Z", " "] {
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
-            text: text.into(),
-        });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.into() });
     }
 
     assert_eq!(
         w.get_active_modal().as_str(),
-        "settings",
+        "sessions",
         "an ordinary key press was treated as Back — back-scope is over-matching"
     );
 }
@@ -1917,26 +2807,184 @@ fn back_pops_selection_mode_before_the_modal() {
     let w = boot();
     chatter_ui::bin_ui::features::back::wire(&w);
 
-    w.set_selection_mode(true);
-    w.set_active_modal("settings".into());
+    w.global::<chatter_ui::ChatPane>().set_selection_mode(true);
+    chatter_ui::bin_ui::features::back::push(&w, "sessions");
 
     w.invoke_back_pressed();
 
     assert!(
-        !w.get_selection_mode(),
+        !w.global::<chatter_ui::ChatPane>().get_selection_mode(),
         "back did not exit message multi-select — it is the innermost layer and \
          must pop first"
     );
     assert_eq!(
         w.get_active_modal().as_str(),
-        "settings",
+        "sessions",
         "back popped TWO layers at once: selection mode AND the modal. One press, \
          one layer"
     );
 
     // Second press now takes the modal.
     w.invoke_back_pressed();
-    assert_eq!(w.get_active_modal().as_str(), "none", "the second back press did not close the modal");
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "none",
+        "the second back press did not close the modal"
+    );
+}
+
+/// UX1 (R4 P0-1): the current tab and the screens pushed over it are separate
+/// state. With one `active-modal` slot for both, Back always landed on Chats,
+/// Sessions/Link device replaced Settings instead of stacking on it, and
+/// someone else's profile lit the Profile tab.
+#[test]
+fn back_pops_the_modal_stack_before_leaving_the_tab() {
+    use chatter_ui::bin_ui::features::back;
+    let w = boot();
+    back::wire(&w);
+    let tab = |w: &MainWindow| {
+        w.global::<chatter_ui::SidebarPane>()
+            .get_active_tab()
+            .to_string()
+    };
+    let top = |w: &MainWindow| w.get_active_modal().to_string();
+
+    // Profile menu › Settings › Sessions › Link device, pushed through the
+    // Slint callback. Settings is pushed, not a tab (UX3).
+    w.global::<chatter_ui::SidebarPane>()
+        .set_active_tab("profile".into());
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_nav_push("settings".into());
+    assert!(
+        w.global::<chatter_ui::ModalHostState>().get_settings_open(),
+        "pushing Settings did not raise settings-open"
+    );
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_nav_push("sessions".into());
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_nav_push("link-device-approve".into());
+    assert_eq!(top(&w), "link-device-approve");
+    assert!(back::handle_back(&w));
+    assert_eq!(
+        top(&w),
+        "sessions",
+        "Back from Link device must return to Sessions"
+    );
+    assert!(
+        w.global::<chatter_ui::ModalHostState>().get_settings_open(),
+        "Settings must stay mounted under Sessions"
+    );
+    assert!(back::handle_back(&w));
+    assert_eq!(
+        top(&w),
+        "settings",
+        "Back from Sessions must return to Settings, not Chats"
+    );
+    assert!(back::handle_back(&w));
+    assert_eq!(
+        (tab(&w), top(&w)),
+        ("profile".into(), "none".into()),
+        "Back from Settings must return to the account menu"
+    );
+    assert!(
+        !w.global::<chatter_ui::ModalHostState>().get_settings_open(),
+        "popping Settings left settings-open set"
+    );
+    assert!(
+        back::handle_back(&w),
+        "Back on a non-Chats tab must be consumed"
+    );
+    assert_eq!(tab(&w), "chats", "Back from a root tab must go to Chats");
+    assert!(
+        !back::handle_back(&w),
+        "Back on Chats with nothing open backgrounds the app"
+    );
+
+    // A profile opened from Contacts is pushed over Contacts, never the Profile tab.
+    w.global::<chatter_ui::SidebarPane>()
+        .set_active_tab("contacts".into());
+    back::push(&w, "user-profile");
+    assert_eq!(tab(&w), "contacts", "opening a profile changed the tab");
+    assert!(back::handle_back(&w));
+    assert_eq!(
+        (tab(&w), top(&w)),
+        ("contacts".into(), "none".into()),
+        "Back from a profile must land on Contacts"
+    );
+
+    // close() takes what the closed screen opened with it; closing a screen
+    // that is not open (a late async completion) changes nothing.
+    back::push(&w, "sessions");
+    back::push(&w, "link-device-approve");
+    back::close(&w, "forward-message");
+    assert_eq!(top(&w), "link-device-approve");
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_nav_close("sessions".into());
+    assert_eq!(top(&w), "none");
+
+    // Re-pushing an open screen moves it to the top instead of stacking a copy.
+    back::push(&w, "sessions");
+    back::push(&w, "jarvis-memory");
+    back::push(&w, "sessions");
+    assert_eq!(
+        slint::Model::row_count(&w.global::<chatter_ui::ModalHostState>().get_modal_stack()),
+        2
+    );
+    w.global::<chatter_ui::ModalHostState>().invoke_nav_pop();
+    assert_eq!(top(&w), "jarvis-memory");
+
+    // Opening a conversation / logout: nothing stays over the Chats tab.
+    back::reset_to_chats(&w);
+    assert_eq!((tab(&w), top(&w)), ("chats".into(), "none".into()));
+}
+
+/// The bottom tab bar and the return-to-call bar are layered UNDER every
+/// pushed modal (z -1, with the chat column at -2, the Chats FAB at -0.5
+/// between the dock and the modals), so a dialog's backdrop
+/// dims them and takes their taps; the tab screens sit at the same layer,
+/// declared before the bar, so they never cover it. And the bar highlights
+/// `active-tab`, not something derived from whichever modal is open.
+#[test]
+fn tab_bar_and_call_bar_sit_under_pushed_modals() {
+    let app = include_str!("../../../ui/app.slint");
+    let tabs = include_str!("../../../ui/app_tab_screens.slint");
+    let settings = include_str!("../../../ui/app_settings_host.slint");
+    let chrome = include_str!("../../../ui/app_bottom_chrome.slint");
+    for host in ["AppTabScreens {", "AppSettingsHost {", "AppBottomChrome {"] {
+        let at = app
+            .find(host)
+            .unwrap_or_else(|| panic!("app.slint lost `{host}`"));
+        assert!(
+            app[at..at + 50].contains("z: -1;"),
+            "`{host}` must sit below modals"
+        );
+    }
+    for host in ["AppModalHost {", "AppSecondaryModals {"] {
+        let at = app
+            .find(host)
+            .unwrap_or_else(|| panic!("app.slint lost `{host}`"));
+        assert!(
+            app[at..at + 50].contains("z: 0;"),
+            "`{host}` must cover tabs"
+        );
+    }
+    assert!(chrome.contains("if root.bottom-nav-visible: AppBottomNavigation {"));
+    assert!(chrome.contains("selected-tab <=> SidebarPane.active-tab;"));
+    assert!(
+        chrome.contains(")): ReturnToCallBar {")
+            && chrome.contains("if root.fab-visible: ComposeFab {")
+    );
+    for screen in [
+        r#"if SidebarPane.active-tab == "calls": CallHistoryScreen {"#,
+        r#"if SidebarPane.active-tab == "contacts": FriendsModal {"#,
+        r#"if SidebarPane.active-tab == "profile": AccountMenu {"#,
+    ] {
+        let at = tabs
+            .find(screen)
+            .unwrap_or_else(|| panic!("tab screen lost `{screen}`"));
+        assert!(tabs[at..at + 60].contains("z: -1;"));
+    }
+    assert!(settings.contains("if ModalHostState.settings-open: SettingsScreen {"));
 }
 
 // ============================================================================
@@ -1972,22 +3020,53 @@ fn message_selection_toggle_reaches_the_selection_store() {
     a.message_id = "msg-a".into();
     let mut b = chatter_ui::MessageItemData::default();
     b.message_id = "msg-b".into();
-    w.set_messages(slint::ModelRc::new(slint::VecModel::from(vec![a, b])));
+    w.global::<chatter_ui::ChatPane>()
+        .set_messages(slint::ModelRc::new(slint::VecModel::from(vec![a, b])));
 
     // L1 dynamic: selecting one message turns the mode on and marks that row.
-    w.invoke_message_selection_toggled("msg-a".into());
-    assert!(w.get_selection_mode(), "toggling a message must enter selection mode");
-    assert_eq!(w.get_selected_message_count(), 1, "the count must reach the selection bar");
-    let rows = w.get_messages();
-    assert!(rows.row_data(0).unwrap().selected, "the selected row must be marked");
-    assert!(!rows.row_data(1).unwrap().selected, "an unselected row must NOT be marked");
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_message_selection_toggled("msg-a".into());
+    assert!(
+        w.global::<chatter_ui::ChatPane>().get_selection_mode(),
+        "toggling a message must enter selection mode"
+    );
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_selected_message_count(),
+        1,
+        "the count must reach the selection bar"
+    );
+    let rows = w.global::<chatter_ui::ChatPane>().get_messages();
+    assert!(
+        rows.row_data(0).unwrap().selected,
+        "the selected row must be marked"
+    );
+    assert!(
+        !rows.row_data(1).unwrap().selected,
+        "an unselected row must NOT be marked"
+    );
 
     // Deselecting the last one leaves the mode entirely — a selection bar
     // reading "0 selected" with a dead delete button is a dead end.
-    w.invoke_message_selection_toggled("msg-a".into());
-    assert!(!w.get_selection_mode(), "deselecting the last message must exit selection mode");
-    assert_eq!(w.get_selected_message_count(), 0);
-    assert!(!w.get_messages().row_data(0).unwrap().selected, "the mark must be cleared");
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_message_selection_toggled("msg-a".into());
+    assert!(
+        !w.global::<chatter_ui::ChatPane>().get_selection_mode(),
+        "deselecting the last message must exit selection mode"
+    );
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_selected_message_count(),
+        0
+    );
+    assert!(
+        !w.global::<chatter_ui::ChatPane>()
+            .get_messages()
+            .row_data(0)
+            .unwrap()
+            .selected,
+        "the mark must be cleared"
+    );
 
     // L2 static (Slint): the hold gesture is what fires this on a touch screen.
     let item_src = include_str!("../../../ui/chat/message_item.slint");
@@ -2007,7 +3086,8 @@ fn message_selection_toggle_reaches_the_selection_store() {
     // longer hold.
     let menu_src = include_str!("../../../ui/chat/message_context_menu.slint");
     assert!(
-        menu_src.contains(r#"label: "Select""#) && menu_src.contains("root.select-clicked(root.message-id)"),
+        menu_src.contains(r#"label: "Select""#)
+            && menu_src.contains("root.select-clicked(root.message-id)"),
         "the message menu must carry a Select item wired to select-clicked"
     );
 }
@@ -2024,11 +3104,13 @@ fn message_selection_toggle_reaches_the_selection_store() {
 fn the_message_hover_action_bar_never_appears_on_touch() {
     let item_src = include_str!("../../../ui/chat/message_item.slint");
     assert!(
-        item_src.contains("property <bool> is-hovered: !root.mobile && touch.has-hover;"),
+        item_src.contains(
+            "property <bool> is-hovered: !root.mobile && !root.menu-open && touch.has-hover;"
+        ),
         "the message action bar's hover gate must exclude touch platforms"
     );
     assert!(
-        item_src.contains("visible: root.is-hovered"),
+        item_src.contains("if root.is-hovered: MessageActions {"),
         "the action bar is what that gate is for — if it stops reading \
          is-hovered, the gate is guarding nothing"
     );
@@ -2077,11 +3159,14 @@ fn pin_conversation_reaches_core_from_the_sidebar_menu() {
     chatter_ui::bin_ui::features::sidebar::wire(&w, &client);
 
     // Must not panic: the persist runs on tokio, which this harness does not pump.
-    w.invoke_set_conversation_pinned("00000000-0000-0000-0000-000000000001".into(), true);
+    w.global::<chatter_ui::SidebarPane>()
+        .invoke_set_conversation_pinned("00000000-0000-0000-0000-000000000001".into(), true);
 
     // L2 static (Rust): the handler is not a Slint-only bool.
     let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
-    let idx = src.find("on_set_conversation_pinned").expect("pin handler present");
+    let idx = src
+        .find("on_set_conversation_pinned")
+        .expect("pin handler present");
     assert!(
         src[idx..].contains(".set_conversation_pinned("),
         "the pin entry must call ChatterClient::set_conversation_pinned"
@@ -2098,15 +3183,16 @@ fn pin_conversation_reaches_core_from_the_sidebar_menu() {
         "the entry must name the action it will actually perform"
     );
 
-    let channels = include_str!("../../../ui/sidebar/channel_list.slint");
-    let dms = include_str!("../../../ui/sidebar/dm_list.slint");
+    // Every chat-list row hands itself to the menu, pin state included.
+    let list = include_str!("../../../ui/sidebar/chat_list.slint");
     assert!(
-        channels.contains("root.channel-context-menu-requested(item.channel-id, item.is-pinned, x, y)"),
-        "the channel row must carry its pin state into the menu"
+        list.contains("root.row-context-menu-requested(row, x, y)"),
+        "the chat-list row must carry itself into the menu"
     );
+    let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
     assert!(
-        dms.contains("root.dm-context-menu-requested(item.channel-id, item.is-pinned, x, y)"),
-        "the DM row must carry its pin state into the menu"
+        sidebar.contains("root.ctx-menu-is-pinned = row.is-pinned;"),
+        "the menu must read the row's pin state"
     );
 }
 
@@ -2125,10 +3211,16 @@ fn pinning_round_trips_through_core_and_is_local_only() {
         .expect("offline ChatterClient::build");
 
     let id = "11111111-1111-1111-1111-111111111111";
-    assert!(!client.is_conversation_pinned(id), "nothing is pinned by default");
+    assert!(
+        !client.is_conversation_pinned(id),
+        "nothing is pinned by default"
+    );
 
     assert!(client.set_conversation_pinned(id, true));
-    assert!(client.is_conversation_pinned(id), "the pin must survive the write");
+    assert!(
+        client.is_conversation_pinned(id),
+        "the pin must survive the write"
+    );
     assert!(
         client.pinned_conversation_ids().contains(id),
         "the bulk query the lists use must see the same pin as the single lookup"
@@ -2162,10 +3254,13 @@ fn folder_reorder_is_wired_and_reaches_reorder_sections() {
     let w = MainWindow::new().expect("MainWindow::new");
     chatter_ui::bin_ui::features::sidebar::wire(&w, &client);
 
-    w.invoke_move_section("00000000-0000-0000-0000-000000000001".into(), -1);
+    w.global::<chatter_ui::SidebarPane>()
+        .invoke_move_section("00000000-0000-0000-0000-000000000001".into(), -1);
 
     let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
-    let idx = src.find("on_move_section").expect("move-section handler present");
+    let idx = src
+        .find("on_move_section")
+        .expect("move-section handler present");
     assert!(
         src[idx..].contains(".move_section("),
         "the folder menu's Move up/down must reach ChatterClient::move_section"
@@ -2173,7 +3268,9 @@ fn folder_reorder_is_wired_and_reaches_reorder_sections() {
 
     // The core method is what finally calls the orphaned reorder.
     let core = include_str!("../../chatter-core/src/services/section_service.rs");
-    let core_idx = core.find("pub fn move_section").expect("move_section in core");
+    let core_idx = core
+        .find("pub fn move_section")
+        .expect("move_section in core");
     assert!(
         core[core_idx..].contains("self.reorder_sections(&ids)"),
         "move_section must be the caller reorder_sections never had"
@@ -2205,7 +3302,9 @@ fn folder_sort_mode_reaches_core_and_defaults_to_recent() {
     chatter_ui::bin_ui::features::sidebar::wire(&w, &client);
 
     // L1 dynamic through core: a new folder is Recent, and the mode persists.
-    let section = client.create_section("Work", "\u{1F4C1}").expect("create_section");
+    let section = client
+        .create_section("Work", "\u{1F4C1}", None)
+        .expect("create_section");
     assert_eq!(
         section.sort_mode,
         chatter_core::domain::section::SectionSortMode::Recent,
@@ -2213,9 +3312,14 @@ fn folder_sort_mode_reaches_core_and_defaults_to_recent() {
     );
 
     client
-        .set_section_sort_mode(&section.id, chatter_core::domain::section::SectionSortMode::Alphabetical)
+        .set_section_sort_mode(
+            &section.id,
+            chatter_core::domain::section::SectionSortMode::Alphabetical,
+        )
         .expect("set_section_sort_mode");
-    let reloaded = client.list_sections_with_conversations().expect("list sections");
+    let reloaded = client
+        .list_sections_with_conversations()
+        .expect("list sections");
     assert_eq!(
         reloaded[0].sort_mode,
         chatter_core::domain::section::SectionSortMode::Alphabetical,
@@ -2223,10 +3327,13 @@ fn folder_sort_mode_reaches_core_and_defaults_to_recent() {
     );
 
     // L1 dynamic through the UI callback.
-    w.invoke_set_section_sort_mode(section.id.to_string().into(), "unread".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .invoke_set_section_sort_mode(section.id.to_string().into(), "unread".into());
 
     let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
-    let idx = src.find("on_set_section_sort_mode").expect("sort-mode handler present");
+    let idx = src
+        .find("on_set_section_sort_mode")
+        .expect("sort-mode handler present");
     assert!(
         src[idx..].contains(".set_section_sort_mode("),
         "the sort picker must reach ChatterClient::set_section_sort_mode"
@@ -2248,8 +3355,12 @@ fn folder_sort_mode_reaches_core_and_defaults_to_recent() {
 #[test]
 fn foldered_conversations_are_excluded_from_the_loose_lists() {
     let core = include_str!("../../chatter-core/src/client/mod.rs");
-    let idx = core.find("pub fn sidebar_channels").expect("sidebar_channels present");
-    let body = &core[idx..idx + 2000];
+    let idx = core
+        .find("pub fn sidebar_channels")
+        .expect("sidebar_channels present");
+    let (body, _) = core[idx..]
+        .split_once("\n    }\n")
+        .expect("sidebar_channels closing brace present");
     assert!(
         body.contains("all_sectioned_conversation_ids"),
         "sidebar_channels must drop conversations that live in a folder"
@@ -2259,9 +3370,13 @@ fn foldered_conversations_are_excluded_from_the_loose_lists() {
         "sidebar_channels must put pinned channels first — ordering is core's job"
     );
 
-    let messaging = include_str!("../../chatter-core/src/client/messaging.rs");
-    let dm_idx = messaging.find("fn finish_dm_sidebar").expect("finish_dm_sidebar present");
-    let dm_body = &messaging[dm_idx..dm_idx + 1200];
+    let messaging = include_str!("../../chatter-core/src/client/messaging/sidebar.rs");
+    let dm_idx = messaging
+        .find("fn finish_dm_sidebar")
+        .expect("finish_dm_sidebar present");
+    let (dm_body, _) = messaging[dm_idx..]
+        .split_once("\n    }\n")
+        .expect("finish_dm_sidebar closing brace present");
     assert!(
         dm_body.contains("all_sectioned_conversation_ids") && dm_body.contains("is_pinned"),
         "the DM sidebar must apply the same folder exclusion and pin order"
@@ -2286,7 +3401,9 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
     );
 
     let channel = include_str!("../src/bin_ui/features/sidebar/channel.rs");
-    let read_idx = channel.find("mark_as_read()").expect("mark_as_read present");
+    let read_idx = channel
+        .find("mark_read_local()")
+        .expect("mark_read_local present");
     assert!(
         channel[read_idx..].contains("refresh_section_badges"),
         "reading a foldered channel must clear its folder badge too"
@@ -2297,9 +3414,9 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
     // else — the count came straight back on the next refresh and after every
     // restart.
     let dm = include_str!("../src/bin_ui/features/sidebar/dm.rs");
-    let dm_read_idx = dm.find("mark_as_read()").expect(
-        "selecting a DM must mark it read in core, not just zero the sidebar model",
-    );
+    let dm_read_idx = dm
+        .find("mark_read_local()")
+        .expect("selecting a DM must mark it read in core, not just zero the sidebar model");
     assert!(
         dm[dm_read_idx..].contains("refresh_section_badges"),
         "reading a foldered DM must clear its folder badge too"
@@ -2330,7 +3447,7 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
 fn folder_rows_are_pre_grouped_per_section() {
     let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
     assert!(
-        list.contains("conversations: [SectionConversationData]"),
+        list.contains("conversations: [ChatRowData]"),
         "each section must own its rows"
     );
     assert!(
@@ -2356,19 +3473,29 @@ fn folder_rows_are_pre_grouped_per_section() {
 #[test]
 fn folder_ui_sizes_up_for_touch() {
     let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
-    let idx = sidebar.find("CustomSectionList {").expect("CustomSectionList instantiated");
+    let idx = sidebar
+        .find("CustomSectionList {")
+        .expect("CustomSectionList instantiated");
     assert!(
-        sidebar[idx..idx + 600].contains("mobile-mode: root.mobile-mode"),
+        // `touch`, not `mobile-mode`: a two-pane tablet is not in mobile
+        // layout but is still driven by a finger (595b5031).
+        sidebar[idx..idx + 600].contains("mobile-mode: root.touch"),
         "the folder list must be told whether it is being touched"
     );
 
     let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
+    // Folder rows are the chat list's own rows, sized by the same flag.
+    let rows = &list[list
+        .find("for conv in section.conversations: ChatRow {")
+        .expect("folder rows are ChatRows")..];
     assert!(
-        list.contains("height: root.mobile-mode ? Spacing.touch-target-min : 36px"),
+        rows[..200].contains("mobile-mode: root.mobile-mode;"),
         "folder conversation rows must meet the touch minimum"
     );
     assert!(
-        list.contains("height: root.mobile-mode ? Spacing.touch-target-min : 32px"),
+        list.contains(
+            "height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height"
+        ),
         "folder headers must meet the touch minimum"
     );
     assert!(
@@ -2439,7 +3566,9 @@ fn a_foldered_dm_still_resolves_to_its_conversation() {
         .expect("offline ChatterClient::build");
 
     let peer = "22222222-2222-2222-2222-222222222222";
-    let section = client.create_section("Work", "\u{1F4C1}").expect("create_section");
+    let section = client
+        .create_section("Work", "\u{1F4C1}", None)
+        .expect("create_section");
     client
         .move_conversation_to_section(
             peer,
@@ -2450,7 +3579,7 @@ fn a_foldered_dm_still_resolves_to_its_conversation() {
 
     // The loose DM list drops the row ...
     assert!(
-        client.list_dm_sidebar().iter().all(|d| d.channel_id.as_str() != peer),
+        client.sidebar_rows().iter().all(|d| d.id.as_str() != peer),
         "a foldered DM must not also render loose"
     );
     // ... and opening it must still work.
@@ -2468,7 +3597,7 @@ fn a_foldered_dm_still_resolves_to_its_conversation() {
         "DM selection must resolve the conversation through core"
     );
     assert!(
-        !src.contains("get_dm_conversations()"),
+        !src.contains("get_chat_rows()"),
         "DM selection must not scan the sidebar model — foldered rows are not in it"
     );
 }
@@ -2491,7 +3620,9 @@ fn folders_hide_identified_conversations_while_anon_mode_is_on() {
         .expect("offline ChatterClient::build");
 
     let channel = "33333333-3333-3333-3333-333333333333";
-    let section = client.create_section("Work", "\u{1F4C1}").expect("create_section");
+    let section = client
+        .create_section("Work", "\u{1F4C1}", None)
+        .expect("create_section");
     client
         .move_conversation_to_section(
             channel,
@@ -2500,11 +3631,19 @@ fn folders_hide_identified_conversations_while_anon_mode_is_on() {
         )
         .expect("move_conversation_to_section");
 
-    let listed = client.list_sections_with_conversations().expect("list sections");
-    assert_eq!(listed[0].conversations.len(), 1, "the folder holds the channel");
+    let listed = client
+        .list_sections_with_conversations()
+        .expect("list sections");
+    assert_eq!(
+        listed[0].conversations.len(),
+        1,
+        "the folder holds the channel"
+    );
 
     client.set_anon_mode_enabled(true);
-    let hidden = client.list_sections_with_conversations().expect("list sections");
+    let hidden = client
+        .list_sections_with_conversations()
+        .expect("list sections");
     assert!(
         hidden[0].conversations.is_empty(),
         "an identified channel must not surface through a folder in anon mode"
@@ -2530,19 +3669,104 @@ fn foldered_private_groups_leave_the_loose_list() {
         "the loose private-group list must drop groups that live in a folder"
     );
 
-    let ui = include_str!("../src/bin_ui/features/sidebar/private_group.rs");
+    let rows = include_str!("../../chatter-core/src/client/messaging/sidebar.rs");
+    let idx = rows
+        .find("pub fn sidebar_rows")
+        .expect("sidebar_rows present");
     assert!(
-        ui.contains("sidebar_private_groups()"),
-        "the private-group row builder must use the folder-aware core list"
+        rows[idx..idx + 1500].contains("sidebar_private_groups()"),
+        "the chat list's group rows must come from the folder-aware core list"
     );
 
+    // Every folder mutation rebuilds the whole chat list, groups included.
     let sections = include_str!("../src/bin_ui/features/sidebar/sections.rs");
-    let refresh = sections
-        .find("fn refresh_conversation_lists")
-        .expect("refresh_conversation_lists present");
     assert!(
-        sections[refresh..].contains("set_private_groups"),
-        "filing a group into a folder must redraw the loose group list too"
+        sections.contains("super::rebuild_chat_list("),
+        "filing a group into a folder must redraw the chat list too"
+    );
+}
+
+/// FX3 (owner 2026-09-26): the chat list is ONE list — DMs, channels and
+/// private groups interleaved by activity, pinned first (Signal/Telegram). It
+/// used to be a DM block above a channel block, so a channel with newer
+/// activity never rose above a DM. Core orders it; a live message moves its
+/// row to the top of the unpinned rows — never above a pin, which the old
+/// per-list `insert(0, ..)` did — and every other row keeps its badge.
+#[test]
+fn chat_list_is_one_list_by_activity_with_pins_first() {
+    use chatter_core::domain::message::ConversationType as CT;
+    use chatter_core::ui::sidebar_data::{ChatRowSendData, order_chat_rows};
+    use chatter_ui::bin_ui::converters::ChatRowExt;
+    use slint::Model;
+
+    const DM: &str = "11111111-1111-1111-1111-111111111111";
+    const PINNED: &str = "22222222-2222-2222-2222-222222222222";
+    const CHANNEL: &str = "33333333-3333-3333-3333-333333333333";
+    const OLD: &str = "44444444-4444-4444-4444-444444444444";
+    let row = |id: &str, kind: CT, at: i64, pinned: bool, unread: u32| {
+        let mut r = ChatRowSendData::new(kind, id, id);
+        r.last_activity = chrono::DateTime::from_timestamp(at, 0);
+        r.is_pinned = pinned;
+        r.unread_count = unread;
+        r
+    };
+    let mut rows = vec![
+        row(DM, CT::ServerDm, 20, false, 2),
+        row(OLD, CT::AnonGroup, 5, false, 0),
+        row(PINNED, CT::ServerDm, 1, true, 0),
+        row(CHANNEL, CT::Channel, 30, false, 0),
+    ];
+    order_chat_rows(&mut rows);
+    let ids: Vec<_> = rows.iter().map(|r| r.id.clone()).collect();
+    assert_eq!(
+        ids,
+        [PINNED, CHANNEL, DM, OLD],
+        "pinned first, then a newer channel above an older DM"
+    );
+
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    let client = std::sync::Arc::new(
+        chatter_core::client::ChatterClient::builder()
+            .data_dir(tmp.path().to_string_lossy().to_string())
+            .build()
+            .expect("offline ChatterClient::build"),
+    );
+    let w = boot();
+    let slint_rows: Vec<_> = rows.into_iter().map(|r| r.to_slint()).collect();
+    w.global::<chatter_ui::SidebarPane>()
+        .set_chat_rows(slint::ModelRc::new(slint::VecModel::from(slint_rows)));
+
+    // A message lands in the oldest conversation, a private group.
+    chatter_ui::bin_ui::features::sidebar::apply_received_to_sidebar(
+        &w,
+        &client,
+        chatter_core::state::ActiveConversation::AnonGroup(OLD.parse().unwrap()),
+        "hello",
+        "12:00",
+        chatter_core::client::UnreadBadges { row: 1, total: 2 },
+    );
+    let model = w.global::<chatter_ui::SidebarPane>().get_chat_rows();
+    let ids: Vec<String> = model
+        .iter()
+        .map(|r| r.conversation_id.to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        [PINNED, OLD, CHANNEL, DM],
+        "the row moves to the top of the unpinned rows, not above the pin"
+    );
+    let moved = model.row_data(1).unwrap();
+    assert_eq!(
+        (moved.last_message.as_str(), moved.unread_count),
+        ("hello", 1)
+    );
+    assert_eq!(
+        model.row_data(3).unwrap().unread_count,
+        2,
+        "other rows keep their unread counts"
     );
 }
 
@@ -2554,46 +3778,45 @@ fn foldered_private_groups_leave_the_loose_list() {
 /// row had the last of those three (`timestamp` in, never rendered).
 #[test]
 fn channel_and_group_rows_show_their_latest_activity() {
-    // 1. Population — core composes it, the converter no longer blanks it.
-    let conv = include_str!("../src/bin_ui/converters/channel.rs");
-    let idx = conv.find("pub fn channel_to_slint").expect("channel_to_slint present");
-    let body = &conv[idx..];
-    assert!(
-        body.contains("channel_sidebar_activity(channel)"),
-        "a channel row's preview and stamp must come from core, not be hardcoded empty"
-    );
-    assert!(
-        !body.contains("last_message: SharedString::default()"),
-        "the hardcoded-empty preview must not come back"
-    );
-    // The converter must NOT name a conversation type. A channel's messages
-    // live under `Channel::conversation_type()` — `AnonGroup` for an encrypted
-    // channel, which is the default — so hardcoding `ConversationType::Channel`
-    // here queries an empty bucket and the row renders as a bare name. Core
-    // derives it from the channel; see `channel_sidebar_activity`, and
+    // 1. Population — core composes it, for every row kind, so they cannot
+    // drift. A channel's messages live under `Channel::conversation_type()` —
+    // `AnonGroup` for an encrypted channel, which is the default — so the
+    // bucket is derived from the channel, never hardcoded `Channel` (an empty
+    // bucket renders the row as a bare name). See
     // `integration_message_storage.rs` for the storage-level proof.
+    let core = include_str!("../../chatter-core/src/client/messaging/sidebar.rs");
+    let idx = core.find("fn channel_row(").expect("channel_row present");
     assert!(
-        !body.contains("ConversationType::"),
-        "the converter must not pick the storage bucket — core derives it from the channel"
+        core[idx..idx + 900].contains("&channel.conversation_type()"),
+        "a channel row's preview must come from the channel's own bucket"
+    );
+    let idx = core
+        .find("fn private_group_row(")
+        .expect("private_group_row present");
+    assert!(
+        core[idx..idx + 700].contains("sidebar_activity("),
+        "private-group rows must take core's preview wording"
     );
 
-    // Preview wording is core's for every row kind, so the three cannot drift.
-    let group = include_str!("../src/bin_ui/features/sidebar/private_group.rs");
-    assert!(
-        group.contains("sidebar_activity(") && !group.contains("truncate_preview_text"),
-        "private-group rows must take core's preview, not re-derive it in the UI crate"
-    );
-
-    // 2. Forwarding — the list must hand the row what it was given.
-    let list = include_str!("../../../ui/sidebar/channel_list.slint");
-    for prop in ["last-message: item.last-message", "timestamp: item.timestamp", "is-typing: item.is-typing"] {
-        assert!(list.contains(prop), "ChannelList must forward `{prop}`");
+    // 2. Forwarding — the row must hand each visual what it was given.
+    let list = include_str!("../../../ui/sidebar/chat_list.slint");
+    for prop in [
+        "last-message: root.data.last-message",
+        "timestamp: root.data.timestamp",
+        "is-typing: root.data.is-typing",
+    ] {
+        assert_eq!(
+            list.matches(prop).count(),
+            3,
+            "ChatRow must forward `{prop}` to all three row visuals"
+        );
     }
 
     // 3. Markup — the second line and the right-hand column exist on both rows.
     let channel_row = include_str!("../../../ui/sidebar/channel_list_item.slint");
     assert!(
-        channel_row.contains("text: root.last-message;") && channel_row.contains("text: root.timestamp;"),
+        channel_row.contains("text: root.last-message;")
+            && channel_row.contains("text: root.timestamp;"),
         "the channel row must render the preview and the timestamp"
     );
     assert!(
@@ -2606,12 +3829,15 @@ fn channel_and_group_rows_show_their_latest_activity() {
         "the private-group row declared `timestamp` but never rendered it"
     );
 
-    // 4. Typing reaches all three lists, not just DMs.
+    // 4. Typing reaches every row kind, not just DMs: one model, matched on
+    // the conversation id or (DMs) the peer.
     let typing = include_str!("../src/bin_ui/features/auth/initial_data.rs");
-    let t_idx = typing.find("pub fn update_sidebar_typing").expect("update_sidebar_typing present");
-    let t_body = &typing[t_idx..t_idx + 900];
+    let t_idx = typing
+        .find("pub fn update_sidebar_typing")
+        .expect("update_sidebar_typing present");
+    let t_body = &typing[t_idx..t_idx + 700];
     assert!(
-        t_body.contains("get_channels()") && t_body.contains("get_private_groups()"),
+        t_body.contains("row.conversation_id.as_str() == id"),
         "a typing event must animate a channel or group row too, not only a DM row"
     );
 }
@@ -2681,11 +3907,7 @@ fn wired_dm_open(
     // The accept handler reads the peer from the ACTIVE conversation, never
     // from the callback, so the key it pins always belongs to the conversation
     // the prompt was drawn in.
-    client
-        .chat_state()
-        .set_active_conversation(chatter_core::state::ActiveConversation::ServerDm {
-            peer_id: peer,
-        });
+    client.select_conversation(chatter_core::state::ActiveConversation::ServerDm { peer_id: peer });
     (tmp, client, w)
 }
 
@@ -2722,21 +3944,29 @@ fn identity_change_accept_reaches_core_and_clears_the_pending_change() {
     // and the PeerIdentityChanged event do it.
     chatter_ui::bin_ui::features::chat::identity_change::refresh(&w, &client, &peer);
     assert!(
-        w.get_identity_change_visible(),
+        w.global::<chatter_ui::ChatPane>()
+            .get_identity_change_visible(),
         "a parked identity change must raise the in-conversation prompt"
     );
     assert!(
-        w.get_identity_change_attributed(),
+        w.global::<chatter_ui::ChatPane>()
+            .get_identity_change_attributed(),
         "a sealed-sender change is cryptographically attributed"
     );
     assert!(
-        !w.get_identity_change_title().is_empty()
-            && !w.get_identity_change_detail().is_empty(),
+        !w.global::<chatter_ui::ChatPane>()
+            .get_identity_change_title()
+            .is_empty()
+            && !w
+                .global::<chatter_ui::ChatPane>()
+                .get_identity_change_detail()
+                .is_empty(),
         "the prompt must carry core's wording, not an empty bar"
     );
 
     // Fire the exact callback the Accept button invokes.
-    w.invoke_identity_change_accept_clicked();
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_identity_change_accept_clicked();
 
     // THE assertion: core ran the accept transaction. A UI-only stub cannot
     // make this true.
@@ -2747,11 +3977,15 @@ fn identity_change_accept_reaches_core_and_clears_the_pending_change() {
          conversation is still wedged in both directions and the button is a lie"
     );
     assert!(
-        !w.get_identity_change_visible(),
+        !w.global::<chatter_ui::ChatPane>()
+            .get_identity_change_visible(),
         "the prompt must come down once the change has been accepted"
     );
-    assert!(w.get_toast_visible(), "accepting must confirm itself — a bar that \
-        merely disappears does not distinguish 'accepted' from 'did nothing'");
+    assert!(
+        w.get_toast_visible(),
+        "accepting must confirm itself — a bar that \
+        merely disappears does not distinguish 'accepted' from 'did nothing'"
+    );
 }
 
 /// A server-claimed change must NOT be presented as though the peer had been
@@ -2772,16 +4006,24 @@ fn a_server_claimed_identity_change_is_not_presented_as_attributed() {
     );
 
     chatter_ui::bin_ui::features::chat::identity_change::refresh(&w, &client, &peer);
-    assert!(w.get_identity_change_visible(), "it must still be surfaced");
     assert!(
-        !w.get_identity_change_attributed(),
+        w.global::<chatter_ui::ChatPane>()
+            .get_identity_change_visible(),
+        "it must still be surfaced"
+    );
+    assert!(
+        !w.global::<chatter_ui::ChatPane>()
+            .get_identity_change_attributed(),
         "the UI must not claim attribution the crypto never gave it"
     );
 
     // The peer's own display name resolves to their uuid on an offline client
     // with no profile row, so this also proves the unattributed copy does not
     // name them.
-    let title = w.get_identity_change_title().to_string();
+    let title = w
+        .global::<chatter_ui::ChatPane>()
+        .get_identity_change_title()
+        .to_string();
     assert!(
         !title.contains(&peer.to_string()),
         "an unattributed change must not name the peer: the only thing that \
@@ -2826,27 +4068,31 @@ fn the_identity_change_bar_is_wired_and_not_dismissable() {
 
     let layout = include_str!("../../../ui/chat/chat_layout.slint");
     assert!(
-        layout.contains(r#"if root.identity-change-visible && root.channel-type == "dm": IdentityChangeBar"#),
-        "the bar must render inside the conversation, gated on channel-type so a \
+        layout.contains(
+            r#"&& root.conversation-kind == ConversationKind.server-dm: IdentityChangeBar"#
+        ),
+        "the bar must render inside the conversation, gated on conversation-kind so a \
          prompt cannot survive a switch into a channel, group or mesh room"
     );
-    // The whole four-hop chain, because a break at any hop leaves a button that
+    // The whole chain, because a break at any hop leaves a button that
     // looks alive and reaches nothing:
-    // IdentityChangeBar -> ChatLayout -> App -> MainWindow -> Rust.
+    // IdentityChangeBar -> ChatLayout -> MainWindow (app.slint) -> Rust.
     assert!(
         layout.contains("root.identity-change-accept-clicked()"),
         "ChatLayout must forward the bar's accept-clicked onwards"
     );
-    let app = include_str!("../../../ui/app.slint");
+    let app = include_str!("../../../ui/chat/app_conversation_layout.slint");
+    let chat_pane = include_str!("../../../ui/app_chat_pane.slint");
     assert!(
-        app.contains("identity-change-accept-clicked => { root.identity-change-accept-clicked(); }"),
-        "App must forward accept-clicked from ChatLayout"
+        app.contains(
+            "identity-change-accept-clicked => { root.identity-change-accept-clicked(); }"
+        ),
+        "the conversation layout must forward accept-clicked from ChatLayout"
     );
-    let main = include_str!("../../../ui/main.slint");
     assert!(
-        main.contains("callback identity-change-accept-clicked <=> app.identity-change-accept-clicked;"),
-        "MainWindow must alias the callback, or `on_identity_change_accept_clicked` \
-         is wired to something nothing can fire"
+        chat_pane.contains("callback identity-change-accept-clicked();"),
+        "ChatPane must declare the callback, or there is no \
+         `on_identity_change_accept_clicked` for Rust to wire"
     );
 }
 
@@ -2861,7 +4107,9 @@ fn the_send_toast_points_at_the_identity_change_instead_of_saying_retry() {
     let (_tmp, client, _w) = wired_dm_open(peer);
 
     let err = chatter_core::services::gateway::SendError::Message(
-        MessageError::RecipientIdentityChanged { peer_id: peer.to_string() },
+        MessageError::RecipientIdentityChanged {
+            peer_id: peer.to_string(),
+        },
     );
     let msg = client.format_send_error(&err, "send");
 
@@ -2885,16 +4133,29 @@ fn the_send_toast_points_at_the_identity_change_instead_of_saying_retry() {
 #[test]
 fn conversation_open_anchors_on_the_unread_boundary() {
     for (name, src) in [
-        ("channel", include_str!("../src/bin_ui/features/sidebar/channel.rs")),
+        (
+            "channel",
+            include_str!("../src/bin_ui/features/sidebar/channel.rs"),
+        ),
         ("dm", include_str!("../src/bin_ui/features/sidebar/dm.rs")),
         (
             "private_group",
             include_str!("../src/bin_ui/features/sidebar/private_group.rs"),
         ),
     ] {
+        // `mark_as_read`, or its local half `mark_read_local` when the open
+        // receipts the page it loads itself (`send_read_receipts_for_page`).
         let read_idx = src
-            .find("mark_as_read()")
+            .find("mark_read_local()")
+            .or_else(|| src.find("mark_as_read()"))
             .unwrap_or_else(|| panic!("{name} open path must mark the conversation read"));
+        if src[read_idx..].starts_with("mark_read_local()") {
+            assert!(
+                src.contains("send_read_receipts_for_page("),
+                "{name}: mark_read_local sends no receipts; the open must send \
+                 them for the page it loads"
+            );
+        }
         // The anchor is bound from the mark_as_read expression itself, not
         // fetched afterwards from a conversation that is now fully read.
         let bind = src[..read_idx]
@@ -2939,25 +4200,37 @@ fn conversation_open_anchors_on_the_unread_boundary() {
         list.contains("new messages"),
         "MessageList must offer the jump-to-newest pill with its count"
     );
+    // Rows are created on demand by Slint's ListView runtime, which the
+    // compiler enables only for a `for` whose parent element is named
+    // `ListView` with the visible-*/viewport-* length properties. Lose that
+    // name and every row of the conversation is instantiated and walked on
+    // every frame again (the 10-20 fps phone scroll this replaced).
+    assert!(
+        list.contains("component ListView inherits Flickable")
+            && list.contains("out property <length> visible-height")
+            && list.contains("list := ListView {"),
+        "MessageList must keep its rows behind the ListView runtime"
+    );
+    // That runtime rewrites viewport-y after every layout pass; an animation
+    // on it would be cancelled mid-flight and fight the fling.
+    assert!(
+        !list.contains("animate viewport-y"),
+        "MessageList must not animate viewport-y"
+    );
     let layout = include_str!("../../../ui/chat/chat_layout.slint");
     assert!(
         layout.contains("unread-index <=> root.unread-index"),
         "ChatLayout must forward the open position to MessageList"
     );
-    let app = include_str!("../../../ui/app.slint");
+    let app = include_str!("../../../ui/chat/app_conversation_layout.slint");
     assert!(
         app.contains("unread-index <=> root.unread-index"),
-        "App must forward the open position to ChatLayout"
+        "the conversation layout must forward the open position to ChatLayout"
     );
     assert!(
         app.contains("is-at-bottom <=> root.is-at-bottom"),
-        "App must bind is-at-bottom to ChatLayout, or every set_is_at_bottom call \
+        "the conversation layout must bind is-at-bottom to ChatLayout, or every set_is_at_bottom call \
          in Rust writes to a property nothing reads"
-    );
-    let main = include_str!("../../../ui/main.slint");
-    assert!(
-        main.contains("unread-index <=> app.unread-index"),
-        "MainWindow must alias unread-index, or set_unread_index is inert"
     );
 }
 
@@ -2997,7 +4270,11 @@ fn dismissable_screens() -> Vec<(String, String)> {
             .collect();
         entries.sort();
         for path in entries {
-            let name = path.file_name().expect("file name").to_string_lossy().into_owned();
+            let name = path
+                .file_name()
+                .expect("file name")
+                .to_string_lossy()
+                .into_owned();
             let src = std::fs::read_to_string(&path).expect("read slint source");
             out.push((format!("ui/{dir}/{name}"), src));
         }
@@ -3014,21 +4291,17 @@ fn dismissable_screens() -> Vec<(String, String)> {
 
 #[test]
 fn no_screen_defines_its_own_dismissal_glyph() {
-    // `Icons.arrow-left` is an alias of `Icons.chevron-left` (icons.slint), so
-    // both spellings have to be listed or the rule is one rename from mute.
     // The `\u{...}` escapes are the Unicode close glyphs: they are BOTH an
     // inconsistency and an Android bug — the font has no glyph, so they render
     // as a tofu box.
-    const OWN_GLYPH: [&str; 5] = [
-        "Icons.x",
-        "Icons.chevron-left",
-        "Icons.arrow-left",
-        "\\u{00D7}",
-        "\\u{2715}",
-    ];
+    const OWN_GLYPH: [&str; 4] = ["Icons.x", "Icons.chevron-left", "\\u{00D7}", "\\u{2715}"];
     // A screen is "dismissable" if it exposes any of these outward.
-    const DISMISS_CALLBACK: [&str; 4] =
-        ["callback close(", "callback closed(", "close-clicked", "close-settings"];
+    const DISMISS_CALLBACK: [&str; 4] = [
+        "callback close(",
+        "callback closed(",
+        "close-clicked",
+        "close-settings",
+    ];
 
     let mut findings = Vec::new();
     for (name, src) in dismissable_screens() {
@@ -3050,7 +4323,11 @@ fn no_screen_defines_its_own_dismissal_glyph() {
             ));
         }
     }
-    assert!(findings.is_empty(), "dismissal drifted:\n  {}", findings.join("\n  "));
+    assert!(
+        findings.is_empty(),
+        "dismissal drifted:\n  {}",
+        findings.join("\n  ")
+    );
 }
 
 #[test]
@@ -3058,43 +4335,264 @@ fn dismissal_glyph_and_edge_follow_the_screen_shape() {
     let dismiss = include_str!("../../../ui/components/dismiss_button.slint");
     // The glyph is chosen by shape, in one expression, in one place.
     assert!(
-        dismiss.contains("source: root.back ? Icons.chevron-left : Icons.x;"),
+        dismiss.contains("icon: root.back ? Icons.chevron-left : Icons.x;"),
         "DismissButton must pick chevron for a pushed page and X for a dialog"
     );
-    // Both densities come from the shared header tokens, so a dismissal
-    // control is never a different size from the rest of its header row.
-    for token in [
-        "Spacing.header-action-box-touch",
-        "Spacing.header-action-box",
-        "Spacing.header-glyph-touch",
-        "Spacing.header-glyph",
-    ] {
-        assert!(
-            dismiss.contains(token),
-            "DismissButton must size itself from {token}, not a literal"
-        );
-    }
+    // Its geometry is HeaderButton's, so a dismissal control is never a
+    // different size from the rest of its header row.
+    assert!(
+        dismiss.contains("inherits HeaderButton"),
+        "DismissButton must be a HeaderButton, not a second header geometry"
+    );
 
     // The EDGE is a layout position, so it is pinned by ORDER inside Modal's
     // header row: chevron before the title, X after it. `full-screen` is the
     // only thing that selects between them, and the two are mutually exclusive
     // `if`s so no screen can ever show both.
+    // A tab's root screen (`root-screen`) drops the chevron — it was not
+    // pushed, so there is nothing to pop — and a confirm dialog with its own
+    // Cancel drops the X (`show-close`). Neither ever swaps one for the other.
     let modal = include_str!("../../../ui/components/modal.slint");
-    let leading = modal.find("if root.full-screen: DismissButton").expect(
-        "Modal must place a back chevron on the LEADING edge when full-screen",
-    );
-    let title = modal.find("text: root.title;").expect("Modal must render a title");
+    let leading = modal
+        .find("if root.full-screen && !root.root-screen: DismissButton")
+        .expect(
+            "Modal must place a back chevron on the LEADING edge when full-screen, \
+             except on a tab's root screen",
+        );
+    let title = modal
+        .find("text: root.title;")
+        .expect("Modal must render a title");
     let trailing = modal
-        .find("if !root.full-screen: DismissButton")
+        .find("if !root.full-screen && root.show-close: DismissButton")
         .expect("Modal must place an X on the TRAILING edge when not full-screen");
     assert!(
         leading < title && title < trailing,
         "Modal's dismissal edges are reversed: the chevron must precede the \
          title and the X must follow it"
     );
+    for glyph in ["Icons.x", "Icons.chevron-left"] {
+        assert!(
+            !modal.contains(glyph),
+            "Modal must not name a dismissal glyph ({glyph}) — DismissButton owns that"
+        );
+    }
+}
+
+// FX6 (owner, 2026-09-26): "buttons in headers must be aligned on axis and be
+// of same size. This must be applied to all places." Every icon control in a
+// title row — back, close, ⋮, search, call, video, +, Shield, fullscreen — is
+// `ui/components/header_button.slint` (DismissButton is one), so one box, one
+// glyph, one hover and no stroke. Screens had grown their own: chat_header's
+// `IconButton`, selection_bar's `BarButton`, a 24px "+" and Shield in the chat
+// list, a 32px fullscreen toggle on calls, 40px "×" text glyphs in the media
+// viewers, 32px emoji buttons in the file previews.
+
+/// Every `.slint` file under ui/, as (path relative to ui/, source).
+fn all_slint_sources() -> Vec<(String, String)> {
+    fn walk(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<(String, String)>) {
+        for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {dir:?}: {e}")) {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                walk(&path, base, out);
+            } else if path.extension().is_some_and(|x| x == "slint") {
+                let rel = path
+                    .strip_prefix(base)
+                    .expect("under ui/")
+                    .to_string_lossy()
+                    .into_owned();
+                out.push((
+                    rel,
+                    std::fs::read_to_string(&path).expect("read slint source"),
+                ));
+            }
+        }
+    }
+    let ui = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
+    let mut out = Vec::new();
+    walk(&ui, &ui, &mut out);
+    out.sort();
+    out
+}
+
+/// The element block (`{ … }`) that is `levels` braces out from `pos`.
+fn block_around(src: &str, pos: usize, levels: usize) -> &str {
+    let bytes = src.as_bytes();
+    let mut open = pos;
+    for _ in 0..levels {
+        let mut depth = 0usize;
+        loop {
+            if open == 0 {
+                return src;
+            }
+            open -= 1;
+            match bytes[open] {
+                b'}' => depth += 1,
+                b'{' if depth > 0 => depth -= 1,
+                b'{' => break,
+                _ => {}
+            }
+        }
+    }
+    let mut depth = 0usize;
+    for (i, b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &src[open..=i];
+                }
+            }
+            _ => {}
+        }
+    }
+    &src[open..]
+}
+
+#[test]
+fn headers_use_the_shared_header_button() {
+    let sources = all_slint_sources();
+    let mut findings = Vec::new();
+
+    // 1. No screen keeps a private header-button component.
+    for (name, src) in &sources {
+        for local in ["component IconButton", "component BarButton"] {
+            if src.contains(local) {
+                findings.push(format!("{name} defines `{local}` — use HeaderButton"));
+            }
+        }
+    }
+
+    // 2. A back / close / ⋮ / fullscreen glyph drawn next to its own TouchArea
+    //    is a hand-rolled header button. The allowlist is the uses that are
+    //    NOT in a title row, each with where it lives.
+    const HEADER_GLYPHS: [&str; 8] = [
+        "Icons.chevron-left",
+        "Icons.x",
+        "Icons.more-vertical",
+        "Icons.maximize",
+        "Icons.minimize",
+        "\\u{00D7}",
+        "\\u{2715}",
+        "\\u{22EE}",
+    ];
+    const NOT_A_HEADER: [(&str, &str); 11] = [
+        ("chat/chat_layout.slint", "Icons.x"), // clear the picker drawer's search field
+        ("chat/message_composer.slint", "Icons.x"), // cancel reply / edit strip
+        ("chat/message_composer.slint", "\\u{00D7}"), // remove a pending attachment
+        ("chat/pinned_bar.slint", "Icons.x"),  // dismiss the pinned banner
+        ("components/connection_banner.slint", "Icons.x"), // dismiss the banner
+        ("components/toast.slint", "Icons.x"), // dismiss a toast
+        ("components/emoji_picker.slint", "Icons.x"), // clear the search field
+        ("components/gif_picker.slint", "Icons.x"), // clear the search field
+        ("modals/channel_settings.slint", "Icons.more-vertical"), // a member row's menu
+        ("modals/friends.slint", "Icons.more-vertical"), // a friend row's menu
+        ("sidebar/sidebar.slint", "Icons.chevron-left"), // the rail's collapse control
+    ];
+    for (name, src) in &sources {
+        if name.ends_with("header_button.slint") || name.ends_with("dismiss_button.slint") {
+            continue;
+        }
+        for line_start in src
+            .match_indices("source:")
+            .chain(src.match_indices("text:"))
+            .map(|(at, _)| at)
+        {
+            let line = &src[line_start
+                ..src[line_start..]
+                    .find(['\n', ';'])
+                    .map_or(src.len(), |n| line_start + n)];
+            for glyph in HEADER_GLYPHS {
+                // `Icons.x` must not match a longer icon name.
+                let hit = line.match_indices(glyph).any(|(at, _)| {
+                    !line[at + glyph.len()..]
+                        .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-')
+                });
+                if !hit || NOT_A_HEADER.contains(&(name.as_str(), glyph)) {
+                    continue;
+                }
+                // The glyph's element is one brace out; its button two.
+                if block_around(src, line_start, 2).contains("TouchArea") {
+                    findings.push(format!(
+                        "{name} hand-rolls a header button around {glyph} — use HeaderButton \
+                         (or DismissButton for back/close) from ui/components/"
+                    ));
+                }
+            }
+        }
+    }
+
+    // 3. Every title row with an icon control goes through the shared one.
+    for header in [
+        "components/modal.slint",
+        "chat/chat_header.slint",
+        "chat/selection_bar.slint",
+        "chat/thread_panel.slint",
+        "sidebar/sidebar.slint",
+        "calls/device_picker.slint",
+        "calls/active_call_view.slint",
+        "modals/user_profile.slint",
+        "modals/jarvis_memory.slint",
+        "settings/settings_screen.slint",
+        "components/code_preview_panel.slint",
+        "components/pdf_preview_panel.slint",
+        "components/image_viewer.slint",
+        "components/video_player.slint",
+        "pages/register.slint",
+        "app.slint",
+    ] {
+        let src = &sources
+            .iter()
+            .find(|(n, _)| n == header)
+            .unwrap_or_else(|| panic!("ui/{header} is gone — update this list"))
+            .1;
+        if !src.contains("HeaderButton {") && !src.contains("DismissButton {") {
+            findings.push(format!(
+                "ui/{header} has a header with no HeaderButton in it"
+            ));
+        }
+    }
+
+    // 4. The shared control owns geometry; GlassSurface owns its optical edge.
+    let button = include_str!("../../../ui/components/header_button.slint");
+    for token in [
+        "Spacing.header-action-box-touch",
+        "Spacing.header-action-box",
+        "Spacing.header-glyph-touch",
+        "Spacing.header-glyph",
+        "accessible-label: root.label;",
+    ] {
+        if !button.contains(token) {
+            findings.push(format!("HeaderButton lost `{token}`"));
+        }
+    }
+    if button.contains("border-width") {
+        findings
+            .push("HeaderButton draws its own stroke instead of using the shared material".into());
+    }
+    // 5. It centres itself on the row's axis (RC24 D1). A fixed root height
+    // leaves the button at the TOP of any taller HorizontalLayout; the root
+    // must stretch to the row (floor: the box) and centre the box inside.
+    let root_body = &button[button.find("export component HeaderButton").unwrap()..];
+    let root_body = &root_body[..root_body
+        .find("box := GlassSurface")
+        .expect("HeaderButton lost its inner box")];
+    if root_body.lines().any(|l| l.starts_with("    height:")) {
+        findings.push(
+            "HeaderButton's root fixes its height — it will ride the top of a taller row".into(),
+        );
+    }
+    if !root_body.contains("min-height: self.width;") {
+        findings.push("HeaderButton's root lost `min-height: self.width;`".into());
+    }
+    if !button.contains("y: (parent.height - self.height) / 2;") {
+        findings.push("HeaderButton no longer centres its box vertically".into());
+    }
+
     assert!(
-        !modal.contains("Icons."),
-        "Modal must not name a glyph itself — DismissButton owns that"
+        findings.is_empty(),
+        "header buttons drifted:\n  {}",
+        findings.join("\n  ")
     );
 }
 
@@ -3138,17 +4636,29 @@ fn destructive_actions_need_a_second_click() {
             src.contains(&format!("property <bool> {flag}: false;")),
             "{name}: must gate the destructive action behind an explicit confirm reveal"
         );
-        // The FIRST button may only reveal the confirm — never fire.
+        // The FIRST button may only reveal the confirm — never fire. Where the
+        // reveal lives is the screen's business (call history's is in a header
+        // ⋮ menu at the end of the file), so this is not a source-order check:
+        // every place the action fires must sit inside a conditional that
+        // tests the flag, and the reveal must not be inside one.
         let reveal = src
             .find(&format!("root.{flag} = true;"))
             .unwrap_or_else(|| panic!("{name}: the button must reveal the confirm step"));
-        let fire = src
-            .find(callback)
-            .unwrap_or_else(|| panic!("{name}: the confirm step must still be able to act"));
         assert!(
-            reveal < fire,
-            "{name}: {callback} is reachable before the confirm reveal — the gate is bypassed"
+            !gated_on(&enclosing_if(src, reveal), flag),
+            "{name}: the reveal is itself behind the confirm — nothing can open it"
         );
+        let fires: Vec<usize> = src.match_indices(callback).map(|(at, _)| at).collect();
+        assert!(
+            !fires.is_empty(),
+            "{name}: the confirm step must still be able to act"
+        );
+        for fire in fires {
+            assert!(
+                gated_on(&enclosing_if(src, fire), flag),
+                "{name}: {callback} is reachable without the confirm reveal — the gate is bypassed"
+            );
+        }
         // Reopening must not land on the confirm step (possibly for a
         // different channel), so the reveal resets whenever the screen is
         // shown or hidden.
@@ -3161,6 +4671,39 @@ fn destructive_actions_need_a_second_click() {
              reopens already asking to do the irreversible thing"
         );
     }
+}
+
+/// The conditions of every `if …:` element enclosing `pos`, innermost first,
+/// joined with ` && ` — the text between `if` and the end of each element
+/// header, found by walking out through the unmatched `{` braces. Empty when
+/// no conditional encloses it.
+fn enclosing_if(src: &str, pos: usize) -> String {
+    let bytes = src.as_bytes();
+    let mut conds = Vec::new();
+    let mut depth = 0usize;
+    let mut i = pos;
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b'}' => depth += 1,
+            b'{' if depth > 0 => depth -= 1,
+            b'{' => {
+                let line_start = src[..i].rfind('\n').map_or(0, |n| n + 1);
+                if let Some(cond) = src[line_start..i].trim().strip_prefix("if ") {
+                    conds.push(cond);
+                }
+            }
+            _ => {}
+        }
+    }
+    conds.join(" && ")
+}
+
+/// `cond` requires `root.{flag}` to be TRUE — a `!root.{flag}` does not count.
+fn gated_on(cond: &str, flag: &str) -> bool {
+    let needle = format!("root.{flag}");
+    cond.match_indices(&needle)
+        .any(|(at, _)| at == 0 || cond.as_bytes()[at - 1] != b'!')
 }
 
 /// Touch-target minimums are an accessibility floor, not a style preference.
@@ -3179,8 +4722,2965 @@ fn shared_content_pill_tabs_clear_the_touch_floor() {
         .expect("the grid follows the tab strip");
     let block = &src[strip..strip + end];
     assert!(
-        block.contains("height: Spacing.touch-target-min;") && block.contains("padding: 2px;"),
+        block.contains("height: Spacing.touch-target-min;")
+            && block.contains("padding: Spacing.xxs;"),
         "the pill shell must be Spacing.touch-target-min with a 2px inset, so each \
          chip lands on the 44px touch floor — a literal here is how 34px happened"
     );
 }
+
+// ============================================================================
+// DROPPED-P1s — findings that a completeness review found were never assigned
+// to any work package. See docs/OPEN-ITEMS.md §58, §59, §63.
+// ============================================================================
+
+/// FEAT-8: the empty-state "Browse channels" CTA — the first control a
+/// brand-new account ever sees — was dead.
+///
+/// `ChannelList` (now `ChatList`, `ui/sidebar/chat_list.slint`) emitted
+/// `join-channel-clicked` from its empty-state CTA, and the empty state rendered exactly when
+/// `channels.length == 0`. Its ONLY instantiation, in
+/// `ui/sidebar/sidebar.slint`, bound `channel-selected` and
+/// `channel-context-menu-requested` and not this one, and no Rust `on_*`
+/// existed either — so the button did nothing at all.
+///
+/// This pins the whole chain: emitter -> ChatList instantiation -> sidebar
+/// root callback -> app.slint, which opens the join tab of CreateChannelModal.
+#[test]
+fn sidebar_empty_state_join_cta_is_wired_end_to_end() {
+    let list_src = include_str!("../../../ui/sidebar/chat_list.slint");
+    let sidebar_src = include_str!("../../../ui/sidebar/sidebar.slint");
+    let app_src = include_str!("../../../ui/app_sidebar_host.slint");
+
+    // The emitter exists and the empty state's "Browse channels" fires it.
+    assert!(
+        list_src.contains("callback join-channel-clicked();"),
+        "ChatList must declare join-channel-clicked"
+    );
+    let cta = list_src
+        .find("text: \"Browse channels\";")
+        .expect("the empty state must still offer Browse channels");
+    assert!(
+        list_src[cta..cta + 400].contains("root.join-channel-clicked()"),
+        "the empty state's Browse channels must emit join-channel-clicked"
+    );
+
+    // The instantiation binds it. This is the assertion that was missing.
+    let inst = sidebar_src
+        .find("ChatList {")
+        .expect("sidebar must instantiate ChatList");
+    let block = &sidebar_src[inst..];
+    let block_end = block.find("\n                }\n").unwrap_or(block.len());
+    assert!(
+        block[..block_end].contains("join-channel-clicked() => { root.join-channel-clicked(); }"),
+        "the ChatList instantiation in sidebar.slint must bind \
+         join-channel-clicked — without it the empty-state CTA a brand-new \
+         account sees first is dead (FEAT-8)"
+    );
+
+    // The sidebar re-emits it, and AppSidebarHost opens the join modal.
+    assert!(
+        sidebar_src.contains("callback join-channel-clicked();"),
+        "Sidebar must declare the callback it forwards to"
+    );
+    let handler = app_src
+        .find("join-channel-clicked =>")
+        .expect("AppSidebarHost must handle the sidebar's join-channel-clicked");
+    let tail = &app_src[handler..handler + 220];
+    assert!(
+        tail.contains(r#"ModalHostState.create-channel-initial-tab = 1"#)
+            && tail.contains(r#"ModalHostState.nav-push("create-channel")"#),
+        "join-channel-clicked must open the JOIN tab of CreateChannelModal"
+    );
+}
+
+/// STUB-1a: the Tor status dot must not render "Off" as amber "connecting".
+///
+/// `TorStatus.state == 0` means Off — not on onion, traffic going direct
+/// (`ui/anon_mode/anon_mode_global.slint`;
+/// `chatter-core/src/client/mod.rs` sets it). The dot's ternary fell through to
+/// `Colors.warning` for every state that was not 2 or 3, and the file's own
+/// comment defined amber as "connecting" — so a build with no Tor in it showed
+/// a reassuring amber dot forever, and
+/// `ui/components/connection_banner.slint` only banners states 1 and 3, so
+/// nothing else told the user.
+#[test]
+fn tor_status_dot_does_not_report_off_as_connecting() {
+    let src = include_str!("../../../ui/sidebar/sidebar.slint");
+
+    // Both shield entry points (expanded footer + collapsed rail) carry a dot.
+    let dots: Vec<_> = src
+        .match_indices("TorStatus.state == 2 ? Colors.success")
+        .collect();
+    assert_eq!(
+        dots.len(),
+        2,
+        "expected the Tor dot at both shield entry points (expanded footer and \
+         collapsed rail); found {}",
+        dots.len()
+    );
+
+    for (at, _) in dots {
+        let ternary = &src[at..at + 260];
+        assert!(
+            ternary.contains("TorStatus.state == 1 ? Colors.warning"),
+            "amber must be reserved for state 1 (Connecting); this dot still \
+             uses it as the fallback, which renders state 0 (Off — traffic is \
+             going direct) as 'connecting' (STUB-1)"
+        );
+        // The fallback arm must not be warning.
+        let fallback = ternary.split(": ").last().unwrap_or("");
+        assert!(
+            !fallback.starts_with("Colors.warning"),
+            "the fallback arm of the Tor dot must not be amber"
+        );
+    }
+}
+
+/// Shield is offered in every build; only the Tor promise is gated.
+///
+/// STUB-1b once hid every Shield control in a build without the `onion`
+/// feature, so the Android build (no onion) had no Shield entry point at all
+/// (RC20). Shield is the anonymous-mailbox mode and works without Tor: core
+/// sets TorStatus Unavailable and ShieldNetworkBanner says the network
+/// location is not hidden. What must stay gated is the Tor status dot, which
+/// without Tor would be a permanent red.
+#[test]
+fn shield_toggle_is_offered_without_tor_but_the_tor_dot_is_not() {
+    let global_src = include_str!("../../../ui/anon_mode/anon_mode_global.slint");
+    assert!(
+        global_src.contains("in-out property <bool> onion-built"),
+        "AnonMode must carry the mirrored `onion` Cargo feature flag"
+    );
+
+    let sidebar_src = include_str!("../../../ui/sidebar/sidebar.slint");
+    let settings_src = include_str!("../../../ui/settings/settings_screen.slint");
+    assert!(
+        !sidebar_src.contains("if AnonMode.onion-built:")
+            && !settings_src.contains("if AnonMode.onion-built:"),
+        "a Shield entry point is gated on the `onion` feature again — the \
+         Android build has no onion, so it would have no Shield toggle"
+    );
+    let shields = sidebar_src.matches("root.anon-mode-clicked()").count();
+    let dots = sidebar_src
+        .matches("visible: AnonMode.enabled && AnonMode.onion-built;")
+        .count();
+    assert_eq!(
+        dots, shields,
+        "every shield's Tor dot must be gated on onion-built"
+    );
+
+    // Rust mirrors the Cargo feature, exactly as it does for jarvis, and the
+    // real startup path runs that mirror.
+    let lib_src = include_str!("../src/lib.rs");
+    assert!(
+        lib_src.contains(r#"set_onion_built(cfg!(feature = "onion"))"#),
+        "lib.rs must mirror the `onion` Cargo feature into AnonMode.onion-built"
+    );
+    assert!(
+        lib_src.contains("mirror_anon_mode_build(&window);"),
+        "app_init must run the AnonMode build mirror on the real window"
+    );
+
+    // Dynamic: drive the real mirror (a bare `boot()` only reads back the
+    // Slint default, false, which matches only a build without `onion`) and
+    // check the global reflects this test binary's feature set — with and
+    // without `onion`.
+    use slint::ComponentHandle;
+    let w = boot();
+    chatter_ui::mirror_anon_mode_build(&w);
+    assert!(
+        !w.global::<AnonMode>().get_enabled(),
+        "Shield must start off"
+    );
+    assert_eq!(
+        w.global::<AnonMode>().get_onion_built(),
+        cfg!(feature = "onion"),
+        "AnonMode.onion-built must equal the compiled-in `onion` feature"
+    );
+}
+
+/// FEAT-5: the "AI assistant" channel template always produced an empty
+/// channel, and said nothing.
+///
+/// `integration_client.rs` hardcodes `secrets: Default::default()`, the server
+/// requires `secrets["api_key"]` unconditionally
+/// (`internal/services/ai/providers/factory.go:85`) and validates BEFORE it
+/// writes (`integration/service/service.go:89` runs `handler.Initialize` ahead
+/// of `CreateIntegration` at `:96`), so the integration was never created — and
+/// the client swallowed the error with a `tracing::error!`.
+///
+/// The honest resolution is removal: the template is gated on the
+/// off-by-default `ai-channel-template` Cargo feature, mirrored into
+/// `AiIntegrationGlobal.channel-template-enabled`, so it is not rendered at
+/// all in a default build. The error is surfaced rather than logged for the
+/// build that turns it on.
+#[test]
+fn ai_assistant_channel_template_is_off_and_its_failure_is_surfaced() {
+    let global_src = include_str!("../../../ui/ai/ai_global.slint");
+    assert!(
+        global_src.contains("in-out property <bool> channel-template-enabled: false"),
+        "the AI-assistant template flag must default to false"
+    );
+
+    // The whole template block is behind the gate.
+    let modal_src = include_str!("../../../ui/modals/create_channel.slint");
+    assert!(
+        modal_src.contains("if AiIntegrationGlobal.channel-template-enabled: VerticalLayout {"),
+        "the AI-assistant block in create_channel.slint must be gated on \
+         AiIntegrationGlobal.channel-template-enabled (FEAT-5)"
+    );
+
+    // Rust mirrors the Cargo feature.
+    let lib_src = include_str!("../src/lib.rs");
+    assert!(
+        lib_src.contains(r#"set_channel_template_enabled(cfg!(feature = "ai-channel-template"))"#),
+        "lib.rs must mirror the `ai-channel-template` Cargo feature"
+    );
+
+    // The failure is reported, not swallowed. The old code's whole response to
+    // a failed integration was a tracing::error!.
+    let handler_src = include_str!("../src/bin_ui/features/modals/create_channel.rs");
+    let at = handler_src
+        .find("Failed to create AI integration")
+        .expect("the AI integration failure path must still exist");
+    let tail = &handler_src[at..];
+    assert!(
+        tail.contains("set_toast_message") && tail.contains(r#"set_toast_variant("error""#),
+        "a failed AI integration must surface an error toast, not only a log \
+         line — the channel is created either way and the user was told nothing"
+    );
+    assert!(
+        tail.contains("the AI assistant was not added"),
+        "the toast must say what actually happened"
+    );
+
+    // Dynamic: default build renders no AI template.
+    use slint::ComponentHandle;
+    let w = boot();
+    assert_eq!(
+        w.global::<AiIntegrationGlobal>()
+            .get_channel_template_enabled(),
+        cfg!(feature = "ai-channel-template"),
+        "AiIntegrationGlobal.channel-template-enabled must equal the compiled-in feature"
+    );
+    assert!(
+        !cfg!(feature = "ai-channel-template"),
+        "the ai-channel-template feature must stay OFF in the default test build: \
+         nothing on that path can supply the provider API key the server requires"
+    );
+}
+
+/// §124 1b: the Calls screen was reachable only from the phone tab bar, so a
+/// two-pane tablet (touch, >= 600 dp) had no way in. The sidebar now carries a
+/// Calls row on every wide layout; on a phone it stays hidden because the tab
+/// bar is the entry there.
+#[test]
+fn tablet_sidebar_opens_the_calls_screen() {
+    use slint::ComponentHandle;
+    require_element_queries();
+    let w = boot();
+    w.set_current_view("main".into());
+    w.set_is_mobile_platform(true);
+
+    // Two-pane tablet.
+    w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+    assert!(
+        !w.get_compact_layout(),
+        "1000 dp must be the two-pane layout"
+    );
+    let row = testing::ElementHandle::find_by_accessible_label(&w, "Calls")
+        .next()
+        .expect("no Calls entry in the tablet sidebar");
+    row.invoke_accessible_default_action();
+    assert_eq!(
+        w.global::<chatter_ui::SidebarPane>()
+            .get_active_tab()
+            .as_str(),
+        "calls",
+        "the sidebar Calls row did not raise the Calls screen"
+    );
+
+    // Missed calls surface on the row itself.
+    w.global::<chatter_ui::SidebarPane>()
+        .set_active_tab("chats".into());
+    w.global::<chatter_ui::CallView>().set_missed_call_count(3);
+    assert!(
+        testing::ElementHandle::find_by_accessible_label(&w, "Calls, 3 missed")
+            .next()
+            .is_some(),
+        "missed-call count is not on the sidebar Calls row"
+    );
+
+    // Phone: the tab bar owns the entry; the sidebar must not duplicate it.
+    w.global::<chatter_ui::CallView>().set_missed_call_count(0);
+    w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
+    assert!(w.get_compact_layout());
+    // The tab bar's own Calls tab carries the same label (an accessible tab
+    // since ae492dbb, over its visible Text), so exactly one control.
+    assert_eq!(
+        testing::ElementHandle::find_by_accessible_label(&w, "Calls")
+            .filter(|e| e.accessible_role() != Some(testing::AccessibleRole::Text))
+            .count(),
+        1,
+        "phone layout shows a sidebar Calls row next to the tab bar's Calls tab"
+    );
+}
+
+// §124 1b: channel member rows showed initials even for a member with an
+// avatar — `ChannelMemberData` had no image field at all. The row converter
+// must carry the member's decoded avatar into the settings member list, and
+// leave it empty (initials fallback) when there is none.
+#[test]
+fn channel_member_row_carries_avatar() {
+    use chatter_core::domain::channel::{MemberRole, MemberWithProfile, Membership};
+    use chatter_ui::bin_ui::converters::member_to_slint;
+    use slint::{Model, ModelRc, VecModel};
+    let w = boot();
+
+    let member = |avatar: Option<Vec<u8>>| MemberWithProfile {
+        membership: Membership {
+            channel_id: uuid::Uuid::new_v4().into(),
+            user_id: uuid::Uuid::new_v4().into(),
+            role: MemberRole::Member,
+            joined_at: chrono::Utc::now(),
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+            notification_preference: Default::default(),
+        },
+        display_name: "P2".into(),
+        username: String::new(),
+        avatar_bytes: avatar,
+        moderation: Default::default(),
+        unverified: false,
+    };
+
+    let with = member_to_slint(&member(Some(TINY_PNG.to_vec())));
+    let without = member_to_slint(&member(None));
+    assert_eq!(
+        without.avatar_source.size().width,
+        0,
+        "no avatar must fall back to initials"
+    );
+
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_members(ModelRc::new(VecModel::from(vec![with, without])));
+    let rows = w
+        .global::<chatter_ui::ModalHostState>()
+        .get_channel_settings_members();
+    let bound = rows.row_data(0).expect("row 0").avatar_source;
+    assert!(
+        bound.size().width > 0,
+        "member avatar did not reach the channel-settings member row"
+    );
+}
+
+/// Tap the visible Text labelled `label` at its centre, as a finger would.
+/// Text takes no input, so the tap lands on whatever TouchArea is under it.
+fn tap_text(w: &MainWindow, label: &str) {
+    let text = testing::ElementHandle::find_by_accessible_label(w, label)
+        .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Text))
+        .unwrap_or_else(|| panic!("no Text labelled {label:?} on screen"));
+    text.mock_single_click(slint::platform::PointerEventButton::Left);
+}
+
+fn tap_switch(w: &MainWindow, label: &str) {
+    let switch = testing::ElementHandle::find_by_accessible_label(w, label)
+        .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Switch))
+        .unwrap_or_else(|| panic!("no switch labelled {label:?} on screen"));
+    switch.mock_single_click(slint::platform::PointerEventButton::Left);
+}
+
+/// §124: the Mute and AI toggles in Channel Settings (and the app-settings
+/// toggle rows, which share `ToggleRow`) responded only to the 44x24 switch.
+/// Tapping the row's label must flip the state, tapping the switch must flip
+/// it exactly once (not once for the switch and again for the row under it),
+/// and a state pushed from Rust after a tap must still reach the switch — a
+/// one-way `checked:` binding would have been dropped by the first tap.
+#[test]
+fn toggle_rows_flip_from_anywhere_on_the_row() {
+    use slint::ComponentHandle;
+    require_element_queries();
+    let w = boot();
+    w.set_current_view("main".into());
+    w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+
+    // ---- Channel Settings > Notifications: Mute + AI ------------------------
+    let muted = std::rc::Rc::new(std::cell::RefCell::new(Vec::<bool>::new()));
+    let m = muted.clone();
+    w.global::<chatter_ui::ModalHostState>()
+        .on_channel_settings_toggle_mute(move |v| m.borrow_mut().push(v));
+    let ai = std::rc::Rc::new(std::cell::RefCell::new(Vec::<bool>::new()));
+    let a = ai.clone();
+    w.global::<chatter_ui::ModalHostState>()
+        .on_channel_settings_toggle_ai(move |v| a.borrow_mut().push(v));
+
+    chatter_ui::bin_ui::features::back::push(&w, "channel-settings");
+    slint::platform::update_timers_and_animations();
+    tap_text(&w, "Notifications");
+
+    tap_text(&w, "Mute channel");
+    assert!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_muted(),
+        "tapping the Mute label did not mute"
+    );
+    assert_eq!(
+        *muted.borrow(),
+        vec![true],
+        "the Mute row tap did not reach the handler once"
+    );
+
+    tap_switch(&w, "Mute channel");
+    assert!(
+        !w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_muted(),
+        "tapping the Mute switch did not unmute"
+    );
+    assert_eq!(
+        *muted.borrow(),
+        vec![true, false],
+        "one tap on the switch fired more than one toggle (switch + row underneath)"
+    );
+
+    // Core snapping the value back (as the AI handler does on a failed save)
+    // must still reach the switch after the user has tapped it.
+    tap_text(&w, "AI assistant");
+    assert!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_ai_enabled(),
+        "tapping the AI label did not enable it"
+    );
+    assert_eq!(*ai.borrow(), vec![true]);
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_ai_enabled(false);
+    let ai_switch = testing::ElementHandle::find_by_accessible_label(&w, "AI assistant")
+        .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Switch))
+        .expect("AI switch");
+    assert_eq!(
+        ai_switch.accessible_checked(),
+        Some(false),
+        "a value set from Rust after a tap no longer reaches the switch"
+    );
+
+    // ---- App settings > Privacy: a ToggleRow outside the modal --------------
+    chatter_ui::bin_ui::features::back::close(&w, "channel-settings");
+    chatter_ui::bin_ui::features::back::push(&w, "settings");
+    tap_text(&w, "Privacy");
+    let before = w
+        .global::<chatter_ui::SettingsPane>()
+        .get_settings_read_receipts();
+    tap_text(&w, "Read receipts");
+    assert_eq!(
+        w.global::<chatter_ui::SettingsPane>()
+            .get_settings_read_receipts(),
+        !before,
+        "tapping the Read Receipts label did not flip it"
+    );
+}
+
+/// Disappearing messages: the picker's choices come from core in Signal's
+/// order, and the DM-settings row is offered for a friend only — core announces
+/// the timer over the friend DM and has no DM to announce it on otherwise.
+#[test]
+fn disappearing_picker_offers_presets_to_friends_only() {
+    use chatter_ui::DisappearingGlobal;
+    use slint::{ComponentHandle, Model};
+    let (rt, _tmp, client, w) = wired_offline();
+    let _guard = rt.enter();
+    chatter_ui::bin_ui::features::chat::disappearing::wire(&w, &client);
+
+    let g = w.global::<DisappearingGlobal>();
+    let labels: Vec<String> = g
+        .get_options()
+        .iter()
+        .map(|o| o.label.to_string())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "Off",
+            "30 seconds",
+            "5 minutes",
+            "1 hour",
+            "8 hours",
+            "1 day",
+            "1 week",
+            "4 weeks"
+        ]
+    );
+    let seconds: Vec<i32> = g.get_options().iter().map(|o| o.seconds).collect();
+    assert_eq!(
+        seconds,
+        [0, 30, 300, 3_600, 28_800, 86_400, 604_800, 2_419_200]
+    );
+
+    // No conversation open: no timer beside the header's name.
+    assert_eq!(g.get_header_label().as_str(), "");
+
+    let peer = chatter_core::domain::ids::UserId::new();
+    chatter_ui::bin_ui::features::chat::disappearing::show_for_profile(&w, &client, &peer, false);
+    assert!(
+        !g.get_dm_can_set(),
+        "a non-friend has no DM to carry a timer"
+    );
+
+    chatter_ui::bin_ui::features::chat::disappearing::show_for_profile(&w, &client, &peer, true);
+    assert!(
+        g.get_dm_can_set(),
+        "a friend's DM settings offer the picker"
+    );
+    assert_eq!(g.get_dm_seconds(), 0);
+    assert_eq!(g.get_dm_label().as_str(), "Off");
+}
+
+// ============================================================================
+// F29: channel moderation (ban / unban / mute / unmute) reaches core.
+//
+//  L1 (DYNAMIC): the members-pane callbacks run their real handlers offline
+//      without panicking (the RPCs fail with no server; the wire is what runs).
+//  L2 (STATIC): each action calls its ChatterClient method, and the Slint rows
+//      gate Ban/Mute on core's per-member permission, not on a UI-side rule.
+// ============================================================================
+#[test]
+fn channel_settings_moderation_reaches_core() {
+    no_keyring();
+    let rt = test_rt();
+    let _guard = rt.enter();
+    let _tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(_tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::modals::wire_channel_settings(&w, &client);
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_id(uuid::Uuid::new_v4().to_string().into());
+    let target: slint::SharedString = uuid::Uuid::new_v4().to_string().into();
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_channel_settings_ban_member(target.clone());
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_channel_settings_unban_member(target.clone());
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_channel_settings_set_member_muted(target.clone(), true, 0);
+    w.global::<chatter_ui::ModalHostState>()
+        .invoke_channel_settings_set_member_muted(target, false, 0);
+
+    let src = concat!(
+        include_str!("../src/bin_ui/features/modals/channel_settings/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/actions.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/invites.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/moderation.rs"),
+    );
+    for call in [
+        ".ban_user(",
+        ".unban_user(",
+        ".mute_user(",
+        ".unmute_user(",
+        ".list_banned_members(",
+    ] {
+        assert!(
+            src.contains(call),
+            "channel settings must call ChatterClient{call}"
+        );
+    }
+    let conv = include_str!("../src/bin_ui/converters/channel.rs");
+    assert!(
+        conv.contains("can_ban: m.moderation.can_ban")
+            && conv.contains("can_mute: m.moderation.can_mute"),
+        "Ban/Mute visibility must come from core's MemberModeration"
+    );
+    let slint = include_str!("../../../ui/modals/channel_members.slint");
+    let settings = include_str!("../../../ui/modals/channel_settings.slint");
+    assert!(
+        slint.contains("if member.can-ban: Button")
+            && slint.contains("if member.can-mute && member.muted: Button")
+    );
+    assert!(slint.contains("root.unban-member(banned.user-id)"));
+    assert!(settings.contains("unban-member(arg0) => { root.unban-member(arg0); }"));
+}
+
+/// UX3 (owner decisions 2026-09-26): Settings left the tab bar for the
+/// Profile tab's account menu, and the chat list's create actions moved from
+/// in-list rows to a '+' (a FAB on a phone).
+#[test]
+fn ux3_account_menu_pushes_settings_and_fab_opens_create_menu() {
+    use chatter_ui::Appearance;
+    use chatter_ui::bin_ui::features::back;
+    use slint::ComponentHandle;
+    require_element_queries();
+    let w = boot();
+    back::wire(&w);
+    w.set_current_view("main".into());
+
+    // The bar is Chats, Calls, Contacts, Profile; nothing routes to a
+    // Settings tab any more.
+    let nav = include_str!("../../../ui/components/mobile_bottom_nav.slint");
+    assert!(
+        !nav.contains(r#"tab-selected("settings")"#),
+        "Settings is back in the tab bar"
+    );
+    assert_eq!(
+        nav.matches("\n    NavTab {").count(),
+        4,
+        "the tab bar is not four tabs"
+    );
+    let app = include_str!("../../../ui/app.slint");
+    assert!(
+        !app.contains(r#"active-tab = "settings""#),
+        "something still opens Settings as a tab"
+    );
+
+    // Account menu › Settings pushes Settings over the Profile tab.
+    let opened = std::rc::Rc::new(std::cell::Cell::new(0));
+    let o = opened.clone();
+    w.global::<chatter_ui::SidebarPane>()
+        .on_settings_clicked(move || o.set(o.get() + 1));
+    w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+    w.global::<chatter_ui::SidebarPane>()
+        .set_active_tab("profile".into());
+    let settings_row = testing::ElementHandle::find_by_accessible_label(&w, "Settings")
+        .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Button))
+        .expect("the account menu has no Settings row");
+    settings_row.mock_single_click(slint::platform::PointerEventButton::Left);
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "settings",
+        "the Settings row did not push Settings"
+    );
+    assert!(w.global::<chatter_ui::ModalHostState>().get_settings_open());
+    assert_eq!(
+        opened.get(),
+        1,
+        "Settings opened without hydrating (settings-clicked)"
+    );
+    assert!(back::handle_back(&w));
+    assert_eq!(
+        (
+            w.global::<chatter_ui::SidebarPane>()
+                .get_active_tab()
+                .as_str(),
+            w.get_active_modal().as_str()
+        ),
+        ("profile", "none")
+    );
+
+    // Night mode shows the palette in force and pins the opposite one.
+    let appearance = w.global::<Appearance>();
+    appearance.set_theme("dark".into());
+    tap_switch(&w, "Night mode");
+    assert_eq!(
+        appearance.get_theme().as_str(),
+        "light",
+        "Night mode off did not pick Light"
+    );
+    tap_switch(&w, "Night mode");
+    assert_eq!(
+        appearance.get_theme().as_str(),
+        "dark",
+        "Night mode on did not pick Dark"
+    );
+
+    // Phone: the FAB is on the Chats list and opens the create menu, and is
+    // gone while anything is pushed over the list.
+    w.set_is_mobile_platform(true);
+    w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
+    w.global::<chatter_ui::SidebarPane>()
+        .set_active_tab("chats".into());
+    let fab = || {
+        testing::ElementHandle::find_by_accessible_label(&w, "Create")
+            .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Button))
+    };
+    fab()
+        .expect("no create FAB on the phone Chats list")
+        .mock_single_click(slint::platform::PointerEventButton::Left);
+    assert_eq!(w.get_active_modal().as_str(), "create-menu");
+    assert!(fab().is_none(), "the FAB stayed up over its own menu");
+    assert!(
+        testing::ElementHandle::find_by_accessible_label(&w, "New section")
+            .next()
+            .is_some(),
+        "the create menu has no New Section"
+    );
+    assert!(back::handle_back(&w));
+    assert_eq!(w.get_active_modal().as_str(), "none");
+}
+
+/// D1 / RC24 D5: a call answered from the phone's chat list raises the pane;
+/// when the call ends the phone falls back to the list — whether or not a chat
+/// was left behind the pane (opening a DM then Back leaves `channel-name` set,
+/// which is what defeated the old `channel-name == ""` guard). A call over an
+/// open chat returns to that chat. The steps below mirror `open_call_screen`
+/// (calls/incoming.rs), which is private to its module.
+#[test]
+fn phone_call_end_without_chat_returns_to_list() {
+    use slint::ComponentHandle;
+    let w = boot();
+    w.set_current_view("main".into());
+    w.set_is_mobile_platform(true);
+    w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
+    assert!(w.get_compact_layout());
+    let tick = slint::platform::update_timers_and_animations;
+    let answer = |w: &MainWindow| {
+        // `changed` handlers run on the next tick, not inside the setter.
+        w.global::<chatter_ui::CallView>()
+            .set_active_call_visible(true);
+        if !w.global::<chatter_ui::SidebarPane>().get_mobile_show_chat() {
+            w.global::<chatter_ui::CallView>()
+                .set_call_raised_pane(true);
+        }
+        w.global::<chatter_ui::SidebarPane>()
+            .set_mobile_show_chat(true);
+        tick();
+    };
+
+    // Answered from the list, no chat ever opened.
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(false);
+    tick();
+    answer(&w);
+    w.global::<chatter_ui::CallView>()
+        .set_active_call_visible(false);
+    tick();
+    assert!(
+        !w.global::<chatter_ui::SidebarPane>().get_mobile_show_chat(),
+        "call end left the phone on the empty pane"
+    );
+
+    // Opened a DM, went Back, then answered from the list.
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("Bob".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
+    tick();
+    assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
+    tick();
+    assert!(!w.global::<chatter_ui::SidebarPane>().get_mobile_show_chat());
+    answer(&w);
+    w.global::<chatter_ui::CallView>()
+        .set_active_call_visible(false);
+    tick();
+    assert!(
+        !w.global::<chatter_ui::SidebarPane>().get_mobile_show_chat(),
+        "call end opened the last DM instead of the list"
+    );
+
+    // Answered over an open chat: stays in it.
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
+    tick();
+    answer(&w);
+    w.global::<chatter_ui::CallView>()
+        .set_active_call_visible(false);
+    tick();
+    assert!(
+        w.global::<chatter_ui::SidebarPane>().get_mobile_show_chat(),
+        "call end closed the chat it was placed from"
+    );
+}
+
+/// Glass optics stay centralized and outside the scroll delegates fixed by PERF1/PERF2.
+#[test]
+fn glass_material_is_chrome_only_with_one_optical_edge() {
+    let sources = all_slint_sources();
+    let mut backdrops = Vec::new();
+    for (name, src) in &sources {
+        let code = src
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if code.contains("Backdrop {") {
+            backdrops.push(name.as_str());
+        }
+        if code.contains("Materials.glass-edge") {
+            assert_eq!(
+                name, "components/glass_surface.slint",
+                "optical edges belong only to GlassSurface"
+            );
+        }
+        if name.ends_with("_list_item.slint") || name == "chat/message_item.slint" {
+            assert!(
+                !code.contains("GlassSurface"),
+                "{name} puts glass in a scroll delegate"
+            );
+            assert!(
+                !code.contains("Backdrop"),
+                "{name} samples the backdrop while scrolling"
+            );
+            assert!(
+                !code.contains("drop-shadow-"),
+                "{name} restores a per-row shadow"
+            );
+        }
+    }
+    assert_eq!(backdrops, ["components/glass_surface.slint"]);
+    let glass = sources
+        .iter()
+        .find(|(name, _)| name == "components/glass_surface.slint")
+        .unwrap()
+        .1
+        .as_str();
+    assert!(glass.contains("Appearance.glass-effects"));
+    assert!(glass.contains("Appearance.reduce-motion"));
+    assert!(
+        !glass.contains("iteration-count"),
+        "glass must settle without an idle animation loop"
+    );
+    let modal = sources
+        .iter()
+        .find(|(name, _)| name == "components/modal_container.slint")
+        .unwrap()
+        .1
+        .as_str();
+    assert!(
+        modal.contains("material-enabled: !root.full-screen;"),
+        "full-screen content is not a glass sheet"
+    );
+}
+
+/// Chrome must sample scrolling content, with clearance inside the scroll range.
+#[test]
+fn floating_chrome_keeps_content_insets_and_clear_materials() {
+    let chat = include_str!("../../../ui/chat/chat_layout.slint");
+    let list = include_str!("../../../ui/chat/message_list.slint");
+    let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
+    let app = include_str!("../../../ui/app.slint");
+    let material = include_str!("../../../ui/theme/materials.slint");
+    let nav = include_str!("../../../ui/components/mobile_bottom_nav.slint");
+    assert!(
+        chat.find("message-list := MessageList").unwrap()
+            < chat.find("top-chrome := VerticalLayout").unwrap()
+    );
+    assert!(
+        chat.contains("top-inset: top-chrome.height;")
+            && chat.contains("bottom-inset: bottom-chrome.height + composer.list-clearance-extra")
+    );
+    assert!(chat.contains("y: root.height - self.height - root.drawer-occupied-height;"));
+    assert!(list.contains("padding-top: idx == 0 ? root.top-inset + Spacing.md : Spacing.none;"));
+    assert!(list.contains("? root.bottom-inset + Spacing.md + Spacing.touch-target-min"));
+    assert!(list.contains("(self.viewport-height - root.bottom-inset) + self.viewport-y"));
+    assert!(
+        list.contains("changed bottom-inset =>")
+            && list.contains("root.is-at-bottom && !root.scrolling && root.jump-row < 0")
+    );
+    assert!(list.contains("y: root.height - root.bottom-inset - 60px;"));
+    assert!(
+        sidebar.find("Flickable {").unwrap()
+            < sidebar.find("if !root.collapsed: GlassSurface {").unwrap()
+    );
+    assert!(sidebar.contains("root.bottom-inset + Spacing.fab-size"));
+    assert!(!app.contains("// Space held for the bottom tab bar."));
+    for src in [
+        include_str!("../../../ui/modals/friends.slint"),
+        include_str!("../../../ui/calls/call_history_screen.slint"),
+    ] {
+        assert!(src.contains("floating-content: root.mobile-mode;"));
+        assert!(src.contains(
+            "padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;"
+        ));
+    }
+    // Calls reserves space for its confirmation footer. Its actual floating
+    // viewport and footer hit isolation are checked by ui_calls_menu; an
+    // unconditional full-height source rule would require the native overlap.
+    assert!(
+        include_str!("../../../ui/modals/friends.slint")
+            .contains("height: root.mobile-mode ? root.height : parent.height;")
+    );
+    assert!(material.contains("Appearance.glass-effects"));
+    assert!(material.contains("blur-regular:") && material.contains("blur-thick:"));
+    assert!(material.contains("<physical-length> glass-edge-width:"));
+    assert!(
+        nav.contains("background: Colors.text-primary.with-alpha(Appearance.dark ? 0.17 : 0.11);")
+    );
+}
+
+/// DESIGN3: the row wrappers are just as important as the leaf delegates.
+#[test]
+fn repeated_chat_rows_never_sample_glass() {
+    for (name, src) in all_slint_sources() {
+        if name.ends_with("_list_item.slint")
+            || matches!(
+                name.as_str(),
+                "chat/message_item.slint"
+                    | "sidebar/chat_list.slint"
+                    | "sidebar/custom_section_list.slint"
+            )
+        {
+            let code = src
+                .lines()
+                .map(|line| line.split("//").next().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for forbidden in ["GlassSurface", "Backdrop", "drop-shadow-"] {
+                assert!(
+                    !code.contains(forbidden),
+                    "{name} adds {forbidden} to a repeated row"
+                );
+            }
+        }
+    }
+}
+
+/// Inline GIFs animate only on the rows the list has on screen: the list
+/// reports its range up the alias chain and the GIF tick walks only that.
+#[test]
+fn inline_gifs_animate_only_visible_rows() {
+    let list = include_str!("../../../ui/chat/message_list.slint");
+    assert!(list.contains("let first = root.seen-top;"));
+    assert!(list.contains("let last = Math.min(self.bottom-row(), root.messages.length - 1);"));
+    assert!(list.contains("root.first-visible-row = first;"));
+    assert!(list.contains("root.last-visible-row = last;"));
+    let layout = include_str!("../../../ui/chat/chat_layout.slint");
+    assert!(layout.contains("last-visible-row <=> root.message-last-visible-row;"));
+    let app = include_str!("../../../ui/chat/app_conversation_layout.slint");
+    assert!(app.contains("message-last-visible-row <=> root.message-last-visible-row;"));
+    let gifs = include_str!("../src/bin_ui/gif_state/inline.rs");
+    assert!(
+        gifs.contains("for msg_idx in rows {"),
+        "the tick must walk only the visible rows"
+    );
+    assert!(
+        gifs.contains("fn rows_to_animate("),
+        "the range (and its -1 sentinel) is unit-tested there"
+    );
+    // A conversation that starts loading has no rows on screen yet.
+    assert!(squash(list).contains("root.first-visible-row = 0; root.last-visible-row = -1;"));
+    assert!(
+        !gifs.contains("for msg_idx in 0..msg_count"),
+        "a whole-model scan per tick is back"
+    );
+}
+
+/// Chrome over the message list stops re-blurring the moving rows every frame
+/// while the list scrolls, and keeps its at-rest material unchanged.
+#[test]
+fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
+    let glass = squash(include_str!("../../../ui/components/glass_surface.slint"));
+    // Neutral values at 0 (no backdrop layer), the designed values at 1.
+    assert!(glass.contains("property <float> sampling: root.backdrop-paused ? 0 : 1;"));
+    assert!(glass.contains(": Materials.blur-regular) : 0px) * root.sampling;"));
+    assert!(glass.contains("saturation: 1.0 + ((Appearance.glass-effects ? Materials.saturation : 1.0) - 1.0) * root.sampling;"));
+    assert!(glass.contains(
+        "refraction: (Appearance.glass-effects ? Materials.refraction : 0.0) * root.sampling;"
+    ));
+    // Stops at once, fades back in at rest (no pop), honours reduce-motion.
+    assert!(
+        glass.contains("duration: root.backdrop-paused || Appearance.reduce-motion ? 0ms : 160ms;")
+    );
+    let list = include_str!("../../../ui/chat/message_list.slint");
+    assert!(list.contains("out property <bool> scrolling: false;"));
+    assert!(
+        list.contains("backdrop-paused: root.scrolling;"),
+        "jump pill"
+    );
+    let layout = include_str!("../../../ui/chat/chat_layout.slint");
+    assert_eq!(
+        layout
+            .matches("backdrop-paused: message-list.scrolling;")
+            .count(),
+        4,
+        "header, pinned bar, composer notice and composer"
+    );
+    let header = include_str!("../../../ui/chat/chat_header.slint");
+    assert_eq!(
+        header.matches("HeaderButton {").count(),
+        header
+            .matches("backdrop-paused: root.backdrop-paused;")
+            .count(),
+        "every header button samples the header's backdrop too"
+    );
+    // The selection bar replaces the header over the same list, from the window root.
+    assert!(layout.contains("out property <bool> list-scrolling: message-list.scrolling;"));
+    let app = include_str!("../../../ui/chat/app_conversation_layout.slint");
+    assert!(
+        app.contains(
+            "changed list-scrolling => { root.chat-list-scrolling = self.list-scrolling; }"
+        )
+    );
+    let shell = include_str!("../../../ui/main_chat_shell.slint");
+    assert!(
+        shell.contains("backdrop-paused: ChatPane.chat-list-scrolling;"),
+        "selection bar"
+    );
+    let bar = include_str!("../../../ui/chat/selection_bar.slint");
+    assert_eq!(
+        bar.matches("HeaderButton {").count(),
+        bar.matches("backdrop-paused: root.backdrop-paused;")
+            .count(),
+        "every selection-bar button pauses with the bar"
+    );
+    let composer = include_str!("../../../ui/chat/message_composer.slint");
+    // Raised composer surfaces also sample the backdrop. Verify each element
+    // directly so adding a surface cannot mask a missing recording-button binding.
+    for marker in ["HeaderButton {", "GlassSurface {"] {
+        let elements: Vec<_> = composer.match_indices(marker).collect();
+        assert!(!elements.is_empty(), "composer must exercise {marker}");
+        for (pos, _) in elements {
+            let element = block_around(composer, pos + marker.len(), 1);
+            assert!(
+                element.contains("backdrop-paused: root.backdrop-paused;"),
+                "composer {marker} at {pos} must pause with the composer"
+            );
+        }
+    }
+}
+
+/// The sidebar's typing dots fade through their background's alpha. An
+/// `opacity` binding becomes an Opacity item that Slint renders even when it
+/// is clipped away, so a row scrolled out of the sidebar kept the infinite
+/// animation, and a frame every vsync, running.
+#[test]
+fn typing_dots_animate_only_while_drawn() {
+    for (name, src) in [
+        (
+            "channel",
+            include_str!("../../../ui/sidebar/channel_list_item.slint"),
+        ),
+        ("dm", include_str!("../../../ui/sidebar/dm_list_item.slint")),
+        (
+            "private group",
+            include_str!("../../../ui/sidebar/private_group_list_item.slint"),
+        ),
+    ] {
+        assert!(
+            !src.contains("opacity: root.dot-opacity("),
+            "{name} row fades its dots with opacity again"
+        );
+        assert_eq!(
+            src.matches(".with-alpha(root.dot-opacity(").count(),
+            3,
+            "{name} row"
+        );
+    }
+}
+
+#[test]
+fn fine_glass_rim_preserves_shared_childless_material() {
+    let materials = include_str!("../../../ui/theme/materials.slint");
+    let glass = include_str!("../../../ui/components/glass_surface.slint");
+    assert!(
+        materials.contains("<physical-length> glass-edge-width: 1phx;"),
+        "rim must stay one physical pixel at every DPI"
+    );
+    let rim = materials
+        .split("<brush> glass-edge:")
+        .nth(1)
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    assert!(
+        rim.contains("Appearance.dark"),
+        "rim must adapt to the theme"
+    );
+    assert!(
+        rim.contains("#ffffff00"),
+        "rim must fade away between its highlights"
+    );
+    assert!(!materials.contains("inner-edge") && !glass.contains("inner-edge"));
+    assert_eq!(
+        glass.matches("border-width:").count(),
+        1,
+        "a second stroke makes the rim look thick"
+    );
+    let private = glass.split("export component GlassSurface").next().unwrap();
+    assert!(private.contains("component GlassMaterial inherits Rectangle"));
+    assert!(
+        !private.lines().any(|line| line.trim() == "@children"),
+        "MEM1: material must remain childless"
+    );
+    assert!(squash(glass).contains("GlassMaterial { x: 0; y: 0;"));
+}
+
+#[test]
+fn secondary_chrome_exposes_its_shared_material() {
+    let pinned = include_str!("../../../ui/chat/pinned_bar.slint");
+    assert!(pinned.contains("inherits GlassSurface"));
+    assert!(!pinned.contains("drop-shadow-"));
+    for src in [
+        include_str!("../../../ui/components/emoji_picker.slint"),
+        include_str!("../../../ui/components/gif_picker.slint"),
+        include_str!("../../../ui/chat/message_composer.slint"),
+    ] {
+        assert!(
+            !src.contains("background: Colors.background;"),
+            "opaque chrome masks its glass shell"
+        );
+    }
+    let reaction = include_str!("../../../ui/chat/reaction_picker.slint");
+    assert!(
+        reaction.contains("material-enabled: false;"),
+        "embedded emoji picker must not stack glass"
+    );
+    let list = include_str!("../../../ui/chat/message_list.slint");
+    assert_eq!(
+        list.matches("GlassSurface {").count(),
+        1,
+        "only the jump capsule floats over the list"
+    );
+    // The date and unread chips, and the history-retry notice that reuses
+    // the unread chip (41464d63), are a plain tinted fill, never a backdrop
+    // sample per row (glass_surface.slint:1).
+    assert_eq!(
+        list.matches("background: Materials.regular;").count(),
+        3,
+        "date, unread and history-retry chips"
+    );
+    assert!(!list.contains("Colors.action-fill.with-alpha(0.97)"));
+    let profile = include_str!("../../../ui/modals/user_profile.slint");
+    assert!(profile.contains("height: parent.height - self.y;"));
+    assert!(profile.contains(
+        "padding-top: root.mobile-mode ? profile-header.height + Spacing.sm * 2 : Spacing.none;"
+    ));
+    let account = include_str!("../../../ui/settings/account_menu.slint");
+    assert!(account.contains("floating-content: root.mobile-mode;"));
+    assert!(account.contains("y: root.mobile-mode ? -menu-body.chrome-inset : 0px;"));
+    assert!(
+        !account.contains("absolute-position"),
+        "content-sized menus must not derive their padding from their own layout position"
+    );
+}
+
+/// `src` with every whitespace run collapsed to one space, so a source pin
+/// survives reindentation and rewrapping.
+fn squash(src: &str) -> String {
+    src.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+// POLISH1: keep layout rhythm and ordinary controls in the shared primitives.
+// These are source checks so they also cover screens absent from the headless
+// fixture, without needing every account/channel/call state to be constructed.
+fn raw_layout_spacing(src: &str) -> Vec<String> {
+    let code = src
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut findings = Vec::new();
+    for (at, _) in code.match_indices(':') {
+        let property = code[..at]
+            .trim_end()
+            .rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .next()
+            .unwrap_or("");
+        if !matches!(
+            property,
+            "spacing"
+                | "padding"
+                | "padding-left"
+                | "padding-right"
+                | "padding-top"
+                | "padding-bottom"
+        ) {
+            continue;
+        }
+        let value = code[at + 1..].split(';').next().unwrap_or("");
+        if value
+            .match_indices("px")
+            .any(|(i, _)| i > 0 && value.as_bytes()[i - 1].is_ascii_digit())
+        {
+            findings.push(format!("{property}: {}", value.trim()));
+        }
+    }
+    findings
+}
+
+#[test]
+fn screen_layout_spacing_uses_tokens() {
+    assert!(
+        !raw_layout_spacing("HorizontalLayout { spacing: 6px; padding-left: wide ? 8px : 0px; }")
+            .is_empty()
+    );
+    assert!(
+        raw_layout_spacing("// spacing: 8px;\nspacing: Spacing.sm; letter-spacing: 1px;")
+            .is_empty()
+    );
+    let mut findings = Vec::new();
+    for (name, src) in all_slint_sources() {
+        if name.starts_with("theme/") {
+            continue;
+        }
+        for property in raw_layout_spacing(&src) {
+            findings.push(format!("ui/{name}: {property}"));
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "Layout spacing must use Spacing tokens:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn screens_do_not_define_private_button_families() {
+    let mut findings = Vec::new();
+    for (name, src) in all_slint_sources() {
+        if name.starts_with("components/") || name.starts_with("theme/") {
+            continue;
+        }
+        let code = src
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let words: Vec<_> = code.split_whitespace().collect();
+        for pair in words.windows(2) {
+            if pair[0] == "component" && pair[1].ends_with("Button") {
+                findings.push(format!(
+                    "ui/{name}: private {} — use Button, HeaderButton or IconAction",
+                    pair[1]
+                ));
+            }
+        }
+        for import in code
+            .split(';')
+            .filter(|part| part.contains("std-widgets.slint"))
+        {
+            if import
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .any(|word| word == "Button")
+            {
+                findings.push(format!(
+                    "ui/{name}: platform Button bypasses the shared family"
+                ));
+            }
+        }
+    }
+    assert!(findings.is_empty(), "{}", findings.join("\n"));
+}
+
+#[test]
+fn polish_shared_controls_and_rc28_regressions() {
+    let sources = all_slint_sources();
+    let source = |name: &str| {
+        sources
+            .iter()
+            .find(|(path, _)| path == name)
+            .unwrap()
+            .1
+            .as_str()
+    };
+    let button = source("components/button.slint");
+    assert!(button.contains("pressed: touch.pressed && !root.disabled && !root.loading"));
+    assert!(
+        button.contains("root.touch ? max(Spacing.touch-target-min")
+            && button.contains("root.size == \"small\" ? 36px")
+            && button.contains("Spacing.radius-md")
+            && button.contains("root.variant == \"icon\" ? self.height / 2")
+    );
+    assert!(button.contains("overflow: elide;") && button.contains("accessible-action-default"));
+    let toggle = source("components/toggle.slint");
+    assert!(
+        toggle.contains("height: Spacing.button-height;")
+            && toggle.contains("background: Colors.on-action;")
+    );
+    let icons = source("components/icon_action.slint");
+    assert!(
+        icons.contains("max(Spacing.button-height, root.size)")
+            && icons.contains("enabled: root.enabled;")
+    );
+    let checkbox = source("components/checkbox.slint");
+    assert!(
+        checkbox.contains("width: Spacing.button-height;")
+            && checkbox.contains("height: Spacing.button-height;")
+    );
+    assert!(
+        source("components/emoji_picker.slint")
+            .contains("viewport-width: categories.preferred-width;")
+    );
+    let picker = source("chat/reaction_picker.slint");
+    assert!(picker.contains("max-picker-width: picker-shell.width;"));
+    // The quick row is taller on touch (9d055847); the picker gets the rest.
+    assert!(picker.contains(
+        "max-picker-height: max(0px, picker-shell.height - root.quick-row-height - Spacing.stroke);"
+    ));
+    // D3 and the notification-inbox portion of D9 were already migrated to
+    // the shared shell before this pass; protect the title and that route.
+    assert!(source("settings/account_menu.slint").contains("title: \"Profile\";"));
+    assert!(source("server_records/screen.slint").contains("Modal {"));
+    assert!(source("components/modal.slint").contains("title: root.title;"));
+    // D4: a modal scrim must sort above the conversation's floating controls.
+    assert!(source("chat/message_context_menu.slint").contains("z: 10;"));
+    // D6: the narrow DM column must retain the word that conveys the status.
+    assert!(
+        source("chat/chat_header.slint")
+            .contains("root.mobile && root.is-dm ? \"Typing…\" : root.typing-indicator")
+    );
+    // D7: both cut edges are faded, and tabs share the ordinary Button family.
+    let settings = source("settings/settings_screen.slint");
+    assert!(settings.contains("if tabs.viewport-x < 0px: Rectangle"));
+    assert!(settings.contains("if tabs.viewport-width + tabs.viewport-x > tabs.width: Rectangle"));
+    // The open tab is the neutral pill every tab bar uses, not the action fill.
+    assert!(
+        settings.contains("variant: root.active-section == item.id ? \"secondary\" : \"ghost\";")
+    );
+}
+
+/// D10: every call entry point delegates duration to the core connected clock.
+#[test]
+fn call_duration_uses_core_connection_time() {
+    let timers = include_str!("../src/bin_ui/features/calls/timers.rs");
+    assert!(timers.contains("ui_ctx.call_room_snapshot().await"));
+    assert!(timers.contains("call.duration_seconds()"));
+    assert!(!timers.contains("SystemTime") && !timers.contains("started_at_ns"));
+    assert!(
+        timers.contains("stop.load(Ordering::Relaxed)"),
+        "a late snapshot must not restart a stopped timer"
+    );
+    for source in [
+        include_str!("../src/bin_ui/features/calls/outgoing.rs"),
+        include_str!("../src/bin_ui/features/calls/incoming.rs"),
+        include_str!("../src/bin_ui/features/calls/key_exchange.rs"),
+    ] {
+        assert!(source.contains("start_call_timer(&w, ui_ctx.clone())"));
+        assert!(
+            !source.contains("start_call_timer(&w, Some(")
+                && !source.contains("start_call_timer(&w, None)")
+        );
+    }
+    let active = include_str!("../src/bin_ui/features/calls/active.rs");
+    assert!(
+        active.contains("ctx.end_active_call().await"),
+        "hangup duration must also come from core"
+    );
+    let worker = [
+        include_str!("../../chatter-core/src/services/call_worker/lifecycle.rs"),
+        include_str!("../../chatter-core/src/services/call_worker/actor.rs"),
+    ]
+    .concat();
+    assert!(
+        squash(&worker).contains("if encryption_root_key == &[0u8; 32] { call.ring();"),
+        "a DM room alone is not an answered call"
+    );
+    assert!(
+        worker.contains("derive_call_handle(state) == call && state.call.connected_at.is_none()"),
+        "only the matching first answer starts the core clock"
+    );
+}
+
+/// Owner decision 2026-10-04: a Shield toggle on the sign-in and create-account
+/// screens, so an account can be made and used over the onion service without
+/// the server ever seeing the device's IP. It must be the chat list's Shield
+/// control (HeaderButton + shield glyph), disabled where the build cannot
+/// route over Tor, and must reach core's fail-closed `set_shield_before_login`.
+#[test]
+fn shield_toggle_on_sign_in_and_create_account() {
+    use slint::ComponentHandle;
+    use std::{cell::Cell, rc::Rc};
+
+    for (page, src) in [
+        ("login", include_str!("../../../ui/pages/login.slint")),
+        ("register", include_str!("../../../ui/pages/register.slint")),
+        (
+            "link-device",
+            include_str!("../../../ui/pages/link_device.slint"),
+        ),
+    ] {
+        assert!(
+            src.contains("ShieldOnboardingToggle {"),
+            "the {page} page lost its Shield toggle"
+        );
+    }
+    let toggle = include_str!("../../../ui/anon_mode/shield_onboarding.slint");
+    assert!(
+        toggle.contains("HeaderButton {") && toggle.contains("icon: Icons.shield;"),
+        "the sign-in Shield must reuse the chat-list Shield control"
+    );
+    let glue = include_str!("../src/bin_ui/features/auth/shield.rs");
+    assert!(glue.contains("set_shield_available(ui_ctx.shield_available())"));
+    assert!(glue.contains("ui_ctx.set_shield_before_login("));
+
+    require_element_queries();
+    let w = boot();
+    let hits = Rc::new(Cell::new(0));
+    let counter = hits.clone();
+    w.global::<AnonMode>()
+        .on_toggle_before_login(move || counter.set(counter.get() + 1));
+
+    for view in ["login", "register", "link-device"] {
+        w.set_current_view(view.into());
+        // No onion service in the build: offered, but disabled.
+        w.global::<AnonMode>().set_shield_available(false);
+        let off = testing::ElementHandle::find_by_accessible_label(
+            &w,
+            "Shield unavailable: this build has no Tor onion service",
+        )
+        .next()
+        .unwrap_or_else(|| panic!("no Shield control on the {view} screen"));
+        let before = hits.get();
+        off.invoke_accessible_default_action();
+        assert_eq!(
+            hits.get(),
+            before,
+            "a disabled Shield must not toggle ({view})"
+        );
+
+        w.global::<AnonMode>().set_shield_available(true);
+        testing::ElementHandle::find_by_accessible_label(
+            &w,
+            "Shield off - tap to connect over Tor",
+        )
+        .next()
+        .unwrap_or_else(|| panic!("Shield not offered on the {view} screen"))
+        .invoke_accessible_default_action();
+        assert_eq!(
+            hits.get(),
+            before + 1,
+            "the {view} Shield did not reach the toggle callback"
+        );
+    }
+}
+
+/// Owner, 2026-10-05: "Remove the video-call button from the header and put it
+/// in the ⋯ menu." Voice call stays in the row; ⋯ opens a menu holding Video
+/// call (and Conversation settings where the conversation has them), and its
+/// Video call row starts the same call the header button used to.
+#[test]
+fn video_call_lives_in_the_header_more_menu() {
+    use chatter_ui::ConversationKind;
+    use chatter_ui::bin_ui::features::back;
+    use slint::ComponentHandle;
+    require_element_queries();
+
+    let header = include_str!("../../../ui/chat/chat_header.slint");
+    assert!(
+        !header.contains("Icons.video"),
+        "the header row draws a video-call button again"
+    );
+    assert!(
+        !header.contains("video-call-clicked"),
+        "the header still emits video-call-clicked"
+    );
+
+    let w = boot();
+    back::wire(&w);
+    let started = std::rc::Rc::new(std::cell::Cell::new(0));
+    let s = started.clone();
+    w.global::<chatter_ui::ChatPane>()
+        .on_start_video_call(move || s.set(s.get() + 1));
+    let opened_settings = std::rc::Rc::new(std::cell::Cell::new(0));
+    let o = opened_settings.clone();
+    w.global::<chatter_ui::ChatPane>()
+        .on_chat_settings_clicked(move || o.set(o.get() + 1));
+    w.set_current_view("main".into());
+
+    let button = |w: &MainWindow, label: &str| {
+        testing::ElementHandle::find_by_accessible_label(w, label)
+            .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Button))
+    };
+    let click = |w: &MainWindow, label: &str| {
+        button(w, label)
+            .unwrap_or_else(|| panic!("no {label:?} button"))
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+    };
+
+    // Phone DM and two-pane channel keep Voice call in the row and Video
+    // call only behind ⋯. Secret chats (anon group, anon DM) have no calls
+    // at all (owner decision 2026-10-10): neither the row nor the menu.
+    for (phone, kind, name, settings_row, calls) in [
+        (true, ConversationKind::ServerDm, "Bob", true, true),
+        (false, ConversationKind::Channel, "general", true, true),
+        (false, ConversationKind::AnonGroup, "Group", true, false),
+        (true, ConversationKind::AnonDm, "Anon", false, false),
+    ] {
+        w.set_is_mobile_platform(phone);
+        w.window().set_size(if phone {
+            slint::LogicalSize::new(400.0, 800.0)
+        } else {
+            slint::LogicalSize::new(1000.0, 800.0)
+        });
+        w.global::<chatter_ui::ChatPane>()
+            .set_conversation_kind(kind);
+        w.global::<chatter_ui::ChatPane>()
+            .set_channel_name(name.into());
+        w.global::<chatter_ui::SidebarPane>()
+            .set_mobile_show_chat(true);
+        slint::platform::update_timers_and_animations();
+
+        assert_eq!(
+            button(&w, "Voice call").is_some(),
+            calls,
+            "{kind:?}: Voice call in the header"
+        );
+        assert!(
+            button(&w, "Video call").is_none(),
+            "{kind:?}: video call is still in the header row"
+        );
+        click(&w, "More options");
+        assert_eq!(
+            w.get_active_modal().as_str(),
+            "chat-menu",
+            "{kind:?}: ⋯ did not open the menu"
+        );
+        assert_eq!(
+            button(&w, "Conversation settings").is_some(),
+            settings_row,
+            "{kind:?}: Conversation settings row"
+        );
+        if calls {
+            let before = started.get();
+            click(&w, "Video call");
+            assert_eq!(
+                started.get(),
+                before + 1,
+                "{kind:?}: the menu's Video call did not start a video call"
+            );
+            assert_eq!(
+                w.get_active_modal().as_str(),
+                "none",
+                "{kind:?}: the menu stayed open over the call"
+            );
+        } else {
+            assert!(
+                button(&w, "Video call").is_none(),
+                "{kind:?}: a secret chat offers a video call"
+            );
+            w.global::<chatter_ui::ModalHostState>()
+                .set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<
+                    slint::SharedString,
+                >::new(
+                ))));
+        }
+
+        if settings_row {
+            click(&w, "More options");
+            let before = opened_settings.get();
+            click(&w, "Conversation settings");
+            assert_eq!(
+                opened_settings.get(),
+                before + 1,
+                "{kind:?}: settings row did nothing"
+            );
+            w.global::<chatter_ui::ModalHostState>()
+                .set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<
+                    slint::SharedString,
+                >::new(
+                ))));
+        }
+
+        // Back closes the menu like any other layer.
+        click(&w, "More options");
+        assert!(back::handle_back(&w));
+        assert_eq!(w.get_active_modal().as_str(), "none");
+    }
+}
+
+/// The call view and compact return banner agree on actual connection state,
+/// including an answered call at 0:00 and a pre-populated ringing roster.
+#[test]
+fn call_banners_use_connection_state_instead_of_roster_or_duration() {
+    use slint::ComponentHandle;
+    require_element_queries();
+    let w = boot();
+    w.set_current_view("main".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("Call test".into());
+    w.global::<chatter_ui::CallView>()
+        .set_active_call_visible(true);
+    w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+    let mut data = w.global::<chatter_ui::CallView>().get_active_call_data();
+    data.call_id = "test-call".into();
+    data.title = "Call test".into();
+    data.participant_count = 3;
+    data.is_connected = false;
+    w.global::<chatter_ui::CallView>()
+        .set_active_call_data(data.clone());
+    for fullscreen in [true, false] {
+        w.global::<chatter_ui::SidebarPane>()
+            .set_active_tab(if fullscreen { "chats" } else { "calls" }.into());
+        w.global::<chatter_ui::CallView>()
+            .set_active_call_fullscreen(fullscreen);
+        slint::platform::update_timers_and_animations();
+        assert!(
+            testing::ElementHandle::find_by_accessible_label(&w, "Calling…")
+                .next()
+                .is_some(),
+            "ringing roster must not imply an answered call (fullscreen={fullscreen})"
+        );
+    }
+    data.participant_count = 1;
+    data.is_connected = true;
+    data.duration_seconds = 0;
+    w.global::<chatter_ui::CallView>()
+        .set_active_call_data(data);
+    for fullscreen in [true, false] {
+        w.global::<chatter_ui::SidebarPane>()
+            .set_active_tab(if fullscreen { "chats" } else { "calls" }.into());
+        w.global::<chatter_ui::CallView>()
+            .set_active_call_fullscreen(fullscreen);
+        slint::platform::update_timers_and_animations();
+        assert!(
+            testing::ElementHandle::find_by_accessible_label(&w, "Calling…")
+                .next()
+                .is_none()
+        );
+        assert!(
+            testing::ElementHandle::find_by_accessible_label(&w, "0:00")
+                .next()
+                .is_some(),
+            "connected zero-second call must show its clock (fullscreen={fullscreen})"
+        );
+    }
+}
+
+// ── Composer IME composition across conversation switches ─────────────────
+
+/// The persistent no-keyring marker beside the database a client in `dir`
+/// will open, written before it is built: the opt-out holds even without the
+/// environment overrides.
+fn headless_dir(dir: &std::path::Path) {
+    let db = chatter_core::system::Directories::with_base_dir(dir.to_path_buf())
+        .expect("test directories")
+        .database_path();
+    std::fs::write(
+        db.parent()
+            .unwrap()
+            .join(chatter_core::system::keyring::NO_KEYRING_MARKER),
+        b"",
+    )
+    .expect("write no-keyring marker");
+}
+
+/// A real chat window with a client for the draft store, the composer focused
+/// by a click and holding `typed` with the caret `left` characters from the end.
+fn composer_with_caret(
+    typed: &str,
+    left: usize,
+) -> (
+    tempfile::TempDir,
+    std::sync::Arc<chatter_core::client::ChatterClient>,
+    MainWindow,
+) {
+    use slint::ComponentHandle;
+    no_keyring();
+    let _guard = test_rt().enter();
+    let tmp = tempfile::tempdir().unwrap();
+    headless_dir(tmp.path());
+    let w = boot();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    chatter_ui::bin_ui::features::composer::wire_text_format(&w);
+    w.set_current_view("main".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("A".into());
+    w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+    let input = testing::ElementHandle::find_by_accessible_label(&w, "Message input")
+        .next()
+        .expect("the composer's text input is not in the tree");
+    let at = input.absolute_position();
+    let size = input.size();
+    let position = slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+    let button = slint::platform::PointerEventButton::Left;
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+    for ch in typed.chars() {
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: ch.to_string().into(),
+            });
+    }
+    for _ in 0..left {
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::LeftArrow.into(),
+            });
+    }
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        typed,
+        "precondition: the composer took the keys"
+    );
+    (tmp, client, w)
+}
+
+/// What an input method sends: a composition (`commit: false`) or its commit.
+fn ime(w: &MainWindow, text: &str, commit: bool) {
+    ime_unpumped(w, text, commit);
+    // Between two input events the loop runs change handlers; the mirror the
+    // settle reads is one of them.
+    slint::platform::update_timers_and_animations();
+}
+
+/// The event alone, with no loop iteration after it.
+fn ime_unpumped(w: &MainWindow, text: &str, commit: bool) {
+    use i_slint_core::input::{InternalKeyEvent, KeyEventType};
+    use slint::ComponentHandle;
+    let mut event = InternalKeyEvent::default();
+    if commit {
+        event.event_type = KeyEventType::CommitComposition;
+        event.key_event.text = text.into();
+    } else {
+        event.event_type = KeyEventType::UpdateComposition;
+        event.preedit_text = text.into();
+    }
+    i_slint_core::window::WindowInner::from_pub(w.window()).process_key_input(event);
+}
+
+/// Switching conversation mid-composition parked the draft WITHOUT the word
+/// being composed (`TextInput.text` excludes it), and the input method later
+/// committed that word into the conversation switched TO. The word is spliced
+/// in at the caret's byte offset — multi-byte text before it — and the draft
+/// parked under the conversation it was typed in.
+#[test]
+fn switching_conversation_mid_composition_keeps_the_word_in_its_own_draft() {
+    let (_tmp, client, w) = composer_with_caret("hélo", 1);
+    ime(&w, "ö", false);
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "hélo",
+        "precondition: the preedit is not text yet"
+    );
+
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "",
+        "B starts empty"
+    );
+
+    // The input method finishes the word it was composing. The composition
+    // was ended with the switch, so this must land nowhere — above all not
+    // in B's draft.
+    ime(&w, "ö", true);
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "",
+        "the old composition was committed into B"
+    );
+
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "hélöo",
+        "A's draft must hold the composed word at the caret, exactly once"
+    );
+}
+
+/// No composition: a switch takes no focus and parks the text as typed.
+#[test]
+fn switching_conversation_without_a_composition_leaves_focus_alone() {
+    let (_tmp, client, w) = composer_with_caret("hi", 0);
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
+    {
+        use slint::ComponentHandle;
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
+    }
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "x",
+        "the composer lost focus on a plain switch"
+    );
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "hi"
+    );
+}
+
+/// The chat pane is an `if`: leaving it (a fullscreen call, a phone's Back)
+/// destroys the focused TextInput, and Slint sends a dying item no FocusOut,
+/// so its preedit vanished. The remounted layout settles what its
+/// predecessor was composing into the same conversation's text.
+#[test]
+fn a_composition_survives_the_chat_pane_being_destroyed() {
+    let (_tmp, _client, w) = composer_with_caret("ab", 1);
+    ime(&w, "X", false);
+    w.global::<chatter_ui::CallView>()
+        .set_active_call_fullscreen(true);
+    assert!(
+        testing::ElementHandle::find_by_accessible_label(&w, "Message input")
+            .next()
+            .is_none(),
+        "precondition: a fullscreen call unmounts the chat pane"
+    );
+    w.global::<chatter_ui::CallView>()
+        .set_active_call_fullscreen(false);
+    assert!(
+        testing::ElementHandle::find_by_accessible_label(&w, "Message input")
+            .next()
+            .is_some()
+    );
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "aXb",
+        "the composition died with the pane"
+    );
+    // Settled once: another remount must not insert it again.
+    w.global::<chatter_ui::CallView>()
+        .set_active_call_fullscreen(true);
+    testing::ElementHandle::find_by_accessible_label(&w, "Message input").next();
+    w.global::<chatter_ui::CallView>()
+        .set_active_call_fullscreen(false);
+    testing::ElementHandle::find_by_accessible_label(&w, "Message input").next();
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "aXb"
+    );
+}
+
+// ── GIF send bound to the conversation and composer it was picked in ──────
+
+struct GifHarness {
+    _tmp: tempfile::TempDir,
+    client: std::sync::Arc<chatter_core::client::ChatterClient>,
+    w: MainWindow,
+    a: chatter_core::domain::ids::ChannelId,
+    b: chatter_core::domain::ids::ChannelId,
+}
+
+impl GifHarness {
+    fn new() -> Self {
+        no_keyring();
+        let _guard = test_rt().enter();
+        let tmp = tempfile::tempdir().unwrap();
+        headless_dir(tmp.path());
+        let w = boot();
+        let client = chatter_core::client::ChatterClient::builder()
+            .data_dir(tmp.path().to_string_lossy().to_string())
+            .build()
+            .expect("offline ChatterClient::build");
+        // Durable send admission keys attempts by the authenticated user.
+        // This is in-memory fixture identity only; no login or connection occurs.
+        client.testing_set_logged_in(
+            chatter_core::domain::ids::UserId::new(),
+            1,
+            "GIF fixture".into(),
+        );
+        chatter_ui::bin_ui::features::composer::wire_text_format(&w);
+        let h = Self {
+            _tmp: tmp,
+            client,
+            w,
+            a: chatter_core::domain::ids::ChannelId::new(),
+            b: chatter_core::domain::ids::ChannelId::new(),
+        };
+        h.client
+            .select_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
+        chatter_ui::bin_ui::features::composer::switch_composer_draft(
+            &h.w,
+            &h.client,
+            "",
+            &h.a.to_string(),
+        );
+        h
+    }
+
+    /// Navigate the way the app does: core state first, then the draft swap.
+    fn open(&self, to: chatter_core::domain::ids::ChannelId) {
+        let from = match self.client.active_conversation() {
+            chatter_core::state::ActiveConversation::Channel(id) => id,
+            _ => unreachable!(),
+        };
+        self.client
+            .select_conversation(chatter_core::state::ActiveConversation::Channel(to));
+        chatter_ui::bin_ui::features::composer::switch_composer_draft(
+            &self.w,
+            &self.client,
+            &from.to_string(),
+            &to.to_string(),
+        );
+    }
+
+    fn stage(&self, name: &str) {
+        let snapshot = self.client.chat_snapshot();
+        self.client.add_pending_attachment_for(
+            snapshot.active_conversation,
+            snapshot.attachment_revision,
+            chatter_core::state::PendingAttachment::new(
+                chatter_core::domain::ids::AttachmentId::new(),
+                name.into(),
+                self._tmp.path().join("missing-staged-file").join(name),
+                1,
+                "image/png".into(),
+            ),
+        );
+    }
+
+    fn staged(&self) -> Vec<String> {
+        self.client
+            .pending_attachments()
+            .into_iter()
+            .map(|a| a.filename)
+            .collect()
+    }
+
+    /// Pick a GIF now; its upload resolves when the returned sender fires.
+    fn pick(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Sender<Result<chatter_core::state::PendingAttachment, String>>,
+        tokio::task::JoinHandle<Option<chatter_core::client::ComposerSend>>,
+    ) {
+        use slint::ComponentHandle;
+        let send =
+            chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&self.w, &self.client)
+                .expect("a GIF can be sent to channel A");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let upload = async move { rx.await.unwrap() };
+        let task = test_rt().spawn(
+            chatter_ui::bin_ui::features::composer::gif::finish_gif_send(
+                self.w.as_weak(),
+                self.client.clone(),
+                send,
+                upload,
+            ),
+        );
+        (tx, task)
+    }
+
+    /// The upload resolves; the completion lands on the UI thread.
+    fn complete(
+        &self,
+        tx: tokio::sync::oneshot::Sender<Result<chatter_core::state::PendingAttachment, String>>,
+        task: tokio::task::JoinHandle<Option<chatter_core::client::ComposerSend>>,
+        upload: Result<chatter_core::state::PendingAttachment, String>,
+    ) {
+        tx.send(upload).unwrap();
+        // Successful fake uploads carry a nonexistent local file. The real
+        // attachment service refuses its metadata before any network submission;
+        // upload errors return the frozen send directly. Both exercise recovery.
+        let failed = test_rt()
+            .block_on(task)
+            .unwrap()
+            .expect("an offline send cannot succeed");
+        chatter_ui::bin_ui::features::composer::gif::recover_gif_send(
+            &self.w,
+            &self.client,
+            failed,
+        );
+    }
+}
+
+fn gif_attachment() -> chatter_core::state::PendingAttachment {
+    chatter_core::state::PendingAttachment::new(
+        chatter_core::domain::ids::AttachmentId::new(),
+        "picked.gif".into(),
+        Default::default(),
+        1,
+        "image/gif".into(),
+    )
+}
+
+/// The GIF send took the caption, the reply and the staged file at the pick
+/// and cleared them, as Send does.
+#[test]
+fn picking_a_gif_freezes_the_composer_into_its_send() {
+    let h = GifHarness::new();
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("caption".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_is_replying(true);
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_to_sender(uuid::Uuid::new_v4().to_string().into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_to_timestamp("1700000000000".into());
+    h.stage("cat.png");
+
+    let send =
+        chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).unwrap();
+    assert_eq!(
+        send.conversation,
+        chatter_core::state::ActiveConversation::Channel(h.a)
+    );
+    assert_eq!(send.text, "caption");
+    assert!(send.reply.is_some());
+    assert_eq!(send.attachments.len(), 1);
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        ""
+    );
+    assert!(
+        !h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_is_replying()
+    );
+    assert!(h.staged().is_empty());
+}
+
+/// The download finishes after the user moved to B and started a message
+/// there: B's draft and B's staged file are not consumed, nothing is written
+/// into B, and A gets its caption back when it is opened again.
+#[test]
+fn a_gif_completing_after_navigation_never_touches_the_other_chat() {
+    let h = GifHarness::new();
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("for A".into());
+    h.stage("a.png");
+    let (tx, task) = h.pick();
+
+    h.open(h.b);
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("for B".into());
+    h.stage("b.png");
+
+    h.complete(tx, task, Ok(gif_attachment()));
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "for B",
+        "B's draft was consumed or overwritten"
+    );
+    assert_eq!(
+        h.staged(),
+        ["b.png"],
+        "B's staged file was consumed, or A's landed in B"
+    );
+
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("".into());
+    h.client.clear_pending_attachments();
+    h.open(h.a);
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "for A"
+    );
+    assert_eq!(
+        h.staged(),
+        ["a.png", "picked.gif"],
+        "A's send came back without its files"
+    );
+}
+
+/// A newer draft in the same chat is not written over: the failed send is
+/// kept, and comes back only once that composer is empty again.
+#[test]
+fn a_failed_gif_never_overwrites_a_newer_draft_in_its_chat() {
+    let h = GifHarness::new();
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("caption".into());
+    let (tx, task) = h.pick();
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("newer".into());
+
+    h.complete(tx, task, Err("download failed".into()));
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "newer"
+    );
+    assert!(h.staged().is_empty(), "a failed download staged nothing");
+
+    // Composer emptied, chat left and re-entered: now there is room.
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("".into());
+    h.open(h.b);
+    h.open(h.a);
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "caption"
+    );
+}
+
+/// Failing while its own composer is still empty puts it straight back.
+#[test]
+fn a_failed_gif_in_an_untouched_composer_is_restored_at_once() {
+    let h = GifHarness::new();
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("caption".into());
+    let (tx, task) = h.pick();
+    h.complete(tx, task, Err("download failed".into()));
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "caption"
+    );
+}
+
+/// Where a GIF cannot go, picking one consumes nothing.
+#[test]
+fn a_gif_with_nowhere_to_go_consumes_nothing() {
+    let h = GifHarness::new();
+    h.client
+        .select_conversation(chatter_core::state::ActiveConversation::None);
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("keep".into());
+    h.stage("keep.png");
+    assert!(chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).is_none());
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "keep"
+    );
+    assert_eq!(h.staged(), ["keep.png"]);
+}
+
+/// B open with an EMPTY composer when A's GIF fails: still not B's to have.
+#[test]
+fn a_gif_failing_while_another_empty_chat_is_open_waits_for_its_own() {
+    let h = GifHarness::new();
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("for A".into());
+    let (tx, task) = h.pick();
+    h.open(h.b);
+    h.complete(tx, task, Err("download failed".into()));
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "",
+        "A's caption was restored into B"
+    );
+    assert!(h.staged().is_empty());
+    h.open(h.a);
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "for A"
+    );
+}
+
+/// A recording started after the pick (the composer looked empty) would send
+/// whatever is staged with the voice note: a failed GIF is kept, not restored
+/// behind the recording panel.
+#[test]
+fn a_failed_gif_is_not_restored_under_a_voice_recording() {
+    use slint::ComponentHandle;
+    let h = GifHarness::new();
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("caption".into());
+    h.stage("a.png");
+    let (tx, task) = h.pick();
+    h.w.global::<chatter_ui::VoiceRecording>().set_active(true);
+    h.complete(tx, task, Err("download failed".into()));
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        ""
+    );
+    assert!(
+        h.staged().is_empty(),
+        "A's file was staged under the recording"
+    );
+    h.w.global::<chatter_ui::VoiceRecording>().set_active(false);
+    h.open(h.b);
+    h.open(h.a);
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "caption"
+    );
+    assert_eq!(h.staged(), ["a.png"]);
+}
+
+/// The IME update and the switch in ONE loop iteration: no change-handler
+/// pass between them to refresh the mirror the settle reads.
+#[test]
+fn a_composition_updated_in_the_same_iteration_as_the_switch_is_kept() {
+    let (_tmp, client, w) = composer_with_caret("ab", 1);
+    ime(&w, "x", false);
+    ime_unpumped(&w, "xy", false);
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
+    ime(&w, "xy", true);
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "",
+        "the composition leaked into B"
+    );
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "axyb",
+        "a stale mirror parked the old composition"
+    );
+}
+
+/// An input method replacing existing text with a composition (recomposing a
+/// word, or composing over a selection) sends a replacement range relative to
+/// the caret, which deletes those bytes; the word then sits where they were.
+#[test]
+fn a_composition_replacing_text_lands_at_the_right_bytes() {
+    use i_slint_core::input::{InternalKeyEvent, KeyEventType};
+    use slint::ComponentHandle;
+    // Caret after "hé" (byte 3, "é" is two bytes); the range covers "ll".
+    let (_tmp, client, w) = composer_with_caret("héllo", 3);
+    let mut event = InternalKeyEvent::default();
+    event.event_type = KeyEventType::UpdateComposition;
+    event.preedit_text = "ß".into();
+    event.replacement_range = Some(0..2);
+    i_slint_core::window::WindowInner::from_pub(w.window()).process_key_input(event);
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "héo",
+        "precondition: the range deleted the replaced bytes"
+    );
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "héßo"
+    );
+}
+
+/// The very first composition, switched away from before any loop
+/// iteration: the mirror has never been set at all.
+#[test]
+fn a_first_composition_switched_away_unpumped_is_kept() {
+    let (_tmp, client, w) = composer_with_caret("ab", 1);
+    ime_unpumped(&w, "x", false);
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
+    ime(&w, "x", true);
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "",
+        "the composition leaked into B"
+    );
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "axb"
+    );
+}
+
+/// The pane dies mid-composition and, before it is rebuilt, the user opens B,
+/// which has a draft of its own: the word goes to A, B's draft is untouched,
+/// and the rebuilt pane adds nothing.
+#[test]
+fn a_composition_lost_with_the_pane_goes_to_its_own_chat_not_the_next() {
+    let (_tmp, client, w) = composer_with_caret("ab", 1);
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("b draft".into());
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "ab"
+    );
+    ime(&w, "X", false);
+    w.global::<chatter_ui::CallView>()
+        .set_active_call_fullscreen(true);
+    assert!(
+        testing::ElementHandle::find_by_accessible_label(&w, "Message input")
+            .next()
+            .is_none()
+    );
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "b draft"
+    );
+    w.global::<chatter_ui::CallView>()
+        .set_active_call_fullscreen(false);
+    assert!(
+        testing::ElementHandle::find_by_accessible_label(&w, "Message input")
+            .next()
+            .is_some()
+    );
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "b draft",
+        "the dead pane's word landed in B"
+    );
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "aXb"
+    );
+}
+
+/// Core has moved to B but the draft watcher has not swapped the composer
+/// yet: a GIF picked now would carry A's caption to B. Refused, nothing taken.
+#[test]
+fn a_gif_picked_mid_switch_is_refused() {
+    let h = GifHarness::new();
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("for A".into());
+    h.stage("a.png");
+    h.client
+        .select_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
+    assert!(chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).is_none());
+    assert_eq!(
+        h.w.get_toast_message().as_str(),
+        "The conversation is changing. Nothing was sent.",
+        "refusal must come from composer ownership, not failed admission"
+    );
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "for A"
+    );
+    assert!(h.staged().is_empty(), "B must not inherit A's tray");
+    // The core switch already parked A's file; refusal must leave it intact.
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(
+        &h.w,
+        &h.client,
+        &h.a.to_string(),
+        &h.b.to_string(),
+    );
+    h.open(h.a);
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "for A"
+    );
+    assert_eq!(h.staged(), ["a.png"]);
+}
+
+/// The GIF fails just after core moved back to A but before the watcher
+/// swapped the composer, which still shows B: not restored into B (where the
+/// swap would then park it under B), but kept for A.
+#[test]
+fn a_gif_failing_mid_switch_is_not_restored_into_the_old_composer() {
+    let h = GifHarness::new();
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("for A".into());
+    let (tx, task) = h.pick();
+    h.open(h.b);
+    h.client
+        .select_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
+    h.complete(tx, task, Err("download failed".into()));
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "",
+        "A's caption landed in B's composer"
+    );
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(
+        &h.w,
+        &h.client,
+        &h.b.to_string(),
+        &h.a.to_string(),
+    );
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "for A"
+    );
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(
+        &h.w,
+        &h.client,
+        &h.a.to_string(),
+        &h.b.to_string(),
+    );
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "",
+        "A's caption was parked under B"
+    );
+}
+
+/// Send while a word is composed mid-line: it goes out where it is drawn,
+/// at the caret, not appended to the end.
+#[test]
+fn sending_mid_composition_sends_the_word_at_the_caret() {
+    use slint::ComponentHandle;
+    let (_tmp, _client, w) = composer_with_caret("ac", 1);
+    let sent = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let sink = sent.clone();
+    w.global::<chatter_ui::ChatPane>().on_send(move |text| {
+        *sink.borrow_mut() = Some(text.to_string());
+        true
+    });
+    ime(&w, "b", false);
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Return.into(),
+        });
+    assert_eq!(sent.borrow().as_deref(), Some("abc"));
+}
+
+#[test]
+fn refused_send_keeps_the_midline_composition_and_draft() {
+    use slint::ComponentHandle;
+    let (_tmp, _client, w) = composer_with_caret("ac", 1);
+    let sent = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let sink = sent.clone();
+    w.global::<chatter_ui::ChatPane>().on_send(move |text| {
+        *sink.borrow_mut() = Some(text.to_string());
+        false
+    });
+    ime(&w, "b", false);
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Return.into(),
+        });
+    assert_eq!(sent.borrow().as_deref(), Some("abc"));
+    w.invoke_settle_composer();
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "abc",
+        "refusal erased the unsent word"
+    );
+}
+
+#[test]
+fn ordinary_send_mid_switch_refuses_without_taking_the_new_chats_tray_or_reply() {
+    let h = GifHarness::new();
+    let _guard = test_rt().enter();
+    chatter_ui::bin_ui::features::chat::send_message::wire_send(&h.w, &h.client);
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("A draft".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_is_replying(true);
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_to_sender(uuid::Uuid::new_v4().to_string().into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_to_timestamp("1700000000000".into());
+    h.client
+        .select_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
+    h.stage("b.png");
+    assert!(
+        !h.w.global::<chatter_ui::ChatPane>()
+            .invoke_send("A draft".into())
+    );
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "A draft"
+    );
+    assert!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_is_replying()
+    );
+    assert_eq!(h.staged(), ["b.png"]);
+    assert!(h.w.get_toast_visible());
+}
+
+#[test]
+fn queued_draft_navigation_uses_actual_owner_and_expires_on_session_reset() {
+    let h = GifHarness::new();
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("A draft".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_is_replying(true);
+    h.stage("a.png");
+    let revision = h.client.chat_snapshot().attachment_revision;
+    h.client
+        .select_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
+    let c = chatter_core::domain::ids::ChannelId::new();
+    h.client
+        .select_conversation(chatter_core::state::ActiveConversation::Channel(c));
+    // The B callback never ran. Its replacement must park what is actually
+    // displayed under A, not the asynchronously expected intermediate B.
+    chatter_ui::bin_ui::features::composer::sync_composer_draft(&h.w, &h.client, revision);
+    assert_eq!(h.client.composer_owner_key(), c.to_string());
+    assert!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .is_empty()
+    );
+    assert!(
+        !h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_is_replying()
+    );
+    h.open(h.a);
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "A draft"
+    );
+    assert_eq!(h.staged(), ["a.png"]);
+    h.client.clear_composer_session();
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("new account draft".into());
+    chatter_ui::bin_ui::features::composer::sync_composer_draft(&h.w, &h.client, revision);
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "new account draft"
+    );
+    assert!(h.client.composer_owner_key().is_empty());
+}
+
+#[test]
+fn definite_send_failure_parks_exact_reply_and_files_without_overwriting_new_input() {
+    use slint::ComponentHandle;
+    let h = GifHarness::new();
+    let bytes = vec![25u8, 50, 75, 255, 100, 125, 150, 255];
+    let author = uuid::Uuid::new_v4().to_string();
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("failed caption".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_is_replying(true);
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_to_sender(author.clone().into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_to_timestamp("1700000000000".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_to_sender_name("Author".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_preview("Photo".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_thumbnail(slint::Image::from_rgba8(slint::SharedPixelBuffer::<
+            slint::Rgba8Pixel,
+        >::clone_from_slice(
+            &bytes, 2, 1
+        )));
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_has_thumbnail(true);
+    h.stage("missing.png");
+    let send =
+        chatter_ui::bin_ui::features::chat::send_message::take_composer_send(&h.w, &h.client)
+            .unwrap();
+    // The synthetic staged file does not exist: the production attachment
+    // preparation fails before any deposit or network submission.
+    assert!(
+        !test_rt().block_on(chatter_ui::bin_ui::features::chat::send_message::deliver(
+            h.w.as_weak(),
+            h.client.clone(),
+            send.clone(),
+            std::time::Instant::now(),
+        ))
+    );
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("newer draft".into());
+    chatter_ui::bin_ui::features::chat::send_message::recover_failed_send(&h.w, &h.client, send);
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "newer draft"
+    );
+    assert!(
+        !h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_is_replying()
+    );
+    assert!(h.staged().is_empty());
+    h.open(h.b);
+    assert!(h.staged().is_empty());
+    assert!(
+        !h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_is_replying()
+    );
+    h.open(h.a);
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "newer draft"
+    );
+    // Clearing the newer draft makes room: re-entering the conversation
+    // takes the parked send through the production path, where core moves
+    // its files into the tray durably (dc3ee9d0) and the UI restores the rest.
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("".into());
+    h.open(h.b);
+    h.open(h.a);
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "failed caption"
+    );
+    assert_eq!(h.staged(), ["missing.png"]);
+    let reply = chatter_ui::bin_ui::features::chat::send_message::composer_reply(&h.w).unwrap();
+    assert_eq!(reply.sender_id, author);
+    assert_eq!(reply.timestamp, "1700000000000");
+    assert_eq!(reply.sender_name, "Author");
+    assert_eq!(reply.preview, "Photo");
+    assert_eq!(reply.thumbnail, Some((bytes, 2, 1)));
+}
+
+#[test]
+fn a_failed_gif_does_not_overwrite_a_new_uncommitted_word() {
+    let (_tmp, client, w) = composer_with_caret("", 0);
+    // Admit the frozen send before exercising the newer IME preedit guard.
+    client.testing_set_logged_in(
+        chatter_core::domain::ids::UserId::new(),
+        1,
+        "IME fixture".into(),
+    );
+    let channel = chatter_core::domain::ids::ChannelId::new();
+    client.select_conversation(chatter_core::state::ActiveConversation::Channel(channel));
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(
+        &w,
+        &client,
+        "",
+        &channel.to_string(),
+    );
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("old caption".into());
+    let send = chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&w, &client).unwrap();
+    ime(&w, "new", false);
+    assert!(
+        w.invoke_composer_has_preedit(),
+        "precondition: the new word is still composing"
+    );
+    assert!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .is_empty()
+    );
+    chatter_ui::bin_ui::features::composer::gif::recover_gif_send(&w, &client, send);
+    assert!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .is_empty(),
+        "the old caption overwrote a composing word"
+    );
+    ime(&w, "new", true);
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "new"
+    );
+    assert!(client.take_parked_send(false).is_none());
+    assert_eq!(client.take_parked_send(true).unwrap().text, "old caption");
+}
+
+#[test]
+fn a_gif_finishing_after_an_account_change_is_discarded() {
+    let h = GifHarness::new();
+    h.client
+        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("A's caption".into());
+    let (tx, task) = h.pick();
+    h.client.testing_set_logged_out();
+    h.client
+        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("B's draft".into());
+    h.stage("b.png");
+    tx.send(Ok(gif_attachment())).unwrap();
+    assert!(
+        test_rt().block_on(task).unwrap().is_none(),
+        "A's send survived into B's session"
+    );
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "B's draft"
+    );
+    assert_eq!(h.staged(), ["b.png"]);
+    h.client.clear_pending_attachments();
+    assert!(h.client.take_parked_send(true).is_none());
+}
+
+#[test]
+fn sign_out_invalidates_recovery_before_resetting_the_visible_composer() {
+    let h = GifHarness::new();
+    h.client
+        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("A's caption".into());
+    let old = chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).unwrap();
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("A's later draft".into());
+    h.stage("private.png");
+    chatter_ui::bin_ui::features::composer::reset_session(&h.w, &h.client);
+    assert!(!h.client.composer_session_is_current(old.session_revision));
+    assert!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .is_empty()
+    );
+    assert!(h.staged().is_empty());
+    // A completion queued behind the reset must not repopulate the old UI.
+    chatter_ui::bin_ui::features::composer::gif::recover_gif_send(&h.w, &h.client, old);
+    assert!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .is_empty()
+    );
+    h.client.testing_set_logged_out();
+    h.client
+        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
+    h.client
+        .select_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(
+        &h.w,
+        &h.client,
+        "",
+        &h.a.to_string(),
+    );
+    assert!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .is_empty(),
+        "A's draft restored under B"
+    );
+    assert!(h.client.take_parked_send(true).is_none());
+}
+
+#[test]
+fn a_gif_upload_error_after_account_change_cannot_restore_or_show_a_toast() {
+    let h = GifHarness::new();
+    h.client
+        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("A's caption".into());
+    let (tx, task) = h.pick();
+    h.client.testing_set_logged_out();
+    h.client
+        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("B's draft".into());
+    tx.send(Err("download failed".into())).unwrap();
+    let expired = test_rt().block_on(task).unwrap().unwrap();
+    chatter_ui::bin_ui::features::composer::gif::recover_gif_send(&h.w, &h.client, expired);
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "B's draft"
+    );
+    assert!(
+        !h.w.get_toast_visible(),
+        "old-session failure appeared in B's UI"
+    );
+    assert!(h.client.take_parked_send(true).is_none());
+}
+
+#[test]
+fn attachment_trays_follow_their_conversations_and_keep_captions() {
+    use slint::Model;
+    let h = GifHarness::new();
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("A caption".into());
+    h.stage("a.png");
+    h.open(h.b);
+    assert!(h.staged().is_empty());
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_pending_attachments()
+            .row_count(),
+        0
+    );
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("B caption".into());
+    h.stage("b.png");
+    h.open(h.a);
+    assert_eq!(h.staged(), ["a.png"]);
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_pending_attachments()
+            .row_count(),
+        1
+    );
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "A caption"
+    );
+    let send =
+        chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).unwrap();
+    assert_eq!(send.attachments[0].filename, "a.png");
+    h.open(h.b);
+    assert_eq!(h.staged(), ["b.png"]);
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "B caption"
+    );
+}
+
+#[test]
+fn failed_reply_restores_its_thumbnail_after_navigation() {
+    let h = GifHarness::new();
+    let bytes = vec![25u8, 50, 75, 255, 100, 125, 150, 255];
+    let image = slint::Image::from_rgba8(
+        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&bytes, 2, 1),
+    );
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("reply caption".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_is_replying(true);
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_to_sender(uuid::Uuid::new_v4().to_string().into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_to_timestamp("1700000000000".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_to_sender_name("Author".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_preview("Photo".into());
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_thumbnail(image);
+    h.w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_has_thumbnail(true);
+    let send =
+        chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).unwrap();
+    assert!(
+        !h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_reply_has_thumbnail()
+    );
+    h.open(h.b);
+    chatter_ui::bin_ui::features::composer::gif::recover_gif_send(&h.w, &h.client, send);
+    assert!(
+        !h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_is_replying()
+    );
+    h.open(h.a);
+    assert!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_is_replying()
+    );
+    assert!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_reply_has_thumbnail()
+    );
+    let restored =
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_reply_thumbnail()
+            .to_rgba8()
+            .unwrap();
+    assert_eq!((restored.width(), restored.height()), (2, 1));
+    assert_eq!(restored.as_bytes(), bytes.as_slice());
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_reply_to_sender_name()
+            .as_str(),
+        "Author"
+    );
+    assert_eq!(
+        h.w.global::<chatter_ui::ChatPane>()
+            .get_composer_reply_preview()
+            .as_str(),
+        "Photo"
+    );
+}
+
+/// The Android reaction callback carries author/clock strings from production
+/// conversion; exercise that boundary with a clock above f64's exact range.
+#[test]
+fn reaction_converter_callback_preserves_author_and_nanosecond_clock() {
+    use chatter_core::domain::{
+        UserId,
+        ids::ChannelId,
+        message::{ConversationType, Message},
+    };
+    use chatter_core::inbox::{events::InboxEvent, polling::device::dispatch_control_content};
+    use std::sync::{Arc, Mutex};
+    testing::init_no_event_loop();
+    let window = MainWindow::new().unwrap();
+    let channel = ChannelId::new();
+    let author = UserId::new();
+    let actor = UserId::new();
+    let clock = 1_791_275_453_330_123_457u64;
+    let message = Message::new_text(
+        channel,
+        ConversationType::Channel,
+        Some(author),
+        "synthetic".into(),
+        clock,
+    );
+    let row =
+        chatter_ui::bin_ui::converters::message_to_display_data(&message, "synthetic", &[], None)
+            .to_slint_with_user(&actor.to_string());
+    let captured = Arc::new(Mutex::new(None));
+    let capture = captured.clone();
+    window
+        .global::<chatter_ui::ChatPane>()
+        .on_reaction_selected(move |sender, timestamp, _id, emoji| {
+            let parsed_author: UserId = sender.as_str().parse().unwrap();
+            let parsed_clock: u64 = timestamp.as_str().parse().unwrap();
+            *capture.lock().unwrap() = Some(
+                chatter_core::services::build_reaction_content_with_channel(
+                    emoji.as_str(),
+                    false,
+                    &parsed_author.to_string(),
+                    parsed_clock,
+                    Some(&channel.to_string()),
+                )
+                .content
+                .unwrap(),
+            );
+        });
+    window
+        .global::<chatter_ui::ChatPane>()
+        .invoke_reaction_selected(row.sender_id, row.timestamp_ns, row.message_id, "👍".into());
+    let (tx, mut rx) = tokio::sync::broadcast::channel(4);
+    let stats = Arc::new(Default::default());
+    dispatch_control_content(
+        captured.lock().unwrap().take().unwrap(),
+        &actor,
+        1,
+        "synthetic",
+        clock + 1,
+        &tx,
+        &stats,
+    );
+    match rx.try_recv().unwrap() {
+        InboxEvent::ChannelReaction {
+            channel_id,
+            sender_id,
+            target_author_aci,
+            target_sent_timestamp,
+            ..
+        } => {
+            assert_eq!(channel_id, channel);
+            assert_eq!(sender_id, actor);
+            assert_eq!(target_author_aci, author.to_string());
+            assert_eq!(target_sent_timestamp, clock);
+        }
+        _ => panic!("reaction did not reach channel dispatcher"),
+    }
+}
+
+// Compile the production JNI-independent publication bookkeeping on the host.
+#[path = "../../../vendor/i-slint-backend-android-activity/text_input_publication.rs"]
+mod text_input_publication;

@@ -1,55 +1,25 @@
 //! Group mailbox coordination.
 //!
-//! Handles group mailbox creation and member address exchange.
-//!
-//! Coordination flow:
-//! 1. User creates/joins a channel
-//! 2. GroupCoordinator creates ephemeral mailbox using blind token
-//! 3. GroupCoordinator builds announcement message (GroupMailboxAddress)
-//! 4. User sends announcement to channel (via device inbox initially)
-//! 5. Other members receive announcement, store the mailbox address
-//! 6. Other members respond with their mailbox addresses
+//! Handles member address exchange for existing group mailboxes.
 
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
-use tokio::time::sleep;
 
 use crate::domain::{ChannelId, UserId};
 use crate::error::MailboxError;
-use crate::mailbox::group::{GroupMailbox, GroupMailboxManager, MemberMailbox};
-use crate::mailbox::{MailboxToken, TokenManager};
-use crate::network::grpc::{AnonymousMailboxClient, MailboxClient};
-use crate::proto::content_v1::{GroupMailboxAddress, SenderKeyDistribution};
-use crate::storage::Database;
-use crate::util::time::TimestampNanos;
+use crate::mailbox::group::{GroupMailboxManager, MemberMailbox};
+use crate::proto::content_v1::GroupMailboxAddress;
 
 /// Default group mailbox TTL: 48 hours in seconds. Matches the DM TTL so the
 /// shared rotation threshold (12h) gives the same ~36h epoch / 12h overlap.
 pub const DEFAULT_GROUP_MAILBOX_TTL_SECONDS: u64 = 48 * 60 * 60;
 
-/// Result of setting up a group mailbox.
-pub struct GroupMailboxSetupResult {
-    /// Our newly created mailbox.
-    pub mailbox: GroupMailbox,
-    /// Announcement to send to the group.
-    pub announcement: GroupMailboxAddress,
-    /// Sender Key Distribution Message to distribute to members.
-    ///
-    /// This SKDM must be distributed pairwise via Double Ratchet to all
-    /// channel members so they can decrypt our Sender Key encrypted messages.
-    pub skdm: Option<SenderKeyDistribution>,
-}
-
 /// Group mailbox coordinator.
 ///
 /// Handles:
-/// - Creating group mailboxes when joining/creating channels
-/// - Building announcement messages for mailbox exchange
 /// - Processing received mailbox announcements from other members
 pub struct GroupCoordinator {
-    /// Token manager for blind signature tokens.
-    token_manager: TokenManager,
     /// Group mailbox state persistence.
     mailbox_manager: Arc<GroupMailboxManager>,
 }
@@ -59,116 +29,14 @@ impl GroupCoordinator {
     ///
     /// # Arguments
     ///
-    /// * `db` - Shared database connection
     /// * `mailbox_manager` - Manager for group mailbox state
-    pub fn new(db: Arc<Database>, mailbox_manager: Arc<GroupMailboxManager>) -> Self {
-        let token_manager = TokenManager::new(db);
-        Self {
-            token_manager,
-            mailbox_manager,
-        }
+    pub fn new(mailbox_manager: Arc<GroupMailboxManager>) -> Self {
+        Self { mailbox_manager }
     }
 
     /// Get the underlying mailbox manager.
     pub fn mailbox_manager(&self) -> &GroupMailboxManager {
         &self.mailbox_manager
-    }
-
-    /// Setup group mailbox for a channel (on create or join).
-    ///
-    /// Creates an ephemeral mailbox using a blind token and prepares
-    /// the announcement message.
-    ///
-    /// # Arguments
-    ///
-    /// * `channel_id` - The channel to setup mailbox for
-    /// * `mailbox_client` - For server communication
-    ///
-    /// # Returns
-    ///
-    /// `GroupMailboxSetupResult` containing our mailbox and the announcement.
-    pub async fn setup_group_mailbox(
-        &self,
-        channel_id: &ChannelId,
-        mailbox_client: &mut MailboxClient,
-        anon_mailbox_client: &mut AnonymousMailboxClient,
-    ) -> Result<GroupMailboxSetupResult, MailboxError> {
-        tracing::info!(channel_id = %channel_id, "Starting group mailbox setup");
-
-        // Check if we already have a non-expired mailbox
-        if let Some(state) = self.mailbox_manager.load_group_state(channel_id)? {
-            if let Some(existing) = &state.our_mailbox {
-                if !existing.is_expired() {
-                    // Already have valid mailbox, just return announcement
-                    // SKDM will be populated by caller if needed
-                    tracing::info!(channel_id = %channel_id, "Using existing non-expired mailbox");
-                    let announcement = self.build_announcement(channel_id, existing);
-                    return Ok(GroupMailboxSetupResult {
-                        mailbox: existing.clone(),
-                        announcement,
-                        skdm: None,
-                    });
-                }
-            }
-        }
-
-        // Get available token or request new ones (authenticated — rate limited per user)
-        tracing::info!(channel_id = %channel_id, "Ensuring token...");
-        let token = self.ensure_token(mailbox_client).await?;
-        tracing::info!(channel_id = %channel_id, "Token obtained");
-
-        // Create ephemeral mailbox on server (with retry for transient transport errors)
-        // Uses anonymous client to avoid leaking device identity alongside blind signature
-        tracing::info!(channel_id = %channel_id, "Creating ephemeral mailbox on server...");
-        let response = {
-            const MAX_RETRIES: u32 = 3;
-            let mut attempt = 0;
-            loop {
-                attempt += 1;
-                match anon_mailbox_client
-                    .create_ephemeral_mailbox(
-                        token.public_key.clone(),
-                        token.signature.clone(),
-                        DEFAULT_GROUP_MAILBOX_TTL_SECONDS,
-                        vec![], // Empty randomizer for compatibility
-                    )
-                    .await
-                {
-                    Ok(resp) => break resp,
-                    Err(e) => {
-                        if e.is_retryable() && attempt < MAX_RETRIES {
-                            let backoff = std::time::Duration::from_millis(200 * u64::from(attempt));
-                            tracing::warn!(
-                                channel_id = %channel_id,
-                                error = %e,
-                                attempt,
-                                "Group mailbox creation failed (retrying)"
-                            );
-                            sleep(backoff).await;
-                        } else {
-                            return Err(MailboxError::Network(e.to_string()));
-                        }
-                    }
-                }
-            }
-        };
-        tracing::info!(channel_id = %channel_id, mailbox_id = %response.mailbox_id, "Ephemeral mailbox created");
-
-        // Build our mailbox from token + response
-        let mailbox = self.build_mailbox_from_token(channel_id, &token, &response)?;
-
-        // Build announcement
-        let announcement = self.build_announcement(channel_id, &mailbox);
-
-        // Persist state (token already marked used by claim_available_token in ensure_token)
-        self.mailbox_manager.save_our_mailbox(&mailbox)?;
-        let _ = token;
-
-        Ok(GroupMailboxSetupResult {
-            mailbox,
-            announcement,
-            skdm: None, // Populated by caller if available
-        })
     }
 
     /// Process a received GroupMailboxAddress announcement.
@@ -186,10 +54,9 @@ impl GroupCoordinator {
         announcement: &GroupMailboxAddress,
     ) -> Result<(), MailboxError> {
         // Parse channel_id
-        let channel_id: ChannelId = announcement
-            .channel_id
-            .parse()
-            .map_err(|_| MailboxError::InvalidServerKey("Invalid channel_id in announcement".into()))?;
+        let channel_id: ChannelId = announcement.channel_id.parse().map_err(|_| {
+            MailboxError::InvalidServerKey("Invalid channel_id in announcement".into())
+        })?;
 
         // Validate mailbox_pk length
         if announcement.mailbox_pk.len() != 32 {
@@ -215,8 +82,6 @@ impl GroupCoordinator {
             .save_member_mailbox(&channel_id, &member_mailbox)?;
 
         tracing::info!(
-            channel_id = %channel_id,
-            sender_id = %sender_id,
             "Stored member mailbox address from announcement"
         );
 
@@ -253,8 +118,6 @@ impl GroupCoordinator {
             .save_member_mailbox(channel_id, &member_mailbox)?;
 
         tracing::info!(
-            channel_id = %channel_id,
-            sender_id = %sender_id,
             "Stored member mailbox from SKDM ephemeral_reply_to (NDSS '21)"
         );
 
@@ -267,110 +130,11 @@ impl GroupCoordinator {
         Ok(state.map(|s| s.our_mailbox.is_some()).unwrap_or(false))
     }
 
-    /// Get our announcement for re-sending (e.g., when a new member joins).
-    ///
-    /// Returns None if we don't have a mailbox for this channel.
-    pub fn get_announcement(
-        &self,
-        channel_id: &ChannelId,
-    ) -> Result<Option<GroupMailboxAddress>, MailboxError> {
-        let state = self.mailbox_manager.load_group_state(channel_id)?;
-
-        match state.and_then(|s| s.our_mailbox) {
-            Some(mailbox) if !mailbox.is_expired() => {
-                Ok(Some(self.build_announcement(channel_id, &mailbox)))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    /// Atomically claim a token, requesting more if needed.
-    ///
-    /// Uses `claim_available_token` (UPDATE ... RETURNING) so the credential
-    /// is marked used in the same SQL statement — the server rejects any
-    /// credential it has seen before.
-    async fn ensure_token(
-        &self,
-        client: &mut MailboxClient,
-    ) -> Result<MailboxToken, MailboxError> {
-        tracing::info!("Claiming available token locally");
-        if let Some(token) = self.token_manager.claim_available_token()? {
-            tracing::info!("Claimed existing local token");
-            return Ok(token);
-        }
-
-        tracing::info!("No local token, requesting from server...");
-        let count = self.token_manager.request_tokens(client, 5).await?;
-        tracing::info!(count = count, "Requested tokens from server");
-        if count == 0 {
-            return Err(MailboxError::NoTokensAvailable);
-        }
-
-        self.token_manager
-            .claim_available_token()?
-            .ok_or(MailboxError::NoTokensAvailable)
-    }
-
-    /// Build GroupMailbox from token and server response.
-    fn build_mailbox_from_token(
-        &self,
-        channel_id: &ChannelId,
-        token: &MailboxToken,
-        response: &crate::proto::mailbox_v1::CreateEphemeralMailboxResponse,
-    ) -> Result<GroupMailbox, MailboxError> {
-        let mut public_key = [0u8; 32];
-        let mut private_key = [0u8; 64];
-
-        if token.public_key.len() != 32 {
-            return Err(MailboxError::InvalidServerKey(format!(
-                "Invalid token public key size: expected 32, got {}",
-                token.public_key.len()
-            )));
-        }
-        if token.private_key.len() != 64 {
-            return Err(MailboxError::InvalidServerKey(format!(
-                "Invalid token private key size: expected 64, got {}",
-                token.private_key.len()
-            )));
-        }
-
-        public_key.copy_from_slice(&token.public_key);
-        private_key.copy_from_slice(&token.private_key);
-
-        Ok(GroupMailbox {
-            id: response.mailbox_id.clone(),
-            group_id: *channel_id,
-            public_key,
-            private_key,
-            signature: token.signature.clone(),
-            randomizer: token.randomizer.clone(),
-            token_id: token.id.clone(),
-            created_at: Utc::now(),
-            expires_at: Utc::now() + Duration::seconds(DEFAULT_GROUP_MAILBOX_TTL_SECONDS as i64),
-            last_polled_at: None,
-        })
-    }
-
-    /// Build GroupMailboxAddress announcement from our mailbox.
-    fn build_announcement(&self, channel_id: &ChannelId, mailbox: &GroupMailbox) -> GroupMailboxAddress {
-        tracing::info!(
-            channel_id = %channel_id,
-            mailbox_id = %mailbox.id,
-            announce_pk_hex = %hex::encode(mailbox.public_key),
-            "[BUILD_ANNOUNCEMENT] Building GroupMailboxAddress"
-        );
-        GroupMailboxAddress {
-            channel_id: channel_id.to_string(),
-            mailbox_pk: mailbox.public_key.to_vec(),
-            timestamp: TimestampNanos::now().as_u64(),
-        }
-    }
-
     /// Clean up all group mailbox state when leaving a channel.
     ///
     /// Removes our mailbox and all member mailbox records for this channel.
     pub fn cleanup_channel(&self, channel_id: &ChannelId) -> Result<(), MailboxError> {
-        tracing::info!(channel_id = %channel_id, "Cleaning up group mailbox state");
+        tracing::info!("Cleaning up group mailbox state");
         self.mailbox_manager.delete_group_state(channel_id)
     }
 }
@@ -378,46 +142,14 @@ impl GroupCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::Database;
+    use crate::util::time::TimestampNanos;
 
     #[test]
     fn test_default_group_mailbox_ttl() {
         // 7 days in seconds
         assert_eq!(DEFAULT_GROUP_MAILBOX_TTL_SECONDS, 48 * 60 * 60);
         assert_eq!(DEFAULT_GROUP_MAILBOX_TTL_SECONDS, 172800);
-    }
-
-    #[test]
-    fn test_group_mailbox_setup_result_structure() {
-        let channel_id = ChannelId::new();
-
-        let mailbox = GroupMailbox {
-            id: "test-mailbox".to_string(),
-            group_id: channel_id,
-            public_key: [1u8; 32],
-            private_key: [2u8; 64],
-            signature: vec![3u8; 256],
-            randomizer: Some(vec![4u8; 32]),
-            token_id: "test-token".to_string(),
-            created_at: Utc::now(),
-            expires_at: Utc::now() + Duration::days(7),
-            last_polled_at: None,
-        };
-
-        let announcement = GroupMailboxAddress {
-            channel_id: channel_id.to_string(),
-            mailbox_pk: mailbox.public_key.to_vec(),
-            timestamp: TimestampNanos::now().as_u64(),
-        };
-
-        let result = GroupMailboxSetupResult {
-            mailbox: mailbox.clone(),
-            announcement: announcement.clone(),
-            skdm: None,
-        };
-
-        assert_eq!(result.mailbox.id, "test-mailbox");
-        assert_eq!(result.announcement.channel_id, channel_id.to_string());
-        assert_eq!(result.announcement.mailbox_pk.len(), 32);
     }
 
     #[test]
@@ -452,7 +184,7 @@ mod tests {
         db.run_migrations().unwrap();
 
         let mgr = Arc::new(GroupMailboxManager::new(db.clone()));
-        let coordinator = GroupCoordinator::new(db, mgr.clone());
+        let coordinator = GroupCoordinator::new(mgr.clone());
 
         let channel_id = ChannelId::new();
         let member = UserId::new();
@@ -466,7 +198,10 @@ mod tests {
         coordinator.process_announcement(member, &first).unwrap();
 
         let state = mgr.load_group_state(&channel_id).unwrap().unwrap();
-        assert_eq!(state.member_mailboxes.get(&member).unwrap().public_key, [1u8; 32]);
+        assert_eq!(
+            state.member_mailboxes.get(&member).unwrap().public_key,
+            [1u8; 32]
+        );
 
         // Rotated announcement: same member, new mailbox pk → must overwrite.
         let rotated = GroupMailboxAddress {
@@ -477,7 +212,11 @@ mod tests {
         coordinator.process_announcement(member, &rotated).unwrap();
 
         let state = mgr.load_group_state(&channel_id).unwrap().unwrap();
-        assert_eq!(state.member_mailboxes.len(), 1, "must overwrite, not duplicate");
+        assert_eq!(
+            state.member_mailboxes.len(),
+            1,
+            "must overwrite, not duplicate"
+        );
         assert_eq!(
             state.member_mailboxes.get(&member).unwrap().public_key,
             [2u8; 32],

@@ -14,12 +14,15 @@
 //!
 //! # What is genuinely bitchat-specific
 //!
-//! Everything in [`seal`] and [`sign`]: the two domain-separating prologues, the
-//! one-shot `X` seal framing, and the canonical announce bytes. Those have no
-//! upstream vectors and are where the care belongs.
+//! Everything in [`seal`] and [`sign`]: the domain-separating prologues, the
+//! one-shot `X` seal framing, and packet signatures over the bitchat preimage.
+//! Those have no upstream vectors and are where the care belongs.
 
 #![forbid(unsafe_code)]
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![cfg_attr(
+    not(test),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
 
 pub mod error;
 pub mod identity;
@@ -41,7 +44,8 @@ pub const COURIER_PROLOGUE: &[u8] = b"bitchat-courier-v1";
 /// Prefix for prekey-sealed envelopes; the full prologue appends the prekey ID
 /// as a big-endian u32 so a ciphertext cannot be replayed against another prekey.
 pub const PREKEY_PROLOGUE_PREFIX: &[u8] = b"bitchat-prekey-v1";
-/// Context string mixed into the canonical announce signing bytes.
+/// Announce domain string, kept prefix-free of the seal prologues.
+/// Live announce authentication is [`sign::verify_packet`].
 pub const ANNOUNCE_CONTEXT: &[u8] = b"bitchat-announce-v1";
 /// Context string covering a signed prekey bundle.
 ///

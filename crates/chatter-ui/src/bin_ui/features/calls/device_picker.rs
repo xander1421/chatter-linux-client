@@ -6,223 +6,338 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_core::client::ChatterClient;
+use crate::AudioDeviceData;
+use crate::MainWindow;
+#[cfg(not(target_os = "android"))]
+use crate::ScreenSourceData;
 use chatter_core::calls::AudioCapture;
 #[cfg(not(target_os = "android"))]
 use chatter_core::calls::{ScreenCapture, ScreenSourceType};
-use crate::AudioDeviceData;
-#[cfg(not(target_os = "android"))]
-use crate::ScreenSourceData;
-use crate::MainWindow;
+use chatter_core::client::ChatterClient;
 
 /// Wire device picker callbacks for audio device and screen source selection.
 pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
 
     // Show audio input device picker (microphones)
-    window.on_show_audio_device_picker({
-        let weak = weak.clone();
-        move || {
-            if let Some(w) = weak.upgrade() {
-                // Enumerate audio input devices
-                match AudioCapture::list_devices() {
-                    Ok(devices) => {
-                        let ui_devices: Vec<AudioDeviceData> = devices
-                            .into_iter()
-                            .map(|d| AudioDeviceData {
-                                id: d.id.into(),
-                                name: d.name.into(),
-                                is_default: d.is_default,
-                            })
-                            .collect();
-
-                        w.set_audio_devices(ModelRc::new(VecModel::from(ui_devices)));
-                        w.set_device_picker_type("audio".into());
-                        w.set_device_picker_visible(true);
-                        tracing::info!("Showing audio input device picker");
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to enumerate audio input devices: {}", e);
-                    }
-                }
-            }
-        }
-    });
-
-    // Show audio output device picker (speakers/headphones)
-    window.on_show_audio_output_picker({
-        let weak = weak.clone();
-        move || {
-            if let Some(w) = weak.upgrade() {
-                // Enumerate audio output devices
-                match AudioCapture::list_output_devices() {
-                    Ok(devices) => {
-                        let ui_devices: Vec<AudioDeviceData> = devices
-                            .into_iter()
-                            .map(|d| AudioDeviceData {
-                                id: d.id.into(),
-                                name: d.name.into(),
-                                is_default: d.is_default,
-                            })
-                            .collect();
-
-                        w.set_audio_output_devices(ModelRc::new(VecModel::from(ui_devices)));
-                        w.set_device_picker_type("audio_output".into());
-                        w.set_device_picker_visible(true);
-                        tracing::info!("Showing audio output device picker");
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to enumerate audio output devices: {}", e);
-                    }
-                }
-            }
-        }
-    });
-
-    // Show screen source picker (desktop only)
-    window.on_show_screen_source_picker({
-        let weak = weak.clone();
-        let ui_ctx = ui_ctx.clone();
-        move || {
-            #[cfg(target_os = "android")]
-            { tracing::warn!("Screen source picker not available on Android"); return; }
-            #[cfg(not(target_os = "android"))]
-            {
+    window
+        .global::<crate::CallView>()
+        .on_show_audio_device_picker({
+            let weak = weak.clone();
+            move || {
                 let weak = weak.clone();
-                let ui_ctx = ui_ctx.clone();
-                slint::spawn_local(async move {
-                    // Gate on the room being connected. During an outgoing
-                    // "Calling…" call there is no room yet, so opening the
-                    // picker would only end in a `NotInCall` failure after the
-                    // user selected a source (and the OS portal dialog would
-                    // never appear). Don't surface the picker until connected.
-                    if !ui_ctx.call_is_connected().await {
-                        tracing::info!("Screen share unavailable — call not connected yet");
-                        return;
-                    }
+                std::thread::spawn(move || {
+                    let result = AudioCapture::list_devices();
+                    let _ = slint::invoke_from_event_loop(move || {
                     let Some(w) = weak.upgrade() else { return };
-                    // Enumerate screen sources using LiveKit's desktop_capturer
-                    match ScreenCapture::list_sources() {
-                        Ok(sources) => {
-                            let source_count = sources.len();
-                            let ui_sources: Vec<ScreenSourceData> = sources
+                    match result {
+                        Ok(devices) => {
+                            let ui_devices: Vec<AudioDeviceData> = devices
                                 .into_iter()
-                                .enumerate()
-                                .map(|(idx, s)| ScreenSourceData {
-                                    id: s.id.to_string().into(),
-                                    name: s.name.into(),
-                                    width: 0, // Not available from libwebrtc
-                                    height: 0,
-                                    is_monitor: s.source_type == ScreenSourceType::Monitor,
-                                    is_primary: idx == 0 && s.source_type == ScreenSourceType::Monitor,
+                                .map(|d| AudioDeviceData {
+                                    id: d.id.into(),
+                                    name: d.name.into(),
+                                    is_default: d.is_default,
                                 })
                                 .collect();
 
-                            w.set_screen_sources(ModelRc::new(VecModel::from(ui_sources)));
-                            w.set_device_picker_type("screen".into());
-                            w.set_device_picker_visible(true);
-                            tracing::info!("Showing screen source picker with {} sources", source_count);
+                            w.global::<crate::CallView>()
+                                .set_audio_devices(ModelRc::new(VecModel::from(ui_devices)));
+                            w.global::<crate::CallView>()
+                                .set_device_picker_type("audio".into());
+                            w.global::<crate::CallView>()
+                                .set_device_picker_visible(true);
+                            tracing::info!("Showing audio input device picker");
                         }
                         Err(e) => {
-                            tracing::error!("Failed to enumerate screen sources: {}", e);
+                            tracing::error!("Failed to enumerate audio input devices: {}", e);
+                            picker_error(&w, "Could not list microphones. Try again.");
                         }
                     }
-                })
-                .unwrap();
+                    });
+                });
             }
-        }
-    });
+        });
+
+    // Show audio output device picker (speakers/headphones)
+    window
+        .global::<crate::CallView>()
+        .on_show_audio_output_picker({
+            let weak = weak.clone();
+            move || {
+                let weak = weak.clone();
+                std::thread::spawn(move || {
+                    let result = AudioCapture::list_output_devices();
+                    let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    match result {
+                        Ok(devices) => {
+                            let ui_devices: Vec<AudioDeviceData> = devices
+                                .into_iter()
+                                .map(|d| AudioDeviceData {
+                                    id: d.id.into(),
+                                    name: d.name.into(),
+                                    is_default: d.is_default,
+                                })
+                                .collect();
+
+                            w.global::<crate::CallView>()
+                                .set_audio_output_devices(ModelRc::new(VecModel::from(ui_devices)));
+                            w.global::<crate::CallView>()
+                                .set_device_picker_type("audio_output".into());
+                            w.global::<crate::CallView>()
+                                .set_device_picker_visible(true);
+                            tracing::info!("Showing audio output device picker");
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to enumerate audio output devices: {}", e);
+                            picker_error(&w, "Could not list speakers. Try again.");
+                        }
+                    }
+                    });
+                });
+            }
+        });
+
+    // Show screen source picker (desktop only)
+    window
+        .global::<crate::CallView>()
+        .on_show_screen_source_picker({
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            move || {
+                #[cfg(target_os = "android")]
+                {
+                    let _ = (&weak, &ui_ctx);
+                    tracing::warn!("Screen source picker not available on Android");
+                    return;
+                }
+                #[cfg(not(target_os = "android"))]
+                {
+                    let weak = weak.clone();
+                    let ui_ctx = ui_ctx.clone();
+                    slint::spawn_local(async move {
+                        // Gate on the room being connected. During an outgoing
+                        // "Calling…" call there is no room yet, so opening the
+                        // picker would only end in a `NotInCall` failure after the
+                        // user selected a source (and the OS portal dialog would
+                        // never appear). Don't surface the picker until connected.
+                        if !ui_ctx.call_is_connected().await {
+                            tracing::info!("Screen share unavailable — call not connected yet");
+                            if let Some(w) = weak.upgrade() {
+                                picker_error(&w, "Screen sharing is available once the call connects.");
+                            }
+                            return;
+                        }
+                        // Desktop capturer discovery may invoke an OS portal.
+                        std::thread::spawn(move || {
+                            let result = ScreenCapture::list_sources();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                let Some(w) = weak.upgrade() else { return };
+                                match result {
+                                    Ok(sources) => {
+                                        let source_count = sources.len();
+                                        let ui_sources: Vec<ScreenSourceData> = sources
+                                            .into_iter()
+                                            .enumerate()
+                                            .map(|(idx, s)| ScreenSourceData {
+                                                id: s.id.to_string().into(),
+                                                name: s.name.into(),
+                                                width: 0,
+                                                height: 0,
+                                                is_monitor: s.source_type == ScreenSourceType::Monitor,
+                                                is_primary: idx == 0 && s.source_type == ScreenSourceType::Monitor,
+                                            })
+                                            .collect();
+                                        let (monitors, windows): (Vec<_>, Vec<_>) = ui_sources
+                                            .into_iter().partition(|source| source.is_monitor);
+                                        w.global::<crate::CallView>()
+                                            .set_screen_monitors(ModelRc::new(VecModel::from(monitors)));
+                                        w.global::<crate::CallView>()
+                                            .set_screen_windows(ModelRc::new(VecModel::from(windows)));
+                                        w.global::<crate::CallView>()
+                                            .set_device_picker_type("screen".into());
+                                        w.global::<crate::CallView>()
+                                            .set_device_picker_visible(true);
+                                        tracing::info!("Showing screen source picker with {} sources", source_count);
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to enumerate screen sources: {}", e);
+                                        picker_error(&w, "Could not list screens. Try again.");
+                                    }
+                                }
+                            });
+                        });
+                    })
+                    .unwrap();
+                }
+            }
+        });
 
     // Handle audio input device selection
-    window.on_audio_device_selected({
-        let ui_ctx = ui_ctx.clone();
-        let weak = weak.clone();
-        move |device_id| {
-            let device_id_str = device_id.to_string();
-            tracing::info!("Audio input device selected: {}", device_id_str);
-
+    window
+        .global::<crate::CallView>()
+        .on_audio_device_selected({
             let ui_ctx = ui_ctx.clone();
             let weak = weak.clone();
-            slint::spawn_local(async move {
-                ui_ctx.call_stop_microphone();
-                if let Err(e) = ui_ctx.call_publish_microphone(Some(&device_id_str)).await {
-                    tracing::error!("Failed to switch microphone to {}: {}", device_id_str, e);
-                } else {
-                    tracing::info!("Switched to microphone: {}", device_id_str);
-                    if let Some(w) = weak.upgrade() {
-                        w.set_selected_audio_device_id(device_id_str.into());
-                    }
-                }
-            })
-            .unwrap();
-        }
-    });
-
-    // Handle audio output device selection
-    window.on_audio_output_selected({
-        let weak = weak.clone();
-        move |device_id| {
-            let device_id_str = device_id.to_string();
-            tracing::info!("Audio output device selected: {}", device_id_str);
-
-            // Note: Audio output device switching requires platform-specific handling
-            // LiveKit handles audio output internally via the room's audio system
-            // For now, we store the selection for reference
-            if let Some(w) = weak.upgrade() {
-                w.set_selected_audio_output_id(device_id_str.into());
-                tracing::info!("Audio output device set (system default used for playback)");
-            }
-        }
-    });
-
-    // Handle screen source selection
-    window.on_screen_source_selected({
-        let ui_ctx = ui_ctx.clone();
-        let weak = weak.clone();
-        move |source_id| {
-            #[cfg(target_os = "android")]
-            { let _ = source_id; let _ = &ui_ctx; tracing::warn!("Screen source selection not available on Android"); return; }
-            #[cfg(not(target_os = "android"))]
-            {
-                let source_id_str = source_id.to_string();
-                tracing::info!("Screen source selected: {}", source_id_str);
-
-                let source_id_u64: u64 = match source_id_str.parse() {
-                    Ok(id) => id,
-                    Err(e) => {
-                        tracing::error!("Invalid screen source ID '{}': {}", source_id_str, e);
-                        return;
-                    }
-                };
+            move |device_id| {
+                let device_id_str = device_id.to_string();
+                tracing::info!("Audio input device selected: {}", device_id_str);
 
                 let ui_ctx = ui_ctx.clone();
                 let weak = weak.clone();
-                let source_id_display = source_id_str.clone();
                 slint::spawn_local(async move {
-                    match ScreenCapture::list_sources() {
-                        Ok(sources) => {
-                            if let Some(source) = sources.into_iter().find(|s| s.id == source_id_u64) {
-                                if let Err(e) = ui_ctx.call_publish_screen_share(source).await {
-                                    tracing::error!("Failed to start screen share: {}", e);
-                                } else {
-                                    tracing::info!("Screen share started with source: {}", source_id_display);
-                                    if let Some(w) = weak.upgrade() {
-                                        w.set_call_is_screen_sharing(true);
-                                        w.set_selected_screen_source_id(source_id_display.into());
-                                    }
-                                }
-                            } else {
-                                tracing::error!("Selected screen source not found: {}", source_id_display);
-                            }
+                    if let Err(e) = ui_ctx.call_publish_microphone(Some(&device_id_str)).await {
+                        tracing::error!("Failed to switch microphone to {}: {}", device_id_str, e);
+                        if let Some(w) = weak.upgrade() {
+                            picker_error(&w, "Could not switch microphones. Try again.");
                         }
-                        Err(e) => {
-                            tracing::error!("Failed to enumerate screen sources: {}", e);
+                    } else {
+                        tracing::info!("Switched to microphone: {}", device_id_str);
+                        if let Some(w) = weak.upgrade() {
+                            w.global::<crate::CallView>()
+                                .set_selected_audio_device_id(device_id_str.into());
                         }
                     }
                 })
                 .unwrap();
             }
-        }
-    });
+        });
+
+    // Handle audio output device selection
+    window
+        .global::<crate::CallView>()
+        .on_audio_output_selected({
+            let ui_ctx = ui_ctx.clone();
+            let weak = weak.clone();
+            move |device_id| {
+                let device_id_str = device_id.to_string();
+                let ui_ctx = ui_ctx.clone();
+                let weak = weak.clone();
+                slint::spawn_local(async move {
+                    let result = ui_ctx.call_set_audio_output(&device_id_str).await;
+                    let Some(w) = weak.upgrade() else { return };
+                    match result {
+                        Ok(()) => w
+                            .global::<crate::CallView>()
+                            .set_selected_audio_output_id(device_id_str.into()),
+                        Err(e) => {
+                            // Slint set the id optimistically; don't leave a tick
+                            // on a device the audio isn't actually going to.
+                            tracing::error!(
+                                "Failed to switch audio output to {}: {}",
+                                device_id_str,
+                                e
+                            );
+                            w.global::<crate::CallView>()
+                                .set_selected_audio_output_id("".into());
+                            picker_error(&w, "Could not switch speakers. Try again.");
+                        }
+                    }
+                })
+                .unwrap();
+            }
+        });
+
+    // Handle screen source selection
+    window
+        .global::<crate::CallView>()
+        .on_screen_source_selected({
+            let ui_ctx = ui_ctx.clone();
+            let weak = weak.clone();
+            move |source_id| {
+                #[cfg(target_os = "android")]
+                {
+                    let _ = (source_id, &ui_ctx, &weak);
+                    tracing::warn!("Screen source selection not available on Android");
+                    return;
+                }
+                #[cfg(not(target_os = "android"))]
+                {
+                    let source_id_str = source_id.to_string();
+                    tracing::info!("Screen source selected: {}", source_id_str);
+
+                    let source_id_u64: u64 = match source_id_str.parse() {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::error!("Invalid screen source ID '{}': {}", source_id_str, e);
+                            if let Some(w) = weak.upgrade() {
+                                picker_error(&w, "That screen is no longer available.");
+                            }
+                            return;
+                        }
+                    };
+
+                    let ui_ctx = ui_ctx.clone();
+                    let weak = weak.clone();
+                    let source_id_display = source_id_str.clone();
+                    slint::spawn_local(async move {
+                        let sources_result = tokio::task::spawn_blocking(ScreenCapture::list_sources).await;
+                        match sources_result {
+                            Err(error) => {
+                                tracing::error!("Failed to enumerate screen sources: {}", error);
+                                if let Some(w) = weak.upgrade() {
+                                    picker_error(&w, "Could not list screens. Try again.");
+                                }
+                            }
+                            Ok(result) => match result {
+                            Ok(sources) => {
+                                if let Some(source) =
+                                    sources.into_iter().find(|s| s.id == source_id_u64)
+                                {
+                                    if let Err(e) = ui_ctx.call_publish_screen_share(source).await {
+                                        tracing::error!("Failed to start screen share: {}", e);
+                                        if let Some(w) = weak.upgrade() {
+                                            picker_error(&w, "Could not share that screen. Try again.");
+                                        }
+                                    } else {
+                                        tracing::info!(
+                                            "Screen share started with source: {}",
+                                            source_id_display
+                                        );
+                                        if let Some(w) = weak.upgrade() {
+                                            w.global::<crate::CallView>()
+                                                .set_call_is_screen_sharing(true);
+                                            w.global::<crate::CallView>()
+                                                .set_selected_screen_source_id(
+                                                    source_id_display.into(),
+                                                );
+                                            if let Some(id) = ui_ctx.session_current_user_id() {
+                                                super::active::set_local_participant_screen_sharing(
+                                                    &w,
+                                                    &id.to_string(),
+                                                    true,
+                                                );
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    tracing::error!(
+                                        "Selected screen source not found: {}",
+                                        source_id_display
+                                    );
+                                    if let Some(w) = weak.upgrade() {
+                                        picker_error(&w, "That screen is no longer available.");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to enumerate screen sources: {}", e);
+                                if let Some(w) = weak.upgrade() {
+                                    picker_error(&w, "Could not list screens. Try again.");
+                                }
+                            }
+                            }
+                        }
+                    })
+                    .unwrap();
+                }
+            }
+        });
 }
 
+fn picker_error(window: &MainWindow, message: &str) {
+    window.set_toast_message(message.into());
+    window.set_toast_variant("error".into());
+    window.set_toast_visible(true);
+}

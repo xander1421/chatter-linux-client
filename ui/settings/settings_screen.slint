@@ -1,3 +1,14 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { AccountSettings } from "account_settings.slint";
+import { DevicesSettings } from "devices_settings.slint";
+import { PrivacySettings } from "privacy_settings.slint";
+import { NotificationsSettings } from "notifications_settings.slint";
+import { EncryptionSettings } from "encryption_settings.slint";
+import { AISettings } from "ai_settings.slint";
+import { AppearanceSettings } from "appearance_settings.slint";
+import { AboutSettings } from "about_settings.slint";
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // SettingsScreen - Main settings page with sidebar navigation
 
 import { Colors } from "../theme/colors.slint";
@@ -5,39 +16,31 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 import { DismissButton } from "../components/dismiss_button.slint";
-import { Input } from "../components/input.slint";
-import { Avatar } from "../components/avatar.slint";
-import { Toggle } from "../components/toggle.slint";
-import { NeoActionToggle } from "../components/neo_action_toggle.slint";
-import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Icons } from "../theme/icons.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+import { SessionInfo, PendingLinkInfo } from "../modals/sessions.slint";
 
-// A local AI provider found running on this machine.
-export struct LocalAIProviderData {
-    kind: string,          // "ollama" | "lm-studio" | "llama-cpp" | "vllm" | "mistralrs"
-    display-name: string,
-    detail: string,        // "12 models · localhost:11434" or "in-process GPU engine"
-    is-active: bool,
-}
-
-// One row of the downloadable-model catalog.
-export struct CatalogModelData {
-    name: string,
-    tag: string,           // ollama tag — the download key
-    detail: string,        // "7.6B params · 4.7 GB"
-    fit: string,           // "gpu" | "cpu" | "big"
-    fit-label: string,     // "Fits GPU" | "CPU only (slow)" | "Too big"
-    installed: bool,
-    downloading: bool,
-    progress: float,       // 0..1 while downloading
-    error: string,
-}
+// Shared model data remains exported through this screen for its callers.
+import { LocalAIProviderData, CatalogModelData } from "settings_types.slint";
+export { LocalAIProviderData, CatalogModelData } from "settings_types.slint";
 
 export component SettingsScreen inherits Rectangle {
     // User profile data
     in property <string> display-name: "";
     in property <string> username: "";
+    // Room left for the mobile tab bar drawn over the bottom of the screen.
+    in property <length> bottom-inset: 0px;
+    in property <bool> mobile-platform: false;
     in property <image> avatar;
     in property <int> session-count: 0;
+    in property <[SessionInfo]> sessions: [];
+    in property <[PendingLinkInfo]> pending-links: [];
+    in property <bool> sessions-loaded: false;
+    in property <bool> sessions-loading: false;
+    in property <bool> sessions-revoking: false;
+    in property <string> sessions-error: "";
+    property <int> confirm-revoke-id: 0;
 
     // Change password form state
     in-out property <string> current-password: "";
@@ -64,16 +67,27 @@ export component SettingsScreen inherits Rectangle {
     in-out property <string> message-backup-passphrase: "";
     in-out property <string> message-backup-pin: "";
     in property <string> message-backup-status: "";
+    in property <bool> message-backup-busy: false;
 
     // Privacy settings
     in-out property <bool> read-receipts-enabled: true;
     in-out property <bool> typing-indicators-enabled: true;
+    in-out property <string> notification-detail: "none";  // "none" | "name_only" | "name_and_message"
     in-out property <string> search-shortcut: "both";   // "k" | "f" | "both"
+    // "Who can see my photo and name": "everyone" | "contacts" | "nobody".
+    // A restricting choice that needs the PIN parks in
+    // profile-visibility-pending until confirmed (Rust sets it).
+    in property <string> profile-visibility: "everyone";
+    in property <string> profile-visibility-pending: "";
+    in property <bool> profile-visibility-busy: false;
+    in property <string> profile-visibility-error: "";
+    in-out property <string> profile-visibility-pin: "";
 
     // Encryption settings
     in property <string> identity-fingerprint: "";
     in-out property <bool> sealed-sender-unrestricted: false;
-    in property <int> prekey-count: 0;
+    // "Who can find me by my username": true = Everyone, false = Nobody.
+    in-out property <bool> username-discoverable: true;
 
     // AI settings
     in-out property <bool> local-ai-enabled: true;
@@ -104,31 +118,85 @@ export component SettingsScreen inherits Rectangle {
     in property <bool> delete-loading: false;
     in property <string> delete-error: "";
 
+    // Recovery-code regeneration (password-confirmed; the new codes open in
+    // RecoveryCodesModal, the old ones stop working)
+    in-out property <string> recovery-regen-password: "";
+    in property <bool> recovery-regen-loading: false;
+    in property <string> recovery-regen-error: "";
+
     // Navigation state
-    property <string> active-section: "account";  // "account", "privacy", "encryption", "appearance"
+    // Mirror of AnonMode.enabled for the Privacy pane's Shield switch; the
+    // switch writes it, so it is re-synced from the global on every change.
+    property <bool> shield-switch: AnonMode.enabled;
+    property <bool> shield-on: AnonMode.enabled;
+    changed shield-on => { root.shield-switch = root.shield-on; }
+    in-out property <string> active-section: "account";  // "account", "devices", "privacy", "notifications", "encryption", "ai", "appearance"
+    property <bool> page-appearing: false;
+    property <float> page-entry: 1;
+    changed active-section => {
+        root.confirm-revoke-id = 0;
+        content-scroll.viewport-y = 0px;
+        if root.active-section == "devices" { root.refresh-sessions(); }
+        // Snap the new section a little toward its source, then let it glide
+        // into the same content column. The timer separates the two frames.
+        root.page-appearing = false;
+        root.page-entry = 0;
+        page-entry-timer.running = true;
+    }
+    page-entry-timer := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.page-appearing = true;
+            root.page-entry = 1;
+        }
+    }
+    animate page-entry {
+        duration: root.page-appearing ? Materials.motion-standard : 0ms;
+        easing: Materials.glide;
+    }
+    // Log Out asks once: on a phone it sits one thumb-width from Delete Account.
+
     property <bool> show-password-form: false;
     property <bool> show-pin-form: false;
     property <bool> show-backup-retry: false;
     property <bool> show-delete-confirm: false;
+    property <bool> show-recovery-regen: false;
+    // Log Out asks once: on a phone it sits one thumb-width from Delete Account.
+    property <bool> show-logout-confirm: false;
 
     // Callbacks
     callback edit-profile-clicked();
     callback change-password(string, string);  // current, new
     callback view-sessions-clicked();
+    callback refresh-sessions();
+    callback revoke-session(int);
+    callback cancel-pending-link(string);
+    callback link-new-device();
     callback logout-clicked();
     callback delete-account-clicked();
     callback delete-account-confirmed(string);  // password — fired only after explicit confirm
+    callback regenerate-recovery-codes(string);  // password — fired only after explicit confirm
     callback close-settings();
+    callback open-licenses();
 
     // Privacy callbacks
     callback read-receipts-changed(bool);
     callback typing-indicators-changed(bool);
+    callback notification-detail-changed(string);
     callback search-shortcut-changed(string);
+    callback profile-visibility-selected(string);           // option key
+    callback profile-visibility-confirmed(string, string);  // option key, PIN
+    callback profile-visibility-cancelled();
+    // Shield switch — the same toggle as the chat-list header's shield: ON
+    // opens the PIN gate, OFF leaves directly (sidebar/anon_mode.rs).
+    callback shield-toggled();
 
     // Encryption callbacks
     callback copy-fingerprint-clicked();
     callback sealed-sender-changed(bool);
-    callback refresh-keys-clicked();
+    callback username-discoverable-changed(bool);  // true = Everyone, false = Nobody
 
     // Security callbacks
     callback change-pin(string, string);  // current_pin, new_pin
@@ -156,7 +224,7 @@ export component SettingsScreen inherits Rectangle {
     callback cloud-ai-api-key-changed(string);
     callback cloud-ai-refresh-quota();
 
-    background: Colors.background;
+    background: Materials.ambient;
 
     // Responsive breakpoint: compact mode when width < 500px
     property <bool> compact-mode: root.width < 500px;
@@ -165,87 +233,18 @@ export component SettingsScreen inherits Rectangle {
     property <length> content-padding: compact-mode ? Spacing.md : Spacing.xl;
 
     VerticalLayout {
-
-        // Compact mode: horizontal tab bar at top — Neo glass
-        // Tall enough for 48px touch targets (close button + tab chips) plus
-        // the 4px padding the tab strip carries.
-        if compact-mode: Rectangle {
-            height: Spacing.touch-target-min + Spacing.sm;
-            background: Colors.surface.with-alpha(0.85);
-            border-width: 1px;
-            border-color: Colors.neo-highlight;
-            drop-shadow-blur: Spacing.neo-blur-sm;
-            drop-shadow-offset-y: Spacing.neo-offset-sm;
-            drop-shadow-color: Colors.neo-shadow;
-
-            HorizontalLayout {
-                padding-left: Spacing.sm;
-                padding-right: Spacing.sm;
-
-                // The only way out of Settings in compact mode — and Settings
-                // is a full-screen page, so it is a back chevron on the
-                // leading edge, not an X. Was an X here and a "Close Settings"
-                // text button at the bottom of the desktop rail: three
-                // spellings of one action across two breakpoints.
-                DismissButton {
-                    back: true;
-                    clicked => { root.close-settings(); }
-                }
-
-                // Tab bar (scrollable)
-                Flickable {
-                    horizontal-stretch: 1;
-                    viewport-width: tab-layout.preferred-width;
-
-                    tab-layout := HorizontalLayout {
-                        spacing: 2px;
-                        padding: Spacing.xs;
-
-                        for item in [
-                            { id: "account", label: "Account", enabled: true },
-                            { id: "privacy", label: "Privacy", enabled: true },
-                            { id: "encryption", label: "Encrypt", enabled: true },
-                            { id: "ai", label: "AI", enabled: true },
-                            { id: "appearance", label: "Theme", enabled: true }
-                        ]: Rectangle {
-                            width: compact-tab-text.preferred-width + Spacing.md * 2;
-                            height: Spacing.touch-target-min;
-                            border-radius: Spacing.radius-sm;
-                            background: active-section == item.id ? Colors.primary :
-                                       (compact-tab-touch.has-hover ? Colors.surface-hover : transparent);
-
-                            compact-tab-text := Text {
-                                text: item.label;
-                                color: active-section == item.id ? Colors.text-primary : Colors.text-secondary;
-                                font-size: Typography.xs;
-                                font-weight: active-section == item.id ? Typography.medium : Typography.normal;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-
-                            compact-tab-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    if item.enabled { active-section = item.id; }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        width: root.width;
+        height: root.height;
 
         HorizontalLayout {
+            horizontal-stretch: 1;
 
         // Sidebar navigation — hidden in compact mode — Neo surface
-        if !compact-mode: Rectangle {
+        if !compact-mode: GlassSurface {
+            material-level: 2;
+            elevation: 3;
+
             width: min(240px, root.width * 0.35);
-            background: Colors.surface;
-            border-width: 1px;
-            border-color: Colors.neo-highlight;
-            drop-shadow-blur: Spacing.neo-blur-sm;
-            drop-shadow-offset-x: Spacing.neo-offset-sm;
-            drop-shadow-color: Colors.neo-shadow;
 
             VerticalLayout {
                 padding: Spacing.md;
@@ -264,6 +263,7 @@ export component SettingsScreen inherits Rectangle {
 
                     DismissButton {
                         back: true;
+                        plain: true;
                         touch: false;
                         clicked => { root.close-settings(); }
                     }
@@ -283,24 +283,57 @@ export component SettingsScreen inherits Rectangle {
                 for item[index] in [
                     { id: "account", label: "Account", enabled: true },
                     { id: "privacy", label: "Privacy", enabled: true },
+                    { id: "notifications", label: "Notifications", enabled: true },
+                    { id: "devices", label: "Linked devices", enabled: true },
+                    { id: "appearance", label: "Appearance", enabled: true },
                     { id: "encryption", label: "Encryption", enabled: true },
                     { id: "ai", label: "AI Assistant", enabled: true },
-                    { id: "appearance", label: "Appearance", enabled: true }
+                    { id: "about", label: "About", enabled: true }
                 ]: Rectangle {
-                    height: 40px;
+                    height: root.mobile-platform ? Spacing.touch-target-min : Spacing.button-height;
                     border-radius: Spacing.radius-md;
-                    background: active-section == item.id ? Colors.primary :
-                               (nav-touch.has-hover && item.enabled ? Colors.surface-hover : transparent);
+                    background: active-section == item.id ? Colors.row-selected :
+                               (nav-touch.pressed && item.enabled ? Materials.pressed
+                               : nav-touch.has-hover && item.enabled ? Colors.row-hover : transparent);
+                    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
                     opacity: item.enabled ? 1.0 : 0.5;
+                    accessible-role: tab;
+                    accessible-label: item.label;
+                    accessible-item-selected: active-section == item.id;
+                    accessible-enabled: item.enabled;
+                    accessible-action-default => {
+                        if item.enabled {
+                            active-section = item.id;
+                        }
+                    }
+                    KeyFocus { enabled: item.enabled; border-radius: parent.border-radius; activate => { active-section = item.id; } }
 
                     HorizontalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
+                        spacing: Spacing.sm;
                         alignment: start;
 
+                        if !root.compact-mode: VerticalLayout {
+                            alignment: center;
+                            Image {
+                                source: item.id == "account" ? Icons.user
+                                    : item.id == "devices" ? Icons.smartphone
+                                    : item.id == "privacy" ? Icons.shield
+                                    : item.id == "notifications" ? Icons.bell
+                                    : item.id == "encryption" ? Icons.lock
+                                    : item.id == "ai" ? Icons.sparkles
+                                    : item.id == "about" ? Icons.info : Icons.moon;
+                                width: Spacing.button-icon;
+                                height: Spacing.button-icon;
+                                colorize: active-section == item.id ? Colors.selected-indicator : Colors.text-secondary;
+                            }
+                        }
+
                         Text {
+                            accessible-role: none;
                             text: item.label;
-                            color: active-section == item.id ? Colors.text-primary :
+                            color: active-section == item.id ? (root.compact-mode ? Colors.on-action : Colors.text-primary) :
                                    (item.enabled ? Colors.text-secondary : Colors.text-muted);
                             font-size: Typography.sm;
                             font-weight: active-section == item.id ? Typography.medium : Typography.normal;
@@ -315,6 +348,7 @@ export component SettingsScreen inherits Rectangle {
                                 active-section = item.id;
                             }
                         }
+
                     }
                 }
 
@@ -326,1938 +360,283 @@ export component SettingsScreen inherits Rectangle {
         // Content area
         Rectangle {
             horizontal-stretch: 1;
+            vertical-stretch: 1;
             background: Colors.background;
 
-            Flickable {
+            content-scroll := Flickable {
+                width: parent.width;
+                height: parent.height;
                 viewport-width: self.width;
-                viewport-height: content-layout.preferred-height + root.content-padding * 2;
+                viewport-height: content-layout.preferred-height;
 
                 content-layout := VerticalLayout {
+                    width: parent.width;
                     padding: root.content-padding;
+                    padding-left: root.content-padding + Spacing.md * (1 - root.page-entry);
+                    padding-top: root.content-padding + (root.compact-mode ? Spacing.touch-target-min + Spacing.sm : Spacing.none);
+                    padding-bottom: root.content-padding + root.bottom-inset;
                     spacing: root.compact-mode ? Spacing.md : Spacing.lg;
                     alignment: start;
 
-                    // Center content with max-width (wider in compact mode to use space)
-                    Rectangle {
-                        max-width: root.compact-mode ? root.width : 600px;
+                    // Center content with max-width (wider in compact mode to use space).
+                    // A layout, not a Rectangle: a Rectangle does not pass its
+                    // `if` children's height up, so `content-layout` reported
+                    // ~0 and the page could not scroll to anything below the
+                    // fold (Key Backup was stranded under the tab bar).
+                    HorizontalLayout {
+                        Rectangle { horizontal-stretch: 1; }
+                    VerticalLayout {
+                        width: min(root.compact-mode ? root.width : 600px, parent.width);
 
                         // Account section
-                        if active-section == "account": VerticalLayout {
-                            spacing: Spacing.lg;
-
-                            // Section header
-                            Text {
-                                text: "Account";
-                                color: Colors.text-primary;
-                                font-size: Typography.xl;
-                                font-weight: Typography.semibold;
-                            }
-
-                            // Profile info row
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        // Avatar
-                                        Avatar {
-                                            size: 64px;
-                                            source: root.avatar;
-                                            fallback-text: root.display-name;
-                                        }
-
-                                        // Name and username
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            spacing: Spacing.xs;
-
-                                            Text {
-                                                text: root.display-name;
-                                                color: Colors.text-primary;
-                                                font-size: Typography.lg;
-                                                font-weight: Typography.medium;
-                                                overflow: elide;
-                                            }
-
-                                            Text {
-                                                text: "@" + root.username;
-                                                color: Colors.text-secondary;
-                                                font-size: Typography.sm;
-                                                overflow: elide;
-                                            }
-                                        }
-
-                                        // Edit button — beside the name on wide screens
-                                        if !root.compact-mode: Button {
-                                            text: "Edit Profile";
-                                            variant: "ghost";
-                                            clicked => { root.edit-profile-clicked(); }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if root.compact-mode: Button {
-                                        text: "Edit Profile";
-                                        variant: "ghost";
-                                        clicked => { root.edit-profile-clicked(); }
-                                    }
-                                }
-                            }
-
-                            // Security subsection
-                            Rectangle { height: Spacing.md; }
-
-                            Text {
-                                text: "Security";
-                                color: Colors.text-primary;
-                                font-size: Typography.lg;
-                                font-weight: Typography.semibold;
-                            }
-
-                            // Change Password group
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.sm;
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.xs;
-
-                                            Text {
-                                                text: "Password";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                            }
-
-                                            Text {
-                                                text: "Update your password regularly to keep your account secure.";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
-                                        }
-
-                                        if !show-password-form && !root.compact-mode: Button {
-                                            text: "Change";
-                                            variant: "secondary";
-                                            clicked => { show-password-form = true; }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if !show-password-form && root.compact-mode: Button {
-                                        text: "Change";
-                                        variant: "secondary";
-                                        clicked => { show-password-form = true; }
-                                    }
-
-                                    // Inline password form
-                                    if show-password-form: VerticalLayout {
-                                        spacing: Spacing.sm;
-
-                                        Rectangle {
-                                            height: 1px;
-                                            background: Colors.text-muted.with-alpha(0.2);
-                                        }
-
-                                        Input {
-                                            placeholder: "Current password";
-                                            password: true;
-                                            text <=> root.current-password;
-                                        }
-
-                                        HorizontalLayout {
-                                            spacing: Spacing.md;
-
-                                            Input {
-                                                placeholder: "New password";
-                                                password: true;
-                                                text <=> root.new-password;
-                                                horizontal-stretch: 1;
-                                            }
-
-                                            Input {
-                                                placeholder: "Confirm new password";
-                                                password: true;
-                                                text <=> root.confirm-password;
-                                                error: root.password-error != "";
-                                                error-message: root.password-error;
-                                                horizontal-stretch: 1;
-                                            }
-                                        }
-
-                                        HorizontalLayout {
-                                            spacing: Spacing.sm;
-                                            alignment: end;
-
-                                            Button {
-                                                text: "Cancel";
-                                                variant: "ghost";
-                                                clicked => {
-                                                    show-password-form = false;
-                                                    root.current-password = "";
-                                                    root.new-password = "";
-                                                    root.confirm-password = "";
-                                                }
-                                            }
-
-                                            Button {
-                                                text: "Save";
-                                                variant: "primary";
-                                                loading: root.password-changing;
-                                                disabled: root.current-password == "" ||
-                                                         root.new-password == "" ||
-                                                         root.confirm-password == "";
-                                                clicked => {
-                                                    root.change-password(root.current-password, root.new-password);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Active Sessions group
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.xs;
-
-                                            HorizontalLayout {
-                                                spacing: Spacing.sm;
-
-                                                Text {
-                                                    text: "Active Sessions";
-                                                    color: Colors.text-primary;
-                                                    font-size: Typography.sm;
-                                                    font-weight: Typography.medium;
-                                                }
-
-                                                // Count badge
-                                                Rectangle {
-                                                    width: 24px;
-                                                    height: 20px;
-                                                    border-radius: Spacing.radius-sm;
-                                                    background: Colors.primary;
-
-                                                    Text {
-                                                        text: root.session-count;
-                                                        color: Colors.text-primary;
-                                                        font-size: Typography.xs;
-                                                        horizontal-alignment: center;
-                                                        vertical-alignment: center;
-                                                        width: 100%;
-                                                        height: 100%;
-                                                    }
-                                                }
-                                            }
-
-                                            Text {
-                                                text: "Manage devices that are signed in to your account.";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
-                                        }
-
-                                        if !root.compact-mode: Button {
-                                            text: "View All";
-                                            variant: "secondary";
-                                            clicked => { root.view-sessions-clicked(); }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if root.compact-mode: Button {
-                                        text: "View All";
-                                        variant: "secondary";
-                                        clicked => { root.view-sessions-clicked(); }
-                                    }
-                                }
-                            }
-
-                            // Change PIN group
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.sm;
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.xs;
-
-                                            Text {
-                                                text: "Backup PIN";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                            }
-
-                                            Text {
-                                                text: "Your PIN secures your encrypted key backup.";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
-                                        }
-
-                                        if !show-pin-form && !root.compact-mode: Button {
-                                            text: "Change";
-                                            variant: "secondary";
-                                            clicked => { show-pin-form = true; }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if !show-pin-form && root.compact-mode: Button {
-                                        text: "Change";
-                                        variant: "secondary";
-                                        clicked => { show-pin-form = true; }
-                                    }
-
-                                    // Inline PIN form
-                                    if show-pin-form: VerticalLayout {
-                                        spacing: Spacing.sm;
-
-                                        Rectangle {
-                                            height: 1px;
-                                            background: Colors.text-muted.with-alpha(0.2);
-                                        }
-
-                                        Input {
-                                            placeholder: "Current PIN";
-                                            password: true;
-                                            text <=> root.change-pin-current;
-                                        }
-
-                                        HorizontalLayout {
-                                            spacing: Spacing.md;
-
-                                            Input {
-                                                placeholder: "New PIN (8+ characters)";
-                                                password: true;
-                                                text <=> root.change-pin-new;
-                                                horizontal-stretch: 1;
-                                            }
-
-                                            Input {
-                                                placeholder: "Confirm new PIN";
-                                                password: true;
-                                                text <=> root.change-pin-confirm;
-                                                error: root.change-pin-error != "" || (root.change-pin-confirm != "" && root.change-pin-new != root.change-pin-confirm);
-                                                error-message: root.change-pin-error != "" ? root.change-pin-error : "PINs do not match";
-                                                horizontal-stretch: 1;
-                                            }
-                                        }
-
-                                        if root.change-pin-success != "": Text {
-                                            text: root.change-pin-success;
-                                            color: Colors.success;
-                                            font-size: Typography.xs;
-                                        }
-
-                                        HorizontalLayout {
-                                            spacing: Spacing.sm;
-                                            alignment: end;
-
-                                            Button {
-                                                text: "Cancel";
-                                                variant: "ghost";
-                                                clicked => {
-                                                    show-pin-form = false;
-                                                    root.change-pin-current = "";
-                                                    root.change-pin-new = "";
-                                                    root.change-pin-confirm = "";
-                                                }
-                                            }
-
-                                            Button {
-                                                text: "Save";
-                                                variant: "primary";
-                                                loading: root.change-pin-loading;
-                                                disabled: root.change-pin-current == "" ||
-                                                         root.change-pin-new == "" ||
-                                                         root.change-pin-confirm == "";
-                                                clicked => {
-                                                    root.change-pin(root.change-pin-current, root.change-pin-new);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Key Backup group
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.sm;
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.xs;
-
-                                            Text {
-                                                text: "Key Backup";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                            }
-
-                                            HorizontalLayout {
-                                                spacing: Spacing.sm;
-
-                                                Text {
-                                                    text: "Status:";
-                                                    color: Colors.text-muted;
-                                                    font-size: Typography.xs;
-                                                }
-
-                                                Text {
-                                                    text: root.backup-status == "backed_up" ? "Backed up" :
-                                                          root.backup-status == "not_backed_up" ? "Not backed up" : "Unknown";
-                                                    color: root.backup-status == "backed_up" ? Colors.success :
-                                                           root.backup-status == "not_backed_up" ? Colors.warning : Colors.text-muted;
-                                                    font-size: Typography.xs;
-                                                    font-weight: Typography.medium;
-                                                }
-                                            }
-                                        }
-
-                                        if !show-backup-retry && !root.compact-mode: Button {
-                                            text: "Retry";
-                                            variant: "secondary";
-                                            clicked => { show-backup-retry = true; }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if !show-backup-retry && root.compact-mode: Button {
-                                        text: "Retry";
-                                        variant: "secondary";
-                                        clicked => { show-backup-retry = true; }
-                                    }
-
-                                    // Inline retry form
-                                    if show-backup-retry: VerticalLayout {
-                                        spacing: Spacing.sm;
-
-                                        Rectangle {
-                                            height: 1px;
-                                            background: Colors.text-muted.with-alpha(0.2);
-                                        }
-
-                                        Input {
-                                            placeholder: "Enter your PIN to retry backup";
-                                            text <=> root.backup-retry-pin;
-                                        }
-
-                                        if root.backup-retry-error != "": Text {
-                                            text: root.backup-retry-error;
-                                            color: Colors.error;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                        }
-
-                                        HorizontalLayout {
-                                            spacing: Spacing.sm;
-                                            alignment: end;
-
-                                            Button {
-                                                text: "Cancel";
-                                                variant: "ghost";
-                                                clicked => {
-                                                    show-backup-retry = false;
-                                                    root.backup-retry-pin = "";
-                                                }
-                                            }
-
-                                            Button {
-                                                text: "Retry";
-                                                variant: "primary";
-                                                loading: root.backup-retry-loading;
-                                                disabled: root.backup-retry-pin == "";
-                                                clicked => {
-                                                    root.retry-backup(root.backup-retry-pin);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Message Backup group (encrypted history export/restore)
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.sm;
-
-                                    Text {
-                                        text: "Message Backup";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.sm;
-                                        font-weight: Typography.medium;
-                                    }
-
-                                    Text {
-                                        text: "Encrypted backup of your message history, conversations, and contacts. Neither the file nor the server copy can be read without your passphrase or PIN.";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                        wrap: word-wrap;
-                                    }
-
-                                    Input {
-                                        placeholder: "Backup passphrase (for file backup)";
-                                        text <=> root.message-backup-passphrase;
-                                    }
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.sm;
-                                        alignment: end;
-
-                                        Button {
-                                            text: "Export to File…";
-                                            variant: "secondary";
-                                            disabled: root.message-backup-passphrase == "";
-                                            clicked => {
-                                                root.export-message-backup(root.message-backup-passphrase);
-                                            }
-                                        }
-
-                                        Button {
-                                            text: "Restore from File…";
-                                            variant: "secondary";
-                                            disabled: root.message-backup-passphrase == "";
-                                            clicked => {
-                                                root.import-message-backup(root.message-backup-passphrase);
-                                            }
-                                        }
-                                    }
-
-                                    Input {
-                                        placeholder: "PIN (for server backup)";
-                                        text <=> root.message-backup-pin;
-                                    }
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.sm;
-                                        alignment: end;
-
-                                        Button {
-                                            text: "Back Up to Server";
-                                            variant: "secondary";
-                                            disabled: root.message-backup-pin == "";
-                                            clicked => {
-                                                root.server-message-backup(root.message-backup-pin);
-                                            }
-                                        }
-
-                                        Button {
-                                            text: "Restore from Server";
-                                            variant: "secondary";
-                                            disabled: root.message-backup-pin == "";
-                                            clicked => {
-                                                root.restore-message-backup(root.message-backup-pin);
-                                            }
-                                        }
-                                    }
-
-                                    if root.message-backup-status != "": Text {
-                                        text: root.message-backup-status;
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                        wrap: word-wrap;
-                                    }
-                                }
-                            }
-
-                            // Danger Zone
-                            Rectangle { height: Spacing.md; }
-
-                            Text {
-                                text: "Danger Zone";
-                                color: Colors.error;
-                                font-size: Typography.lg;
-                                font-weight: Typography.semibold;
-                            }
-
-                            Rectangle {
-                                background: Colors.error.with-alpha(0.05);
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.error.with-alpha(0.2);
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.error.with-alpha(0.1);
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    // Logout row
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.xs;
-
-                                            Text {
-                                                text: "Session on this device";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                            }
-
-                                            Text {
-                                                text: "Sign out of your account on this device.";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
-                                        }
-
-                                        if !root.compact-mode: Button {
-                                            text: "Log Out";
-                                            variant: "danger";
-                                            clicked => { root.logout-clicked(); }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if root.compact-mode: Button {
-                                        text: "Log Out";
-                                        variant: "danger";
-                                        clicked => { root.logout-clicked(); }
-                                    }
-
-                                    Rectangle {
-                                        height: 1px;
-                                        background: Colors.error.with-alpha(0.2);
-                                    }
-
-                                    // Delete account row
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.xs;
-
-                                            Text {
-                                                // Not plain "Account" — that is the
-                                                // section header a few rows up.
-                                                text: "This account";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                            }
-
-                                            Text {
-                                                text: "Permanently delete your account and all associated data. This action cannot be undone.";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
-                                        }
-
-                                        // First click reveals a confirmation step
-                                        // (with password) — never deletes directly.
-                                        if !show-delete-confirm && !root.compact-mode: Button {
-                                            text: "Delete Account";
-                                            variant: "danger";
-                                            clicked => {
-                                                root.delete-account-clicked();
-                                                show-delete-confirm = true;
-                                            }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if !show-delete-confirm && root.compact-mode: Button {
-                                        text: "Delete Account";
-                                        variant: "danger";
-                                        clicked => {
-                                            root.delete-account-clicked();
-                                            show-delete-confirm = true;
-                                        }
-                                    }
-
-                                    // Inline delete confirmation (explicit confirm gate)
-                                    if show-delete-confirm: VerticalLayout {
-                                        spacing: Spacing.sm;
-
-                                        Rectangle {
-                                            height: 1px;
-                                            background: Colors.error.with-alpha(0.2);
-                                        }
-
-                                        Text {
-                                            text: "This permanently deletes your account and all associated data. This cannot be undone. Enter your password to confirm.";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                        }
-
-                                        Input {
-                                            placeholder: "Password";
-                                            password: true;
-                                            text <=> root.delete-password;
-                                            error: root.delete-error != "";
-                                            error-message: root.delete-error;
-                                        }
-
-                                        HorizontalLayout {
-                                            spacing: Spacing.sm;
-                                            alignment: end;
-
-                                            Button {
-                                                text: "Cancel";
-                                                variant: "ghost";
-                                                clicked => {
-                                                    show-delete-confirm = false;
-                                                    root.delete-password = "";
-                                                }
-                                            }
-
-                                            Button {
-                                                text: "Delete Forever";
-                                                variant: "danger";
-                                                loading: root.delete-loading;
-                                                disabled: root.delete-password == "";
-                                                clicked => {
-                                                    root.delete-account-confirmed(root.delete-password);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                        if active-section == "account": AccountSettings {
+                            show-password-form <=> root.show-password-form;
+                            show-pin-form <=> root.show-pin-form;
+                            show-backup-retry <=> root.show-backup-retry;
+                            show-delete-confirm <=> root.show-delete-confirm;
+                            show-recovery-regen <=> root.show-recovery-regen;
+                            show-logout-confirm <=> root.show-logout-confirm;
+                            avatar : root.avatar;
+                            backup-retry-error : root.backup-retry-error;
+                            backup-retry-loading : root.backup-retry-loading;
+                            backup-retry-pin <=> root.backup-retry-pin;
+                            backup-status : root.backup-status;
+                            change-pin-confirm <=> root.change-pin-confirm;
+                            change-pin-current <=> root.change-pin-current;
+                            change-pin-error : root.change-pin-error;
+                            change-pin-loading : root.change-pin-loading;
+                            change-pin-new <=> root.change-pin-new;
+                            change-pin-success : root.change-pin-success;
+                            compact-mode : root.compact-mode;
+                            confirm-password <=> root.confirm-password;
+                            current-password <=> root.current-password;
+                            delete-error : root.delete-error;
+                            delete-loading : root.delete-loading;
+                            delete-password <=> root.delete-password;
+                            display-name : root.display-name;
+                            message-backup-passphrase <=> root.message-backup-passphrase;
+                            message-backup-pin <=> root.message-backup-pin;
+                            message-backup-status : root.message-backup-status;
+                            message-backup-busy : root.message-backup-busy;
+                            mobile-platform : root.mobile-platform;
+                            new-password <=> root.new-password;
+                            password-changing : root.password-changing;
+                            password-error : root.password-error;
+                            recovery-regen-error : root.recovery-regen-error;
+                            recovery-regen-loading : root.recovery-regen-loading;
+                            recovery-regen-password <=> root.recovery-regen-password;
+                            username : root.username;
+                            change-password(arg0, arg1) => { root.change-password(arg0, arg1); }
+                            change-pin(arg0, arg1) => { root.change-pin(arg0, arg1); }
+                            delete-account-clicked() => { root.delete-account-clicked(); }
+                            delete-account-confirmed(arg0) => { root.delete-account-confirmed(arg0); }
+                            edit-profile-clicked() => { root.edit-profile-clicked(); }
+                            export-message-backup(arg0) => { root.export-message-backup(arg0); }
+                            import-message-backup(arg0) => { root.import-message-backup(arg0); }
+                            logout-clicked() => { root.logout-clicked(); }
+                            regenerate-recovery-codes(arg0) => { root.regenerate-recovery-codes(arg0); }
+                            restore-message-backup(arg0) => { root.restore-message-backup(arg0); }
+                            retry-backup(arg0) => { root.retry-backup(arg0); }
+                            server-message-backup(arg0) => { root.server-message-backup(arg0); }
+                        }
+
+                        // Linked devices section
+                        if active-section == "devices": DevicesSettings {
+                            compact-mode : root.compact-mode;
+                            confirm-revoke-id <=> root.confirm-revoke-id;
+                            mobile-platform : root.mobile-platform;
+                            pending-links : root.pending-links;
+                            session-count : root.session-count;
+                            sessions : root.sessions;
+                            sessions-error : root.sessions-error;
+                            sessions-loaded : root.sessions-loaded;
+                            sessions-loading : root.sessions-loading;
+                            sessions-revoking : root.sessions-revoking;
+                            cancel-pending-link(arg0) => { root.cancel-pending-link(arg0); }
+                            link-new-device() => { root.link-new-device(); }
+                            revoke-session(arg0) => { root.revoke-session(arg0); }
+                            view-sessions-clicked() => { root.view-sessions-clicked(); }
                         }
 
                         // Privacy section
-                        if active-section == "privacy": VerticalLayout {
-                            spacing: Spacing.lg;
+                        if active-section == "privacy": PrivacySettings {
+                            mobile-platform : root.mobile-platform;
+                            profile-visibility : root.profile-visibility;
+                            profile-visibility-busy : root.profile-visibility-busy;
+                            profile-visibility-error : root.profile-visibility-error;
+                            profile-visibility-pending : root.profile-visibility-pending;
+                            profile-visibility-pin <=> root.profile-visibility-pin;
+                            read-receipts-enabled <=> root.read-receipts-enabled;
+                            shield-switch <=> root.shield-switch;
+                            typing-indicators-enabled <=> root.typing-indicators-enabled;
+                            username-discoverable <=> root.username-discoverable;
+                            profile-visibility-cancelled() => { root.profile-visibility-cancelled(); }
+                            profile-visibility-confirmed(arg0, arg1) => { root.profile-visibility-confirmed(arg0, arg1); }
+                            profile-visibility-selected(arg0) => { root.profile-visibility-selected(arg0); }
+                            read-receipts-changed(arg0) => { root.read-receipts-changed(arg0); }
+                            shield-toggled() => { root.shield-toggled(); }
+                            typing-indicators-changed(arg0) => { root.typing-indicators-changed(arg0); }
+                            username-discoverable-changed(arg0) => { root.username-discoverable-changed(arg0); }
+                        }
 
-                            // Section header
-                            Text {
-                                text: "Privacy";
-                                color: Colors.text-primary;
-                                font-size: Typography.xl;
-                                font-weight: Typography.semibold;
-                            }
-
-                            Text {
-                                text: "Control what information you share with others";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                            }
-
-                            // Read Receipts setting
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                HorizontalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Read Receipts";
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Let others know when you've read their messages";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                        }
-                                    }
-
-                                    Toggle {
-                                        accessible-text: "Read Receipts";
-                                        checked: root.read-receipts-enabled;
-                                        toggled(value) => {
-                                            root.read-receipts-enabled = value;
-                                            root.read-receipts-changed(value);
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Typing Indicators setting
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                HorizontalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Typing Indicators";
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Show when you're typing a message";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                        }
-                                    }
-
-                                    Toggle {
-                                        accessible-text: "Typing Indicators";
-                                        checked: root.typing-indicators-enabled;
-                                        toggled(value) => {
-                                            root.typing-indicators-enabled = value;
-                                            root.typing-indicators-changed(value);
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Search shortcut setting (3-way segmented selector)
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                HorizontalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Search shortcut";
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Which keys open search";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                        }
-                                    }
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.xs;
-                                        vertical-stretch: 0;
-                                        alignment: center;
-
-                                        for opt[idx] in [
-                                            { key: "k", label: "Ctrl+K" },
-                                            { key: "f", label: "Ctrl+F" },
-                                            { key: "both", label: "Both" },
-                                        ]: Rectangle {
-                                            property <bool> selected: root.search-shortcut == opt.key;
-                                            height: 32px;
-                                            min-width: 56px;
-                                            border-radius: Spacing.radius-md;
-                                            background: selected ? Colors.primary : Colors.surface-hover;
-                                            border-width: 1px;
-                                            border-color: selected ? Colors.primary : Colors.neo-highlight;
-
-                                            HorizontalLayout {
-                                                padding-left: Spacing.sm;
-                                                padding-right: Spacing.sm;
-                                                Text {
-                                                    text: opt.label;
-                                                    vertical-alignment: center;
-                                                    horizontal-alignment: center;
-                                                    color: selected ? Colors.text-primary : Colors.text-secondary;
-                                                    font-size: Typography.xs;
-                                                    font-weight: selected ? Typography.semibold : Typography.medium;
-                                                }
-                                            }
-
-                                            TouchArea {
-                                                mouse-cursor: pointer;
-                                                clicked => {
-                                                    root.search-shortcut = opt.key;
-                                                    root.search-shortcut-changed(opt.key);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Profile Visibility placeholder (coming soon)
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-                                opacity: 0.5;
-
-                                HorizontalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Profile Visibility";
-                                            color: Colors.text-secondary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Coming soon";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            font-italic: true;
-                                        }
-                                    }
-                                }
-                            }
+                        // Notifications section
+                        if active-section == "notifications": NotificationsSettings {
+                            mobile-platform : root.mobile-platform;
+                            notification-detail <=> root.notification-detail;
+                            notification-detail-changed(arg0) => { root.notification-detail-changed(arg0); }
                         }
 
                         // Encryption section
-                        if active-section == "encryption": VerticalLayout {
-                            spacing: Spacing.lg;
-
-                            // Section header
-                            Text {
-                                text: "Encryption";
-                                color: Colors.text-primary;
-                                font-size: Typography.xl;
-                                font-weight: Typography.semibold;
-                            }
-
-                            Text {
-                                text: "Your messages are protected with Signal Protocol end-to-end encryption";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                                wrap: word-wrap;
-                            }
-
-                            // Identity Verification group
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.sm;
-
-                                    Text {
-                                        text: "Your Safety Number";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.lg;
-                                        font-weight: Typography.medium;
-                                    }
-
-                                    // Fingerprint display — Neo inset
-                                    Rectangle {
-                                        background: Colors.neo-inset-bg;
-                                        border-radius: Spacing.radius-md;
-                                        border-width: 1px;
-                                        border-color: Colors.neo-inset-shadow;
-
-                                        VerticalLayout {
-                                            padding: Spacing.lg;
-
-                                            Text {
-                                                text: root.identity-fingerprint != "" ? root.identity-fingerprint : "No fingerprint available";
-                                                color: root.identity-fingerprint != "" ? Colors.text-secondary : Colors.text-muted;
-                                                font-size: Typography.sm;
-                                                letter-spacing: 1px;
-                                                horizontal-alignment: center;
-                                            }
-                                        }
-                                    }
-
-                                    HorizontalLayout {
-                                        alignment: space-between;
-
-                                        Text {
-                                            text: "Share this with your contacts to verify encryption";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                            vertical-alignment: center;
-                                        }
-
-                                        if !root.compact-mode: Button {
-                                            text: "Copy";
-                                            variant: "ghost";
-                                            clicked => { root.copy-fingerprint-clicked(); }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if root.compact-mode: Button {
-                                        text: "Copy";
-                                        variant: "ghost";
-                                        clicked => { root.copy-fingerprint-clicked(); }
-                                    }
-                                }
-                            }
-
-                            // Sealed Sender setting
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                HorizontalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Allow sealed sender from anyone";
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Accept messages from unknown senders without revealing your identity";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                        }
-                                    }
-
-                                    Toggle {
-                                        checked: root.sealed-sender-unrestricted;
-                                        toggled(value) => {
-                                            root.sealed-sender-unrestricted = value;
-                                            root.sealed-sender-changed(value);
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Key Status group
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.sm;
-
-                                    Text {
-                                        text: "Encryption Keys";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.lg;
-                                        font-weight: Typography.medium;
-                                    }
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.xs;
-
-                                            HorizontalLayout {
-                                                spacing: Spacing.sm;
-
-                                                Text {
-                                                    text: "Prekeys available";
-                                                    color: Colors.text-secondary;
-                                                    font-size: Typography.sm;
-                                                    vertical-alignment: center;
-                                                }
-
-                                                // Prekey count badge with color indicator
-                                                Rectangle {
-                                                    width: 32px;
-                                                    height: 22px;
-                                                    border-radius: Spacing.radius-sm;
-                                                    background: root.prekey-count >= 10 ? Colors.success :
-                                                               (root.prekey-count >= 5 ? Colors.warning : Colors.error);
-
-                                                    Text {
-                                                        text: root.prekey-count;
-                                                        color: Colors.text-primary;
-                                                        font-size: Typography.xs;
-                                                        font-weight: Typography.medium;
-                                                        horizontal-alignment: center;
-                                                        vertical-alignment: center;
-                                                        width: 100%;
-                                                        height: 100%;
-                                                    }
-                                                }
-                                            }
-
-                                            Text {
-                                                text: root.prekey-count >= 10 ? "Keys are healthy" :
-                                                      (root.prekey-count >= 5 ? "Consider refreshing soon" : "Keys are low, refresh recommended");
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
-                                        }
-
-                                        if !root.compact-mode: Button {
-                                            text: "Refresh";
-                                            variant: "secondary";
-                                            clicked => { root.refresh-keys-clicked(); }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if root.compact-mode: Button {
-                                        text: "Refresh";
-                                        variant: "secondary";
-                                        clicked => { root.refresh-keys-clicked(); }
-                                    }
-                                }
-                            }
+                        if active-section == "encryption": EncryptionSettings {
+                            compact-mode : root.compact-mode;
+                            identity-fingerprint : root.identity-fingerprint;
+                            mobile-platform : root.mobile-platform;
+                            sealed-sender-unrestricted <=> root.sealed-sender-unrestricted;
+                            copy-fingerprint-clicked() => { root.copy-fingerprint-clicked(); }
+                            sealed-sender-changed(arg0) => { root.sealed-sender-changed(arg0); }
                         }
 
                         // AI Assistant section
-                        if active-section == "ai": VerticalLayout {
-                            spacing: Spacing.lg;
-
-                            // Section header
-                            Text {
-                                text: "AI Assistant";
-                                color: Colors.text-primary;
-                                font-size: Typography.xl;
-                                font-weight: Typography.semibold;
-                            }
-
-                            if JarvisGlobal.enabled : Text {
-                                init => { root.local-ai-refresh(); }
-                                text: "Chat with a local model in the Jarvis (AI) channel. Everything runs on this machine — nothing leaves your device.";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                                wrap: word-wrap;
-                            }
-
-                            // Enable Local AI toggle
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                HorizontalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Enable Local AI";
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Run AI models locally on your GPU for privacy";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                        }
-                                    }
-
-                                    NeoActionToggle {
-                                        checked: root.local-ai-enabled;
-                                        glow-mode: "cyan";
-                                        toggled(value) => {
-                                            root.local-ai-enabled = value;
-                                            root.local-ai-enabled-changed(value);
-                                        }
-                                    }
-                                }
-                            }
-
-                            // ── Cloud AI ───────────────────────────────────
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.sm;
-
-                                            Text {
-                                                text: "Use cloud AI";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                            }
-
-                                            Text {
-                                                text: "Send prompts to a cloud model for better answers. Only in channels — direct messages always stay on this device.";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
-                                        }
-
-                                        NeoActionToggle {
-                                            checked: root.ai-prefer-cloud;
-                                            glow-mode: "cyan";
-                                            toggled(value) => {
-                                                root.ai-prefer-cloud = value;
-                                                root.ai-prefer-cloud-changed(value);
-                                            }
-                                        }
-                                    }
-
-                                    // Who pays, and who sees the prompt.
-                                    if root.ai-prefer-cloud: VerticalLayout {
-                                        spacing: Spacing.sm;
-
-                                        Rectangle {
-                                            height: 1px;
-                                            background: Colors.text-muted.with-alpha(0.2);
-                                        }
-
-                                        HorizontalLayout {
-                                            spacing: Spacing.sm;
-
-                                            Button {
-                                                text: "My API key";
-                                                variant: root.cloud-ai-mode == "direct-anthropic" ? "primary" : "secondary";
-                                                clicked => {
-                                                    root.cloud-ai-mode = "direct-anthropic";
-                                                    root.cloud-ai-mode-changed("direct-anthropic");
-                                                }
-                                            }
-
-                                            Button {
-                                                text: "Buy tokens";
-                                                variant: root.cloud-ai-mode == "server-broker" ? "primary" : "secondary";
-                                                clicked => {
-                                                    root.cloud-ai-mode = "server-broker";
-                                                    root.cloud-ai-mode-changed("server-broker");
-                                                }
-                                            }
-                                        }
-
-                                        // Bring-your-own-key: nobody but the
-                                        // provider sees the prompt.
-                                        if root.cloud-ai-mode == "direct-anthropic": VerticalLayout {
-                                            spacing: Spacing.sm;
-
-                                            Text {
-                                                text: "Your key is stored on this device only. Prompts go straight to the provider — our servers never see them.";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
-
-                                            Input {
-                                                placeholder: root.cloud-ai-configured ? "API key saved — enter a new one to replace it" : "Anthropic API key";
-                                                password: true;
-                                                text <=> root.cloud-ai-api-key;
-                                            }
-
-                                            HorizontalLayout {
-                                                alignment: start;
-                                                Button {
-                                                    text: "Save key";
-                                                    variant: "secondary";
-                                                    clicked => {
-                                                        root.cloud-ai-api-key-changed(root.cloud-ai-api-key);
-                                                        root.cloud-ai-api-key = "";
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        // Managed tokens: state the trade plainly.
-                                        if root.cloud-ai-mode == "server-broker": VerticalLayout {
-                                            spacing: Spacing.sm;
-
-                                            Text {
-                                                text: "No API key needed. Prompts are sent through our servers, which see them in order to meter usage.";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
-
-                                            if root.cloud-ai-balance != "": Text {
-                                                text: root.cloud-ai-balance;
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                            }
-
-                                            HorizontalLayout {
-                                                alignment: start;
-                                                Button {
-                                                    text: "Refresh balance";
-                                                    variant: "secondary";
-                                                    clicked => { root.cloud-ai-refresh-quota(); }
-                                                }
-                                            }
-                                        }
-
-                                        if root.cloud-ai-status != "": Text {
-                                            text: root.cloud-ai-status;
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Memory browser entry
-                            if root.local-ai-enabled: HorizontalLayout {
-                                alignment: start;
-                                Button {
-                                    text: "View Memory";
-                                    variant: "secondary";
-                                    clicked => { root.local-ai-open-memory(); }
-                                }
-                            }
-
-                            // Hardware summary
-                            if root.local-ai-enabled && root.local-ai-hardware-summary != "": Text {
-                                text: "Hardware: " + root.local-ai-hardware-summary;
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                                wrap: word-wrap;
-                            }
-
-                            // Detected providers
-                            if root.local-ai-enabled: Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.sm;
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.sm;
-                                        Text {
-                                            horizontal-stretch: 1;
-                                            text: "Detected Providers";
-                                            color: Colors.text-primary;
-                                            font-size: Typography.lg;
-                                            font-weight: Typography.medium;
-                                        }
-                                        Button {
-                                            text: root.local-ai-detecting ? "Scanning..." : "Rescan";
-                                            variant: "ghost";
-                                            disabled: root.local-ai-detecting;
-                                            clicked => { root.local-ai-refresh(); }
-                                        }
-                                    }
-
-                                    if root.local-ai-providers.length == 0 && !root.local-ai-detecting: Text {
-                                        text: "No local AI providers found. Start Ollama (ollama.com), LM Studio, llama.cpp server, or vLLM and rescan.";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                        wrap: word-wrap;
-                                    }
-
-                                    for provider in root.local-ai-providers: Rectangle {
-                                        height: 44px;
-                                        border-radius: Spacing.radius-md;
-                                        background: provider.is-active ? Colors.surface-hover : transparent;
-                                        provider-touch := TouchArea {
-                                            clicked => { root.local-ai-select-provider(provider.kind); }
-                                        }
-                                        HorizontalLayout {
-                                            padding-left: Spacing.sm;
-                                            padding-right: Spacing.sm;
-                                            spacing: Spacing.sm;
-                                            // health dot: listed == reachable
-                                            Rectangle {
-                                                width: 8px; height: 8px;
-                                                y: (parent.height - self.height) / 2;
-                                                border-radius: 4px;
-                                                background: Colors.success;
-                                            }
-                                            VerticalLayout {
-                                                horizontal-stretch: 1;
-                                                alignment: center;
-                                                Text {
-                                                    text: provider.display-name;
-                                                    color: Colors.text-primary;
-                                                    font-size: Typography.sm;
-                                                    font-weight: provider.is-active ? Typography.semibold : Typography.medium;
-                                                }
-                                                Text {
-                                                    text: provider.detail;
-                                                    color: Colors.text-muted;
-                                                    font-size: Typography.xs;
-                                                }
-                                            }
-                                            if provider.is-active: Text {
-                                                text: "Active";
-                                                color: Colors.primary;
-                                                font-size: Typography.xs;
-                                                vertical-alignment: center;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Chat model of the active provider
-                            if root.local-ai-enabled && root.local-ai-models.length > 0: Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.sm;
-
-                                    Text {
-                                        text: "Chat Model";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.lg;
-                                        font-weight: Typography.medium;
-                                    }
-
-                                    for model in root.local-ai-models: Rectangle {
-                                        height: 32px;
-                                        border-radius: Spacing.radius-md;
-                                        background: model == root.local-ai-active-model ? Colors.surface-hover : transparent;
-                                        model-touch := TouchArea {
-                                            clicked => { root.local-ai-select-model(model); }
-                                        }
-                                        HorizontalLayout {
-                                            padding-left: Spacing.sm;
-                                            padding-right: Spacing.sm;
-                                            Text {
-                                                horizontal-stretch: 1;
-                                                text: model;
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                vertical-alignment: center;
-                                            }
-                                            if model == root.local-ai-active-model: Text {
-                                                text: "✓";
-                                                color: Colors.primary;
-                                                font-size: Typography.sm;
-                                                vertical-alignment: center;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Downloadable model catalog (hardware-fit tagged)
-                            if root.local-ai-enabled && root.local-ai-catalog.length > 0: Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.sm;
-
-                                    Text {
-                                        text: "Popular Models";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.lg;
-                                        font-weight: Typography.medium;
-                                    }
-                                    Text {
-                                        text: "Downloads go through Ollama — no account needed. Suggestions are filtered by your hardware.";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                        wrap: word-wrap;
-                                    }
-
-                                    for entry in root.local-ai-catalog: Rectangle {
-                                        height: entry.error != "" ? 64px : 48px;
-                                        border-radius: Spacing.radius-md;
-
-                                        VerticalLayout {
-                                            padding-left: Spacing.sm;
-                                            padding-right: Spacing.sm;
-                                            spacing: 2px;
-
-                                            HorizontalLayout {
-                                                spacing: Spacing.sm;
-                                                VerticalLayout {
-                                                    horizontal-stretch: 1;
-                                                    alignment: center;
-                                                    Text {
-                                                        text: entry.name;
-                                                        color: entry.fit == "big" ? Colors.text-muted : Colors.text-primary;
-                                                        font-size: Typography.sm;
-                                                        font-weight: Typography.medium;
-                                                    }
-                                                    Text {
-                                                        text: entry.detail + " · " + entry.fit-label;
-                                                        color: entry.fit == "gpu" ? Colors.success : (entry.fit == "cpu" ? Colors.warning : Colors.text-muted);
-                                                        font-size: Typography.xs;
-                                                    }
-                                                }
-                                                if entry.installed: Text {
-                                                    text: "Installed";
-                                                    color: Colors.success;
-                                                    font-size: Typography.xs;
-                                                    vertical-alignment: center;
-                                                }
-                                                if !entry.installed && entry.downloading: Text {
-                                                    text: floor(entry.progress * 100) + "%";
-                                                    color: Colors.text-secondary;
-                                                    font-size: Typography.xs;
-                                                    vertical-alignment: center;
-                                                }
-                                                if !entry.installed && !entry.downloading: Button {
-                                                    text: entry.error != "" ? "Retry" : "Download";
-                                                    variant: "secondary";
-                                                    disabled: entry.fit == "big";
-                                                    clicked => { root.local-ai-download(entry.tag); }
-                                                }
-                                            }
-
-                                            // Download progress bar
-                                            if entry.downloading: Rectangle {
-                                                height: 4px;
-                                                border-radius: 2px;
-                                                background: Colors.background;
-                                                Rectangle {
-                                                    x: 0;
-                                                    width: parent.width * entry.progress;
-                                                    height: parent.height;
-                                                    border-radius: 2px;
-                                                    background: Colors.primary;
-                                                }
-                                            }
-
-                                            if entry.error != "": Text {
-                                                text: entry.error;
-                                                color: Colors.error;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // In-process (mistralrs) model configuration
-                            if root.local-ai-enabled && root.local-ai-active-provider == "mistralrs": Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    Text {
-                                        text: "Model Configuration";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.lg;
-                                        font-weight: Typography.medium;
-                                    }
-
-                                    // Status display
-                                    HorizontalLayout {
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Status:";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.sm;
-                                        }
-
-                                        Text {
-                                            text: root.local-ai-status != "" ? root.local-ai-status : "Not loaded";
-                                            color: root.local-ai-status == "" ? Colors.text-muted :
-                                                   (root.local-ai-loading ? Colors.warning : Colors.success);
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-                                    }
-
-                                    // Error display
-                                    if root.local-ai-error != "": Text {
-                                        text: root.local-ai-error;
-                                        color: Colors.error;
-                                        font-size: Typography.xs;
-                                        wrap: word-wrap;
-                                    }
-
-                                    // Model ID input
-                                    VerticalLayout {
-                                        spacing: Spacing.xs;
-
-                                        Text {
-                                            text: "Model ID (HuggingFace)";
-                                            color: Colors.text-secondary;
-                                            font-size: Typography.xs;
-                                        }
-
-                                        Input {
-                                            text <=> root.local-ai-model-id;
-                                            placeholder: "mistralai/Mistral-7B-Instruct-v0.3";
-                                            disabled: root.local-ai-loading;
-                                        }
-
-                                        Text {
-                                            text: "Enter a HuggingFace model ID (e.g., mistralai/Mistral-7B-Instruct-v0.3)";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                        }
-                                    }
-
-                                    // Load/Unload buttons
-                                    HorizontalLayout {
-                                        spacing: Spacing.sm;
-                                        alignment: end;
-
-                                        Button {
-                                            text: "Unload";
-                                            variant: "ghost";
-                                            disabled: root.local-ai-loading || root.local-ai-status == "";
-                                            clicked => { root.local-ai-unload-model(); }
-                                        }
-
-                                        Button {
-                                            text: root.local-ai-loading ? "Loading..." : "Load Model";
-                                            variant: "primary";
-                                            loading: root.local-ai-loading;
-                                            disabled: root.local-ai-model-id == "" || root.local-ai-loading;
-                                            clicked => { root.local-ai-load-model(root.local-ai-model-id); }
-                                        }
-                                    }
-                                }
-                            }
-
+                        if active-section == "ai": AISettings {
+                            ai-prefer-cloud <=> root.ai-prefer-cloud;
+                            cloud-ai-api-key <=> root.cloud-ai-api-key;
+                            cloud-ai-balance : root.cloud-ai-balance;
+                            cloud-ai-configured : root.cloud-ai-configured;
+                            cloud-ai-mode <=> root.cloud-ai-mode;
+                            cloud-ai-status : root.cloud-ai-status;
+                            local-ai-active-model : root.local-ai-active-model;
+                            local-ai-active-provider : root.local-ai-active-provider;
+                            local-ai-catalog : root.local-ai-catalog;
+                            local-ai-detecting : root.local-ai-detecting;
+                            local-ai-enabled <=> root.local-ai-enabled;
+                            local-ai-error : root.local-ai-error;
+                            local-ai-hardware-summary : root.local-ai-hardware-summary;
+                            local-ai-loading : root.local-ai-loading;
+                            local-ai-model-id <=> root.local-ai-model-id;
+                            local-ai-models : root.local-ai-models;
+                            local-ai-providers : root.local-ai-providers;
+                            local-ai-status : root.local-ai-status;
+                            mobile-platform : root.mobile-platform;
+                            ai-prefer-cloud-changed(arg0) => { root.ai-prefer-cloud-changed(arg0); }
+                            cloud-ai-api-key-changed(arg0) => { root.cloud-ai-api-key-changed(arg0); }
+                            cloud-ai-mode-changed(arg0) => { root.cloud-ai-mode-changed(arg0); }
+                            cloud-ai-refresh-quota() => { root.cloud-ai-refresh-quota(); }
+                            local-ai-download(arg0) => { root.local-ai-download(arg0); }
+                            local-ai-enabled-changed(arg0) => { root.local-ai-enabled-changed(arg0); }
+                            local-ai-load-model(arg0) => { root.local-ai-load-model(arg0); }
+                            local-ai-open-memory() => { root.local-ai-open-memory(); }
+                            local-ai-refresh() => { root.local-ai-refresh(); }
+                            local-ai-select-model(arg0) => { root.local-ai-select-model(arg0); }
+                            local-ai-select-provider(arg0) => { root.local-ai-select-provider(arg0); }
+                            local-ai-unload-model() => { root.local-ai-unload-model(); }
                         }
 
                         // Appearance section
-                        if active-section == "appearance": VerticalLayout {
-                            spacing: Spacing.lg;
-
-                            // Section header
-                            Text {
-                                text: "Appearance";
-                                color: Colors.text-primary;
-                                font-size: Typography.xl;
-                                font-weight: Typography.semibold;
-                            }
-
-                            Text {
-                                text: "Dark theme is the only theme for v1.";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                            }
-
-                            // Theme selector (grayed out for v1)
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-                                opacity: 0.5;
-
-                                HorizontalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Theme";
-                                            color: Colors.text-secondary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Choose your preferred color theme";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
-                                    }
-
-                                    // Disabled dropdown indicator
-                                    Rectangle {
-                                        width: 100px;
-                                        height: 36px;
-                                        border-radius: Spacing.radius-md;
-                                        background: Colors.background;
-
-                                        HorizontalLayout {
-                                            padding-left: Spacing.sm;
-                                            padding-right: Spacing.sm;
-                                            alignment: space-between;
-
-                                            Text {
-                                                text: "Dark";
-                                                color: Colors.text-secondary;
-                                                font-size: Typography.sm;
-                                                vertical-alignment: center;
-                                            }
-
-                                            Text {
-                                                text: "v";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                vertical-alignment: center;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Font Size placeholder (grayed out)
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-                                opacity: 0.5;
-
-                                HorizontalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Font Size";
-                                            color: Colors.text-secondary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Coming soon";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            font-italic: true;
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Message Density placeholder (grayed out)
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-                                opacity: 0.5;
-
-                                HorizontalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Message Density";
-                                            color: Colors.text-secondary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Coming soon";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            font-italic: true;
-                                        }
-                                    }
-                                }
-                            }
+                        if active-section == "appearance": AppearanceSettings {
+                            mobile-platform : root.mobile-platform;
+                            search-shortcut <=> root.search-shortcut;
+                            search-shortcut-changed(arg0) => { root.search-shortcut-changed(arg0); }
                         }
+                        if active-section == "about": AboutSettings {
+                            mobile-platform : root.mobile-platform;
+                            open-licenses() => { root.open-licenses(); }
+                        }
+                    }
+                        Rectangle { horizontal-stretch: 1; }
                     }
                 }
             }
         }
         } // HorizontalLayout
     } // VerticalLayout
+
+    // Compact navigation floats over the full-height content scroll, pinned
+    // to the top edge where `content-layout`'s padding-top reserves its room.
+    // Explicit x/y: a sized child of a plain Rectangle is CENTRED by default,
+    // which put this bar mid-screen over the content on phones (§138).
+    if compact-mode: GlassSurface {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        material-enabled: false;
+        background: Colors.surface-page;
+        border-radius: Spacing.none;
+
+        height: Spacing.touch-target-min + Spacing.sm;
+
+        HorizontalLayout {
+            padding-left: Spacing.sm;
+            padding-right: Spacing.sm;
+
+            // The only way out of Settings in compact mode — and Settings
+            // is a full-screen page, so it is a back chevron on the
+            // leading edge, not an X. Was an X here and a "Close Settings"
+            // text button at the bottom of the desktop rail: three
+            // spellings of one action across two breakpoints.
+            DismissButton {
+                touch: root.mobile-platform;
+                back: true;
+                plain: true;
+                clicked => { root.close-settings(); }
+            }
+
+            // The section chips scroll across the remaining phone width. Fades
+            // hint at more sections without adding a second navigation arrow.
+            Rectangle {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                clip: true;
+                tabs := Flickable {
+                    width: parent.width;
+                    height: parent.height;
+                    viewport-width: tab-layout.preferred-width;
+                    viewport-height: self.height;
+                    animate viewport-x { duration: Materials.motion-standard; easing: Materials.glide; }
+
+                    tab-layout := HorizontalLayout {
+                        spacing: Spacing.xxs;
+                        padding: Spacing.xs;
+
+                        for item in [
+                            { id: "account", label: "Account" },
+                            { id: "privacy", label: "Privacy" },
+                            { id: "notifications", label: "Notifications" },
+                            { id: "devices", label: "Linked devices" },
+                            { id: "appearance", label: "Appearance" },
+                            { id: "encryption", label: "Encryption" },
+                            { id: "ai", label: "AI" },
+                            { id: "about", label: "About" }
+                        ]: Button {
+                            touch: root.mobile-platform;
+                            hover-enabled: !root.mobile-platform;
+                            text: item.label;
+                            height: Spacing.touch-target-min;
+                            // Selected tab = the neutral raised pill every other tab bar uses
+                            // (bottom nav, Calls, Contacts); teal fill is for actions.
+                            variant: root.active-section == item.id ? "secondary" : "ghost";
+                            clicked => {
+                                root.active-section = item.id;
+                                // Centre the chosen chip so it is never left
+                                // half off the edge ("Linked d…").
+                                tabs.viewport-x = min(0px, max(tabs.width - tabs.viewport-width,
+                                    (tabs.width - self.width) / 2 - self.x));
+                            }
+                        }
+                    }
+                }
+                if tabs.viewport-x < 0px: Rectangle {
+                    x: 0;
+                    width: Spacing.md;
+                    height: parent.height;
+                    background: @linear-gradient(90deg, Colors.surface-page 0%, Colors.surface-page.with-alpha(0) 100%);
+                }
+                if tabs.viewport-width + tabs.viewport-x > tabs.width: Rectangle {
+                    x: parent.width - self.width;
+                    width: Spacing.md;
+                    height: parent.height;
+                    background: @linear-gradient(90deg, Colors.surface-page.with-alpha(0) 0%, Colors.surface-page 100%);
+                }
+            }
+        }
+    }
 }

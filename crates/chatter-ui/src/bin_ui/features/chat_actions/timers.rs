@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use slint::{ComponentHandle, Timer, TimerMode};
 
+use crate::MainWindow;
 use crate::bin_ui::audio_state;
 use crate::bin_ui::video_state;
-use crate::MainWindow;
 
 thread_local! {
     /// Thread-local audio progress timer (must be on UI thread).
@@ -31,32 +31,31 @@ pub fn start_audio_progress_timer(window: &MainWindow) {
 
         // Create new timer
         let timer = Timer::default();
-        timer.start(
-            TimerMode::Repeated,
-            Duration::from_millis(100),
-            move || {
-                if let Some(w) = weak_window.upgrade() {
-                    // Get current progress from audio state
-                    let progress = audio_state::get_progress();
-                    let position = audio_state::get_position();
-                    let elapsed = audio_state::format_duration(position);
+        timer.start(TimerMode::Repeated, Duration::from_millis(100), move || {
+            if let Some(w) = weak_window.upgrade() {
+                // Get current progress from audio state
+                let progress = audio_state::get_progress();
+                let position = audio_state::get_position();
+                let elapsed = audio_state::format_duration(position);
 
-                    w.set_audio_progress(progress);
-                    w.set_audio_elapsed(elapsed.into());
+                w.global::<crate::ChatPane>().set_audio_progress(progress);
+                w.global::<crate::ChatPane>()
+                    .set_audio_elapsed(elapsed.into());
 
-                    // Check if playback finished (progress >= 1.0 or sink empty)
-                    if progress >= 0.999 {
-                        // Stop timer and clear state
-                        stop_audio_progress_timer();
-                        audio_state::clear_state();
-                        w.set_current_playing_attachment_id("".into());
-                        w.set_is_media_playing(false);
-                        w.set_audio_progress(0.0);
-                        w.set_audio_elapsed("0:00".into());
-                    }
+                // Completion comes from the player, including unknown durations.
+                if audio_state::playback_finished() {
+                    // Stop timer and clear state
+                    stop_audio_progress_timer();
+                    audio_state::clear_state();
+                    w.global::<crate::ChatPane>()
+                        .set_current_playing_attachment_id("".into());
+                    w.global::<crate::ChatPane>().set_is_media_playing(false);
+                    w.global::<crate::ChatPane>().set_audio_progress(0.0);
+                    w.global::<crate::ChatPane>()
+                        .set_audio_elapsed("0:00".into());
                 }
-            },
-        );
+            }
+        });
 
         *timer_cell.borrow_mut() = Some(timer);
     });
@@ -85,11 +84,15 @@ pub fn start_video_progress_timer(window: &MainWindow) {
             timer.stop();
         }
 
-        // Create new timer - run at ~1ms for high refresh rate video (up to 540Hz)
+        // Poll at display cadence; the decoder keeps only its newest frame.
         let timer = Timer::default();
+        let mut last_text = String::new();
+        let mut last_progress = f32::NAN;
+        let mut last_playing = None;
+        let mut last_status = std::time::Instant::now() - Duration::from_millis(250);
         timer.start(
             TimerMode::Repeated,
-            Duration::from_micros(1850), // ~540Hz max
+            Duration::from_millis(16),
             move || {
                 if let Some(w) = weak_window.upgrade() {
                     // Take latest frame from buffer and render it
@@ -99,31 +102,51 @@ pub fn start_video_progress_timer(window: &MainWindow) {
                             frame.height,
                             &frame.rgb_data,
                         );
-                        w.set_video_player_frame(image);
+                        w.global::<crate::ChatPane>().set_video_player_frame(image);
                     }
 
                     // Get current state from video player
-                    if let Some((position, duration, is_playing)) = video_state::get_playback_state() {
+                    if let Some((position, duration, is_playing)) =
+                        video_state::get_playback_state()
+                    {
                         // Clamp position to duration (some videos report timestamps beyond duration)
                         let clamped_position = position.min(duration);
-                        let progress = if duration > 0.0 { (clamped_position / duration).clamp(0.0, 1.0) } else { 0.0 };
+                        let progress = if duration > 0.0 {
+                            (clamped_position / duration).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
                         let elapsed = chatter_core::media::format_duration(clamped_position);
 
-                        w.set_video_player_progress(progress as f32);
-                        w.set_video_player_elapsed(elapsed.into());
-                        w.set_video_player_is_playing(is_playing);
+                        if last_status.elapsed() >= Duration::from_millis(200) {
+                            let pane = w.global::<crate::ChatPane>();
+                            let progress = progress as f32;
+                            if !last_progress.is_finite() || (progress - last_progress).abs() >= 0.001 {
+                                pane.set_video_player_progress(progress);
+                                last_progress = progress;
+                            }
+                            if elapsed != last_text {
+                                pane.set_video_player_elapsed(elapsed.clone().into());
+                                last_text = elapsed;
+                            }
+                            last_status = std::time::Instant::now();
+                        }
+                        if last_playing != Some(is_playing) {
+                            w.global::<crate::ChatPane>().set_video_player_is_playing(is_playing);
+                            last_playing = Some(is_playing);
+                        }
 
                         // Check if playback finished (only when not playing and at end)
                         // Don't stop on progress alone - wait for actual EOS from decoder
                         if !is_playing && progress >= 0.99 {
                             // Video ended - stop timer but keep player visible
                             stop_video_progress_timer();
-                            w.set_video_player_is_playing(false);
                         }
                     } else {
                         // Player was stopped/closed
                         stop_video_progress_timer();
-                        w.set_video_player_visible(false);
+                        w.global::<crate::ChatPane>()
+                            .set_video_player_visible(false);
                     }
                 }
             },

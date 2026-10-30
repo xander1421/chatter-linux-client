@@ -1,0 +1,133 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
+import { Elevation } from "../theme/elevation.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+export component ProfileActionTiles inherits HorizontalLayout {
+    in property <bool> scoped-member;
+    in property <bool> is-muted;
+    in property <bool> is-anonymous;
+    in property <bool> is-friend;
+    callback send-message();
+    callback toggle-mute();
+    callback start-call(bool);
+    callback open-more();
+    padding-left: Spacing.md;
+    padding-right: Spacing.md;
+    spacing: Spacing.xs;
+
+    // "Message" in Anon Mode only for a friend: the friend
+    // DM goes over the mailbox there; core has no DM to
+    // open with anyone else (resolve_dm_conversation).
+    // No Call/Video from a secret chat: LiveKit media would
+    // leave Tor and expose the user's IP.
+    for act in root.scoped-member ? [
+        { id: "mute", label: root.is-muted ? "Unmute conversation" : "Mute conversation", icon: root.is-muted ? Icons.bell-off : Icons.bell },
+        { id: "more", label: "More", icon: Icons.more-horizontal },
+    ] : root.is-anonymous && AnonMode.enabled && !root.is-friend ? [
+        { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: root.is-muted ? Icons.bell-off : Icons.bell },
+        { id: "more", label: "More", icon: Icons.more-horizontal },
+    ] : root.is-anonymous ? [
+        { id: "message", label: "Message", icon: Icons.message-circle },
+        { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: root.is-muted ? Icons.bell-off : Icons.bell },
+        { id: "more", label: "More", icon: Icons.more-horizontal },
+    ] : AnonMode.enabled && !root.is-friend ? [
+        { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: root.is-muted ? Icons.bell-off : Icons.bell },
+        { id: "call", label: "Call", icon: Icons.phone },
+        { id: "more", label: "More", icon: Icons.more-horizontal },
+    ] : [
+        { id: "message", label: "Message", icon: Icons.message-circle },
+        { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: root.is-muted ? Icons.bell-off : Icons.bell },
+        { id: "call", label: "Call", icon: Icons.phone },
+        { id: "more", label: "More", icon: Icons.more-horizontal },
+    ]: Rectangle {
+        // Equal tiles, as in iOS Contacts: a zero preferred width makes the
+        // stretch split the row evenly instead of by label length.
+        horizontal-stretch: 1;
+        preferred-width: 0px;
+        min-width: 0px;
+        height: 62px;
+        border-radius: Spacing.radius-md;
+        background: act-touch.has-hover ? Colors.surface-hover : Colors.surface-section;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale-x: act-touch.pressed ? 96% : 100%;
+        transform-scale-y: act-touch.pressed ? 94% : 100%;
+        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+        accessible-role: button;
+        accessible-label: act.label;
+        accessible-action-default => {
+            if (act.id == "message") {
+                root.send-message();
+            } else if (act.id == "mute") {
+                root.toggle-mute();
+            } else if (act.id == "call") {
+                root.start-call(false);
+            } else {
+                root.open-more();
+            }
+        }
+        KeyFocus {
+            border-radius: parent.border-radius;
+            activate => {
+                if (act.id == "message") {
+                    root.send-message();
+                } else if (act.id == "mute") {
+                    root.toggle-mute();
+                } else if (act.id == "call") {
+                    root.start-call(false);
+                } else {
+                    root.open-more();
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: Spacing.xs;
+
+            HorizontalLayout {
+                alignment: center;
+                Image {
+                    source: act.icon;
+                    width: 20px;
+                    height: 20px;
+                    colorize: act.id == "mute" && root.is-muted
+                        ? Colors.warning : Colors.primary;
+                }
+            }
+
+            Text {
+                text: act.id == "mute" ? (root.is-muted ? "Unmute" : "Mute") : act.label;
+                color: Colors.text-secondary;
+                font-size: Typography.xs;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        act-touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                if (act.id == "message") {
+                    root.send-message();
+                } else if (act.id == "mute") {
+                    root.toggle-mute();
+                } else if (act.id == "call") {
+                    root.start-call(false);
+                } else {
+                    root.open-more();
+                }
+            }
+        }
+    }
+}

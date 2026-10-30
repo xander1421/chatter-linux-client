@@ -1,0 +1,246 @@
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { ScrollView } from "std-widgets.slint";
+import { Avatar } from "../components/avatar.slint";
+import { Icons } from "../theme/icons.slint";
+import { HoldArea } from "../components/hold_area.slint";
+import { MenuRow } from "../settings/account_menu.slint";
+
+export struct ServerRecordRow { id: string, title: string, body: string, primary: string, secondary: string }
+export struct NotificationViewRow { id: string, title: string, body: string, kind: string, actor-id: string, channel-id: string, avatar: image, when: string, read: bool, quiet: bool, status: string }
+export global ServerRecordsGlobal {
+    in-out property <string> kind;
+    in-out property <string> channel;
+    in-out property <[ServerRecordRow]> rows;
+    in-out property <[NotificationViewRow]> notifications;
+    in-out property <string> next;
+    in-out property <bool> loading;
+    in-out property <string> error;
+    in-out property <string> detail-title;
+    in-out property <string> detail-body;
+    in-out property <string> detail-id;
+    callback open(string, string);
+    callback load(bool);
+    callback act(string, string);
+    callback details(string);
+}
+
+export component ServerRecordsScreen inherits Rectangle {
+    in property <bool> mobile-mode;
+    callback close();
+    callback open-notification(string, string, string, string);
+    in property <bool> show: true;
+    private property <string> menu-id: "";
+    private property <bool> menu-read: false;
+    private property <length> menu-x: 0px;
+    private property <length> menu-y: 0px;
+    Timer {
+        interval: 20s;
+        running: root.show && ServerRecordsGlobal.kind == "notifications";
+        triggered => { if !ServerRecordsGlobal.loading { ServerRecordsGlobal.load(false); } }
+    }
+    Modal {
+        show: root.show;
+        title: ServerRecordsGlobal.kind == "notifications" ? "Notification inbox" : ServerRecordsGlobal.kind == "integrations" ? "Channel integrations" : "Channel call history";
+        modal-width: 600px;
+        max-modal-height: 800px;
+        fill-height: true;
+        full-screen: root.mobile-mode;
+        close => { root.close(); }
+        VerticalLayout {
+            spacing: Spacing.md;
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                if ServerRecordsGlobal.kind != "notifications": Button { text: "Refresh"; variant: "secondary"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.load(false); } }
+                Rectangle { horizontal-stretch: 1; }
+                if ServerRecordsGlobal.kind == "notifications": Button {
+                    text: "Mark all read"; variant: "ghost"; size: "small"; disabled: ServerRecordsGlobal.loading || ServerRecordsGlobal.notifications.length == 0;
+                    clicked => { ServerRecordsGlobal.act("", "Mark all read"); }
+                }
+            }
+            if ServerRecordsGlobal.kind == "integrations": Text {
+                width: parent.width;
+                text: "Install your configured integrations in this channel, or remove an installed integration.";
+                wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm;
+            }
+            if ServerRecordsGlobal.kind == "calls": Text {
+                width: parent.width;
+                text: "Call records from this channel’s server. Private call history stays in Calls.";
+                wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm;
+            }
+            if ServerRecordsGlobal.error != "": Text {
+                width: parent.width;
+                text: ServerRecordsGlobal.error; wrap: word-wrap; color: Colors.error;
+            }
+            if ServerRecordsGlobal.detail-title != "": Rectangle {
+                background: Colors.surface-section;
+                border-radius: Spacing.radius-lg;
+                height: detail-content.preferred-height;
+                detail-content := VerticalLayout {
+                    padding: Spacing.md;
+                    spacing: Spacing.sm;
+                    HorizontalLayout {
+                        Text { text: ServerRecordsGlobal.detail-title; color: Colors.text-primary; font-weight: Typography.semibold; horizontal-stretch: 1; vertical-alignment: center; }
+                        Button { text: "Close"; variant: "ghost"; clicked => { ServerRecordsGlobal.detail-title = ""; ServerRecordsGlobal.detail-body = ""; ServerRecordsGlobal.detail-id = ""; } }
+                    }
+                    Text {
+                        width: max(0px, parent.width - parent.padding * 2);
+                        text: ServerRecordsGlobal.detail-body; wrap: word-wrap; color: Colors.text-secondary; }
+                }
+            }
+            if ServerRecordsGlobal.loading: Text { text: "Loading…"; color: Colors.text-secondary; }
+            if !ServerRecordsGlobal.loading && ServerRecordsGlobal.error == "" && (ServerRecordsGlobal.kind == "notifications" ? ServerRecordsGlobal.notifications.length == 0 : ServerRecordsGlobal.rows.length == 0): Text {
+                text: ServerRecordsGlobal.kind == "notifications" ? "You're all caught up" : ServerRecordsGlobal.kind == "integrations" ? "No integrations yet" : "No calls yet"; color: Colors.text-secondary;
+            }
+            if ServerRecordsGlobal.kind == "notifications": inbox := ScrollView {
+                mouse-drag-pan-enabled: true;
+                vertical-stretch: 1;
+                viewport-height: activity.preferred-height;
+                activity := VerticalLayout {
+                    alignment: start;
+                    spacing: 1px;
+                    for row in ServerRecordsGlobal.notifications: Rectangle {
+                        width: inbox.visible-width;
+                        height: max(44px + 2 * Spacing.md, inbox-row-content.preferred-height);
+                        background: row.read || row.quiet ? Colors.surface : Colors.surface-section;
+                        accessible-role: button;
+                        accessible-label: row.title;
+                        accessible-action-default => { root.open-notification(row.id, row.kind, (row.kind == "message" || row.kind == "mention" || row.kind == "reply" || row.kind == "reaction" || row.kind == "channel-invite") ? row.channel-id : row.actor-id, row.status); }
+                        row-keys := FocusScope {
+                            width: 0px; height: 0px;
+                            key-pressed(event) => {
+                                if event.text == Key.Return || event.text == Key.Space {
+                                    root.open-notification(row.id, row.kind, (row.kind == "message" || row.kind == "mention" || row.kind == "reply" || row.kind == "reaction" || row.kind == "channel-invite") ? row.channel-id : row.actor-id, row.status);
+                                    return accept;
+                                }
+                                if event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift) {
+                                    root.menu-id = row.id; root.menu-read = row.read;
+                                    root.menu-x = parent.absolute-position.x + parent.width / 2;
+                                    root.menu-y = parent.absolute-position.y + parent.height / 2;
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                        HoldArea {
+                            mouse-cursor: pointer;
+                            clicked => { if !self.hold-fired { root.open-notification(row.id, row.kind, (row.kind == "message" || row.kind == "mention" || row.kind == "reply" || row.kind == "reaction" || row.kind == "channel-invite") ? row.channel-id : row.actor-id, row.status); } }
+                            held => { root.menu-id = row.id; root.menu-read = row.read; root.menu-x = self.anchor-x; root.menu-y = self.anchor-y; }
+                        }
+                        inbox-row-content := HorizontalLayout {
+                            padding: Spacing.md;
+                            spacing: Spacing.md;
+                            Rectangle {
+                                min-width: 44px; max-width: 44px; height: 44px;
+                                border-radius: 22px;
+                                background: row.kind == "friend-request" || row.kind == "friend-accepted" ? transparent : Colors.surface-control;
+                                if row.kind == "friend-request" || row.kind == "friend-accepted": Avatar {
+                                    name: row.title; source: row.avatar; size: 44px;
+                                }
+                                if row.kind == "device-linked": Image {
+                                    source: Icons.smartphone; width: 22px; height: 22px;
+                                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                    colorize: Colors.primary;
+                                }
+                                if row.kind != "friend-request" && row.kind != "friend-accepted" && row.kind != "device-linked": Text {
+                                    text: row.kind == "channel-invite" ? "#" : row.kind == "mention" ? "@" : row.kind == "reply" ? "↩" : row.kind == "reaction" ? "♡" : row.kind == "message" ? "✉" : "•";
+                                    color: Colors.primary; font-size: Typography.base;
+                                    horizontal-alignment: center; vertical-alignment: center;
+                                }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+                                HorizontalLayout {
+                                    spacing: Spacing.sm;
+                                    Text { text: row.title; color: Colors.text-primary; font-size: Typography.base; font-weight: row.read || row.quiet ? 400 : Typography.semibold; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+                                    if !row.read && !row.quiet: Rectangle {
+                                        min-width: 6px; max-width: 6px; height: 6px;
+                                        border-radius: 3px; background: Colors.primary;
+                                    }
+                                    Text { text: row.when; color: Colors.text-muted; font-size: Typography.sm; vertical-alignment: center; }
+                                }
+                                Text {
+                                    width: max(0px, inbox.visible-width - 2 * Spacing.md - 44px - Spacing.md);
+                                    text: row.body; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap;
+                                }
+                                if row.status != "": Text { text: row.status; color: Colors.primary; font-size: Typography.sm; }
+                            }
+                        }
+                    }
+                }
+            }
+            if ServerRecordsGlobal.kind != "notifications": list := ScrollView {
+                mouse-drag-pan-enabled: true;
+                vertical-stretch: 1;
+                // The record texts take the list's width. Without it a
+                // repeated word-wrap Text was measured at ~0 width (one glyph
+                // per line), the viewport came out thousands of px tall and
+                // the rows were stretched over it: records spread apart with
+                // a gap between, and the list never moved to the next one.
+                viewport-height: records.preferred-height;
+                records := VerticalLayout {
+                    alignment: start;
+                    spacing: Spacing.md;
+                    for row in ServerRecordsGlobal.rows: Rectangle {
+                        width: list.visible-width;
+                        height: record-content.preferred-height;
+                        background: Colors.surface-section;
+                        border-radius: Spacing.radius-lg;
+                        record-content := VerticalLayout {
+                            padding: Spacing.md;
+                            spacing: Spacing.sm;
+                            Text {
+                                width: max(0px, parent.width - parent.padding * 2);
+                                text: row.title; wrap: word-wrap; color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.semibold; }
+                            Text {
+                                width: max(0px, parent.width - parent.padding * 2);
+                                text: row.body; wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm; }
+                            if row.primary != "" || row.secondary != "": HorizontalLayout {
+                                spacing: Spacing.sm;
+                                if row.primary != "": Button {
+                                    text: row.primary; variant: "secondary"; disabled: ServerRecordsGlobal.loading;
+                                    clicked => { if row.primary == "Details" { ServerRecordsGlobal.details(row.id); } else { ServerRecordsGlobal.act(row.id, row.primary); } }
+                                }
+                                if row.secondary != "": Button {
+                                    text: row.secondary; variant: "ghost"; disabled: ServerRecordsGlobal.loading;
+                                    clicked => { ServerRecordsGlobal.act(row.id, row.secondary); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if ServerRecordsGlobal.next != "": Button {
+                text: "Load more"; variant: "secondary"; disabled: ServerRecordsGlobal.loading;
+                clicked => { ServerRecordsGlobal.load(true); }
+            }
+        }
+    }
+    if root.show && root.menu-id != "": Rectangle {
+        z: 10;
+        width: 100%; height: 100%;
+        background: transparent;
+        TouchArea { clicked => { root.menu-id = ""; } }
+        Rectangle {
+            x: max(Spacing.md, min(root.menu-x, parent.width - self.width - Spacing.md));
+            y: max(Spacing.md, min(root.menu-y, parent.height - self.height - Spacing.md));
+            width: 220px;
+            height: menu-rows.preferred-height;
+            background: Colors.surface-section;
+            border-radius: Spacing.radius-lg;
+            clip: true;
+            TouchArea { }
+            menu-rows := VerticalLayout {
+                padding-top: Spacing.xs;
+                padding-bottom: Spacing.xs;
+                MenuRow { icon: Icons.info; label: "Details"; clicked => { ServerRecordsGlobal.details(root.menu-id); if !root.menu-read { ServerRecordsGlobal.act(root.menu-id, "Mark read"); } root.menu-id = ""; } }
+                if !root.menu-read: MenuRow { icon: Icons.check; label: "Mark read"; clicked => { ServerRecordsGlobal.act(root.menu-id, "Mark read"); root.menu-id = ""; } }
+                MenuRow { icon: Icons.trash; label: "Delete"; destructive: true; clicked => { ServerRecordsGlobal.act(root.menu-id, "Delete"); root.menu-id = ""; } }
+            }
+        }
+    }
+}

@@ -1,0 +1,85 @@
+import { Materials } from "../theme/materials.slint";
+import { CodePreviewPanel } from "code_preview_panel.slint";
+import { PdfPreviewPanel } from "pdf_preview_panel.slint";
+
+export component CodePreviewOverlay inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: "modal-overlay";
+    in property <string> file-name;
+    in property <string> language;
+    in property <int> line-count;
+    in property <string> plain-text;
+    callback close();
+    callback copy();
+    callback open-external();
+    background: Materials.scrim;
+
+    // Click backdrop to close
+    TouchArea { clicked => { root.close(); } }
+
+    // Centered code panel
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(parent.width - 80px, 900px);
+        height: min(parent.height - 80px, 700px);
+        TouchArea { } // Block backdrop clicks
+        CodePreviewPanel {
+            width: 100%;
+            height: 100%;
+            file-name: root.file-name;
+            language: root.language;
+            line-count: root.line-count;
+            plain-text: root.plain-text;
+            close-clicked => { root.close(); }
+            copy-clicked => { root.copy(); }
+            open-external-clicked => { root.open-external(); }
+        }
+    }
+}
+
+export component PdfPreviewOverlay inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: "modal-overlay";
+    in property <string> file-name;
+    in property <int> page-count;
+    in property <int> current-page;
+    in property <string> error-message;
+    in property <bool> external-only;
+    in property <image> page-image;
+    callback close();
+    callback open-external();
+    callback page-prev();
+    callback page-next();
+    background: Materials.scrim;
+
+    // Click backdrop to close
+    TouchArea { clicked => { root.close(); } }
+
+    // Centered PDF panel
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(parent.width - 40px, 900px);
+        height: min(parent.height - 40px, 800px);
+        TouchArea { } // Block backdrop clicks
+        PdfPreviewPanel {
+            width: 100%;
+            height: 100%;
+            file-name: root.file-name;
+            page-count: root.page-count;
+            current-page: root.current-page;
+            error-message: root.error-message;
+            external-only: root.external-only;
+            page-image: root.page-image;
+            close-clicked => { root.close(); }
+            open-external-clicked => { root.open-external(); }
+            page-prev-clicked => { root.page-prev(); }
+            page-next-clicked => { root.page-next(); }
+        }
+    }
+}

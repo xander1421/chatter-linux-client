@@ -10,8 +10,8 @@
 //! Source enumeration returns minimal data - the actual source selection
 //! happens via a system dialog when capture starts.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use livekit::webrtc::desktop_capturer::{
     DesktopCaptureSourceType, DesktopCapturer, DesktopCapturerOptions,
@@ -45,7 +45,13 @@ struct FrameSlot {
 
 impl FrameSlot {
     fn empty() -> Self {
-        Self { buf: Vec::new(), width: 0, height: 0, stride: 0, ready: false }
+        Self {
+            buf: Vec::new(),
+            width: 0,
+            height: 0,
+            stride: 0,
+            ready: false,
+        }
     }
 }
 
@@ -206,7 +212,12 @@ impl ScreenCapture {
 
         tracing::info!("Found {} monitors via libwebrtc", sources.len());
         for source in &sources {
-            tracing::debug!("  Monitor: {} (id={}, display_id={})", source.name, source.id, source.display_id);
+            tracing::debug!(
+                "  Monitor: {} (id={}, display_id={})",
+                source.name,
+                source.id,
+                source.display_id
+            );
         }
 
         Ok(sources)
@@ -250,7 +261,7 @@ impl ScreenCapture {
         if is_wayland() {
             tracing::info!("Wayland detected - using XDG Desktop Portal for screen sharing");
             return Ok(vec![ScreenSource {
-                name: "Share Screen (Portal)".to_string(),
+                name: "Share screen (Portal)".to_string(),
                 id: 0, // Special ID for portal
                 display_id: 0,
                 source_type: ScreenSourceType::Monitor,
@@ -284,9 +295,10 @@ impl ScreenCapture {
     /// Get the primary display (first monitor).
     pub fn primary_source() -> Result<ScreenSource, CallError> {
         let monitors = Self::list_monitors()?;
-        monitors.into_iter().next().ok_or_else(|| {
-            CallError::TrackPublishFailed("No primary display found".to_string())
-        })
+        monitors
+            .into_iter()
+            .next()
+            .ok_or_else(|| CallError::TrackPublishFailed("No primary display found".to_string()))
     }
 
     /// Spawn the capture thread and return a handshake the caller drives
@@ -348,7 +360,14 @@ impl ScreenCapture {
 
         let handle = std::thread::spawn(move || {
             Self::capture_loop(
-                source_id, source_type, options, running, fps, dims_tx, source_rx, local_preview,
+                source_id,
+                source_type,
+                options,
+                running,
+                fps,
+                dims_tx,
+                source_rx,
+                local_preview,
             );
         });
 
@@ -382,14 +401,14 @@ impl ScreenCapture {
         source_rx: std::sync::mpsc::Receiver<NativeVideoSource>,
         local_preview: Option<super::video_capture::LocalPreview>,
     ) {
-        use std::time::{Duration, Instant};
         use livekit::webrtc::desktop_capturer::CaptureError;
+        use std::time::{Duration, Instant};
 
         let frame_duration = Duration::from_secs_f64(1.0 / fps as f64);
         // Self-preview tee runs at most a few times a second: a full-res screen
         // RGBA convert (e.g. 30 MB at 5120×1440) is far too costly per frame, and
         // the preview tile is tiny. Throttle by wall-clock.
-        // ponytail: 400ms fixed; downsample before convert if even this shows on a profile.
+        // 400ms fixed; downsample before convert if even this shows on a profile.
         let preview_min_interval = Duration::from_millis(400);
         let mut last_preview = Instant::now()
             .checked_sub(preview_min_interval)
@@ -407,7 +426,9 @@ impl ScreenCapture {
 
         let capture_source = if use_portal {
             tracing::info!("Starting capture via XDG Desktop Portal (system picker will appear)");
-            tracing::info!("Note: 'Temporary' errors are expected until you select a screen in the portal dialog");
+            tracing::info!(
+                "Note: 'Temporary' errors are expected until you select a screen in the portal dialog"
+            );
             None
         } else {
             let source_list = capturer.get_source_list();
@@ -536,9 +557,7 @@ impl ScreenCapture {
                     match source_rx.recv_timeout(Duration::from_secs(10)) {
                         Ok(src) => break 'probe (src, captured),
                         Err(_) => {
-                            tracing::error!(
-                                "Screen capture: source handoff timed out — aborting"
-                            );
+                            tracing::error!("Screen capture: source handoff timed out — aborting");
                             running.store(false, Ordering::SeqCst);
                             return;
                         }
@@ -560,10 +579,10 @@ impl ScreenCapture {
         // ── Phase 2: push frames into the negotiated source ──
         let mut frame_count = 0u64;
         let mut window_frames: u32 = 0;
-        let mut window_wait = Duration::ZERO;      // capture_frame() request → frame_data arrival
-        let mut window_convert = Duration::ZERO;   // bgra_to_i420 (libyuv)
-        let mut window_push = Duration::ZERO;      // video_source.capture_frame(&frame)
-        let mut window_total = Duration::ZERO;     // start of tick → end of push
+        let mut window_wait = Duration::ZERO; // capture_frame() request → frame_data arrival
+        let mut window_convert = Duration::ZERO; // bgra_to_i420 (libyuv)
+        let mut window_push = Duration::ZERO; // video_source.capture_frame(&frame)
+        let mut window_total = Duration::ZERO; // start of tick → end of push
         let mut window_start = Instant::now();
 
         // First frame already in hand from probe phase; reuse it before the
@@ -614,7 +633,13 @@ impl ScreenCapture {
             };
             let wait_done = Instant::now();
 
-            if let Some(CapturedFrame { buf: data, width, height, stride }) = captured {
+            if let Some(CapturedFrame {
+                buf: data,
+                width,
+                height,
+                stride,
+            }) = captured
+            {
                 if width > 0 && height > 0 {
                     let conv_start = Instant::now();
                     let dims = (width as u32, height as u32);
@@ -670,17 +695,18 @@ impl ScreenCapture {
                     spare = data;
 
                     window_frames += 1;
-                    window_wait    += wait_done - tick_start;
+                    window_wait += wait_done - tick_start;
                     window_convert += conv_done - conv_start;
-                    window_push    += push_done - push_start;
-                    window_total   += push_done - tick_start;
+                    window_push += push_done - push_start;
+                    window_total += push_done - tick_start;
 
                     if window_start.elapsed() >= Duration::from_secs(1) && window_frames > 0 {
                         let secs = window_start.elapsed().as_secs_f64();
                         let f = window_frames as f64;
                         tracing::info!(
                             "[SCREEN_FPS] {}x{} {:.1} fps  avg/frame total={:.1}ms wait={:.1}ms convert={:.1}ms push={:.1}ms (target {} fps)",
-                            width, height,
+                            width,
+                            height,
                             window_frames as f64 / secs,
                             window_total.as_secs_f64() * 1000.0 / f,
                             window_wait.as_secs_f64() * 1000.0 / f,
@@ -735,7 +761,12 @@ impl ScreenCapture {
         // `spare` now holds the filled buffer; move it out and leave `spare`
         // empty (the old slot buffer) for the next swap-in.
         let buf = std::mem::take(spare);
-        Some(CapturedFrame { buf, width: slot.width, height: slot.height, stride: slot.stride })
+        Some(CapturedFrame {
+            buf,
+            width: slot.width,
+            height: slot.height,
+            stride: slot.stride,
+        })
     }
 
     /// Convert BGRA (memory byte order B, G, R, A) to I420 via libyuv.
@@ -764,19 +795,34 @@ impl ScreenCapture {
         // Capture-free helper (a plain fn, so it's trivially shareable across
         // rayon tasks — a closure capturing the strides could only be moved into
         // one spawn).
-        fn conv(src: &[u8], stride: usize, y: &mut [u8], u: &mut [u8], v: &mut [u8], w: usize, rows: usize) {
+        fn conv(
+            src: &[u8],
+            stride: usize,
+            y: &mut [u8],
+            u: &mut [u8],
+            v: &mut [u8],
+            w: usize,
+            rows: usize,
+        ) {
             livekit::webrtc::native::yuv_helper::argb_to_i420(
-                src, stride as u32,
-                y, w as u32,
-                u, (w / 2) as u32,
-                v, (w / 2) as u32,
-                w as i32, rows as i32,
+                src,
+                stride as u32,
+                y,
+                w as u32,
+                u,
+                (w / 2) as u32,
+                v,
+                (w / 2) as u32,
+                w as i32,
+                rows as i32,
             );
         }
 
         // Pick a band count from the core budget, but keep bands ≥64 rows so the
         // SIMD kernel amortises rayon dispatch, and only bother past ~2 MP.
-        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
         let bands = cores.min(height / 64).max(1);
         if bands == 1 || width * height < 2_000_000 {
             conv(bgra, stride, y_plane, u_plane, v_plane, width, height);
@@ -796,10 +842,15 @@ impl ScreenCapture {
         let mut y_rest = y_plane;
         let mut u_rest = u_plane;
         let mut v_rest = v_plane;
-        let mut tasks: Vec<(&[u8], &mut [u8], &mut [u8], &mut [u8], u32)> = Vec::with_capacity(bands);
+        let mut tasks: Vec<(&[u8], &mut [u8], &mut [u8], &mut [u8], u32)> =
+            Vec::with_capacity(bands);
         let mut y0 = 0usize;
         for b in 0..bands {
-            let rows = if b == bands - 1 { height - y0 } else { rows_each };
+            let rows = if b == bands - 1 {
+                height - y0
+            } else {
+                rows_each
+            };
             let (yh, yt) = y_rest.split_at_mut(rows * wc);
             let (uh, ut) = u_rest.split_at_mut((rows / 2) * hchroma_stride);
             let (vh, vt) = v_rest.split_at_mut((rows / 2) * hchroma_stride);
@@ -867,14 +918,20 @@ mod tests {
     fn test_is_wayland_detection() {
         // No environment mutation: the cases go straight to the pure helper, so
         // this test cannot affect — or be affected by — anything running beside it.
-        assert!(session_type_is_wayland(Some("wayland")), "should detect Wayland");
+        assert!(
+            session_type_is_wayland(Some("wayland")),
+            "should detect Wayland"
+        );
         assert!(
             session_type_is_wayland(Some("WAYLAND")),
             "should detect Wayland case-insensitively"
         );
         assert!(!session_type_is_wayland(Some("x11")), "X11 is not Wayland");
         assert!(!session_type_is_wayland(Some("tty")), "tty is not Wayland");
-        assert!(!session_type_is_wayland(None), "an unset session type is not Wayland");
+        assert!(
+            !session_type_is_wayland(None),
+            "an unset session type is not Wayland"
+        );
     }
 
     #[test]
@@ -934,10 +991,10 @@ mod tests {
         // Test a simple 2x2 red pixel image
         // BGRA: Blue=0, Green=0, Red=255, Alpha=255
         let bgra = vec![
-            0, 0, 255, 255,  // pixel (0,0) - red
-            0, 0, 255, 255,  // pixel (1,0) - red
-            0, 0, 255, 255,  // pixel (0,1) - red
-            0, 0, 255, 255,  // pixel (1,1) - red
+            0, 0, 255, 255, // pixel (0,0) - red
+            0, 0, 255, 255, // pixel (1,0) - red
+            0, 0, 255, 255, // pixel (0,1) - red
+            0, 0, 255, 255, // pixel (1,1) - red
         ];
 
         let width = 2;
@@ -969,21 +1026,24 @@ mod tests {
         }
 
         // U should be around 90
-        assert!(u_plane[0] > 80 && u_plane[0] < 100, "U value {} out of expected range", u_plane[0]);
+        assert!(
+            u_plane[0] > 80 && u_plane[0] < 100,
+            "U value {} out of expected range",
+            u_plane[0]
+        );
 
         // V should be around 239
-        assert!(v_plane[0] > 230, "V value {} out of expected range", v_plane[0]);
+        assert!(
+            v_plane[0] > 230,
+            "V value {} out of expected range",
+            v_plane[0]
+        );
     }
 
     #[test]
     fn test_bgra_to_i420_black() {
         // Black pixels: B=0, G=0, R=0, A=255
-        let bgra = vec![
-            0, 0, 0, 255,
-            0, 0, 0, 255,
-            0, 0, 0, 255,
-            0, 0, 0, 255,
-        ];
+        let bgra = vec![0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255];
 
         let width = 2;
         let height = 2;
@@ -1019,10 +1079,7 @@ mod tests {
     fn test_bgra_to_i420_white() {
         // White pixels: B=255, G=255, R=255, A=255
         let bgra = vec![
-            255, 255, 255, 255,
-            255, 255, 255, 255,
-            255, 255, 255, 255,
-            255, 255, 255, 255,
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
         ];
 
         let width = 2;
@@ -1051,8 +1108,16 @@ mod tests {
         for y in &y_plane {
             assert!(*y > 220, "Y value for white should be > 220, got {}", y);
         }
-        assert!(u_plane[0] > 120 && u_plane[0] < 136, "U value for white should be ~128, got {}", u_plane[0]);
-        assert!(v_plane[0] > 120 && v_plane[0] < 136, "V value for white should be ~128, got {}", v_plane[0]);
+        assert!(
+            u_plane[0] > 120 && u_plane[0] < 136,
+            "U value for white should be ~128, got {}",
+            u_plane[0]
+        );
+        assert!(
+            v_plane[0] > 120 && v_plane[0] < 136,
+            "V value for white should be ~128, got {}",
+            v_plane[0]
+        );
     }
 
     // Parallel band-split must be byte-identical to a single full-frame convert.
@@ -1067,10 +1132,10 @@ mod tests {
         for y in 0..height {
             for x in 0..width {
                 let p = (y * stride) + x * 4;
-                bgra[p] = (x % 256) as u8;         // B
-                bgra[p + 1] = (y % 256) as u8;     // G
+                bgra[p] = (x % 256) as u8; // B
+                bgra[p + 1] = (y % 256) as u8; // G
                 bgra[p + 2] = ((x + y) % 256) as u8; // R
-                bgra[p + 3] = 255;                 // A
+                bgra[p + 3] = 255; // A
             }
         }
 
@@ -1082,16 +1147,30 @@ mod tests {
         // Reference: one libyuv call over the whole frame.
         let (mut yr, mut ur, mut vr) = (vec![0u8; ysz], vec![0u8; csz], vec![0u8; csz]);
         livekit::webrtc::native::yuv_helper::argb_to_i420(
-            &bgra, stride as u32,
-            &mut yr, width as u32,
-            &mut ur, (width / 2) as u32,
-            &mut vr, (width / 2) as u32,
-            width as i32, height as i32,
+            &bgra,
+            stride as u32,
+            &mut yr,
+            width as u32,
+            &mut ur,
+            (width / 2) as u32,
+            &mut vr,
+            (width / 2) as u32,
+            width as i32,
+            height as i32,
         );
 
-        assert_eq!(yp, yr, "Y plane mismatch between parallel and single convert");
-        assert_eq!(up, ur, "U plane mismatch between parallel and single convert");
-        assert_eq!(vp, vr, "V plane mismatch between parallel and single convert");
+        assert_eq!(
+            yp, yr,
+            "Y plane mismatch between parallel and single convert"
+        );
+        assert_eq!(
+            up, ur,
+            "U plane mismatch between parallel and single convert"
+        );
+        assert_eq!(
+            vp, vr,
+            "V plane mismatch between parallel and single convert"
+        );
     }
 
     #[test]
@@ -1125,9 +1204,16 @@ mod tests {
 
         match ScreenCapture::list_sources() {
             Ok(sources) => {
-                assert_eq!(sources.len(), 1, "Wayland should return single portal source");
+                assert_eq!(
+                    sources.len(),
+                    1,
+                    "Wayland should return single portal source"
+                );
                 assert_eq!(sources[0].id, 0, "Portal source should have id 0");
-                assert!(sources[0].name.contains("Portal"), "Portal source name should contain 'Portal'");
+                assert!(
+                    sources[0].name.contains("Portal"),
+                    "Portal source name should contain 'Portal'"
+                );
             }
             Err(e) => {
                 eprintln!("list_sources failed: {}", e);

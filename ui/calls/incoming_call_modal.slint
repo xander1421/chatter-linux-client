@@ -1,6 +1,11 @@
+import { KeyFocus } from "../components/key_focus.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // Incoming call notification modal
 
 import { Colors } from "../theme/colors.slint";
+import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -8,6 +13,10 @@ import { Avatar } from "../components/avatar.slint";
 import { IncomingCallData } from "types.slint";
 
 export component IncomingCallModal inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     in property <bool> show: false;
     in property <IncomingCallData> call-data;
     /// True when there is already an active call — accepting this one will
@@ -16,32 +25,40 @@ export component IncomingCallModal inherits Rectangle {
 
     callback accept-call();
     callback decline-call();
+    property <float> card-arrival: 0;
+    init => { root.card-arrival = root.show ? 1 : 0; }
+    changed show => { root.card-arrival = root.show ? 1 : 0; }
+    animate card-arrival { duration: Materials.motion-standard; easing: Materials.spring; }
 
     // Full screen overlay
     width: 100%;
     height: 100%;
-    background: Colors.overlay;
-    opacity: show ? 1.0 : 0.0;
-    visible: show;
+    background: Materials.scrim;
+    opacity: min(1, card-arrival);
+    visible: root.show || self.opacity > 0;
 
-    animate opacity { duration: 200ms; }
+    // Swallow every tap on the scrim and on the card's background: without it
+    // a tap beside the card opened the chat underneath while the call kept
+    // ringing (RC20). It deliberately does NOT decline — unlike a modal's
+    // tap-outside-to-close, a stray tap must not reject a call.
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        enabled: root.show;
+    }
 
-    if show: Rectangle {
+    GlassSurface {
+        material-level: 3;
+        elevation: 5;
+
         // Center card — Neo strong surface
         x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        y: (parent.height - self.height) / 2 + (1 - root.card-arrival) * 28px;
         width: min(320px, parent.width - 32px);
-        height: min(380px, parent.height - 48px);
-        background: Colors.surface;
-        border-radius: Spacing.radius-lg;
-        border-width: 1px;
-        border-color: Colors.neo-highlight-strong;
-        drop-shadow-blur: Spacing.neo-blur-lg;
-        drop-shadow-offset-x: Spacing.neo-offset-lg;
-        drop-shadow-offset-y: Spacing.neo-offset-lg;
-        drop-shadow-color: Colors.neo-shadow-strong;
+        height: min(card-content.preferred-height, parent.height - 48px);
+        border-radius: Spacing.radius-sheet;
 
-        VerticalLayout {
+        card-content := VerticalLayout {
             alignment: center;
             spacing: Spacing.xl;
             padding: Spacing.xxl;
@@ -55,28 +72,25 @@ export component IncomingCallModal inherits Rectangle {
                     height: 96px;
                     horizontal-stretch: 0;
 
-                    // Pulse ring animation — Neo glow pulse
+                    // The ring expands from the avatar instead of flashing in place.
                     Rectangle {
-                        width: 96px;
-                        height: 96px;
-                        border-radius: 48px;
+                        property <float> ripple: 0;
+                        width: Appearance.reduce-motion ? 96px : 80px + ripple * 32px;
+                        height: self.width;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: self.width / 2;
                         background: transparent;
-                        border-width: 2px;
-                        border-color: Colors.glow-cyan.with-alpha(pulse-opacity);
-                        drop-shadow-blur: Spacing.neo-blur-md;
-                        drop-shadow-color: Colors.glow-cyan-soft;
-
-                        property <float> pulse-opacity: 0.0;
-
-                        animate pulse-opacity {
-                            duration: 1500ms;
-                            iteration-count: -1;
-                            easing: ease-out;
+                        border-width: Spacing.stroke;
+                        border-color: Colors.primary.with-alpha(Appearance.reduce-motion ? 0.65 : (1 - ripple) * 0.9);
+                        drop-shadow-blur: Elevation.halo-blur-strong;
+                        drop-shadow-color: Colors.primary.with-alpha(Appearance.reduce-motion ? 0.12 : (1 - ripple) * 0.18);
+                        animate ripple {
+                            duration: Materials.motion-emphasized * 3;
+                            iteration-count: Appearance.reduce-motion ? 1 : -1;
+                            easing: Materials.glide;
                         }
-
-                        init => {
-                            self.pulse-opacity = 0.8;
-                        }
+                        init => { self.ripple = 1; }
                     }
 
                     Avatar {
@@ -105,7 +119,11 @@ export component IncomingCallModal inherits Rectangle {
                 }
 
                 Text {
-                    text: call-data.is-video-call ? "Incoming video call..." : "Incoming voice call...";
+                    // A channel call rings with its channel: answering joins
+                    // a call already under way rather than starting one.
+                    text: call-data.channel-name != ""
+                        ? (call-data.is-video-call ? "Join group video call" : "Join group voice call")
+                        : (call-data.is-video-call ? "Incoming video call..." : "Incoming voice call...");
                     font-size: Typography.sm;
                     color: Colors.text-secondary;
                     horizontal-alignment: center;
@@ -164,12 +182,21 @@ export component IncomingCallModal inherits Rectangle {
                     height: 64px;
                     border-radius: 32px;
                     background: decline-hover.has-hover ? Colors.error-hover : Colors.error;
-                    drop-shadow-blur: decline-hover.has-hover ? Spacing.neo-blur-md : Spacing.neo-blur-sm;
-                    drop-shadow-offset-x: Spacing.neo-offset-sm;
-                    drop-shadow-offset-y: Spacing.neo-offset-sm;
+                    drop-shadow-blur: decline-hover.has-hover ? Elevation.halo-blur-strong : Elevation.halo-blur;
+                    drop-shadow-offset-y: Elevation.popover-contact-offset;
                     drop-shadow-color: Colors.error.with-alpha(0.4);
+                    transform-scale-x: decline-hover.pressed ? 91% : 100%;
+                    transform-scale-y: decline-hover.pressed ? 91% : 100%;
+                    animate transform-scale-x { duration: decline-hover.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: decline-hover.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    accessible-role: button;
+                    accessible-label: "Decline call";
+                    accessible-action-default => { if root.show { root.decline-call(); } }
+                    KeyFocus { border-radius: parent.border-radius; activate => { if root.show { root.decline-call(); } } }
 
                     decline-hover := TouchArea {
+                        enabled: root.show;
                         clicked => { decline-call(); }
                     }
 
@@ -184,7 +211,7 @@ export component IncomingCallModal inherits Rectangle {
                         height: 28px;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        colorize: Colors.text-primary;
+                        colorize: Colors.on-error;
                     }
                 }
 
@@ -193,13 +220,22 @@ export component IncomingCallModal inherits Rectangle {
                     width: 64px;
                     height: 64px;
                     border-radius: 32px;
-                    background: accept-hover.has-hover ? Colors.success-hover : Colors.success;
-                    drop-shadow-blur: accept-hover.has-hover ? Spacing.neo-blur-md : Spacing.neo-blur-sm;
-                    drop-shadow-offset-x: Spacing.neo-offset-sm;
-                    drop-shadow-offset-y: Spacing.neo-offset-sm;
-                    drop-shadow-color: Colors.success.with-alpha(0.4);
+                    background: accept-hover.has-hover ? Colors.success-fill-hover : Colors.success-fill;
+                    drop-shadow-blur: accept-hover.has-hover ? Elevation.halo-blur-strong : Elevation.halo-blur;
+                    drop-shadow-offset-y: Elevation.popover-contact-offset;
+                    drop-shadow-color: Colors.success-fill.with-alpha(0.4);
+                    transform-scale-x: accept-hover.pressed ? 91% : 100%;
+                    transform-scale-y: accept-hover.pressed ? 91% : 100%;
+                    animate transform-scale-x { duration: accept-hover.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: accept-hover.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    accessible-role: button;
+                    accessible-label: "Accept call";
+                    accessible-action-default => { if root.show { root.accept-call(); } }
+                    KeyFocus { border-radius: parent.border-radius; activate => { if root.show { root.accept-call(); } } }
 
                     accept-hover := TouchArea {
+                        enabled: root.show;
                         clicked => { accept-call(); }
                     }
 
@@ -209,7 +245,7 @@ export component IncomingCallModal inherits Rectangle {
                         height: 28px;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        colorize: Colors.text-primary;
+                        colorize: Colors.on-success;
                     }
                 }
             }

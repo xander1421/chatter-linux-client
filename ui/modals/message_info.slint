@@ -1,0 +1,29 @@
+import { Modal } from "../components/modal.slint";
+import { Colors } from "../theme/colors.slint";
+import { Typography } from "../theme/typography.slint";
+
+export global MessageInfo {
+    in-out property <string> message-id: "";
+    in-out property <string> details: "";
+    callback open(string);
+}
+
+export component MessageInfoModal inherits Modal {
+    title: "Message info";
+    modal-width: 440px;
+    max-modal-height: 460px;
+    fill-height: true;
+
+    VerticalLayout {
+        Flickable {
+            viewport-height: details.preferred-height;
+            details := Text {
+                width: parent.width;
+                text: MessageInfo.details;
+                wrap: word-wrap;
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+            }
+        }
+    }
+}

@@ -3,49 +3,288 @@
 //! Handles selecting a DM conversation, loading messages, and presence.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
-use chatter_core::domain::AnonDmId;
 
-use crate::{MainWindow, run_ui};
-use crate::bin_ui::converters::messages_to_display_batch;
+use crate::MainWindow;
+use crate::bin_ui::converters::messages_to_display_batch_deferred;
 
 use super::stop_audio_playback;
+use crate::bin_ui::features::history_owner::HistoryOwner;
+
+// Notification delivery and the selection callback run on the UI thread.
+// Capture this one-shot preference before the asynchronous history load.
+static NOTIFICATION_OPEN_LATEST: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn open_from_notification(
+    window: &MainWindow,
+    conversation: chatter_core::state::ActiveConversation,
+) {
+    if matches!(
+        conversation,
+        chatter_core::state::ActiveConversation::ServerDm { .. }
+            | chatter_core::state::ActiveConversation::AnonDm(_)
+    ) {
+        NOTIFICATION_OPEN_LATEST.store(true, Ordering::Relaxed);
+    }
+    super::select_conversation(window, conversation);
+}
+
+/// Sidebar menu › Delete chat on a DM row, or a channel we are no longer in
+/// (confirmed in the menu). Core resolves the row and deletes
+/// (`delete_conversation`); if it was the open conversation the chat pane is
+/// emptied, then the lists rebuild.
+pub fn wire_delete_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let ui_ctx = ui_ctx.clone();
+    let weak = window.as_weak();
+    window.global::<crate::SidebarPane>().on_delete_conversation(move |row_id: SharedString, kind: crate::ConversationKind| {
+        let (weak, ui_ctx) = (weak.clone(), ui_ctx.clone());
+        tokio::spawn(async move {
+            let kind = crate::bin_ui::converters::conversation_type(kind);
+            let Some(conv) = ui_ctx.resolve_row_conversation(row_id.as_str(), &kind) else {
+                tracing::warn!(row_id = %row_id, "delete chat: row resolves to no conversation");
+                return;
+            };
+            if let Err(e) = ui_ctx.delete_conversation(conv).await {
+                tracing::error!(error = %e, row_id = %row_id, "delete chat failed");
+                // A secret chat stays when its peer could not be told.
+                crate::run_ui!(weak, |w| {
+                    w.set_toast_message(
+                        "Could not delete the chat. Check your connection and try again.".into(),
+                    );
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                });
+                return;
+            }
+            super::conversation_removed(&weak, &ui_ctx, conv);
+        });
+    });
+}
+
+/// A secret chat's header: the peer as the chat presents them (core's
+/// `anon_dm_peer_card`). UI thread.
+fn apply_anon_dm_header(
+    w: &MainWindow,
+    ui_ctx: &ChatterClient,
+    id: &chatter_core::domain::anon_dm::AnonDmId,
+) {
+    let (name, avatar) = ui_ctx
+        .anon_dm_peer_card(id)
+        .unwrap_or_else(|| ("Private chat".to_string(), None));
+    let image = avatar
+        .as_deref()
+        .and_then(crate::bin_ui::converters::avatar_bytes_to_image);
+    w.global::<crate::ChatPane>().set_channel_name(name.into());
+    // The "Secret chat" subtitle already says what this is; no topic line.
+    w.global::<crate::ChatPane>().set_topic("".into());
+    w.global::<crate::ChatPane>()
+        .set_channel_has_avatar(image.is_some());
+    w.global::<crate::ChatPane>()
+        .set_channel_avatar_source(image.unwrap_or_default());
+}
+
+/// Repaint the open secret chat's header and composer after its peer's name,
+/// avatar or acceptance changed (RC108 O1: the initiator's header kept
+/// "Private chat" after the peer accepted until the chat was reopened).
+pub(crate) fn refresh_open_anon_dm(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    id: chatter_core::domain::anon_dm::AnonDmId,
+) {
+    let open = chatter_core::state::ActiveConversation::AnonDm(id);
+    if ui_ctx.active_conversation() != open {
+        return;
+    }
+    let ctx = ui_ctx.clone();
+    crate::run_ui!(weak, |w| {
+        if ctx.active_conversation() == open {
+            apply_anon_dm_header(&w, &ctx, &id);
+        }
+    });
+    crate::bin_ui::features::chat::send_message::show_send_notice(weak, ui_ctx, id.into());
+}
+
+/// Accept / Decline under an unanswered secret-chat request opened from the
+/// chat list (RC108 O2): the same handlers as Contacts › Requests › Private,
+/// for the secret chat that is open.
+pub fn wire_secret_request_answer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    fn open_secret_chat(ctx: &ChatterClient) -> Option<SharedString> {
+        match ctx.active_conversation() {
+            chatter_core::state::ActiveConversation::AnonDm(id) => Some(id.to_string().into()),
+            _ => None,
+        }
+    }
+    let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
+    window
+        .global::<crate::ChatPane>()
+        .on_secret_request_accept_clicked(move || {
+            if let (Some(w), Some(id)) = (weak.upgrade(), open_secret_chat(&ctx)) {
+                w.global::<crate::ModalHostState>()
+                    .invoke_friends_accept_private_request(id);
+            }
+        });
+    let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
+    window
+        .global::<crate::ChatPane>()
+        .on_secret_request_decline_clicked(move || {
+            if let (Some(w), Some(id)) = (weak.upgrade(), open_secret_chat(&ctx)) {
+                w.global::<crate::ModalHostState>()
+                    .invoke_friends_decline_private_request(id);
+            }
+        });
+}
+
+/// Profile › Start secret chat, and the chat header's ⋯ › Start secret chat
+/// on a regular DM. Core starts the secret chat with the peer (or finds the
+/// one that exists, `start_secret_chat`); the list rebuilds with its row and
+/// the chat pane opens it through `dm-selected`, like every other DM.
+pub fn wire_start_secret_chat(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_start_secret_chat(move || {
+            let Some(w) = weak.upgrade() else {
+                return;
+            };
+            let Ok(peer) = w
+                .global::<crate::ModalHostState>()
+                .get_profile_user_id()
+                .parse::<UserId>()
+            else {
+                return;
+            };
+            start_secret_chat(&weak, &ctx, peer);
+        });
+
+    let ctx = ui_ctx.clone();
+    window
+        .global::<crate::ModalHostState>()
+        .on_chat_menu_can_start_secret_chat(move || {
+            open_dm_peer(&ctx).is_some_and(|peer| ctx.can_start_secret_chat(&peer))
+        });
+
+    let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
+    window
+        .global::<crate::ModalHostState>()
+        .on_chat_menu_start_secret_chat(move || {
+            if let Some(peer) = open_dm_peer(&ctx) {
+                start_secret_chat(&weak, &ctx, peer);
+            }
+        });
+}
+
+/// The peer of the open regular DM, if that is what is open.
+fn open_dm_peer(ui_ctx: &ChatterClient) -> Option<UserId> {
+    match ui_ctx.active_conversation() {
+        chatter_core::state::ActiveConversation::ServerDm { peer_id } => Some(peer_id),
+        _ => None,
+    }
+}
+
+fn start_secret_chat(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>, peer: UserId) {
+    if let Some(w) = weak.upgrade() {
+        w.set_secret_chat_starts_pending(w.get_secret_chat_starts_pending() + 1);
+        w.set_toast_message("Secret chat is getting ready — will start automatically".into());
+        w.set_toast_variant("info".into());
+        w.set_toast_visible(true);
+    }
+    let (weak, ui_ctx) = (weak.clone(), ui_ctx.clone());
+    tokio::spawn(async move {
+        let result = ui_ctx.start_secret_chat(peer).await;
+        let done = weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = done.upgrade() {
+                w.set_secret_chat_starts_pending((w.get_secret_chat_starts_pending() - 1).max(0));
+                if w.get_secret_chat_starts_pending() == 0
+                    && w.get_toast_message()
+                        == "Secret chat is getting ready — will start automatically"
+                {
+                    w.set_toast_visible(false);
+                }
+            }
+        });
+        match result {
+            Ok(dm) => {
+                super::rebuild_chat_list(&weak, &ui_ctx);
+                let dm_id = dm.id.to_string();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        crate::bin_ui::features::back::reset_to_chats(&w);
+                        w.global::<crate::SidebarPane>()
+                            .invoke_dm_selected(dm_id.into());
+                    }
+                });
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "start secret chat failed");
+                let message = format!("Could not start secret chat: {e}");
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_toast_message(message.into());
+                        w.set_toast_variant("error".into());
+                        w.set_toast_visible(true);
+                    }
+                });
+            }
+        }
+    });
+}
 
 /// Wire DM selected callback.
 pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_clone = ui_ctx.clone();
     let weak_window = window.as_weak();
 
-    window.on_dm_selected(move |dm_id: SharedString| {
+    window.global::<crate::SidebarPane>().on_dm_selected(move |dm_id: SharedString| {
+        let open_latest = NOTIFICATION_OPEN_LATEST.swap(false, Ordering::Relaxed);
+        let open_started = std::time::Instant::now();
+        tracing::info!(kind = "dm", stage = "tap", source = if open_latest { "notification" } else { "other" }, elapsed_ms = 0, "conversation_open");
         let dm_id_str = dm_id.to_string();
         if dm_id_str.is_empty() {
             return;
         }
+        crate::trace_chat_open_started(open_started, "dm");
 
         let ui_ctx = ui_ctx_clone.clone();
         let weak = weak_window.clone();
-        
-        // Stop any playing audio
-        stop_audio_playback();
-
-        // Clear inline GIF animations
-        crate::bin_ui::gif_state::clear_inline_gifs();
 
         // What kind of DM is this? Core answers from storage, not from the
         // sidebar model: a DM filed into a custom folder is deliberately absent
         // from that model, and scanning it here made every foldered DM
         // unopenable.
         let active_pre_spawn = ui_ctx.resolve_dm_conversation(&dm_id_str);
-        let is_anon_dm = matches!(
-            active_pre_spawn,
-            Some(chatter_core::state::ActiveConversation::AnonDm(_))
-        );
-        let peer_id_for_dm: Option<UserId> = match active_pre_spawn {
-            Some(chatter_core::state::ActiveConversation::ServerDm { peer_id }) => Some(peer_id),
+        let Some(active) = active_pre_spawn else {
+            // Nothing to open. Showing the chat pane anyway put the PREVIOUS
+            // conversation on screen as if it were this one, so stay on the
+            // list (the sidebar row already asked for the pane).
+            tracing::warn!(dm_id = %dm_id_str, "[UI_OPEN_DM] resolves to no conversation");
+            if let Some(w) = weak.upgrade() {
+                w.global::<crate::SidebarPane>().set_mobile_show_chat(false);
+                w.global::<crate::ChatPane>().set_loading_messages(false);
+                super::super::header::finish_pending_jump(&w, &ui_ctx);
+                super::super::header::refresh_pinned_ui(&w, &ui_ctx);
+            }
+            return;
+        };
+        super::show_chat_pane(&weak);
+        tracing::info!(kind = "dm", stage = "slide_requested", elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
+
+        // Stop any playing audio
+        stop_audio_playback();
+
+        // Clear inline GIF animations
+        crate::bin_ui::gif_state::clear_inline_gifs();
+
+        super::super::header::cancel_pending_jump_for(active);
+
+        let is_anon_dm = matches!(active, chatter_core::state::ActiveConversation::AnonDm(_));
+        let peer_id_for_dm: Option<UserId> = match active {
+            chatter_core::state::ActiveConversation::ServerDm { peer_id } => Some(peer_id),
             _ => None,
         };
 
@@ -54,37 +293,31 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // both read `active_channel_id`; if they fire before the async task
         // sets it, send_message.rs:86 early-returns and
         // handle_message_received drops the bubble (`is_active=false`).
-        if let Some(active) = active_pre_spawn {
-            tracing::info!(?active, dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] committing active conversation pre-spawn");
-            ui_ctx.chat_state().set_active_conversation(active);
-        } else {
-            tracing::warn!(dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] no active conversation computed; sends will silently drop");
+        tracing::info!(?active, dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] committing active conversation pre-spawn");
+        ui_ctx.select_conversation(active);
+        if let Some(w) = weak.upgrade() {
+            w.invoke_refresh_screen_protection();
         }
 
+        if let Some(w) = weak.upgrade() {
+            crate::bin_ui::features::composer::sync_composer_draft(
+                &w, &ui_ctx, ui_ctx.chat_snapshot().attachment_revision,
+            );
+        }
+
+        let owner = HistoryOwner::begin(&ui_ctx, active);
         let dm_id_str_for_ui = dm_id_str.clone();
         let ui_ctx_for_ui = ui_ctx.clone();
-        run_ui!(weak, |w| {
-            w.set_loading_messages(true);
+        crate::run_history_ui!(weak, owner, |w| {
+            w.global::<crate::ChatPane>().set_loading_messages(true);
 
             // Clear unread count in sidebar
             crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &ui_ctx_for_ui, &dm_id_str_for_ui, 0);
 
-
-            // Clear composer state
-            w.set_composer_is_replying(false);
-            w.set_composer_reply_to_sender("".into());
-            w.set_composer_reply_to_sender_name("".into());
-            w.set_composer_reply_to_timestamp("".into());
-            w.set_composer_reply_preview("".into());
-            w.set_composer_reply_has_thumbnail(false);
-            w.set_composer_reply_thumbnail(slint::Image::default());
-            w.set_composer_is_editing(false);
-            w.set_composer_edit_message_id("".into());
-
             // Clear pins
-            w.set_has_pinned_messages(false);
-            w.set_pinned_message_preview("".into());
-            w.set_pinned_total_count(0);
+            w.global::<crate::ChatPane>().set_has_pinned_messages(false);
+            w.global::<crate::ChatPane>().set_pinned_message_preview("".into());
+            w.global::<crate::ChatPane>().set_pinned_total_count(0);
 
             // Clear the identity-change prompt up front. It is re-evaluated
             // below for a server DM; every other branch (anon DM, or a failed
@@ -94,34 +327,29 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
 
         tokio::spawn(async move {
+            if !owner.is_current() { return; }
             // Mark as read — the local half persists `is_read`, which is what
             // the sidebar badge counts. Clearing the Slint model above only
             // hides the badge until the next rebuild. Same call the channel
             // path makes; covers anon and server DMs alike.
             // Where the user left off. This is the only moment it exists:
             // the call that returns it is the call that clears `is_read`.
-            let anchor = match active_pre_spawn {
-                Some(active) => ui_ctx
-                    .conversation(active)
-                    .mark_as_read()
-                    .await
-                    .unwrap_or_default(),
-                None => Default::default(),
-            };
+            // Receipts go out below, for the page this open loads anyway.
+            let read_handle = ui_ctx.conversation(active);
+            let anchor = read_handle.mark_read_local().unwrap_or_default();
+            // A notification open lands on the newest message, with no divider.
+            let anchor = if open_latest { Default::default() } else { anchor };
+            tracing::info!(kind = "dm", stage = "read_marked", elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
 
             // 1. Handle Anon DM selection
-            if is_anon_dm {
-                let anon_dm_id: AnonDmId = match dm_id_str.parse() {
-                    Ok(id) => id,
-                    Err(e) => {
-                        tracing::error!("Invalid anon DM ID: {}", e);
-                        run_ui!(weak, |w| w.set_loading_messages(false));
-                        return;
-                    }
-                };
+            // The resolved conversation, not the row id: a peer's row can
+            // resolve to the anon DM we share with them.
+            if let chatter_core::state::ActiveConversation::AnonDm(anon_dm_id) = active {
+                // A peer avatar whose fetch never came through gets another try.
+                ui_ctx.retry_secret_chat_avatar(anon_dm_id);
 
                 let ui_ctx_for_sel = ui_ctx.clone();
-                run_ui!(weak, |w| {
+                crate::run_history_ui!(weak, owner, |w| {
                     super::refresh_selection(&w, &ui_ctx_for_sel);
                     super::refresh_section_badges(&w, &ui_ctx_for_sel);
                 });
@@ -138,56 +366,64 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         .unwrap_or_else(|| "[Pinned message]".to_string());
                     (ids, preview)
                 };
-                let channel_id = anon_dm_id.to_string().parse().unwrap_or_else(|_| ChannelId::new());
-                super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
+                if !owner.is_current() { return; }
+                super::apply_pinned_ui_owned(&weak, &ui_ctx, msg_ids, preview, &owner);
 
                 // Load messages
-                let messages = match ui_ctx.get_anon_dm_messages_asc(&anon_dm_id, None, chatter_core::config::MESSAGE_PAGE_SIZE) {
+                let messages = match anchor.opening_page(chatter_core::config::MESSAGE_PAGE_SIZE as u32, |limit| ui_ctx.get_anon_dm_messages_asc(&anon_dm_id, None, limit as i32)) {
                     Ok(msgs) => msgs,
                     Err(e) => {
                         tracing::error!("Failed to list anon DM messages: {}", e);
-                        run_ui!(weak, |w| w.set_loading_messages(false));
+                        crate::run_history_ui!(weak, owner, |w| w.global::<crate::ChatPane>().set_loading_messages(false));
                         return;
                     }
                 };
+                if !owner.is_current() { return; }
+                tracing::info!(kind = "secret_dm", stage = "page_loaded", rows = messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
+            read_handle.send_read_receipts_for_page(&messages);
 
-                let display_messages = messages_to_display_batch(
+                let mut display_messages = messages_to_display_batch_deferred(
                     &messages,
-                    |m| ui_ctx.message_sender_display_name(m),
-                    |att_id| ui_ctx.get_attachment(att_id),
+                    |ms| ui_ctx.message_sender_display_names(ms),
+                    |m| ui_ctx.message_sender_avatar(m),
+                    crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
                     |m| ui_ctx.reply_author_display_name(m),
                     |m| ui_ctx.reply_parent_missing_for(m),
                     |m| ui_ctx.reply_parent_media(m),
+                    |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
                 );
-
-                // Get conversation info for the header
-                let (title, subtitle) = match ui_ctx.get_anon_dm_conversation(&anon_dm_id) {
-                    Some(conv) => (
-                        conv.peer_display_name.clone().unwrap_or_else(|| "Private Chat".to_string()),
-                        "Private Chat".to_string()
-                    ),
-                    None => ("Private Chat".to_string(), "NDSS'21 Protocol".to_string()),
-                };
+                crate::bin_ui::converters::mark_disappearing(&ui_ctx, &mut display_messages);
 
                 let initial_count = display_messages.len();
+                tracing::info!(kind = "secret_dm", stage = "display_built", rows = initial_count, elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
                 tracing::info!(dm_id = %anon_dm_id, count = initial_count, "[UI_OPEN_DM] anon DM spawn run_ui firing");
-                let anchor_page = messages.clone();
-                run_ui!(weak, |w| {
+                let anchor = ui_ctx.opening_unread_anchor(anchor);
+                let unread_index = anchor.divider_index(&messages);
+                crate::run_history_ui!(weak, owner, |w| {
                     use slint::Model;
-                    super::apply_unread_anchor(&w, anchor, &anchor_page);
-                    let before = w.get_messages().row_count();
+                    let pane = w.global::<crate::ChatPane>();
+                    pane.set_unread_index(unread_index.map_or(-1, |i| i as i32));
+                    pane.set_unread_count(anchor.unread_count as i32);
+                    pane.set_is_at_bottom(unread_index.is_none());
+                    let before = w.global::<crate::ChatPane>().get_messages().row_count();
                     let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
-                    let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
+                    let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_preview_with_user(&current_user_id)).collect();
                     tracing::info!(before_count = before, replacing_with = slint_messages.len(), "[UI_OPEN_DM] anon DM run_ui replacing messages");
-                    w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
-                    w.set_loading_messages(false);
-                    w.set_channel_type("anon-dm".into());
-                    w.set_is_dm(true);
-                    w.set_channel_name(title.into());
-                    w.set_topic(subtitle.into());
-                    w.set_header_presence_status("online".into());
-                    w.set_channel_has_avatar(false);
-                    w.set_channel_avatar_source(slint::Image::default());
+                    w.global::<crate::ChatPane>().set_messages(ModelRc::new(VecModel::from(slint_messages)));
+                    crate::trace_chat_open_model(initial_count, 0);
+                    tracing::info!(kind = "secret_dm", stage = "model_replaced", rows = initial_count, elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
+                    tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
+                    w.global::<crate::ChatPane>().set_loading_messages(false);
+                super::super::header::finish_pending_jump(&w, &ui_ctx);
+                super::super::header::refresh_pinned_ui(&w, &ui_ctx);
+                    crate::bin_ui::converters::set_conversation_kind(
+                        &w, &ui_ctx, &chatter_core::domain::message::ConversationType::AnonDm, false,
+                    );
+                    w.global::<crate::ChatPane>().set_is_dm(true);
+                    apply_anon_dm_header(&w, &ui_ctx, &anon_dm_id);
+                    w.global::<crate::ChatPane>().set_header_presence_status(
+                        ui_ctx.anon_peer_presence().as_str().into(),
+                    );
                     crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx.clone());
                 });
                 return;
@@ -198,7 +434,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Some(id) => id,
                 None => {
                     tracing::error!("Could not determine peer ID for DM: {}", dm_id_str);
-                    run_ui!(weak, |w| w.set_loading_messages(false));
+                    crate::run_history_ui!(weak, owner, |w| w.global::<crate::ChatPane>().set_loading_messages(false));
                     return;
                 }
             };
@@ -217,7 +453,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let conv_type = chatter_core::domain::message::ConversationType::ServerDm;
 
             let ui_ctx_for_sel = ui_ctx.clone();
-            run_ui!(weak, |w| {
+            crate::run_history_ui!(weak, owner, |w| {
                 super::refresh_selection(&w, &ui_ctx_for_sel);
                 super::refresh_section_badges(&w, &ui_ctx_for_sel);
             });
@@ -231,36 +467,51 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 _ => (vec![], String::new()),
             };
-            super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
+            if !owner.is_current() { return; }
+            tracing::info!(kind = "dm", stage = "pins_loaded", elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
+                super::apply_pinned_ui_owned(&weak, &ui_ctx, msg_ids, preview, &owner);
 
             // Load messages
-            let messages = match ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, chatter_core::config::MESSAGE_PAGE_SIZE as u32) {
+            let messages = match anchor.opening_page(chatter_core::config::MESSAGE_PAGE_SIZE as u32, |limit| ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, limit)) {
                 Ok(msgs) => msgs,
                 Err(e) => {
                     tracing::error!("Failed to list DM messages: {}", e);
-                    run_ui!(weak, |w| w.set_loading_messages(false));
+                    crate::run_history_ui!(weak, owner, |w| w.global::<crate::ChatPane>().set_loading_messages(false));
                     return;
                 }
             };
+            if !owner.is_current() { return; }
+            tracing::info!(kind = "dm", stage = "page_loaded", rows = messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
+            read_handle.send_read_receipts_for_page(&messages);
 
-            let peer_profile = ui_ctx.get_user_profile(&peer_id).await.ok();
-            let title = peer_profile.as_ref()
-                .map(|p| p.display_name.clone())
-                .unwrap_or_else(|| peer_id.to_string());
-            
-            let status_str = peer_profile.as_ref()
-                .map(|p| p.presence.as_str())
-                .unwrap_or("offline");
+            // The stored profile, not a server fetch: the open no longer waits
+            // on a network round trip (and in Shield makes no identified
+            // request at all). The throttled refresh after the first paint,
+            // below, patches the header through `UserProfileUpdated`. The name
+            // is the chat list's resolution (profile → username →
+            // placeholder), never the raw id.
+            let peer_profile = ui_ctx.get_profile_local(&peer_id);
+            let title = ui_ctx.display_name(&peer_id);
 
-            let display_messages = messages_to_display_batch(
+            let status_str = ui_ctx.peer_presence(&peer_id).as_str();
+            let last_seen: String = ui_ctx.peer_last_seen(&peer_id)
+                .map(|(presence, at)| crate::bin_ui::converters::last_seen_label(presence, at))
+                .unwrap_or_default();
+
+            let mut display_messages = messages_to_display_batch_deferred(
                 &messages,
-                |m| ui_ctx.message_sender_display_name(m),
-                |att_id| ui_ctx.get_attachment(att_id),
+                |ms| ui_ctx.message_sender_display_names(ms),
+                |m| ui_ctx.message_sender_avatar(m),
+                crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
                 |m| ui_ctx.reply_author_display_name(m),
                 |m| ui_ctx.reply_parent_missing_for(m),
                 |m| ui_ctx.reply_parent_media(m),
+                |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
             );
+            crate::bin_ui::converters::mark_disappearing(&ui_ctx, &mut display_messages);
+            tracing::info!(kind = "dm", stage = "display_built", rows = display_messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
 
+            if !owner.is_current() { return; }
             // Decode the peer's avatar (Send-safe RGBA); the non-Send Image is
             // built in the run_ui closure. Header shows it if present.
             let header_avatar: Option<(u32, u32, Vec<u8>)> = peer_profile
@@ -274,29 +525,39 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     })
                 });
 
-            let anchor_page = messages.clone();
-            run_ui!(weak, |w| {
-                super::apply_unread_anchor(&w, anchor, &anchor_page);
+            let refresh_ctx = ui_ctx.clone();
+            let anchor = ui_ctx.opening_unread_anchor(anchor);
+            let unread_index = anchor.divider_index(&messages);
+            crate::run_history_ui!(weak, owner, |w| {
+                let pane = w.global::<crate::ChatPane>();
+                pane.set_unread_index(unread_index.map_or(-1, |i| i as i32));
+                pane.set_unread_count(anchor.unread_count as i32);
+                pane.set_is_at_bottom(unread_index.is_none());
                 let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
-                let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
-                w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
-                w.set_loading_messages(false);
-                w.set_channel_type("dm".into());
-                w.set_is_dm(true);
-                w.set_channel_name(title.into());
+                let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_preview_with_user(&current_user_id)).collect();
+                w.global::<crate::ChatPane>().set_messages(ModelRc::new(VecModel::from(slint_messages)));
+                tracing::info!(kind = "dm", stage = "model_replaced", rows = display_messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
+                crate::trace_chat_open_model(display_messages.len(), 0);
+                tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
+                w.global::<crate::ChatPane>().set_loading_messages(false);
+                super::super::header::finish_pending_jump(&w, &ui_ctx);
+                super::super::header::refresh_pinned_ui(&w, &ui_ctx);
+                crate::bin_ui::converters::set_conversation_kind(&w, &ui_ctx, &conv_type, false);
+                w.global::<crate::ChatPane>().set_is_dm(true);
+                w.global::<crate::ChatPane>().set_channel_name(title.into());
                 // A DM has no topic. This used to carry the presence word
                 // ("online"/"offline"), which the header centres beside the
                 // name — so every DM header spelled out what the dot next to
                 // the name already says, in the row with the least room for it.
-                w.set_topic("".into());
-                w.set_header_presence_status(status_str.into());
+                w.global::<crate::ChatPane>().set_topic("".into());
+                w.global::<crate::ChatPane>().set_header_presence_status(status_str.into());
+                w.global::<crate::ChatPane>().set_header_last_seen(last_seen.clone().into());
                 if let Some((aw, ah, px)) = &header_avatar {
-                    let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(px, *aw, *ah);
-                    w.set_channel_avatar_source(slint::Image::from_rgba8(buf));
-                    w.set_channel_has_avatar(true);
+                    w.global::<crate::ChatPane>().set_channel_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(px, *aw, *ah));
+                    w.global::<crate::ChatPane>().set_channel_has_avatar(true);
                 } else {
-                    w.set_channel_has_avatar(false);
-                    w.set_channel_avatar_source(slint::Image::default());
+                    w.global::<crate::ChatPane>().set_channel_has_avatar(false);
+                    w.global::<crate::ChatPane>().set_channel_avatar_source(slint::Image::default());
                 }
                 // Is this conversation wedged on an unaccepted identity key?
                 // Read on every open, not only on the live event, so a change
@@ -310,6 +571,10 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 // anon-DM / channel / group open paths.
                 crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx.clone());
             });
+
+            // Catch up on the peer's profile edits once the conversation is on
+            // screen (throttled in core; skipped in Shield).
+            if owner.is_current() { refresh_ctx.refresh_profile_if_stale(&peer_id, &chatter_core::state::ActiveConversation::ServerDm { peer_id }).await; }
         });
     });
 }

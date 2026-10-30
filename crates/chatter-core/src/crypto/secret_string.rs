@@ -83,7 +83,9 @@ impl SecretString {
         } else {
             // mlock failed - usually due to RLIMIT_MEMLOCK
             // This is not critical, just means the memory could be swapped
-            tracing::trace!("Could not lock memory for secret (this is normal for unprivileged processes)");
+            tracing::trace!(
+                "Could not lock memory for secret (this is normal for unprivileged processes)"
+            );
         }
     }
 

@@ -26,18 +26,20 @@ use chatter_mesh::packet::{NoisePayloadType, decode_noise_payload, encode_noise_
 use chatter_mesh::tlv::courier_envelope::{CourierEnvelope, TAG_LEN, epoch_day, recipient_tag};
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
 use chatter_mesh_noise::MeshIdentity;
-use chatter_mesh_noise::seal::{open_courier, seal_courier};
+#[cfg(test)]
+use chatter_mesh_noise::seal::open_courier;
 use chatter_mesh_nostr::identity::NostrIdentity;
 use chatter_mesh_store::bridge_drop::{
-    AbandonedDrop, BridgeCourier, BridgeView, DedupSnapshot, DepositOutcome, DepositRefusal,
-    DropEvent, DropOperationId, DropRelay, DropSink, PublishRequest, PublisherKey,
+    AbandonedDrop, BridgeCourier, DedupSnapshot, DepositOutcome, DepositRefusal, DropEvent,
+    DropOperationId, DropRelay, DropSink, PublishRequest, PublisherKey,
 };
 use chatter_mesh_store::outbox::{AckKind, DropReason, LinkState, OutboxStore, Sealer};
 use chatter_mesh_store::router::{MessageRouter, RouterEvent, SendOutcome};
 use chatter_mesh_store::storage::{Storage, StorageKey};
 use chatter_mesh_store::{MESSAGE_TTL_SECS, RouterTransport, StoreError};
 use parking_lot::Mutex;
-use rand::RngCore;
+use rand::{RngCore, TryRngCore};
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -47,9 +49,7 @@ use super::events::{MeshDelivery, MeshEvent, MeshMessage};
 use super::mapping::{InboundMessage, MeshConversation};
 use super::state::{MeshState, NostrState, now_secs};
 use super::timeline::MeshEvents;
-use super::transport::{
-    BleCommand, BleTransport, MeshDirectory, MeshFavorites, NostrCommand, NostrTransport,
-};
+use super::transport::{BleCommand, BleTransport, MeshDirectory, NostrCommand, NostrTransport};
 
 /// The bridge courier, shared between the actor and the router's deposit
 /// closure. Single-threaded by construction, so `Rc`/`RefCell` rather than a
@@ -64,7 +64,6 @@ pub struct RouterDeps {
     pub identity: Arc<MeshIdentity>,
     pub storage: Arc<dyn Storage>,
     pub sealer: Arc<dyn Sealer>,
-    pub favorites: Arc<MeshFavorites>,
     pub ble: Arc<super::CommandBus<BleCommand>>,
     pub nostr: Arc<super::CommandBus<NostrCommand>>,
     pub events: MeshEvents,
@@ -203,7 +202,7 @@ impl DropRelay for NostrDropRelay {
         // hang the actor; its last draw is still a fresh key.
         let mut bytes = [0u8; 32];
         for _ in 0..16 {
-            rand::rng().fill_bytes(&mut bytes);
+            OsRng.unwrap_err().fill_bytes(&mut bytes);
             if NostrIdentity::from_secret(bytes).is_ok() {
                 break;
             }
@@ -234,14 +233,18 @@ impl DropRelay for NostrDropRelay {
 struct MeshDropSink {
     identity: Arc<MeshIdentity>,
     state: Arc<MeshState>,
-    ble: Arc<super::CommandBus<BleCommand>>,
     events: MeshEvents,
 }
 
 impl MeshDropSink {
     /// Open a sealed envelope addressed to us and turn it into a timeline row.
     fn open(&self, envelope: &CourierEnvelope) -> Option<MeshMessage> {
-        let (plaintext, sender_key) = open_courier(&envelope.ciphertext, &self.identity).ok()?;
+        let (plaintext, sender_key) = super::prekeys::open_envelope(
+            &self.state,
+            envelope,
+            &self.identity,
+            now_secs().saturating_mul(1_000),
+        )?;
         let (payload_type, body) = decode_noise_payload(&plaintext)?;
         if payload_type != NoisePayloadType::PrivateMessage {
             return None;
@@ -290,18 +293,6 @@ impl DropSink for MeshDropSink {
             None => false,
         }
     }
-
-    fn deliver_to_peer(&self, envelope: &CourierEnvelope, peer: &PeerId) -> bool {
-        if !self.state.can_write_to(peer) {
-            return false;
-        }
-        self.ble
-            .send(BleCommand::Courier {
-                peer: peer.clone(),
-                envelope: envelope.clone(),
-            })
-            .is_ok()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -328,7 +319,7 @@ fn load_dedup(storage: &dyn Storage, sealer: &dyn Sealer) -> Result<DedupSnapsho
         });
     };
     let plaintext = sealer.open(&sealed)?;
-    let blob: DedupBlob = bincode::deserialize(&plaintext)
+    let blob: DedupBlob = crate::storage::serialization::db_deserialize(&plaintext)
         .map_err(|_| StoreError::Malformed("bridge drop dedup"))?;
     Ok(DedupSnapshot {
         published_drop_keys: blob.published,
@@ -347,8 +338,8 @@ fn save_dedup(
         published: snapshot.published_drop_keys.clone(),
         seen: snapshot.seen_drop_event_ids.clone(),
     };
-    let plaintext =
-        bincode::serialize(&blob).map_err(|_| StoreError::Malformed("bridge drop dedup"))?;
+    let plaintext = crate::storage::serialization::db_serialize(&blob)
+        .map_err(|_| StoreError::Malformed("bridge drop dedup"))?;
     let sealed = sealer.seal(&plaintext)?;
     storage.save(StorageKey::BridgeDropDedup, &sealed)
 }
@@ -367,6 +358,7 @@ struct Actor {
     storage: Arc<dyn Storage>,
     sealer: Arc<dyn Sealer>,
     events: MeshEvents,
+    persisted_dedup: Option<DedupSnapshot>,
 }
 
 impl Actor {
@@ -377,7 +369,6 @@ impl Actor {
             identity,
             storage,
             sealer,
-            favorites,
             ble,
             nostr,
             events,
@@ -385,7 +376,7 @@ impl Actor {
         } = deps;
 
         let outbox = OutboxStore::new(Arc::clone(&storage), Arc::clone(&sealer));
-        let directory = MeshDirectory::new(Arc::clone(&state), favorites);
+        let directory = MeshDirectory::new(Arc::clone(&state));
 
         // Order matters. The router takes the *first* transport reporting a link
         // binding, and only the radio ever has one; the reachable fallback is
@@ -409,26 +400,28 @@ impl Actor {
             },
             MeshDropSink {
                 identity: Arc::clone(&identity),
-                state,
-                ble,
+                state: Arc::clone(&state),
                 events: events.clone(),
             },
         );
         courier.set_bridge_enabled(bridge_enabled);
-        // Not a gateway: this device publishes and collects its own mail and
-        // never republishes other people's.
-        courier.set_gateway_enabled(false);
         let bridge: SharedBridge = Rc::new(RefCell::new(courier));
         let abandoned: Rc<RefCell<Vec<AbandonedDrop>>> = Rc::new(RefCell::new(Vec::new()));
 
         let deposit_identity = Arc::clone(&identity);
+        let deposit_state = Arc::clone(&state);
         let deposit_bridge = Rc::clone(&bridge);
         let deposit_abandoned = Rc::clone(&abandoned);
         router.set_bridge_deposit(Box::new(move |content, message_id, recipient_key| {
             let now = now_secs();
-            let Some(envelope) =
-                seal_for_drop(&deposit_identity, content, message_id, recipient_key, now)
-            else {
+            let Some(envelope) = seal_for_drop(
+                &deposit_state,
+                &deposit_identity,
+                content,
+                message_id,
+                recipient_key,
+                now,
+            ) else {
                 return false;
             };
             let deposited = deposit_bridge
@@ -458,6 +451,7 @@ impl Actor {
             storage,
             sealer,
             events,
+            persisted_dedup: None,
         };
         actor.restore();
         actor
@@ -465,7 +459,10 @@ impl Actor {
 
     fn restore(&mut self) {
         match load_dedup(self.storage.as_ref(), self.sealer.as_ref()) {
-            Ok(snapshot) => self.bridge.borrow_mut().restore_dedup(&snapshot, now_secs()),
+            Ok(snapshot) => {
+                self.bridge.borrow_mut().restore_dedup(&snapshot, now_secs());
+                self.persisted_dedup = Some(snapshot);
+            }
             Err(error) => {
                 // A locked keyring is not an empty set. Starting empty would
                 // republish every drop this device has ever sent, which is the
@@ -490,8 +487,7 @@ impl Actor {
         }
         // Persist the dedup sets on the way out: losing them costs an
         // amplification storm on the next launch, which is worse than the write.
-        let snapshot = self.bridge.borrow().dedup_snapshot();
-        let _ = save_dedup(self.storage.as_ref(), self.sealer.as_ref(), &snapshot);
+        self.persist_dedup();
     }
 
     fn handle(&mut self, command: RouterCommand) {
@@ -524,7 +520,7 @@ impl Actor {
                 peer,
                 kind,
             } => {
-                let (outcome, events) = self.router.mark_acked(&message_id, kind);
+                let (outcome, events) = self.router.mark_acked(&peer, &message_id, kind);
                 self.publish(events);
                 let state = match outcome.strongest {
                     AckKind::Delivered => MeshDelivery::Delivered,
@@ -547,9 +543,7 @@ impl Actor {
                 self.abandoned.borrow_mut().extend(flushed);
                 if now >= bridge.next_refresh_due() {
                     let key = self.identity.static_public();
-                    // Sender-only: this device watches its own recipient tags
-                    // and never other people's, because it is not a gateway.
-                    let evicted = bridge.refresh(BridgeView::sender_only(Some(key)), now);
+                    let evicted = bridge.refresh(Some(key), now);
                     self.abandoned.borrow_mut().extend(evicted);
                 }
                 drop(bridge);
@@ -565,10 +559,9 @@ impl Actor {
                     .resolve_publish(operation, accepted, now);
                 if let Some(resolved) = resolved
                     && resolved.accepted
-                    && let Some(message_id) = resolved.message_id
                 {
                     self.events.send(MeshEvent::Delivery {
-                        message_id,
+                        message_id: resolved.message_id,
                         peer: None,
                         state: MeshDelivery::Carried,
                     });
@@ -595,10 +588,19 @@ impl Actor {
                     self.events
                         .send(MeshEvent::Degraded(format!("outbox wipe failed: {error}")));
                 }
-                if let Err(error) = self.storage.wipe_all() {
-                    self.events.send(MeshEvent::Degraded(format!(
-                        "mesh storage wipe failed: {error}"
-                    )));
+                // Mail cleanup does not reset identity trust or identity-bound
+                // keys: wiping our prekey secrets would orphan mail already
+                // sealed to them. Panic wipe destroys both explicitly in
+                // MeshService.
+                for key in StorageKey::ALL {
+                    if matches!(key, StorageKey::PeerPins | StorageKey::LocalPrekeys) {
+                        continue;
+                    }
+                    if let Err(error) = self.storage.wipe(*key) {
+                        self.events.send(MeshEvent::Degraded(format!(
+                            "mesh storage wipe failed: {error}"
+                        )));
+                    }
                 }
             }
         }
@@ -609,22 +611,24 @@ impl Actor {
     fn drain_abandoned(&self) {
         let drops: Vec<AbandonedDrop> = self.abandoned.borrow_mut().drain(..).collect();
         for drop in drops {
-            if let Some(message_id) = drop.message_id {
-                self.events.send(MeshEvent::Delivery {
-                    message_id,
-                    peer: None,
-                    state: MeshDelivery::Unreachable,
-                });
-            }
+            self.events.send(MeshEvent::Delivery {
+                message_id: drop.message_id,
+                peer: None,
+                state: MeshDelivery::Unreachable,
+            });
         }
     }
 
-    fn persist_dedup(&self) {
+    fn persist_dedup(&mut self) {
         let snapshot = self.bridge.borrow().dedup_snapshot();
-        if let Err(error) = save_dedup(self.storage.as_ref(), self.sealer.as_ref(), &snapshot) {
-            self.events.send(MeshEvent::Degraded(format!(
+        if self.persisted_dedup.as_ref() == Some(&snapshot) {
+            return;
+        }
+        match save_dedup(self.storage.as_ref(), self.sealer.as_ref(), &snapshot) {
+            Ok(()) => self.persisted_dedup = Some(snapshot),
+            Err(error) => self.events.send(MeshEvent::Degraded(format!(
                 "bridge drop history could not be persisted: {error}"
-            )));
+            ))),
         }
     }
 
@@ -683,6 +687,7 @@ impl Actor {
 /// One copy: a relay drop is not a spray-and-wait courier, and a copy budget
 /// above one would only invite the gateway layer to fan it out further.
 fn seal_for_drop(
+    state: &MeshState,
     identity: &MeshIdentity,
     content: &str,
     message_id: &str,
@@ -693,7 +698,13 @@ fn seal_for_drop(
         .encode()
         .ok()?;
     let payload = encode_noise_payload(NoisePayloadType::PrivateMessage, &inner);
-    let ciphertext = seal_courier(&payload, recipient_key, identity).ok()?;
+    let (ciphertext, prekey_id) = super::prekeys::seal_offline(
+        state,
+        &payload,
+        recipient_key,
+        identity,
+        now_unix_secs.saturating_mul(1_000),
+    )?;
     let expiry_ms = now_unix_secs
         .saturating_add(MESSAGE_TTL_SECS)
         .saturating_mul(1_000);
@@ -702,7 +713,7 @@ fn seal_for_drop(
         expiry_ms,
         ciphertext,
         1,
-        None,
+        prekey_id,
     );
     envelope.encode().ok()?;
     Some(envelope)
@@ -711,8 +722,8 @@ fn seal_for_drop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::os_rng;
     use chatter_mesh_store::MemoryStorage;
-    use rand_core_06::OsRng;
 
     /// Not encryption — just enough to prove the dedup blob round trips through
     /// the seal seam without pulling the real keyring in.
@@ -761,9 +772,10 @@ mod tests {
 
     #[test]
     fn a_drop_envelope_carries_only_ciphertext_and_opens_for_its_recipient() {
-        let identity = MeshIdentity::generate(&mut OsRng);
-        let recipient = MeshIdentity::generate(&mut OsRng);
+        let identity = MeshIdentity::generate(&mut os_rng());
+        let recipient = MeshIdentity::generate(&mut os_rng());
         let envelope = seal_for_drop(
+            &MeshState::new(identity.peer_id()),
             &identity,
             "meet at the bridge",
             "m1",
@@ -791,10 +803,11 @@ mod tests {
 
     #[test]
     fn a_stranger_cannot_open_a_drop() {
-        let identity = MeshIdentity::generate(&mut OsRng);
-        let recipient = MeshIdentity::generate(&mut OsRng);
-        let stranger = MeshIdentity::generate(&mut OsRng);
+        let identity = MeshIdentity::generate(&mut os_rng());
+        let recipient = MeshIdentity::generate(&mut os_rng());
+        let stranger = MeshIdentity::generate(&mut os_rng());
         let envelope = seal_for_drop(
+            &MeshState::new(identity.peer_id()),
             &identity,
             "secret",
             "m1",
