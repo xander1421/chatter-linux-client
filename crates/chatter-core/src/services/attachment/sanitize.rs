@@ -146,6 +146,176 @@ fn strip_png_metadata(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentError> {
     Ok(if dropped { Some(out) } else { None })
 }
 
+// The file path uses fixed scratch storage even for a multi-GB IDAT or JPEG
+// entropy tail. Do not size a buffer from an untrusted segment/chunk length.
+const IMAGE_COPY_BUFFER_SIZE: usize = 8192;
+
+fn image_io_error(e: std::io::Error) -> AttachmentError {
+    AttachmentError::FileError(format!("sanitize image io: {e}"))
+}
+
+fn malformed_image(format: &str, message: &str) -> AttachmentError {
+    AttachmentError::InvalidAttachment(format!("malformed {format} rejected: {message}"))
+}
+
+fn read_image_exact(
+    input: &mut impl Read,
+    buf: &mut [u8],
+    format: &str,
+) -> Result<(), AttachmentError> {
+    input.read_exact(buf).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            malformed_image(format, "truncated input")
+        } else {
+            image_io_error(e)
+        }
+    })
+}
+
+/// Copy or discard an already bounds-checked span, still detecting a source
+/// truncated after its length was obtained. Discarding reads (rather than seeks)
+/// ensures missing metadata bytes/CRCs cannot silently pass validation.
+fn transfer_image_span(
+    input: &mut impl Read,
+    output: &mut impl std::io::Write,
+    mut len: u64,
+    keep: bool,
+    format: &str,
+) -> Result<(), AttachmentError> {
+    let mut scratch = [0u8; IMAGE_COPY_BUFFER_SIZE];
+    while len != 0 {
+        let count = len.min(scratch.len() as u64) as usize;
+        read_image_exact(input, &mut scratch[..count], format)?;
+        if keep {
+            output
+                .write_all(&scratch[..count])
+                .map_err(image_io_error)?;
+        }
+        len -= count as u64;
+    }
+    Ok(())
+}
+
+/// File equivalent of `strip_jpeg_metadata`: preserve its marker policy,
+/// including copying the entire tail verbatim from SOS (or an early EOI).
+fn stream_jpeg_metadata(
+    input: &mut impl Read,
+    output: &mut impl std::io::Write,
+    len: u64,
+) -> Result<bool, AttachmentError> {
+    let bad = |m| malformed_image("JPEG", m);
+    let mut remaining = len.checked_sub(2).ok_or_else(|| bad("truncated SOI"))?;
+    let mut soi = [0u8; 2];
+    read_image_exact(input, &mut soi, "JPEG")?;
+    output.write_all(&soi).map_err(image_io_error)?;
+    let mut dropped = false;
+    loop {
+        // Match the bytes parser's four-byte lookahead, even for standalone
+        // markers and SOS/EOI. Do not consume the next segment's bytes early.
+        if remaining < 4 {
+            return Err(bad("truncated before SOS"));
+        }
+        let mut marker = [0u8; 2];
+        read_image_exact(input, &mut marker, "JPEG")?;
+        remaining -= 2;
+        if marker[0] != 0xFF {
+            return Err(bad("expected marker"));
+        }
+        if marker[1] == 0x01 || (0xD0..=0xD7).contains(&marker[1]) {
+            output.write_all(&marker).map_err(image_io_error)?;
+            continue;
+        }
+        if marker[1] == 0xDA || marker[1] == 0xD9 {
+            output.write_all(&marker).map_err(image_io_error)?;
+            transfer_image_span(input, output, remaining, true, "JPEG")?;
+            return Ok(dropped);
+        }
+        let mut size = [0u8; 2];
+        read_image_exact(input, &mut size, "JPEG")?;
+        let segment_len = u64::from(u16::from_be_bytes(size));
+        if segment_len < 2 || segment_len > remaining {
+            return Err(bad("segment length out of bounds"));
+        }
+        let drop = marker[1] == 0xE1 || marker[1] == 0xFE;
+        if drop {
+            dropped = true;
+        } else {
+            output.write_all(&marker).map_err(image_io_error)?;
+            output.write_all(&size).map_err(image_io_error)?;
+        }
+        transfer_image_span(input, output, segment_len - 2, !drop, "JPEG")?;
+        remaining -= segment_len;
+    }
+}
+
+/// File equivalent of `strip_png_metadata`. Retained chunks (including their
+/// original CRCs) are copied byte-exactly; CRC verification/PNG decoding is not
+/// performed by the bytes parser and is not added here. Parsing ends at IEND.
+fn stream_png_metadata(
+    input: &mut impl Read,
+    output: &mut impl std::io::Write,
+    len: u64,
+) -> Result<bool, AttachmentError> {
+    let bad = |m| malformed_image("PNG", m);
+    let mut remaining = len
+        .checked_sub(8)
+        .ok_or_else(|| bad("truncated signature"))?;
+    let mut signature = [0u8; 8];
+    read_image_exact(input, &mut signature, "PNG")?;
+    output.write_all(&signature).map_err(image_io_error)?;
+    let mut dropped = false;
+    while remaining != 0 {
+        if remaining < 8 {
+            return Err(bad("truncated chunk header"));
+        }
+        let mut header = [0u8; 8];
+        read_image_exact(input, &mut header, "PNG")?;
+        // Widen before arithmetic: a u32 chunk length plus header/CRC must
+        // neither wrap on 32-bit Android nor allocate a chunk-sized buffer.
+        let chunk_len = u64::from(u32::from_be_bytes(header[..4].try_into().unwrap()));
+        let total = chunk_len + 12;
+        if total > remaining {
+            return Err(bad("chunk length out of bounds"));
+        }
+        let ty = &header[4..];
+        let drop = matches!(ty, b"eXIf" | b"tEXt" | b"zTXt" | b"iTXt" | b"tIME");
+        if drop {
+            dropped = true;
+        } else {
+            output.write_all(&header).map_err(image_io_error)?;
+        }
+        transfer_image_span(input, output, chunk_len + 4, !drop, "PNG")?;
+        if ty == b"IEND" {
+            break;
+        }
+        remaining -= total;
+    }
+    Ok(dropped)
+}
+
+/// Own the partial output throughout parsing and flushing. All errors and the
+/// unchanged case drop/unlink the temp; only a complete rewrite escapes.
+fn sanitize_image_to_temp(
+    input: &mut impl Read,
+    len: u64,
+    jpeg: bool,
+    directory: &Path,
+) -> Result<Option<tempfile::NamedTempFile>, AttachmentError> {
+    use std::io::{BufWriter, Write};
+    let mut temp = tempfile::NamedTempFile::new_in(directory).map_err(image_io_error)?;
+    let dropped = {
+        let mut output = BufWriter::with_capacity(IMAGE_COPY_BUFFER_SIZE, temp.as_file_mut());
+        let dropped = if jpeg {
+            stream_jpeg_metadata(input, &mut output, len)?
+        } else {
+            stream_png_metadata(input, &mut output, len)?
+        };
+        output.flush().map_err(image_io_error)?;
+        dropped
+    };
+    Ok(if dropped { Some(temp) } else { None })
+}
+
 /// Sanitize outgoing media bytes before they leave the device.
 ///
 /// Returns [`SanitizeOutcome::Rewritten`] when the MP4 metadata had to be
@@ -205,7 +375,7 @@ pub fn validate_media(content: &[u8]) -> Result<(), AttachmentError> {
 /// streaming (file-path) upload path, where attachments may be multi-GB.
 ///
 /// Same coverage and policy as [`sanitize_media`]. Returns `Some(temp)` holding
-/// the rewritten MP4 when the metadata had to be relocated/stripped (caller
+/// the rewritten media when metadata had to be relocated/stripped (caller
 /// encrypts the temp file instead of the original); `None` when the original
 /// can be uploaded as-is.
 ///
@@ -232,32 +402,18 @@ pub fn sanitize_media_file(
     }
 
     if looks_like_jpeg(&magic[..n]) || looks_like_png(&magic[..n]) {
-        // Photos are small (attachment cap already enforced upstream) — load,
-        // strip losslessly, write a temp if anything was dropped.
-        let content = std::fs::read(path)
-            .map_err(|e| AttachmentError::FileError(format!("Failed to read image: {e}")))?;
-        let stripped = if looks_like_jpeg(&content) {
-            strip_jpeg_metadata(&content)?
-        } else {
-            strip_png_metadata(&content)?
-        };
-        let Some(bytes) = stripped else {
-            return Ok(None);
-        };
+        // Use the descriptor that was sniffed, not a second path lookup. Only
+        // fixed-size input/output buffers are held while streaming to our temp.
+        let len = file.metadata().map_err(image_io_error)?.len();
         super::ensure_attachments_dir().map_err(|e| {
             AttachmentError::FileError(format!("Failed to create attachments dir: {e}"))
         })?;
-        let mut out = tempfile::NamedTempFile::new_in(super::attachments_dir()).map_err(|e| {
-            AttachmentError::FileError(format!("Failed to create sanitize temp: {e}"))
-        })?;
-        use std::io::Write;
-        out.write_all(&bytes).map_err(|e| {
-            AttachmentError::FileError(format!("Failed to write stripped image: {e}"))
-        })?;
-        out.flush().map_err(|e| {
-            AttachmentError::FileError(format!("Failed to flush stripped image: {e}"))
-        })?;
-        return Ok(Some(out));
+        return sanitize_image_to_temp(
+            &mut BufReader::with_capacity(IMAGE_COPY_BUFFER_SIZE, file),
+            len,
+            looks_like_jpeg(&magic[..n]),
+            &super::attachments_dir(),
+        );
     }
 
     if !looks_like_mp4(&magic[..n]) {
@@ -971,3 +1127,7 @@ mod tests {
         assert!(validate_media(&input).is_ok());
     }
 }
+
+#[cfg(test)]
+#[path = "sanitize_stream_tests.rs"]
+mod streaming_tests;
