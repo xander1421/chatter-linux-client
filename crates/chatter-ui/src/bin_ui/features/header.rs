@@ -22,6 +22,37 @@ thread_local! {
     static PENDING_JUMP: std::cell::RefCell<Option<(ActiveConversation, String)>> = const { std::cell::RefCell::new(None) };
 }
 
+thread_local! {
+    // (start, end, row_count) of the media window the last eviction pass saw.
+    // Lets the hot per-frame call evict only the rows that scrolled out of the
+    // window, instead of rescanning the whole model every frame.
+    static LAST_MEDIA_WINDOW: std::cell::Cell<Option<(usize, usize, usize)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Row indices whose thumbnails should be dropped this pass. When the model
+/// size is unchanged since the last pass, only the rows that left the window
+/// are returned (`prev \ current`) — O(delta). When the size changed (history
+/// prepended, a page loaded, a conversation switched) the previous indices no
+/// longer map to the same rows, so a full sweep (`0..row_count` minus the
+/// current window) is returned instead. Evicting an off-window thumbnail is
+/// always safe — it reloads when the row is scrolled back — so a stale diff can
+/// only cost an extra reload or defer one eviction, never show a wrong row.
+fn media_evict_rows(
+    prev: Option<(usize, usize, usize)>,
+    cur_start: usize,
+    cur_end: usize,
+    row_count: usize,
+) -> Vec<usize> {
+    let in_window = |i: usize| i >= cur_start && i <= cur_end;
+    match prev {
+        Some((p_start, p_end, p_count)) if p_count == row_count => (p_start..=p_end)
+            .filter(|&i| i < row_count && !in_window(i))
+            .collect(),
+        _ => (0..row_count).filter(|&i| !in_window(i)).collect(),
+    }
+}
+
 /// Queue navigation until the source conversation's model has been installed.
 pub(crate) fn jump_to_conversation_message(
     w: &MainWindow,
@@ -108,7 +139,7 @@ fn media_window(first: i32, last: i32, row_count: usize) -> Option<std::ops::Ran
 
 #[cfg(test)]
 mod media_window_tests {
-    use super::media_window;
+    use super::{media_evict_rows, media_window};
 
     #[test]
     fn scroll_cushion_clamps_at_model_edges_and_rejects_empty_ranges() {
@@ -116,6 +147,25 @@ mod media_window_tests {
         assert_eq!(media_window(17, 19, 20), Some(9..=19));
         assert_eq!(media_window(0, -1, 20), None);
         assert_eq!(media_window(0, 0, 0), None);
+    }
+
+    #[test]
+    fn evict_full_sweep_on_first_pass_and_size_change() {
+        // First pass (no previous window): every off-window row.
+        assert_eq!(media_evict_rows(None, 2, 5, 10), vec![0, 1, 6, 7, 8, 9]);
+        // Model grew (history prepended): previous indices are stale, so sweep.
+        assert_eq!(
+            media_evict_rows(Some((0, 5, 10)), 0, 5, 12),
+            vec![6, 7, 8, 9, 10, 11]
+        );
+    }
+
+    #[test]
+    fn evict_only_rows_that_left_the_window_when_size_unchanged() {
+        // Scrolled down from [0,5] to [3,8]: only 0,1,2 left the window.
+        assert_eq!(media_evict_rows(Some((0, 5, 10)), 3, 8, 10), vec![0, 1, 2]);
+        // No movement: nothing to evict.
+        assert!(media_evict_rows(Some((3, 8, 10)), 3, 8, 10).is_empty());
     }
 }
 
@@ -137,15 +187,17 @@ pub(crate) fn refresh_visible_media(
     }
     let owner = super::history_owner::HistoryOwner::capture(ui_ctx, conversation);
     let model = window.global::<crate::ChatPane>().get_messages();
-    let Some(window_rows) = media_window(first, last, model.row_count()) else {
+    let row_count = model.row_count();
+    let Some(window_rows) = media_window(first, last, row_count) else {
         return;
     };
     // Slint rows own the decoded pixel buffer. Drop it as soon as a row is
-    // outside the cushion; the bounded decode cache can then evict it.
-    for index in 0..model.row_count() {
-        if window_rows.contains(&index) {
-            continue;
-        }
+    // outside the cushion; the bounded decode cache can then evict it. Only the
+    // rows that left the window since the last pass are visited (O(delta)) — the
+    // old loop rescanned the whole model on every scroll frame, which is what
+    // made a long conversation scroll janky.
+    let prev = LAST_MEDIA_WINDOW.with(|w| w.get());
+    for index in media_evict_rows(prev, *window_rows.start(), *window_rows.end(), row_count) {
         let Some(row) = model.row_data(index) else { continue };
         if let Some(attachments) = row.attachments.as_any()
             .downcast_ref::<slint::VecModel<crate::MessageAttachmentData>>() {
@@ -159,6 +211,9 @@ pub(crate) fn refresh_visible_media(
             }
         }
     }
+    LAST_MEDIA_WINDOW.with(|w| {
+        w.set(Some((*window_rows.start(), *window_rows.end(), row_count)))
+    });
     let mut ids = Vec::new();
     for index in window_rows {
         let Some(row) = model.row_data(index) else {
