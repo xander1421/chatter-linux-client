@@ -276,6 +276,10 @@ pub(super) fn handle_presence_changed(
         {
             w.global::<crate::ModalHostState>()
                 .set_profile_presence(presence_slint.clone());
+            // The label takes precedence over the presence fallback in Slint.
+            // Keep it in step with the dot when this peer comes online.
+            w.global::<crate::ModalHostState>()
+                .set_profile_last_seen(last_seen_label.clone());
         }
 
         // 4. Contacts tab rows. Same in-place patch as the DM rows above —
