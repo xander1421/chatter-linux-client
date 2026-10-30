@@ -403,6 +403,8 @@ pub async fn handle_domain_event(
                 let ui_ctx_dl = ui_ctx.clone();
                 let weak = window.clone();
                 let conv_id = channel_id.to_string();
+                let download_session = ui_ctx_dl.session_guard();
+                let download_owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(&ui_ctx_dl, ui_ctx_dl.active_conversation());
                 tokio::spawn(async move {
                     super::attachment_download::download_attachments(
                         &downloadable,
@@ -410,6 +412,8 @@ pub async fn handle_domain_event(
                         weak,
                         conv_id,
                         false,
+                        download_session,
+                        download_owner,
                     )
                     .await;
                 });

@@ -276,7 +276,7 @@ impl ChatterClient {
         let digest: [u8; 32] = crypto.digest.try_into().ok()?;
         let source = std::fs::File::open(path).ok()?;
         let size = source.metadata().ok()?.len();
-        if size > MAX_PREVIEW_INPUT + 128 {
+        if size > crate::services::attachment::image_preview_ciphertext_limit() {
             return None;
         }
         let mut decryptor = crate::crypto::streaming_decrypt::StreamingDecryptor::new(

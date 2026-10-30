@@ -305,6 +305,35 @@ impl ImageProcessor {
     /// Small composer pixels, with a separate decoder budget from full-size
     /// media. Invalid/oversized images keep their attachment and generic icon.
     pub fn tray_preview_from_memory(data: &[u8]) -> Result<image::RgbaImage, MediaError> {
+        Ok(Self::load_preview_image(data)?
+            .thumbnail(160, 160)
+            .into_rgba8())
+    }
+
+    /// Decode stored sidecars to the inline model's pixel budget.
+    pub fn inline_pixels_from_memory(data: &[u8]) -> Result<image::RgbaImage, MediaError> {
+        Ok(Self::load_preview_image(data)?
+            .thumbnail(320, 320)
+            .into_rgba8())
+    }
+
+    /// Decode an original once for a durable preview; return its true aspect
+    /// dimensions separately from the bounded thumbnail pixels.
+    pub fn bounded_inline_thumbnail(data: &[u8]) -> Result<(DynamicImage, u32, u32), MediaError> {
+        let image = Self::load_preview_image(data)?;
+        let (width, height) = (image.width(), image.height());
+        Ok((
+            image.resize(
+                INLINE_THUMBNAIL_MAX_SIZE,
+                INLINE_THUMBNAIL_MAX_SIZE,
+                FilterType::Lanczos3,
+            ),
+            width,
+            height,
+        ))
+    }
+
+    fn load_preview_image(data: &[u8]) -> Result<DynamicImage, MediaError> {
         let mut reader = ImageReader::new(Cursor::new(data))
             .with_guessed_format()
             .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
@@ -313,10 +342,9 @@ impl ImageProcessor {
         limits.max_image_width = Some(16384);
         limits.max_image_height = Some(16384);
         reader.limits(limits);
-        let image = reader
+        reader
             .decode()
-            .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
-        Ok(image.thumbnail(160, 160).into_rgba8())
+            .map_err(|e| MediaError::InvalidFormat(e.to_string()))
     }
 
     /// Generate thumbnail bytes from in-memory image data.

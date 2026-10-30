@@ -23,15 +23,18 @@ pub async fn download_attachments(
     weak_window: slint::Weak<MainWindow>,
     conversation_id: String,
     own_sent: bool,
+    session: chatter_core::client::SessionGuard,
+    owner: crate::bin_ui::features::history_owner::HistoryOwner,
 ) {
     for att in attachments {
+        if !session.is_current() {
+            return;
+        }
         let cdn_key = match &att.remote_url {
             Some(url) if !url.is_empty() => url.clone(),
             _ => continue,
         };
         let att_id = att.id;
-        let mime = &att.metadata.mime_type;
-        let filename = &att.metadata.name;
         // Media-kind classification is domain behavior on the attachment metadata.
         let is_image = att.metadata.is_image();
         let is_video = att.metadata.is_video();
@@ -45,11 +48,7 @@ pub async fn download_attachments(
 
         // Verify attachment record exists
         if ui_ctx.get_attachment_metadata(&att_id).is_none() {
-            tracing::error!(
-                attachment_id = %att_id,
-                cdn_key = %cdn_key,
-                "BUG: Attachment not found in DB"
-            );
+            tracing::error!("Attachment metadata unavailable for download");
             continue;
         }
 
@@ -63,26 +62,23 @@ pub async fn download_attachments(
         // `handle_gif` is lost on any re-render. The animated frames still come
         // from the full download below.
         if (is_image || is_video) && !has_thumbnail {
-            if let Some(thumb_bytes) = ui_ctx.ensure_attachment_thumbnail(&att_id).await {
+            if let Some(preview) = ui_ctx
+                .ensure_attachment_preview(att_id, session.clone())
+                .await
+            {
                 has_thumbnail = true;
-                let weak = weak_window.clone();
-                let att_id_p = att_id.to_string();
-                let conv = conversation_id.clone();
-                let ui_p = ui_ctx.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(window) = weak.upgrade() {
-                        match crate::bin_ui::slint_conversions::memory_to_slint_image(&thumb_bytes)
-                        {
-                            Ok(image) => {
-                                update_attachment_thumbnail(&window, &ui_p, &att_id_p, image, &conv)
-                            }
-                            Err(e) => {
-                                tracing::debug!(error = ?e, "Failed to decode sidecar thumbnail for preview")
-                            }
-                        }
-                    }
-                });
+                queue_image_preview(
+                    weak_window.clone(),
+                    ui_ctx.clone(),
+                    owner.clone(),
+                    att_id.to_string(),
+                    conversation_id.clone(),
+                    preview,
+                );
             }
+        }
+        if !session.is_current() {
+            return;
         }
 
         // The originating device already has the video, but its linked device
@@ -92,29 +88,34 @@ pub async fn download_attachments(
             continue;
         }
 
-        tracing::info!(
-            cdn_key = %cdn_key,
-            filename = %filename,
-            content_type = %mime,
-            conversation_id = %conversation_id,
-            "Auto-downloading media attachment"
-        );
+        tracing::debug!("Auto-downloading media attachment");
 
         // Download encrypted content to filesystem
         match ui_ctx.download_attachment_to_filesystem(&att_id).await {
             Ok(()) => {
-                tracing::info!(cdn_key = %cdn_key, "Attachment downloaded");
+                if !session.is_current() {
+                    return;
+                }
+                tracing::debug!("Attachment downloaded");
 
                 if is_gif {
                     handle_gif(&ui_ctx, &att_id, &cdn_key, &weak_window, &conversation_id);
                 } else if is_image && !has_thumbnail {
-                    handle_image(&ui_ctx, &att_id, &cdn_key, &weak_window, &conversation_id);
+                    handle_image(
+                        &ui_ctx,
+                        &att_id,
+                        &cdn_key,
+                        &weak_window,
+                        &conversation_id,
+                        owner.clone(),
+                        session.clone(),
+                    );
                 } else if is_video && !has_thumbnail {
                     handle_video(&ui_ctx, &att_id, &cdn_key, &weak_window, &conversation_id);
                 }
             }
-            Err(e) => {
-                tracing::error!(cdn_key = %cdn_key, error = %e, "Download failed");
+            Err(_) => {
+                tracing::warn!("Attachment download failed");
             }
         }
     }
@@ -244,48 +245,67 @@ fn handle_gif(
     });
 }
 
-/// Handle image: generate thumbnail if missing.
+/// Handle still images: original bytes/pixels never enter the event loop.
 fn handle_image(
     ui_ctx: &Arc<chatter_core::client::ChatterClient>,
     att_id: &AttachmentId,
     cdn_key: &str,
     weak_window: &slint::Weak<MainWindow>,
     conversation_id: &str,
+    owner: crate::bin_ui::features::history_owner::HistoryOwner,
+    session: chatter_core::client::SessionGuard,
 ) {
-    let image_result = match ui_ctx.decrypt_and_get_image_info(att_id) {
-        Ok(result) => result,
-        Err(e) => {
-            tracing::error!(cdn_key = %cdn_key, error = %e, "Failed to process image");
+    let client = ui_ctx.clone();
+    let id = *att_id;
+    let cdn_key = cdn_key.to_string();
+    let conversation = conversation_id.to_string();
+    let weak = weak_window.clone();
+    crate::rt_handle().spawn(async move {
+        if !owner.is_current() {
             return;
         }
-    };
-
-    let cdn_key_for_ui = cdn_key.to_string();
-    let conv_id = conversation_id.to_string();
-    let weak = weak_window.clone();
-    let width = image_result.width;
-    let height = image_result.height;
-    let image_bytes = image_result.image_bytes;
-    let ui_ctx_img = ui_ctx.clone();
-
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(window) = weak.upgrade() {
-            match crate::bin_ui::slint_conversions::memory_to_slint_image(&image_bytes) {
-                Ok(image) => {
-                    update_attachment_thumbnail_with_dims(
-                        &window,
-                        &ui_ctx_img,
-                        &cdn_key_for_ui,
-                        image,
-                        width as i32,
-                        height as i32,
-                        &conv_id,
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(cdn_key = %cdn_key_for_ui, error = ?e, "Failed to create image");
-                }
+        let preview = match client.prepare_downloaded_image_preview(id, session).await {
+            Ok(preview) => preview,
+            Err(_) => {
+                tracing::debug!("Image preview unavailable");
+                return;
             }
+        };
+        queue_image_preview(weak, client, owner, cdn_key, conversation, preview);
+    });
+}
+
+/// Publish only prepared pixels, fenced again after event-loop queueing.
+fn queue_image_preview(
+    weak: slint::Weak<MainWindow>,
+    client: Arc<chatter_core::client::ChatterClient>,
+    owner: crate::bin_ui::features::history_owner::HistoryOwner,
+    attachment_key: String,
+    conversation: String,
+    preview: chatter_core::services::attachment::ImagePreview,
+) {
+    if !owner.is_current() {
+        return;
+    }
+    let pixels = crate::bin_ui::decode_cache::Pixels::clone_from_slice(
+        preview.pixels.as_raw(),
+        preview.pixels.width(),
+        preview.pixels.height(),
+    );
+    let _ = slint::invoke_from_event_loop(move || {
+        if !owner.is_current() {
+            return;
+        }
+        if let Some(window) = weak.upgrade() {
+            update_attachment_thumbnail_with_dims(
+                &window,
+                &client,
+                &attachment_key,
+                slint::Image::from_rgba8(pixels),
+                preview.width as i32,
+                preview.height as i32,
+                &conversation,
+            );
         }
     });
 }
@@ -489,4 +509,109 @@ fn is_conversation_active(
         .map(|id| active.matches_dm_peer(&id))
         .unwrap_or(false);
     channel_match || dm_channel_match || anon_dm_match || anon_group_match || peer_match
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bin_ui::features::history_owner::HistoryOwner;
+    use chatter_core::state::ActiveConversation;
+
+    #[test]
+    fn downloaded_image_publication_keeps_small_pixels_and_rejects_stale_view_or_session() {
+        const CHILD: &str = "CHATTER_DOWNLOADED_PREVIEW_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let test = format!(
+                "{}::downloaded_image_publication_keeps_small_pixels_and_rejects_stale_view_or_session",
+                module_path!().split_once("::").unwrap().1
+            );
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &test, "--nocapture", "--test-threads=1"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return;
+        }
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _runtime = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        let database = chatter_core::system::Directories::with_base_dir(dir.path().to_path_buf())
+            .unwrap()
+            .database_path();
+        std::fs::write(
+            database
+                .parent()
+                .unwrap()
+                .join(chatter_core::system::keyring::NO_KEYRING_MARKER),
+            b"",
+        )
+        .unwrap();
+        let client = chatter_core::client::ChatterClient::builder()
+            .data_dir(dir.path().to_string_lossy().to_string())
+            .build()
+            .unwrap();
+        let a = ActiveConversation::Channel(chatter_core::domain::ids::ChannelId::new());
+        let b = ActiveConversation::Channel(chatter_core::domain::ids::ChannelId::new());
+        let key = AttachmentId::new().to_string();
+        let window = MainWindow::new().unwrap();
+        for case in 0..3 {
+            client.select_conversation(a);
+            let owner = HistoryOwner::begin(&client, a);
+            let attachments =
+                slint::ModelRc::new(VecModel::from(vec![crate::MessageAttachmentData {
+                    id: key.clone().into(),
+                    ..Default::default()
+                }]));
+            window
+                .global::<crate::ChatPane>()
+                .set_messages(slint::ModelRc::new(VecModel::from(vec![
+                    crate::MessageItemData {
+                        message_id: "current-row".into(),
+                        attachments: attachments.clone(),
+                        ..Default::default()
+                    },
+                ])));
+            queue_image_preview(
+                window.as_weak(),
+                client.clone(),
+                owner,
+                key.clone(),
+                a.channel_id().unwrap().to_string(),
+                chatter_core::services::attachment::ImagePreview {
+                    pixels: image::RgbaImage::new(320, 160),
+                    width: 2048,
+                    height: 1024,
+                },
+            );
+            if case == 1 {
+                client.select_conversation(b);
+                HistoryOwner::begin(&client, b);
+                client.select_conversation(a);
+                HistoryOwner::begin(&client, a);
+            } else if case == 2 {
+                client.testing_invalidate_session();
+            }
+            slint::invoke_from_event_loop(|| slint::quit_event_loop().unwrap()).unwrap();
+            slint::run_event_loop().unwrap();
+            let row = attachments.row_data(0).unwrap();
+            if case == 0 {
+                assert!(row.has_thumbnail);
+                assert_eq!(
+                    (row.thumbnail.size().width, row.thumbnail.size().height),
+                    (320, 160)
+                );
+                assert_eq!((row.width, row.height), (2048, 1024));
+            } else {
+                assert!(!row.has_thumbnail, "stale preview changed newer view");
+            }
+        }
+    }
 }

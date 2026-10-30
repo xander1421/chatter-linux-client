@@ -76,6 +76,23 @@ pub struct ImageDecodeResult {
     pub height: u32,
 }
 
+/// Include Signal bucket padding as well as IV/MAC overhead in the work cap.
+/// A fixed overhead above plaintext size rejects valid near-limit originals.
+pub(crate) fn image_preview_ciphertext_limit() -> u64 {
+    crate::crypto::attachment_crypto::AttachmentCrypto::padded_size(
+        crate::domain::attachment::Attachment::AUTO_DOWNLOAD_IMAGE_LIMIT as usize,
+    ) as u64
+        + 16
+        + 32
+}
+
+/// Small inline model pixels; original encoded bytes never cross into UI.
+pub struct ImagePreview {
+    pub pixels: image::RgbaImage,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// All frames from a fully decoded GIF.
 pub struct GifFullDecodeResult {
     /// All decoded frames with RGBA data and delays.
@@ -149,7 +166,12 @@ impl AttachmentService {
         // Once the original is downloaded, derive one locally so reopening the
         // conversation does not bring the placeholder back.
         if let Ok(Some(mut attachment)) = self.attachment_repo.get(attachment_id) {
-            if attachment.metadata.thumbnail.as_ref().is_none_or(Vec::is_empty) {
+            if attachment
+                .metadata
+                .thumbnail
+                .as_ref()
+                .is_none_or(Vec::is_empty)
+            {
                 if let Ok((thumbnail, thumb_width, thumb_height)) =
                     ImageProcessor::generate_thumbnail_from_memory(&image_bytes)
                 {
@@ -163,14 +185,124 @@ impl AttachmentService {
             }
         }
 
-        tracing::debug!(
-            width = width,
-            height = height,
-            "Got image dimensions"
-        );
+        tracing::debug!(width = width, height = height, "Got image dimensions");
 
         Ok(ImageDecodeResult {
             image_bytes,
+            width,
+            height,
+        })
+    }
+
+    /// Decode an authenticated stored sidecar within the inline pixel budget.
+    pub fn decode_image_sidecar(bytes: &[u8]) -> Result<image::RgbaImage, AttachmentError> {
+        if bytes.len() > 4 * 1024 * 1024 {
+            return Err(AttachmentError::InvalidAttachment(
+                "thumbnail exceeds preview budget".into(),
+            ));
+        }
+        super::validate_media(bytes)?;
+        ImageProcessor::inline_pixels_from_memory(bytes)
+            .map_err(|_| AttachmentError::InvalidAttachment("invalid thumbnail image".into()))
+    }
+
+    /// Derive missing previews without returning/retaining full originals in UI.
+    /// Caller runs this on the shared attachment worker and fences session use.
+    pub fn prepare_image_preview_guarded(
+        &self,
+        id: &AttachmentId,
+        owner: ThumbnailOwner,
+    ) -> Result<ImagePreview, AttachmentError> {
+        self.prepare_image_preview_with(id, owner, ImageProcessor::bounded_inline_thumbnail)
+    }
+
+    fn prepare_image_preview_with(
+        &self,
+        id: &AttachmentId,
+        owner: ThumbnailOwner,
+        decode: impl FnOnce(&[u8]) -> Result<(image::DynamicImage, u32, u32), crate::error::MediaError>,
+    ) -> Result<ImagePreview, AttachmentError> {
+        let stale = || AttachmentError::InvalidAttachment("image preview owner changed".into());
+        if !owner() {
+            return Err(stale());
+        }
+        let attachment = self
+            .get_metadata(id)?
+            .ok_or_else(|| AttachmentError::InvalidAttachment("image attachment missing".into()))?;
+        if let Some(bytes) = attachment.metadata.thumbnail.as_deref() {
+            if let Ok(pixels) = Self::decode_image_sidecar(bytes) {
+                if !owner() {
+                    return Err(stale());
+                }
+                return Ok(ImagePreview {
+                    width: attachment
+                        .metadata
+                        .width
+                        .filter(|n| *n > 0)
+                        .unwrap_or(pixels.width()),
+                    height: attachment
+                        .metadata
+                        .height
+                        .filter(|n| *n > 0)
+                        .unwrap_or(pixels.height()),
+                    pixels,
+                });
+            }
+        }
+        if !attachment.metadata.is_image()
+            || attachment.metadata.is_gif()
+            || attachment.metadata.size
+                > crate::domain::attachment::Attachment::AUTO_DOWNLOAD_IMAGE_LIMIT
+            || std::fs::metadata(super::attachment_file_path(id))
+                .map_err(|_| AttachmentError::FileError("image unavailable".into()))?
+                .len()
+                > image_preview_ciphertext_limit()
+        {
+            return Err(AttachmentError::InvalidAttachment(
+                "image exceeds preview budget".into(),
+            ));
+        }
+        // SecureBuffer owns and zeroizes the ONE decrypted original. Authenticate
+        // it before the decoder; no whole-file clone or original bytes in result.
+        let plaintext = self.decrypt_auto(id)?;
+        super::validate_media(plaintext.as_slice())?;
+        if !owner() {
+            return Err(stale());
+        }
+        let (thumbnail, width, height) = decode(plaintext.as_slice())
+            .map_err(|_| AttachmentError::InvalidAttachment("invalid image preview".into()))?;
+        if !owner() {
+            return Err(stale());
+        }
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        thumbnail
+            .write_to(&mut encoded, image::ImageFormat::WebP)
+            .map_err(|_| {
+                AttachmentError::InvalidAttachment("image preview encoding failed".into())
+            })?;
+        let pixels = thumbnail.thumbnail(320, 320).into_rgba8();
+        if !owner() {
+            return Err(stale());
+        }
+        if !self
+            .attachment_repo
+            .cache_image_preview(
+                &attachment,
+                encoded.get_ref(),
+                (width, height),
+                (thumbnail.width(), thumbnail.height()),
+            )
+            .map_err(|e| AttachmentError::StorageError(e.to_string()))?
+        {
+            return Err(AttachmentError::InvalidAttachment(
+                "image preview source replaced".into(),
+            ));
+        }
+        if !owner() {
+            return Err(stale());
+        }
+        Ok(ImagePreview {
+            pixels,
             width,
             height,
         })
@@ -298,7 +430,7 @@ impl AttachmentService {
         // concurrent transfer/status changes or resurrect a deleted/replaced attachment.
         if !self
             .attachment_repo
-            .cache_video_thumbnail(&attachment, &result.image_bytes)
+            .cache_authenticated_thumbnail(&attachment, &result.image_bytes)
             .map_err(|e| AttachmentError::StorageError(e.to_string()))?
         {
             return Err(AttachmentError::InvalidAttachment(
@@ -497,12 +629,12 @@ mod video_thumbnail_tests {
         concurrent.status = AttachmentStatus::Downloading;
         repo.update(&concurrent).unwrap();
         let bytes = thumbnail(32, 18).image_bytes;
-        assert!(repo.cache_video_thumbnail(&source, &bytes).unwrap());
+        assert!(repo.cache_authenticated_thumbnail(&source, &bytes).unwrap());
         let saved = repo.get(&source.id).unwrap().unwrap();
         assert_eq!(saved.status, AttachmentStatus::Downloading);
         assert_eq!(saved.metadata.thumbnail.as_deref(), Some(bytes.as_slice()));
         source.encryption_iv = Some(vec![3; 32]);
-        assert!(!repo.cache_video_thumbnail(&source, &[1, 2]).unwrap());
+        assert!(!repo.cache_authenticated_thumbnail(&source, &[1, 2]).unwrap());
         assert_eq!(
             repo.get(&source.id)
                 .unwrap()
@@ -511,6 +643,258 @@ mod video_thumbnail_tests {
                 .thumbnail
                 .unwrap(),
             bytes
+        );
+    }
+}
+
+#[cfg(test)]
+mod image_preview_tests {
+    use super::*;
+    use crate::crypto::attachment_crypto::AttachmentCrypto;
+    use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
+    use crate::storage::repositories::AttachmentRepository;
+
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        service: AttachmentService,
+        repo: Arc<AttachmentRepository>,
+        source: Attachment,
+        path: std::path::PathBuf,
+        ciphertext: Vec<u8>,
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+    fn fixture() -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            crate::storage::Database::open(&dir.path().join("image.db"), "image-test").unwrap(),
+        );
+        db.run_migrations().unwrap();
+        let repo = Arc::new(AttachmentRepository::new(db));
+        let service = AttachmentService::new_local(repo.clone());
+        let mut plaintext = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2048, 1024)
+            .write_to(&mut plaintext, image::ImageFormat::Jpeg)
+            .unwrap();
+        let encrypted = AttachmentCrypto::encrypt(plaintext.get_ref()).unwrap();
+        let source = Attachment {
+            id: AttachmentId::new(),
+            metadata: FileMetadata::new(
+                "photo.jpg".into(),
+                "image/jpeg".into(),
+                plaintext.get_ref().len() as u64,
+            ),
+            status: AttachmentStatus::Ready,
+            content_location: ContentLocation::OnFilesystem,
+            remote_url: Some("generated-owned-image".into()),
+            encryption_key: Some(encrypted.key.to_vec()),
+            encryption_iv: Some(encrypted.digest.to_vec()),
+            created_at: chrono::Utc::now(),
+            secret_chat: false,
+        };
+        repo.insert(&source).unwrap();
+        super::super::ensure_attachments_dir().unwrap();
+        let path = super::super::attachment_file_path(&source.id);
+        std::fs::write(&path, &encrypted.ciphertext).unwrap();
+        Fixture {
+            _dir: dir,
+            service,
+            repo,
+            source,
+            path,
+            ciphertext: encrypted.ciphertext.clone(),
+        }
+    }
+
+    #[test]
+    fn missing_or_failed_sidecar_retains_only_small_pixels_and_reuses_durable_preview() {
+        let f = fixture();
+        let result = f
+            .service
+            .prepare_image_preview_guarded(&f.source.id, Arc::new(|| true))
+            .unwrap();
+        assert_eq!((result.width, result.height), (2048, 1024));
+        assert_eq!(result.pixels.dimensions(), (320, 160));
+        assert_eq!(
+            std::fs::read(&f.path).unwrap(),
+            f.ciphertext,
+            "original for viewer changed"
+        );
+        let cached = f
+            .repo
+            .get(&f.source.id)
+            .unwrap()
+            .unwrap()
+            .metadata
+            .thumbnail
+            .unwrap();
+        assert_eq!(
+            ImageProcessor::get_dimensions_from_memory(&cached).unwrap(),
+            (768, 384)
+        );
+        std::fs::remove_file(&f.path).unwrap();
+        let reused = f
+            .service
+            .prepare_image_preview_with(&f.source.id, Arc::new(|| true), |_| {
+                panic!("cached sidecar must skip original decode")
+            })
+            .unwrap();
+        assert_eq!(reused.pixels.dimensions(), (320, 160));
+        assert_eq!((reused.width, reused.height), (2048, 1024));
+        // A broken fetched sidecar must fall back to the authenticated original.
+        let mut broken = f.repo.get(&f.source.id).unwrap().unwrap();
+        broken.metadata.thumbnail = Some(b"bad sidecar".to_vec());
+        f.repo.update(&broken).unwrap();
+        std::fs::write(&f.path, &f.ciphertext).unwrap();
+        assert!(
+            f.service
+                .prepare_image_preview_guarded(&f.source.id, Arc::new(|| true))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn image_authentication_and_owner_checks_precede_decode_and_persistence() {
+        let f = fixture();
+        let mut tampered = f.ciphertext.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        std::fs::write(&f.path, tampered).unwrap();
+        assert!(
+            f.service
+                .prepare_image_preview_with(&f.source.id, Arc::new(|| true), |_| panic!(
+                    "unauthenticated image reached decoder"
+                ))
+                .is_err()
+        );
+        assert!(
+            f.repo
+                .get(&f.source.id)
+                .unwrap()
+                .unwrap()
+                .metadata
+                .thumbnail
+                .is_none()
+        );
+        std::fs::write(&f.path, &f.ciphertext).unwrap();
+        let valid = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let owner = valid.clone();
+        assert!(
+            f.service
+                .prepare_image_preview_with(
+                    &f.source.id,
+                    Arc::new(move || owner.load(std::sync::atomic::Ordering::SeqCst)),
+                    |_| {
+                        valid.store(false, std::sync::atomic::Ordering::SeqCst);
+                        Ok((image::DynamicImage::new_rgb8(32, 16), 2048, 1024))
+                    }
+                )
+                .is_err()
+        );
+        assert!(
+            f.repo
+                .get(&f.source.id)
+                .unwrap()
+                .unwrap()
+                .metadata
+                .thumbnail
+                .is_none(),
+            "revoked preview persisted"
+        );
+    }
+
+    #[test]
+    fn near_plaintext_limit_accepts_signal_bucket_padding() {
+        let f = fixture();
+        let mut plaintext = f
+            .service
+            .decrypt_auto(&f.source.id)
+            .unwrap()
+            .as_slice()
+            .to_vec();
+        plaintext.resize(
+            crate::domain::attachment::Attachment::AUTO_DOWNLOAD_IMAGE_LIMIT as usize,
+            0,
+        );
+        let encrypted = AttachmentCrypto::encrypt(&plaintext).unwrap();
+        assert!(
+            encrypted.ciphertext.len() as u64
+                > crate::domain::attachment::Attachment::AUTO_DOWNLOAD_IMAGE_LIMIT + 128
+        );
+        assert_eq!(
+            encrypted.ciphertext.len() as u64,
+            image_preview_ciphertext_limit()
+        );
+        let mut source = f.source.clone();
+        source.metadata.size = plaintext.len() as u64;
+        source.encryption_key = Some(encrypted.key.to_vec());
+        source.encryption_iv = Some(encrypted.digest.to_vec());
+        f.repo.update(&source).unwrap();
+        std::fs::write(&f.path, &encrypted.ciphertext).unwrap();
+        assert!(
+            f.service
+                .prepare_image_preview_with(&source.id, Arc::new(|| true), |_| {
+                    Ok((image::DynamicImage::new_rgb8(32, 16), 2048, 1024))
+                })
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn preview_persistence_preserves_status_and_rejects_replaced_encryption_identity() {
+        for replace in [false, true] {
+            let f = fixture();
+            let result =
+                f.service
+                    .prepare_image_preview_with(&f.source.id, Arc::new(|| true), |_| {
+                        let mut current = f.repo.get(&f.source.id).unwrap().unwrap();
+                        current.status = AttachmentStatus::Downloading;
+                        if replace {
+                            current.encryption_iv = Some(vec![8; 32]);
+                        }
+                        f.repo.update(&current).unwrap();
+                        Ok((image::DynamicImage::new_rgb8(32, 16), 2048, 1024))
+                    });
+            assert_eq!(result.is_err(), replace);
+            let current = f.repo.get(&f.source.id).unwrap().unwrap();
+            assert_eq!(current.status, AttachmentStatus::Downloading);
+            assert_eq!(current.metadata.thumbnail.is_none(), replace);
+        }
+    }
+
+    #[test]
+    fn invalid_or_oversized_sidecars_and_originals_leave_no_preview() {
+        assert!(AttachmentService::decode_image_sidecar(b"bad sidecar").is_err());
+        let mut oversized_dimensions = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(16385, 1)
+            .write_to(&mut oversized_dimensions, image::ImageFormat::Png)
+            .unwrap();
+        assert!(AttachmentService::decode_image_sidecar(oversized_dimensions.get_ref()).is_err());
+        assert!(AttachmentService::decode_image_sidecar(&vec![0; 4 * 1024 * 1024 + 1]).is_err());
+        let f = fixture();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&f.path)
+            .unwrap()
+            .set_len(image_preview_ciphertext_limit() + 1)
+            .unwrap();
+        assert!(
+            f.service
+                .prepare_image_preview_with(&f.source.id, Arc::new(|| true), |_| panic!(
+                    "oversized source reached decoder"
+                ))
+                .is_err()
+        );
+        assert!(
+            f.repo
+                .get(&f.source.id)
+                .unwrap()
+                .unwrap()
+                .metadata
+                .thumbnail
+                .is_none()
         );
     }
 }

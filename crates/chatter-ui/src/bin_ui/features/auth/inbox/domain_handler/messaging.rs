@@ -153,6 +153,8 @@ pub(super) fn handle_message_received(
         let ui_ctx_dl = ui_ctx.clone();
         let weak_dl = window.clone();
         let conv_id = conversation_id.to_string();
+        let download_session = ui_ctx_dl.session_guard();
+        let download_owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(&ui_ctx_dl, ui_ctx_dl.active_conversation());
         tokio::spawn(async move {
             super::super::attachment_download::download_attachments(
                 &downloadable,
@@ -160,6 +162,8 @@ pub(super) fn handle_message_received(
                 weak_dl,
                 conv_id,
                 own_sent,
+                download_session,
+                download_owner,
             )
             .await;
         });

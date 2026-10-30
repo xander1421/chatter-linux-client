@@ -869,3 +869,18 @@ fn preview_pixel_budget_does_not_drop_or_reorder_batch_attachments() {
     assert_eq!(candidates.iter().map(|(index, _)| *index).collect::<Vec<_>>(), (0..64).collect::<Vec<_>>());
     assert_eq!(files.len(), 100);
 }
+
+#[tokio::test]
+async fn downloaded_preview_cannot_adopt_session_when_first_polled_late() {
+    let (client, _dir) = client();
+    let guard = client.session_guard();
+    let pending = client.prepare_downloaded_image_preview(AttachmentId::new(), guard);
+    client.auth_state().invalidate_session();
+    let error = match pending.await {
+        Err(error) => error,
+        Ok(_) => panic!("stale preview admitted"),
+    };
+    assert!(
+        matches!(error, crate::services::attachment::AttachmentError::InvalidAttachment(ref detail) if detail == "image preview owner changed")
+    );
+}

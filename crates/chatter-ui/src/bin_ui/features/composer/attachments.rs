@@ -523,6 +523,26 @@ pub(crate) fn wire_remove_attachment(
 mod tests {
     #[test]
     fn batch_preparation_inside_slint_future_keeps_event_loop_responsive() {
+        const CHILD: &str = "CHATTER_BATCH_PREPARATION_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let test = format!(
+                "{}::batch_preparation_inside_slint_future_keeps_event_loop_responsive",
+                module_path!().split_once("::").unwrap().1
+            );
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &test, "--nocapture", "--test-threads=1"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return;
+        }
         i_slint_backend_testing::init_integration_test_with_system_time();
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let _runtime = runtime.enter();
