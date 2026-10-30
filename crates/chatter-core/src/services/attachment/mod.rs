@@ -8,6 +8,9 @@ mod media;
 mod range_decrypt;
 mod sanitize;
 mod upload;
+mod work;
+
+pub use work::run_attachment_work;
 
 pub use media::{
     GifDecodeResult, GifFullDecodeResult, ImageDecodeResult, ThumbnailOwner,

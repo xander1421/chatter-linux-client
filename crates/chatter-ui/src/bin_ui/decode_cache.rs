@@ -122,6 +122,7 @@ impl<K: Eq + Hash + Clone, V: Clone> ByteLru<K, V> {
 }
 
 struct Caches {
+    generation: u64,
     /// Keyed by a hash of the avatar's encoded bytes, so a changed avatar is
     /// a new entry rather than a stale hit.
     avatars: ByteLru<u64, Pixels>,
@@ -135,6 +136,7 @@ struct Caches {
 impl Caches {
     fn new() -> Self {
         Self {
+            generation: 0,
             avatars: ByteLru::new(AVATAR_BUDGET),
             thumbnails: ByteLru::new(THUMBNAIL_BUDGET),
             gifs: ByteLru::new(GIF_BUDGET),
@@ -142,6 +144,7 @@ impl Caches {
     }
 
     fn wipe(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
         self.avatars.clear();
         self.thumbnails.clear();
         self.gifs.clear();
@@ -166,7 +169,7 @@ fn pixel_bytes(p: &Pixels) -> usize {
 }
 
 fn to_pixels(img: image::DynamicImage) -> Pixels {
-    let rgba = img.to_rgba8();
+    let rgba = img.into_rgba8();
     let (w, h) = rgba.dimensions();
     Pixels::clone_from_slice(rgba.as_raw(), w, h)
 }
@@ -203,14 +206,29 @@ pub fn thumbnail(
     decode: impl FnOnce() -> Option<image::DynamicImage>,
 ) -> Option<Pixels> {
     let key = (id.to_string(), source_len);
-    if let Some(hit) = caches().thumbnails.get(&key) {
-        return Some(hit);
-    }
+    let generation = {
+        let mut cache = caches();
+        if let Some(hit) = cache.thumbnails.get(&key) {
+            return Some(hit);
+        }
+        cache.generation
+    };
     let pixels = decode().map(to_pixels)?;
-    caches()
+    let mut cache = caches();
+    // Logout/Android pause may wipe while the decoder is running. Never
+    // repopulate that cleared cache or publish old pixels after the wipe.
+    if cache.generation != generation {
+        return None;
+    }
+    cache
         .thumbnails
         .insert(key, pixels.clone(), pixel_bytes(&pixels));
     Some(pixels)
+}
+
+/// Read already prepared tray pixels without any file IO or decoding.
+pub fn cached_thumbnail(id: &str, source_len: usize) -> Option<Pixels> {
+    caches().thumbnails.get(&(id.to_string(), source_len))
 }
 
 pub fn gif(id: &str) -> Option<GifFrames> {
@@ -295,6 +313,20 @@ mod tests {
         on_lock();
         assert!(is_empty());
         assert!(gif("gif-1").is_none());
+    }
+
+    #[test]
+    fn wipe_during_thumbnail_decode_cannot_repopulate_cache() {
+        let _g = guard();
+        wipe();
+        assert!(
+            thumbnail("stale", 0, || {
+                on_lock();
+                Some(image::DynamicImage::new_rgba8(8, 8))
+            })
+            .is_none()
+        );
+        assert!(cached_thumbnail("stale", 0).is_none());
     }
 
     #[test]

@@ -336,10 +336,10 @@ impl ChatterClient {
         conversation: crate::state::ActiveConversation,
         revision: u64,
         attachment: crate::state::PendingAttachment,
-    ) {
+    ) -> bool {
         self.services
             .chat_state
-            .add_pending_attachment_for(conversation, revision, attachment);
+            .add_pending_attachment_for(conversation, revision, attachment)
     }
 
     pub fn add_pending_attachment(&self, attachment: crate::state::PendingAttachment) {

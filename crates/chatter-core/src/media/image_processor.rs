@@ -302,6 +302,23 @@ impl ImageProcessor {
         Ok(bytes)
     }
 
+    /// Small composer pixels, with a separate decoder budget from full-size
+    /// media. Invalid/oversized images keep their attachment and generic icon.
+    pub fn tray_preview_from_memory(data: &[u8]) -> Result<image::RgbaImage, MediaError> {
+        let mut reader = ImageReader::new(Cursor::new(data))
+            .with_guessed_format()
+            .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
+        let mut limits = image::Limits::default();
+        limits.max_alloc = Some(96 * 1024 * 1024);
+        limits.max_image_width = Some(16384);
+        limits.max_image_height = Some(16384);
+        reader.limits(limits);
+        let image = reader
+            .decode()
+            .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
+        Ok(image.thumbnail(160, 160).into_rgba8())
+    }
+
     /// Generate thumbnail bytes from in-memory image data.
     ///
     /// Returns WebP-encoded thumbnail bytes with dimensions.
@@ -501,6 +518,19 @@ impl ImageProcessor {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tray_preview_is_small_and_rejects_invalid_images() {
+        let source = image::DynamicImage::new_rgba8(640, 320);
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        source
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        let pixels = super::ImageProcessor::tray_preview_from_memory(bytes.get_ref()).unwrap();
+        assert_eq!(pixels.dimensions(), (160, 80));
+        assert_eq!(pixels.as_raw().len(), 160 * 80 * 4);
+        assert!(super::ImageProcessor::tray_preview_from_memory(b"bad photo").is_err());
+    }
+
     use super::*;
 
     #[test]

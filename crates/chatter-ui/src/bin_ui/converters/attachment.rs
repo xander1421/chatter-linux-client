@@ -25,7 +25,10 @@ pub fn assign_album_positions(attachments: &mut [MessageAttachmentData]) {
 /// Indices of attachments that need their own row outside the album grid.
 pub fn standalone_attachment_indices(attachments: &[MessageAttachmentData]) -> ModelRc<i32> {
     let indices = chatter_core::media::album::standalone_indices(
-        &attachments.iter().map(|a| a.album_index).collect::<Vec<_>>(),
+        &attachments
+            .iter()
+            .map(|a| a.album_index)
+            .collect::<Vec<_>>(),
         attachments.first().map_or(0, |a| a.album_count),
     );
     ModelRc::new(VecModel::from(indices))
@@ -136,7 +139,9 @@ impl AttachmentDisplayData {
             let bytes = &self.thumbnail_bytes;
             self.thumbnail_pixels =
                 crate::bin_ui::decode_cache::thumbnail(&self.id, bytes.len(), || {
-                    image::load_from_memory(bytes).ok().map(|img| img.thumbnail(320, 320))
+                    image::load_from_memory(bytes)
+                        .ok()
+                        .map(|img| img.thumbnail(320, 320))
                 });
             if self.thumbnail_pixels.is_some() {
                 return;
@@ -179,83 +184,9 @@ impl AttachmentDisplayData {
             // Pre-decoded and shared: wrapping it is a reference count, no copy.
             let (w, h) = (pixels.width(), pixels.height());
             (true, Image::from_rgba8(pixels.clone()), w as i32, h as i32)
-        } else if !self.thumbnail_bytes.is_empty() {
-            // Fallback: decode on UI thread (should be avoided - call decode_thumbnail() first)
-            tracing::warn!(
-                "Decoding thumbnail on UI thread for {} - consider calling decode_thumbnail() earlier",
-                self.filename
-            );
-            match image::load_from_memory(&self.thumbnail_bytes) {
-                Ok(img) => {
-                    let rgba = img.to_rgba8();
-                    let (w, h) = rgba.dimensions();
-                    let slint_img =
-                        crate::bin_ui::slint_conversions::rgba_to_slint_image(rgba.as_raw(), w, h);
-                    (true, slint_img, w as i32, h as i32)
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to decode thumbnail bytes for {}: {:?}",
-                        self.filename,
-                        e
-                    );
-                    (false, Image::default(), self.width, self.height)
-                }
-            }
-        } else if let Some(ref path) = self.local_path {
-            // Load from local file after download
-            if self.is_image || self.is_video {
-                let path_obj = std::path::Path::new(path);
-                if !path_obj.exists() {
-                    tracing::info!("Attachment thumbnail path does not exist: {}", path);
-                    (false, Image::default(), self.width, self.height)
-                } else {
-                    // For videos, we need to extract a thumbnail if it hasn't been done yet
-                    // But Image::load_from_path only works for images.
-                    // If it's a video and we are here, it means we don't have thumbnail_bytes.
-                    if self.is_video {
-                        tracing::info!(
-                            "Skipping local video thumbnail loading for {} (not implemented)",
-                            self.filename
-                        );
-                        (false, Image::default(), self.width, self.height)
-                    } else {
-                        match Image::load_from_path(path_obj) {
-                            Ok(img) => {
-                                // Extract actual dimensions from loaded image
-                                let size = img.size();
-                                let w = size.width as i32;
-                                let h = size.height as i32;
-                                tracing::info!(
-                                    "Loaded thumbnail from local path for {}: {}x{}",
-                                    self.filename,
-                                    w,
-                                    h
-                                );
-                                (true, img, w, h)
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to load thumbnail for {}: {:?}",
-                                    self.filename,
-                                    e
-                                );
-                                (false, Image::default(), self.width, self.height)
-                            }
-                        }
-                    }
-                }
-            } else {
-                (false, Image::default(), self.width, self.height)
-            }
-        } else if self.is_image || self.is_video {
-            // Only log when a thumbnail was actually expected (image/video);
-            // audio and generic files never have one, so suppress the noise.
-            // Expected while a received attachment has not been downloaded and
-            // its sidecar preview is still unavailable. Keep this out of INFO.
-            tracing::debug!("No thumbnail source available");
-            (false, Image::default(), self.width, self.height)
         } else {
+            // Missing/failed or intentionally deferred decodes keep placeholders.
+            // Every bitmap must be prepared before event-loop publication.
             (false, Image::default(), self.width, self.height)
         };
 
@@ -352,8 +283,8 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
     // Determine transfer status from attachment status
     let is_uploading = attachment.status == AttachmentStatus::Uploading;
     let is_downloading = attachment.status == AttachmentStatus::Downloading;
-    let is_download_failed = attachment.status == AttachmentStatus::Failed
-        && attachment.remote_url.is_some();
+    let is_download_failed =
+        attachment.status == AttachmentStatus::Failed && attachment.remote_url.is_some();
 
     AttachmentDisplayData {
         id: id_str,
@@ -402,26 +333,9 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
 pub fn pending_attachment_to_slint(attachment: &PendingAttachment) -> PendingAttachmentData {
     let is_image = attachment.mime_type.starts_with("image/");
 
-    // Try to load thumbnail for images
-    let encrypted_staging = attachment
-        .path
-        .components()
-        .any(|component| component.as_os_str() == "composer-staging");
-    let (has_thumbnail, thumbnail) = if is_image && !encrypted_staging && attachment.path.exists() {
-        match Image::load_from_path(&attachment.path) {
-            Ok(img) => (true, img),
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to load thumbnail for {}: {:?}",
-                    attachment.filename,
-                    e
-                );
-                (false, Image::default())
-            }
-        }
-    } else {
-        (false, Image::default())
-    };
+    // Preview workers populate pixels later; path loaders may synchronously
+    // decode the original and must never run in this presentation converter.
+    let (has_thumbnail, thumbnail) = (false, Image::default());
 
     PendingAttachmentData {
         id: attachment.id.to_string().into(),

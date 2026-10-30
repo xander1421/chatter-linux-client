@@ -698,10 +698,10 @@ async fn upload_attachments(
             }
             continue;
         }
-        let staged = client
-            .map(|client| client.staged_upload_file(&att.path))
-            .transpose()?
-            .flatten();
+        let staged = match client {
+            Some(client) => client.staged_upload_file(&att.path).await?,
+            None => None,
+        };
         let upload_path = staged.as_ref().map(|(_, path)| path.as_path()).unwrap_or(&att.path);
         match attachment_service.upload_to_cdn_encrypted(upload_path).await {
             Ok(res) => {

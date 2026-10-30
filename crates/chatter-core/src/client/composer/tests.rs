@@ -806,3 +806,66 @@ async fn a_thread_draft_survives_a_restart_and_clears_when_sent() {
     assert!(client.thread_draft(&root).is_empty());
     assert!(!client.has_failed_thread_reply(&root));
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn batch_file_preparation_preserves_order_owner_and_cleans_rejected_staging() {
+    let (client, dir) = client();
+    let a = ChannelId::new();
+    let b = ChannelId::new();
+    open(&client, a);
+    let revision = client.chat_snapshot().attachment_revision;
+    let conversation = ActiveConversation::Channel(a);
+    // Navigate while the selection belongs to A: B must never receive it.
+    open(&client, b);
+    for index in 0..8 {
+        let input = picked(&dir, &format!("photo-{index}.png"));
+        let encrypted = client.stage_owned_file_async(input.clone()).await.unwrap();
+        assert_ne!(encrypted, input);
+        client.prepare_pending_file(encrypted, Some(5), conversation, revision).await.unwrap();
+    }
+    assert!(client.pending_attachments().is_empty());
+    open(&client, a);
+    assert_eq!(client.pending_attachments().iter().map(|a| a.filename.clone()).collect::<Vec<_>>(),
+        (0..8).map(|i| format!("photo-{i}.png")).collect::<Vec<_>>());
+    let original = dir.path().join("missing.png");
+    assert!(client.prepare_pending_file(original, None, conversation, revision).await.is_err());
+    assert_eq!(client.pending_attachments().len(), 8);
+
+    let rejected = client.stage_owned_file_async(picked(&dir, "stale.png")).await.unwrap();
+    client.chat_state().clear_attachment_trays();
+    client.prepare_pending_file(rejected.clone(), Some(5), conversation, revision).await.unwrap();
+    assert!(!rejected.exists(), "rejected selection leaked encrypted staging");
+    assert!(client.pending_attachments().is_empty());
+}
+
+#[tokio::test]
+async fn staged_tray_pixels_are_small_and_require_authenticated_ciphertext() {
+    let (client, dir) = client();
+    open(&client, ChannelId::new());
+    let input = picked(&dir, "preview.png");
+    image::DynamicImage::new_rgba8(640, 320).save(&input).unwrap();
+    let path = client.stage_owned_file_async(input).await.unwrap();
+    let reader = client.clone();
+    let preview_path = path.clone();
+    let pixels = crate::services::attachment::run_attachment_work(move || reader.pending_image_pixels(&preview_path))
+        .await.unwrap().unwrap();
+    assert_eq!(pixels.dimensions(), (160, 80));
+    // Tamper only the authentication trailer: plaintext pixels would remain
+    // decodable if preview authentication were accidentally bypassed.
+    let mut ciphertext = std::fs::read(&path).unwrap();
+    *ciphertext.last_mut().unwrap() ^= 1;
+    std::fs::write(&path, ciphertext).unwrap();
+    let reader = client.clone();
+    let preview_path = path.clone();
+    assert!(crate::services::attachment::run_attachment_work(move || reader.pending_image_pixels(&preview_path))
+        .await.unwrap().is_none());
+}
+
+#[test]
+fn preview_pixel_budget_does_not_drop_or_reorder_batch_attachments() {
+    let files: Vec<_> = (0..100).map(|index| staged(&format!("{index}.png"))).collect();
+    let candidates: Vec<_> = ChatterClient::pending_preview_files(&files).collect();
+    assert_eq!(candidates.len(), 64);
+    assert_eq!(candidates.iter().map(|(index, _)| *index).collect::<Vec<_>>(), (0..64).collect::<Vec<_>>());
+    assert_eq!(files.len(), 100);
+}

@@ -151,7 +151,7 @@ impl AttachmentService {
         // into memory. Malformed MP4/WebP is rejected; other formats untouched.
         let sanitized_temp = {
             let p = file_path.to_path_buf();
-            tokio::task::spawn_blocking(move || super::sanitize::sanitize_media_file(&p))
+            super::run_attachment_work(move || super::sanitize::sanitize_media_file(&p))
                 .await
                 .map_err(|e| AttachmentError::FileError(format!("Sanitize task failed: {e}")))??
         };
@@ -213,7 +213,7 @@ impl AttachmentService {
         let output_path = temp_file.path().to_path_buf();
 
         let encrypt_start = std::time::Instant::now();
-        let encrypt_result = tokio::task::spawn_blocking(move || {
+        let encrypt_result = super::run_attachment_work(move || {
             AttachmentCrypto::encrypt_file_to_file(&input_path, &output_path)
         })
         .await
@@ -880,7 +880,7 @@ impl AttachmentService {
             #[cfg(feature = "desktop-gstreamer")]
             {
                 let path_for_waveform = file_path.to_path_buf();
-                meta.waveform = match tokio::task::spawn_blocking(move || {
+                meta.waveform = match super::run_attachment_work(move || {
                     crate::media::extract_waveform(&path_for_waveform)
                 })
                 .await
@@ -901,7 +901,7 @@ impl AttachmentService {
             }
 
             let path_for_duration = file_path.to_path_buf();
-            meta.duration_ms = tokio::task::spawn_blocking(move || {
+            meta.duration_ms = super::run_attachment_work(move || {
                 crate::media::AudioPlayer::get_duration(&path_for_duration)
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0)
@@ -911,7 +911,7 @@ impl AttachmentService {
         } else if mime_type.starts_with("image/") {
             // Image processing - use spawn_blocking for large images
             let path_for_dims = file_path.to_path_buf();
-            let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+            let (orig_w, orig_h) = super::run_attachment_work(move || {
                 crate::media::ImageProcessor::get_dimensions(&path_for_dims).unwrap_or((0, 0))
             })
             .await
@@ -921,7 +921,7 @@ impl AttachmentService {
 
             // Generate thumbnail in blocking thread (large images can take time/memory)
             let path_for_thumb = file_path.to_path_buf();
-            match tokio::task::spawn_blocking(move || {
+            match super::run_attachment_work(move || {
                 crate::media::ImageProcessor::generate_thumbnail_bytes(&path_for_thumb)
             })
             .await
@@ -952,7 +952,7 @@ impl AttachmentService {
             #[cfg(target_os = "android")]
             {
                 let path_for_video = file_path.to_path_buf();
-                match tokio::task::spawn_blocking(move || {
+                match super::run_attachment_work(move || {
                     crate::media::analyze_video(&path_for_video)
                 })
                 .await
@@ -968,9 +968,12 @@ impl AttachmentService {
                         meta.width = Some(video.width);
                         meta.height = Some(video.height);
                         meta.duration_ms = video.duration_ms;
-                        tracing::info!(width = video.width, height = video.height,
+                        tracing::info!(
+                            width = video.width,
+                            height = video.height,
                             has_thumbnail = meta.thumbnail.is_some(),
-                            "Android video metadata extracted");
+                            "Android video metadata extracted"
+                        );
                     }
                     Ok(Err(e)) => tracing::warn!("Failed to analyze Android video: {e}"),
                     Err(e) => tracing::warn!("Android video metadata task panicked: {e}"),
@@ -979,14 +982,14 @@ impl AttachmentService {
             #[cfg(feature = "desktop-gstreamer")]
             {
                 let path_for_thumb = file_path.to_path_buf();
-                match tokio::task::spawn_blocking(move || {
+                match super::run_attachment_work(move || {
                     crate::media::extract_video_thumbnail(&path_for_thumb)
                 })
                 .await
                 {
                     Ok(Ok((bytes, thumb_w, thumb_h, vid_duration_ms))) => {
                         let path_for_dims = file_path.to_path_buf();
-                        let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+                        let (orig_w, orig_h) = super::run_attachment_work(move || {
                             crate::media::get_video_dimensions(&path_for_dims)
                                 .unwrap_or((thumb_w, thumb_h))
                         })
@@ -1014,12 +1017,12 @@ impl AttachmentService {
                         tracing::warn!("Failed to generate video thumbnail: {}", e);
                         let path_for_dims = file_path.to_path_buf();
                         let path_for_dur = file_path.to_path_buf();
-                        let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+                        let (orig_w, orig_h) = super::run_attachment_work(move || {
                             crate::media::get_video_dimensions(&path_for_dims).unwrap_or((0, 0))
                         })
                         .await
                         .unwrap_or((0, 0));
-                        let vid_duration = tokio::task::spawn_blocking(move || {
+                        let vid_duration = super::run_attachment_work(move || {
                             crate::media::get_video_duration(&path_for_dur).unwrap_or(0)
                         })
                         .await

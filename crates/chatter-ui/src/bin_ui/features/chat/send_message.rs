@@ -54,9 +54,8 @@ fn pending_message_id(send: &ComposerSend) -> String {
 /// A decode-then-insert callback would not have that property: it could run
 /// after the removal and leave a "sending" row behind for good.
 ///
-/// Thumbnails: `to_slint` loads an image by its local path through Slint's
-/// image cache, which the attachment tray filled when the file was staged,
-/// so the common case decodes nothing here.
+/// Thumbnails reuse the tray's bounded decoded cache. Missing previews remain
+/// placeholders; inserting the pending row never performs IO or decoding.
 pub(crate) fn show_pending_bubble(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
@@ -258,7 +257,7 @@ fn pending_attachment_to_display_data(
         is_download_failed: false,
         progress: 0.0,
         thumbnail_bytes: std::sync::Arc::<[u8]>::from(Vec::new()),
-        thumbnail_pixels: None,
+        thumbnail_pixels: crate::bin_ui::decode_cache::cached_thumbnail(&attachment.id.to_string(), 0),
     }
 }
 

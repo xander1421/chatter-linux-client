@@ -2,6 +2,26 @@
 
 use super::*;
 
+// A blocking job may outlive its awaiting future. Unclaimed staging output
+// must be deleted when Tokio drops that job's result after cancellation.
+struct PreparedOwnedFile {
+    client: std::sync::Arc<ChatterClient>,
+    path: Option<PathBuf>,
+}
+impl Drop for PreparedOwnedFile {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            self.client.release_staged_files(&[PendingAttachment::new(
+                AttachmentId::new(),
+                String::new(),
+                path,
+                0,
+                String::new(),
+            )]);
+        }
+    }
+}
+
 impl ChatterClient {
     // ── Recovery: staged files and parked sends ─────────────────────
 
@@ -128,10 +148,124 @@ impl ChatterClient {
         )
     }
 
-    /// Authenticate a small staged image and produce its tray preview entirely
-    /// in memory. Large inputs keep the generic icon instead of allocating a
-    /// full plaintext image; the media decoder applies its own pixel limits.
-    pub fn staged_image_preview(&self, path: &std::path::Path) -> Option<Vec<u8>> {
+    /// Prepare file display metadata off the caller's executor. Publication is
+    /// still fenced by the selection's account-local attachment revision.
+    pub async fn prepare_pending_file(
+        self: &std::sync::Arc<Self>,
+        path: PathBuf,
+        staged_size: Option<u64>,
+        conversation: ActiveConversation,
+        revision: u64,
+    ) -> Result<(), String> {
+        let client = self.clone();
+        let mut owned = PreparedOwnedFile {
+            client: client.clone(),
+            path: Some(path.clone()),
+        };
+        crate::services::attachment::run_attachment_work(move || {
+            let metadata = std::fs::metadata(&path)
+                .map_err(|e| format!("Failed to read attachment metadata: {e}"))?;
+            let filename = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let mime = mime_guess::from_path(&path)
+                .first_or_octet_stream()
+                .to_string();
+            let size = staged_size
+                .or_else(|| client.staged_file_size(&path))
+                .unwrap_or(metadata.len());
+            let attachment =
+                PendingAttachment::new(AttachmentId::new(), filename, path, size, mime);
+            if client.add_pending_attachment_for(conversation, revision, attachment) {
+                owned.path.take();
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("Attachment preparation failed: {e}"))?
+    }
+
+    /// Bound pixels retained by the tray model as well as decoder concurrency:
+    /// at most 64 x 160 x 160 x RGBA = 6.25 MiB, regardless of batch size.
+    /// Remaining selections still appear, validate and send, with file icons.
+    pub fn pending_preview_files(
+        attachments: &[PendingAttachment],
+    ) -> impl Iterator<Item = (usize, &PendingAttachment)> {
+        attachments
+            .iter()
+            .enumerate()
+            .filter(|(_, attachment)| attachment.mime_type.starts_with("image/"))
+            .take(64)
+    }
+
+    /// Read/decode a tray preview only on the bounded attachment worker. This
+    /// skips the inline-thumbnail WebP encode/decode round trip and Lanczos pass.
+    pub fn pending_image_pixels(&self, path: &std::path::Path) -> Option<image::RgbaImage> {
+        let bytes = if self.staging_crypto_key(path).is_some() {
+            self.staged_image_plaintext(path)?
+        } else {
+            if std::fs::metadata(path).ok()?.len() > 10 * 1024 * 1024 {
+                return None;
+            }
+            use std::io::Read;
+            let mut bytes = zeroize::Zeroizing::new(Vec::new());
+            std::fs::File::open(path)
+                .ok()?
+                .take(10 * 1024 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .ok()?;
+            if bytes.len() > 10 * 1024 * 1024 {
+                return None;
+            }
+            bytes
+        };
+        crate::media::ImageProcessor::tray_preview_from_memory(&bytes).ok()
+    }
+
+    /// Stage app-owned files without running encryption on the caller's executor.
+    pub async fn stage_owned_file_async(
+        self: &std::sync::Arc<Self>,
+        path: PathBuf,
+    ) -> Result<PathBuf, String> {
+        let client = self.clone();
+        let session = self.session_guard();
+        crate::services::attachment::run_attachment_work(move || {
+            if !session.is_current() {
+                return PreparedOwnedFile {
+                    client,
+                    path: Some(path),
+                };
+            }
+            let staged = client.stage_owned_file(path.clone());
+            if !session.is_current() && staged != path {
+                client.release_staged_files(&[PendingAttachment::new(
+                    AttachmentId::new(),
+                    String::new(),
+                    staged,
+                    0,
+                    String::new(),
+                )]);
+                return PreparedOwnedFile {
+                    client,
+                    path: Some(path),
+                };
+            }
+            PreparedOwnedFile {
+                client,
+                path: Some(staged),
+            }
+        })
+        .await
+        .map(|mut staged| staged.path.take().unwrap())
+        .map_err(|e| format!("Attachment staging failed: {e}"))
+    }
+
+    fn staged_image_plaintext(
+        &self,
+        path: &std::path::Path,
+    ) -> Option<zeroize::Zeroizing<Vec<u8>>> {
         const MAX_PREVIEW_INPUT: u64 = 10 * 1024 * 1024;
         let key_name = self.staging_crypto_key(path)?;
         let crypto: StagingCrypto = self.settings_repo().get(&key_name).ok()??;
@@ -152,10 +286,7 @@ impl ChatterClient {
             crypto.plaintext_size.try_into().ok()?,
             size.try_into().ok()?,
         );
-        let plaintext = zeroize::Zeroizing::new(decryptor.decrypt_all().ok()?);
-        let (thumbnail, _, _) =
-            crate::media::ImageProcessor::generate_thumbnail_from_memory(&plaintext).ok()?;
-        Some(thumbnail)
+        Some(zeroize::Zeroizing::new(decryptor.decrypt_all().ok()?))
     }
 
     fn restorable_staged_file(&self, path: &std::path::Path) -> bool {
@@ -168,7 +299,7 @@ impl ChatterClient {
     /// Verify and decrypt a staged file for the duration of one upload.
     /// The existing attachment uploader and media sanitizer require a file path;
     /// its private temporary plaintext file is removed when the send returns.
-    pub(crate) fn staged_upload_file(
+    pub(crate) async fn staged_upload_file(
         &self,
         path: &std::path::Path,
     ) -> Result<Option<(tempfile::TempDir, PathBuf)>, crate::services::attachment::AttachmentError>
@@ -184,59 +315,63 @@ impl ChatterClient {
             .ok_or_else(|| {
                 AttachmentError::DecryptionError("staged file has no encryption key".into())
             })?;
-        let key: [u8; 64] = crypto
-            .key
-            .try_into()
-            .map_err(|_| AttachmentError::DecryptionError("invalid staged file key".into()))?;
-        let digest: [u8; 32] = crypto
-            .digest
-            .try_into()
-            .map_err(|_| AttachmentError::DecryptionError("invalid staged file digest".into()))?;
-        let source =
-            std::fs::File::open(path).map_err(|e| AttachmentError::FileError(e.to_string()))?;
-        let size = source
-            .metadata()
-            .map_err(|e| AttachmentError::FileError(e.to_string()))?
-            .len() as usize;
-        let mut decryptor = crate::crypto::streaming_decrypt::StreamingDecryptor::new(
-            std::io::BufReader::new(source),
-            &key,
-            &digest,
-            crypto.plaintext_size as usize,
-            size,
-        );
-        decryptor
-            .verify()
-            .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
-        decryptor
-            .init_decryption()
-            .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
-        let root = Self::ensure_staged_upload_temp_root()
-            .map_err(|e| AttachmentError::FileError(e.to_string()))?;
-        let temp = tempfile::Builder::new()
-            .prefix("upload-")
-            .tempdir_in(root)
-            .map_err(|e| AttachmentError::FileError(e.to_string()))?;
-        let output_path = temp.path().join(
-            path.file_name()
-                .ok_or_else(|| AttachmentError::FileError("staged filename missing".into()))?,
-        );
-        let mut output = std::fs::File::create(&output_path)
-            .map_err(|e| AttachmentError::FileError(e.to_string()))?;
-        let mut chunk = vec![0u8; 512 * 1024];
-        loop {
-            let read = decryptor
-                .read_decrypted(&mut chunk)
-                .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
-            if read == 0 {
-                break;
-            }
-            output
-                .write_all(&chunk[..read])
+        let path = path.to_path_buf();
+        crate::services::attachment::run_attachment_work(move || {
+            let key: [u8; 64] = crypto
+                .key
+                .try_into()
+                .map_err(|_| AttachmentError::DecryptionError("invalid staged file key".into()))?;
+            let digest: [u8; 32] = crypto.digest.try_into().map_err(|_| {
+                AttachmentError::DecryptionError("invalid staged file digest".into())
+            })?;
+            let source = std::fs::File::open(&path)
                 .map_err(|e| AttachmentError::FileError(e.to_string()))?;
-        }
-        drop(output);
-        Ok(Some((temp, output_path)))
+            let size = source
+                .metadata()
+                .map_err(|e| AttachmentError::FileError(e.to_string()))?
+                .len() as usize;
+            let mut decryptor = crate::crypto::streaming_decrypt::StreamingDecryptor::new(
+                std::io::BufReader::new(source),
+                &key,
+                &digest,
+                crypto.plaintext_size as usize,
+                size,
+            );
+            decryptor
+                .verify()
+                .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
+            decryptor
+                .init_decryption()
+                .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
+            let root = Self::ensure_staged_upload_temp_root()
+                .map_err(|e| AttachmentError::FileError(e.to_string()))?;
+            let temp = tempfile::Builder::new()
+                .prefix("upload-")
+                .tempdir_in(root)
+                .map_err(|e| AttachmentError::FileError(e.to_string()))?;
+            let output_path = temp.path().join(
+                path.file_name()
+                    .ok_or_else(|| AttachmentError::FileError("staged filename missing".into()))?,
+            );
+            let mut output = std::fs::File::create(&output_path)
+                .map_err(|e| AttachmentError::FileError(e.to_string()))?;
+            let mut chunk = vec![0u8; 512 * 1024];
+            loop {
+                let read = decryptor
+                    .read_decrypted(&mut chunk)
+                    .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
+                if read == 0 {
+                    break;
+                }
+                output
+                    .write_all(&chunk[..read])
+                    .map_err(|e| AttachmentError::FileError(e.to_string()))?;
+            }
+            drop(output);
+            Ok(Some((temp, output_path)))
+        })
+        .await
+        .map_err(|e| AttachmentError::FileError(format!("Preparation task failed: {e}")))?
     }
 
     /// The account whose recovery row may be written: the drafts' owner,
@@ -386,7 +521,9 @@ impl ChatterClient {
         drop(drafts);
         let tray = self.chat_state().take_attachment_tray_for(conversation);
         self.release_staged_files(&tray);
-        let thread_trays = self.chat_state().take_thread_attachment_trays_for(message_ids);
+        let thread_trays = self
+            .chat_state()
+            .take_thread_attachment_trays_for(message_ids);
         self.release_staged_files(&thread_trays);
         let mut parked = self.parked_sends.lock();
         parked.retain(|send| {
@@ -529,7 +666,8 @@ impl ChatterClient {
                 self.composer_recovery_unread.store(true, Ordering::SeqCst);
                 continue;
             };
-            for attachment in attachments.into_iter()
+            for attachment in attachments
+                .into_iter()
                 .filter(|attachment| self.restorable_staged_file(&attachment.path))
                 .map(StagedAttachment::into_pending)
             {
