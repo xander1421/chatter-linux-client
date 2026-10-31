@@ -35,6 +35,7 @@ pub mod navigation;
 pub mod server_records;
 pub mod sidebar;
 pub mod status;
+mod static_images;
 pub mod thread;
 pub mod unified_search;
 pub mod update;
@@ -48,6 +49,7 @@ use chatter_core::client::ChatterClient;
 
 /// Wire all UI callbacks to their handlers.
 pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    static_images::wire(window, ui_ctx);
     auth::wire(window, ui_ctx);
     activity::wire(window, ui_ctx);
     back::wire(window);

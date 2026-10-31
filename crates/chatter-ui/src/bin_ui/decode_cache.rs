@@ -311,6 +311,7 @@ pub fn evict_attachments(ids: &std::collections::HashSet<String>) {
 
 /// Drop every decoded image.
 pub fn wipe() {
+    chatter_core::media::static_preview::wipe();
     caches().wipe();
 }
 

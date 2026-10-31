@@ -233,6 +233,9 @@ pub(crate) fn refresh_visible_media(
             // The grid paints at most ten media tiles. Hidden overflow remains
             // available to the viewer but needs no inline thumbnail texture.
             if (attachment.is_image || attachment.is_video)
+                // Static images use the bounded, cancellable core preview loader.
+                && (!attachment.is_image || attachment.mime_type == "image/gif"
+                    || attachment.filename.to_lowercase().ends_with(".gif"))
                 && (attachment.album_count < 2 || attachment.album_index < 10)
                 && !attachment.has_thumbnail
             {

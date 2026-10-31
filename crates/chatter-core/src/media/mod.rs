@@ -15,6 +15,7 @@ pub mod decoder;
 pub mod file_picker;
 pub mod gif;
 pub mod image_processor;
+pub mod static_preview;
 pub mod video_playback;
 #[cfg(feature = "desktop-gstreamer")]
 pub mod video_processor;
