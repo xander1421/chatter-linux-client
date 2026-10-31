@@ -1439,6 +1439,7 @@ fn jarvis_ask_is_gated_by_the_per_conversation_switch() {
 
     require_element_queries();
     let (rt, _tmp, client, _w) = wired_offline();
+    let _runtime = rt.enter();
 
     let channel = chatter_core::domain::ids::ChannelId::new();
     let ctx = JarvisContext::channel(channel.clone());
