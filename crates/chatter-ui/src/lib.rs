@@ -563,6 +563,7 @@ fn init_tracing() {
         // Call setup uses only constant metadata targets; event values still
         // go through the unchanged release redactor.
         .add_directive("call_setup=info".parse().unwrap())
+        .add_directive("gif_playback=info".parse().unwrap())
         .add_directive("glycin=warn".parse().unwrap())
         .add_directive("glycin_utils=warn".parse().unwrap())
         .add_directive("zbus=warn".parse().unwrap());

@@ -1173,15 +1173,11 @@ async fn deliver_inner(
             if let Some(text) = stored.as_ref().and_then(|m| m.reply_to_text.as_deref()) {
                 msg_item.reply_to_preview = text.into();
             }
-            // Only this message can carry a not-yet-registered GIF; scan it,
-            // not the whole model. Done before `msg_item` is moved into upsert.
-            crate::bin_ui::gif_state::auto_register_gifs_in_message(
-                w.as_weak(),
-                ui_ctx_for_gifs,
-                &msg_item,
-            );
-            // In place of the pending row, so the bubble does not move.
+            // Bind GIF targets to the models actually installed by the upsert.
             upsert_message_in_ui(&w, &pending_id, msg_item);
+            crate::bin_ui::gif_state::auto_register_gifs_from_messages(
+                w.as_weak(), ui_ctx_for_gifs,
+            );
             tracing::debug!(
                 elapsed_ms = send_started.elapsed().as_millis(),
                 "send: bubble appended"

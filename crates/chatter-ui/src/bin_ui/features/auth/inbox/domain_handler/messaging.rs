@@ -328,14 +328,6 @@ pub(super) async fn handle_message_received(
                     );
                 }
                 chatter_core::domain::message::InsertPosition::At(insert_pos) => {
-                    // Only the arriving message can carry a not-yet-registered
-                    // GIF; scan it, not the whole model (which was O(N) per
-                    // received message). Done before `new_msg` is moved in.
-                    crate::bin_ui::gif_state::auto_register_gifs_in_message(
-                        weak.clone(),
-                        ui_ctx_ui.clone(),
-                        &new_msg,
-                    );
                     if let Some(vec_model) = current_model
                         .as_any()
                         .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
@@ -376,6 +368,11 @@ pub(super) async fn handle_message_received(
                     }
                 }
             }
+
+            // Inserts and same-count snapshot replacements have now published.
+            crate::bin_ui::gif_state::auto_register_gifs_from_messages(
+                w.as_weak(), ui_ctx_ui.clone(),
+            );
 
             if was_at_bottom && !w.global::<crate::ChatPane>().get_history_has_newer() {
                 w.global::<crate::ChatPane>().set_is_at_bottom(true);

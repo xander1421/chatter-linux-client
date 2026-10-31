@@ -2,9 +2,11 @@
 //!
 //! Manages animated GIF playback for message thumbnails in the chat view.
 
+use i_slint_core::model::{ModelChangeListener, ModelChangeListenerContainer};
 use slint::ComponentHandle;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::pin::Pin;
 use std::sync::{Arc, LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
@@ -17,6 +19,9 @@ use crate::MainWindow;
 static ADMITTED: LazyLock<RwLock<HashSet<String>>> = LazyLock::new(|| RwLock::new(HashSet::new()));
 type AttachmentTarget = (slint::ModelRc<crate::MessageAttachmentData>, usize);
 thread_local! {
+    static BINDING_EPOCH: Cell<u64> = const { Cell::new(0) };
+    static PLAYBACK_PHASES: Cell<u8> = const { Cell::new(0) };
+    static MODEL_WATCH: RefCell<Option<(slint::ModelRc<crate::MessageItemData>, Pin<Box<ModelChangeListenerContainer<GifModelWatch>>>)>> = const { RefCell::new(None) };
     static ANIMATED: RefCell<Vec<AttachmentTarget>> = const { RefCell::new(Vec::new()) };
     static TARGETS: RefCell<HashMap<String, Vec<AttachmentTarget>>> = RefCell::new(HashMap::new());
     /// Inline GIF animations for message thumbnails (attachment_id -> frames).
@@ -32,6 +37,72 @@ thread_local! {
     /// Last message-list offset seen by the GIF timer. A changed offset means
     /// the user is dragging or a fling is moving rows this frame.
     static INLINE_LAST_SCROLL_POSITION: Cell<Option<f32>> = const { Cell::new(None) };
+}
+
+// At most seven constant messages per conversation open, never per-frame
+// values or attachment identifiers. These distinguish admission, decoding and
+// model publication on release devices where verbose logging stays disabled.
+fn trace_playback_phase(phase: u8) {
+    PLAYBACK_PHASES.with(|phases| {
+        if phases.get() & phase != 0 {
+            return;
+        }
+        phases.set(phases.get() | phase);
+        match phase {
+            1 => tracing::info!(target: "gif_playback::index_empty", "index_empty"),
+            2 => tracing::info!(target: "gif_playback::index_ready", "index_ready"),
+            4 => tracing::info!(target: "gif_playback::decode_requested", "decode_requested"),
+            8 => tracing::info!(target: "gif_playback::animation_registered", "animation_registered"),
+            16 => tracing::info!(target: "gif_playback::scroll_held", "scroll_held"),
+            32 => tracing::info!(target: "gif_playback::frame_written", "frame_written"),
+            64 => tracing::info!(target: "gif_playback::preview_written", "preview_written"),
+            _ => {}
+        }
+    });
+}
+
+/// Message rows can replace their nested attachment model without changing
+/// the viewport or row count. Coalesce notifications after publication, even
+/// while the playback clock is idle. Frame writes only touch nested models.
+struct GifModelWatch {
+    epoch: u64,
+    queued: Cell<bool>,
+    window: Weak<MainWindow>,
+    client: std::sync::Weak<chatter_core::client::ChatterClient>,
+    owner: crate::bin_ui::features::history_owner::HistoryOwner,
+}
+impl GifModelWatch {
+    fn changed(self: Pin<&Self>) {
+        if self.queued.replace(true) {
+            return;
+        }
+        let window = self.window.clone();
+        let client = self.client.clone();
+        let owner = self.owner.clone();
+        let epoch = self.epoch;
+        Timer::single_shot(Duration::ZERO, move || {
+            if !owner.is_current() || BINDING_EPOCH.with(|current| current.get() != epoch) {
+                return;
+            }
+            if let Some(client) = client.upgrade() {
+                auto_register_gifs_from_messages(window, client);
+            }
+        });
+    }
+}
+impl ModelChangeListener for GifModelWatch {
+    fn row_changed(self: Pin<&Self>, _: usize) {
+        self.changed();
+    }
+    fn row_added(self: Pin<&Self>, _: usize, _: usize) {
+        self.changed();
+    }
+    fn row_removed(self: Pin<&Self>, _: usize, _: usize) {
+        self.changed();
+    }
+    fn reset(self: Pin<&Self>) {
+        self.changed();
+    }
 }
 
 /// State for an inline animated GIF in message list.
@@ -184,6 +255,7 @@ pub fn register_inline_gif_from_images(
     };
 
     insert_inline_gif(att_id_string, state);
+    trace_playback_phase(8);
 
     tracing::info!(
         "Registered inline GIF animation: id={}, frames={}",
@@ -273,6 +345,7 @@ fn tick_inline_gifs(elapsed_ms: u64) {
         moved
     });
     if moved {
+        trace_playback_phase(16);
         return;
     }
     // The viewport observer indexes GIF attachment slots once per range
@@ -342,6 +415,7 @@ fn tick_inline_gifs(elapsed_ms: u64) {
         att.thumbnail = frame.clone();
         att.has_thumbnail = true;
         model.set_row_data(att_idx, att);
+        trace_playback_phase(32);
     }
 }
 
@@ -399,12 +473,17 @@ fn set_attachment_thumbnail(window: &MainWindow, attachment_id: &str, image: Ima
             att.progress = 1.0;
             att.has_thumbnail = true;
             model.set_row_data(*index, att);
+            trace_playback_phase(64);
         }
     });
 }
 
 /// Clear all inline GIF animations.
 pub fn clear_inline_gifs() {
+    BINDING_EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
+    PLAYBACK_PHASES.with(|phases| phases.set(0));
+    MODEL_WATCH.with(|watch| watch.borrow_mut().take());
+    INLINE_LAST_SCROLL_POSITION.with(|last| last.set(None));
     TARGETS.with(|targets| targets.borrow_mut().clear());
     ANIMATED.with(|targets| targets.borrow_mut().clear());
     if let Ok(mut admitted) = ADMITTED.write() {
@@ -441,6 +520,29 @@ pub fn auto_register_gifs_from_messages(
     INLINE_WINDOW.with(|c| *c.borrow_mut() = Some(window_weak.clone()));
     let pane = w.global::<crate::ChatPane>();
     let messages = pane.get_messages();
+    MODEL_WATCH.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if let Some((model, watch)) = slot.as_ref() {
+            if *model == messages && watch.owner.is_current() {
+                watch.queued.set(false);
+                return;
+            }
+        }
+        let watch = Box::pin(ModelChangeListenerContainer::new(GifModelWatch {
+            epoch: BINDING_EPOCH.with(Cell::get),
+            queued: Cell::new(false),
+            window: window_weak.clone(),
+            client: Arc::downgrade(&ui_ctx),
+            owner: crate::bin_ui::features::history_owner::HistoryOwner::capture(
+                &ui_ctx,
+                ui_ctx.active_conversation(),
+            ),
+        }));
+        messages
+            .model_tracker()
+            .attach_peer(watch.as_ref().model_peer());
+        *slot = Some((messages.clone(), watch));
+    });
     let rows = rows_to_admit(
         pane.get_message_first_visible_row(),
         pane.get_message_last_visible_row(),
@@ -460,7 +562,8 @@ pub fn auto_register_gifs_from_messages(
             };
             if (att.mime_type == "image/gif" || att.filename.to_lowercase().ends_with(".gif"))
                 && (att.album_count < 2 || att.album_index < 10)
-                && (admit_new || INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(att.id.as_str())))
+                && (admit_new
+                    || INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(att.id.as_str())))
             {
                 if animate {
                     animated.push((msg.attachments.clone(), index));
@@ -485,10 +588,13 @@ pub fn auto_register_gifs_from_messages(
     }
     // Thread slots can reuse an already registered animation. The panel has
     // no viewport report here, so it must not admit unseen decode work.
-    for msg in pane.get_thread_replies().iter() {
-        collect(msg, true, false);
+    if pane.get_thread_panel_visible() {
+        for msg in pane.get_thread_replies().iter() {
+            collect(msg, true, false);
+        }
     }
     let ids: Vec<_> = targets.keys().cloned().collect();
+    trace_playback_phase(if animated.is_empty() { 1 } else { 2 });
     if let Ok(mut admitted) = ADMITTED.write() {
         *admitted = ids.iter().cloned().collect();
     }
@@ -534,18 +640,6 @@ fn register_gif_ids(
     }
 }
 
-/// Register GIFs from a single message — the hot receive/send path. Avoids
-/// rescanning the whole model on every added message (older messages' GIFs are
-/// already registered from their own receive/open).
-pub fn auto_register_gifs_in_message(
-    window_weak: Weak<MainWindow>,
-    ui_ctx: std::sync::Arc<chatter_core::client::ChatterClient>,
-    msg: &crate::MessageItemData,
-) {
-    let _ = msg;
-    auto_register_gifs_from_messages(window_weak, ui_ctx);
-}
-
 /// Register a single GIF attachment for inline animation.
 ///
 /// This is called after sending a message with GIF attachments.
@@ -581,10 +675,12 @@ pub(crate) fn register_gif_attachment_guarded(
 
     let generation = crate::bin_ui::decode_cache::thumbnail_generation();
     let visible = ADMITTED
-        .read().is_ok_and(|ids| ids.contains(&attachment_id));
+        .read()
+        .is_ok_and(|ids| ids.contains(&attachment_id));
     if !visible {
         return;
     }
+    trace_playback_phase(4);
     chatter_core::media::gif::workers::submit(
         format!("inline:{attachment_id}:{generation}"),
         visible,
@@ -721,6 +817,7 @@ pub(crate) fn register_gif_attachment_guarded(
                     let first_owner = owner.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if !first_owner.is_current()
+                            || !ADMITTED.read().is_ok_and(|ids| ids.contains(&id))
                             || generation != crate::bin_ui::decode_cache::thumbnail_generation()
                         {
                             return;
@@ -789,6 +886,105 @@ pub(crate) fn register_gif_attachment_guarded(
 #[cfg(test)]
 mod tests {
     use super::rows_to_animate;
+
+    #[test]
+    fn published_models_rebind_and_restart_idle_gif_playback() {
+        use super::*;
+        use slint::{ModelRc, VecModel};
+        i_slint_backend_testing::init_no_event_loop();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        let client = chatter_core::client::ChatterClient::builder()
+            .data_dir(dir.path().to_string_lossy().to_string())
+            .build()
+            .unwrap();
+        let window = MainWindow::new().unwrap();
+        let pane = window.global::<crate::ChatPane>();
+        let frame = |color| {
+            Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
+                &[color, 0, 0, 255],
+                1,
+                1,
+            ))
+        };
+        let first = frame(10);
+        let second = frame(200);
+        let row = || {
+            let attachments = ModelRc::new(VecModel::from(vec![crate::MessageAttachmentData {
+                id: "playback-fixture".into(),
+                mime_type: "image/gif".into(),
+                thumbnail: first.clone(),
+                has_thumbnail: true,
+                ..Default::default()
+            }]));
+            crate::MessageItemData {
+                attachments,
+                ..Default::default()
+            }
+        };
+        clear_inline_gifs();
+        init_inline_animations(window.as_weak());
+        insert_inline_gif(
+            "playback-fixture".into(),
+            InlineGifState {
+                frames: vec![first.clone(), second.clone()],
+                delays: vec![80, 80],
+                current_frame: 0,
+                accumulated_ms: 0,
+            },
+        );
+        let messages = std::rc::Rc::new(VecModel::from(vec![row()]));
+        pane.set_messages(messages.clone().into());
+        // Opening before layout must not admit whole history or leave a clock.
+        pane.set_message_last_visible_row(-1);
+        auto_register_gifs_from_messages(window.as_weak(), client.clone());
+        tick_inline_gifs(80);
+        assert!(INLINE_TIMER.with(|t| t.borrow().is_none()));
+        pane.set_message_first_visible_row(0);
+        pane.set_message_last_visible_row(0);
+        auto_register_gifs_from_messages(window.as_weak(), client.clone());
+        tick_inline_gifs(80);
+        let detached = messages.row_data(0).unwrap().attachments;
+        assert_eq!(detached.row_data(0).unwrap().thumbnail, second);
+        // Same count and viewport, new nested model: notifications rebind it.
+        messages.set_row_data(0, row());
+        slint::platform::update_timers_and_animations();
+        tick_inline_gifs(80);
+        let installed = messages.row_data(0).unwrap().attachments;
+        assert_eq!(installed.row_data(0).unwrap().thumbnail, first);
+        assert_eq!(detached.row_data(0).unwrap().thumbnail, second);
+        tick_inline_gifs(80);
+        assert_eq!(installed.row_data(0).unwrap().thumbnail, second);
+        assert_eq!(detached.row_data(0).unwrap().thumbnail, second);
+        // Empty visible model stops the clock; publication wakes it again.
+        messages.set_vec(Vec::new());
+        slint::platform::update_timers_and_animations();
+        tick_inline_gifs(80);
+        assert!(INLINE_TIMER.with(|t| t.borrow().is_none()));
+        messages.push(row());
+        slint::platform::update_timers_and_animations();
+        assert!(INLINE_TIMER.with(|t| t.borrow().is_some()));
+        assert_eq!(ANIMATED.with(|t| t.borrow().len()), 1);
+        // A hidden thread cannot retain playback slots.
+        pane.set_thread_replies(ModelRc::new(VecModel::from(vec![row()])));
+        pane.set_thread_panel_visible(false);
+        auto_register_gifs_from_messages(window.as_weak(), client);
+        assert_eq!(ANIMATED.with(|t| t.borrow().len()), 1);
+        // A queued model refresh cannot resurrect a cleared playback session.
+        messages.set_row_data(0, row());
+        clear_inline_gifs();
+        slint::platform::update_timers_and_animations();
+        assert!(ANIMATED.with(|t| t.borrow().is_empty()));
+        assert!(INLINE_TIMER.with(|t| t.borrow().is_none()));
+    }
+
+    #[test]
+    fn admission_stays_in_viewport_cushion() {
+        assert_eq!(super::rows_to_admit(100, 102, 10000), Some(92..=110));
+        assert_eq!(super::rows_to_admit(0, -1, 10000), None);
+        assert_eq!(super::rows_to_admit(20, 10, 10000), None);
+    }
 
     #[test]
     fn no_list_animates_nothing() {
