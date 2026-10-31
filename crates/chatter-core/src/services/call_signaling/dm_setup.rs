@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(feature = "media")]
+use crate::calls::setup_diagnostics::{Phase, observe};
 
 impl CallSignalingService {
     /// Start a DM call: generate ephemeral key, create call on server, send offer, store pending state.
@@ -64,9 +66,11 @@ impl CallSignalingService {
         // a room nobody else joins, and every retry fails with
         // `AlreadyInCall` until the process restarts.
         let call_id_str = call.id.to_string();
-        if let Err(e) = self
-            .send_call_offer(peer_id, &call_id_str, ephemeral_public, call_type_str)
-            .await
+        if let Err(e) = observe(
+            Phase::DmOffer,
+            self.send_call_offer(peer_id, &call_id_str, ephemeral_public, call_type_str),
+        )
+        .await
         {
             tracing::error!(error = %e, call_id = %call.id, "Call offer send failed — rolling back call");
             call_worker
@@ -330,17 +334,18 @@ impl CallSignalingService {
 
         // Delegate all crypto to the Signal service (ECDH + identity lookup + HKDF)
         let priv_key = our_ephemeral.private_key_bytes();
-        let encryption_key = signal_service
-            .actor
-            .complete_call_key_exchange(
+        let encryption_key = observe(
+            Phase::DmCrypto,
+            signal_service.actor.complete_call_key_exchange(
                 priv_key,
                 caller_ephemeral_pk,
                 *caller_id,
                 call_id.to_string(),
                 false, // we_are_caller = false (we're the callee)
-            )
-            .await
-            .map_err(|e| CallSignalingError::KeyDerivationFailed(e.to_string()))?;
+            ),
+        )
+        .await
+        .map_err(|e| CallSignalingError::KeyDerivationFailed(e.to_string()))?;
 
         tracing::info!(
             call_id = %call_id,
@@ -349,8 +354,11 @@ impl CallSignalingService {
         );
 
         // Send answer with our ephemeral public key
-        self.send_call_answer(caller_id, call_id, our_ephemeral_pk)
-            .await?;
+        observe(
+            Phase::DmAnswer,
+            self.send_call_answer(caller_id, call_id, our_ephemeral_pk),
+        )
+        .await?;
 
         // Ephemeral key dropped here (zeroized)
         drop(our_ephemeral);

@@ -167,11 +167,17 @@ impl RoomManager {
             elapsed_us = 0u64,
             "Call stage"
         );
+        tracing::info!(target: "call_setup::room_connect_begin", "Call setup diagnostic");
         let connected = tokio::time::timeout(
             tokio::time::Duration::from_secs(10),
             Room::connect(url, token, room_options),
         )
         .await;
+        match &connected {
+            Ok(Ok(_)) => tracing::info!(target: "call_setup::room_connect_succeeded", "Call setup diagnostic"),
+            Ok(Err(_)) => tracing::info!(target: "call_setup::room_connect_failed", "Call setup diagnostic"),
+            Err(_) => tracing::info!(target: "call_setup::room_connect_timed_out", "Call setup diagnostic"),
+        }
         let stage = match &connected {
             Ok(Ok(_)) => "room_connect_succeeded",
             Ok(Err(_)) => "room_connect_failed",

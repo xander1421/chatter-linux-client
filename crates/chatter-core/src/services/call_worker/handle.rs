@@ -505,6 +505,7 @@ impl CallWorkerHandle {
         encryption_root_key: &[u8; 32],
         initiator_id: UserId,
     ) -> Result<Call, CallError> {
+        tracing::info!(target: "call_setup::create_worker_requested", "Call setup diagnostic");
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::InitiateCall {
@@ -532,6 +533,7 @@ impl CallWorkerHandle {
         if self.presentation_session.is_some() && !self.presentation_session_is_current() {
             return Err(CallError::WorkerShutdown);
         }
+        tracing::info!(target: "call_setup::join_worker_requested", "Call setup diagnostic");
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::JoinCall {
@@ -554,6 +556,7 @@ impl CallWorkerHandle {
         call_id: CallId,
         joiner_id: UserId,
     ) -> Result<Call, CallError> {
+        tracing::info!(target: "call_setup::join_worker_requested", "Call setup diagnostic");
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::JoinCall {

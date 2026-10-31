@@ -16,6 +16,7 @@ mod screen_capture;
 pub mod shared_frames;
 pub mod tiles;
 pub(crate) mod timing;
+pub(crate) mod setup_diagnostics;
 mod video_capture;
 mod video_playback;
 

@@ -560,6 +560,9 @@ fn init_tracing() {
             // Release logs must not be made verbose through RUST_LOG.
             tracing_subscriber::EnvFilter::new("warn")
         }
+        // Call setup uses only constant metadata targets; event values still
+        // go through the unchanged release redactor.
+        .add_directive("call_setup=info".parse().unwrap())
         .add_directive("glycin=warn".parse().unwrap())
         .add_directive("glycin_utils=warn".parse().unwrap())
         .add_directive("zbus=warn".parse().unwrap());

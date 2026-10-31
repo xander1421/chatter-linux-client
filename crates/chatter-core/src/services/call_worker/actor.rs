@@ -985,6 +985,7 @@ pub(super) fn run_call_worker(
                     let _ = resume.await;
                 }
                 CallCommand::OrchAcceptPresented { call, replaces_active, invites, response } => {
+                    tracing::info!(target: "call_setup::orchestrator_accept_worker_begin", "Call setup diagnostic");
                     let mut invites = invites.lock();
                     let is_group = orchestrator.incoming.get(&call)
                         .is_some_and(|p| p.kind == OrchestratedCallKind::GroupChannel);

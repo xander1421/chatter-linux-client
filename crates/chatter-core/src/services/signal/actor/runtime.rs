@@ -262,6 +262,7 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::CompleteCallKeyExchange { our_ephemeral_private, peer_ephemeral_public, peer_id, call_id, we_are_caller, response } => {
+                            tracing::info!(target: "call_setup::dm_crypto_actor_begin", "Call setup diagnostic");
                             use libsignal_protocol::IdentityKeyStore;
                             use crate::crypto::{EphemeralCallKey, derive_call_key_ephemeral};
 
