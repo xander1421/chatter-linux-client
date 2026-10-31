@@ -61,15 +61,18 @@ impl FileClient {
         &mut self,
         cdn_key: &str,
     ) -> Result<ConfirmAttachmentUploadResponse, NetworkError> {
-        let request = ConfirmAttachmentUploadRequest {
-            cdn_key: cdn_key.to_string(),
-        };
-
-        self.inner
-            .confirm_attachment_upload(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
+        let inner = self.inner.clone();
+        confirm_with_retry(cdn_key, move |request| {
+            let mut inner = inner.clone();
+            async move {
+                inner
+                    .confirm_attachment_upload(request)
+                    .await
+                    .map(|r| r.into_inner())
+            }
+        })
+        .await
+        .map_err(|status| NetworkError::from_status(&status))
     }
 
     /// Get a presigned download URL for an attachment.
@@ -176,5 +179,137 @@ mod tests {
             encrypted_size: 200 * 1024 * 1024,
         };
         assert_eq!(request.encrypted_size, 200 * 1024 * 1024);
+    }
+}
+
+// The server may retain an uncertain immutable promotion for its five-minute
+// lease. Only its explicit retry-same-attachment response is retryable here:
+// never create a new upload, key, destination or message from this loop.
+async fn confirm_with_retry<F, Fut>(
+    cdn_key: &str,
+    mut confirm: F,
+) -> Result<ConfirmAttachmentUploadResponse, tonic::Status>
+where
+    F: FnMut(ConfirmAttachmentUploadRequest) -> Fut,
+    Fut: std::future::Future<Output = Result<ConfirmAttachmentUploadResponse, tonic::Status>>,
+{
+    use std::time::Duration;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(330);
+    let mut delay = Duration::from_millis(250);
+    loop {
+        let request = ConfirmAttachmentUploadRequest {
+            cdn_key: cdn_key.to_owned(),
+        };
+        let result = tokio::time::timeout_at(deadline, confirm(request))
+            .await
+            .map_err(|_| tonic::Status::deadline_exceeded("Attachment confirmation timed out"))?;
+        match result {
+            Ok(response) => return Ok(response),
+            Err(status) => {
+                let retry_same = status.code() == tonic::Code::Unavailable
+                    && status.message()
+                        == "attachment operation in progress; retry same attachment";
+                if !retry_same || tokio::time::Instant::now() + delay >= deadline {
+                    return Err(status);
+                }
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(5));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod confirmation_retry_tests {
+    use super::*;
+    use std::{
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+    fn busy() -> tonic::Status {
+        tonic::Status::unavailable("attachment operation in progress; retry same attachment")
+    }
+    #[tokio::test(start_paused = true)]
+    async fn confirmation_survives_promotion_lease_using_the_same_key() {
+        let start = tokio::time::Instant::now();
+        let keys = Arc::new(Mutex::new(Vec::new()));
+        let observed = keys.clone();
+        let response = confirm_with_retry("fixture-cdn-key", move |request| {
+            observed.lock().unwrap().push(request.cdn_key);
+            async move {
+                if start.elapsed() < Duration::from_secs(305) {
+                    Err(busy())
+                } else {
+                    Ok(ConfirmAttachmentUploadResponse { confirmed: true })
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(response.confirmed);
+        let keys = keys.lock().unwrap();
+        assert!(keys.len() > 2 && keys.len() < 75);
+        assert!(keys.iter().all(|key| key == "fixture-cdn-key"));
+    }
+    #[tokio::test(start_paused = true)]
+    async fn terminal_and_generic_transport_errors_do_not_retry() {
+        for status in [
+            tonic::Status::unauthenticated("fixture"),
+            tonic::Status::invalid_argument("fixture"),
+            tonic::Status::resource_exhausted("fixture"),
+            tonic::Status::not_found("fixture"),
+            tonic::Status::unavailable("generic transport failure"),
+        ] {
+            let calls = AtomicUsize::new(0);
+            let expected = status.code();
+            let result = confirm_with_retry("fixture", |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let status = status.clone();
+                async move { Err(status) }
+            })
+            .await;
+            assert_eq!(result.unwrap_err().code(), expected);
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn perpetual_busy_and_hung_rpc_are_bounded() {
+        let start = tokio::time::Instant::now();
+        let calls = AtomicUsize::new(0);
+        assert!(
+            confirm_with_retry("fixture", |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async { Err(busy()) }
+            })
+            .await
+            .is_err()
+        );
+        assert!(start.elapsed() <= Duration::from_secs(330));
+        assert!(calls.load(Ordering::SeqCst) < 75);
+        let start = tokio::time::Instant::now();
+        let result = confirm_with_retry("fixture", |_| std::future::pending()).await;
+        assert_eq!(result.unwrap_err().code(), tonic::Code::DeadlineExceeded);
+        assert_eq!(start.elapsed(), Duration::from_secs(330));
+    }
+    #[tokio::test(start_paused = true)]
+    async fn dropping_confirmation_stops_future_attempts() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let task = tokio::spawn(async move {
+            confirm_with_retry("fixture", move |_| {
+                observed.fetch_add(1, Ordering::SeqCst);
+                async { Err(busy()) }
+            })
+            .await
+        });
+        tokio::task::yield_now().await;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let before = calls.load(Ordering::SeqCst);
+        tokio::time::advance(Duration::from_secs(600)).await;
+        assert_eq!(calls.load(Ordering::SeqCst), before);
     }
 }
