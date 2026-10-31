@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 
-use crate::services::ai::{LocalAIActorHandle, LocalAIService};
 use crate::services::ai_service::AIService;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
@@ -21,15 +20,14 @@ use crate::services::ephemeral_service::EphemeralService;
 use crate::services::gateway::MessageGateway;
 #[cfg(feature = "jarvis")]
 use crate::services::jarvis::{JarvisEngine, JarvisService, SharedJarvisEngine};
-use crate::services::local_ai_service::HttpLocalAIService;
 use crate::services::mailbox_manager::MailboxManager;
 #[cfg(feature = "mesh")]
 use crate::services::mesh::{MeshConfig, MeshDeps, MeshService};
 use crate::services::message::MessageService;
 use crate::services::pairwise::PairwiseService;
 use crate::services::pin_service::PinService;
+use crate::services::remote_ai_service::RemoteAIService;
 use crate::services::section_service::SectionService;
-use crate::services::semantic_search::SemanticSearchService;
 use crate::services::session_service::SessionService;
 use crate::services::signal::SignalService;
 use crate::services::user::UserService;
@@ -86,9 +84,7 @@ pub struct ServiceContainer {
     /// Anonymous DM service for server-oblivious direct messages.
     pub anon_dm_service: Arc<AnonDmService>,
     /// Local AI actor for GPU-accelerated inference (optional feature).
-    pub local_ai: LocalAIActorHandle,
     /// Local AI service (high-level API for summarization, smart replies).
-    pub local_ai_service: Arc<LocalAIService>,
     /// Jarvis AI assistant service.
     /// The bitchat mesh, when built in. Serverless and independent of every
     /// other service here: it makes no RPC and shares no identity with them.
@@ -102,10 +98,9 @@ pub struct ServiceContainer {
     /// Section service for custom sidebar sections.
     pub section_service: Arc<SectionService>,
     pub conversation_pins: Arc<ConversationPins>,
-    /// HTTP-backed local AI service (Ollama/OpenAI-compat chat, models, semantic search).
-    pub http_local_ai_service: Arc<HttpLocalAIService>,
+    /// Remote provider configuration and per-conversation consent.
+    pub remote_ai_service: Arc<RemoteAIService>,
     /// Semantic search service for E2E encrypted channel search.
-    pub semantic_search_service: Arc<SemanticSearchService>,
     /// Device service for multi-device management.
     pub device_service: Arc<DeviceService>,
     /// Unified conversation repository (available to services).
@@ -291,38 +286,10 @@ impl ServiceContainer {
             infra.token_manager.clone(),
         ));
 
-        // 18. Local AI actor for GPU-accelerated inference
-        let local_ai = LocalAIActorHandle::spawn();
+        // Remote configuration has no model actor, local HTTP client or indexer.
+        let remote_ai_service = Arc::new(RemoteAIService::new(infra.settings_repo.clone()));
 
-        // 19. Local AI service (high-level API wrapping the actor)
-        let local_ai_service = Arc::new(LocalAIService::new(
-            local_ai.clone(),
-            infra.settings_repo.clone(),
-        ));
-
-        // 19c. HTTP local AI service (Ollama backend + semantic search)
-        let http_local_ai_service = Arc::new(HttpLocalAIService::new(
-            infra.settings_repo.clone(),
-            infra.vector_repo.clone(),
-        ));
-        let semantic_search_service = Arc::new(
-            SemanticSearchService::new(
-                infra.vector_repo.clone(),
-                Arc::new(crate::local_ai::embeddings::EmbeddingGenerator::new(
-                    crate::local_ai::ollama::OllamaBackend::default_local(),
-                    &crate::local_ai::settings::LocalAISettings::default(),
-                )),
-            )
-            // Hybrid retrieval: BM25 over messages_fts fused with vectors.
-            .with_keyword_index(infra.search_index.clone(), infra.message_repo.clone()),
-        );
-
-        // The service owns both indexer tasks, so opt-out cancels queued work.
-        http_local_ai_service
-            .configure_indexing(semantic_search_service.clone(), infra.event_bus.clone());
-        local_ai_service.attach_http_service(http_local_ai_service.clone());
-
-        // 20. Jarvis AI assistant service, driven by the active local AI provider
+        // Remote assistant service; providers are installed only from cloud settings.
         // The mesh. Constructed but not started — `start()` is the caller's,
         // so the radio does not come up merely because the app booted.
         #[cfg(feature = "mesh")]
@@ -416,49 +383,13 @@ impl ServiceContainer {
         };
 
         #[cfg(feature = "jarvis")]
-        let jarvis_engine = SharedJarvisEngine::new(JarvisEngine::from_settings(
-            http_local_ai_service.settings(),
-            local_ai.clone(),
-        ));
+        let jarvis_engine = SharedJarvisEngine::new(JarvisEngine::Disabled);
         #[cfg(feature = "jarvis")]
-        let jarvis_service = {
-            // App-context bridge: live channel + friend names ground Jarvis
-            // answers ("what did alex say", "summarize general").
-            let ctx_channels = channel_service.clone();
-            let ctx_users = user_service.clone();
-            let app_context: crate::services::jarvis::service::AppContextFn = Arc::new(move || {
-                use crate::domain::channel::ChannelType;
-                let mut s = String::new();
-                if let Ok(channels) = ctx_channels.get_channels_mru() {
-                    let names: Vec<_> = channels
-                        .iter()
-                        .filter(|c| {
-                            matches!(c.channel_type, ChannelType::Public | ChannelType::Private)
-                                && !c.id.0.is_nil()
-                        })
-                        .take(15)
-                        .map(|c| c.name.clone())
-                        .collect();
-                    if !names.is_empty() {
-                        s.push_str(&format!("User's channels: {}.\n", names.join(", ")));
-                    }
-                }
-                let friends = ctx_users.friend_usernames_local();
-                if !friends.is_empty() {
-                    s.push_str(&format!("User's friends: {}.\n", friends.join(", ")));
-                }
-                s
-            });
-            Arc::new(
-                JarvisService::new(
-                    infra.jarvis_memory_repo.clone(),
-                    infra.jarvis_graph_repo.clone(),
-                    jarvis_engine.clone(),
-                    Some(semantic_search_service.clone()),
-                )
-                .with_app_context(app_context),
-            )
-        };
+        let jarvis_service = Arc::new(JarvisService::new(
+            infra.jarvis_memory_repo.clone(),
+            infra.jarvis_graph_repo.clone(),
+            jarvis_engine.clone(),
+        ));
 
         // 22. Channel bootstrap service for pending message flush
         let channel_bootstrap_service = Arc::new(ChannelBootstrapService::new(
@@ -508,8 +439,6 @@ impl ServiceContainer {
             pairwise_service,
             anon_group_service,
             anon_dm_service,
-            local_ai,
-            local_ai_service,
             #[cfg(feature = "mesh")]
             mesh_service,
             #[cfg(feature = "jarvis")]
@@ -519,8 +448,7 @@ impl ServiceContainer {
             channel_bootstrap_service,
             section_service,
             conversation_pins,
-            http_local_ai_service,
-            semantic_search_service,
+            remote_ai_service,
             device_service,
             conversation_repo,
         })

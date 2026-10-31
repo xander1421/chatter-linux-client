@@ -11,11 +11,12 @@ pub enum JarvisError {
 
     /// Local AI error.
     #[error("local AI error: {0}")]
+    #[cfg(feature = "local-ai")]
     LocalAI(#[from] crate::services::ai::LocalAIError),
 
     /// HTTP provider backend error.
     #[error("provider error: {0}")]
-    Backend(#[from] crate::local_ai::backend::BackendError),
+    Backend(#[from] crate::ai_protocol::BackendError),
 
     /// Entity extraction failed.
     #[error("entity extraction failed: {0}")]
@@ -26,7 +27,7 @@ pub enum JarvisError {
     ContextBuilding(String),
 
     /// No model loaded.
-    #[error("no model loaded - call load_model first")]
+    #[error("Remote AI is not configured")]
     NoModel,
 
     /// Jarvis is disabled.

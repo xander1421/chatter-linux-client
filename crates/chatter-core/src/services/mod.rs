@@ -4,10 +4,10 @@
 
 pub mod account_service;
 pub mod activity_service;
-#[cfg(target_os = "android")]
-mod android_aac;
 pub mod ai;
 pub mod ai_service;
+#[cfg(target_os = "android")]
+mod android_aac;
 pub mod anon_dm;
 pub mod anon_group;
 pub(crate) mod anon_shared;
@@ -38,6 +38,7 @@ pub mod gateway;
 pub mod jarvis;
 pub mod key_recovery;
 pub mod link_device_service;
+#[cfg(feature = "local-ai")]
 pub mod local_ai_service;
 pub mod media_gallery;
 #[cfg(feature = "mesh")]
@@ -52,9 +53,11 @@ pub mod pin_service;
 pub mod presence_service;
 pub mod profile_visibility;
 pub mod quick_switcher;
+pub mod remote_ai_service;
 pub mod search;
 pub(crate) mod secret_avatar;
 pub mod section_service;
+#[cfg(feature = "local-ai")]
 pub mod semantic_search;
 pub mod server_records;
 pub mod session_service;

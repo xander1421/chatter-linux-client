@@ -171,10 +171,6 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                             ui_ctx_settings.typing_indicators_enabled().unwrap_or(true),
                         );
                     w.global::<crate::SettingsPane>()
-                        .set_settings_local_ai_enabled(
-                            ui_ctx_settings.local_ai_enabled().unwrap_or(false),
-                        );
-                    w.global::<crate::SettingsPane>()
                         .set_settings_notification_detail(
                             ui_ctx_settings.notification_detail_level().as_str().into(),
                         );

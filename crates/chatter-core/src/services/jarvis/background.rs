@@ -204,8 +204,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_builder_default_interval() {
-        use crate::local_ai::settings::LocalAISettings;
-        use crate::services::ai::LocalAIActorHandle;
         use crate::services::jarvis::engine::{JarvisEngine, SharedJarvisEngine};
         use crate::storage::Database;
         use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
@@ -214,15 +212,11 @@ mod tests {
         let db =
             Arc::new(Database::open(&dir.path().join("jarvis.db"), "test-passphrase").unwrap());
         db.run_migrations().unwrap();
-        let engine = SharedJarvisEngine::new(JarvisEngine::from_settings(
-            &LocalAISettings::default(),
-            LocalAIActorHandle::spawn(),
-        ));
+        let engine = SharedJarvisEngine::new(JarvisEngine::Disabled);
         let jarvis = Arc::new(JarvisService::new(
             Arc::new(JarvisMemoryRepository::new(db.clone())),
             Arc::new(JarvisGraphRepository::new(db)),
             engine,
-            None,
         ));
         let builder = JarvisBackgroundBuilder::new(jarvis);
         assert_eq!(

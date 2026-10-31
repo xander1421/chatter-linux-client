@@ -56,7 +56,6 @@ import { InviteUser } from "modals/invite_member.slint";
 import { QuickSwitcherItem, SearchResult, CalendarDay } from "components/unified_search.slint";
 
 // Import settings
-import { LocalAIProviderData, CatalogModelData } from "settings/settings_screen.slint";
 import { PinnedItem } from "modals/pinned_messages.slint";
 export { PinnedItem }
 import { MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData } from "modals/jarvis_memory.slint";
@@ -72,7 +71,7 @@ import { ActiveCallView, IncomingCallData, ActiveCallData, CallParticipantData, 
 import { ShieldWash } from "anon_mode/shield_wash.slint";
 
 // Re-export types for Rust binding
-export { ChatRowData, CustomSectionData, SidebarRowData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, ChannelInviteData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
+export { ChatRowData, CustomSectionData, SidebarRowData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, ChannelInviteData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
 
 export component MainWindow inherits Window {
     // Unread chats in the title, as Signal Desktop ("Signal (3)"): it is what

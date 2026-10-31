@@ -1,22 +1,6 @@
-//! Cloud AI silo.
-//!
-//! Providers that send content **off the device**. Deliberately separate from
-//! [`crate::local_ai`]: separate provider enum, separate settings, separate
-//! dispatch. Nothing in the local silo can construct a client from here, so
-//! "a DM never reaches a cloud provider" is a property of what the local path
-//! *contains*, not only of a runtime check.
-//!
-//! The two silos share the inference vocabulary from
-//! [`crate::local_ai::backend`] (`ChatMessage`, `GenerateParams`,
-//! `ChatResponse`, the trait). That is an interface, not a capability — having
-//! the trait in scope doesn't let local code build a cloud client, because the
-//! only constructor is [`AnyCloudBackend::for_kind`], which needs
-//! [`CloudSettings`] and an API key.
-//!
-//! silo boundary is module + type level. If you want a hard one,
-//! lift this module into its own crate that `chatter-core` depends on
-//! optionally — then a build without the feature physically cannot link an
-//! egress path. Worth doing if cloud AI ever gains more than one provider.
+//! Remote inference providers. Shared request/response types live in ai_protocol.
+//! Provider construction requires remote configuration; consent and conversation
+//! policy remain separate checks before any prompt may leave the device.
 
 pub mod anthropic;
 pub mod broker;
@@ -25,7 +9,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::local_ai::backend::{
+use crate::ai_protocol::{
     AvailableModel, BackendError, ChatMessage, ChatResponse, GenerateParams, LocalAIBackend,
 };
 
@@ -123,7 +107,7 @@ pub struct CloudSettings {
     /// Model id.
     pub model: String,
     /// HTTP request timeout.
-    #[serde(with = "crate::local_ai::settings::humantime_serde")]
+    #[serde(with = "crate::cloud_ai::duration_serde")]
     pub request_timeout: Duration,
 }
 
@@ -348,5 +332,17 @@ mod tests {
         let k = CloudProviderKind::Anthropic;
         assert_eq!(CloudProviderKind::parse(k.as_str()), Some(k));
         assert_eq!(CloudProviderKind::parse("ollama"), None);
+    }
+}
+
+/// Stable seconds-based wire representation retained after removing local AI.
+pub mod duration_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::time::Duration;
+    pub fn serialize<S: Serializer>(value: &Duration, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(value.as_secs())
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Duration, D::Error> {
+        Ok(Duration::from_secs(u64::deserialize(deserializer)?))
     }
 }

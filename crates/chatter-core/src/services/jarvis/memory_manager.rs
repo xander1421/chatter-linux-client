@@ -284,8 +284,6 @@ Summary:"#,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::local_ai::settings::LocalAISettings;
-    use crate::services::ai::LocalAIActorHandle;
     use crate::services::jarvis::engine::JarvisEngine;
     use crate::storage::Database;
 
@@ -299,10 +297,7 @@ mod tests {
             Arc::new(Database::open(&dir.path().join("jarvis.db"), "test-passphrase").unwrap());
         db.run_migrations().unwrap();
         let memory = Arc::new(JarvisMemoryRepository::new(db.clone()));
-        let engine = SharedJarvisEngine::new(JarvisEngine::from_settings(
-            &LocalAISettings::default(),
-            LocalAIActorHandle::spawn(),
-        ));
+        let engine = SharedJarvisEngine::new(JarvisEngine::Disabled);
         let mm = MemoryManager::new(
             memory.clone(),
             Arc::new(JarvisGraphRepository::new(db)),

@@ -373,6 +373,17 @@ pub struct JarvisContext {
 }
 
 impl JarvisContext {
+    /// New remote history never inherits unlabelled local conversations or another owner.
+    pub fn for_remote(&self, owner: &UserId) -> Self {
+        let prefix = format!("remote-ai:v1:{owner}:");
+        if self.context_id.starts_with(&prefix) {
+            return self.clone();
+        }
+        Self {
+            context_type: self.context_type,
+            context_id: format!("{prefix}{}", self.context_id),
+        }
+    }
     /// The conversation kind this context refers to, for AI policy decisions.
     ///
     /// Maps onto [`crate::domain::message::ConversationType`] so

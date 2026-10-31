@@ -1032,23 +1032,7 @@ fn link_device_page_start_and_cancel_are_wired() {
 }
 
 // ============================================================================
-// LOCAL AI — the AI channel + settings wires (feature `jarvis`, default-on).
-//
-// Core round-trip (detect → pull with progress → chat) is proven live by
-// chatter-core `live_detect_finds_local_ollama` / `live_pull_and_chat`
-// (--ignored, needs Ollama). These prove the UI side.
-// ============================================================================
-
-/// The sidebar injects the virtual AI channel (nil-UUID) at the top when
-/// local AI is enabled — pure core logic, provable offline.
-///
-/// This test asserted "local AI defaults on" and so had been failing since
-/// 69fd7878 ("fix(client): local AI off by default", 2026-08-16) flipped
-/// `LocalAISettings::default().enabled` to false
-/// (`crates/chatter-core/src/local_ai/settings.rs:40`). Nothing ran the suite,
-/// so nobody saw it; CI now does. The property under test is unchanged — it
-/// just has to turn local AI on first, and the default-off case is now pinned
-/// too, since that is the state a fresh install is actually in.
+// Remote assistant visibility requires explicit cloud opt-in.
 #[cfg(feature = "jarvis")]
 #[test]
 fn sidebar_injects_ai_channel_and_never_autoselects_it() {
@@ -1065,21 +1049,14 @@ fn sidebar_injects_ai_channel_and_never_autoselects_it() {
     // Default-off: a fresh install shows no AI channel at all.
     assert!(
         client.sidebar_channels().is_empty(),
-        "local AI is off by default (settings.rs:40), so a fresh profile must \
-         show no AI channel — if this fails the default flipped back"
+        "a fresh profile has not opted into remote AI"
     );
 
     client
-        .set_local_ai_enabled(true)
-        .expect("enabling local AI is a settings write, not a network call");
+        .set_ai_silo_preference(chatter_core::ai_policy::channel_ai::SiloPreference::PreferCloud)
+        .expect("remote consent is a settings write, not a network call");
 
-    // Rebuild the client rather than reusing it: LocalAIService holds a
-    // settings SNAPSHOT taken at construction
-    // (chatter-core/src/services/local_ai_service.rs:434), so a running client
-    // does not observe its own write and the AI channel appears only after a
-    // restart. That staleness is a separate bug — docs/OPEN-ITEMS.md §64 — and
-    // is deliberately NOT asserted here, so fixing it does not turn this test
-    // red. What is under test is the injection itself.
+    // The explicit remote preference survives a restart.
     drop(client);
     let client = chatter_core::client::ChatterClient::builder()
         .data_dir(data_dir)
@@ -1176,11 +1153,10 @@ fn ai_channel_select_and_send_are_wired_to_jarvis() {
     rt.shutdown_background();
 }
 
-/// Settings local-AI section: refresh/select/download callbacks are wired to
-/// the real handlers, which reach the core façade.
+/// Remote settings remain wired after removing model-management controls.
 #[cfg(feature = "jarvis")]
 #[test]
-fn settings_local_ai_section_is_wired_to_core() {
+fn settings_remote_ai_section_is_wired_to_core() {
     no_keyring();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let _guard = rt.enter();
@@ -1189,58 +1165,25 @@ fn settings_local_ai_section_is_wired_to_core() {
     let client = chatter_core::client::ChatterClient::builder()
         .data_dir(tmp.path().to_string_lossy().to_string())
         .build()
-        .expect("offline ChatterClient::build");
-    let w = MainWindow::new().expect("MainWindow::new");
-    chatter_ui::bin_ui::features::modals::local_ai::wire(&w, &client);
-
-    // L1 dynamic: callbacks run their real handlers without panicking
-    // (refresh spawns the probe; select-model persists synchronously).
+        .unwrap();
+    let w = MainWindow::new().unwrap();
+    chatter_ui::bin_ui::features::modals::settings::wire_settings_callbacks(&w, &client);
     w.global::<chatter_ui::SettingsPane>()
-        .invoke_settings_local_ai_refresh();
+        .invoke_settings_ai_prefer_cloud_changed(true);
+    assert!(client.remote_ai_enabled());
     w.global::<chatter_ui::SettingsPane>()
-        .invoke_settings_local_ai_select_model("qwen3:4b".into());
+        .invoke_settings_cloud_ai_mode_changed("server-broker".into());
     assert_eq!(
-        w.global::<chatter_ui::SettingsPane>()
-            .get_settings_local_ai_active_model()
-            .as_str(),
-        "qwen3:4b",
-        "select-model did not update the bound active-model property"
+        client.cloud_ai_settings().mode,
+        chatter_core::cloud_ai::CloudMode::ServerBroker
     );
-    // ...and the choice reached core persistence (real settings row).
-    assert_eq!(
-        client.local_ai_chat_model(),
-        "qwen3:4b",
-        "select-model did NOT persist through the core façade (dead/stub wire)"
-    );
-
-    // L2 static (Rust): handlers reach the core façade methods.
-    let src = include_str!("../src/bin_ui/features/modals/local_ai.rs");
-    for needle in [
-        "local_ai_detect_providers",
-        "local_ai_apply_provider",
-        "local_ai_apply_chat_model",
-        "local_ai_pull_model",
-        "local_ai_hardware_profile",
-    ] {
-        assert!(
-            src.contains(needle),
-            "local_ai.rs must call ChatterClient::{needle}"
-        );
-    }
-
-    // L2 static (Slint): the section fires the callbacks.
-    let slint_src = include_str!("../../../ui/settings/settings_screen.slint");
-    for needle in [
-        "root.local-ai-refresh()",
-        "root.local-ai-select-provider(",
-        "root.local-ai-select-model(",
-        "root.local-ai-download(",
-    ] {
-        assert!(
-            slint_src.contains(needle),
-            "settings screen must invoke {needle}"
-        );
-    }
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_ai_prefer_cloud_changed(false);
+    assert!(!client.remote_ai_enabled());
+    drop(w);
+    drop(client);
+    drop(_guard);
+    rt.shutdown_background();
 }
 
 /// Memory browser: callbacks reach the real handlers, which reach the Jarvis
@@ -1283,8 +1226,8 @@ fn jarvis_memory_browser_is_wired() {
     // L2 static (Slint): settings entry opens the modal; modal is routed.
     let settings_src = include_str!("../../../ui/settings/settings_screen.slint");
     assert!(
-        settings_src.contains("root.local-ai-open-memory()"),
-        "settings must have a View Memory button"
+        settings_src.contains("root.ai-open-memory()"),
+        "settings must retain assistant-memory access"
     );
     let app_src = include_str!("../../../ui/app_secondary_modals.slint");
     assert!(
@@ -1509,17 +1452,13 @@ fn jarvis_ask_is_gated_by_the_per_conversation_switch() {
         "expected NotEnabledHere, got {err:?}"
     );
 
-    // Enabled: the switch no longer blocks. It still fails offline (no model),
-    // but it must fail for a *different* reason.
-    client
-        .set_ai_enabled_for(&channel.to_string(), true)
-        .expect("enable AI for the channel");
-    match rt.block_on(client.jarvis_ask(&ctx, "hello", None)) {
-        Err(JarvisError::NotEnabledHere) => {
-            panic!("the per-conversation switch still blocks after being enabled")
-        }
-        _ => {} // any other outcome means the gate let it through
-    }
+    // Per-conversation consent cannot enable a remote provider by itself.
+    client.set_ai_enabled_for(&channel.to_string(), true).unwrap();
+    assert!(matches!(rt.block_on(client.jarvis_ask(&ctx, "hello", None)), Err(JarvisError::NotEnabledHere)));
+    client.set_ai_silo_preference(chatter_core::ai_policy::channel_ai::SiloPreference::PreferCloud).unwrap();
+    client.set_cloud_ai_mode(chatter_core::cloud_ai::CloudMode::ServerBroker).unwrap();
+    // Both gates now pass. No owner is signed in, so fail before any network call.
+    assert!(matches!(rt.block_on(client.jarvis_ask(&ctx, "hello", None)), Err(JarvisError::NotPermitted(_))));
 }
 
 /// The dedicated AI channel is exempt — requiring it to be switched on would

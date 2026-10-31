@@ -12,7 +12,6 @@ use crate::mailbox::group::GroupFanout;
 use crate::network::grpc::client_pool::GrpcClientPool;
 #[cfg(feature = "media")]
 use crate::services::CallWorkerHandle;
-use crate::services::ai::LocalAIService;
 use crate::services::ai_service::AIService;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
@@ -27,13 +26,12 @@ use crate::services::ephemeral_service::EphemeralService;
 use crate::services::gateway::MessageGateway;
 #[cfg(feature = "jarvis")]
 use crate::services::jarvis::{JarvisService, SharedJarvisEngine};
-use crate::services::local_ai_service::HttpLocalAIService;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
 use crate::services::notification_service::NotificationService;
 use crate::services::pin_service::PinService;
+use crate::services::remote_ai_service::RemoteAIService;
 use crate::services::section_service::SectionService;
-use crate::services::semantic_search::SemanticSearchService;
 use crate::services::session_service::SessionService;
 use crate::services::signal::SignalService;
 use crate::services::user::UserService;
@@ -77,9 +75,7 @@ pub struct CoreServices {
     pub ephemeral_service: Arc<EphemeralService>,
     pub anon_group_service: Arc<AnonGroupService>,
     pub anon_dm_service: Arc<AnonDmService>,
-    pub local_ai_service: Arc<LocalAIService>,
-    pub http_local_ai_service: Arc<HttpLocalAIService>,
-    pub semantic_search_service: Arc<SemanticSearchService>,
+    pub remote_ai_service: Arc<RemoteAIService>,
     #[cfg(feature = "jarvis")]
     pub jarvis_service: Arc<JarvisService>,
     /// The bitchat mesh. Serverless: it shares no identity and makes no RPC.
@@ -164,7 +160,10 @@ impl CoreServices {
             }
         });
         let auth_state = AuthState::new();
-        let _ = services.message_service.receive_auth.set(auth_state.clone());
+        let _ = services
+            .message_service
+            .receive_auth
+            .set(auth_state.clone());
         // Shared decrypt -> persist path for server-managed channel messages.
         // Both the live stream and the durable catch-up fetch go through it,
         // so a message reads the same whichever way it arrived.
@@ -187,7 +186,6 @@ impl CoreServices {
             services.message_service.clone(),
         ));
 
-
         Self {
             // Runtime handle for async spawning from UI callbacks
             runtime_handle: tokio::runtime::Handle::current(),
@@ -209,9 +207,7 @@ impl CoreServices {
             ephemeral_service: services.ephemeral_service.clone(),
             anon_group_service: services.anon_group_service.clone(),
             anon_dm_service: services.anon_dm_service.clone(),
-            local_ai_service: services.local_ai_service.clone(),
-            http_local_ai_service: services.http_local_ai_service.clone(),
-            semantic_search_service: services.semantic_search_service.clone(),
+            remote_ai_service: services.remote_ai_service.clone(),
             #[cfg(feature = "jarvis")]
             jarvis_service: services.jarvis_service.clone(),
             #[cfg(feature = "mesh")]

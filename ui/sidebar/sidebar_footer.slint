@@ -235,7 +235,7 @@ export component SidebarFooter inherits GlassSurface {
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
                         Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
-                        // The local AI channel's fixed id is the nil UUID
+                        // The virtual assistant channel's fixed id is the nil UUID
                         // (chatter-core client/jarvis.rs jarvis_channel_id).
                         TouchArea { clicked => { root.channel-selected("00000000-0000-0000-0000-000000000000"); } }
                     } }

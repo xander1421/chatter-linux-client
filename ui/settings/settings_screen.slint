@@ -22,8 +22,6 @@ import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 import { SessionInfo, PendingLinkInfo } from "../modals/sessions.slint";
 
 // Shared model data remains exported through this screen for its callers.
-import { LocalAIProviderData, CatalogModelData } from "settings_types.slint";
-export { LocalAIProviderData, CatalogModelData } from "settings_types.slint";
 
 export component SettingsScreen inherits Rectangle {
     // User profile data
@@ -90,18 +88,6 @@ export component SettingsScreen inherits Rectangle {
     in-out property <bool> username-discoverable: true;
 
     // AI settings
-    in-out property <bool> local-ai-enabled: true;
-    in-out property <string> local-ai-model-id: "Qwen/Qwen2.5-7B-Instruct-GGUF";
-    in property <bool> local-ai-loading: false;
-    in property <string> local-ai-status: "";  // "not loaded", "loading", "loaded: ModelName"
-    in property <string> local-ai-error: "";
-    in property <string> local-ai-hardware-summary: "";
-    in property <bool> local-ai-detecting: false;
-    in property <[LocalAIProviderData]> local-ai-providers: [];
-    in property <string> local-ai-active-provider: "";
-    in property <[string]> local-ai-models: [];
-    in property <string> local-ai-active-model: "";
-    in property <[CatalogModelData]> local-ai-catalog: [];
 
     // Cloud AI (off-device). Separate from local AI on purpose: this is the
     // surface where content leaves the machine, so it states plainly what goes
@@ -209,16 +195,9 @@ export component SettingsScreen inherits Rectangle {
     callback restore-message-backup(string);  // pin
 
     // AI callbacks
-    callback local-ai-enabled-changed(bool);
-    callback local-ai-load-model(string);  // model_id
-    callback local-ai-unload-model();
-    callback local-ai-refresh();                 // re-probe providers + hardware
-    callback local-ai-open-memory();             // open the memory browser
-    callback local-ai-select-provider(string);   // provider kind
-    callback local-ai-select-model(string);      // chat model name
-    callback local-ai-download(string);          // ollama tag
 
     // Cloud AI callbacks
+    callback ai-open-memory();
     callback ai-prefer-cloud-changed(bool);
     callback cloud-ai-mode-changed(string);      // "direct-anthropic" | "server-broker"
     callback cloud-ai-api-key-changed(string);
@@ -287,7 +266,7 @@ export component SettingsScreen inherits Rectangle {
                     { id: "devices", label: "Linked devices", enabled: true },
                     { id: "appearance", label: "Appearance", enabled: true },
                     { id: "encryption", label: "Encryption", enabled: true },
-                    { id: "ai", label: "AI Assistant", enabled: true },
+                    { id: "ai", label: "Remote AI", enabled: true },
                     { id: "about", label: "About", enabled: true }
                 ]: Rectangle {
                     height: root.mobile-platform ? Spacing.touch-target-min : Spacing.button-height;
@@ -498,37 +477,18 @@ export component SettingsScreen inherits Rectangle {
 
                         // AI Assistant section
                         if active-section == "ai": AISettings {
+                            open-memory() => { root.ai-open-memory(); }
                             ai-prefer-cloud <=> root.ai-prefer-cloud;
                             cloud-ai-api-key <=> root.cloud-ai-api-key;
                             cloud-ai-balance : root.cloud-ai-balance;
                             cloud-ai-configured : root.cloud-ai-configured;
                             cloud-ai-mode <=> root.cloud-ai-mode;
                             cloud-ai-status : root.cloud-ai-status;
-                            local-ai-active-model : root.local-ai-active-model;
-                            local-ai-active-provider : root.local-ai-active-provider;
-                            local-ai-catalog : root.local-ai-catalog;
-                            local-ai-detecting : root.local-ai-detecting;
-                            local-ai-enabled <=> root.local-ai-enabled;
-                            local-ai-error : root.local-ai-error;
-                            local-ai-hardware-summary : root.local-ai-hardware-summary;
-                            local-ai-loading : root.local-ai-loading;
-                            local-ai-model-id <=> root.local-ai-model-id;
-                            local-ai-models : root.local-ai-models;
-                            local-ai-providers : root.local-ai-providers;
-                            local-ai-status : root.local-ai-status;
                             mobile-platform : root.mobile-platform;
                             ai-prefer-cloud-changed(arg0) => { root.ai-prefer-cloud-changed(arg0); }
                             cloud-ai-api-key-changed(arg0) => { root.cloud-ai-api-key-changed(arg0); }
                             cloud-ai-mode-changed(arg0) => { root.cloud-ai-mode-changed(arg0); }
                             cloud-ai-refresh-quota() => { root.cloud-ai-refresh-quota(); }
-                            local-ai-download(arg0) => { root.local-ai-download(arg0); }
-                            local-ai-enabled-changed(arg0) => { root.local-ai-enabled-changed(arg0); }
-                            local-ai-load-model(arg0) => { root.local-ai-load-model(arg0); }
-                            local-ai-open-memory() => { root.local-ai-open-memory(); }
-                            local-ai-refresh() => { root.local-ai-refresh(); }
-                            local-ai-select-model(arg0) => { root.local-ai-select-model(arg0); }
-                            local-ai-select-provider(arg0) => { root.local-ai-select-provider(arg0); }
-                            local-ai-unload-model() => { root.local-ai-unload-model(); }
                         }
 
                         // Appearance section

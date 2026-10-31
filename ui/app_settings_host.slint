@@ -7,7 +7,7 @@ import { AuthFlow } from "app_auth_flow.slint";
 import { SettingsPane } from "app_settings_pane.slint";
 import { Spacing } from "theme/spacing.slint";
 import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
-import { SettingsScreen, LocalAIProviderData, CatalogModelData } from "settings/settings_screen.slint";
+import { SettingsScreen } from "settings/settings_screen.slint";
 
 export component AppSettingsHost inherits Rectangle {
     in property <bool> compact-layout;
@@ -67,24 +67,12 @@ export component AppSettingsHost inherits Rectangle {
         backup-retry-loading: SettingsPane.settings-backup-retry-loading;
         backup-retry-error: SettingsPane.settings-backup-retry-error;
         // AI settings
-        local-ai-enabled <=> SettingsPane.settings-local-ai-enabled;
         ai-prefer-cloud <=> SettingsPane.settings-ai-prefer-cloud;
         cloud-ai-mode <=> SettingsPane.settings-cloud-ai-mode;
         cloud-ai-api-key <=> SettingsPane.settings-cloud-ai-api-key;
         cloud-ai-configured: SettingsPane.settings-cloud-ai-configured;
         cloud-ai-status: SettingsPane.settings-cloud-ai-status;
         cloud-ai-balance: SettingsPane.settings-cloud-ai-balance;
-        local-ai-model-id <=> SettingsPane.settings-local-ai-model-id;
-        local-ai-loading: SettingsPane.settings-local-ai-loading;
-        local-ai-status: SettingsPane.settings-local-ai-status;
-        local-ai-error: SettingsPane.settings-local-ai-error;
-        local-ai-hardware-summary: SettingsPane.settings-local-ai-hardware-summary;
-        local-ai-detecting: SettingsPane.settings-local-ai-detecting;
-        local-ai-providers: SettingsPane.settings-local-ai-providers;
-        local-ai-active-provider: SettingsPane.settings-local-ai-active-provider;
-        local-ai-models: SettingsPane.settings-local-ai-models;
-        local-ai-active-model: SettingsPane.settings-local-ai-active-model;
-        local-ai-catalog: SettingsPane.settings-local-ai-catalog;
         // Delete-account confirmation
         delete-password <=> SettingsPane.settings-delete-password;
         delete-loading: SettingsPane.settings-delete-loading;
@@ -174,43 +162,14 @@ export component AppSettingsHost inherits Rectangle {
         restore-message-backup(pin) => {
             SettingsPane.settings-restore-message-backup(pin);
         }
-        // AI callbacks
-        local-ai-enabled-changed(value) => {
-            SettingsPane.settings-local-ai-enabled-changed(value);
-        }
-        ai-prefer-cloud-changed(value) => {
-            SettingsPane.settings-ai-prefer-cloud-changed(value);
-        }
-        cloud-ai-mode-changed(mode) => {
-            SettingsPane.settings-cloud-ai-mode-changed(mode);
-        }
-        cloud-ai-api-key-changed(key) => {
-            SettingsPane.settings-cloud-ai-api-key-changed(key);
-        }
-        cloud-ai-refresh-quota => {
-            SettingsPane.settings-cloud-ai-refresh-quota();
-        }
-        local-ai-load-model(model-id) => {
-            SettingsPane.settings-local-ai-load-model(model-id);
-        }
-        local-ai-unload-model => {
-            SettingsPane.settings-local-ai-unload-model();
-        }
-        local-ai-refresh => {
-            SettingsPane.settings-local-ai-refresh();
-        }
-        local-ai-open-memory => {
+        // Remote AI callbacks
+        ai-prefer-cloud-changed(value) => { SettingsPane.settings-ai-prefer-cloud-changed(value); }
+        cloud-ai-mode-changed(mode) => { SettingsPane.settings-cloud-ai-mode-changed(mode); }
+        cloud-ai-api-key-changed(key) => { SettingsPane.settings-cloud-ai-api-key-changed(key); }
+        cloud-ai-refresh-quota => { SettingsPane.settings-cloud-ai-refresh-quota(); }
+        ai-open-memory => {
             ModalHostState.nav-push("jarvis-memory");
             JarvisPane.jarvis-memory-refresh();
-        }
-        local-ai-select-provider(kind) => {
-            SettingsPane.settings-local-ai-select-provider(kind);
-        }
-        local-ai-select-model(model) => {
-            SettingsPane.settings-local-ai-select-model(model);
-        }
-        local-ai-download(tag) => {
-            SettingsPane.settings-local-ai-download(tag);
         }
     }
 }

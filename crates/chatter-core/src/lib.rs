@@ -61,6 +61,8 @@ pub mod wire;
 
 /// Arbiter between the two AI silos — outside both by design.
 pub mod ai_policy;
+#[doc(hidden)]
+pub mod ai_protocol;
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub mod app;
@@ -72,7 +74,7 @@ pub mod cloud_ai;
 pub mod config;
 #[doc(hidden)]
 pub mod inbox;
-#[doc(hidden)]
+#[cfg(feature = "local-ai")]
 pub mod local_ai;
 #[doc(hidden)]
 pub mod mailbox;
@@ -85,8 +87,8 @@ pub mod services;
 #[doc(hidden)]
 pub mod storage;
 pub(crate) mod sync;
-pub mod update;
 #[doc(hidden)]
 pub mod ui;
+pub mod update;
 #[doc(hidden)]
 pub mod util;

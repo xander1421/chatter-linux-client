@@ -34,7 +34,7 @@ export { UpdateGlobal }
 // The window itself is `MainWindow` in app.slint; this file only exports what
 // Rust binds to.
 
-import { MainWindow, ChatRowData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, QuickSwitcherItem, SharedContentItem, SharedTab } from "app.slint";
+import { MainWindow, ChatRowData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, QuickSwitcherItem, SharedContentItem, SharedTab } from "app.slint";
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { AiIntegrationGlobal } from "ai/ai_global.slint";
 import { TextFormat } from "chat/message_composer.slint";
@@ -52,7 +52,7 @@ import { MembershipGlobal, InviteLinkRowData, JoinRequestRowData, ServerOperated
 
 // Re-export the window and all types for Rust binding
 export { MainWindow }
-export { ChatRowData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, QuickSwitcherItem, SharedContentItem, SharedTab }
+export { ChatRowData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, QuickSwitcherItem, SharedContentItem, SharedTab }
 export { JarvisGlobal }
 // Server-side AI integration flags. FEAT-5: the create-channel "AI assistant"
 // template is off unless the `ai-channel-template` Cargo feature is built.

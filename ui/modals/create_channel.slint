@@ -85,7 +85,7 @@ export component CreateChannelModal inherits Rectangle {
     in property <[AIProviderOption]> ai-providers: [
         { id: "claude", name: "Claude (Anthropic)" },
         { id: "openai", name: "OpenAI" },
-        { id: "ollama", name: "Ollama (Local)" },
+        { id: "ollama", name: "Hosted Ollama" },
     ];
     in property <[AIModelOption]> ai-models: [];
     in property <bool> ai-models-loading: false;

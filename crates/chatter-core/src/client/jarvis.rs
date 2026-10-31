@@ -3,17 +3,17 @@
 use super::ChatterClient;
 use crate::domain::channel::{Channel, ChannelType};
 
-/// Display name of the local AI channel.
+/// Display name of the virtual assistant channel.
 pub const JARVIS_CHANNEL_NAME: &str = "Jarvis (AI)";
 
-/// The local AI channel's fixed id: the nil UUID. Matches the
+/// The virtual assistant channel's fixed id: the nil UUID. Matches the
 /// `JarvisContext::general()` context key, so channel history and Jarvis
 /// memory share one identity. Never collides with server channels (v4 UUIDs).
 pub fn jarvis_channel_id() -> crate::domain::ids::ChannelId {
     crate::domain::ids::ChannelId::from_uuid(uuid::Uuid::nil())
 }
 
-/// Whether an id refers to the local AI channel.
+/// Whether an id refers to the virtual assistant channel.
 pub fn is_jarvis_channel(id: &crate::domain::ids::ChannelId) -> bool {
     id.0.is_nil()
 }
@@ -76,7 +76,7 @@ pub fn parse_jarvis_mention(text: &str) -> Option<&str> {
 }
 
 /// A Jarvis message row as core shapes it: who, what, when. Jarvis turns
-/// are local-only, so these never come from the message store; the UI only
+/// are stored in the device assistant history rather than the message store; the UI only
 /// formats the time and builds its view type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JarvisRow {
@@ -172,32 +172,10 @@ pub fn jarvis_channel_reply_text(
     match result {
         Ok(r) => r.clone(),
         Err(e) => format!(
-            "Error: {}\n\nCheck Settings → AI Assistant: is a local provider (Ollama, LM Studio, …) running and a model selected?",
+            "Error: {}\n\nCheck Settings → Remote AI and configure a provider.",
             e
         ),
     }
-}
-
-pub struct LocalAiModelChoices {
-    pub active_models: Vec<String>,
-    pub providers: Vec<LocalAiProviderChoice>,
-    pub catalog: Vec<LocalAiCatalogChoice>,
-}
-
-pub struct LocalAiProviderChoice {
-    pub kind: String,
-    pub display_name: String,
-    pub detail: String,
-    pub is_active: bool,
-}
-
-pub struct LocalAiCatalogChoice {
-    pub name: String,
-    pub tag: String,
-    pub detail: String,
-    pub fit: &'static str,
-    pub fit_label: &'static str,
-    pub installed: bool,
 }
 
 impl ChatterClient {
@@ -226,13 +204,13 @@ impl ChatterClient {
         }
     }
 
-    /// Whether the local AI channel should appear in the sidebar.
+    /// Whether the virtual assistant channel should appear in the sidebar.
     ///
-    /// Follows the local-AI enabled setting; a missing provider surfaces as
+    /// Follows explicit remote-AI consent; a missing provider surfaces as
     /// a helpful error inside the channel rather than hiding it, so users
     /// can discover the feature and be pointed at settings.
     pub fn jarvis_channel_enabled(&self) -> bool {
-        self.http_local_ai().is_enabled()
+        self.remote_ai().is_enabled()
     }
 
     /// The virtual (client-side only) channel entry for the sidebar.
@@ -248,8 +226,7 @@ impl ChatterClient {
     }
 
     /// Header line for the AI channel, stating where its messages actually
-    /// go. The channel follows the user's silo preference, so it is only
-    /// "never leaves this device" when it really runs locally.
+    /// go. Unconfigured or disabled remote AI never claims a local model exists.
     pub fn jarvis_channel_topic(&self) -> String {
         self.jarvis_privacy_line().0
     }
@@ -271,7 +248,7 @@ impl ChatterClient {
         use crate::ai_policy::channel_ai::SiloPreference;
         use crate::ai_policy::policy::Silo;
         let prefers_cloud = self.ai_silo_preference() == SiloPreference::PreferCloud;
-        let available = self.http_local_ai().cloud_settings().is_available();
+        let available = self.remote_ai().cloud_settings().is_available();
         if prefers_cloud && available {
             Silo::Cloud
         } else {
@@ -306,130 +283,22 @@ impl ChatterClient {
         limit: u32,
     ) -> Result<Vec<crate::domain::jarvis::JarvisConversation>, crate::services::jarvis::JarvisError>
     {
-        self.jarvis()
-            .get_conversation_history(&crate::domain::jarvis::JarvisContext::general(), limit)
-    }
-
-    // ── Local AI settings façade ─────────────────────────────────────────
-
-    /// Probe local providers (Ollama / LM Studio / llama.cpp / vLLM +
-    /// compiled-in mistralrs) and list their installed models.
-    pub async fn local_ai_detect_providers(
-        &self,
-    ) -> Vec<crate::local_ai::providers::DetectedProvider> {
-        let ollama_url = self.http_local_ai().settings().ollama_url.clone();
-        crate::local_ai::providers::detect_providers(&ollama_url).await
-    }
-
-    /// Current hardware profile (blocking probes — call off the UI thread).
-    pub fn local_ai_hardware_profile(&self) -> crate::local_ai::hardware::HardwareProfile {
-        crate::local_ai::hardware::HardwareProfile::detect()
-    }
-
-    /// Resolve provider and catalog choices for the local AI settings view.
-    pub fn local_ai_model_choices(
-        &self,
-        providers: &[crate::local_ai::providers::DetectedProvider],
-        active_provider: &str,
-        profile: &crate::local_ai::hardware::HardwareProfile,
-    ) -> LocalAiModelChoices {
-        use crate::local_ai::catalog::{CATALOG, ModelKind};
-        use crate::local_ai::hardware::ModelFit;
-        use crate::local_ai::providers::ProviderKind;
-        let active_models = providers.iter()
-            .find(|p| p.kind.as_str() == active_provider)
-            .map(|p| p.models.iter().map(|m| m.name.clone())
-                .filter(|name| {
-                    let n = name.to_lowercase();
-                    !n.contains("embed") && !n.contains("minilm") && !n.contains("bge")
-                }).collect()).unwrap_or_default();
-        let ollama_models: Vec<_> = providers.iter()
-            .find(|p| p.kind == ProviderKind::Ollama)
-            .map(|p| p.models.iter().map(|m| m.name.clone()).collect())
-            .unwrap_or_default();
-        let providers = providers.iter().map(|p| LocalAiProviderChoice {
-            kind: p.kind.as_str().into(), display_name: p.kind.display_name().into(),
-            detail: if p.kind == ProviderKind::MistralRs {
-                "in-process GPU engine (loads models from HuggingFace)".into()
-            } else { format!("{} models · {}", p.models.len(), p.url) },
-            is_active: p.kind.as_str() == active_provider,
-        }).collect();
-        let catalog = CATALOG.iter().map(|m| {
-            let installed = ollama_models.iter().any(|name: &String|
-                name == m.ollama_tag || name.starts_with(&format!("{}:", m.ollama_tag)));
-            let (fit, fit_label) = match m.fit(profile) {
-                ModelFit::Gpu => ("gpu", "Fits GPU"),
-                ModelFit::CpuSlow => ("cpu", "CPU only (slow)"),
-                ModelFit::TooBig => ("big", "Too big for this machine"),
-            };
-            let kind_label = match m.kind {
-                ModelKind::Chat => "", ModelKind::Embedding => " · embeddings",
-            };
-            LocalAiCatalogChoice {
-                name: m.name.into(), tag: m.ollama_tag.into(),
-                detail: format!("{}B params · {:.1} GB{}", m.params_b, m.size_gb, kind_label),
-                fit, fit_label, installed,
-            }
-        }).collect();
-        LocalAiModelChoices { active_models, providers, catalog }
-    }
-
-    /// The active provider's settings identifier ("ollama", "mistralrs", …).
-    pub fn local_ai_active_provider(&self) -> String {
-        self.http_local_ai()
-            .fresh_settings()
-            .active_provider
-            .as_str()
-            .to_string()
-    }
-
-    /// Currently configured chat model.
-    pub fn local_ai_chat_model(&self) -> String {
-        self.http_local_ai().fresh_settings().chat_model
-    }
-
-    /// Persist a provider choice and hot-swap the Jarvis engine.
-    pub fn local_ai_apply_provider(&self, kind_str: &str) -> Result<(), String> {
-        let kind = crate::local_ai::providers::ProviderKind::parse(kind_str)
-            .ok_or_else(|| format!("unknown provider: {kind_str}"))?;
-        self.http_local_ai()
-            .set_active_provider(kind)
-            .map_err(|e| e.to_string())?;
-        self.rebuild_jarvis_engine();
-        Ok(())
-    }
-
-    /// Persist a chat-model choice and hot-swap the Jarvis engine.
-    pub fn local_ai_apply_chat_model(&self, model: &str) -> Result<(), String> {
-        self.http_local_ai()
-            .set_chat_model(model)
-            .map_err(|e| e.to_string())?;
-        self.rebuild_jarvis_engine();
-        Ok(())
-    }
-
-    fn rebuild_jarvis_engine(&self) {
-        let settings = self.http_local_ai().fresh_settings();
-        self.services
-            .jarvis_engine
-            .set(crate::services::jarvis::JarvisEngine::from_settings(
-                &settings,
-                self.local_ai().actor(),
-            ));
-        self.rebuild_cloud_engine();
-        tracing::info!(engine = %self.services.jarvis_engine.describe(), "jarvis engine rebuilt");
+        let Some(owner) = self.auth_state().get().current_user_id else {
+            return Ok(Vec::new());
+        };
+        let context = crate::domain::jarvis::JarvisContext::general().for_remote(&owner);
+        self.jarvis().get_conversation_history(&context, limit)
     }
 
     /// Install the cloud engine for the configured mode, or clear it.
     ///
-    /// Kept separate from the local engine so both are available at once: the
-    /// silo is chosen per conversation, and a DM must still get the local
-    /// model even while cloud is configured.
+    /// Missing configuration clears the remote engine; private conversations
+    /// remain unavailable and never fall back to local inference.
     pub fn rebuild_cloud_engine(&self) {
         use crate::cloud_ai::{AnyCloudBackend, CloudMode};
         use crate::services::jarvis::JarvisEngine;
 
-        let cloud = self.http_local_ai().cloud_settings();
+        let cloud = self.remote_ai().cloud_settings();
         let engine = match cloud.mode {
             // Managed tokens: the server holds the key, so this needs a live
             // authenticated client rather than settings.
@@ -444,22 +313,6 @@ impl ChatterClient {
         let configured = engine.is_some();
         self.services.jarvis_engine.set_cloud(engine);
         tracing::info!(mode = %cloud.mode.as_str(), configured, "cloud jarvis engine rebuilt");
-    }
-
-    /// Pull a model through Ollama with streaming progress.
-    pub async fn local_ai_pull_model(
-        &self,
-        tag: &str,
-        on_progress: impl FnMut(crate::local_ai::ollama::PullProgress),
-    ) -> Result<(), crate::local_ai::backend::BackendError> {
-        let settings = self.http_local_ai().fresh_settings();
-        let backend = crate::local_ai::ollama::OllamaBackend::new(
-            &settings.ollama_url,
-            settings
-                .request_timeout
-                .max(std::time::Duration::from_secs(3600)),
-        );
-        backend.pull_model_with_progress(tag, on_progress).await
     }
 
     // ── Memory browser façade ────────────────────────────────────────────
@@ -508,8 +361,11 @@ impl ChatterClient {
     /// Delete the AI channel's conversation history and its summaries.
     /// Facts and the knowledge graph stay. Returns the turns deleted.
     pub fn jarvis_clear_history(&self) -> Result<u32, crate::services::jarvis::JarvisError> {
-        self.jarvis()
-            .clear_memory(&crate::domain::jarvis::JarvisContext::general())
+        let Some(owner) = self.auth_state().get().current_user_id else {
+            return Ok(0);
+        };
+        let context = crate::domain::jarvis::JarvisContext::general().for_remote(&owner);
+        self.jarvis().clear_memory(&context)
     }
 
     pub async fn jarvis_ask(
@@ -529,18 +385,7 @@ impl ChatterClient {
             .jarvis()
             .ask_in(context, query, author_id, silo)
             .await?;
-        // The turn just grew this context's history; once it passes the
-        // builder's window, fold the oldest turns into a summary. Off the
-        // reply's path: it is one more LLM call.
-        let jarvis = self.jarvis().clone();
-        let ctx = context.clone();
-        self.runtime_handle().spawn(async move {
-            match jarvis.compress_memory(&ctx).await {
-                Ok(true) => tracing::info!(context_id = %ctx.context_id, "Jarvis history compressed"),
-                Ok(false) => {}
-                Err(e) => tracing::warn!(context_id = %ctx.context_id, "Jarvis history compression failed: {e}"),
-            }
-        });
+        // No automatic local extraction, indexing or extra summary requests.
         Ok(reply)
     }
 
@@ -629,7 +474,8 @@ impl ChatterClient {
                 Err(JarvisError::ContextBuilding("Session changed".into())),
             );
         }
-        let command = self.jarvis_execute_in_context(cmd, &context, Some(&owner.user_id), Some(owner));
+        let command =
+            self.jarvis_execute_in_context(cmd, &context, Some(&owner.user_id), Some(owner));
         tokio::pin!(command);
         loop {
             tokio::select! {
@@ -714,7 +560,9 @@ impl ChatterClient {
         context: &crate::domain::jarvis::JarvisContext,
     ) -> Result<String, crate::services::jarvis::JarvisError> {
         self.check_ai_allowed_in(context)?;
-        self.jarvis().summarize_conversation(context).await
+        let owner = self.auth_state().get().current_user_id.ok_or_else(||
+            crate::services::jarvis::JarvisError::NotPermitted("Sign in before using remote AI".into()))?;
+        self.jarvis_ask(context, "Summarize this remote conversation, highlighting main topics, decisions and next steps.", Some(&owner)).await
     }
 }
 
@@ -741,11 +589,11 @@ fn memory_stats_label(
 }
 
 /// `(statement, leaves_device)` for the AI channel on `silo`.
-fn jarvis_privacy_for(silo: crate::ai_policy::policy::Silo, engine: &str) -> (String, bool) {
+fn jarvis_privacy_for(silo: crate::ai_policy::policy::Silo, _engine: &str) -> (String, bool) {
     use crate::ai_policy::policy::Silo;
     match silo {
         Silo::Local => (
-            format!("Local AI · {engine} · never leaves this device"),
+            "Remote AI is off or not configured; no prompt is sent".to_string(),
             false,
         ),
         Silo::Cloud => (
@@ -793,7 +641,7 @@ mod tests {
         assert_eq!(jarvis_channel_reply_text(&Ok("yo".into())), "yo");
         let err =
             jarvis_channel_reply_text(&Err(crate::services::jarvis::JarvisError::NotEnabledHere));
-        assert!(err.starts_with("Error: ") && err.contains("Settings → AI Assistant"));
+        assert!(err.starts_with("Error: ") && err.contains("Settings → Remote AI"));
     }
     use crate::services::jarvis::MemoryStats;
 
@@ -829,7 +677,7 @@ mod tests {
     #[test]
     fn jarvis_privacy_line_follows_the_silo() {
         let (local, local_leaves) = jarvis_privacy_for(Silo::Local, "llama");
-        assert!(local.contains("never leaves this device") && local.contains("llama"));
+        assert!(local.contains("no prompt is sent") && !local.contains("Local AI"));
         assert!(!local_leaves);
         let (cloud, cloud_leaves) = jarvis_privacy_for(Silo::Cloud, "llama");
         assert!(cloud.contains("cloud AI provider") && !cloud.contains("never leaves"));

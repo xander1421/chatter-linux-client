@@ -102,7 +102,8 @@ impl ChatterClient {
         use futures::StreamExt;
         let client = Arc::clone(self);
         let stored = self.services.database.subscribe_message_stores();
-        self.channel_delivery_shutdown.store(false, Ordering::SeqCst);
+        self.channel_delivery_shutdown
+            .store(false, Ordering::SeqCst);
         tokio::spawn(async move {
             let mut retry = tokio::time::interval(std::time::Duration::from_secs(5));
             retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -112,12 +113,18 @@ impl ChatterClient {
                     _ = retry.tick() => {},
                 }
                 let auth = client.auth_state().get();
-                let Some(owner) = auth.current_user_id.filter(|_| !auth.session_ended) else { continue };
+                let Some(owner) = auth.current_user_id.filter(|_| !auth.session_ended) else {
+                    continue;
+                };
                 let db = client.services.database.clone();
                 let load_db = db.clone();
-                let batch = match db.run_blocking(move || {
-                    ChannelDeliveryRepository::new(load_db).due(owner, chrono::Utc::now().timestamp_millis())
-                }).await {
+                let batch = match db
+                    .run_blocking(move || {
+                        ChannelDeliveryRepository::new(load_db)
+                            .due(owner, chrono::Utc::now().timestamp_millis())
+                    })
+                    .await
+                {
                     Ok(batch) => batch,
                     Err(error) => {
                         tracing::warn!(%error, "Cannot read durable delivery intents");
@@ -127,7 +134,10 @@ impl ChatterClient {
                 let full_batch = batch.len() == 50;
                 let mut channels = std::collections::HashMap::new();
                 for item in batch {
-                    channels.entry((item.conversation_id, item.author)).or_insert_with(Vec::new).push(item);
+                    channels
+                        .entry((item.conversation_id, item.author))
+                        .or_insert_with(Vec::new)
+                        .push(item);
                 }
                 // Independent channels make progress despite another channel's timeout.
                 futures::stream::iter(channels).for_each_concurrent(4, |((channel, author), items)| {
@@ -342,18 +352,26 @@ impl ChatterClient {
         listeners.handles.push(self.ctx.spawn_event_handlers());
 
         // ── Multi-device crypto maintenance listener ────────────────
-        listeners.handles.push(self.spawn_crypto_maintenance_listener());
-        listeners.handles.push(self.spawn_channel_delivery_listener());
+        listeners
+            .handles
+            .push(self.spawn_crypto_maintenance_listener());
+        listeners
+            .handles
+            .push(self.spawn_channel_delivery_listener());
 
         // ── Call worker room-events policy listener ─────────────────
         #[cfg(feature = "media")]
-        listeners.handles.push(self.spawn_call_room_policy_listener());
+        listeners
+            .handles
+            .push(self.spawn_call_room_policy_listener());
 
         // ── Inbox polling + protocol processor ──────────────────────
         let inbox_rx = match self.services.start_inbox_provider().await {
             Some(rx) => rx,
             None => {
-                listeners.channel_delivery_shutdown.store(true, Ordering::SeqCst);
+                listeners
+                    .channel_delivery_shutdown
+                    .store(true, Ordering::SeqCst);
                 for handle in &listeners.handles {
                     handle.abort();
                 }
@@ -394,7 +412,8 @@ impl ChatterClient {
         let h_saved_sync_retry = crate::services::message::spawn_saved_sync_recovery(self);
         let h_channel_send_retry = crate::services::message::spawn_channel_send_recovery(self);
         let h_dm_send_retry = crate::services::message::spawn_dm_send_recovery(self);
-        let h_delete_batch_retry = crate::services::conversation::recovery::spawn_delete_batch_recovery(self);
+        let h_delete_batch_retry =
+            crate::services::conversation::recovery::spawn_delete_batch_recovery(self);
         let h_receipt_retry = crate::services::conversation::recovery::spawn_receipt_recovery(self);
         let h_channel_stream = self.ctx.start_channel_event_stream();
         // Live channel messages. This is the ONLY subscriber of the
@@ -411,24 +430,8 @@ impl ChatterClient {
         let h_channel_bootstrap = self.ctx.start_channel_bootstrap_service();
         let h_dm_bootstrap = self.ctx.spawn_dm_bootstrap_handler();
 
-        // ── AI services ─────────────────────────────────────────────
-        #[cfg(feature = "jarvis")]
-        let jarvis = crate::services::jarvis::JarvisBackgroundBuilder::new(self.jarvis().clone())
-            .with_event_bus(self.event_bus().clone())
-            .spawn();
-
-        let h_ai = tokio::spawn({
-            let local_ai = self.local_ai().clone();
-            async move {
-                match local_ai.load_preferred_model().await {
-                    Ok(Some(info)) => {
-                        tracing::info!("Auto-loaded local AI model: {}", info.model_id)
-                    }
-                    Ok(None) => {}
-                    Err(e) => tracing::warn!("Failed to auto-load local AI model: {}", e),
-                }
-            }
-        });
+        // Remote AI runs only for explicit requests; no local model loading,
+        // passive-learning observer or local message indexing starts here.
 
         // ── Pre-fetch sender certificate (needed for sealed sender / anon DM) ──
         {
@@ -493,29 +496,42 @@ impl ChatterClient {
                                 &gone.iter().map(|message| message.id).collect::<Vec<_>>(),
                             );
                             // A restart clears the ledger while Android may retain its tag.
-                            let message_repo = crate::storage::repositories::MessageRepository::new(db.clone());
-                            for (conversation_id, conversation_type) in gone.iter()
+                            let message_repo =
+                                crate::storage::repositories::MessageRepository::new(db.clone());
+                            for (conversation_id, conversation_type) in gone
+                                .iter()
                                 .map(|m| (m.conversation_id, m.conversation_type.clone()))
                                 .collect::<std::collections::HashSet<_>>()
                             {
-                                match message_repo.get_unread_count(&conversation_id, &conversation_type) {
+                                match message_repo
+                                    .get_unread_count(&conversation_id, &conversation_type)
+                                {
                                     Ok(0) => {
-                                        if let Err(e) = notifications.cancel_conversation(&conversation_id) {
+                                        if let Err(e) =
+                                            notifications.cancel_conversation(&conversation_id)
+                                        {
                                             tracing::warn!(error = %e, "Failed to cancel expired conversation notification");
                                         }
                                     }
                                     Ok(_) => {}
-                                    Err(e) => tracing::warn!(error = %e, "Failed to check unread messages after expiry"),
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "Failed to check unread messages after expiry")
+                                    }
                                 }
                             }
-                            let attachment_repo = crate::storage::repositories::AttachmentRepository::new(db.clone());
-                            let removed_attachment_ids = gone.iter()
+                            let attachment_repo =
+                                crate::storage::repositories::AttachmentRepository::new(db.clone());
+                            let removed_attachment_ids = gone
+                                .iter()
                                 .flat_map(|message| message.attachments.iter().copied())
                                 .collect::<std::collections::HashSet<_>>()
                                 .into_iter()
                                 .filter(|id| matches!(attachment_repo.get(id), Ok(None)))
                                 .collect();
-                            let _ = expired.send(ExpiredMessages { messages: gone, removed_attachment_ids });
+                            let _ = expired.send(ExpiredMessages {
+                                messages: gone,
+                                removed_attachment_ids,
+                            });
                         }
                         Ok(_) => {}
                         Err(e) => tracing::warn!(error = %e, "ephemeral reaper: cleanup failed"),
@@ -551,7 +567,6 @@ impl ChatterClient {
             h_channel_messages,
             h_channel_bootstrap,
             h_dm_bootstrap,
-            h_ai,
             h_sync,
             h_prekey,
             h_key_rolling,
@@ -560,13 +575,6 @@ impl ChatterClient {
             h_ephemeral_reaper,
             h_presence,
         ]);
-        #[cfg(feature = "jarvis")]
-        {
-            tasks.push(jarvis.maintenance);
-            if let Some(observer) = jarvis.observer {
-                tasks.push(observer);
-            }
-        }
 
         drop(tasks);
         // Startup after session restore, login, registration and device linking
@@ -574,5 +582,4 @@ impl ChatterClient {
         self.start_configured_push();
         Ok(())
     }
-
 }
