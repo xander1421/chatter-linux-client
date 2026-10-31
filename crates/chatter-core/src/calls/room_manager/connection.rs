@@ -447,6 +447,9 @@ impl RoomManager {
     }
 
     async fn disconnect_inner(&self, preserve_camera: bool) {
+        if let Some(task) = self.screen_adaptation.write().take() {
+            task.abort();
+        }
         // Retire handler ownership before any await or reuse of shared playback.
         self.connection_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);

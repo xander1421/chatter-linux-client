@@ -1,8 +1,8 @@
 //! JNI bridge for Android MediaProjection screen capture.
 
 use chatter_core::calls::android_screen::{self, PlatformScreen};
-use jni::objects::{JByteArray, JObject, JValue};
-use jni::sys::{jint, jlong};
+use jni::objects::{JByteBuffer, JObject, JValue};
+use jni::sys::{jboolean, jint, jlong};
 
 use super::activity;
 
@@ -47,19 +47,33 @@ pub extern "system" fn Java_com_chatter_client_ScreenShareService_nativeOnScreen
     mut env: jni::EnvUnowned<'_>,
     _this: JObject,
     token: jlong,
-    data: JByteArray,
+    data: JByteBuffer,
+    row_stride: jint,
+    pixel_stride: jint,
     width: jint,
     height: jint,
     timestamp_us: jlong,
+    metered: jboolean,
 ) {
     env.with_env(|env| -> jni::errors::Result<_> {
-        if let Ok(bytes) = env.convert_byte_array(&data) {
+        if width <= 0 || height <= 0 || row_stride <= 0 || pixel_stride < 4 {
+            return Ok(());
+        }
+        let address = env.get_direct_buffer_address(&data)?;
+        let capacity = env.get_direct_buffer_capacity(&data)?;
+        if !address.is_null() {
+            // The Image remains open throughout this synchronous call. Never retain
+            // this pointer: Android owns it and closes the Image after we return.
+            let bytes = unsafe { std::slice::from_raw_parts(address, capacity) };
             android_screen::push_frame(
                 token as u64,
-                &bytes,
+                bytes,
+                row_stride as u32,
+                pixel_stride as u32,
                 width as u32,
                 height as u32,
                 timestamp_us,
+                metered,
             );
         }
         Ok(())
@@ -74,8 +88,9 @@ pub extern "system" fn Java_com_chatter_client_ScreenShareService_nativeOnScreen
     token: jlong,
     width: jint,
     height: jint,
+    metered: jboolean,
 ) {
-    android_screen::started(token as u64, width as u32, height as u32);
+    android_screen::started(token as u64, width as u32, height as u32, metered);
 }
 
 #[unsafe(no_mangle)]

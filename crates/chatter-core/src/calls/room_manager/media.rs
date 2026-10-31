@@ -418,12 +418,13 @@ impl RoomManager {
         };
 
         let publication = local_participant
-            .publish_track(LocalTrack::Video(video_track), publish_options)
+            .publish_track(LocalTrack::Video(video_track.clone()), publish_options)
             .await
             .map_err(|e| CallError::TrackPublishFailed(e.to_string()))?;
 
         let sid = publication.sid();
         *self.screen_share_track_sid.write() = Some(sid.clone());
+        self.start_screen_adaptation(video_track, width, height, target_fps);
 
         tracing::info!(
             "Published screen share track (H.265/NVENC, degradation=disabled, simulcast off, {} fps cap, {} Mbps, {}x{}, sid={})",
@@ -474,18 +475,34 @@ impl RoomManager {
         };
         let source = NativeVideoSource::new(VideoResolution { width, height }, true);
         let track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source.clone()));
+        // H.264 is broadly supported by Android MediaCodec; Hardware selects
+        // CreateAndroidVideoEncoderFactory, never the desktop NVENC backend.
+        let max_bitrate = if android_screen::is_metered() {
+            2_000_000
+        } else {
+            ((width as u64 * height as u64) * 16).clamp(10_000_000, 150_000_000)
+        };
         let options = TrackPublishOptions {
             source: TrackSource::Screenshare,
+            video_codec: VideoCodec::H264,
+            video_encoder: VideoEncoderBackend::Hardware,
+            degradation_preference: Some(DegradationPreference::MaintainFramerateAndResolution),
+            simulcast: false,
+            video_encoding: Some(VideoEncoding {
+                max_bitrate,
+                max_framerate: 60.0,
+            }),
             ..Default::default()
         };
         let publication = local_participant
-            .publish_track(LocalTrack::Video(track), options)
+            .publish_track(LocalTrack::Video(track.clone()), options)
             .await
             .map_err(|error| {
                 android_screen::stop();
                 CallError::TrackPublishFailed(error.to_string())
             })?;
         *self.screen_share_track_sid.write() = Some(publication.sid());
+        self.start_screen_adaptation(track, width, height, 60);
         // Only release the buffered first frame once the sender is published.
         if !android_screen::install_source(token, source) {
             self.stop_screen_share().await;
@@ -554,6 +571,9 @@ impl RoomManager {
     /// subscription it had first.
     #[cfg(not(target_os = "ios"))]
     pub async fn stop_screen_share(&self) {
+        if let Some(task) = self.screen_adaptation.write().take() {
+            task.abort();
+        }
         #[cfg(not(target_os = "android"))]
         {
             let mut capture = self.screen_capture.write();

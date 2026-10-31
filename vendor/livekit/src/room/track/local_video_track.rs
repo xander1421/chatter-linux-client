@@ -310,6 +310,33 @@ impl LocalVideoTrack {
         super::local_track::get_stats(&self.inner).await
     }
 
+    /// Update a single screen-share sender in place, preserving active state and
+    /// every other negotiated parameter. Does not republish or queue frames.
+    pub fn set_screen_share_encoding(
+        &self,
+        max_bitrate: u64,
+        max_framerate: f64,
+        scale_resolution_down_by: f64,
+    ) -> RoomResult<()> {
+        if max_bitrate == 0 || !max_framerate.is_finite() || max_framerate <= 0.0
+            || !scale_resolution_down_by.is_finite() || scale_resolution_down_by < 1.0 {
+            return Err(RoomError::Internal("invalid screen-share encoding target".into()));
+        }
+        let transceiver = self.transceiver().ok_or_else(||
+            RoomError::Internal("screen-share sender is unavailable".into()))?;
+        let sender = transceiver.sender();
+        let mut params = sender.parameters();
+        if params.encodings.len() != 1 {
+            return Err(RoomError::Internal("adaptive screen share requires one encoding".into()));
+        }
+        let encoding = &mut params.encodings[0];
+        encoding.max_bitrate = Some(max_bitrate);
+        encoding.max_framerate = Some(max_framerate);
+        encoding.scale_resolution_down_by = Some(scale_resolution_down_by);
+        sender.set_parameters(params).map_err(|e|
+            RoomError::Internal(format!("failed to adapt screen-share sender: {e}")))
+    }
+
     pub(crate) fn on_muted(&self, f: impl Fn(Track) + Send + 'static) {
         self.inner.events.lock().muted.replace(Box::new(f));
     }

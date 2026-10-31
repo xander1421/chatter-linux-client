@@ -12,6 +12,8 @@ import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.view.WindowManager
+import android.net.ConnectivityManager
+import java.nio.ByteBuffer
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
@@ -25,17 +27,28 @@ import android.util.Log
 
 /** Owns the projection and its typed foreground-service lifetime. */
 class ScreenShareService : Service() {
-    private external fun nativeOnScreenStarted(token: Long, width: Int, height: Int)
-    private external fun nativeOnScreenFrame(token: Long, bgra: ByteArray, width: Int, height: Int, timestampUs: Long)
+    private external fun nativeOnScreenStarted(token: Long, width: Int, height: Int, metered: Boolean)
+    private external fun nativeOnScreenFrame(token: Long, rgba: ByteBuffer, rowStride: Int, pixelStride: Int, width: Int, height: Int, timestampUs: Long, metered: Boolean)
     private external fun nativeOnScreenStopped(token: Long)
 
+    private val frameLock = Any()
     private var token = 0L
     private var projection: MediaProjection? = null
     private var display: VirtualDisplay? = null
     private var reader: ImageReader? = null
     private var thread: HandlerThread? = null
-    private var lastFrameNs = 0L
+    private var nextFrameNs = 0L
     private var stopping = false
+    private var targetFps = 60
+    private var metered = true
+    private var lastNetworkCheckNs = 0L
+
+    private fun updateNetwork(now: Long) {
+        if (lastNetworkCheckNs == 0L || now - lastNetworkCheckNs >= 2_000_000_000L) {
+            metered = getSystemService(ConnectivityManager::class.java).isActiveNetworkMetered
+            lastNetworkCheckNs = now
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -60,6 +73,8 @@ class ScreenShareService : Service() {
         }
         val start = intent ?: return START_NOT_STICKY
         token = requestedToken
+        targetFps = start.getIntExtra(FPS, 60).coerceIn(1, 60)
+        updateNetwork(SystemClock.elapsedRealtimeNanos())
         try {
             val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -84,7 +99,7 @@ class ScreenShareService : Service() {
             this.projection = projection
             val metrics = DisplayMetrics()
             getSystemService(WindowManager::class.java).defaultDisplay.getRealMetrics(metrics)
-            val scale = minOf(1.0, 1280.0 / maxOf(metrics.widthPixels, metrics.heightPixels))
+            val scale = minOf(1.0, 1920.0 / maxOf(metrics.widthPixels, metrics.heightPixels))
             val width = ((metrics.widthPixels * scale).toInt() and -2).coerceAtLeast(2)
             val height = ((metrics.heightPixels * scale).toInt() and -2).coerceAtLeast(2)
             val worker = HandlerThread("ChatterScreenCapture").also { it.start() }
@@ -96,37 +111,33 @@ class ScreenShareService : Service() {
             val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
             this.reader = reader
             reader.setOnImageAvailableListener({ source ->
-                val image = try { source.acquireLatestImage() }
-                    catch (_: IllegalStateException) { null }
-                    ?: return@setOnImageAvailableListener
-                try {
-                    val now = SystemClock.elapsedRealtimeNanos()
-                    if (now - lastFrameNs < 66_666_667L) return@setOnImageAvailableListener
-                    lastFrameNs = now
-                    val plane = image.planes[0]
-                    val bytes = ByteArray(width * height * 4)
-                    val buffer = plane.buffer
-                    for (row in 0 until height) {
-                        for (col in 0 until width) {
-                            val at = row * plane.rowStride + col * plane.pixelStride
-                            val out = (row * width + col) * 4
-                            // ImageReader RGBA -> libyuv ARGB (BGRA byte order).
-                            bytes[out] = buffer.get(at + 2)
-                            bytes[out + 1] = buffer.get(at + 1)
-                            bytes[out + 2] = buffer.get(at)
-                            bytes[out + 3] = buffer.get(at + 3)
-                        }
+                synchronized(frameLock) {
+                    val image = try { source.acquireLatestImage() }
+                        catch (_: IllegalStateException) { null }
+                        ?: return@setOnImageAvailableListener
+                    try {
+                        val now = SystemClock.elapsedRealtimeNanos()
+                        val periodNs = 1_000_000_000L / targetFps
+                        if (now < nextFrameNs) return@setOnImageAvailableListener
+                        // Half a period of scheduling credit tolerates vsync jitter
+                        // without accumulating a burst after capture stalls.
+                        nextFrameNs = maxOf(nextFrameNs + periodNs, now + periodNs / 2)
+                        val plane = image.planes[0]
+                        updateNetwork(now)
+                        // Synchronous JNI borrows the plane only until this returns.
+                        // acquireLatestImage + two slots keeps stale frames out of the pipeline.
+                        nativeOnScreenFrame(token, plane.buffer, plane.rowStride, plane.pixelStride,
+                            width, height, now / 1000, metered)
+                    } catch (error: Exception) {
+                        Log.e("ScreenShare", "Frame capture failed", error)
+                        stopSelf()
+                    } finally {
+                        try { image.close() } catch (_: IllegalStateException) { }
                     }
-                    nativeOnScreenFrame(token, bytes, width, height, now / 1000)
-                } catch (error: Exception) {
-                    Log.e("ScreenShare", "Frame capture failed", error)
-                    stopSelf()
-                } finally {
-                    try { image.close() } catch (_: IllegalStateException) { }
                 }
             }, handler)
             // Install dimensions before ImageReader can deliver its first frame.
-            nativeOnScreenStarted(token, width, height)
+            nativeOnScreenStarted(token, width, height, metered)
             display = projection.createVirtualDisplay("Chatter screen", width, height,
                 metrics.densityDpi, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader.surface, null, handler)
@@ -143,9 +154,13 @@ class ScreenShareService : Service() {
             val ended = token
             token = 0L
             runCatching { reader?.setOnImageAvailableListener(null, null) }
-            runCatching { display?.release() }
-            runCatching { reader?.close() }
-            runCatching { projection?.stop() }
+            // ImageReader.close invalidates plane memory. Wait for the one
+            // synchronous JNI borrower before releasing its backing storage.
+            synchronized(frameLock) {
+                runCatching { display?.release() }
+                runCatching { reader?.close() }
+                runCatching { projection?.stop() }
+            }
             thread?.quitSafely()
             if (ended != 0L) nativeOnScreenStopped(ended)
         }
@@ -159,11 +174,12 @@ class ScreenShareService : Service() {
         private const val TOKEN = "token"
         private const val RESULT = "result"
         private const val DATA = "data"
+        private const val FPS = "fps"
 
-        fun start(context: Context, token: Long, resultCode: Int, data: Intent) {
+        fun start(context: Context, token: Long, resultCode: Int, data: Intent, fps: Int = 60) {
             context.startForegroundService(Intent(context, ScreenShareService::class.java)
                 .setAction(START).putExtra(TOKEN, token).putExtra(RESULT, resultCode)
-                .putExtra(DATA, data))
+                .putExtra(DATA, data).putExtra(FPS, fps))
         }
 
         fun stop(context: Context) {

@@ -102,3 +102,15 @@ pull protocol 0.8 types into the 0.7.52 SDK. Keep protocol 0.7.10,
 livekit-common 0.1.0, livekit-data-stream 0.1.0, livekit-datatrack 0.1.11, and
 libwebrtc 0.3.41 with webrtc-sys 0.3.38 and webrtc-sys-build 0.3.18 together until the deferred SDK upgrade has a live-call proof.
 These are dependency constraints only; no media implementation changed.
+
+## Adaptive screen-share sender (2026-10-31)
+
+`LocalVideoTrack::set_screen_share_encoding` updates a single encoding's maximum
+bitrate, frame rate and resolution scale through getParameters/setParameters,
+preserving all other sender state and propagating SDK errors. Chatter's
+screen-share controller uses publisher candidate-pair BWE and track-specific
+outbound congestion/encoder statistics. No renegotiation or frame queue is added.
+
+`Room::get_stats` returns an owned session snapshot future, allowing callers to
+release the application room lock before awaiting native statistics. Existing
+`.get_stats().await` callers retain the same result type and behavior.

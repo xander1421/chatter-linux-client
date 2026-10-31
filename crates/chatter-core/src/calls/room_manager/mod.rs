@@ -9,8 +9,8 @@ use livekit::e2ee::{
 };
 use livekit::options::TrackPublishOptions;
 use livekit::prelude::*;
-// Desktop screen-share encoder tuning.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+// Platform screen-share encoder tuning.
+#[cfg(not(target_os = "ios"))]
 use livekit::options::{DegradationPreference, VideoCodec, VideoEncoderBackend, VideoEncoding};
 use livekit::webrtc::audio_source::RtcAudioSource;
 use livekit::webrtc::video_source::RtcVideoSource;
@@ -268,6 +268,7 @@ pub struct RoomManager {
     /// subscribed to the dead one.
     #[cfg(not(target_os = "ios"))]
     screen_share_track_sid: Arc<RwLock<Option<TrackSid>>>,
+    screen_adaptation: RwLock<Option<tokio::task::JoinHandle<()>>>,
     /// E2EE key state (provider + epoch).
     e2ee: Arc<RwLock<E2eeState>>,
     /// Handle to the spawned event handler task so disconnect() can await it.
@@ -332,6 +333,7 @@ impl RoomManager {
             screen_capture: Arc::new(RwLock::new(ScreenCapture::new())),
             #[cfg(not(target_os = "ios"))]
             screen_share_track_sid: Arc::new(RwLock::new(None)),
+            screen_adaptation: RwLock::new(None),
             e2ee: Arc::new(RwLock::new(E2eeState {
                 provider: None,
                 epoch: 0,
@@ -349,6 +351,8 @@ mod connection;
 mod events;
 mod keys;
 mod media;
+#[cfg(not(target_os = "ios"))]
+mod screen_adaptation;
 
 #[cfg(test)]
 mod tests;
