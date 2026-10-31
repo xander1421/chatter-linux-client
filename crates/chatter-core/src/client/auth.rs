@@ -77,6 +77,7 @@ impl ChatterClient {
                     client.persist_composer_recovery();
                     client.auth_state().invalidate_session();
                     let teardown_revision = client.auth_state().get().session_revision;
+                    client.retire_presence().await;
                     if let Err(error) = client.auth().end_session() {
                         tracing::error!(%error, "could not persist ended session");
                     }
@@ -117,6 +118,7 @@ impl ChatterClient {
                     let teardown_revision = client.auth_state().get().session_revision;
                     // Stop authenticating before teardown, as the ended-session
                     // path does; there is nothing left to tell the server.
+                    client.retire_presence().await;
                     client.auth().auth_interceptor.clear();
                     client.shutdown_session(teardown_revision, false).await;
                     // Keys go after every session task has stopped, so none
@@ -1028,6 +1030,7 @@ impl ChatterClient {
         // using its captured revision, before new credentials can be installed.
         self.clear_composer_session();
         let teardown_revision = self.auth_state().get().session_revision;
+        self.retire_presence().await;
         let handles = std::mem::take(&mut *self.tasks.lock());
         for handle in &handles {
             handle.abort();

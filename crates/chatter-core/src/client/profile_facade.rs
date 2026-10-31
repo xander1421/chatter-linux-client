@@ -49,18 +49,21 @@ impl ChatterClient {
             auth.settings_repo.clone(),
             auth.auth_interceptor.clone(),
         );
+        let suspension = self.suspend_presence(revision).await;
         account.delete_acct(password).await?;
+        suspension.commit();
         #[cfg(feature = "mesh")]
-        if let Some(owner) = former_owner {
-            self.mesh()
-                .remove_account_bindings(owner)
-                .map_err(crate::services::account_service::AccountError::Storage)?;
-        }
+        let mesh_result = former_owner.map(|owner| self.mesh().remove_account_bindings(owner));
         self.clear_composer_session();
         // The account service clears persisted credentials. Retire the old
         // session before publishing logout, just as normal sign-out does.
-        self.shutdown_session(revision, false).await;
-        self.services.auth_state.set_logged_out_if_current(revision);
+        let teardown_revision = self.services.auth_state.get().session_revision;
+        self.shutdown_session(teardown_revision, false).await;
+        self.services.auth_state.set_logged_out_if_current(teardown_revision);
+        #[cfg(feature = "mesh")]
+        if let Some(result) = mesh_result {
+            result.map_err(crate::services::account_service::AccountError::Storage)?;
+        }
         Ok(())
     }
 

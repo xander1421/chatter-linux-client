@@ -12,6 +12,12 @@ impl SignalActorHandle {
             runtime.block_on(async {
                 while let Some(cmd) = receiver.recv().await {
                     match cmd {
+                        SignalCommand::Barrier { response } => { let _ = response.send(()); }
+                        #[cfg(test)]
+                        SignalCommand::TestPause { entered, resume } => {
+                            let _ = entered.send(());
+                            let _ = resume.await;
+                        }
                         SignalCommand::GetIdentityFingerprint { response } => {
                             use libsignal_protocol::IdentityKeyStore;
                             let res = store.get_identity_key_pair().await

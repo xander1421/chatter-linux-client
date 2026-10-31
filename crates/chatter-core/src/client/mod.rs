@@ -142,6 +142,8 @@ pub use pin::PinnedDisplayItem;
 mod profile;
 mod profile_visibility;
 mod presence;
+mod presence_owner;
+mod lifecycle_diagnostics;
 pub mod preview;
 mod push_config;
 mod secret_chat;

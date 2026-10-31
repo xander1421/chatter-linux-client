@@ -51,7 +51,10 @@ impl ChatterClient {
         kind: crate::inbox::handlers::PushKind,
     ) -> bool {
         // Account teardown/login cannot cross a router's awaited inbox start.
+        let phase = super::lifecycle_diagnostics::Phase::PushWakeup;
+        phase.requested();
         let _lifecycle = self.auth_lifecycle_lock.lock().await;
+        let _scope = phase.acquired();
         if !self.push_wakeup_allowed(revision) {
             return false;
         }
@@ -291,7 +294,10 @@ impl ChatterClient {
                             // Linked devices receive no AuthResponse. Fetch their own
                             // capabilities through authenticated identity, with session fencing.
                             refresh_at = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                            let phase = super::lifecycle_diagnostics::Phase::PushIdentityRefresh;
+                            phase.requested();
                             let _guard = owner.auth_lifecycle_lock.lock().await;
+                            let _scope = phase.acquired();
                             if !owner.auth_state().session_is_current(revision) {
                                 break;
                             }

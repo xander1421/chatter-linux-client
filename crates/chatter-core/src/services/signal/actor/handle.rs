@@ -1,6 +1,14 @@
 use super::*;
 
 impl SignalActorHandle {
+    pub(crate) async fn drain_submitted(&self) -> Result<(), ServiceError> {
+        self.send(|response| SignalCommand::Barrier { response }).await
+    }
+    #[cfg(test)]
+    pub(crate) async fn test_pause(&self, entered: oneshot::Sender<()>, resume: oneshot::Receiver<()>) {
+        self.sender.send(SignalCommand::TestPause { entered, resume }).await.unwrap();
+    }
+
     async fn send<T>(
         &self,
         cmd_fn: impl FnOnce(oneshot::Sender<T>) -> SignalCommand,

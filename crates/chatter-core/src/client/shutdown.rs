@@ -19,6 +19,7 @@ impl ChatterClient {
         if self.auth_state().get().session_revision != revision {
             return;
         }
+        self.retire_presence().await;
         crate::system::messaging_background::set_signed_in(false);
         if let Some(task) = self.mailbox_wake_task.lock().take() {
             task.abort();
