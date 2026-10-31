@@ -1016,6 +1016,8 @@ async fn queued_intents_are_cleared_at_signout_and_cancelled_with_their_conversa
     assert!(original.exists());
     assert!(!client.await_composer_turn(&first).await);
     assert!(!client.await_composer_turn(&queued).await);
+    assert!(client.recover_composer_send(queued.clone(), true).is_none());
+    assert!(client.parked_sends.lock().is_empty(), "cancelled UI callback restored a deleted conversation");
     let count = || {
         let conn = client.services.database.read_connection().unwrap();
         conn.query_row("SELECT count(*) FROM settings WHERE key GLOB ?1", rusqlite::params![format!("ui.composer_queue.{owner}:*")], |r| r.get::<_, i64>(0)).unwrap()
@@ -1043,4 +1045,24 @@ async fn queue_storage_failure_keeps_the_staged_attachment_and_does_not_claim_a_
     let send = client.begin_composer_send("kept caption".into(), None).unwrap();
     assert_eq!(send.attachments[0].filename, "kept.jpg");
     assert!(!send.is_upload_queued());
+}
+
+#[tokio::test]
+async fn parking_a_completed_failed_send_releases_the_next_batches_turn() {
+    let (client, _dir) = client();
+    let conversation = ActiveConversation::Channel(ChannelId::new());
+    open(&client, conversation.channel_id().unwrap());
+    let first = client.begin_composer_send("failed first".into(), None).unwrap();
+    let key = client.retain_send_attempt(first.attempt_id, conversation, &first.text,
+        &first.attachments, None, None).unwrap();
+    let second = client.begin_composer_send("second".into(), None).unwrap();
+    client.chat_state().add_pending_attachment(staged("newer-draft.jpg"));
+    crate::client::send_attempt::settle_failure(&client.services.database, &key,
+        first.attempt_id, false, None, crate::services::gateway::SendError::NotLoggedIn).unwrap();
+    assert!(client.recover_composer_send(first, false).is_none());
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(250), client.await_composer_turn(&second)).await.unwrap());
+    assert_eq!(client.pending_attachments()[0].filename, "newer-draft.jpg");
+    let parked = client.parked_sends.lock();
+    assert_eq!(parked.len(), 1);
+    assert!(parked[0].queue_ticket.is_none());
 }

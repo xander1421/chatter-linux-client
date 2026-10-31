@@ -597,20 +597,29 @@ impl ChatterClient {
     /// input, until [`Self::take_parked_send`] finds room for it.
     pub fn recover_composer_send(
         &self,
-        send: ComposerSend,
+        mut send: ComposerSend,
         composer_empty: bool,
     ) -> Option<ComposerSend> {
         if !self.composer_session_is_current(send.session_revision) {
+            return None;
+        }
+        if send.queue_ticket.as_ref().is_some_and(|ticket| ticket.is_cancelled()) {
             return None;
         }
         match self.park_unstarted_queued_send(&send) {
             Ok(false) => {},
             Ok(true) | Err(()) => return None,
         }
+        // A completed failed task no longer owns admission. Keeping its
+        // recoverable draft must not hold later accepted batches forever.
+        let ticket = send.queue_ticket.take();
         if self.composer_has_room(send.conversation, composer_empty) {
             return Some(send);
         }
         let (_drafts, _) = self.composer_drafts_for_session();
+        if ticket.as_ref().is_some_and(|ticket| ticket.is_cancelled()) {
+            return None;
+        }
         if !self.composer_session_is_current(send.session_revision) {
             return None;
         }

@@ -16,6 +16,9 @@ pub(crate) struct QueueTicket {
     done: watch::Sender<bool>,
 }
 impl QueueTicket {
+    pub(super) fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
     pub(super) fn is_waiting(&self) -> bool {
         self.predecessors
             .iter()
@@ -114,6 +117,10 @@ impl ChatterClient {
             let current = self.auth_state().get();
             if current.session_revision != send.session_revision
                 || current.current_user_id != Some(owner)
+                || send
+                    .queue_ticket
+                    .as_ref()
+                    .is_some_and(|ticket| ticket.is_cancelled())
             {
                 return Err(crate::error::StorageError::InvalidData(
                     "Composer session retired".into(),
