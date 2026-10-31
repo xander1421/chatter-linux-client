@@ -183,7 +183,7 @@ mod tests {
 }
 
 // The server may retain an uncertain immutable promotion for its five-minute
-// lease. Only its explicit retry-same-attachment response is retryable here:
+// lease. The public error filter hides response text, so retry transient statuses:
 // never create a new upload, key, destination or message from this loop.
 async fn confirm_with_retry<F, Fut>(
     cdn_key: &str,
@@ -206,9 +206,10 @@ where
         match result {
             Ok(response) => return Ok(response),
             Err(status) => {
-                let retry_same = status.code() == tonic::Code::Unavailable
-                    && status.message()
-                        == "attachment operation in progress; retry same attachment";
+                let retry_same = matches!(
+                    status.code(),
+                    tonic::Code::Unavailable | tonic::Code::DeadlineExceeded
+                );
                 if !retry_same || tokio::time::Instant::now() + delay >= deadline {
                     return Err(status);
                 }
@@ -230,7 +231,7 @@ mod confirmation_retry_tests {
         time::Duration,
     };
     fn busy() -> tonic::Status {
-        tonic::Status::unavailable("attachment operation in progress; retry same attachment")
+        tonic::Status::unavailable("service temporarily unavailable")
     }
     #[tokio::test(start_paused = true)]
     async fn confirmation_survives_promotion_lease_using_the_same_key() {
@@ -255,13 +256,12 @@ mod confirmation_retry_tests {
         assert!(keys.iter().all(|key| key == "fixture-cdn-key"));
     }
     #[tokio::test(start_paused = true)]
-    async fn terminal_and_generic_transport_errors_do_not_retry() {
+    async fn terminal_errors_do_not_retry() {
         for status in [
             tonic::Status::unauthenticated("fixture"),
             tonic::Status::invalid_argument("fixture"),
             tonic::Status::resource_exhausted("fixture"),
             tonic::Status::not_found("fixture"),
-            tonic::Status::unavailable("generic transport failure"),
         ] {
             let calls = AtomicUsize::new(0);
             let expected = status.code();
@@ -275,6 +275,30 @@ mod confirmation_retry_tests {
             assert_eq!(calls.load(Ordering::SeqCst), 1);
         }
     }
+    #[tokio::test(start_paused = true)]
+    async fn transient_confirmation_does_not_depend_on_sanitized_error_text() {
+        for first in [
+            tonic::Status::unavailable("service temporarily unavailable"),
+            tonic::Status::unavailable("generic transport failure"),
+            tonic::Status::deadline_exceeded("request deadline exceeded"),
+        ] {
+            let mut first = Some(first);
+            let response = confirm_with_retry("same-key", |request| {
+                assert_eq!(request.cdn_key, "same-key");
+                let first = first.take();
+                async move {
+                    match first {
+                        Some(status) => Err(status),
+                        None => Ok(ConfirmAttachmentUploadResponse { confirmed: true }),
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert!(response.confirmed);
+        }
+    }
+
     #[tokio::test(start_paused = true)]
     async fn perpetual_busy_and_hung_rpc_are_bounded() {
         let start = tokio::time::Instant::now();
