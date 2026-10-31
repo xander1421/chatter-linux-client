@@ -58,6 +58,26 @@ pub fn decode_frames_cpu_bounded(
     max_frames: usize,
     max_bytes: usize,
 ) -> Result<Vec<GifFrame>, MediaError> {
+    decode_frames(gif_bytes, max_frames, max_bytes, None)
+}
+
+/// Fast native decode with display-sized samples spanning the complete loop.
+pub fn decode_loop_cpu(
+    gif_bytes: &[u8],
+    width: u32,
+    height: u32,
+    max_frames: usize,
+    max_bytes: usize,
+) -> Result<Vec<GifFrame>, MediaError> {
+    decode_frames(gif_bytes, max_frames, max_bytes, Some((width, height)))
+}
+
+fn decode_frames(
+    gif_bytes: &[u8],
+    max_frames: usize,
+    max_bytes: usize,
+    display: Option<(u32, u32)>,
+) -> Result<Vec<GifFrame>, MediaError> {
     ensure_gst_init()?;
 
     if gif_bytes.len() < 6 || (&gif_bytes[0..6] != b"GIF89a" && &gif_bytes[0..6] != b"GIF87a") {
@@ -122,12 +142,27 @@ pub fn decode_frames_cpu_bounded(
 
     let mut frames = Vec::new();
     let mut decoded_bytes = 0usize;
+    let mut selected: super::DecimatedGif<GifFrame> = super::DecimatedGif::default();
     loop {
         match appsink.try_pull_sample(gst::ClockTime::from_seconds(5)) {
             Some(sample) => {
                 let Some(buffer) = sample.buffer() else {
                     continue;
                 };
+                let delay = buffer
+                    .duration()
+                    .map(|d| Duration::from_nanos(d.nseconds()))
+                    .filter(|d| !d.is_zero())
+                    .unwrap_or(Duration::from_millis(100));
+
+                let delay_ms = super::animator::normalize_delay_ms(delay.as_millis() as u64);
+                if display.is_some() && selected.seen % selected.stride != 0 {
+                    selected.seen += 1;
+                    if let Some(last) = selected.frames.last_mut() {
+                        last.delay_ms += delay_ms;
+                    }
+                    continue;
+                }
                 let Some(caps) = sample.caps() else { continue };
                 let info = gst_video::VideoInfo::from_caps(caps)
                     .map_err(|e| MediaError::PlaybackError(format!("caps: {e}")))?;
@@ -139,10 +174,19 @@ pub fn decode_frames_cpu_bounded(
                 let w = info.width() as usize;
                 let h = info.height() as usize;
                 let stride = info.stride()[0] as usize;
-                let Some(frame_bytes) = w.checked_mul(h).and_then(|pixels| pixels.checked_mul(4)) else {
+                let Some(frame_bytes) = w.checked_mul(h).and_then(|pixels| pixels.checked_mul(4))
+                else {
                     break;
                 };
-                if !super::frame_fits_budget(frames.len(), decoded_bytes, frame_bytes, max_frames, max_bytes) {
+                if display.is_none()
+                    && !super::frame_fits_budget(
+                        frames.len(),
+                        decoded_bytes,
+                        frame_bytes,
+                        max_frames,
+                        max_bytes,
+                    )
+                {
                     break;
                 }
                 let row_bytes = w * 4;
@@ -158,18 +202,40 @@ pub fn decode_frames_cpu_bounded(
                     }
                 }
 
-                let delay = buffer
-                    .duration()
-                    .map(|d| Duration::from_nanos(d.nseconds()))
-                    .filter(|d| !d.is_zero())
-                    .unwrap_or(Duration::from_millis(100));
-
-                frames.push(GifFrame {
-                    data,
-                    width: w as u32,
-                    height: h as u32,
-                    delay,
-                });
+                if let Some((max_width, max_height)) = display {
+                    let image = image::RgbaImage::from_raw(w as u32, h as u32, data)
+                        .ok_or_else(|| MediaError::InvalidFormat("Invalid RGBA frame".into()))?;
+                    let image = if w as u32 > max_width || h as u32 > max_height {
+                        image::DynamicImage::ImageRgba8(image)
+                            .thumbnail(max_width.max(1), max_height.max(1))
+                            .to_rgba8()
+                    } else {
+                        image
+                    };
+                    let (width, height) = image.dimensions();
+                    let data = image.into_raw();
+                    let bytes = data.len();
+                    selected = super::decimate_gif_frame(
+                        selected,
+                        GifFrame {
+                            data,
+                            width,
+                            height,
+                            delay: Duration::from_millis(delay_ms),
+                        },
+                        delay_ms,
+                        bytes,
+                        max_frames,
+                        max_bytes,
+                    );
+                } else {
+                    frames.push(GifFrame {
+                        data,
+                        width: w as u32,
+                        height: h as u32,
+                        delay: Duration::from_millis(delay_ms),
+                    });
+                }
             }
             None => {
                 if appsink.is_eos() {
@@ -184,6 +250,16 @@ pub fn decode_frames_cpu_bounded(
     }
 
     pipeline.set_state(gst::State::Null).ok();
+    if display.is_some() {
+        return Ok(selected
+            .frames
+            .into_iter()
+            .map(|mut sample| {
+                sample.frame.delay = Duration::from_millis(sample.delay_ms);
+                sample.frame
+            })
+            .collect());
+    }
     Ok(frames)
 }
 

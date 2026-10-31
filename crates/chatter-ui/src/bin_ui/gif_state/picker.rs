@@ -5,7 +5,7 @@
 use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use slint::{Image, Model, Timer, TimerMode};
 
@@ -80,8 +80,12 @@ fn start_picker_timer_if_needed() {
         }
 
         let timer = Timer::default();
+        let mut last_tick = Instant::now();
         timer.start(TimerMode::Repeated, Duration::from_millis(33), move || {
-            tick_picker_gifs(33);
+            let now = Instant::now();
+            let elapsed = now.duration_since(last_tick).as_millis() as u64;
+            last_tick += Duration::from_millis(elapsed);
+            tick_picker_gifs(elapsed);
         });
 
         *timer_cell.borrow_mut() = Some(timer);

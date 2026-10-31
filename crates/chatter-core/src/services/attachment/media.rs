@@ -490,7 +490,7 @@ impl AttachmentService {
             let delay_ms = if denom == 0 {
                 100
             } else {
-                ((numer as u64) / (denom as u64)).max(20)
+                crate::media::gif::animator::normalize_delay_ms((numer as u64) / (denom as u64))
             };
 
             let buffer = frame.into_buffer();

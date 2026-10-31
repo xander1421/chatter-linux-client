@@ -1,6 +1,7 @@
 //! GIF frame decode.
 
 pub mod animator;
+pub mod workers;
 #[cfg(feature = "desktop-gstreamer")]
 pub mod gstreamer_decoder;
 pub mod progressive;

@@ -5,11 +5,11 @@
 use slint::ComponentHandle;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use slint::{Image, Model, Timer, TimerMode, Weak};
 
-use super::{INLINE_ANIMATION_BYTES, INLINE_FRAME_PX, MAX_INLINE_GIF_BYTES, MAX_INLINE_GIFS};
+use super::{INLINE_ANIMATION_BYTES, INLINE_FRAME_PX, MAX_INLINE_GIFS, MAX_INLINE_GIF_BYTES};
 use crate::MainWindow;
 
 thread_local! {
@@ -21,6 +21,8 @@ thread_local! {
     static INLINE_TIMER: RefCell<Option<Timer>> = const { RefCell::new(None) };
     /// Window weak reference for inline GIF updates.
     pub(super) static INLINE_WINDOW: RefCell<Option<Weak<MainWindow>>> = const { RefCell::new(None) };
+    static INLINE_CLIENT: RefCell<Option<std::sync::Weak<chatter_core::client::ChatterClient>>> = const { RefCell::new(None) };
+    static INLINE_REQUESTED: RefCell<HashMap<String, Instant>> = RefCell::new(HashMap::new());
     /// Last message-list offset seen by the GIF timer. A changed offset means
     /// the user is dragging or a fling is moving rows this frame.
     static INLINE_LAST_SCROLL_POSITION: Cell<Option<f32>> = const { Cell::new(None) };
@@ -56,24 +58,14 @@ impl InlineGifState {
             .unwrap_or_default()
     }
 
-    fn current_delay_ms(&self) -> u64 {
-        self.delays.get(self.current_frame).copied().unwrap_or(100)
-    }
-
     /// Advance time and return true if frame changed.
     pub(crate) fn tick(&mut self, elapsed_ms: u64) -> bool {
-        self.accumulated_ms += elapsed_ms;
-        let delay = self.current_delay_ms();
-
-        if self.accumulated_ms >= delay {
-            self.accumulated_ms -= delay;
-            if !self.frames.is_empty() {
-                self.current_frame = (self.current_frame + 1) % self.frames.len();
-            }
-            true
-        } else {
-            false
-        }
+        chatter_core::media::gif::animator::advance_playback(
+            &self.delays,
+            &mut self.current_frame,
+            &mut self.accumulated_ms,
+            elapsed_ms,
+        )
     }
 }
 
@@ -138,7 +130,7 @@ pub fn register_inline_gif_from_buffers(
     buffers: Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>>,
     delays: Vec<u64>,
 ) -> Option<Image> {
-    if buffers.len() <= 1 {
+    if buffers.is_empty() {
         return None;
     }
 
@@ -159,7 +151,7 @@ pub fn register_inline_gif_from_images(
     frames: Vec<Image>,
     delays: Vec<u64>,
 ) -> Option<Image> {
-    if frames.len() <= 1 {
+    if frames.is_empty() {
         return None;
     }
 
@@ -167,7 +159,7 @@ pub fn register_inline_gif_from_images(
     let frame_count = frames.len();
     let att_id_string = attachment_id.to_string();
 
-    // Check if this GIF already exists (progressive update) - preserve playback position
+    // Duplicate completions keep the current playback position.
     let (current_frame, accumulated_ms) = INLINE_GIFS.with(|gifs| {
         if let Some(existing) = gifs.borrow().get(&att_id_string) {
             // Preserve position, but clamp to new frame count
@@ -223,9 +215,13 @@ pub(super) fn start_inline_timer_if_needed() {
         }
 
         let timer = Timer::default();
+        let mut last_tick = Instant::now();
         // Run at ~30fps for smooth animation
         timer.start(TimerMode::Repeated, Duration::from_millis(33), move || {
-            tick_inline_gifs(33);
+            let now = Instant::now();
+            let elapsed = now.duration_since(last_tick).as_millis() as u64;
+            last_tick += Duration::from_millis(elapsed);
+            tick_inline_gifs(elapsed);
         });
 
         *timer_cell.borrow_mut() = Some(timer);
@@ -288,6 +284,32 @@ fn tick_inline_gifs(elapsed_ms: u64) {
             if let Some(att) = msg.attachments.row_data(att_idx) {
                 if INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(att.id.as_str())) {
                     shown.push((msg.attachments.clone(), att_idx, att));
+                } else if att.mime_type.as_str() == "image/gif"
+                    || att.filename.to_lowercase().ends_with(".gif")
+                {
+                    // Promote newly visible queued work; retry a dropped or failed
+                    // request at most once per five seconds while it stays visible.
+                    let request = INLINE_REQUESTED.with(|requests| {
+                        let mut requests = requests.borrow_mut();
+                        if requests
+                            .get(att.id.as_str())
+                            .is_some_and(|last| last.elapsed() < Duration::from_secs(5))
+                        {
+                            return false;
+                        }
+                        requests.insert(att.id.to_string(), Instant::now());
+                        true
+                    });
+                    if request {
+                        if let Some(client) =
+                            INLINE_CLIENT.with(|c| c.borrow().as_ref().and_then(|c| c.upgrade()))
+                        {
+                            let weak = INLINE_WINDOW.with(|w| w.borrow().clone());
+                            if let Some(weak) = weak {
+                                register_gif_attachment(att.id.to_string(), client, weak);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -349,34 +371,44 @@ fn rows_to_animate(
 /// animation itself goes through `tick_inline_gifs`, which looks only at the
 /// visible rows.
 fn set_attachment_thumbnail(window: &MainWindow, attachment_id: &str, image: Image) {
-    let messages = window.global::<crate::ChatPane>().get_messages();
-    for msg_idx in 0..messages.row_count() {
-        let Some(msg) = messages.row_data(msg_idx) else {
-            continue;
-        };
-        for att_idx in 0..msg.attachments.row_count() {
-            let Some(mut att) = msg.attachments.row_data(att_idx) else {
+    let pane = window.global::<crate::ChatPane>();
+    for messages in [pane.get_messages(), pane.get_thread_replies()] {
+        for msg_idx in 0..messages.row_count() {
+            let Some(msg) = messages.row_data(msg_idx) else {
                 continue;
             };
-            if att.id.as_str() != attachment_id {
-                continue;
+            for att_idx in 0..msg.attachments.row_count() {
+                let Some(mut att) = msg.attachments.row_data(att_idx) else {
+                    continue;
+                };
+                if att.id.as_str() != attachment_id {
+                    continue;
+                }
+                if let Some(model) = msg
+                    .attachments
+                    .as_any()
+                    .downcast_ref::<slint::VecModel<crate::MessageAttachmentData>>()
+                {
+                    if att.width <= 0 || att.height <= 0 {
+                        let size = image.size();
+                        att.width = size.width as i32;
+                        att.height = size.height as i32;
+                    }
+                    att.thumbnail = image.clone();
+                    att.is_downloading = false;
+                    att.progress = 1.0;
+                    att.has_thumbnail = true;
+                    model.set_row_data(att_idx, att);
+                }
             }
-            if let Some(model) = msg
-                .attachments
-                .as_any()
-                .downcast_ref::<slint::VecModel<crate::MessageAttachmentData>>()
-            {
-                att.thumbnail = image;
-                att.has_thumbnail = true;
-                model.set_row_data(att_idx, att);
-            }
-            return;
         }
     }
 }
 
 /// Clear all inline GIF animations.
 pub fn clear_inline_gifs() {
+    INLINE_CLIENT.with(|c| c.borrow_mut().take());
+    INLINE_REQUESTED.with(|r| r.borrow_mut().clear());
     INLINE_GIFS.with(|gifs| {
         gifs.borrow_mut().clear();
     });
@@ -460,10 +492,10 @@ pub fn auto_register_gifs_in_message(
 /// Register a single GIF attachment for inline animation.
 ///
 /// This is called after sending a message with GIF attachments.
-/// Queues authenticated range decoding on the shared worker, then publishes pixels.
+/// Queues decryption/decode on the bounded GIF pool, then registers on the UI thread.
 ///
 /// This function returns immediately - all work happens in background.
-/// Safe to call from any context (including nested runtimes).
+/// Call on the UI thread; this does not enter or block an async runtime.
 pub fn register_gif_attachment(
     attachment_id: String,
     ui_ctx: std::sync::Arc<chatter_core::client::ChatterClient>,
@@ -482,6 +514,8 @@ pub(crate) fn register_gif_attachment_guarded(
     window_weak: slint::Weak<crate::MainWindow>,
     owner: crate::bin_ui::features::history_owner::HistoryOwner,
 ) {
+    INLINE_CLIENT.with(|c| *c.borrow_mut() = Some(std::sync::Arc::downgrade(&ui_ctx)));
+    start_inline_timer_if_needed();
     // Optimization: Check if already registered (O(1) in UI thread)
     let already_registered = INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(&attachment_id));
     if already_registered {
@@ -489,8 +523,7 @@ pub(crate) fn register_gif_attachment_guarded(
     }
 
     let generation = crate::bin_ui::decode_cache::thumbnail_generation();
-    crate::rt_handle().spawn(async move {
-        let _ = chatter_core::services::attachment::run_attachment_work(move || {
+    chatter_core::media::gif::workers::submit(format!("inline:{attachment_id}:{generation}"), true, move || {
             if !owner.is_current()
                 || generation != crate::bin_ui::decode_cache::thumbnail_generation()
             {
@@ -588,7 +621,7 @@ pub(crate) fn register_gif_attachment_guarded(
                 } else {
                     (numer as u64) / (denom as u64)
                 };
-                let delay_ms = delay_ms.max(20);
+                let delay_ms = chatter_core::media::gif::animator::normalize_delay_ms(delay_ms);
 
                 let buffer = frame.into_buffer();
                 let (width, height) = buffer.dimensions();
@@ -665,8 +698,6 @@ pub(crate) fn register_gif_attachment_guarded(
                     }
                 });
             }
-        })
-        .await;
     });
 }
 
