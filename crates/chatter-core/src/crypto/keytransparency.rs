@@ -591,6 +591,7 @@ pub fn verify_consistency_proof(response: &GetConsistencyProofResponse) -> Resul
         || proof.old_epoch != old_sth.epoch
         || proof.new_epoch != new_sth.epoch
     {
+        tracing::warn!(target: "kt_proof::epoch_binding_mismatch", "KT continuity rejected");
         return Err(KtError::ConsistencyEpochOrder);
     }
 
