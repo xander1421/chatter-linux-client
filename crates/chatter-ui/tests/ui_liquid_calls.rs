@@ -1,6 +1,6 @@
 //! Software renderer captures of the live call surfaces at phone and desktop widths.
 use i_slint_backend_testing::{self as testing, TestingBackend, TestingBackendOptions};
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 
 slint::slint! {
     import { IncomingCallModal } from "../../ui/calls/incoming_call_modal.slint";
@@ -21,8 +21,11 @@ slint::slint! {
         in property <int> scene: 0;
         callback theme(string);
         callback motion(bool);
+        callback motion-speed(float);
+        pure callback select-tiles([CallParticipantData], string) -> [int];
         theme(value) => { Appearance.theme = value; }
         motion(value) => { Appearance.reduce-motion = value; }
+        motion-speed(value) => { Appearance.animation-speed = value; }
 
         Rectangle {
             background: Colors.background;
@@ -67,6 +70,7 @@ slint::slint! {
             viewport-height: parent.height;
             show: root.scene == 3;
             call-data: root.active;
+            select-tile-indices(participants, pinned) => { return root.select-tiles(participants, pinned); }
             speaker-toggle: parent.width < 600px;
             is-video-enabled: true;
         }
@@ -109,6 +113,22 @@ fn calls_arrive_and_settle_in_both_themes_and_widths() {
     })))
     .unwrap();
     let window = CallsHarness::new().unwrap();
+    // Sample the standard 320ms transition at 80ms. The app's current 4x
+    // default otherwise finishes it at the first measured frame.
+    window.invoke_motion_speed(1.0);
+    window.on_select_tiles(|participants, pinned| {
+        let participants: Vec<_> = participants.iter().collect();
+        let indices = chatter_core::calls::tiles::select_visible_tiles(
+            &participants,
+            pinned.as_str(),
+            |participant| participant.user_id.as_str(),
+            |participant| participant.is_screen_sharing,
+            |participant| participant.is_speaking,
+        );
+        slint::ModelRc::new(slint::VecModel::from(
+            indices.into_iter().map(|index| index as i32).collect::<Vec<_>>(),
+        ))
+    });
     window.show().unwrap();
     window.set_incoming(IncomingCallData {
         caller_name: "Morgan Rivera".into(),
@@ -161,7 +181,7 @@ fn calls_arrive_and_settle_in_both_themes_and_widths() {
             advance(520);
             frame(&window, &format!("{device}-{theme}-03-ringing-settled.png"));
             let settled = window.window().take_snapshot().unwrap().as_bytes().to_vec();
-            assert_ne!(arrival, settled, "ringing card must move between frames");
+            assert!(arrival != settled, "ringing card must move between frames");
             window.set_scene(2);
             advance(500);
             frame(&window, &format!("{device}-{theme}-04-device-sheet.png"));
@@ -179,7 +199,7 @@ fn calls_arrive_and_settle_in_both_themes_and_widths() {
             advance(500);
             frame(&window, &format!("{device}-{theme}-07-grid-settled.png"));
             let grid = window.window().take_snapshot().unwrap().as_bytes().to_vec();
-            assert_ne!(travel, grid, "participant grid must settle after reflow");
+            assert!(travel != grid, "participant grid must settle after reflow");
         }
     }
 }

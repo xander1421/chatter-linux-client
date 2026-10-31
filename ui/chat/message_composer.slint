@@ -565,9 +565,9 @@ export component MessageComposer inherits GlassSurface {
 
             // Attachment cards sit between the controls and the reply row.
             if root.has-attachments: ComposerAttachmentStrip {
-                x: Spacing.touch-target-min + root.row-padding * 2 + Spacing.xs;
+                x: root.row-padding;
                 y: root.action-shell-height + Spacing.xs;
-                width: max(0px, parent.width - (root.show-attachment-action ? root.action-shell-height : 0px) - self.x - Spacing.xs);
+                width: max(0px, parent.width - root.row-padding * 2);
                 height: min(root.attachment-band-height,
                     max(0px, root.raised-toolbar-height - self.y - Spacing.xs));
                 row-padding: root.row-padding;

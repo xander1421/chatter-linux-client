@@ -83,41 +83,45 @@ export component ComposerAttachmentStrip inherits GlassSurface {
                     padding-right: 0px;
                     spacing: Spacing.xs;
 
-                    // Icon or thumbnail with loading indicator
-                    Rectangle {
-                        width: 32px;
-                        height: 32px;
-                        border-radius: Spacing.radius-sm;
-                        background: attachment.has-thumbnail ? transparent : category-bg.transparentize(0.8);
-                        clip: true;
+                    // Center the preview in the full-height card row.
+                    VerticalLayout {
+                        horizontal-stretch: 0;
+                        alignment: center;
+                        Rectangle {
+                            width: 32px;
+                            height: 32px;
+                            border-radius: Spacing.radius-sm;
+                            background: attachment.has-thumbnail ? transparent : category-bg.transparentize(0.8);
+                            clip: true;
 
-                        // Show thumbnail for images
-                        if attachment.has-thumbnail && attachment.is-ready: Image {
-                            width: 100%;
-                            height: 100%;
-                            source: attachment.thumbnail;
-                            image-fit: cover;
-                        }
+                            // Show thumbnail for images
+                            if attachment.has-thumbnail && attachment.is-ready: Image {
+                                width: 100%;
+                                height: 100%;
+                                source: attachment.thumbnail;
+                                image-fit: cover;
+                            }
 
-                        // Show icon for non-images when ready
-                        if !attachment.has-thumbnail && attachment.is-ready: Text {
-                            width: 100%;
-                            height: 100%;
-                            text: category-emoji;
-                            font-family: Typography.font-family-emoji;
-                            font-size: Typography.lg;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
+                            // Show icon for non-images when ready
+                            if !attachment.has-thumbnail && attachment.is-ready: Text {
+                                width: 100%;
+                                height: 100%;
+                                text: category-emoji;
+                                font-family: Typography.font-family-emoji;
+                                font-size: Typography.lg;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
 
-                        // Loading indicator when not ready
-                        if !attachment.is-ready: Text {
-                            width: 100%;
-                            height: 100%;
-                            text: "\u{23F3}";  // Hourglass
-                            font-size: Typography.lg;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+                            // Loading indicator when not ready
+                            if !attachment.is-ready: Text {
+                                width: 100%;
+                                height: 100%;
+                                text: "\u{23F3}";  // Hourglass
+                                font-size: Typography.lg;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
                         }
                     }
 

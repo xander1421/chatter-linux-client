@@ -25,9 +25,8 @@ export component AppCallDock inherits ActiveCallView {
     callback show-screen-source-picker();
     callback show-audio-output-picker();
 
-        // Take the chat column's full vertical slot when
-        // fullscreen, otherwise stay as a fixed dock (the
-        // child component caps its own height to 280px).
+        // Fullscreen fills the chat column. Otherwise the child computes a
+        // responsive call area, with more room on tablet and desktop.
         vertical-stretch: root.active-call-fullscreen ? 1 : 0;
         show: root.active-call-visible;
         fullscreen: root.active-call-fullscreen;
