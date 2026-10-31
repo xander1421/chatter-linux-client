@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use slint::{Image, Model, Timer, TimerMode, Weak};
 
-use super::{INLINE_ANIMATION_BYTES, INLINE_FRAME_PX, MAX_INLINE_GIFS, MAX_INLINE_GIF_BYTES};
+use super::{INLINE_ANIMATION_BYTES, INLINE_FRAME_PX, MAX_INLINE_GIF_BYTES, MAX_INLINE_GIFS};
 use crate::MainWindow;
 
 thread_local! {
@@ -523,7 +523,30 @@ pub(crate) fn register_gif_attachment_guarded(
     }
 
     let generation = crate::bin_ui::decode_cache::thumbnail_generation();
-    chatter_core::media::gif::workers::submit(format!("inline:{attachment_id}:{generation}"), true, move || {
+    let visible = window_weak.upgrade().is_some_and(|w| {
+        let messages = w.global::<crate::ChatPane>().get_messages();
+        rows_to_animate(
+            w.global::<crate::ChatPane>()
+                .get_message_first_visible_row(),
+            w.global::<crate::ChatPane>().get_message_last_visible_row(),
+            messages.row_count(),
+        )
+        .is_some_and(|rows| {
+            rows.into_iter().any(|row| {
+                messages.row_data(row).is_some_and(|msg| {
+                    (0..msg.attachments.row_count()).any(|i| {
+                        msg.attachments
+                            .row_data(i)
+                            .is_some_and(|att| att.id.as_str() == attachment_id)
+                    })
+                })
+            })
+        })
+    });
+    chatter_core::media::gif::workers::submit(
+        format!("inline:{attachment_id}:{generation}"),
+        visible,
+        move || {
             if !owner.is_current()
                 || generation != crate::bin_ui::decode_cache::thumbnail_generation()
             {
@@ -698,7 +721,8 @@ pub(crate) fn register_gif_attachment_guarded(
                     }
                 });
             }
-    });
+        },
+    );
 }
 
 // Note: legacy unit tests that constructed an `AttachmentService` directly were

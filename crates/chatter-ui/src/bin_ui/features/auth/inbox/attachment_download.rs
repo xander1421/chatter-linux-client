@@ -137,12 +137,14 @@ fn handle_gif(
     _conversation_id: &str,
     owner: crate::bin_ui::features::history_owner::HistoryOwner,
 ) {
-    crate::bin_ui::gif_state::register_gif_attachment_guarded(
-        att_id.to_string(),
-        ui_ctx.clone(),
-        weak_window.clone(),
-        owner,
-    );
+    let id = att_id.to_string();
+    let client = ui_ctx.clone();
+    let weak = weak_window.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if owner.is_current() {
+            crate::bin_ui::gif_state::register_gif_attachment_guarded(id, client, weak, owner);
+        }
+    });
 }
 
 /// Handle still images: original bytes/pixels never enter the event loop.

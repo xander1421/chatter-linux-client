@@ -95,11 +95,17 @@ impl StaticPreviewLoader {
         if !att.metadata.is_image() || att.metadata.is_gif() {
             return None;
         }
-        let bytes = match att.metadata.thumbnail.filter(|b| !b.is_empty()) {
-            Some(bytes) => bytes,
+        // Reuse bounded, authenticated sidecar/original preparation. This keeps
+        // source allocation limits, durable derived thumbnails and session fences.
+        let preview = tokio::select! {
+            _ = cancelled.cancelled() => return None,
+            preview = client.ensure_attachment_preview(id, session.clone()) => preview,
+        };
+        let preview = match preview {
+            Some(preview) => preview,
             None => tokio::select! {
                 _ = cancelled.cancelled() => return None,
-                bytes = client.ensure_attachment_thumbnail(&id) => bytes.unwrap_or_default(),
+                preview = client.prepare_downloaded_image_preview(id, session.clone()) => preview.ok()?,
             },
         };
         if !current() || !session.is_current() {
@@ -111,26 +117,16 @@ impl StaticPreviewLoader {
             if cancelled.is_cancelled() || !session.is_current() || !loader.is_current() {
                 return None;
             }
-            let bytes = if bytes.is_empty() {
-                // No automatic full-blob download merely to paint a row. Downloaded
-                // legacy attachments can still derive a preview without a sidecar.
-                client
-                    .decrypt_attachment_auto(&id)
-                    .ok()?
-                    .as_slice()
-                    .to_vec()
-            } else {
-                bytes
+            let image = image::DynamicImage::ImageRgba8(preview.pixels)
+                .thumbnail(edge, edge)
+                .into_rgba8();
+            let result = Preview {
+                width: image.width(),
+                height: image.height(),
+                rgba: image.into_raw().into(),
             };
-            if cancelled.is_cancelled() || !session.is_current() || !loader.is_current() {
-                return None;
-            }
-            let result = decode(&bytes, edge)?;
-            if cancelled.is_cancelled() || !session.is_current() || !loader.is_current() {
-                return None;
-            }
             let mut cache = loader.cache.lock().ok()?;
-            if !loader.is_current() {
+            if cancelled.is_cancelled() || !session.is_current() || !loader.is_current() {
                 return None;
             }
             remember(&mut cache, key, result.clone(), tick, 32 * 1024 * 1024);
@@ -152,6 +148,7 @@ async fn acquire(
     }
 }
 
+#[cfg(test)]
 fn decode(bytes: &[u8], edge: u32) -> Option<Preview> {
     crate::services::attachment::validate_media(bytes).ok()?;
     let image = super::ImageProcessor::load_from_memory(bytes)

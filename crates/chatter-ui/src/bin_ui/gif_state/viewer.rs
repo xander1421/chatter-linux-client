@@ -124,7 +124,9 @@ pub fn start_gif_animation_and_inline(
                 inline_delays.clone(),
             );
             let _ = slint::invoke_from_event_loop(move || {
-                if GENERATION.with(|g| *g.borrow() != generation) || cache_generation != crate::bin_ui::decode_cache::thumbnail_generation() {
+                if GENERATION.with(|g| *g.borrow() != generation)
+                    || cache_generation != crate::bin_ui::decode_cache::thumbnail_generation()
+                {
                     return;
                 }
                 super::inline::register_inline_gif_from_buffers(&id, inline_buffers, inline_delays);

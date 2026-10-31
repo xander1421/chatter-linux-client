@@ -153,6 +153,8 @@ pub fn decode_loop(
     max_frames: usize,
     max_bytes: usize,
 ) -> Result<Vec<GifFrame>, MediaError> {
+    // Admit the source canvas before either native or image decoding allocates.
+    let decoder = bounded_gif_decoder(Cursor::new(bytes))?;
     #[cfg(feature = "desktop-gstreamer")]
     if super::gstreamer_decoder::is_gstreamer_gif_available() {
         match super::gstreamer_decoder::decode_loop_cpu(
@@ -163,7 +165,6 @@ pub fn decode_loop(
             Err(e) => tracing::debug!("Native GIF decode unavailable, using image decoder: {e}"),
         }
     }
-    let decoder = bounded_gif_decoder(Cursor::new(bytes))?;
     let mut selected = super::DecimatedGif::default();
     for frame in decoder.into_frames() {
         let frame = frame.map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
@@ -217,7 +218,9 @@ mod loop_tests {
         let mut encoded = Vec::new();
         {
             let mut encoder = image::codecs::gif::GifEncoder::new(&mut encoded);
-            encoder.set_repeat(image::codecs::gif::Repeat::Infinite).unwrap();
+            encoder
+                .set_repeat(image::codecs::gif::Repeat::Infinite)
+                .unwrap();
             for delay in [10, 20, 100, 200] {
                 let frame = image::Frame::from_parts(
                     image::RgbaImage::from_pixel(8, 4, image::Rgba([255, 0, 0, 255])),

@@ -409,24 +409,67 @@ async fn fetch_full_gif_frames(
         }
     };
 
+    if !current() {
+        return None;
+    }
     let (tx, rx) = tokio::sync::oneshot::channel();
-    // Search generations may request the same tile while an older generation
-    // is decoding, so each waiter owns its completion rather than coalescing.
     static REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let request = REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     chatter_core::media::gif::workers::submit(format!("picker:{request}"), true, move || {
-        let _fetch = fetch;
-        if !current() { let _ = tx.send(None); return; }
-        let decoded = chatter_core::media::gif::progressive::decode_loop(&bytes, 160, 160, 30, 2 << 20)
-            .ok().filter(|frames| !frames.is_empty()).map(|frames| RawGifFrames {
+        let decoded = (move || {
+            let _fetch = fetch;
+            if !current() {
+                return None;
+            }
+            use image::AnimationDecoder;
+            let decoder =
+                chatter_core::media::gif::bounded_gif_decoder(std::io::Cursor::new(&bytes)).ok()?;
+            let mut selected = chatter_core::media::gif::DecimatedGif::default();
+            for frame in decoder.into_frames() {
+                if !current() {
+                    return None;
+                }
+                let frame = frame.ok()?;
+                let (numer, denom) = frame.delay().numer_denom_ms();
+                let delay = if denom == 0 {
+                    100
+                } else {
+                    chatter_core::media::gif::animator::normalize_delay_ms(
+                        numer as u64 / denom as u64,
+                    )
+                };
+                let buffer = frame.into_buffer();
+                let (w, h) = buffer.dimensions();
+                let (raw, w, h) =
+                    crate::bin_ui::gif_state::fit_frame(buffer.into_raw(), w, h, 160, 160);
+                if raw.is_empty() {
+                    continue;
+                }
+                let size = raw.len();
+                let pixels =
+                    slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&raw, w, h);
+                selected = chatter_core::media::gif::decimate_gif_frame(
+                    selected,
+                    pixels,
+                    delay,
+                    size,
+                    30,
+                    2 * 1024 * 1024,
+                );
+            }
+            if selected.frames.is_empty() {
+                return None;
+            }
+            Some(RawGifFrames {
                 id,
-                frames: frames.into_iter().map(|frame| (
-                    slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                        &frame.data, frame.width, frame.height,
-                    ), frame.delay.as_millis() as u64,
-                )).collect(),
-            });
-        let _ = tx.send(if current() { decoded } else { None });
+                frames: selected
+                    .frames
+                    .into_iter()
+                    .map(|f| (f.frame, f.delay_ms))
+                    .collect(),
+            })
+        })();
+        let _ = tx.send(decoded);
     });
     rx.await.ok().flatten()
 }
