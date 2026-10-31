@@ -1517,17 +1517,23 @@ fn channel_settings_ai_toggle_reaches_core() {
 
     w.global::<chatter_ui::ModalHostState>()
         .invoke_channel_settings_toggle_ai(true);
-    assert!(
-        client.ai_enabled_for(&channel_id),
-        "channel AI toggle did NOT reach core (dead/stub wire)"
-    );
+    rt.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !client.ai_enabled_for(&channel_id) {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }).await.expect("channel AI enable was not persisted");
+    });
 
     w.global::<chatter_ui::ModalHostState>()
         .invoke_channel_settings_toggle_ai(false);
-    assert!(
-        !client.ai_enabled_for(&channel_id),
-        "channel AI toggle did not switch back off"
-    );
+    rt.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while client.ai_enabled_for(&channel_id) {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }).await.expect("channel AI disable was not persisted");
+    });
 }
 
 /// A public channel must not claim end-to-end encryption.
