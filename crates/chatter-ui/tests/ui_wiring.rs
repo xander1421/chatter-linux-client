@@ -1066,7 +1066,7 @@ fn sidebar_injects_ai_channel_and_never_autoselects_it() {
     let channels = client.sidebar_channels();
     assert!(
         !channels.is_empty(),
-        "AI channel missing from sidebar with local AI ON"
+        "AI channel missing from sidebar after remote consent"
     );
     let first = &channels[0];
     assert!(
@@ -3686,6 +3686,7 @@ fn chat_list_is_one_list_by_activity_with_pins_first() {
         "hello",
         "12:00",
         chatter_core::client::UnreadBadges { row: 1, total: 2 },
+        0,
     );
     let model = w.global::<chatter_ui::SidebarPane>().get_chat_rows();
     let ids: Vec<String> = model
