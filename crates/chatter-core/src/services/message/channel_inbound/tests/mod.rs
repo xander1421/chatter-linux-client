@@ -5,6 +5,7 @@ use crate::domain::message::{ConversationType, MessageContent};
 mod edit;
 mod gate;
 mod persistence;
+mod transactional;
 mod resync;
 
 
@@ -17,4 +18,7 @@ pub(super) fn bind_test_owner(client: &ChatterClient) {
             &UserId::new().to_string(),
         ).unwrap();
     }
+    let owner = client.messages().settings_repo.current_user_id().unwrap();
+    client.auth_state().set_logged_in(owner, 1, "fixture".into());
+
 }

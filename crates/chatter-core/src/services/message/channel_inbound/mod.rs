@@ -29,11 +29,11 @@ use super::{MessageError, MessageService};
 
 mod edit;
 mod persist;
-mod prepare;
+pub(crate) mod prepare;
 mod resync;
 
 use edit::is_newer_edit;
-pub(crate) use persist::Persisted;
+pub(crate) use persist::{Persisted, PresenceHint};
 pub(crate) use prepare::DecryptFailureGate;
 #[cfg(test)]
 use prepare::{RESEND_GIVE_UP_ATTEMPTS, record_decrypt_failure};
@@ -58,7 +58,10 @@ pub enum Ingested {
     RetryableFailure,
 }
 
+pub(crate) use crate::state::receive_session::ReceiveSession;
+
 /// Shared decrypt → persist → announce path for channel messages.
+#[derive(Clone)]
 pub struct ChannelInbound {
     messages: Arc<MessageService>,
     attachments: Arc<AttachmentService>,
@@ -122,20 +125,57 @@ impl ChannelInbound {
         channel_id: ChannelId,
         live: bool,
     ) -> Ingested {
+        self.ingest_with_hint(proto_msg, channel_id, live, PresenceHint::KnownPresent).await
+    }
+
+    pub(crate) async fn advisory_ids(
+        &self,
+        ids: Vec<crate::domain::ids::MessageId>,
+    ) -> Result<std::collections::HashSet<crate::domain::ids::MessageId>, crate::error::StorageError> {
+        let messages = self.messages.clone();
+        self.messages.database.run_blocking(move || messages.message_repo.existing_ids(&ids)).await
+    }
+
+    pub(crate) fn receive_session(&self) -> Result<ReceiveSession, crate::error::StorageError> { self.messages.receive_session() }
+
+    pub(crate) fn database(&self) -> &Arc<crate::storage::Database> { &self.messages.database }
+
+    pub(crate) async fn ingest_with_hint(
+        &self,
+        proto_msg: &chat_v1::Message,
+        channel_id: ChannelId,
+        live: bool,
+        hint: PresenceHint,
+    ) -> Ingested {
+        let Ok(session) = self.receive_session() else { return Ingested::RetryableFailure };
+        self.ingest_with_session(proto_msg, channel_id, live, hint, session).await
+    }
+
+    pub(crate) async fn ingest_with_session(
+        &self,
+        proto_msg: &chat_v1::Message,
+        channel_id: ChannelId,
+        live: bool,
+        hint: PresenceHint,
+        session: ReceiveSession,
+    ) -> Ingested {
+        if session.check().is_err() { return Ingested::RetryableFailure; }
         // THIS device's own messages are skipped only on the LIVE path, where
         // they are already on screen from the optimistic send. On a backfill they must
         // still be stored, or a reinstall loses this user's own half of the
         // conversation. (An own message in an ENCRYPTED channel still drops
         // out below — we cannot decrypt our own sender-key ciphertext — which
         // is what the message-backup path exists for.)
-        let mut message = match self.prepare(proto_msg, channel_id, live).await {
+        let mut message = match self.prepare(proto_msg, channel_id, live, &session).await {
             Ok(m) => m,
             Err(outcome) => return outcome,
         };
 
+        let completion_session = session.clone();
         let messages = self.messages.clone();
         let stored = self.messages.database.run_blocking(move || {
-            let persisted = Self::persist_message(&messages, &mut message, channel_id);
+            session.check()?;
+            let persisted = Self::persist_message_admitted(&messages, &mut message, channel_id, hint, &session);
             Ok((message, persisted))
         }).await;
         let (message, Some(persisted)) = (match stored {
@@ -148,6 +188,8 @@ impl ChannelInbound {
             return Ingested::RetryableFailure;
         };
 
+        if completion_session.check().is_err() { return Ingested::RetryableFailure; }
+        if persisted == Persisted::Suppressed { return Ingested::Dropped; }
         if persisted == Persisted::New {
             let _ = self
                 .event_bus()

@@ -163,6 +163,8 @@ impl CoreServices {
                 Arc::new(crate::system::notification_sink::NoopNotificationSink)
             }
         });
+        let auth_state = AuthState::new();
+        let _ = services.message_service.receive_auth.set(auth_state.clone());
         // Shared decrypt -> persist path for server-managed channel messages.
         // Both the live stream and the durable catch-up fetch go through it,
         // so a message reads the same whichever way it arrived.
@@ -185,7 +187,7 @@ impl CoreServices {
             services.message_service.clone(),
         ));
 
-        let auth_state = AuthState::new();
+
         Self {
             // Runtime handle for async spawning from UI callbacks
             runtime_handle: tokio::runtime::Handle::current(),

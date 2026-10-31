@@ -571,8 +571,23 @@ impl UnifiedMessageRepository {
         emoji: &str,
         action_ts: u64,
     ) -> Result<ReactionWriteOutcome, StorageError> {
+        self.add_reaction_outcome_at_admitted(scope, sender_id, sent_at_ns, reactor_id, current_user_id, emoji, action_ts, None)
+    }
+
+    pub(crate) fn add_reaction_outcome_at_admitted(
+        &self,
+        scope: &ReactionScope,
+        sender_id: &UserId,
+        sent_at_ns: u64,
+        reactor_id: &UserId,
+        current_user_id: &UserId,
+        emoji: &str,
+        action_ts: u64,
+        session: Option<&crate::state::receive_session::ReceiveSession>,
+    ) -> Result<ReactionWriteOutcome, StorageError> {
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
+        if let Some(session) = session { session.check_owner(&tx)?; }
         let conn = &tx;
         let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at=?4 AND is_deleted=0)",params![scope.id.to_string(),scope.kind.as_str(),sender_id.to_string(),sent_at_ns as i64],|row|row.get(0))?;
         if !exists {
@@ -593,6 +608,7 @@ impl UnifiedMessageRepository {
             let completed = reaction_action_completed(
                 conn, scope, sender_id, sent_at_ns, reactor_id, emoji, action_ts, false,
             )?;
+            if let Some(session) = session { session.check()?; }
             tx.commit()?;
             return Ok(ReactionWriteOutcome {
                 changed: false,
@@ -620,6 +636,7 @@ impl UnifiedMessageRepository {
         let completed = reaction_action_completed(
             conn, scope, sender_id, sent_at_ns, reactor_id, emoji, action_ts, false,
         )?;
+        if let Some(session) = session { session.check()?; }
         tx.commit()?;
         Ok(ReactionWriteOutcome {
             changed: inserted > 0,
@@ -683,8 +700,23 @@ impl UnifiedMessageRepository {
         emoji: &str,
         action_ts: u64,
     ) -> Result<ReactionWriteOutcome, StorageError> {
+        self.remove_reaction_outcome_at_admitted(scope, sender_id, sent_at_ns, reactor_id, current_user_id, emoji, action_ts, None)
+    }
+
+    pub(crate) fn remove_reaction_outcome_at_admitted(
+        &self,
+        scope: &ReactionScope,
+        sender_id: &UserId,
+        sent_at_ns: u64,
+        reactor_id: &UserId,
+        current_user_id: &UserId,
+        emoji: &str,
+        action_ts: u64,
+        session: Option<&crate::state::receive_session::ReceiveSession>,
+    ) -> Result<ReactionWriteOutcome, StorageError> {
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
+        if let Some(session) = session { session.check_owner(&tx)?; }
         let conn = &tx;
         let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at=?4 AND is_deleted=0)",params![scope.id.to_string(),scope.kind.as_str(),sender_id.to_string(),sent_at_ns as i64],|row|row.get(0))?;
         if !exists {
@@ -705,6 +737,7 @@ impl UnifiedMessageRepository {
             let completed = reaction_action_completed(
                 conn, scope, sender_id, sent_at_ns, reactor_id, emoji, action_ts, true,
             )?;
+            if let Some(session) = session { session.check()?; }
             tx.commit()?;
             return Ok(ReactionWriteOutcome {
                 changed: false,
@@ -726,6 +759,7 @@ impl UnifiedMessageRepository {
         let completed = reaction_action_completed(
             conn, scope, sender_id, sent_at_ns, reactor_id, emoji, action_ts, true,
         )?;
+        if let Some(session) = session { session.check()?; }
         tx.commit()?;
         Ok(ReactionWriteOutcome {
             changed: deleted > 0,

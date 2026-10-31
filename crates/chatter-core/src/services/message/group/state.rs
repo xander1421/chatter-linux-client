@@ -81,8 +81,13 @@ impl GroupStateGate {
         peer_revision: u64,
         peer_hash: &[u8],
     ) -> Option<PeerStateCheck> {
+        self.cross_check_admitted(channel_id, sender_is_member, peer_revision, peer_hash, None).ok().flatten()
+    }
+
+    pub(crate) fn cross_check_admitted(&self, channel_id: &ChannelId, sender_is_member: bool, peer_revision: u64, peer_hash: &[u8], session: Option<&crate::state::receive_session::ReceiveSession>) -> Result<Option<PeerStateCheck>, crate::error::StorageError> {
+        if let Some(session) = session { session.check()?; }
         let check = match self.load(channel_id) {
-            None if peer_revision == 0 => return None,
+            None if peer_revision == 0 => return Ok(None),
             None => PeerStateCheck::PeerAhead,
             Some(local) => {
                 let local_revision = local.revision();
@@ -107,7 +112,8 @@ impl GroupStateGate {
             PeerStateCheck::Fork if sender_is_member => {
                 tracing::error!(%channel_id, peer_revision,
                     "Membership FORK: a member's state hash differs from ours; channel send-blocked");
-                if let Err(e) = self.repo.set_status(channel_id, VerificationStatus::Fork) {
+                if let Err(e) = self.repo.set_status_admitted(channel_id, VerificationStatus::Fork, session) {
+                    if session.is_some() { return Err(e); }
                     tracing::warn!(%channel_id, error = %e, "Could not record membership fork");
                 }
             }
@@ -118,14 +124,28 @@ impl GroupStateGate {
                 let key = Self::peer_ahead_key(channel_id);
                 let known = self.settings.get::<u64>(&key).ok().flatten().unwrap_or(0);
                 if peer_revision > known {
-                    if let Err(e) = self.settings.set(&key, &peer_revision) {
+                    let result = match session {
+                        Some(session) => self.settings.set_received(&key, &peer_revision, session),
+                        None => self.settings.set(&key, &peer_revision),
+                    };
+                    if let Err(e) = result {
+                        if session.is_some() { return Err(e); }
                         tracing::warn!(%channel_id, error = %e, "Could not record a peer's newer revision");
                     }
                 }
             }
             PeerStateCheck::InSync | PeerStateCheck::PeerBehind => {}
         }
-        Some(check)
+        if let Some(session) = session { session.check()?; }
+        Ok(Some(check))
+    }
+
+    fn take_peer_ahead_received(&self, channel_id: &ChannelId, session: &crate::state::receive_session::ReceiveSession) -> Result<Option<u64>, crate::error::StorageError> {
+        session.check()?;
+        let key = Self::peer_ahead_key(channel_id);
+        let Some(revision) = self.settings.get::<u64>(&key)? else { return Ok(None) };
+        self.settings.delete_received(&key, session)?;
+        Ok(Some(revision))
     }
 
     /// The highest revision a peer showed above ours since the last call,
@@ -173,19 +193,24 @@ impl MessageService {
         tokio::spawn(async move { sync.fetch_channel_changes(channel_id, peer_revision).await });
     }
 
-    /// Cross-check a received group DataMessage's stamp from a verified
-    /// member ([`GroupStateGate::cross_check`]), then fetch if it is ahead.
-    pub(crate) fn check_group_stamp(
-        &self,
-        channel_id: &ChannelId,
-        dm: &crate::proto::content_v1::DataMessage,
-    ) {
-        self.group_gate().cross_check(
-            channel_id,
-            true,
-            dm.group_state_revision,
-            &dm.group_state_hash,
-        );
-        self.sync_channel_state_if_behind(channel_id);
+    pub(crate) fn sync_channel_state_if_behind_received(&self, channel_id: &ChannelId, session: &crate::state::receive_session::ReceiveSession) -> Result<(), crate::error::StorageError> {
+        session.check()?;
+        let Some(sync) = self.channel_state_sync.read().clone() else { return Ok(()) };
+        let Some(peer_revision) = self.group_gate().take_peer_ahead_received(channel_id, session)? else { return Ok(()) };
+        session.check()?;
+        let channel_id = *channel_id;
+        let session = session.clone();
+        tokio::spawn(async move {
+            if session.check().is_err() { return; }
+            sync.fetch_channel_changes(channel_id, peer_revision).await;
+            let _ = session.check();
+        });
+        Ok(())
     }
+
+    pub(crate) fn check_group_stamp_received(&self, channel_id: &ChannelId, dm: &crate::proto::content_v1::DataMessage, session: &crate::state::receive_session::ReceiveSession) -> Result<(), crate::error::StorageError> {
+        self.group_gate().cross_check_admitted(channel_id, true, dm.group_state_revision, &dm.group_state_hash, Some(session))?;
+        self.sync_channel_state_if_behind_received(channel_id, session)
+    }
+
 }

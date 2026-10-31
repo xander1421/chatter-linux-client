@@ -189,6 +189,7 @@ impl MessageService {
         use crate::proto::content_v1::GroupEncrypted;
         use crate::services::message::conversion::proto_to_domain_message_with_sender;
 
+        let Ok(session) = self.receive_session() else { return; };
         // An SKDM reply is not proof that it supplied a missing historical key.
         // Keep request backoff until a parked message is durably persisted.
 
@@ -202,17 +203,26 @@ impl MessageService {
                 .collect()
         };
 
-        // The SKDM's stamp may have shown a peer ahead of us.
-        self.sync_channel_state_if_behind(&channel_id);
-
-        if pending.is_empty() {
-            return;
-        }
-        // Admitted when parked; the verified state may have dropped the sender since.
-        if !self.group_gate().admits(&channel_id, &sender_id) {
-            tracing::warn!(%channel_id, %sender_id, count = pending.len(),
-                "Dropping parked group messages: sender is no longer a verified member");
-            return;
+        let has_pending = !pending.is_empty();
+        let messages = self.clone();
+        let admitted = session.clone();
+        let membership = self.database.run_blocking(move || {
+            admitted.check()?;
+            messages.sync_channel_state_if_behind_received(&channel_id, &admitted)?;
+            Ok(!has_pending || messages.group_gate().admits(&channel_id, &sender_id))
+        }).await;
+        if session.check().is_err() { return; }
+        if pending.is_empty() { return; }
+        match membership {
+            Ok(true) => {},
+            Ok(false) => {
+                tracing::warn!(%channel_id, %sender_id, "Dropping parked group messages: sender is no longer a verified member");
+                return;
+            }
+            Err(_) => {
+                for proto in pending { self.defer_pending_group_decrypt(channel_id, sender_id, device_id, proto); }
+                return;
+            }
         }
 
         tracing::info!(
@@ -224,9 +234,12 @@ impl MessageService {
         );
 
         for proto_msg in pending {
-            match super::super::channel_inbound::ChannelInbound::drop_blocked_sender(
-                self, &proto_msg, channel_id,
-            ) {
+            if session.check().is_err() { return; }
+            let messages = self.clone();
+            let metadata = super::super::channel_inbound::prepare::preflight_metadata(&proto_msg);
+            match self.database.run_blocking(move || super::super::channel_inbound::ChannelInbound::drop_blocked_sender(
+                &messages, &metadata, channel_id,
+            )).await {
                 Ok(true) => continue,
                 Ok(false) => {}
                 Err(error) => {
@@ -293,20 +306,6 @@ impl MessageService {
                         tracing::warn!("Retry: authenticated channel identity mismatch");
                         continue;
                     }
-                    self.check_group_stamp(&channel_id, &dm);
-
-                    // Persist incoming attachment pointers so the receiver can
-                    // download + decrypt (parity with the stream path).
-                    if !dm.attachments.is_empty() {
-                        let attachment_service =
-                            crate::services::attachment::AttachmentService::new_local(
-                                self.attachment_repo.clone(),
-                            );
-                        if let Err(error) = attachment_service.create_from_pointers(&dm.attachments)
-                        {
-                            tracing::warn!(%error, "Failed to store attachment records");
-                        }
-                    }
 
                     // Rebuild the wire proto with the decrypted text +
                     // attachment ids so `proto_to_domain_message_with_sender`
@@ -338,44 +337,53 @@ impl MessageService {
                     patched.content = Some(chat_v1::message::Content {
                         r#type: Some(new_type),
                     });
-                    // Group decrypt retry path — channel_id is the
-                    // current retry target. Derive ConversationType so
-                    // identified groups stay tagged Channel.
-                    let conv_type =
-                        crate::services::message::conversion::conversation_type_for_channel(
-                            &self.channel_repo,
-                            &channel_id,
-                        );
-                    match proto_to_domain_message_with_sender(&patched, Some(sender_id), conv_type)
-                    {
-                        Ok(mut message) => {
-                            crate::services::gateway::inbound::apply_inbound_quote(
-                                &mut message,
-                                dm.quote.as_ref(),
-                                &self.message_repo,
+                    let messages = self.clone();
+                    let write_session = session.clone();
+                    let stored = self.database.run_blocking(move || {
+                        write_session.check()?;
+                        messages.check_group_stamp_received(&channel_id, &dm, &write_session)?;
+                    // Persist incoming attachment pointers so the receiver can
+                    // download + decrypt (parity with the stream path).
+                    if !dm.attachments.is_empty() {
+                        let attachment_service =
+                            crate::services::attachment::AttachmentService::new_local(
+                                messages.attachment_repo.clone(),
                             );
-                            let Some(persisted) =
-                                super::super::channel_inbound::ChannelInbound::persist_message(
-                                    self,
-                                    &mut message,
-                                    channel_id,
-                                )
-                            else {
-                                continue;
-                            };
-                            {
-                                let mut gate = self.sender_key_requests.lock();
-                                gate.remove(&(channel_id, sender_id, device_id));
-                                gate.remove(&(channel_id, sender_id, 0));
-                            }
-                            if persisted == super::super::channel_inbound::Persisted::New {
-                                let _ = self
-                                    .event_bus
-                                    .domain_sender()
-                                    .send(DomainEvent::MessageReceived { message });
-                            }
+                        if let Err(error) = attachment_service.create_from_pointers_admitted(&dm.attachments, Some(&write_session))
+                        {
+                            tracing::warn!(%error, "Failed to store attachment records");
                         }
-                        Err(e) => tracing::warn!(error = %e, "Retry: conversion failed"),
+                    }
+
+                        let conv_type = crate::services::message::conversion::conversation_type_for_channel(
+                            &messages.channel_repo, &channel_id,
+                        );
+                        let mut message = match proto_to_domain_message_with_sender(&patched, Some(sender_id), conv_type) {
+                            Ok(message) => message,
+                            Err(error) => {
+                                tracing::warn!(%error, "Retry conversion failed");
+                                return Ok(None);
+                            }
+                        };
+                        crate::services::gateway::inbound::apply_inbound_quote(&mut message, dm.quote.as_ref(), &messages.message_repo);
+                        let persisted = super::super::channel_inbound::ChannelInbound::persist_message_admitted(
+                            &messages, &mut message, channel_id,
+                            super::super::channel_inbound::PresenceHint::KnownPresent, &write_session,
+                        );
+                        Ok(persisted.map(|persisted| (message, persisted)))
+                    }).await;
+                    if session.check().is_err() { return; }
+                    let Ok(Some((message, persisted))) = stored else {
+                        self.defer_pending_group_decrypt(channel_id, sender_id, device_id, proto_msg);
+                        continue;
+                    };
+                    {
+                        let mut gate = self.sender_key_requests.lock();
+                        gate.remove(&(channel_id, sender_id, device_id));
+                        gate.remove(&(channel_id, sender_id, 0));
+                    }
+                    if persisted == super::super::channel_inbound::Persisted::New {
+                        let _ = self.event_bus.domain_sender().send(DomainEvent::MessageReceived { message });
                     }
                 }
                 // libsignal's DuplicatedMessage: the message's iteration is

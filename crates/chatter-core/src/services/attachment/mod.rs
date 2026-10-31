@@ -546,6 +546,10 @@ impl AttachmentService {
         &self,
         pointers: &[AttachmentPointer],
     ) -> Result<Vec<AttachmentId>, crate::error::StorageError> {
+        self.create_from_pointers_admitted(pointers, None)
+    }
+
+    pub(crate) fn create_from_pointers_admitted(&self, pointers: &[AttachmentPointer], session: Option<&crate::state::receive_session::ReceiveSession>) -> Result<Vec<AttachmentId>, crate::error::StorageError> {
         use crate::domain::attachment::{Attachment, AttachmentStatus, FileMetadata};
 
         let mut ids = Vec::with_capacity(pointers.len());
@@ -628,7 +632,7 @@ impl AttachmentService {
                 secret_chat: self.secret_chat,
             };
 
-            let inserted = self.attachment_repo.insert_or_raise_secret(&attachment)?;
+            let inserted = self.attachment_repo.insert_or_raise_secret_admitted(&attachment, session)?;
             ids.push(att_id);
             if self.secret_chat {
                 // Nothing about a secret chat's file reaches the log.

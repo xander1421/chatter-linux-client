@@ -1,6 +1,11 @@
 use super::*;
 
 impl MessageService {
+    pub(crate) fn receive_session(&self) -> Result<crate::state::receive_session::ReceiveSession, crate::error::StorageError> {
+        let state = self.receive_auth.get().ok_or_else(|| crate::error::StorageError::InvalidData("Receive auth state unavailable".into()))?;
+        crate::state::receive_session::ReceiveSession::capture(state)
+    }
+
     /// Keep only history rows that are not already visible in the conversation.
     /// A fetched page can overlap the current model after a live delivery.
     pub fn unseen_history_rows<T>(
@@ -73,6 +78,7 @@ impl MessageService {
                 std::collections::HashMap::new(),
             )),
             eviction_resends: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+            receive_auth: Arc::new(std::sync::OnceLock::new()),
             channel_state_sync: Arc::new(parking_lot::RwLock::new(None)),
         }
     }

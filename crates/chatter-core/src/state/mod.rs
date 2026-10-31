@@ -15,6 +15,7 @@
 //! - **JarvisState** (`jarvis` feature): Jarvis conversation history
 
 pub mod auth_state;
+pub(crate) mod receive_session;
 pub mod chat_state;
 #[cfg(feature = "jarvis")]
 pub mod jarvis_state;

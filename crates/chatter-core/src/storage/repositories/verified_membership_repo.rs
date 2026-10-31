@@ -342,11 +342,19 @@ impl VerifiedMembershipRepository {
         channel_id: &ChannelId,
         status: VerificationStatus,
     ) -> Result<(), StorageError> {
+        self.set_status_admitted(channel_id, status, None)
+    }
+
+    pub(crate) fn set_status_admitted(&self, channel_id: &ChannelId, status: VerificationStatus, session: Option<&crate::state::receive_session::ReceiveSession>) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        conn.execute(
+        let tx = conn.unchecked_transaction()?;
+        if let Some(session) = session { session.check_owner(&tx)?; }
+        tx.execute(
             "UPDATE verified_channel_state SET status = ?2 WHERE channel_id = ?1",
             params![channel_id.to_string(), status as u8],
         )?;
+        if let Some(session) = session { session.check()?; }
+        tx.commit()?;
         Ok(())
     }
 

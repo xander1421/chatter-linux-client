@@ -45,14 +45,18 @@ impl ChannelInbound {
         proto_msg: &chat_v1::Message,
         channel_id: ChannelId,
         skip_own: bool,
+        session: &ReceiveSession,
     ) -> Result<Message, Ingested> {
+        session.check().map_err(|_| Ingested::RetryableFailure)?;
         // Copy metadata only: ciphertext can be large and stays on this task.
         let metadata = preflight_metadata(proto_msg);
+        let admitted = session.clone();
         let messages = self.messages.clone();
         let preflight = self
             .messages
             .database
             .run_blocking(move || {
+                admitted.check()?;
                 if let Ok(id) = metadata.id.parse::<crate::domain::ids::MessageId>() {
                     if messages.message_repo.is_tombstoned(&id)? {
                         return Ok((Some(Ingested::Dropped), None, None));
@@ -60,11 +64,12 @@ impl ChannelInbound {
                 }
                 if !metadata.send_request_key.is_empty() {
                     if let Ok(owner) = messages.settings_repo.current_user_id() {
-                        if super::super::channel_send::settle_cancelled_deposit(
+                        if super::super::channel_send::settle_cancelled_deposit_admitted(
                             &messages.database,
                             owner,
                             channel_id,
                             &metadata,
+                            Some(&admitted),
                         )? {
                             return Ok((Some(Ingested::Dropped), None, None));
                         }
@@ -256,7 +261,12 @@ impl ChannelInbound {
                     }
                     // The sender's verified (revision, state_hash): fork or
                     // staleness check against ours.
-                    self.messages.check_group_stamp(&channel_id, &dm);
+                    let messages = self.messages.clone();
+                    let stamp = content_v1::DataMessage { group_state_revision: dm.group_state_revision, group_state_hash: dm.group_state_hash.clone(), ..Default::default() };
+                    let admitted = session.clone();
+                    self.messages.database.run_blocking(move || messages.check_group_stamp_received(&channel_id, &stamp, &admitted))
+                        .await.map_err(|_| Ingested::RetryableFailure)?;
+                    session.check().map_err(|_| Ingested::RetryableFailure)?;
 
                     if current_user != Some(sid)
                         && let Some(key) = dm
@@ -267,11 +277,11 @@ impl ChannelInbound {
                         let Some(us) = current_user else {
                             return Err(Ingested::RetryableFailure);
                         };
-                        match self
-                            .messages
-                            .user_repo
-                            .set_friend_profile_key(&us, &sid, &key)
-                        {
+                        let users = self.messages.user_repo.clone();
+                        let admitted = session.clone();
+                        let result = self.messages.database.run_blocking(move || users.set_friend_profile_key_admitted(&us, &sid, &key, Some(&admitted))).await;
+                        session.check().map_err(|_| Ingested::RetryableFailure)?;
+                        match result {
                             Ok(true) => {
                                 if let Err(error) = self.users.get_user_profile(&sid).await {
                                     tracing::warn!(%sid, %error, "Could not refresh channel sender profile");
@@ -295,10 +305,15 @@ impl ChannelInbound {
 
                     inbound_quote = dm.quote.clone();
 
-                    if !dm.attachments.is_empty()
-                        && let Err(error) = self.attachments.create_from_pointers(&dm.attachments)
-                    {
-                        tracing::warn!(%error, "Failed to store attachment records");
+                    session.check().map_err(|_| Ingested::RetryableFailure)?;
+                    if !dm.attachments.is_empty() {
+                        let attachments = self.attachments.clone();
+                        let pointers = dm.attachments.clone();
+                        let admitted = session.clone();
+                        if let Err(error) = self.messages.database.run_blocking(move || attachments.create_from_pointers_admitted(&pointers, Some(&admitted))).await {
+                            tracing::warn!(%error, "Failed to store attachment records");
+                        }
+                        session.check().map_err(|_| Ingested::RetryableFailure)?;
                     }
 
                     let files: Vec<chat_v1::FileMetadata> = dm
@@ -478,6 +493,7 @@ impl ChannelInbound {
         &self,
         proto_msg: &chat_v1::Message,
         channel_id: ChannelId,
+        session: &ReceiveSession,
     ) -> Result<bool, crate::error::StorageError> {
         if proto_msg.send_request_key.is_empty() {
             return Ok(false);
@@ -485,17 +501,18 @@ impl ChannelInbound {
         let Ok(owner) = self.messages.settings_repo.current_user_id() else {
             return Ok(false);
         };
-        super::super::channel_send::settle_cancelled_deposit(
+        super::super::channel_send::settle_cancelled_deposit_admitted(
             &self.messages.database,
             owner,
             channel_id,
             proto_msg,
+            Some(session),
         )
     }
 }
 
 /// Fields consumed by tombstone, cancelled-send, block and edit checks only.
-fn preflight_metadata(proto: &chat_v1::Message) -> chat_v1::Message {
+pub(crate) fn preflight_metadata(proto: &chat_v1::Message) -> chat_v1::Message {
     chat_v1::Message {
         id: proto.id.clone(),
         channel_id: proto.channel_id.clone(),

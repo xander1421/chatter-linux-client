@@ -275,8 +275,13 @@ impl AttachmentRepository {
     /// a secret one, and a secret receipt that loses the insert race still
     /// marks the winner's row. Returns whether this call inserted the row.
     pub fn insert_or_raise_secret(&self, attachment: &Attachment) -> Result<bool, StorageError> {
+        self.insert_or_raise_secret_admitted(attachment, None)
+    }
+
+    pub(crate) fn insert_or_raise_secret_admitted(&self, attachment: &Attachment, session: Option<&crate::state::receive_session::ReceiveSession>) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
+        if let Some(session) = session { session.check_owner(&tx)?; }
         let metadata_blob = db_serialize(&attachment.metadata)?;
         let secret = attachment.secret_chat;
         let inserted = tx.execute(
@@ -314,6 +319,7 @@ impl AttachmentRepository {
                 )));
             }
         }
+        if let Some(session) = session { session.check()?; }
         tx.commit()?;
         Ok(inserted)
     }

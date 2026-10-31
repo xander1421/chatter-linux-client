@@ -9,7 +9,7 @@ use futures::stream::{self, StreamExt};
 use crate::domain::ids::ChannelId;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::chat_v1::MessageSortDirection;
-use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
+use crate::services::message::channel_inbound::{ChannelInbound, Ingested, PresenceHint};
 use crate::storage::repositories::settings_repo::SettingsRepository;
 
 use super::channel_sync::SyncError;
@@ -82,9 +82,13 @@ impl MessageSync {
         channel_id: &ChannelId,
         result: &mut MessageSyncResult,
     ) -> Result<(), SyncError> {
+        let session = self.inbound.receive_session().map_err(|e| SyncError::Storage(e.to_string()))?;
         let channel_id_str = channel_id.to_string();
         let sync_key = format!("sync:messages:{}:last_at_ns", channel_id);
-        let last_sync = self.settings_repo.get::<u64>(&sync_key).ok().flatten();
+        let settings = self.settings_repo.clone();
+        let key = sync_key.clone();
+        let last_sync = self.inbound.database().run_blocking(move || settings.get::<u64>(&key))
+            .await.map_err(|e| SyncError::Storage(e.to_string()))?;
 
         // Capture the boundary before fetching, so messages arriving during
         // pagination remain eligible on the next sync. The wire uses Unix ns.
@@ -93,6 +97,7 @@ impl MessageSync {
         let mut incomplete = false;
 
         loop {
+            session.check().map_err(|e| SyncError::Storage(e.to_string()))?;
             let mut client = self.grpc_pool.message_client();
             let response = match client
                 .get_messages(
@@ -118,17 +123,25 @@ impl MessageSync {
                 Err(e) => return Err(SyncError::Network(format!("channel {}: {}", channel_id, e))),
             };
 
+            session.check().map_err(|e| SyncError::Storage(e.to_string()))?;
             result.pages += 1;
             let page_count = response.messages.len();
             result.fetched += page_count;
 
+            let ids = response.messages.iter().filter_map(|m| m.id.parse().ok()).collect();
+            // A failed advisory lookup falls back to authoritative per-row probes.
+            let existing = self.inbound.advisory_ids(ids).await.ok();
             for proto_msg in &response.messages {
                 // Same decrypt → persist path the live stream uses, so a
                 // message read back from the server is as readable as one that
                 // arrived live. `live = false` retains our own history too;
                 // newly inserted rows announce once, whichever path wins.
                 // Existing rows and later encrypted stream duplicates stay silent.
-                let outcome = self.inbound.ingest(proto_msg, *channel_id, false).await;
+                let hint = match (&existing, proto_msg.id.parse().ok()) {
+                    (Some(ids), Some(id)) if !ids.contains(&id) => PresenceHint::UnknownAbsent,
+                    _ => PresenceHint::KnownPresent,
+                };
+                let outcome = self.inbound.ingest_with_session(proto_msg, *channel_id, false, hint, session.clone()).await;
                 if outcome == Ingested::Stored {
                     result.inserted += 1;
                 }
@@ -153,8 +166,12 @@ impl MessageSync {
                 channel_id
             )));
         }
-        let _ = self.settings_repo.set(&sync_key, &sync_started_ns);
+        let completion_session = session.clone();
+        let settings = self.settings_repo.clone();
+        self.inbound.database().run_blocking(move || settings.set_received(&sync_key, &sync_started_ns, &session))
+            .await.map_err(|e| SyncError::Storage(e.to_string()))?;
 
+        completion_session.check().map_err(|e| SyncError::Storage(e.to_string()))?;
         if result.inserted > 0 {
             tracing::info!(
                 channel_id = %channel_id,

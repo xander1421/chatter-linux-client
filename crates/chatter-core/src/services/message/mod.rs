@@ -322,6 +322,7 @@ pub(crate) fn queued_bubble_timestamp(content: &crate::proto::content_v1::Conten
 pub struct MessageService {
     pub(crate) grpc_pool: Arc<GrpcClientPool>,
     pub(crate) database: Arc<Database>,
+    pub(crate) receive_auth: Arc<std::sync::OnceLock<crate::state::AuthState>>,
     pub(crate) settings_repo: Arc<SettingsRepository>,
     pub(crate) message_repo: Arc<MessageRepository>,
     pub(crate) channel_repo: Arc<ChannelRepository>,

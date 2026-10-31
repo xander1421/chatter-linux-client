@@ -158,6 +158,7 @@
             let s = &c.messages().settings_repo;
             s.set(keys::CURRENT_USER_ID, &user.to_string()).unwrap();
             s.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+            c.auth_state().set_logged_in(user, 1, "fixture".into());
             c
         };
         let (alice_id, bob_id) = (UserId::new(), UserId::new());

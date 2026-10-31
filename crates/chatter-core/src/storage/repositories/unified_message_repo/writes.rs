@@ -1,6 +1,40 @@
 use super::reactions::accept_reaction_action;
 use super::*;
 
+const INSERT_MESSAGE_SQL: &str = "INSERT INTO messages (
+                id, conversation_id, conversation_type, sender_id, device_id,
+                content_type, content_json, encrypted_content,
+                thread_id, reply_to, attachments_blob,
+                is_pinned, is_edited, is_deleted, is_read,
+                sent_at, created_at, updated_at, edited_at,
+                reaction_counts_blob, current_user_reactions_blob,
+                mentioned_integrations_blob, targets_ai_bot, delivery_status,
+                reply_to_author_id, reply_to_text,
+                reply_to_thumbnail, reply_to_thumbnail_mime, failure_reason,
+                timestamp_quote_key
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
+                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30
+            )";
+const INSERT_MESSAGE_IGNORE_SQL: &str = "INSERT OR IGNORE INTO messages (
+                id, conversation_id, conversation_type, sender_id, device_id,
+                content_type, content_json, encrypted_content,
+                thread_id, reply_to, attachments_blob,
+                is_pinned, is_edited, is_deleted, is_read,
+                sent_at, created_at, updated_at, edited_at,
+                reaction_counts_blob, current_user_reactions_blob,
+                mentioned_integrations_blob, targets_ai_bot, delivery_status,
+                reply_to_author_id, reply_to_text,
+                reply_to_thumbnail, reply_to_thumbnail_mime, failure_reason,
+                timestamp_quote_key
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
+                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30
+            )";
+
+
 impl UnifiedMessageRepository {
     /// Insert the local echo of a message THIS device just sent.
     ///
@@ -60,7 +94,7 @@ impl UnifiedMessageRepository {
     /// early modifier applied — or `None` when an early delete-for-everyone
     /// kept it out. What a receive path must announce, not what it decoded.
     pub fn insert_received(&self, message: &Message) -> Result<Option<Message>, StorageError> {
-        let (inserted, row) = self.store_with_row(message, false, None, false, true)?;
+        let (inserted, row) = self.store_with_row(message, false, None, false, true, None)?;
         Ok(if inserted { row } else { None })
     }
 
@@ -113,12 +147,104 @@ impl UnifiedMessageRepository {
         saved_pin_clock: Option<u64>,
         local_saved: bool,
     ) -> Result<bool, StorageError> {
-        self.store_with_row(message, or_ignore, saved_pin_clock, local_saved, false).map(|(inserted, _)| inserted)
+        self.store_with_row(message, or_ignore, saved_pin_clock, local_saved, false, None).map(|(inserted, _)| inserted)
     }
 
     /// Return authoritative modifier/dedup state before releasing the writer.
     pub(crate) fn insert_or_ignore_with_row(&self, message: &Message) -> Result<(bool, Option<Message>), StorageError> {
-        self.store_with_row(message, true, None, false, true)
+        self.store_with_row(message, true, None, false, true, None)
+    }
+
+    /// Catch-up hints only choose whether to probe first. Both paths resolve
+    /// conflicts and merge authoritative current state under this writer.
+    pub(crate) fn store_channel_received(
+        &self,
+        message: &Message,
+        known_present: bool,
+        session: &crate::state::receive_session::ReceiveSession,
+    ) -> Result<(bool, Option<Message>), StorageError> {
+        if !matches!(message.conversation_type, ConversationType::Channel | ConversationType::AnonGroup) {
+            return Err(StorageError::InvalidData("Expected a channel row".into()));
+        }
+        self.store_with_row(message, true, None, false, true, Some((session, known_present)))
+    }
+
+    /// Replay can fill missing transport/quote data, never replace local or
+    /// edit-owned state. `existing` was read under the same writer transaction.
+    fn merge_channel_row(
+        tx: &rusqlite::Connection,
+        incoming: &Message,
+        mut existing: Message,
+    ) -> Result<Message, StorageError> {
+        Self::validate_channel_identity(incoming, &existing)?;
+        if existing.is_deleted { return Ok(existing); }
+        let mut changed = false;
+        macro_rules! fill {
+            ($field:ident) => {
+                if existing.$field.is_none() && incoming.$field.is_some() {
+                    existing.$field = incoming.$field.clone();
+                    changed = true;
+                }
+            }
+        }
+        fill!(encrypted_content);
+        fill!(reply_to);
+        fill!(reply_to_author_id);
+        fill!(reply_to_text);
+        fill!(reply_to_thumbnail);
+        fill!(reply_to_thumbnail_mime);
+        if existing.attachments.is_empty() && !incoming.attachments.is_empty() {
+            existing.attachments = incoming.attachments.clone();
+            changed = true;
+        }
+        if changed {
+            tx.prepare_cached("UPDATE messages SET encrypted_content=?1, attachments_blob=?2,
+                reply_to=?3, reply_to_author_id=?4, reply_to_text=?5,
+                reply_to_thumbnail=?6, reply_to_thumbnail_mime=?7 WHERE id=?8")?.execute(params![
+                    existing.encrypted_content.as_deref(), db_serialize(&existing.attachments)?,
+                    existing.reply_to.map(|id| id.to_string()), existing.reply_to_author_id.map(|id| id.to_string()),
+                    existing.reply_to_text.as_deref(), existing.reply_to_thumbnail.as_deref(),
+                    existing.reply_to_thumbnail_mime.as_deref(), existing.id.to_string(),
+                ])?;
+        }
+        Ok(existing)
+    }
+
+    fn validate_channel_identity(incoming: &Message, existing: &Message) -> Result<(), StorageError> {
+        if existing.conversation_type != incoming.conversation_type
+            || existing.conversation_id != incoming.conversation_id
+            || existing.sender_id != incoming.sender_id
+            || existing.thread_id != incoming.thread_id
+            || existing.sent_at != incoming.sent_at
+        {
+            return Err(StorageError::InvalidData("Channel dedup identity mismatch".into()));
+        }
+        Ok(())
+    }
+
+    fn channel_dedup_winner(&self, conn: &rusqlite::Connection, message: &Message) -> Result<Option<Message>, StorageError> {
+        if let Some(existing) = self.get_with_connection(conn, &message.id)? { return Ok(Some(existing)); }
+        conn.query_row(
+            &format!("SELECT {} FROM messages WHERE conversation_type=?1 AND conversation_id=?2 AND sender_id=?3 AND sent_at=?4", *QUALIFIED_MESSAGE_COLUMNS),
+            params![message.conversation_type.as_str(), message.conversation_id.to_string(), message.sender_id.map(|id| id.to_string()), message.sent_at as i64], row_to_message,
+        ).optional()?.transpose()
+    }
+
+    /// Advisory membership only; never hydrate or retain page-wide Messages.
+    pub(crate) fn existing_ids(&self, ids: &[MessageId]) -> Result<std::collections::HashSet<MessageId>, StorageError> {
+        let ids = ids.iter().copied().collect::<std::collections::HashSet<_>>();
+        let ids = ids.into_iter().collect::<Vec<_>>();
+        let conn = self.db.read_connection()?;
+        let mut existing = std::collections::HashSet::new();
+        for chunk in ids.chunks(500) {
+            let sql = format!("SELECT id FROM messages WHERE id IN ({})", vec!["?"; chunk.len()].join(","));
+            let mut stmt = conn.prepare_cached(&sql)?;
+            let values = chunk.iter().map(ToString::to_string).collect::<Vec<_>>();
+            for id in stmt.query_map(rusqlite::params_from_iter(values.iter()), |row| row.get::<_, String>(0))? {
+                existing.insert(id?.parse().map_err(|_| StorageError::InvalidData("Invalid retained message ID".into()))?);
+            }
+        }
+        Ok(existing)
     }
 
     fn store_with_row(
@@ -128,6 +254,7 @@ impl UnifiedMessageRepository {
         saved_pin_clock: Option<u64>,
         local_saved: bool,
         return_row: bool,
+        channel: Option<(&crate::state::receive_session::ReceiveSession, bool)>,
     ) -> Result<(bool, Option<Message>), StorageError> {
         let local_owner = super::super::settings_repo::SettingsRepository::new(self.db.clone())
             .current_user_id().ok();
@@ -141,6 +268,19 @@ impl UnifiedMessageRepository {
         let is_read = self.stored_is_read(message);
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
+        if let Some((session, known_present)) = channel {
+            session.check_owner(&tx)?;
+            if tx.query_row("SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id=?1)",
+                [message.id.to_string()], |row| row.get::<_, bool>(0))? {
+                return Ok((false, None));
+            }
+            if known_present && let Some(existing) = self.get_with_connection(&tx, &message.id)? {
+                let stored = Self::merge_channel_row(&tx, message, existing)?;
+                session.check()?;
+                tx.commit()?;
+                return Ok((false, Some(stored)));
+            }
+        }
         let is_read = if !is_read
             && matches!(
                 message.conversation_type,
@@ -182,6 +322,7 @@ impl UnifiedMessageRepository {
         {
             return Ok((false, None));
         }
+        if channel.is_some() { tx.execute_batch("SAVEPOINT channel_arrival")?; }
         let initial_saved_pin = saved_pin_clock.map(|_| message.is_pinned);
         let (mut message, reactions) =
             match super::super::message_modifier_repo::take_on_arrival(&tx, message)? {
@@ -189,14 +330,19 @@ impl UnifiedMessageRepository {
                     (message, reactions)
                 }
                 super::super::message_modifier_repo::Arrival::CallDeleted => {
+                    if let Some((session, _)) = channel { session.check()?; }
                     tx.commit()?;
                     return Ok((false, None));
                 }
                 super::super::message_modifier_repo::Arrival::Deleted => {
+                    if channel.is_some() && let Some(existing) = self.channel_dedup_winner(&tx, message)? {
+                        Self::validate_channel_identity(message, &existing)?;
+                    }
                     tx.execute(
                         "INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)",
                         params![message.id.to_string()],
                     )?;
+                    if let Some((session, _)) = channel { session.check()?; }
                     tx.commit()?;
                     return Ok((false, None));
                 }
@@ -215,25 +361,7 @@ impl UnifiedMessageRepository {
         let mentioned_integrations_blob = db_serialize(&message.mentioned_integrations)?;
 
         let rows = tx.prepare_cached(
-            &format!(
-                "INSERT {} INTO messages (
-                id, conversation_id, conversation_type, sender_id, device_id,
-                content_type, content_json, encrypted_content,
-                thread_id, reply_to, attachments_blob,
-                is_pinned, is_edited, is_deleted, is_read,
-                sent_at, created_at, updated_at, edited_at,
-                reaction_counts_blob, current_user_reactions_blob,
-                mentioned_integrations_blob, targets_ai_bot, delivery_status,
-                reply_to_author_id, reply_to_text,
-                reply_to_thumbnail, reply_to_thumbnail_mime, failure_reason,
-                timestamp_quote_key
-            ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30
-            )",
-                if or_ignore { "OR IGNORE" } else { "" }
-            ),
+            if or_ignore { INSERT_MESSAGE_IGNORE_SQL } else { INSERT_MESSAGE_SQL },
         )?.execute(
             params![
                 message.id.to_string(),
@@ -268,6 +396,14 @@ impl UnifiedMessageRepository {
                 MessageId::from_timestamp(message.sent_at).to_string(),
             ],
         )?;
+        if channel.is_some() {
+            if rows == 0 {
+                // The insert lost after an advisory absence hint. Do not consume
+                // durable early modifiers without applying them to a new row.
+                tx.execute_batch("ROLLBACK TO channel_arrival")?;
+            }
+            tx.execute_batch("RELEASE channel_arrival")?;
+        }
         if rows > 0 {
             // A transcript of our own send is proof that every earlier incoming
             // message was read on that device, even if this device receives the
@@ -333,7 +469,16 @@ impl UnifiedMessageRepository {
                 )?;
             }
         }
-        let stored = if return_row { self.get_with_connection(&tx, &message.id)? } else { None };
+        let stored = if channel.is_some() {
+            if rows == 0 {
+                let existing = self.channel_dedup_winner(&tx, message)?.ok_or_else(||
+                    StorageError::InvalidData("Channel insert ignored without a dedup winner".into()))?;
+                Some(Self::merge_channel_row(&tx, message, existing)?)
+            } else {
+                self.get_with_connection(&tx, &message.id)?
+            }
+        } else if return_row { self.get_with_connection(&tx, &message.id)? } else { None };
+        if let Some((session, _)) = channel { session.check()?; }
         tx.commit()?;
         if rows > 0 {
             self.db.announce_message_store(message);
@@ -424,10 +569,7 @@ impl UnifiedMessageRepository {
         conn: &rusqlite::Connection,
         id: &MessageId,
     ) -> Result<Option<Message>, StorageError> {
-        let mut stmt = conn.prepare_cached(&format!(
-            "SELECT {} FROM messages WHERE id = ?1",
-            message_columns("messages")
-        ))?;
+        let mut stmt = conn.prepare_cached(&SELECT_MESSAGE_SQL)?;
         match stmt.query_row(params![id.to_string()], row_to_message) {
             Ok(msg) => Ok(Some(msg?)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -493,10 +635,7 @@ impl UnifiedMessageRepository {
         sent_at: u64,
     ) -> Result<Option<Message>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare_cached(&format!(
-            "SELECT {} FROM messages WHERE sender_id = ?1 AND sent_at = ?2",
-            message_columns("messages")
-        ))?;
+        let mut stmt = conn.prepare_cached(&SELECT_SENDER_TIME_SQL)?;
         match stmt.query_row(
             params![sender_id.to_string(), sent_at as i64],
             row_to_message,

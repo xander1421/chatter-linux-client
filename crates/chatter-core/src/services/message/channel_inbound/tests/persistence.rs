@@ -31,6 +31,7 @@ async fn blocked_channel_message_stays_absent_after_unblock_and_catch_up() {
     users.insert_friendship(&friendship).unwrap();
     users.start_block_interval(&me, &sender).unwrap();
 
+    bind_test_owner(&client);
     let inbound = ChannelInbound::new(
         client.messages().clone(),
         client.attachments().clone(),
@@ -82,6 +83,7 @@ async fn reingesting_a_read_message_keeps_it_read() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .expect("build client");
+    bind_test_owner(&client);
     bind_test_owner(&client);
     let inbound = ChannelInbound::new(
         client.messages().clone(),
@@ -142,6 +144,7 @@ async fn reingesting_an_original_keeps_its_applied_edit() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .expect("build client");
+    bind_test_owner(&client);
     bind_test_owner(&client);
     let inbound = ChannelInbound::new(
         client.messages().clone(),
@@ -205,6 +208,7 @@ async fn first_insert_announces_once_before_encrypted_stream_duplicate() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .unwrap();
+    bind_test_owner(&client);
     bind_test_owner(&client);
     let inbound = ChannelInbound::new(
         client.messages().clone(),
@@ -347,6 +351,7 @@ async fn reingesting_a_deleted_message_keeps_it_deleted() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .expect("build client");
+    bind_test_owner(&client);
     bind_test_owner(&client);
     let inbound = ChannelInbound::new(
         client.messages().clone(),

@@ -107,7 +107,12 @@ fn is_no_channels(e: &crate::error::NetworkError) -> bool {
 }
 
 /// Parse strictly before applying or acknowledging a global checkpoint.
+#[cfg(test)]
+thread_local! { static CURSOR_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
 fn validate_global_cursor(raw: &str) -> Result<(), crate::error::NetworkError> {
+    #[cfg(test)]
+    CURSOR_VALIDATIONS.with(|count| count.set(count.get() + 1));
     use serde::de::{Error, MapAccess, Visitor};
     struct Positions;
     impl<'de> Visitor<'de> for Positions {
@@ -151,6 +156,17 @@ fn validate_global_cursor(raw: &str) -> Result<(), crate::error::NetworkError> {
         .map_err(|e| crate::error::NetworkError::DataLoss(e.to_string()))
 }
 
+/// Proof that a wire checkpoint passed strict admission. Only this constructor
+/// can create candidates; coalesced flushes never parse the same cursor again.
+#[derive(Debug, Clone)]
+struct ValidatedGlobalCursor(String);
+impl ValidatedGlobalCursor {
+    fn parse(raw: String) -> Result<Self, crate::error::NetworkError> {
+        validate_global_cursor(&raw)?;
+        Ok(Self(raw))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Applied {
     Complete,
@@ -173,10 +189,11 @@ const RECOVERY_INTERVAL: Duration = Duration::from_secs(5);
 /// Reconnecting loses only this retry plan; the durable old checkpoint replays it.
 #[derive(Default)]
 struct RecoveryState {
+    session: Option<crate::state::receive_session::ReceiveSession>,
     checkpoint_events: usize,
     checkpoint_written_at: Option<std::time::Instant>,
     channels: std::collections::VecDeque<String>,
-    candidate: Option<String>,
+    candidate: Option<ValidatedGlobalCursor>,
     progress: std::collections::BTreeMap<String, RecoveryProgress>,
 }
 
@@ -230,7 +247,7 @@ impl RecoveryState {
 
     fn acknowledgeable(&self) -> Option<&str> {
         if self.channels.is_empty() {
-            self.candidate.as_deref()
+            self.candidate.as_ref().map(|cursor| cursor.0.as_str())
         } else {
             None
         }
@@ -365,8 +382,9 @@ impl ChannelStreamService {
         &self,
         connected_at: &mut Option<std::time::Instant>,
     ) -> Result<(), crate::error::NetworkError> {
+        let session = self.messages.receive_session().map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
         let connect_started = std::time::Instant::now();
-        let cursor = self.cursor()?;
+        let cursor = self.cursor().await?;
         let mut client = self.grpc_pool.message_client();
         // Empty channel_ids => the server subscribes us to every non-archived
         // channel we are a member of, including ones joined in a previous
@@ -426,7 +444,8 @@ impl ChannelStreamService {
         );
 
         tokio::pin!(stream);
-        let mut recovery = RecoveryState::default();
+        session.check().map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
+        let mut recovery = RecoveryState { session: Some(session), ..Default::default() };
         let mut retry = tokio::time::interval(RECOVERY_INTERVAL);
         retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut last_stream_item = tokio::time::Instant::now();
@@ -487,10 +506,9 @@ impl ChannelStreamService {
         }
     }
 
-    fn cursor(&self) -> Result<Option<String>, crate::error::NetworkError> {
-        let cursor = self
-            .settings_repo
-            .get::<String>(CURSOR_KEY)
+    async fn cursor(&self) -> Result<Option<String>, crate::error::NetworkError> {
+        let settings = self.settings_repo.clone();
+        let cursor = self.messages.database.run_blocking(move || settings.get::<String>(CURSOR_KEY)).await
             .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
         if let Some(raw) = &cursor {
             validate_global_cursor(raw)?;
@@ -508,11 +526,10 @@ impl ChannelStreamService {
     /// catch-up: a throttle that skips this one leaves the gap open.
     async fn handle_resync(
         &self,
-        new_cursor: &str,
+        new_cursor: ValidatedGlobalCursor,
         resync: &chat_v1::ResyncRequired,
         recovery: &mut RecoveryState,
     ) -> Result<(), crate::error::NetworkError> {
-        validate_global_cursor(new_cursor)?;
         if resync.channel_ids.len() > 500 {
             return Err(crate::error::NetworkError::DataLoss(
                 "too many resync channels".into(),
@@ -520,7 +537,7 @@ impl ChannelStreamService {
         }
         tracing::info!(
             channels = resync.channel_ids.len(),
-            new_cursor,
+            new_cursor = %new_cursor.0,
             "Server could not replay from our cursor; resyncing from the durable store"
         );
         // Validate the whole plan before applying anything. A recoverable gap
@@ -539,7 +556,7 @@ impl ChannelStreamService {
         for channel in &resync.channel_ids {
             recovery.defer(channel)?;
         }
-        recovery.candidate = Some(new_cursor.to_owned());
+        recovery.candidate = Some(new_cursor);
         recovery.checkpoint_events += 1;
         // Ancillary channel/member sync is useful, but mutation snapshots below
         // are the authority for message application and checkpoint completion.
@@ -560,8 +577,6 @@ impl ChannelStreamService {
         force: bool,
     ) -> Result<(), crate::error::NetworkError> {
         let Some(cursor) = recovery.acknowledgeable() else { return Ok(()) };
-        // Always reject malformed wire cursors, even during the coalescing window.
-        validate_global_cursor(cursor)?;
         if recovery.checkpoint_events == 0 { return Ok(()) }
         if !force && recovery.checkpoint_events < 32
             && recovery.checkpoint_written_at.is_some_and(|at| at.elapsed() < Duration::from_secs(1))
@@ -569,9 +584,15 @@ impl ChannelStreamService {
             return Ok(());
         }
         let cursor = cursor.to_owned();
+        let session = match &recovery.session {
+            Some(session) => session.clone(),
+            None => self.messages.receive_session().map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?,
+        };
+        let completion_session = session.clone();
         let settings = self.settings_repo.clone();
-        self.messages.database.run_blocking(move || settings.set(CURSOR_KEY, &cursor)).await
+        self.messages.database.run_blocking(move || settings.set_received(CURSOR_KEY, &cursor, &session)).await
             .map_err(|error| crate::error::NetworkError::Unknown(error.to_string()))?;
+        completion_session.check().map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
         recovery.checkpoint_events = 0;
         recovery.checkpoint_written_at = Some(std::time::Instant::now());
         Ok(())
@@ -587,9 +608,12 @@ impl ChannelStreamService {
             .front()
             .cloned()
             .expect("pending recovery");
+        let session = recovery.session.clone().ok_or_else(|| crate::error::NetworkError::DataLoss("Missing recovery session".into()))?;
+        session.check().map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
         let outcome = tokio::time::timeout(
             RECOVERY_BUDGET,
             self.recover_channel_changes(
+                &session,
                 &channel,
                 recovery
                     .progress
@@ -624,6 +648,7 @@ impl ChannelStreamService {
     /// new-message catch-up alone cannot recover an old edited/reaction target.
     async fn recover_channel_changes(
         &self,
+        session: &crate::state::receive_session::ReceiveSession,
         channel: &str,
         progress: &mut RecoveryProgress,
     ) -> Result<Applied, crate::error::NetworkError> {
@@ -642,9 +667,9 @@ impl ChannelStreamService {
                 ));
             }
             let result = if message.deleted_at != 0 {
-                self.apply_delete(&message.id, channel_id)
+                self.apply_delete(&message.id, channel_id, session.clone()).await
             } else {
-                self.inbound.ingest_resynced(message, channel_id).await
+                self.inbound.ingest_resynced_with_session(message, channel_id, session.clone()).await
             };
             // Rejected content is terminal for this row, not for the stream.
             // Storage and missing-key failures still hold the checkpoint.
@@ -672,14 +697,23 @@ impl ChannelStreamService {
             tracing::trace!("Channel message stream heartbeat");
             return Ok(());
         }
+        let cursor = ValidatedGlobalCursor::parse(event.event_id.clone())?;
+        let session = match &recovery.session {
+            Some(session) => session.clone(),
+            None => {
+                let session = self.messages.receive_session().map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
+                recovery.session = Some(session.clone());
+                session
+            }
+        };
+        session.check().map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
         // Before anything that reads channel_id: a resync covers several
         // channels and carries none of its own.
         if let Some(MsgEventType::ResyncRequired(resync)) = &event.event {
-            self.handle_resync(&event.event_id, resync, recovery)
+            self.handle_resync(cursor, resync, recovery)
                 .await?;
             return Ok(());
         }
-        validate_global_cursor(&event.event_id)?;
 
         let channel_id = match event.channel_id.parse::<uuid::Uuid>() {
             Ok(id) => ChannelId::from(id),
@@ -704,7 +738,7 @@ impl ChannelStreamService {
                         "message channel mismatch".into(),
                     ));
                 }
-                applied = require_ingested(self.inbound.ingest(&msg, channel_id, true).await);
+                applied = require_ingested(self.inbound.ingest_with_session(&msg, channel_id, true, crate::services::message::channel_inbound::PresenceHint::KnownPresent, session.clone()).await);
             }
             Some(MsgEventType::MessageUpdated(msg)) => {
                 if msg.channel_id != event.channel_id {
@@ -712,9 +746,9 @@ impl ChannelStreamService {
                         "edit channel mismatch".into(),
                     ));
                 }
-                applied = require_ingested(self.inbound.ingest_edit(&msg, channel_id).await);
+                applied = require_ingested(self.inbound.ingest_edit_with_session(&msg, channel_id, session.clone()).await);
             }
-            Some(MsgEventType::MessageDeletedId(id)) => match self.apply_delete(&id, channel_id) {
+            Some(MsgEventType::MessageDeletedId(id)) => match self.apply_delete(&id, channel_id, session.clone()).await {
                 Ok(()) => {}
                 Err(crate::services::message::MessageError::Storage(_)) => {
                     applied = Applied::Pending
@@ -726,12 +760,12 @@ impl ChannelStreamService {
             },
             Some(MsgEventType::ReactionAdded(update)) => {
                 applied = self
-                    .handle_reaction(update, channel_id, false, event.timestamp)
+                    .handle_reaction(update, channel_id, false, event.timestamp, session.clone())
                     .await?;
             }
             Some(MsgEventType::ReactionRemoved(update)) => {
                 applied = self
-                    .handle_reaction(update, channel_id, true, event.timestamp)
+                    .handle_reaction(update, channel_id, true, event.timestamp, session.clone())
                     .await?;
             }
             // Handled above, before the channel_id parse.
@@ -750,13 +784,31 @@ impl ChannelStreamService {
         if applied == Applied::Pending {
             recovery.defer(&event.channel_id)?;
         }
-        recovery.candidate = Some(event.event_id);
+        recovery.candidate = Some(cursor);
         recovery.checkpoint_events += 1;
         self.acknowledge_recovery(recovery).await
     }
 
     async fn handle_reaction(
         &self,
+        update: chat_v1::ReactionUpdate,
+        channel_id: ChannelId,
+        remove: bool,
+        timestamp: u64,
+        session: crate::state::receive_session::ReceiveSession,
+    ) -> Result<Applied, crate::error::NetworkError> {
+        let messages = self.messages.clone();
+        let event_bus = self.event_bus.clone();
+        self.messages.database.run_blocking(move || {
+            session.check()?;
+            Ok(Self::apply_reaction_unit(&messages, &event_bus, &session, update, channel_id, remove, timestamp))
+        }).await.unwrap_or(Ok(Applied::Pending))
+    }
+
+    fn apply_reaction_unit(
+        messages: &MessageService,
+        event_bus: &EventBus,
+        session: &crate::state::receive_session::ReceiveSession,
         update: chat_v1::ReactionUpdate,
         channel_id: ChannelId,
         remove: bool,
@@ -771,11 +823,13 @@ impl ChannelStreamService {
             ));
         };
         // A stream must never mutate a target in another conversation.
-        let scope = self
-            .messages
-            .channel_reaction_scope(channel_id, &sender_id, update.target_sent_timestamp)
-            .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
-        match self.messages.message_repo.get_by_reaction_scope(
+        let scope = match messages.channel_reaction_scope(channel_id, &sender_id, update.target_sent_timestamp) {
+            Ok(scope) => scope,
+            Err(crate::services::message::MessageError::Storage(_)) => return Ok(Applied::Pending),
+            Err(crate::services::message::MessageError::InvalidContent(error)) => return Err(crate::error::NetworkError::DataLoss(error)),
+            Err(error) => return Err(crate::error::NetworkError::Unknown(error.to_string())),
+        };
+        match messages.message_repo.get_by_reaction_scope(
             &scope,
             &sender_id,
             update.target_sent_timestamp,
@@ -798,7 +852,8 @@ impl ChannelStreamService {
             }
             Err(_) => return Ok(Applied::Pending),
         }
-        match self.messages.record_reaction(
+        match messages.record_reaction_received(
+            session,
             &scope,
             &sender_id,
             update.target_sent_timestamp,
@@ -807,6 +862,7 @@ impl ChannelStreamService {
             remove,
         ) {
             Ok(true) => {
+                if session.check().is_err() { return Ok(Applied::Pending); }
                 let event = if remove {
                     DomainEvent::ReactionRemoved {
                         scope: scope.clone(),
@@ -826,7 +882,7 @@ impl ChannelStreamService {
                         timestamp: timestamp / 1_000_000,
                     }
                 };
-                self.event_bus.emit_domain(event);
+                event_bus.emit_domain(event);
             }
             Ok(false) => {}
             Err(crate::services::message::MessageError::Storage(_)) => return Ok(Applied::Pending),
@@ -835,8 +891,25 @@ impl ChannelStreamService {
         Ok(Applied::Complete)
     }
 
-    fn apply_delete(
+    async fn apply_delete(
         &self,
+        message_id: &str,
+        channel_id: ChannelId,
+        session: crate::state::receive_session::ReceiveSession,
+    ) -> Result<(), crate::services::message::MessageError> {
+        let messages = self.messages.clone();
+        let event_bus = self.event_bus.clone();
+        let message_id = message_id.to_owned();
+        self.messages.database.run_blocking(move || {
+            session.check()?;
+            Ok(Self::apply_delete_unit(&messages, &event_bus, &session, &message_id, channel_id))
+        }).await?
+    }
+
+    fn apply_delete_unit(
+        messages: &MessageService,
+        event_bus: &EventBus,
+        session: &crate::state::receive_session::ReceiveSession,
         message_id: &str,
         channel_id: ChannelId,
     ) -> Result<(), crate::services::message::MessageError> {
@@ -845,27 +918,18 @@ impl ChannelStreamService {
                 "invalid deleted message id".into(),
             )
         })?;
-        let existing = self.messages.get_message_local(&id)?;
-        if existing
-            .as_ref()
-            .is_some_and(|m| m.conversation_id != channel_id)
-        {
-            return Err(crate::services::message::MessageError::InvalidContent(
-                "delete channel mismatch".into(),
-            ));
-        }
-        // Record even unseen tombstones: a delayed/deferred message must not
-        // reappear after recovery told us it had been deleted.
-        match self.messages.delete_message_local(&id) {
-            Ok(())
-            | Err(crate::services::message::MessageError::Storage(
-                crate::error::StorageError::NotFound(_),
-            )) => {}
-            Err(error) => return Err(error),
-        }
+        let existing = match messages.message_repo.delete_received(&id, channel_id, session) {
+            Ok(existing) => existing,
+            Err(crate::error::StorageError::NotFound(_)) => None,
+            Err(crate::error::StorageError::InvalidData(error)) if error == "delete channel mismatch" => {
+                return Err(crate::services::message::MessageError::InvalidContent(error));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        session.check()?;
         if let Some(existing) = existing {
             if let Some(author_id) = existing.sender_id {
-                self.event_bus.emit_domain(DomainEvent::MessageDeleted {
+                event_bus.emit_domain(DomainEvent::MessageDeleted {
                     message_id: id,
                     author_id,
                     channel_id: Some(channel_id),
@@ -1136,7 +1200,7 @@ mod global_checkpoints {
         let b = "22222222-2222-2222-2222-222222222222";
         let mut state = RecoveryState::default();
         state.defer(a).unwrap();
-        state.candidate = Some(format!("v1:{{\"{a}\":\"12-0\",\"{b}\":\"50-0\"}}"));
+        state.candidate = Some(ValidatedGlobalCursor::parse(format!("v1:{{\"{a}\":\"12-0\",\"{b}\":\"50-0\"}}")).unwrap());
         assert_eq!(state.acknowledgeable(), None);
         state.channels.rotate_left(1);
         assert_eq!(
@@ -1145,7 +1209,7 @@ mod global_checkpoints {
             "a retry is not an acknowledgement"
         );
         state.channels.pop_front();
-        assert_eq!(state.acknowledgeable(), state.candidate.as_deref());
+        assert_eq!(state.acknowledgeable(), state.candidate.as_ref().map(|cursor| cursor.0.as_str()));
     }
 
     #[test]
@@ -1214,7 +1278,11 @@ mod global_checkpoints {
         let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
             compact
-                .contains("self.handle_reaction(update,channel_id,false,event.timestamp).await?")
+                .contains("self.handle_reaction(update,channel_id,false,event.timestamp,session.clone()).await?")
         );
     }
 }
+
+#[cfg(test)]
+#[path = "channel_stream_admission_tests.rs"]
+mod admission_tests;

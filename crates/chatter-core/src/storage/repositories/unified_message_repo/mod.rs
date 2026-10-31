@@ -175,6 +175,13 @@ const MSG_COLS: &str = "id, conversation_id, conversation_type, sender_id, devic
      reply_to_author_id, reply_to_text, \
      reply_to_thumbnail, reply_to_thumbnail_mime, failure_reason";
 
+static QUALIFIED_MESSAGE_COLUMNS: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| message_columns("messages"));
+static SELECT_MESSAGE_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(||
+    format!("SELECT {} FROM messages WHERE id = ?1", *QUALIFIED_MESSAGE_COLUMNS));
+static SELECT_SENDER_TIME_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(||
+    format!("SELECT {} FROM messages WHERE sender_id = ?1 AND sent_at = ?2", *QUALIFIED_MESSAGE_COLUMNS));
+
 fn message_columns(alias: &str) -> String {
     format!("{alias}.{}", MSG_COLS.replace(", ", &format!(", {alias}.")))
 }
