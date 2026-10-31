@@ -93,16 +93,20 @@ impl ChatterClient {
         self: &std::sync::Arc<Self>,
         section: &crate::domain::section::CustomSection,
     ) -> u32 {
-        section
-            .conversations
-            .iter()
-            .filter(|c| c.unread_count > 0)
-            .filter(|c| {
-                self.resolve_row_conversation(&c.conversation_id, &c.conversation_type)
-                    .is_none_or(|conv| !self.is_conversation_muted(conv).unwrap_or(false))
-            })
-            .map(|c| c.unread_count)
-            .sum()
+        section.conversations.iter().filter(|c| c.unread_count > 0)
+            .map(|c| self.section_member_unread_badge(c)).sum()
+    }
+
+    /// One member's exact contribution to the folder header (muted excluded).
+    pub fn section_member_unread_badge(
+        self: &std::sync::Arc<Self>,
+        conversation: &crate::domain::section::SectionConversation,
+    ) -> u32 {
+        if conversation.unread_count == 0 { return 0; }
+        if self.resolve_row_conversation(&conversation.conversation_id, &conversation.conversation_type)
+            .is_none_or(|conv| !self.is_conversation_muted(conv).unwrap_or(false)) {
+            conversation.unread_count
+        } else { 0 }
     }
 
     // ── Sidebar sections (custom grouping) façade ────────────────────────

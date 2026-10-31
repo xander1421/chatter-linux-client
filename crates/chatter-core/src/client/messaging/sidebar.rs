@@ -207,6 +207,43 @@ impl ChatterClient {
         row
     }
 
+    /// Refresh one existing folder member without listing or projecting other folders.
+    /// Membership, visibility and pin mutations still use structural snapshots.
+    pub fn refresh_section_row(
+        self: &std::sync::Arc<Self>,
+        mut conversation: crate::domain::section::SectionConversation,
+    ) -> Result<(crate::domain::section::SectionConversation, crate::ui::sidebar_data::ChatRowSendData), crate::error::StorageError> {
+        let stats = self.services.conversation_repo.conversation_stats_for(
+            &conversation.conversation_id, &conversation.conversation_type)?;
+        conversation.unread_count = stats.unread_count;
+        conversation.last_message_at = stats.last_message_at.map(|at| at.timestamp_millis());
+        let ids = conversation.conversation_id.parse().ok().into_iter().collect::<Vec<_>>();
+        let projection = SidebarProjection {
+            latest: self.messages().message_repo.sidebar_latest_batch(&ids)?,
+            unread: Default::default(),
+            mentions: self.sidebar_mention_counts(&ids),
+            muted: Default::default(),
+        };
+        let mut row = self.section_row_with_projection(&conversation, &projection);
+        row.is_muted = self.resolve_row_conversation(&conversation.conversation_id, &conversation.conversation_type)
+            .is_some_and(|conv| self.is_conversation_muted(conv).unwrap_or(false));
+        self.decorate_draft_rows(std::slice::from_mut(&mut row));
+        Ok((conversation, row))
+    }
+
+    /// Admit folder SQL through the database's bounded blocking executor.
+    pub async fn refresh_section_row_async(
+        self: &std::sync::Arc<Self>,
+        conversation: crate::domain::section::SectionConversation,
+    ) -> Result<(crate::domain::section::SectionConversation, crate::ui::sidebar_data::ChatRowSendData, u32), crate::error::StorageError> {
+        let client = self.clone();
+        self.services.database.run_blocking(move || {
+            let (metadata, row) = client.refresh_section_row(conversation)?;
+            let contribution = client.section_member_unread_badge(&metadata);
+            Ok((metadata, row, contribution))
+        }).await
+    }
+
     /// Shape a full folder snapshot with one message and mention projection
     /// shared by every child row. Folder unread counts arrive with sections.
     pub fn section_rows(

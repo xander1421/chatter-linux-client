@@ -81,3 +81,24 @@ impl From<crate::services::pairwise::PairwiseError> for AnonGroupError {
         }
     }
 }
+
+impl AnonGroupError {
+    /// Static metadata survives redaction without exposing error text or IDs.
+    pub(crate) fn trace_invite_failure(&self) {
+        match self {
+            Self::Storage(_) => {
+                tracing::warn!(target: "group_invite::storage", "invite acceptance failed")
+            }
+            Self::MessageError(_) | Self::DeliveryUnconfirmed => {
+                tracing::warn!(target: "group_invite::delivery", "invite acceptance failed")
+            }
+            Self::CryptoError(_) => {
+                tracing::warn!(target: "group_invite::crypto_or_token", "invite acceptance failed")
+            }
+            Self::InvalidData(_) | Self::MemberNotFound(_) => {
+                tracing::warn!(target: "group_invite::invalid_state", "invite acceptance failed")
+            }
+            _ => tracing::warn!(target: "group_invite::other", "invite acceptance failed"),
+        }
+    }
+}

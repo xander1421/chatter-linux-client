@@ -406,7 +406,10 @@ impl CoreServices {
                         tracing::info!(had = current, now, "Token refill: pool topped up");
                     }
                     Ok(_) => {}
-                    Err(e) => tracing::warn!("Token refill: could not count tokens: {}", e),
+                    Err(e) => {
+                        trace_token_refill_failure(&e);
+                        tracing::warn!("Token refill: could not count tokens: {}", e);
+                    }
                 }
                 jittered_sleep().await;
             }
@@ -963,12 +966,39 @@ async fn top_up(
             Ok(0) => break,
             Ok(n) => have += n,
             Err(e) => {
+                trace_token_refill_failure(&e);
                 tracing::warn!("Token refill failed: {}", e);
                 break;
             }
         }
     }
     have
+}
+
+// Only constant targets cross the log redactor; never include error payloads.
+fn trace_token_refill_failure(error: &crate::error::MailboxError) {
+    use crate::error::MailboxError;
+    match error {
+        MailboxError::NoTokensAvailable => {
+            tracing::warn!(target: "token_refill::no_tokens", "token refill failed")
+        }
+        MailboxError::QuotaExhausted => {
+            tracing::warn!(target: "token_refill::quota", "token refill failed")
+        }
+        MailboxError::Network(_) => {
+            tracing::warn!(target: "token_refill::network", "token refill failed")
+        }
+        MailboxError::Storage(_) => {
+            tracing::warn!(target: "token_refill::storage", "token refill failed")
+        }
+        MailboxError::InvalidServerKey(_) => {
+            tracing::warn!(target: "token_refill::invalid_manifest", "token refill failed")
+        }
+        MailboxError::BlindSignature(_) => {
+            tracing::warn!(target: "token_refill::blind_signature", "token refill failed")
+        }
+        _ => tracing::warn!(target: "token_refill::other", "token refill failed"),
+    }
 }
 
 #[cfg(test)]

@@ -35,6 +35,7 @@ pub struct PendingAnonGroupInvite {
     pub inviter_avatar: Option<Vec<u8>>,
 }
 
+mod acceptance;
 mod groups;
 mod helpers;
 mod invites;

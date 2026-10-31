@@ -302,20 +302,22 @@ pub async fn handle_domain_event(
             crate::run_ui!(window, |w| {
                 for id in &conversation_ids {
                     helpers::update_unread_count(&w, &ui_ctx, &id.to_string(), 0);
+                    crate::bin_ui::features::sidebar::refresh_section_member(&w, &ui_ctx, &id.to_string());
                 }
-                crate::bin_ui::features::sidebar::refresh_section_badges(&w, &ui_ctx);
             });
         }
         // Read on another of our devices: core marked the messages read;
         // rows and badges are rebuilt from storage (a sync can read only some).
         DomainEvent::ConversationsRead {
+            conversation_ids,
             from_other_device: true,
-            ..
         } => {
             crate::bin_ui::features::sidebar::rebuild_chat_list(window, ui_ctx);
             let ui_ctx = ui_ctx.clone();
             crate::run_ui!(window, |w| {
-                crate::bin_ui::features::sidebar::refresh_section_badges(&w, &ui_ctx);
+                for id in &conversation_ids {
+                    crate::bin_ui::features::sidebar::refresh_section_member(&w, &ui_ctx, &id.to_string());
+                }
                 helpers::recompute_total_unread(&w, &ui_ctx);
             });
         }

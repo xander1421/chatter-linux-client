@@ -89,6 +89,16 @@ async fn real_group_fanout_refuses_replaced_session_after_recipient_preparation(
         let f = fixture();
         let state = f._client.auth_state();
         let me = f._client.anon_groups().current_user_id().unwrap();
+        // This test exercises an established sender, not a non-member denial.
+        // Without self membership send_message returns before the hook.
+        f._client
+            .anon_groups()
+            .anon_group_repo
+            .add_member(&AnonGroupMember {
+                device_id: Some(1),
+                ..AnonGroupMember::with_mailbox(f.group_id, me, AnonGroupRole::Member, [3; 32])
+            })
+            .unwrap();
         state.set_logged_in(me, 1, "old".into());
         let captured = SendSession::capture(state);
         let ready = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -96,7 +106,7 @@ async fn real_group_fanout_refuses_replaced_session_after_recipient_preparation(
         let client = f._client.clone();
         let group = f.group_id;
         let gates = (ready.clone(), resume.clone());
-        let task = tokio::spawn(SEND_SESSION.scope(
+        let mut task = tokio::spawn(SEND_SESSION.scope(
             captured,
             RECIPIENT_PREPARED.scope(
                 gates,
@@ -117,11 +127,25 @@ async fn real_group_fanout_refuses_replaced_session_after_recipient_preparation(
                 ),
             ),
         ));
-        ready.notified().await;
+        tokio::select! {
+            _ = ready.notified() => {},
+            result = &mut task => panic!("fanout ended before recipient preparation: {result:?}"),
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                task.abort();
+                panic!("recipient preparation hook was not reached within five seconds");
+            }
+        }
         // Same-account login replaces the captured session, too.
         state.set_logged_in(me, 1, "replacement".into());
         resume.notify_one();
-        let (result, crossed, _) = task.await.unwrap();
+        let (result, crossed, _) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), &mut task)
+                .await
+                .unwrap_or_else(|_| {
+                    task.abort();
+                    panic!("fanout did not finish after recipient preparation resumed");
+                })
+                .unwrap();
         assert!(matches!(result, Err(AnonGroupError::Storage(_))));
         assert_eq!(crossed, earlier_submission);
         let db = f._client.messages().database.clone();
@@ -137,6 +161,7 @@ async fn real_group_fanout_refuses_replaced_session_after_recipient_preparation(
             lower_claims, 0,
             "pre-encryption lower claim must be released"
         );
+        drop(conn);
         // The expired send must not become durable parked work.
         assert!(
             f._client
@@ -214,6 +239,17 @@ async fn invite_without_tor_fails_closed() {
         [1u8; 32],
     ))
     .unwrap();
+
+    // Reach the routing check with a real pending admission. Without this,
+    // invitation validation returns early and this test never exercises Tor.
+    assert!(
+        repo.invite_ordered_member(
+            &AnonGroupMember::new(group.id, f.victim, AnonGroupRole::Member),
+            &me,
+            crate::util::time::TimestampNanos::now().as_u64(),
+        )
+        .unwrap()
+    );
 
     let res = svc
         .send_invite(f.victim, group.id, "mine", &[1u8; 32])

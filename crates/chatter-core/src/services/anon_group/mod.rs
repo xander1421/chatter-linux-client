@@ -42,6 +42,26 @@ use crate::storage::repositories::AttachmentRepository;
 use crate::storage::repositories::SettingsRepository;
 use crate::storage::repositories::anon_group_repo::PendingAnonGroupInvite;
 
+/// A facade operation's account and exact authenticated session, captured before
+/// waiting for either invitation serialization or lifecycle admission.
+pub(crate) struct InviteSession<'a> {
+    pub auth: &'a crate::state::AuthState,
+    pub lifecycle: &'a tokio::sync::Mutex<()>,
+    pub user: crate::domain::UserId,
+    pub revision: u64,
+}
+
+impl InviteSession<'_> {
+    pub(crate) async fn admit(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, AnonGroupError> {
+        let guard = self.lifecycle.lock().await;
+        let now = self.auth.get();
+        if now.current_user_id != Some(self.user) || now.session_revision != self.revision {
+            return Err(AnonGroupError::NotLoggedIn);
+        }
+        Ok(guard)
+    }
+}
+
 /// Anonymous group service.
 ///
 /// Handles all anonymous group operations following the NDSS'21 model.
@@ -68,6 +88,7 @@ pub struct AnonGroupService {
     pub(crate) token_manager: Arc<TokenManager>,
     /// Posts from senders outside the roster, awaiting a member list.
     pub(crate) held_posts: held::HeldPosts,
+    invite_acceptance: tokio::sync::Mutex<()>,
 }
 
 impl AnonGroupService {
@@ -87,6 +108,18 @@ impl AnonGroupService {
         &self,
         group_id: &crate::domain::anon_group::AnonGroupId,
     ) -> Result<(), AnonGroupError> {
+        self.decline_pending_invite_bound(group_id, None).await
+    }
+
+    pub(crate) async fn decline_pending_invite_bound(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+        session: Option<&InviteSession<'_>>,
+    ) -> Result<(), AnonGroupError> {
+        let admission = match session {
+            Some(session) => Some(session.admit().await?),
+            None => None,
+        };
         let invite = self
             .anon_group_repo
             .get_pending_invite(group_id)?
@@ -96,13 +129,17 @@ impl AnonGroupService {
                 "Invitation has no admission epoch".into(),
             ));
         }
+        self.anon_group_repo.decline_exact_pending_invite(&invite)?;
+        drop(admission);
         let content = crate::proto::content_v1::Content {
-            content: Some(crate::proto::content_v1::content::Content::AnonGroupDecline(
-                crate::proto::content_v1::AnonGroupDecline {
-                    group_id: group_id.to_vec(),
-                    invite_epoch: invite.invite_epoch,
-                },
-            )),
+            content: Some(
+                crate::proto::content_v1::content::Content::AnonGroupDecline(
+                    crate::proto::content_v1::AnonGroupDecline {
+                        group_id: group_id.to_vec(),
+                        invite_epoch: invite.invite_epoch,
+                    },
+                ),
+            ),
             ephemeral_reply_to: None,
             timestamp: crate::util::time::TimestampNanos::now().as_u64(),
             padding: Self::generate_padding(160),
@@ -114,7 +151,6 @@ impl AnonGroupService {
             content,
         )
         .await?;
-        self.anon_group_repo.remove_pending_invite(group_id)?;
         Ok(())
     }
 
@@ -136,20 +172,30 @@ impl AnonGroupService {
             .anon_group_repo
             .get_pending_invite(&group_id)?
             .ok_or_else(|| AnonGroupError::InvalidData("Invitation no longer pending".into()))?;
+        self.accept_pending_invite_bound(invite, None).await
+    }
+
+    pub(crate) async fn accept_pending_invite_bound(
+        &self,
+        invite: PendingAnonGroupInvite,
+        session: Option<&InviteSession<'_>>,
+    ) -> Result<crate::domain::anon_group::AnonGroup, AnonGroupError> {
         let group = self
-            .accept_invite(
+            .accept_invite_bound(
                 invite.group_id,
-                invite.group_name,
+                invite.group_name.clone(),
                 invite.inviter_id,
                 invite.inviter_id,
                 invite.inviter_device_id,
                 invite.inviter_mailbox_pk,
                 invite.profile_key,
-                invite.inviter_display_name,
-                invite.inviter_avatar,
+                invite.inviter_display_name.clone(),
+                invite.inviter_avatar.clone(),
+                Some(&invite),
+                session,
             )
-            .await?;
-        self.anon_group_repo.remove_pending_invite(&group_id)?;
+            .await
+            .inspect_err(AnonGroupError::trace_invite_failure)?;
         Ok(group)
     }
     /// Create a new AnonGroupService.
@@ -176,6 +222,7 @@ impl AnonGroupService {
             grpc_pool,
             token_manager,
             held_posts: held::HeldPosts::default(),
+            invite_acceptance: tokio::sync::Mutex::new(()),
         }
     }
 

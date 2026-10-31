@@ -31,12 +31,12 @@ struct SidebarIndex {
     flat: slint::ModelRc<crate::SidebarRowData>,
     positions: std::collections::HashMap<String, usize>,
     flat_positions: std::collections::HashMap<String, usize>,
+    section_headers: std::collections::HashMap<String, usize>,
     pinned: usize,
     foldered: std::collections::HashSet<String>,
 }
 thread_local! {
     static SIDEBAR_INDEX: std::cell::RefCell<SidebarIndex> = Default::default();
-    static SECTION_REFRESH_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn index_sidebar(window: &MainWindow) {
@@ -62,6 +62,9 @@ fn index_sidebar(window: &MainWindow) {
         );
     }
     for (i, row) in flat.iter().enumerate() {
+        if row.kind == "section-header" {
+            index.section_headers.insert(row.section.section_id.to_string(), i);
+        }
         if row.kind == "chat" {
             index
                 .flat_positions
@@ -636,6 +639,14 @@ fn row_is_active(
     }
 }
 
+/// Refresh an existing folder member after its messages are read. Unfiled rows
+/// incur no folder work; unknown membership is handled by structural snapshots.
+pub(crate) fn refresh_section_member(window: &MainWindow, client: &Arc<ChatterClient>, key: &str) {
+    if SIDEBAR_INDEX.with(|index| index.borrow().foldered.contains(key)) {
+        sections::refresh_member(window, client, key);
+    }
+}
+
 /// Rebuild the folder models, but only when folders exist.
 ///
 /// Folder badges (per-row and the header aggregate) used to be frozen from app
@@ -657,15 +668,7 @@ pub(crate) fn refresh_section_badges(window: &MainWindow, ui_ctx: &Arc<ChatterCl
     {
         return;
     }
-    if SECTION_REFRESH_PENDING.with(|pending| pending.replace(true)) {
-        return;
-    }
-    let weak = slint::ComponentHandle::as_weak(window);
-    let ui_ctx = ui_ctx.clone();
-    slint::Timer::single_shot(Duration::ZERO, move || {
-        SECTION_REFRESH_PENDING.with(|pending| pending.set(false));
-        tokio::spawn(async move { sections::refresh_sections_ui(&weak, &ui_ctx) });
-    });
+    sections::queue_refresh(window, ui_ctx);
 }
 
 /// Apply pinned message state to the UI.
@@ -785,7 +788,7 @@ pub fn apply_thread_reply_badges(
         }
     }
     let foldered = SIDEBAR_INDEX.with(|slot| slot.borrow().foldered.contains(&key));
-    if !found && foldered { refresh_section_badges(window, ui_ctx); }
+    if !found && foldered { sections::refresh_member(window, ui_ctx, &key); }
     if !found && !foldered {
         let (weak, ui_ctx) = (window.as_weak(), ui_ctx.clone());
         tokio::spawn(async move { rebuild_chat_list(&weak, &ui_ctx) });
@@ -835,7 +838,7 @@ fn update_sidebar_row(
     let Some(i) = SIDEBAR_INDEX.with(|slot| slot.borrow().positions.get(&key).copied()) else {
         let foldered = SIDEBAR_INDEX.with(|slot| slot.borrow().foldered.contains(&key));
         if foldered {
-            refresh_section_badges(window, ui_ctx);
+            sections::refresh_member(window, ui_ctx, &key);
         }
         return foldered;
     };

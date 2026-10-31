@@ -245,6 +245,30 @@ impl UnifiedConversationRepository {
         Ok(ids)
     }
 
+    /// The folder hot path reads only the changed conversation's message range.
+    pub fn conversation_stats_for(
+        &self,
+        id: &str,
+        kind: &ConversationType,
+    ) -> Result<ConversationStats, StorageError> {
+        let conn = self.db.read_connection()?;
+        conn.query_row(
+            "SELECT MAX(CASE WHEN thread_id IS NULL THEN created_at END),
+                    COALESCE(SUM(CASE WHEN is_read = 0 AND is_deleted = 0 AND thread_id IS NULL THEN 1 ELSE 0 END), 0)
+             FROM messages WHERE conversation_id = ?1 AND conversation_type = ?2",
+            params![id, kind.as_str()],
+            |row| {
+                let at: Option<String> = row.get(0)?;
+                let unread: i64 = row.get(1)?;
+                Ok(ConversationStats {
+                    last_message_at: at.and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                        .map(|dt| dt.with_timezone(&Utc)),
+                    unread_count: unread.max(0) as u32,
+                })
+            },
+        ).map_err(Into::into)
+    }
+
     /// Unread count and last-message time for EVERY conversation, in one query.
     ///
     /// This is `list_all`'s `conv_stats` CTE on its own. It reads the messages
@@ -368,6 +392,34 @@ mod tests {
             )
             .unwrap();
         (UnifiedConversationRepository::new(Arc::new(db)), dir)
+    }
+
+    #[test]
+    fn targeted_folder_stats_match_snapshot_and_isolate_kind_and_threads() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("stats.db"), "fixture").unwrap());
+        // Minimal message table exercises the actual production aggregate SQL.
+        db.connection().unwrap().execute_batch("CREATE TABLE messages (
+            conversation_id TEXT, conversation_type TEXT, created_at TEXT,
+            thread_id TEXT, is_read INTEGER, is_deleted INTEGER);
+            INSERT INTO messages VALUES
+            ('peer', 'server_dm', '2026-01-01T00:00:00Z', NULL, 0, 0),
+            ('peer', 'server_dm', '2026-01-02T00:00:00Z', NULL, 1, 0),
+            ('peer', 'server_dm', '2026-01-03T00:00:00Z', NULL, 0, 1),
+            ('peer', 'server_dm', '2026-01-09T00:00:00Z', 'thread', 0, 0),
+            ('peer', 'channel', '2026-01-20T00:00:00Z', NULL, 0, 0),
+            ('other', 'server_dm', '2026-01-30T00:00:00Z', NULL, 0, 0);").unwrap();
+        let repo = UnifiedConversationRepository::new(db);
+        let all = repo.conversation_stats().unwrap();
+        let row = repo.conversation_stats_for("peer", &ConversationType::ServerDm).unwrap();
+        let expected = all.get(&("peer".into(), ConversationType::ServerDm)).unwrap();
+        assert_eq!(row.unread_count, 1);
+        assert_eq!(row.unread_count, expected.unread_count);
+        assert_eq!(row.last_message_at, expected.last_message_at);
+        assert_eq!(row.last_message_at.unwrap().to_rfc3339(), "2026-01-03T00:00:00+00:00");
+        let missing = repo.conversation_stats_for("missing", &ConversationType::ServerDm).unwrap();
+        assert_eq!(missing.unread_count, 0);
+        assert!(missing.last_message_at.is_none());
     }
 
     #[test]
