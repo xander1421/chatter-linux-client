@@ -54,7 +54,7 @@ pub fn push_rows(window: &MainWindow, remove_id: Option<&str>, rows: Vec<JarvisR
     window.global::<crate::ChatPane>().set_is_at_bottom(true);
     window
         .global::<crate::ChatPane>()
-        .set_messages(ModelRc::new(VecModel::from(messages)));
+        .set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::from(messages)));
 }
 
 /// Add a "Jarvis is thinking..." placeholder message.
@@ -80,7 +80,7 @@ pub fn remove_jarvis_thinking_placeholder(window: &MainWindow, thinking_id: &str
             .collect();
         window
             .global::<crate::ChatPane>()
-            .set_messages(ModelRc::new(VecModel::from(rows)));
+            .set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::from(rows)));
     }
 }
 

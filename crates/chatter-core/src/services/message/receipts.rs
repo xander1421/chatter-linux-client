@@ -41,7 +41,6 @@ impl MessageService {
         timestamps: &[u64],
         read: bool,
     ) -> Result<(), MessageError> {
-        use prost::Message as _;
         let me = self.current_user_id()?;
         let mut by_author: HashMap<UserId, Vec<u64>> = HashMap::new();
         for &timestamp in timestamps {
@@ -60,47 +59,62 @@ impl MessageService {
             tracing::info!(channel_id = %channel, timestamp_count = timestamps.len(),
                 author_count = by_author.len(), "Channel delivery receipt authors resolved");
         }
+        for (author, stamps) in by_author {
+            self.send_channel_receipt_to_author(channel, author, stamps, read).await?;
+        }
+        Ok(())
+    }
+
+    /// Exact identity from a committed receive intent, avoiding ambiguous
+    /// timestamp-only lookups when different authors share the same clock.
+    pub(crate) async fn send_channel_receipt_to_author(
+        &self,
+        channel: ChannelId,
+        author: UserId,
+        stamps: Vec<u64>,
+        read: bool,
+    ) -> Result<(), MessageError> {
+        use prost::Message as _;
+        if stamps.is_empty() || author == self.current_user_id()? { return Ok(()) }
         let mut auth = self.auth_client();
         let mut client = self.message_client();
-        for (author, stamps) in by_author {
-            let mut content = if read {
-                crate::services::gateway::build_read_receipt_content_with_channel(
-                    stamps,
-                    Some(&channel.to_string()),
-                )
-            } else {
-                crate::services::gateway::build_delivery_receipt_content_with_channel(
-                    stamps,
-                    Some(&channel.to_string()),
-                )
-            };
-            Self::pad_content_to_bucket(&mut content);
-            let outcome = self
-                .deposit_sealed_to_all_devices(
-                    &mut auth,
-                    &mut client,
-                    &author.to_string(),
-                    &content.encode_to_vec(),
-                    None,
-                )
-                .await;
-            if outcome.delivered == 0 {
-                return Err(outcome.error.unwrap_or_else(|| {
-                    MessageError::EncryptionFailed(
-                        "channel receipt reached no author device".into(),
-                    )
-                }));
-            }
-            self.record_pairwise_send(
-                &content,
-                &outcome
-                    .deposits
-                    .iter()
-                    .map(|&(device, server_ts)| (author, device, server_ts))
-                    .collect::<Vec<_>>(),
+        let mut content = if read {
+            crate::services::gateway::build_read_receipt_content_with_channel(
+                stamps,
+                Some(&channel.to_string()),
+            )
+        } else {
+            crate::services::gateway::build_delivery_receipt_content_with_channel(
+                stamps,
+                Some(&channel.to_string()),
+            )
+        };
+        Self::pad_content_to_bucket(&mut content);
+        let outcome = self
+            .deposit_sealed_to_all_devices(
+                &mut auth,
+                &mut client,
+                &author.to_string(),
+                &content.encode_to_vec(),
                 None,
-            );
+            )
+            .await;
+        if outcome.delivered == 0 {
+            return Err(outcome.error.unwrap_or_else(|| {
+                MessageError::EncryptionFailed(
+                    "channel receipt reached no author device".into(),
+                )
+            }));
         }
+        self.record_pairwise_send(
+            &content,
+            &outcome
+                .deposits
+                .iter()
+                .map(|&(device, server_ts)| (author, device, server_ts))
+                .collect::<Vec<_>>(),
+            None,
+        );
         Ok(())
     }
 

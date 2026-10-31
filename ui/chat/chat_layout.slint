@@ -287,6 +287,9 @@ export component ChatLayout inherits Rectangle {
     out property <length> viewer-origin-width: message-list.viewer-origin-width;
     out property <length> viewer-origin-height: message-list.viewer-origin-height;
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
+    in property <bool> history-has-newer;
+    in property <int> history-head-offset;
+    callback request-latest();
     callback load-more();
     callback list-geometry(float, float, bool);
     callback visible-media-rows(int, int);
@@ -415,6 +418,9 @@ export component ChatLayout inherits Rectangle {
         quote-clicked(id) => {
             root.quote-clicked(id);
         }
+        history-has-newer: root.history-has-newer;
+        history-head-offset: root.history-head-offset;
+        request-latest => { root.request-latest(); }
         load-more => {
             root.load-more();
         }

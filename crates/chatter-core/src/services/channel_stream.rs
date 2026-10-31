@@ -173,6 +173,8 @@ const RECOVERY_INTERVAL: Duration = Duration::from_secs(5);
 /// Reconnecting loses only this retry plan; the durable old checkpoint replays it.
 #[derive(Default)]
 struct RecoveryState {
+    checkpoint_events: usize,
+    checkpoint_written_at: Option<std::time::Instant>,
     channels: std::collections::VecDeque<String>,
     candidate: Option<String>,
     progress: std::collections::BTreeMap<String, RecoveryProgress>,
@@ -444,10 +446,14 @@ impl ChannelStreamService {
                         return Err(crate::error::NetworkError::Timeout);
                     }
                 },
-                _ = retry.tick(), if !recovery.channels.is_empty() => {
-                    tokio::select! {
-                        result = self.retry_recovery(&mut recovery) => result?,
-                        _ = self.resubscribe.notified() => return Ok(()),
+                _ = retry.tick() => {
+                    if recovery.channels.is_empty() {
+                        self.flush_checkpoint(&mut recovery, true).await?;
+                    } else {
+                        tokio::select! {
+                            result = self.retry_recovery(&mut recovery) => result?,
+                            _ = self.resubscribe.notified() => return Ok(()),
+                        }
                     }
                 }
                 _ = self.resubscribe.notified() => {
@@ -492,13 +498,6 @@ impl ChannelStreamService {
         Ok(cursor)
     }
 
-    fn store_cursor(&self, event_id: &str) -> Result<(), crate::error::NetworkError> {
-        validate_global_cursor(event_id)?;
-        self.settings_repo
-            .set(CURSOR_KEY, &event_id.to_string())
-            .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))
-    }
-
     /// The server could not replay everything after our cursor: it was older
     /// than the event log retains, a channel's buffer was trimmed past it, or
     /// the stream's replay budget ran out. What it skipped is not coming on
@@ -541,19 +540,40 @@ impl ChannelStreamService {
             recovery.defer(channel)?;
         }
         recovery.candidate = Some(new_cursor.to_owned());
+        recovery.checkpoint_events += 1;
         // Ancillary channel/member sync is useful, but mutation snapshots below
         // are the authority for message application and checkpoint completion.
         let _ = tokio::time::timeout(RECOVERY_BUDGET, self.catch_up_now()).await;
-        self.acknowledge_recovery(recovery)
+        self.acknowledge_recovery(recovery).await
     }
 
-    fn acknowledge_recovery(
+    async fn acknowledge_recovery(
         &self,
-        recovery: &RecoveryState,
+        recovery: &mut RecoveryState,
     ) -> Result<(), crate::error::NetworkError> {
-        if let Some(cursor) = recovery.acknowledgeable() {
-            self.store_cursor(cursor)?;
+        self.flush_checkpoint(recovery, false).await
+    }
+
+    async fn flush_checkpoint(
+        &self,
+        recovery: &mut RecoveryState,
+        force: bool,
+    ) -> Result<(), crate::error::NetworkError> {
+        let Some(cursor) = recovery.acknowledgeable() else { return Ok(()) };
+        // Always reject malformed wire cursors, even during the coalescing window.
+        validate_global_cursor(cursor)?;
+        if recovery.checkpoint_events == 0 { return Ok(()) }
+        if !force && recovery.checkpoint_events < 32
+            && recovery.checkpoint_written_at.is_some_and(|at| at.elapsed() < Duration::from_secs(1))
+        {
+            return Ok(());
         }
+        let cursor = cursor.to_owned();
+        let settings = self.settings_repo.clone();
+        self.messages.database.run_blocking(move || settings.set(CURSOR_KEY, &cursor)).await
+            .map_err(|error| crate::error::NetworkError::Unknown(error.to_string()))?;
+        recovery.checkpoint_events = 0;
+        recovery.checkpoint_written_at = Some(std::time::Instant::now());
         Ok(())
     }
 
@@ -596,7 +616,7 @@ impl ChannelStreamService {
             }
             Ok(Err(error)) => return Err(error),
         }
-        self.acknowledge_recovery(recovery)
+        self.acknowledge_recovery(recovery).await
     }
 
     /// Reconcile one channel from an authoritative retained mutation snapshot.
@@ -731,7 +751,8 @@ impl ChannelStreamService {
             recovery.defer(&event.channel_id)?;
         }
         recovery.candidate = Some(event.event_id);
-        self.acknowledge_recovery(recovery)
+        recovery.checkpoint_events += 1;
+        self.acknowledge_recovery(recovery).await
     }
 
     async fn handle_reaction(

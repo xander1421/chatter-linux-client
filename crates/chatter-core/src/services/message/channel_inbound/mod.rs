@@ -133,7 +133,18 @@ impl ChannelInbound {
             Err(outcome) => return outcome,
         };
 
-        let Some(persisted) = self.persist(&mut message, channel_id) else {
+        let messages = self.messages.clone();
+        let stored = self.messages.database.run_blocking(move || {
+            let persisted = Self::persist_message(&messages, &mut message, channel_id);
+            Ok((message, persisted))
+        }).await;
+        let (message, Some(persisted)) = (match stored {
+            Ok(stored) => stored,
+            Err(error) => {
+                tracing::warn!(%channel_id, %error, "Channel persistence worker failed");
+                return Ingested::RetryableFailure;
+            }
+        }) else {
             return Ingested::RetryableFailure;
         };
 

@@ -8,15 +8,6 @@ pub(crate) enum Persisted {
 }
 
 impl ChannelInbound {
-    /// Upsert, preserving attachments and reactions already stored locally.
-    pub(super) fn persist(
-        &self,
-        message: &mut Message,
-        channel_id: ChannelId,
-    ) -> Option<Persisted> {
-        Self::persist_message(&self.messages, message, channel_id)
-    }
-
     pub(crate) fn persist_message(
         messages: &MessageService,
         message: &mut Message,
@@ -74,9 +65,11 @@ impl ChannelInbound {
             Ok(None) => {
                 // Atomic insert, not the earlier read, decides who announces
                 // when a stream, catch-up or sender-key retry races another.
-                match messages.store_message_local_once(message) {
-                    Ok(true) => Persisted::New,
-                    Ok(false) => Persisted::Existing,
+                match messages.message_repo.insert_or_ignore_with_row(message) {
+                    Ok((inserted, stored)) => {
+                        if let Some(stored) = stored { *message = stored; }
+                        return Some(if inserted { Persisted::New } else { Persisted::Existing });
+                    },
                     Err(e) => {
                         tracing::warn!(%channel_id, message_id = %message.id, error = %e,
                             "Failed to insert channel message");

@@ -275,7 +275,7 @@ export component MessageList inherits Rectangle {
             // The first arrival into an already-open empty list still counts.
             && (root.observed-message-count == 0
                 || root.messages[root.observed-message-count - 1].message-id == root.observed-last-message-id)
-            && root.ready-for-arrivals && !root.loading;
+            && root.ready-for-arrivals && !root.loading && !root.history-has-newer;
         // Older history is inserted above the existing last message. Only a
         // changed tail represents new traffic that should rise into view.
         if (new-tail) {
@@ -369,6 +369,20 @@ export component MessageList inherits Rectangle {
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
+    in property <bool> history-has-newer;
+    in property <int> history-head-offset;
+    callback request-latest();
+    private property <int> seen-head-offset;
+    changed history-head-offset => {
+        let shift = root.history-head-offset - root.seen-head-offset;
+        root.seen-head-offset = root.history-head-offset;
+        if shift > 0 {
+            root.seen-top = max(0, root.seen-top - shift);
+            root.seen-rows = root.messages.length;
+            root.seen-first = root.messages.length > 0 ? root.messages[0].message-id : "";
+            if root.jump-row >= 0 { root.jump-row = max(0, root.jump-row - shift); }
+        }
+    }
     callback load-more();
     callback attachment-clicked(string);  // attachment ID
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
@@ -483,7 +497,7 @@ export component MessageList inherits Rectangle {
             // false. Once that row has been measured and the seek has settled,
             // the pill is unnecessary if the newest messages are already in
             // view (including a conversation too short to scroll).
-            property <bool> unread-tail-in-view: root.opening-on-unread
+            property <bool> unread-tail-in-view: !root.history-has-newer && root.opening-on-unread
                 && root.jump-measured && root.jump-row < 0
                 && self.bottom-gap() <= root.bottom-inset + Spacing.md + Spacing.touch-target-min;
             changed unread-tail-in-view => {
@@ -498,7 +512,7 @@ export component MessageList inherits Rectangle {
             // The unread boundary can be the tail itself, with its seek still
             // pending even though that bubble is already in the viewport.
             function newest-visible(y: length, height: length) {
-                if ((root.jump-row < 0 || root.jump-row == root.messages.length - 1)
+                if (!root.history-has-newer && (root.jump-row < 0 || root.jump-row == root.messages.length - 1)
                         && y < self.height - root.bottom-inset
                         && y + height > root.top-inset) {
                     root.seen-opening-tail = true;
@@ -514,9 +528,9 @@ export component MessageList inherits Rectangle {
                 // Keyboard reveal and row remeasurement can update viewport-y
                 // before height. That transient gap is not a user leaving the
                 // bottom: retain the anchor until a scroll or explicit jump.
-                root.at-end = !root.opening-on-unread && (self.bottom-gap() <= 1px
+                root.at-end = !root.history-has-newer && !root.opening-on-unread && (self.bottom-gap() <= 1px
                     || (root.at-end && !root.scrolling && root.jump-row < 0));
-                root.is-at-bottom = !root.opening-on-unread && (root.following-tail
+                root.is-at-bottom = !root.history-has-newer && !root.opening-on-unread && (root.following-tail
                     || self.bottom-gap() <= (root.is-at-bottom ? 70px : 40px)
                     || (root.is-at-bottom && !root.scrolling && root.jump-row < 0));
                 // Reaching the newest message is what "caught up" means; the
@@ -644,6 +658,8 @@ export component MessageList inherits Rectangle {
             // the same two properties change for a finger, for a message
             // arriving and for a row being measured. So each pass is told
             // apart by what changed since the last one.
+            property <bool> history-gap: root.history-has-newer;
+            changed history-gap => { self.read-position(); }
             property <int> grown;
             property <bool> prepended;
             function settle() {
@@ -794,7 +810,8 @@ export component MessageList inherits Rectangle {
 
             for item[idx] in root.messages: message-row := VerticalLayout {
                 property <length> unread-position:
-                    message-row.absolute-position.y - list.absolute-position.y;
+                    idx == root.unread-index
+                        ? message-row.absolute-position.y - list.absolute-position.y : 0px;
                 changed unread-position => {
                     if (idx == root.unread-index) {
                         root.unread-row-y = self.unread-position;
@@ -984,14 +1001,18 @@ export component MessageList inherits Rectangle {
         // Scroll-to-bottom floating button; an unread count appears when
         // the conversation opened on an unread boundary.
         MessageScrollPill {
-            hide-pill: root.is-at-bottom || list.unread-tail-in-view
-                || (root.seen-opening-tail && root.unread-count == 0);
+            hide-pill: !root.history-has-newer && (root.is-at-bottom || list.unread-tail-in-view
+                || (root.seen-opening-tail && root.unread-count == 0));
             scrolling: root.scrolling;
             unread-count: root.unread-count;
             x: root.width - self.width - 16px;
             y: root.height - root.bottom-inset - 60px;
             clicked => {
                 root.opening-on-unread = false;
+                if root.history-has-newer {
+                    root.request-latest();
+                    return;
+                }
                 if (root.unread-index >= 0 && root.unread-above) {
                     // Scrolled up past the unread boundary: that is
                     // where reading resumes.

@@ -447,6 +447,25 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
+                        SignalCommand::SessionDevices { recipient, response } => {
+                            let res = store.key_store().list_sessions_for_user(&recipient)
+                                .map_err(ServiceError::Storage)
+                                .map(|rows| {
+                                    let prefix = format!("{recipient}:");
+                                    let mut devices: Vec<_> = rows.into_iter().filter_map(|(address, bytes)| {
+                                        let device = address.strip_prefix(&prefix)?.parse::<u32>().ok()?;
+                                        libsignal_protocol::DeviceId::try_from(device).ok()?;
+                                        let record = SessionRecord::deserialize(&bytes).ok()?;
+                                        if !record.has_usable_sender_chain(std::time::SystemTime::now(), libsignal_protocol::SessionUsabilityRequirements::empty()).unwrap_or(false) {
+                                            return None;
+                                        }
+                                        Some((device, record.remote_registration_id().ok().filter(|id| *id != 0)))
+                                    }).collect();
+                                    devices.sort_unstable_by_key(|(id, _)| *id);
+                                    devices
+                                });
+                            let _ = response.send(res);
+                        }
                         SignalCommand::HasSession { address, response } => {
                             let session_key = format!("{}:{}", address.name(), address.device_id());
                             let res = store.key_store().load_session(&session_key)

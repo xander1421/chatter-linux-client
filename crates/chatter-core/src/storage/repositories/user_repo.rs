@@ -487,7 +487,7 @@ impl UserRepository {
     /// treating it as ours would silently discard mail from someone the user
     /// never blocked.
     pub fn is_blocked(&self, user_id: &UserId, peer_id: &UserId) -> Result<bool, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let status: Option<i32> = conn
             .query_row(
                 "SELECT status FROM friendships WHERE user_id = ?1 AND friend_id = ?2",

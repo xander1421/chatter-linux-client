@@ -60,10 +60,8 @@ impl UnifiedMessageRepository {
     /// early modifier applied — or `None` when an early delete-for-everyone
     /// kept it out. What a receive path must announce, not what it decoded.
     pub fn insert_received(&self, message: &Message) -> Result<Option<Message>, StorageError> {
-        if !self.store(message, false, None, false)? {
-            return Ok(None);
-        }
-        self.get(&message.id)
+        let (inserted, row) = self.store_with_row(message, false, None, false, true)?;
+        Ok(if inserted { row } else { None })
     }
 
     /// Insert a message, ignoring duplicates (Signal dedup on primary key + sender_id/sent_at).
@@ -81,10 +79,8 @@ impl UnifiedMessageRepository {
         &self,
         message: &Message,
     ) -> Result<Option<Message>, StorageError> {
-        if !self.store(message, true, None, false)? {
-            return Ok(None);
-        }
-        self.get(&message.id)
+        let (inserted, row) = self.insert_or_ignore_with_row(message)?;
+        Ok(if inserted { row } else { None })
     }
 
     /// Store an own Saved snapshot and its initial pin clock atomically.
@@ -117,17 +113,31 @@ impl UnifiedMessageRepository {
         saved_pin_clock: Option<u64>,
         local_saved: bool,
     ) -> Result<bool, StorageError> {
+        self.store_with_row(message, or_ignore, saved_pin_clock, local_saved, false).map(|(inserted, _)| inserted)
+    }
+
+    /// Return authoritative modifier/dedup state before releasing the writer.
+    pub(crate) fn insert_or_ignore_with_row(&self, message: &Message) -> Result<(bool, Option<Message>), StorageError> {
+        self.store_with_row(message, true, None, false, true)
+    }
+
+    fn store_with_row(
+        &self,
+        message: &Message,
+        or_ignore: bool,
+        saved_pin_clock: Option<u64>,
+        local_saved: bool,
+        return_row: bool,
+    ) -> Result<(bool, Option<Message>), StorageError> {
+        let local_owner = super::super::settings_repo::SettingsRepository::new(self.db.clone())
+            .current_user_id().ok();
         let own_server_message = matches!(
             message.conversation_type,
             ConversationType::ServerDm | ConversationType::Channel
         ) && !matches!(
             message.content,
             MessageContent::System(_) | MessageContent::Call(_)
-        ) && message.sender_id.is_some_and(|sender| {
-            super::super::settings_repo::SettingsRepository::new(self.db.clone())
-                .current_user_id()
-                .is_ok_and(|me| me == sender)
-        });
+        ) && message.sender_id.is_some_and(|sender| local_owner == Some(sender));
         let is_read = self.stored_is_read(message);
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
@@ -158,7 +168,7 @@ impl UnifiedMessageRepository {
                 |r| r.get::<_, bool>(0),
             )?
         {
-            return Ok(false);
+            return Ok((false, None));
         }
         // Check under the same write transaction as insertion: a pre-arrival
         // delete must win even if the caller's earlier read saw no tombstone.
@@ -170,7 +180,7 @@ impl UnifiedMessageRepository {
                 |r| r.get::<_, bool>(0),
             )?
         {
-            return Ok(false);
+            return Ok((false, None));
         }
         let initial_saved_pin = saved_pin_clock.map(|_| message.is_pinned);
         let (mut message, reactions) =
@@ -180,7 +190,7 @@ impl UnifiedMessageRepository {
                 }
                 super::super::message_modifier_repo::Arrival::CallDeleted => {
                     tx.commit()?;
-                    return Ok(false);
+                    return Ok((false, None));
                 }
                 super::super::message_modifier_repo::Arrival::Deleted => {
                     tx.execute(
@@ -188,7 +198,7 @@ impl UnifiedMessageRepository {
                         params![message.id.to_string()],
                     )?;
                     tx.commit()?;
-                    return Ok(false);
+                    return Ok((false, None));
                 }
             };
         if let Some(pinned) = initial_saved_pin {
@@ -204,7 +214,7 @@ impl UnifiedMessageRepository {
         let current_user_reactions_blob = db_serialize(&message.current_user_reactions)?;
         let mentioned_integrations_blob = db_serialize(&message.mentioned_integrations)?;
 
-        let rows = tx.execute(
+        let rows = tx.prepare_cached(
             &format!(
                 "INSERT {} INTO messages (
                 id, conversation_id, conversation_type, sender_id, device_id,
@@ -224,6 +234,7 @@ impl UnifiedMessageRepository {
             )",
                 if or_ignore { "OR IGNORE" } else { "" }
             ),
+        )?.execute(
             params![
                 message.id.to_string(),
                 message.conversation_id.to_string(),
@@ -308,12 +319,26 @@ impl UnifiedMessageRepository {
             }
             index_shared_content(&tx, message);
             self.apply_held_reactions(&tx, message, &reactions)?;
+            if message.conversation_type == ConversationType::Channel
+                && !message.is_deleted
+                && message.sender_id.is_some()
+                && !own_server_message
+                && !matches!(message.content, MessageContent::System(_) | MessageContent::Call(_))
+                && let Some(owner) = local_owner
+            {
+                tx.execute(
+                    "INSERT OR IGNORE INTO channel_delivery_outbox
+                     (owner_id,message_id,conversation_id,sent_at) VALUES (?1,?2,?3,?4)",
+                    params![owner.to_string(),message.id.to_string(),message.conversation_id.to_string(),message.sent_at as i64],
+                )?;
+            }
         }
+        let stored = if return_row { self.get_with_connection(&tx, &message.id)? } else { None };
         tx.commit()?;
         if rows > 0 {
             self.db.announce_message_store(message);
         }
-        Ok(rows > 0)
+        Ok((rows > 0, stored))
     }
 
     /// Record the reactions that waited for `message` (now stored).
@@ -399,7 +424,7 @@ impl UnifiedMessageRepository {
         conn: &rusqlite::Connection,
         id: &MessageId,
     ) -> Result<Option<Message>, StorageError> {
-        let mut stmt = conn.prepare(&format!(
+        let mut stmt = conn.prepare_cached(&format!(
             "SELECT {} FROM messages WHERE id = ?1",
             message_columns("messages")
         ))?;
@@ -468,7 +493,7 @@ impl UnifiedMessageRepository {
         sent_at: u64,
     ) -> Result<Option<Message>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(&format!(
+        let mut stmt = conn.prepare_cached(&format!(
             "SELECT {} FROM messages WHERE sender_id = ?1 AND sent_at = ?2",
             message_columns("messages")
         ))?;
@@ -494,7 +519,7 @@ impl UnifiedMessageRepository {
     ) -> Result<Vec<Message>, StorageError> {
         let conn = self.db.read_connection()?;
         if let Some(before) = before_sent_at {
-            let mut stmt = conn.prepare(&format!(
+            let mut stmt = conn.prepare_cached(&format!(
                 "SELECT {} FROM messages \
                  WHERE conversation_id = ?1 AND conversation_type = ?2 \
                    AND sent_at < ?3 AND is_deleted = 0 \
@@ -510,7 +535,7 @@ impl UnifiedMessageRepository {
             ])?;
             collect_messages(&mut rows)
         } else {
-            let mut stmt = conn.prepare(&format!(
+            let mut stmt = conn.prepare_cached(&format!(
                 "SELECT {} FROM messages \
                  WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_deleted = 0 \
                  ORDER BY sent_at DESC, sender_id DESC \
@@ -533,7 +558,7 @@ impl UnifiedMessageRepository {
         conversation_type: &ConversationType,
     ) -> Result<Option<Message>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(&format!(
+        let mut stmt = conn.prepare_cached(&format!(
             "SELECT {} FROM messages \
              WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_deleted = 0 \
              ORDER BY sent_at DESC",

@@ -474,7 +474,7 @@ mod tests {
                 }]));
             window
                 .global::<crate::ChatPane>()
-                .set_messages(slint::ModelRc::new(VecModel::from(vec![
+                .set_messages(slint::ModelRc::new(crate::bin_ui::message_model::MessageModel::from(vec![
                     crate::MessageItemData {
                         message_id: "current-row".into(),
                         attachments: attachments.clone(),

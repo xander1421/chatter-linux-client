@@ -49,7 +49,6 @@ pub async fn poll_dm_mailboxes(
             .flatten()?;
         local_recipient_address(uuid, device_id)
     });
-    let mut client = mailbox_client.lock().await;
 
     // 1. Check for expired mailboxes and trigger healing (NDSS '21 healing path)
     if let Ok(expiring) = two_way.get_expiring_conversations(0) {
@@ -62,370 +61,399 @@ pub async fn poll_dm_mailboxes(
         }
     }
 
-    match two_way.poll_all_mailboxes(&mut client, mailbox_timeout).await {
-        Ok((poll_results, failures)) => {
-            let mut total_messages = 0u32;
-
-            // Handle failures first (healing path)
-            for (peer_id, error) in failures {
+    let mut pages = match two_way.mailbox_pages() {
+        Ok(pages) => pages,
+        Err(error) => {
+            tracing::debug!(%error, "Cannot load DM mailbox schedule");
+            return;
+        }
+    };
+    let mut total_messages = 0u32;
+    // One payload page in memory at a time; bounded work per pass and a saved
+    // round-robin continuation give every mailbox a turn across passes.
+    for _ in 0..32 {
+        let Some(mut peer_mailboxes) = pages.pop_front() else {
+            break;
+        };
+        let mailbox = peer_mailboxes
+            .pop_front()
+            .expect("nonempty peer mailbox group");
+        let next = pages
+            .front()
+            .and_then(|group| group.front())
+            .or(Some(&mailbox));
+        let result = match tokio::time::timeout(mailbox_timeout, async {
+            let mut client = mailbox_client.lock().await;
+            two_way.poll_page(&mut client, &mailbox, next).await
+        })
+        .await
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => {
                 if matches!(
                     error,
                     MailboxError::MailboxNotFound | MailboxError::TokenExpired
                 ) {
-                    tracing::info!(
-                        peer_id = %peer_id,
-                        error = %error,
-                        "DM mailbox invalid or gone from server, triggering healing path (re-bootstrap)"
-                    );
-                    let _ = event_tx.send(InboxEvent::DmMailboxExpired { peer_id });
+                    let _ = event_tx.send(InboxEvent::DmMailboxExpired {
+                        peer_id: mailbox.peer_id,
+                    });
                 }
+                tracing::warn!(peer_id = %mailbox.peer_id, %error, "DM mailbox page failed");
+                continue;
             }
+            Err(_) => {
+                tracing::warn!(peer_id = %mailbox.peer_id, "DM mailbox page timed out");
+                continue;
+            }
+        };
+        let has_more = result.has_more;
+        let peer_id = result.peer_id;
 
-            for result in poll_results {
-                let peer_id = result.peer_id;
+        // Acking makes the SERVER DELETE the message, so ids go in here
+        // per-message, only once `ack_policy` has decided this one is
+        // safe to destroy. Collecting them all up front — which is what
+        // this did — acked failures too, and a failed DM vanished with
+        // no marker of any kind.
+        let mut message_ids: Vec<String> = Vec::with_capacity(result.messages.len());
 
-                // Acking makes the SERVER DELETE the message, so ids go in here
-                // per-message, only once `ack_policy` has decided this one is
-                // safe to destroy. Collecting them all up front — which is what
-                // this did — acked failures too, and a failed DM vanished with
-                // no marker of any kind.
-                let mut message_ids: Vec<String> = Vec::with_capacity(result.messages.len());
+        // Per-device, per-direction keys: every peer device deposits
+        // into our one mailbox under its own secret, so the key that
+        // opens an envelope also names the device that sent it.
+        let mut recv_keys: Vec<(u32, [u8; 32])> =
+            match conversation_manager.load_conversation(&peer_id) {
+                Ok(Some(conv)) => conv.recv_keys(),
+                Ok(None) => {
+                    tracing::warn!(peer_id = %peer_id, "No conversation state for DM");
+                    Vec::new()
+                }
+                Err(e) => {
+                    tracing::error!(peer_id = %peer_id, error = %e, "Failed to load conversation");
+                    Vec::new()
+                }
+            };
 
-                // Per-device, per-direction keys: every peer device deposits
-                // into our one mailbox under its own secret, so the key that
-                // opens an envelope also names the device that sent it.
-                let mut recv_keys: Vec<(u32, [u8; 32])> = match conversation_manager
+        // Process each message through the gateway
+        for msg in result.messages {
+            total_messages += 1;
+            let cache_key = (peer_id, msg.message_id.clone());
+
+            // Already handled earlier in this session — the server just
+            // re-delivered it because an `acknowledge` failed. Don't
+            // decrypt it again ("old counter" errors), but DO ack it:
+            // it was processed, so draining it loses nothing.
+            //
+            // Note this only *reads* the dedup set. Marking here (which
+            // is what `mark_processed` did) meant a message we chose to
+            // retain was skipped on its redelivery and never retried.
+            if deduplicator.is_duplicate(&msg.message_id) {
+                tracing::debug!(
+                    peer_id = %peer_id,
+                    message_id = %msg.message_id,
+                    "DM message already processed, skipping decryption"
+                );
+                message_ids.push(msg.message_id.clone());
+                continue;
+            }
+            if !retry_budget.should_attempt(&msg.message_id, ack_policy::now_ns()) {
+                continue;
+            }
+            let cached = PENDING_DM_CONTENT.lock().get(&cache_key).cloned();
+
+            // A trial AEAD open picks the device's key; nothing opening
+            // is either a device's bootstrap RESPONSE (a different
+            // envelope) or a failure, reported under the first key.
+            let opening = recv_keys
+                .iter()
+                .find(|(_, key)| {
+                    crate::crypto::dm_crypto::decrypt_dm_bytes(&msg.encrypted_envelope, key).is_ok()
+                })
+                .copied();
+            let response = if opening.is_none() && cached.is_none() {
+                try_parse_bootstrap_response(
+                    &msg.encrypted_envelope,
+                    peer_id,
+                    conversation_manager,
+                    message_gateway,
+                )
+                .await
+            } else {
+                None
+            };
+
+            let decision = if response.is_some() {
+                // NOTE: We intentionally do NOT emit KeyExchangeReceived here.
+                // This is a bootstrap RESPONSE (we were the initiator), not a new
+                // bootstrap request. The dm_bootstrap_handler handles NEW bootstraps
+                // from device inbox, not responses we receive in our DM mailbox.
+                // Emitting here would cause the handler to send a duplicate response.
+                tracing::info!(
+                    peer_id = %peer_id,
+                    "BOOTSTRAP[4/4] SUCCESS - RESPONSE processed, device secret established"
+                );
+                // The answering device's key opens the rest of this batch.
+                recv_keys = conversation_manager
                     .load_conversation(&peer_id)
-                {
-                    Ok(Some(conv)) => conv.recv_keys(),
-                    Ok(None) => {
-                        tracing::warn!(peer_id = %peer_id, "No conversation state for DM");
-                        Vec::new()
-                    }
-                    Err(e) => {
-                        tracing::error!(peer_id = %peer_id, error = %e, "Failed to load conversation");
-                        Vec::new()
-                    }
-                };
-
-                // Process each message through the gateway
-                for msg in result.messages {
-                    total_messages += 1;
-                    let cache_key = (peer_id, msg.message_id.clone());
-
-                    // Already handled earlier in this session — the server just
-                    // re-delivered it because an `acknowledge` failed. Don't
-                    // decrypt it again ("old counter" errors), but DO ack it:
-                    // it was processed, so draining it loses nothing.
-                    //
-                    // Note this only *reads* the dedup set. Marking here (which
-                    // is what `mark_processed` did) meant a message we chose to
-                    // retain was skipped on its redelivery and never retried.
-                    if deduplicator.is_duplicate(&msg.message_id) {
-                        tracing::debug!(
-                            peer_id = %peer_id,
-                            message_id = %msg.message_id,
-                            "DM message already processed, skipping decryption"
-                        );
-                        message_ids.push(msg.message_id.clone());
-                        continue;
-                    }
-                    let cached = PENDING_DM_CONTENT.lock().get(&cache_key).cloned();
-
-                    // A trial AEAD open picks the device's key; nothing opening
-                    // is either a device's bootstrap RESPONSE (a different
-                    // envelope) or a failure, reported under the first key.
-                    let opening = recv_keys
-                        .iter()
-                        .find(|(_, key)| {
-                            crate::crypto::dm_crypto::decrypt_dm_bytes(&msg.encrypted_envelope, key)
-                                .is_ok()
-                        })
-                        .copied();
-                    let response = if opening.is_none() && cached.is_none() {
-                        try_parse_bootstrap_response(
-                            &msg.encrypted_envelope,
-                            peer_id,
-                            conversation_manager,
-                            message_gateway,
-                        )
+                    .ok()
+                    .flatten()
+                    .map(|c| c.recv_keys())
+                    .unwrap_or_default();
+                // Flushes what is queued, and what is owed to this device.
+                let _ = event_tx.send(InboxEvent::DmBootstrapCompleted { peer_id });
+                AckDecision::Ack
+            } else if let Some((sender_device_id, secret)) = cached
+                .as_ref()
+                .map(|(_, device_id, _)| (*device_id, [0; 32]))
+                .or(opening)
+                .or(recv_keys.first().copied())
+            {
+                // Decrypt with Signal Protocol (forward secrecy via Double Ratchet)
+                let decrypted = if let Some((sender, _, content)) = cached {
+                    Ok((sender, content))
+                } else {
+                    message_gateway
+                        .process_dm_message(&msg.encrypted_envelope, &secret, msg.server_timestamp)
                         .await
-                    } else {
-                        None
-                    };
-
-                    let decision = if response.is_some() {
-                        // NOTE: We intentionally do NOT emit KeyExchangeReceived here.
-                        // This is a bootstrap RESPONSE (we were the initiator), not a new
-                        // bootstrap request. The dm_bootstrap_handler handles NEW bootstraps
-                        // from device inbox, not responses we receive in our DM mailbox.
-                        // Emitting here would cause the handler to send a duplicate response.
-                        tracing::info!(
-                            peer_id = %peer_id,
-                            "BOOTSTRAP[4/4] SUCCESS - RESPONSE processed, device secret established"
-                        );
-                        // The answering device's key opens the rest of this batch.
-                        recv_keys = conversation_manager
-                            .load_conversation(&peer_id)
-                            .ok()
-                            .flatten()
-                            .map(|c| c.recv_keys())
-                            .unwrap_or_default();
-                        // Flushes what is queued, and what is owed to this device.
-                        let _ = event_tx.send(InboxEvent::DmBootstrapCompleted { peer_id });
-                        AckDecision::Ack
-                    } else if let Some((sender_device_id, secret)) = cached
-                        .as_ref()
-                        .map(|(_, device_id, _)| (*device_id, [0; 32]))
-                        .or(opening)
-                        .or(recv_keys.first().copied())
-                    {
-                        // Decrypt with Signal Protocol (forward secrecy via Double Ratchet)
-                        let decrypted = if let Some((sender, _, content)) = cached {
-                            Ok((sender, content))
-                        } else {
-                            message_gateway
-                                .process_dm_message(
-                                    &msg.encrypted_envelope,
-                                    &secret,
-                                    msg.server_timestamp,
-                                )
-                                .await
-                        };
-                        match decrypted {
-                            // Blocked sender: the gateway authenticated them
-                            // and refused before parsing, so there is nothing
-                            // to dispatch. Ack anyway — an unacked envelope is
-                            // re-fetched and re-decrypted on every poll.
-                            Ok((_, DmContent::DroppedBlockedSender)) => {
-                                crate::inbox::ack_policy::drop_and_ack(
-                                    "blocked sender",
-                                    &msg.message_id,
-                                    retry_budget,
-                                )
-                            }
-                            Ok((sender_id, dm_content)) => {
-                                // Disappearing timer stated by this message
-                                // (Signal's expireTimer): (timer, sent_at,
-                                // is a timer update, is a visible message).
-                                let disappearing = match &dm_content {
-                                    DmContent::Text {
-                                        stated_timer,
-                                        expire_timer: ttl,
-                                        timer_update,
-                                        body,
-                                        attachments,
-                                        timestamp,
-                                        ..
-                                    } => Some((
-                                        *stated_timer,
-                                        if *timestamp > 0 {
-                                            *timestamp
-                                        } else {
-                                            msg.server_timestamp
-                                        },
-                                        *timer_update,
-                                        !body.is_empty() || !attachments.is_empty(),
-                                        *ttl,
-                                    )),
-                                    _ => None,
-                                };
-                                if let Some((timer, sent_at, update, visible, _)) = disappearing {
-                                    if update || visible {
-                                        let notice = message_gateway.adopt_server_dm_timer(
-                                            &peer_id, &sender_id, timer, sent_at,
-                                        );
-                                        if let (Some(notice), Some(tx)) = (notice, domain_tx) {
-                                            let _ = tx.send(DomainEvent::MessageReceived {
-                                                message: notice,
-                                            });
-                                        }
-                                    }
-                                }
-                                let replay_content = dm_content.clone();
-                                let dispatch = dispatch_dm_content(
-                                    dm_content,
-                                    &sender_id,
-                                    sender_device_id,
-                                    peer_id,
-                                    &msg.message_id,
-                                    msg.server_timestamp,
-                                    &current_user_id,
-                                    event_tx,
-                                    message_repo,
-                                    attachment_repo,
-                                    user_repo,
-                                    conversation_manager,
-                                    domain_tx,
-                                );
-                                if dispatch == AckDecision::Retain {
-                                    PENDING_DM_CONTENT.lock().insert(
-                                        cache_key.clone(),
-                                        (sender_id, sender_device_id, replay_content),
-                                    );
-                                    ack_policy::retain_within_budget(
-                                        ack_policy::dm_target(peer_id, msg.server_timestamp),
-                                        message_repo,
-                                        domain_tx,
-                                        &msg.message_id,
-                                        retry_budget,
-                                        ack_policy::now_ns(),
-                                        "decrypted DM awaits local persistence",
-                                    )
-                                } else {
-                                    // Arm the copy just stored (filed under the
-                                    // sender's (id, sent_at) key) so the reaper
-                                    // removes it when the timer runs out.
-                                    if let Some((_, sent_at, _, true, secs)) = disappearing {
-                                        if secs > 0 {
-                                            if let Ok(Some(stored)) = message_repo
-                                                .get_by_sender_timestamp(&sender_id, sent_at)
-                                            {
-                                                message_gateway.arm_disappearing(&stored.id, secs);
-                                            }
-                                        }
-                                    }
-                                    AckDecision::Ack
-                                }
-                            }
-                            Err(e)
-                                if addressed_to_another_device(&e, local_recipient.as_deref()) =>
-                            {
-                                ack_policy::drop_and_ack(
-                                    "sealed for another of our devices",
-                                    &msg.message_id,
-                                    retry_budget,
-                                )
-                            }
-                            Err(e) => {
-                                // A restart drops the in-memory plaintext retry.
-                                // The ratchet may then report this envelope as a
-                                // duplicate. Only a committed message row makes
-                                // that safe to drain without a delivery marker.
-                                if matches!(
-                                    e,
-                                    crate::error::ServiceError::Crypto(
-                                        crate::error::CryptoError::DuplicateMessage { .. }
-                                    )
-                                ) {
-                                    let stored = match msg.message_id.parse::<MessageId>() {
-                                        Ok(id) => message_repo.get(&id),
-                                        Err(_) => Ok(None),
-                                    };
-                                    match stored {
-                                        Ok(Some(_)) => AckDecision::Ack,
-                                        Ok(None) => ack_policy::record_marker_then_ack(
-                                            message_repo,
-                                            domain_tx,
-                                            ack_policy::dm_target(peer_id, msg.server_timestamp),
-                                            ack_policy::FailureMarker::DeliveryIssue,
-                                        ),
-                                        Err(error) => {
-                                            tracing::warn!(%error, "Cannot verify duplicate DM persistence");
-                                            AckDecision::Retain
-                                        }
-                                    }
-                                } else {
-                                    let error_str = e.to_string();
-                                    // The session's ratchet state is gone and this
-                                    // path sends no DecryptionErrorMessage, so the
-                                    // session is reset instead (Signal's
-                                    // lightSessionReset).
-                                    let session_desync = matches!(
-                                        e,
-                                        crate::error::ServiceError::Crypto(
-                                            crate::error::CryptoError::SessionDesync { .. }
-                                        )
-                                    );
-                                    tracing::error!(
-                                        peer_id = %peer_id,
-                                        message_id = %msg.message_id,
-                                        error = %e,
-                                        session_desync,
-                                        "DM decryption failed"
-                                    );
-                                    let _ = event_tx.send(InboxEvent::DmDecryptionFailed {
-                                        peer_id,
-                                        error: error_str,
-                                        session_desync,
-                                    });
-                                    dm_failure_decision(
-                                        peer_id,
-                                        msg.server_timestamp,
-                                        &e,
-                                        message_repo,
-                                        domain_tx,
-                                        &msg.message_id,
-                                        retry_budget,
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        tracing::warn!(
-                            peer_id = %peer_id,
-                            message_id = %msg.message_id,
-                            "BOOTSTRAP[4/4] FAILED - no peer device has a key yet and this is not a \
-                             bootstrap response; leaving it queued until the session exists"
-                        );
-                        let _ = event_tx.send(InboxEvent::DmDecryptionFailed {
-                            peer_id,
-                            error: "No shared secret established".to_string(),
-                            session_desync: false, // No session to reset
-                        });
-                        // TRANSIENT, and the clearest case of it: we have no
-                        // session yet. The bootstrap can still complete via
-                        // the device inbox, and then these same bytes
-                        // decrypt. Acking here deleted every message that
-                        // arrived before its own bootstrap landed.
-                        //
-                        // Bounded, though: if the bootstrap never completes
-                        // this is a re-decrypt of the same bytes on every
-                        // poll for as long as the client runs.
-                        ack_policy::retain_within_budget(
-                            ack_policy::dm_target(peer_id, msg.server_timestamp),
-                            message_repo,
-                            domain_tx,
+                };
+                match decrypted {
+                    // Blocked sender: the gateway authenticated them
+                    // and refused before parsing, so there is nothing
+                    // to dispatch. Ack anyway — an unacked envelope is
+                    // re-fetched and re-decrypted on every poll.
+                    Ok((_, DmContent::DroppedBlockedSender)) => {
+                        crate::inbox::ack_policy::drop_and_ack(
+                            "blocked sender",
                             &msg.message_id,
                             retry_budget,
-                            ack_policy::now_ns(),
-                            "no shared secret established for this peer yet",
                         )
-                    };
-
-                    match decision {
-                        // Safe to destroy the server's copy. Record it so a
-                        // failed `acknowledge` does not make us decrypt it
-                        // twice on the replay.
-                        AckDecision::Ack => {
-                            PENDING_DM_CONTENT.lock().remove(&cache_key);
-                            deduplicator.mark_processed(&msg.message_id);
-                            retry_budget.forget(&msg.message_id);
-                            message_ids.push(msg.message_id.clone());
+                    }
+                    Ok((sender_id, dm_content)) => {
+                        // Disappearing timer stated by this message
+                        // (Signal's expireTimer): (timer, sent_at,
+                        // is a timer update, is a visible message).
+                        let disappearing = match &dm_content {
+                            DmContent::Text {
+                                stated_timer,
+                                expire_timer: ttl,
+                                timer_update,
+                                body,
+                                attachments,
+                                timestamp,
+                                ..
+                            } => Some((
+                                *stated_timer,
+                                if *timestamp > 0 {
+                                    *timestamp
+                                } else {
+                                    msg.server_timestamp
+                                },
+                                *timer_update,
+                                !body.is_empty() || !attachments.is_empty(),
+                                *ttl,
+                            )),
+                            _ => None,
+                        };
+                        if let Some((timer, sent_at, update, visible, _)) = disappearing {
+                            if update || visible {
+                                let notice = message_gateway
+                                    .adopt_server_dm_timer(&peer_id, &sender_id, timer, sent_at);
+                                if let (Some(notice), Some(tx)) = (notice, domain_tx) {
+                                    let _ =
+                                        tx.send(DomainEvent::MessageReceived { message: notice });
+                                }
+                            }
                         }
-                        // Deliberately NOT marked processed — it must be
-                        // decrypted again when the server re-delivers it.
-                        AckDecision::Retain => {}
+                        let replay_content = dm_content.clone();
+                        let dispatch = dispatch_dm_content(
+                            dm_content,
+                            &sender_id,
+                            sender_device_id,
+                            peer_id,
+                            &msg.message_id,
+                            msg.server_timestamp,
+                            &current_user_id,
+                            event_tx,
+                            message_repo,
+                            attachment_repo,
+                            user_repo,
+                            conversation_manager,
+                            domain_tx,
+                        );
+                        if dispatch == AckDecision::Retain {
+                            PENDING_DM_CONTENT.lock().insert(
+                                cache_key.clone(),
+                                (sender_id, sender_device_id, replay_content),
+                            );
+                            ack_policy::retain_within_budget(
+                                ack_policy::dm_target(peer_id, msg.server_timestamp),
+                                message_repo,
+                                domain_tx,
+                                &msg.message_id,
+                                retry_budget,
+                                ack_policy::now_ns(),
+                                "decrypted DM awaits local persistence",
+                            )
+                        } else {
+                            // Arm the copy just stored (filed under the
+                            // sender's (id, sent_at) key) so the reaper
+                            // removes it when the timer runs out.
+                            if let Some((_, sent_at, _, true, secs)) = disappearing {
+                                if secs > 0 {
+                                    if let Ok(Some(stored)) =
+                                        message_repo.get_by_sender_timestamp(&sender_id, sent_at)
+                                    {
+                                        message_gateway.arm_disappearing(&stored.id, secs);
+                                    }
+                                }
+                            }
+                            AckDecision::Ack
+                        }
+                    }
+                    Err(e) if addressed_to_another_device(&e, local_recipient.as_deref()) => {
+                        ack_policy::drop_and_ack(
+                            "sealed for another of our devices",
+                            &msg.message_id,
+                            retry_budget,
+                        )
+                    }
+                    Err(e) => {
+                        // A restart drops the in-memory plaintext retry.
+                        // The ratchet may then report this envelope as a
+                        // duplicate. Only a committed message row makes
+                        // that safe to drain without a delivery marker.
+                        if matches!(
+                            e,
+                            crate::error::ServiceError::Crypto(
+                                crate::error::CryptoError::DuplicateMessage { .. }
+                            )
+                        ) {
+                            let stored = match msg.message_id.parse::<MessageId>() {
+                                Ok(id) => message_repo.get(&id),
+                                Err(_) => Ok(None),
+                            };
+                            match stored {
+                                Ok(Some(_)) => AckDecision::Ack,
+                                Ok(None) => ack_policy::record_marker_then_ack(
+                                    message_repo,
+                                    domain_tx,
+                                    ack_policy::dm_target(peer_id, msg.server_timestamp),
+                                    ack_policy::FailureMarker::DeliveryIssue,
+                                ),
+                                Err(error) => {
+                                    tracing::warn!(%error, "Cannot verify duplicate DM persistence");
+                                    AckDecision::Retain
+                                }
+                            }
+                        } else {
+                            let error_str = e.to_string();
+                            // The session's ratchet state is gone and this
+                            // path sends no DecryptionErrorMessage, so the
+                            // session is reset instead (Signal's
+                            // lightSessionReset).
+                            let session_desync = matches!(
+                                e,
+                                crate::error::ServiceError::Crypto(
+                                    crate::error::CryptoError::SessionDesync { .. }
+                                )
+                            );
+                            tracing::error!(
+                                peer_id = %peer_id,
+                                message_id = %msg.message_id,
+                                error = %e,
+                                session_desync,
+                                "DM decryption failed"
+                            );
+                            let _ = event_tx.send(InboxEvent::DmDecryptionFailed {
+                                peer_id,
+                                error: error_str,
+                                session_desync,
+                            });
+                            dm_failure_decision(
+                                peer_id,
+                                msg.server_timestamp,
+                                &e,
+                                message_repo,
+                                domain_tx,
+                                &msg.message_id,
+                                retry_budget,
+                            )
+                        }
                     }
                 }
+            } else {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    message_id = %msg.message_id,
+                    "BOOTSTRAP[4/4] FAILED - no peer device has a key yet and this is not a \
+                     bootstrap response; leaving it queued until the session exists"
+                );
+                let _ = event_tx.send(InboxEvent::DmDecryptionFailed {
+                    peer_id,
+                    error: "No shared secret established".to_string(),
+                    session_desync: false, // No session to reset
+                });
+                // TRANSIENT, and the clearest case of it: we have no
+                // session yet. The bootstrap can still complete via
+                // the device inbox, and then these same bytes
+                // decrypt. Acking here deleted every message that
+                // arrived before its own bootstrap landed.
+                //
+                // Bounded, though: if the bootstrap never completes
+                // this is a re-decrypt of the same bytes on every
+                // poll for as long as the client runs.
+                ack_policy::retain_within_budget(
+                    ack_policy::dm_target(peer_id, msg.server_timestamp),
+                    message_repo,
+                    domain_tx,
+                    &msg.message_id,
+                    retry_budget,
+                    ack_policy::now_ns(),
+                    "no shared secret established for this peer yet",
+                )
+            };
 
-                // Acknowledge processed messages
-                if !message_ids.is_empty() {
-                    if let Err(e) = two_way
-                        .acknowledge_messages(&peer_id, message_ids, &mut client)
-                        .await
-                    {
-                        tracing::warn!(peer_id = %peer_id, error = %e, "Failed to acknowledge DM messages");
-                    }
+            match decision {
+                // Safe to destroy the server's copy. Record it so a
+                // failed `acknowledge` does not make us decrypt it
+                // twice on the replay.
+                AckDecision::Ack => {
+                    PENDING_DM_CONTENT.lock().remove(&cache_key);
+                    deduplicator.mark_processed(&msg.message_id);
+                    retry_budget.forget(&msg.message_id);
+                    message_ids.push(msg.message_id.clone());
                 }
+                // Deliberately NOT marked processed — it must be
+                // decrypted again when the server re-delivers it.
+                AckDecision::Retain => {}
             }
+        }
 
-            if total_messages > 0 {
-                let _ = event_tx.send(InboxEvent::DmPollCompleted { total_messages });
-            }
+        // Acknowledge processed messages
+        if !message_ids.is_empty() {
+            retry_budget.retry_after_progress();
         }
-        Err(e) => {
-            tracing::debug!(error = %e, "DM mailbox poll failed (may be normal if no active conversations)");
+        match tokio::time::timeout(mailbox_timeout, async {
+            let mut client = mailbox_client.lock().await;
+            two_way
+                .acknowledge_page(&mailbox, message_ids, &mut client)
+                .await
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(%peer_id, %error, "Failed to acknowledge DM page"),
+            Err(_) => tracing::warn!(%peer_id, "DM page acknowledgment timed out"),
         }
+
+        if has_more {
+            peer_mailboxes.push_front(mailbox);
+        } else {
+            two_way.complete_mailbox(&mailbox, peer_mailboxes.front());
+        }
+        if !peer_mailboxes.is_empty() {
+            pages.push_back(peer_mailboxes);
+        }
+    }
+    if total_messages > 0 {
+        let _ = event_tx.send(InboxEvent::DmPollCompleted { total_messages });
     }
 }

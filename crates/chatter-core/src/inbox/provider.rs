@@ -774,6 +774,10 @@ impl DeviceInboxProvider {
                     for msg in messages {
                         let guid = msg.message_guid.clone();
                         let queue_id = msg.queue_id;
+                        if !retry_budget.should_attempt(&guid, crate::inbox::ack_policy::now_ns()) {
+                            lowest_retained = Some(lowest_retained.map_or(queue_id, |lo: i64| lo.min(queue_id)));
+                            continue;
+                        }
                         // Acking DELETES it server-side, so the guid only goes
                         // into `handled` when `process_device_message` says it
                         // is safe to destroy — either it was processed, or it
@@ -797,6 +801,7 @@ impl DeviceInboxProvider {
                         )
                         .await;
                         if decision.should_ack() {
+                            retry_budget.forget(&guid);
                             handled.push(guid);
                         } else {
                             lowest_retained =
@@ -811,10 +816,13 @@ impl DeviceInboxProvider {
                         }
                     }
 
-                    if count > 0 {
-                        poller.advance_after_id(batch_max, lowest_retained);
+                    if !handled.is_empty() {
+                        retry_budget.retry_after_progress();
                     }
-                    catch_up_pages = if has_more && lowest_retained.is_none() && catch_up_pages < 20
+                    // Even an empty terminal page closes the lookahead traversal
+                    // and reoffers retained mail. ACK failures still block fetching.
+                    poller.advance_after_id(batch_max, lowest_retained, has_more);
+                    catch_up_pages = if has_more && catch_up_pages < 20
                     {
                         catch_up_pages + 1
                     } else {
@@ -1244,7 +1252,14 @@ impl DeviceInboxProvider {
             let base = if catch_up_pages > 0 {
                 std::time::Duration::from_millis(250)
             } else {
-                poll_hints.cycle_interval(poller.current_interval())
+                let interval = if grpc_pool.transport_mode()
+                    == crate::network::grpc::client_pool::TransportMode::Direct
+                {
+                    poller.direct_idle_interval()
+                } else {
+                    poller.current_interval()
+                };
+                poll_hints.cycle_interval(interval)
             };
             let wait = timing
                 .jitter_interval(base)
@@ -1267,6 +1282,7 @@ impl DeviceInboxProvider {
 
     /// Wake the normal cycle; ignored for pacing while on Shield transport.
     pub fn wake(&self) {
+        self.poller.reset_idle_backoff();
         self.poll_hints
             .anon_wake
             .store(true, std::sync::atomic::Ordering::Release);
@@ -1275,6 +1291,7 @@ impl DeviceInboxProvider {
 
     /// Update the Activity's foreground state without restarting the task.
     pub fn set_app_visible(&self, visible: bool) {
+        if visible { self.poller.reset_idle_backoff(); }
         self.poll_hints.set_visible(visible);
     }
 

@@ -204,6 +204,11 @@ pub fn chat_row_top_slot(is_pinned: bool, others: impl IntoIterator<Item = bool>
     }
 }
 
+/// Placement in an already pin-ordered sidebar when its cached pin count is known.
+pub fn chat_row_top_slot_from_pinned_count(is_pinned: bool, other_pinned_count: usize) -> usize {
+    if is_pinned { 0 } else { other_pinned_count }
+}
+
 /// Send-safe intermediate struct for FriendData (Friends-tab rows).
 /// Unifies server-side friendships and accepted anon-DM peers so both
 /// appear in the same list — `is_anon` is the discriminator, `user_id`
@@ -274,5 +279,19 @@ mod tests {
         assert_eq!(chat_row_top_slot(false, []), 0);
         assert_eq!(chat_row_top_slot(true, [true, false]), 0);
         assert_eq!(chat_row_top_slot(true, [false, false]), 0);
+    }
+}
+
+#[cfg(test)]
+mod pinned_count_placement_tests {
+    use super::*;
+    #[test]
+    fn cached_count_matches_existing_placement_in_core_sorted_sidebar() {
+        for pinned_count in 0..50 {
+            for is_pinned in [false,true] {
+                let pins = std::iter::repeat_n(true,pinned_count).chain(std::iter::repeat_n(false,50));
+                assert_eq!(chat_row_top_slot_from_pinned_count(is_pinned,pinned_count),chat_row_top_slot(is_pinned,pins));
+            }
+        }
     }
 }

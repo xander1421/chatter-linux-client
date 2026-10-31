@@ -160,25 +160,10 @@ pub async fn handle_domain_event(
         // Message Events (handled by EventHandlers state store)
         // =========================================================================
         DomainEvent::MessageReceived { ref message } => {
-            let is_server_dm = matches!(
-                message.conversation_type,
-                chatter_core::domain::message::ConversationType::ServerDm
-            );
+            // Profile-key changes already emit ProfileKeyReceived in core;
+            // UserProfileUpdated refreshes the committed profile separately.
+            // A normal message only patches its own sidebar row.
             messaging::handle_message_received(window, ui_ctx, message.clone()).await;
-            // A DM carries the sender's profile key (Signal-style); the gateway
-            // just stored it. Re-sync the sidebar so list_friends_with_profiles
-            // decrypts + persists the peer's real display name + avatar and the
-            // row re-renders (fallback "User <id>" → real name, initials →
-            // avatar). Refreshes on every DM receive; fine for
-            // low-volume friend DMs, revisit if it shows up in profiling.
-            // This runs on the runtime, where a Weak never upgrades — the
-            // refresh has to be scheduled onto the UI thread.
-            if is_server_dm {
-                let ui_ctx = ui_ctx.clone();
-                crate::run_ui!(window, |w| {
-                    crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
-                });
-            }
         }
 
         DomainEvent::MessageDeliveryChanged {

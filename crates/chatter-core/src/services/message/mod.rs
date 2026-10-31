@@ -12,6 +12,7 @@
 //! - `conversation` - Conversation classification and encryption lookup
 
 mod history;
+pub use history::retained_history_range;
 mod read_state;
 mod modifiers;
 mod storage;

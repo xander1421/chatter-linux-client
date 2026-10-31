@@ -21,6 +21,30 @@ mod gstreamer;
 ))]
 pub use self::gstreamer::GStreamerDecoder as PlatformDecoder;
 
+/// Seekable authenticated plaintext source. Reads remain bounded even when
+/// the renderer falls back from hardware to software decoding.
+pub(crate) enum VideoSource {
+    Memory(std::sync::Arc<Vec<u8>>),
+    Range(std::sync::Arc<crate::services::attachment::CbcRangeDecryptor>),
+}
+impl VideoSource {
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Memory(data) => data.len(),
+            Self::Range(range) => range.plaintext_size(),
+        }
+    }
+    pub(crate) fn read(&self, offset: usize, count: usize) -> Vec<u8> {
+        let count = count.min(self.len().saturating_sub(offset));
+        match self {
+            Self::Memory(data) => {
+                data[offset.min(data.len())..offset.min(data.len()) + count].to_vec()
+            }
+            Self::Range(range) => range.read_range(offset, count),
+        }
+    }
+}
+
 /// Information about an opened video.
 #[derive(Debug, Clone)]
 pub struct VideoInfo {
@@ -73,6 +97,15 @@ pub trait VideoDecoder: Send {
 
     /// Open a video from memory buffer.
     fn open_memory(&mut self, data: Vec<u8>) -> Result<VideoInfo, MediaError>;
+
+    fn open_range(
+        &mut self,
+        _range: std::sync::Arc<crate::services::attachment::CbcRangeDecryptor>,
+    ) -> Result<VideoInfo, MediaError> {
+        Err(MediaError::PlaybackError(
+            "Range playback unavailable on this platform".into(),
+        ))
+    }
 
     /// Decode the next video frame.
     ///

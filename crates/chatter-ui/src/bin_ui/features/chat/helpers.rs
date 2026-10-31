@@ -120,11 +120,14 @@ pub fn build_own_message_item(
 /// in place (the list only ever holds the rows on screen, and a fresh model
 /// would make it re-measure and re-seek), clear composer, and auto-scroll.
 pub fn append_message_to_ui(window: &crate::MainWindow, msg_item: crate::MessageItemData) {
+    if window.global::<crate::ChatPane>().get_history_has_newer() {
+        window.global::<crate::ChatPane>().invoke_request_latest();
+    }
     window.global::<crate::ChatPane>().set_is_at_bottom(true);
     let model = window.global::<crate::ChatPane>().get_messages();
     match model
         .as_any()
-        .downcast_ref::<slint::VecModel<crate::MessageItemData>>()
+        .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
     {
         Some(vec) => {
             vec.push(msg_item);
@@ -150,19 +153,26 @@ pub fn append_message_to_ui(window: &crate::MainWindow, msg_item: crate::Message
 /// only guards a test that installed something else.
 pub(crate) fn edit_messages(
     window: &crate::MainWindow,
-    f: impl FnOnce(&slint::VecModel<crate::MessageItemData>),
+    f: impl FnOnce(&crate::bin_ui::message_model::MessageModel) -> Vec<usize>,
 ) {
     let model = window.global::<crate::ChatPane>().get_messages();
     match model
         .as_any()
-        .downcast_ref::<slint::VecModel<crate::MessageItemData>>()
+        .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
     {
         Some(vec) => {
-            f(vec);
+            let changed = f(vec);
             if window.global::<crate::ChatPane>().get_conversation_kind()
                 == crate::ConversationKind::Channel
             {
-                recompute_channel_continuations(vec);
+                let mut affected = std::collections::BTreeSet::new();
+                for index in changed {
+                    affected.insert(index);
+                    affected.insert(index.saturating_add(1));
+                }
+                for index in affected {
+                    recompute_continuation_at(vec, index);
+                }
             }
         }
         None => tracing::warn!("message list model is not a VecModel; edit dropped"),
@@ -172,7 +182,7 @@ pub(crate) fn edit_messages(
 /// Recompute grouping from visible neighbours after insertions, prepends and
 /// removals. Only changed rows notify Slint, preserving the list's model and
 /// scroll anchor.
-pub(crate) fn recompute_channel_continuations(model: &slint::VecModel<crate::MessageItemData>) {
+pub(crate) fn recompute_channel_continuations(model: &dyn slint::Model<Data = crate::MessageItemData>) {
     use chatter_core::ui::chat_data::{ChannelGroupingRow, channel_continuation_flags};
 
     let rows: Vec<_> = (0..model.row_count())
@@ -206,7 +216,7 @@ pub(crate) fn recompute_channel_continuations(model: &slint::VecModel<crate::Mes
 /// of the O(n) [`recompute_channel_continuations`], which clones and re-scans the
 /// whole model for every message.
 pub(crate) fn recompute_continuation_at(
-    model: &slint::VecModel<crate::MessageItemData>,
+    model: &dyn slint::Model<Data = crate::MessageItemData>,
     index: usize,
 ) {
     use chatter_core::ui::chat_data::{ChannelGroupingRow, channel_message_is_continuation};
@@ -327,8 +337,10 @@ fn refresh_reaction_snapshot(
         }
         false
     };
-    let mut found = false;
-    edit_messages(window, |model| found = apply(model));
+    let found;
+    // Reactions never change grouping inputs. Update the same retained model
+    // directly instead of performing any continuation work.
+    found = apply(&window.global::<crate::ChatPane>().get_messages());
     // The open thread panel keeps its own model; its replies react too.
     if !found {
         apply(&window.global::<crate::ChatPane>().get_thread_replies());
@@ -380,6 +392,7 @@ pub(crate) fn remove_messages_where(
     let mut unread_index = pane.get_unread_index();
     let mut unread_count = pane.get_unread_count();
     edit_messages(window, |model| {
+        let mut changed = Vec::new();
         for i in (0..model.row_count()).rev() {
             if let Some(row) = model.row_data(i).filter(|m| gone(m)) {
                 // The pill counts remote rows below the unread boundary, or
@@ -396,8 +409,12 @@ pub(crate) fn remove_messages_where(
                 }
                 removed_ids.push(row.message_id);
                 model.remove(i);
+                for index in &mut changed { if *index > i { *index -= 1; }
+        }
+                changed.push(i);
             }
         }
+        changed
     });
     if !removed_ids.is_empty() {
         pane.set_unread_index(if unread_count == 0 { -1 } else { unread_index });

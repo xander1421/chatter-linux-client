@@ -36,6 +36,8 @@ export component AppCallDock inherits ActiveCallView {
         select-tile-indices(participants, pinned_id) => {
             return CallView.select-call-tile-indices(participants, pinned_id);
         }
+        video-layout-revision: CallView.call-video-layout-revision;
+        video-size(id, width, height, screen) => { CallView.report-call-video-size(id, width, height, screen); }
         is-muted: root.call-is-muted;
         is-video-enabled: root.call-is-video-enabled;
         is-screen-sharing: root.call-is-screen-sharing;

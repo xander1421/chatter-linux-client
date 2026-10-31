@@ -164,7 +164,7 @@ mod tests {
         w.global::<crate::ChatPane>().set_pinned_total_count(7);
         w.global::<crate::ChatPane>().set_loading_messages(false);
         w.global::<crate::ChatPane>()
-            .set_messages(ModelRc::new(VecModel::from(vec![MessageItemData {
+            .set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::from(vec![MessageItemData {
                 message_id: "newer-row".into(),
                 content: "newer message".into(),
                 ..Default::default()
@@ -236,7 +236,7 @@ mod tests {
             w.global::<crate::ChatPane>().set_pinned_total_count(1);
             w.global::<crate::ChatPane>().set_loading_messages(true);
             w.global::<crate::ChatPane>()
-                .set_messages(ModelRc::new(VecModel::from(vec![MessageItemData {
+                .set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::from(vec![MessageItemData {
                     message_id: "old-row".into(),
                     attachments: ModelRc::new(VecModel::<MessageAttachmentData>::from(vec![
                         display.to_slint(),

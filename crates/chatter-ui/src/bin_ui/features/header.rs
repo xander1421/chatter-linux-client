@@ -121,9 +121,89 @@ fn wire_visible_media(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .global::<crate::ChatPane>()
         .on_visible_media_rows(move |first, last| {
             if let Some(w) = weak.upgrade() {
+                if maintain_history_window(&w, &client, first, last) { return; }
                 refresh_visible_media(&w, &client, first, last);
             }
         });
+}
+
+/// Retain a viewport window, leaving all messages durable in core storage.
+fn maintain_history_window(
+    w: &MainWindow,
+    client: &Arc<ChatterClient>,
+    first: i32,
+    last: i32,
+) -> bool {
+    let pane = w.global::<crate::ChatPane>();
+    if pane.get_loading_messages() || last < first || last < 0 {
+        return false;
+    }
+    let conversation = client.active_conversation();
+    let Some(channel) = conversation.channel_id() else {
+        return false;
+    };
+    if client.message_is_loading(&channel) {
+        return false;
+    }
+    let rows = pane.get_messages();
+    let Some(model) = rows
+        .as_any()
+        .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+    else {
+        return false;
+    };
+    if model.has_newer.get() && (last as usize).saturating_add(16) >= model.row_count() {
+        let cursor = model.newer_cursor.borrow().clone().or_else(|| {
+            model
+                .row_data(model.row_count().saturating_sub(1))
+                .map(|row| row.message_id.to_string())
+        });
+        if let Some(cursor) = cursor.and_then(|id| id.parse().ok()) {
+            load_history(
+                w,
+                client,
+                HistoryLoad::Newer(cursor, model.deferred_revision.get()),
+            );
+        }
+        return false;
+    }
+    // Active gestures and navigation keep their complete selection/target.
+    if pane.get_selection_mode()
+        || !pane.get_highlighted_message_id().is_empty()
+        || (pane.get_unread_index() >= 0 && pane.get_unread_count() > 0)
+        || model.has_pending()
+    {
+        return false;
+    }
+    let mut protected = Vec::new();
+    if pane.get_unread_index() >= 0 {
+        protected.push(pane.get_unread_index() as usize);
+    }
+    if let Some(index) = model.row_of(pane.get_thread_root_message_id().as_str()) {
+        protected.push(index);
+    }
+    let range = chatter_core::services::message::retained_history_range(
+        model.row_count(),
+        first.max(0) as usize,
+        last as usize,
+        &protected,
+    );
+    if range.start == 0 && range.end == model.row_count() {
+        return false;
+    }
+    let (front, _) = model.retain_range(range);
+    if front > 0 {
+        if pane.get_unread_index() >= 0 {
+            pane.set_unread_index(pane.get_unread_index() - front as i32);
+        }
+        pane.set_history_head_offset(pane.get_history_head_offset().saturating_add(front as i32));
+        crate::bin_ui::features::chat::recompute_continuation_at(model, 0);
+    }
+    pane.set_history_has_newer(model.has_newer.get());
+    if model.has_newer.get() {
+        pane.set_is_at_bottom(false);
+    }
+    true
 }
 
 // Keep one small scroll cushion so a thumbnail is ready before its row enters
@@ -178,6 +258,7 @@ pub(crate) fn refresh_visible_media(
     first: i32,
     last: i32,
 ) {
+    crate::bin_ui::gif_state::auto_register_gifs_from_messages(window.as_weak(), ui_ctx.clone());
     if window.global::<crate::ChatPane>().get_loading_messages() || last < first || last < 0 {
         return;
     }
@@ -847,6 +928,15 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
+    let latest_window = window.as_weak();
+    let latest_client = ui_ctx.clone();
+    window
+        .global::<crate::ChatPane>()
+        .on_request_latest(move || {
+            if let Some(w) = latest_window.upgrade() {
+                load_history(&w, &latest_client, HistoryLoad::Newest);
+            }
+        });
     window.global::<crate::ChatPane>().on_load_more(move || {
         if let Some(w) = weak_window.upgrade() {
             let oldest = w
@@ -864,6 +954,12 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Row of the open list holding `message_id`.
 fn row_of(w: &MainWindow, message_id: &str) -> Option<usize> {
     let messages = w.global::<crate::ChatPane>().get_messages();
+    if let Some(model) = messages
+        .as_any()
+        .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+    {
+        return model.row_of(message_id);
+    }
     (0..messages.row_count()).find(|&i| {
         messages
             .row_data(i)
@@ -941,6 +1037,8 @@ fn report_jump_unavailable_later(
 enum HistoryLoad {
     /// One page older than the oldest loaded row, inserted above it.
     Older(MessageId),
+    Newer(MessageId, u64),
+    Newest,
     /// The newest rows grown back to this message, installed in place of the
     /// list, then jumped to.
     Reaching(MessageId),
@@ -968,6 +1066,18 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
     };
     let jump = matches!(load, HistoryLoad::Reaching(_));
     let Some(owner) = super::history_owner::HistoryOwner::admit_older(ui_ctx, conversation) else {
+        if matches!(load, HistoryLoad::Newest) {
+            let request = super::history_owner::HistoryOwner::capture(ui_ctx, conversation);
+            let weak = w.as_weak();
+            let client = ui_ctx.clone();
+            slint::Timer::single_shot(std::time::Duration::from_millis(16), move || {
+                if request.is_current() {
+                    if let Some(w) = weak.upgrade() {
+                        load_history(&w, &client, HistoryLoad::Newest);
+                    }
+                }
+            });
+        }
         if jump {
             w.set_toast_message("History is still loading. Try again in a moment.".into());
             w.set_toast_variant("info".into());
@@ -989,6 +1099,15 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
             HistoryLoad::Older(before) => {
                 ui_ctx.get_older_messages_local_asc(&channel_id, &conversation_type, before)
             }
+            HistoryLoad::Newer(after, _) => {
+                ui_ctx.get_newer_messages_local_asc(&channel_id, &conversation_type, after)
+            }
+            HistoryLoad::Newest => ui_ctx.get_messages_local_asc(
+                &channel_id,
+                &conversation_type,
+                None,
+                chatter_core::config::MESSAGE_PAGE_SIZE as u32,
+            ),
             HistoryLoad::Reaching(target) => {
                 ui_ctx.get_messages_local_reaching(&channel_id, &conversation_type, target)
             }
@@ -1016,6 +1135,56 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
             }
         };
         if messages.is_empty() {
+            if matches!(load, HistoryLoad::Newest) {
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if !owner.is_current() {
+                        return;
+                    }
+                    let pane = w.global::<crate::ChatPane>();
+                    let pending = pane
+                        .get_messages()
+                        .iter()
+                        .filter(|row| row.message_id.starts_with("pending:"))
+                        .collect::<Vec<_>>();
+                    pane.set_messages(ModelRc::new(
+                        crate::bin_ui::message_model::MessageModel::from(pending),
+                    ));
+                    pane.set_history_has_newer(false);
+                    pane.set_is_at_bottom(true);
+                });
+                return;
+            }
+            if let HistoryLoad::Newer(_, revision) = load {
+                let weak = weak.clone();
+                let client = ui_ctx.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if !owner.is_current() {
+                        return;
+                    }
+                    let pane = w.global::<crate::ChatPane>();
+                    let rows = pane.get_messages();
+                    let Some(model) = rows
+                        .as_any()
+                        .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+                    else {
+                        return;
+                    };
+                    if model.deferred_revision.get() == revision {
+                        model.has_newer.set(false);
+                        pane.set_history_has_newer(false);
+                    } else {
+                        maintain_history_window(
+                            &w,
+                            &client,
+                            pane.get_message_first_visible_row(),
+                            pane.get_message_last_visible_row(),
+                        );
+                    }
+                });
+                return;
+            }
             tracing::debug!("No older messages for channel: {}", channel_id);
             if jump {
                 report_jump_unavailable_later(weak, owner);
@@ -1023,6 +1192,7 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
             return;
         }
 
+        let fetched_cursor = messages.last().map(|row| row.id.to_string());
         let messages = chatter_core::services::disappearing::visible_history_messages(messages);
         if !owner.is_current() {
             return;
@@ -1062,9 +1232,77 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
                 .map(|d| d.to_slint_preview_with_user(&current_user_id))
                 .collect();
 
+            if matches!(load, HistoryLoad::Newest) {
+                let pane = w.global::<crate::ChatPane>();
+                let mut rows = slint_messages;
+                let target = rows
+                    .last()
+                    .map(|row| row.message_id.to_string())
+                    .unwrap_or_default();
+                // Pending rows are read at apply time: a send that already
+                // failed/settled cannot be resurrected by this async reload.
+                rows.extend(
+                    pane.get_messages()
+                        .iter()
+                        .filter(|row| row.message_id.starts_with("pending:")),
+                );
+                install_and_jump(&w, &ui_ctx, owner, rows, target);
+                let rows = pane.get_messages();
+                if let Some(model) = rows
+                    .as_any()
+                    .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+                {
+                    model.has_newer.set(true);
+                    *model.newer_cursor.borrow_mut() = fetched_cursor;
+                    pane.set_history_has_newer(true);
+                }
+                return;
+            }
+            if let HistoryLoad::Newer(_, _) = load {
+                let pane = w.global::<crate::ChatPane>();
+                let rows = pane.get_messages();
+                if let Some(model) = rows
+                    .as_any()
+                    .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+                {
+                    let fresh = ui_ctx.unseen_history_rows(slint_messages, model.ids(), |row| {
+                        row.message_id.as_str()
+                    });
+                    let start = if model.has_pending() {
+                        0
+                    } else {
+                        model.row_count()
+                    };
+                    model.append_page(fresh);
+                    *model.newer_cursor.borrow_mut() = fetched_cursor;
+                    if pane.get_conversation_kind() == crate::ConversationKind::Channel {
+                        for index in start..model.row_count() {
+                            crate::bin_ui::features::chat::recompute_continuation_at(model, index);
+                        }
+                    }
+                    // Continue over invisible expired rows and close the gap
+                    // only after an empty page observes no deferred live input.
+                    maintain_history_window(
+                        &w,
+                        &ui_ctx,
+                        pane.get_message_first_visible_row(),
+                        pane.get_message_last_visible_row(),
+                    );
+                }
+                return;
+            }
             let HistoryLoad::Reaching(target) = load else {
                 let current_model = w.global::<crate::ChatPane>().get_messages();
-                let current_ids = current_model.iter().map(|msg| msg.message_id.to_string());
+                let current_ids = current_model
+                    .as_any()
+                    .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+                    .map(|model| model.ids())
+                    .unwrap_or_else(|| {
+                        current_model
+                            .iter()
+                            .map(|msg| msg.message_id.to_string())
+                            .collect()
+                    });
 
                 // Prepend older messages (older go at top), skipping
                 // duplicates. Inserted in place: rows added above the
@@ -1078,9 +1316,9 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
                 );
                 tracing::debug!("Loaded {} older messages for channel", older.len());
                 crate::bin_ui::features::chat::edit_messages(&w, |model| {
-                    for (i, msg) in older.into_iter().enumerate() {
-                        model.insert(i, msg);
-                    }
+                    let count = model.prepend(older);
+                    // Only the prepended page and the old first row can change.
+                    (0..=count).collect()
                 });
                 return;
             };
@@ -1107,7 +1345,17 @@ fn install_and_jump(
 ) {
     let pane = w.global::<crate::ChatPane>();
     pane.set_loading_messages(true);
-    pane.set_messages(ModelRc::new(slint::VecModel::from(rows)));
+    pane.set_messages(ModelRc::new(
+        crate::bin_ui::message_model::MessageModel::from(rows),
+    ));
+    let rows = pane.get_messages();
+    if let Some(model) = rows
+        .as_any()
+        .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+    {
+        model.has_newer.set(true);
+        pane.set_history_has_newer(true);
+    }
     let weak = w.as_weak();
     let ui_ctx = ui_ctx.clone();
     slint::Timer::single_shot(std::time::Duration::from_millis(50), move || {

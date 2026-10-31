@@ -263,12 +263,13 @@ impl SignalService {
             )
             .await?;
         let ciphertexts = self
-            .encrypt_message_devices_bounded(
+            .encrypt_prepared_devices_bounded(
                 auth_client,
                 recipient_id,
                 &devices,
                 plaintext,
                 group_id,
+                false,
             )
             .await?;
         Ok((ciphertexts, unrestricted))
@@ -284,6 +285,29 @@ impl SignalService {
         plaintext: &[u8],
         group_id: Option<&[u8]>,
     ) -> Result<HashMap<u32, DeviceCiphertext>, ServiceError> {
+        self.encrypt_prepared_devices_bounded(
+            auth_client,
+            recipient_id,
+            devices,
+            plaintext,
+            group_id,
+            true,
+        )
+        .await
+    }
+
+    /// Fresh discovery already checked usable sessions. Exact-recipient retries
+    /// additionally establish any missing sessions; both paths still validate
+    /// authoritative state and trust inside the actor before batch commit.
+    async fn encrypt_prepared_devices_bounded(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        devices: &[u32],
+        plaintext: &[u8],
+        group_id: Option<&[u8]>,
+        ensure_missing: bool,
+    ) -> Result<HashMap<u32, DeviceCiphertext>, ServiceError> {
         let mut devices = devices.to_vec();
         devices.sort_unstable();
         devices.dedup();
@@ -297,11 +321,20 @@ impl SignalService {
                 .get_encrypt_lock(&format!("{recipient_id}:{device}"))
                 .await;
             guards.push(lock.lock_owned().await);
-            self.ensure_session(auth_client, recipient_id, device)
-                .await?;
             let id = DeviceId::try_from(device)
                 .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
             destinations.push(ProtocolAddress::new(recipient_id.to_string(), id));
+        }
+        self.refuse_pending_identity_change(recipient_id)?;
+        if ensure_missing {
+            let usable = self.session_devices(recipient_id).await?;
+            for destination in &destinations {
+                let device = u32::from(destination.device_id());
+                if !usable.contains(&device) {
+                    self.ensure_session(auth_client, recipient_id, device)
+                        .await?;
+                }
+            }
         }
         let certificate = self.get_or_request_sender_certificate(auth_client).await?;
         let batch = self

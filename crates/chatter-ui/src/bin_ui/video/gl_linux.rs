@@ -13,6 +13,7 @@ use gstreamer_gl as gst_gl;
 use gstreamer_gl::prelude::*;
 use gstreamer_gl_egl as gst_gl_egl;
 use gstreamer_video as gst_video;
+use gst_video::prelude::*;
 
 use chatter_core::services::attachment::CbcRangeDecryptor;
 use slint::ComponentHandle;
@@ -50,6 +51,10 @@ struct GLVideoState {
     audio_elements: Arc<Mutex<Vec<gst::Element>>>,
     /// Pending initial volume to apply when audio is ready.
     pending_volume: Option<f64>,
+    /// Reused only when GStreamer supplies padded rows.
+    staging: Vec<u8>,
+    native_size: Arc<Mutex<(u32,u32)>>,
+    output_size: (u32,u32),
 }
 
 /// Check if GL video is available.
@@ -126,6 +131,9 @@ pub fn init_gl_video(window: &MainWindow) -> bool {
         is_playing: false,
         audio_elements: Arc::new(Mutex::new(Vec::new())),
         pending_volume: None,
+        staging: Vec::new(),
+        native_size: Arc::new(Mutex::new((0,0))),
+        output_size: (0,0),
     };
 
     GL_VIDEO_STATE.with(|cell| {
@@ -159,6 +167,17 @@ pub fn init_gl_video(window: &MainWindow) -> bool {
                     // Fetch next frame and update video player
                     GL_VIDEO_STATE.with(|cell| {
                         if let Some(ref mut video_state) = *cell.borrow_mut() {
+                            if let Some(w) = weak.upgrade() {
+                                let size = w.window().size();
+                                let native = video_state.native_size.lock().map(|size| *size).unwrap_or((0,0));
+                                let output = chatter_core::media::display_frame::fit_dimensions(native.0,native.1,size.width,size.height,true);
+                                if output.0 > 0 && output.1 > 0 && output != video_state.output_size {
+                                    video_state.appsink.set_caps(Some(&gst_video::VideoCapsBuilder::new()
+                                        .format(gst_video::VideoFormat::Rgba)
+                                        .width(output.0 as i32).height(output.1 as i32).build()));
+                                    video_state.output_size = output;
+                                }
+                            }
                             if video_state.is_playing {
                                 match fetch_next_frame(video_state) {
                                     Some(image) => {
@@ -364,17 +383,22 @@ fn fetch_next_frame(state: &mut GLVideoState) -> Option<slint::Image> {
     let src = vframe.plane_data(0).ok()?;
     let src_stride = vframe.plane_stride()[0] as usize;
     let row_bytes = (width as usize) * 4;
-    let mut tight = vec![0u8; row_bytes * height as usize];
+    let required = row_bytes.checked_mul(height as usize)?;
+    if src_stride == row_bytes && src.len() >= required {
+        return super::gl_call::upload_media_player_frame(&src[..required], width, height);
+    }
+    state.staging.resize(required, 0);
+    let tight = &mut state.staging;
     for y in 0..height as usize {
         let s = y * src_stride;
         let d = y * row_bytes;
         if s + row_bytes > src.len() {
-            break;
+            return None;
         }
         tight[d..d + row_bytes].copy_from_slice(&src[s..s + row_bytes]);
     }
 
-    super::gl_call::upload_media_player_frame(&tight, width, height)
+    super::gl_call::upload_media_player_frame(tight, width, height)
 }
 
 /// Start playing video from memory using GL rendering.
@@ -583,6 +607,10 @@ fn start_gl_video_source(source: VideoSource) -> Option<f64> {
         let appsink_clone = state.appsink.clone();
         let pipeline_weak = pipeline.downgrade();
         let audio_elements_arc = state.audio_elements.clone();
+        let native_size = state.native_size.clone();
+        state.output_size = (0,0);
+        if let Ok(mut size) = state.native_size.lock() { *size = (0,0); }
+        state.appsink.set_caps(Some(&gst_video::VideoCapsBuilder::new().format(gst_video::VideoFormat::Rgba).build()));
         decodebin.connect_pad_added(move |_decodebin, src_pad| {
             let caps = src_pad.current_caps().or_else(|| Some(src_pad.query_caps(None)));
             if let Some(caps) = caps {
@@ -592,6 +620,10 @@ fn start_gl_video_source(source: VideoSource) -> Option<f64> {
                     tracing::info!("Decodebin pad-added: {} (caps: {})", name, caps.to_string());
 
                     if name.starts_with("video/") {
+                        if let Ok(mut size) = native_size.lock() {
+                            *size = (s.get::<i32>("width").unwrap_or(0).max(0) as u32,
+                                     s.get::<i32>("height").unwrap_or(0).max(0) as u32);
+                        }
                         if let Some(pipeline) = pipeline_weak.upgrade() {
                             // Add queue + videoconvert before GL elements.
                             // videoconvert is CRITICAL: AVI codecs (MPEG-4 Part 2, DivX, etc.)
@@ -638,10 +670,15 @@ fn start_gl_video_source(source: VideoSource) -> Option<f64> {
                                 }
                             };
 
+                            let videoscale = match gst::ElementFactory::make("videoscale").build() {
+                                Ok(scale) => scale,
+                                Err(error) => { tracing::error!(%error, "GL video: videoscale unavailable"); return; }
+                            };
                             let appsink_element: &gst::Element = appsink_clone.upcast_ref();
                             let elements: &[&gst::Element] = &[
                                 &queue,
                                 &videoconvert,
+                                &videoscale,
                                 &rgba_filter,
                                 appsink_element,
                             ];

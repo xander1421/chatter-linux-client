@@ -5,9 +5,7 @@
 use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
-
-use slint::{Image, Model, Timer, TimerMode};
+use slint::{Image, Model};
 
 use super::inline::InlineGifState;
 
@@ -19,8 +17,6 @@ pub(crate) fn picker_generation() -> u64 {
 thread_local! {
     /// Picker GIF animations (gif_id -> frames).
     static PICKER_GIFS: RefCell<HashMap<String, InlineGifState>> = RefCell::new(HashMap::new());
-    /// Global animation timer for picker GIFs.
-    static PICKER_TIMER: RefCell<Option<Timer>> = const { RefCell::new(None) };
 }
 
 /// Register a GIF for the picker animation.
@@ -61,7 +57,7 @@ pub fn register_picker_gif(
         }
     });
 
-    start_picker_timer_if_needed();
+    super::inline::start_inline_timer_if_needed();
 }
 
 /// Clear all picker GIF animations.
@@ -70,91 +66,46 @@ pub fn clear_picker_gifs() {
     PICKER_GIFS.with(|gifs| {
         gifs.borrow_mut().clear();
     });
-    stop_picker_timer();
 }
 
-fn start_picker_timer_if_needed() {
-    PICKER_TIMER.with(|timer_cell| {
-        if timer_cell.borrow().is_some() {
-            return;
-        }
-
-        let timer = Timer::default();
-        let mut last_tick = Instant::now();
-        timer.start(TimerMode::Repeated, Duration::from_millis(33), move || {
-            let now = Instant::now();
-            let elapsed = now.duration_since(last_tick).as_millis() as u64;
-            last_tick += Duration::from_millis(elapsed);
-            tick_picker_gifs(elapsed);
-        });
-
-        *timer_cell.borrow_mut() = Some(timer);
-    });
+pub(super) fn has_picker_gifs() -> bool {
+    PICKER_GIFS.with(|gifs| !gifs.borrow().is_empty())
 }
 
-fn stop_picker_timer() {
-    PICKER_TIMER.with(|timer_cell| {
-        if let Some(ref timer) = *timer_cell.borrow() {
-            timer.stop();
-        }
-        *timer_cell.borrow_mut() = None;
-    });
-}
-
-fn tick_picker_gifs(elapsed_ms: u64) {
-    let updates: Vec<(String, Image)> = PICKER_GIFS.with(|gifs| {
-        let mut gifs = gifs.borrow_mut();
-        let mut updates = Vec::new();
-
-        for (id, state) in gifs.iter_mut() {
-            if state.tick(elapsed_ms) {
-                updates.push((id.clone(), state.current_image()));
-            }
-        }
-
-        updates
-    });
-
-    if updates.is_empty() {
+pub(super) fn tick_picker_gifs(elapsed_ms: u64) {
+    let Some(window) = super::inline::INLINE_WINDOW
+        .with(|cell| cell.borrow().as_ref().and_then(|weak| weak.upgrade()))
+    else {
+        return;
+    };
+    let pane = window.global::<crate::ChatPane>();
+    if !pane.get_composer_gif_picker_visible() {
         return;
     }
-
-    super::inline::INLINE_WINDOW.with(|window_cell| {
-        if let Some(ref window_weak) = *window_cell.borrow() {
-            if let Some(w) = window_weak.upgrade() {
-                update_picker_thumbnails(&w, &updates);
-            }
-        }
-    });
-}
-
-fn update_picker_thumbnails(window: &crate::MainWindow, updates: &[(String, Image)]) {
-    // A GIF can sit in both sections (sent before, trending now).
-    let changed: HashMap<&str, &Image> = updates
-        .iter()
-        .map(|(id, image)| (id.as_str(), image))
-        .collect();
-    for results in [
-        window
-            .global::<crate::ChatPane>()
-            .get_composer_gif_picker_recent(),
-        window
-            .global::<crate::ChatPane>()
-            .get_composer_gif_picker_results(),
-    ] {
-        let Some(model) = results
-            .as_any()
-            .downcast_ref::<slint::VecModel<crate::GifData>>()
-        else {
-            continue;
-        };
-        for idx in 0..model.row_count() {
-            if let Some(mut gif) = model.row_data(idx) {
-                if let Some(image) = changed.get(gif.id.as_str()) {
-                    gif.preview = (*image).clone();
-                    model.set_row_data(idx, gif);
+    let mut models = Vec::new();
+    if pane.get_composer_gif_picker_search().is_empty() {
+        models.push(pane.get_composer_gif_picker_recent());
+    }
+    if !pane.get_composer_gif_picker_loading() {
+        models.push(pane.get_composer_gif_picker_results());
+    }
+    let mut advanced = HashMap::<String, Option<Image>>::new();
+    PICKER_GIFS.with(|gifs| {
+        let mut gifs = gifs.borrow_mut();
+        for model in models {
+            for index in 0..model.row_count() {
+                let Some(mut gif) = model.row_data(index) else {
+                    continue;
+                };
+                let frame = advanced.entry(gif.id.to_string()).or_insert_with(|| {
+                    gifs.get_mut(gif.id.as_str())
+                        .and_then(|state| state.tick(elapsed_ms).then(|| state.current_image()))
+                });
+                if let Some(frame) = frame {
+                    gif.preview = frame.clone();
+                    model.set_row_data(index, gif);
                 }
             }
         }
-    }
+    });
 }

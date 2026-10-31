@@ -57,7 +57,7 @@ pub async fn load_jarvis_channel_into_ui(
 
         let items: Vec<MessageItemData> = rows.into_iter().map(row_to_item).collect();
         w.global::<crate::ChatPane>()
-            .set_messages(ModelRc::new(VecModel::from(items)));
+            .set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::from(items)));
         w.global::<crate::ChatPane>().set_loading_messages(false);
         w.global::<crate::ChatPane>().set_is_at_bottom(true);
     });

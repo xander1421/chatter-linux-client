@@ -96,76 +96,67 @@ impl ChatterClient {
         })
     }
 
-    /// Receive transports share the repository's post-commit notification.
-    /// Unlike the UI broadcast, this queue cannot drop a burst of stored rows.
+    /// Drain durable receipt intents; coalesced wake hints retain no message bodies.
     fn spawn_channel_delivery_listener(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        use crate::storage::repositories::channel_delivery_repo::ChannelDeliveryRepository;
+        use futures::StreamExt;
         let client = Arc::clone(self);
-        let mut stored = self.services.database.subscribe_message_stores();
-        // A guard also reports cancellation/panic; shutdown marks the intentional abort.
-        struct ExitGuard(Arc<ChatterClient>);
-        impl Drop for ExitGuard {
-            fn drop(&mut self) {
-                if !self.0.channel_delivery_shutdown.load(Ordering::SeqCst) {
-                    tracing::warn!(
-                        "Channel delivery listener exited outside shutdown (receiver closed/replaced, cancellation or panic)"
-                    );
-                }
-            }
-        }
-        self.channel_delivery_shutdown
-            .store(false, Ordering::SeqCst);
-        let guard = ExitGuard(Arc::clone(self));
-        tracing::info!("Channel delivery listener subscribed");
+        let stored = self.services.database.subscribe_message_stores();
+        self.channel_delivery_shutdown.store(false, Ordering::SeqCst);
         tokio::spawn(async move {
-            let _guard = guard;
-            // Recovery bounds each channel delivery attempt, including retries.
-            while let Some(message) = stored.recv().await {
-                if message.conversation_type != crate::domain::message::ConversationType::Channel {
-                    continue;
+            let mut retry = tokio::time::interval(std::time::Duration::from_secs(5));
+            retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = stored.notified() => {},
+                    _ = retry.tick() => {},
                 }
-                let current = client.auth_state().get();
-                let channel_id = message.conversation_id;
-                let timestamp = message.sent_at;
-                let started = std::time::Instant::now();
-                let skip = if current.current_user_id.is_none() || current.session_ended {
-                    Some("signed_out")
-                } else if message.sender_id.is_none() {
-                    Some("no_sender")
-                } else if message.sender_id == current.current_user_id {
-                    Some("own_message")
-                } else if matches!(
-                    message.content,
-                    crate::domain::message::MessageContent::System(_)
-                        | crate::domain::message::MessageContent::Call(_)
-                ) {
-                    Some("control_message")
-                } else {
-                    None
+                let auth = client.auth_state().get();
+                let Some(owner) = auth.current_user_id.filter(|_| !auth.session_ended) else { continue };
+                let db = client.services.database.clone();
+                let load_db = db.clone();
+                let batch = match db.run_blocking(move || {
+                    ChannelDeliveryRepository::new(load_db).due(owner, chrono::Utc::now().timestamp_millis())
+                }).await {
+                    Ok(batch) => batch,
+                    Err(error) => {
+                        tracing::warn!(%error, "Cannot read durable delivery intents");
+                        continue;
+                    }
                 };
-                if let Some(outcome) = skip {
-                    tracing::info!(%channel_id, message_id = %message.id, timestamp, outcome,
-                        elapsed_ms = started.elapsed().as_millis() as u64,
-                        "Channel delivery dispatch");
-                    continue;
+                let full_batch = batch.len() == 50;
+                let mut channels = std::collections::HashMap::new();
+                for item in batch {
+                    channels.entry((item.conversation_id, item.author)).or_insert_with(Vec::new).push(item);
                 }
-                tracing::info!(%channel_id, message_id = %message.id, timestamp,
-                    outcome = "started", elapsed_ms = 0u64, "Channel delivery dispatch");
-                let result = client
-                    .conversation(ActiveConversation::Channel(channel_id))
-                    .send_delivery_receipt(&[timestamp])
-                    .await;
-                let outcome = match &result {
-                    Ok(()) => "completed_or_deduplicated",
-                    Err(crate::services::conversation::ConversationError::Message(
-                        crate::services::MessageError::Network(crate::error::NetworkError::Timeout),
-                    )) => "timeout",
-                    Err(_) => "failed",
-                };
-                tracing::info!(%channel_id, message_id = %message.id, timestamp, outcome,
-                    elapsed_ms = started.elapsed().as_millis() as u64, "Channel delivery dispatch");
-                if let Err(error) = result {
-                    tracing::warn!(%channel_id, message_id = %message.id, timestamp, %error,
-                        "Failed to send channel delivery receipt");
+                // Independent channels make progress despite another channel's timeout.
+                futures::stream::iter(channels).for_each_concurrent(4, |((channel, author), items)| {
+                    let client = client.clone();
+                    let revision = auth.session_revision;
+                    async move {
+                        let current = client.auth_state().get();
+                        if current.current_user_id != Some(owner) || current.session_ended || current.session_revision != revision {
+                            return;
+                        }
+                        let timestamps: Vec<_> = items.iter().map(|item| item.sent_at).collect();
+                        let result = client.conversation(ActiveConversation::Channel(channel))
+                            .send_durable_channel_delivery(author, &timestamps).await;
+                        if let Err(error) = &result {
+                            tracing::warn!(%channel, %error, "Channel delivery batch awaits retry");
+                        }
+                        let db = client.services.database.clone();
+                        let settle_db = db.clone();
+                        if let Err(error) = db.run_blocking(move || {
+                            ChannelDeliveryRepository::new(settle_db).settle(
+                                owner, &items, result.is_ok(), chrono::Utc::now().timestamp_millis())
+                        }).await {
+                            tracing::warn!(%error, "Cannot settle durable delivery intents");
+                        }
+                    }
+                }).await;
+                if full_batch {
+                    stored.notify_one();
+                    tokio::task::yield_now().await;
                 }
             }
         })

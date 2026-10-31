@@ -316,6 +316,17 @@ impl SignalActorHandle {
         .await?
     }
 
+    pub async fn session_devices(
+        &self,
+        recipient: String,
+    ) -> Result<Vec<(u32, Option<u32>)>, ServiceError> {
+        self.send(|response| SignalCommand::SessionDevices {
+            recipient,
+            response,
+        })
+        .await?
+    }
+
     pub async fn has_session(&self, address: ProtocolAddress) -> Result<bool, ServiceError> {
         self.send(|tx| SignalCommand::HasSession {
             address,

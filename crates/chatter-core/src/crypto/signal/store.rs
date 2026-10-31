@@ -613,19 +613,52 @@ impl StagedSignalStore {
             identities: Default::default(),
         }
     }
-    /// Caller must already mark submission: a storage failure can leave a
-    /// partial local commit and must retain uncertainty. No ciphertext has been
-    /// deposited yet; the server still admits all devices in one transaction.
+    /// Caller marks submission before committing, retaining conservative
+    /// uncertainty on storage failure. All envelope admission precedes this.
     pub(crate) async fn commit(&mut self) -> Result<()> {
-        let identities = self.identities.borrow().clone();
-        let sessions = self.sessions.borrow().clone();
-        for (address, identity) in identities {
-            self.base.save_identity(&address, &identity).await?;
+        // Match the base store's account anchor checks before entering SQLite.
+        // Mesh identities are pre-pinned and must never be introduced here.
+        let staged_identities = self.identities.borrow().clone();
+        for (address, identity) in &staged_identities {
+            if self.base.is_local_account(address.name())?
+                && self.base.get_identity_key_pair().await?.identity_key() != identity
+            {
+                return Err(SignalProtocolError::UntrustedIdentity(address.clone()));
+            }
+            #[cfg(feature = "mesh")]
+            if self.base.mesh_owner.is_some()
+                && self.base.mesh_pinned_identity(address)?.as_ref() != Some(identity)
+            {
+                return Err(SignalProtocolError::UntrustedIdentity(address.clone()));
+            }
         }
-        for (address, record) in sessions {
-            self.base.store_session(&address, &record).await?;
+        #[cfg(feature = "mesh")]
+        for (address, _) in self.sessions.borrow().iter() {
+            if self.base.mesh_owner.is_some() && self.base.mesh_pinned_identity(address)?.is_none()
+            {
+                return Err(SignalProtocolError::UntrustedIdentity(address.clone()));
+            }
         }
-        Ok(())
+        let identities = if self.base.mesh_owner.is_some() {
+            Vec::new()
+        } else {
+            staged_identities
+                .iter()
+                .map(|(address, identity)| {
+                    (address.name().to_owned(), identity.serialize().to_vec())
+                })
+                .collect::<Vec<_>>()
+        };
+        let sessions = self
+            .sessions
+            .borrow()
+            .iter()
+            .map(|(address, record)| Ok((self.base.session_address(address), record.serialize()?)))
+            .collect::<Result<Vec<_>>>()?;
+        self.base
+            .key_store
+            .commit_signal_send(&identities, &sessions)
+            .map_err(storage_to_signal_error)
     }
 }
 #[async_trait(?Send)]

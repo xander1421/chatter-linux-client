@@ -82,6 +82,7 @@ async fn reingesting_a_read_message_keeps_it_read() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .expect("build client");
+    bind_test_owner(&client);
     let inbound = ChannelInbound::new(
         client.messages().clone(),
         client.attachments().clone(),
@@ -141,6 +142,7 @@ async fn reingesting_an_original_keeps_its_applied_edit() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .expect("build client");
+    bind_test_owner(&client);
     let inbound = ChannelInbound::new(
         client.messages().clone(),
         client.attachments().clone(),
@@ -203,6 +205,7 @@ async fn first_insert_announces_once_before_encrypted_stream_duplicate() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .unwrap();
+    bind_test_owner(&client);
     let inbound = ChannelInbound::new(
         client.messages().clone(),
         client.attachments().clone(),
@@ -282,6 +285,7 @@ async fn own_message_is_stored_read_on_any_path() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .expect("build client");
+    bind_test_owner(&client);
     let me = UserId::new();
     client
         .messages()
@@ -325,7 +329,7 @@ async fn own_message_is_stored_read_on_any_path() {
         "positive control: someone else's message is unread"
     );
     store(me);
-    assert_eq!(unread(), 1, "our own message counted as unread");
+    assert_eq!(unread(), 0, "our own send advances the read horizon over prior incoming rows");
 }
 
 /// Delete-for-me (and a peer's delete-for-everyone) removes the local row,
@@ -343,6 +347,7 @@ async fn reingesting_a_deleted_message_keeps_it_deleted() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .expect("build client");
+    bind_test_owner(&client);
     let inbound = ChannelInbound::new(
         client.messages().clone(),
         client.attachments().clone(),

@@ -219,6 +219,7 @@ export global ChatPane {
     // Clear Rust's selected-id set at that boundary so a selection cannot
     // carry into another conversation (or leave an empty selection bar there).
     changed loading-messages => {
+        if self.loading-messages { self.history-has-newer = false; self.history-head-offset = 0; }
         if self.loading-messages && self.selection-mode {
             self.selection-mode = false;
             self.selection-cleared();
@@ -350,6 +351,9 @@ export global ChatPane {
     callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
     callback view-attachment(string);  // attachment ID - for viewing/opening attachments
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
+    in-out property <bool> history-has-newer;
+    in-out property <int> history-head-offset;
+    callback request-latest();
     callback load-more();
     callback visible-media-rows(int, int);
     callback send(string) -> bool;

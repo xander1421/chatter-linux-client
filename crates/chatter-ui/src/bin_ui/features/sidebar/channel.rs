@@ -463,7 +463,7 @@ pub(crate) async fn load_channel_into_ui_owned(
             .iter()
             .map(|m| m.to_slint_preview_with_user(&current_user_id))
             .collect();
-        let model = VecModel::from(slint_messages);
+        let model = crate::bin_ui::message_model::MessageModel::from(slint_messages);
         if conversation_type == chatter_core::domain::message::ConversationType::Channel {
             crate::bin_ui::features::chat::recompute_channel_continuations(&model);
         }

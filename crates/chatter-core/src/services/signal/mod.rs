@@ -15,6 +15,7 @@ pub mod kt_anchor;
 mod sender_key;
 mod session;
 
+use crate::domain::ids::ChannelId;
 use libsignal_protocol::PublicKey;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -39,6 +40,11 @@ pub struct SignalService {
     /// `ensure_sessions_and_access_policy_all_devices`). Not a device list:
     /// which devices a recipient has is the server's answer to each send.
     pub(crate) unrestricted_access: Arc<std::sync::Mutex<HashMap<String, bool>>>,
+    /// Automatic SKDM failures only; shared by service clones and bounded by
+    /// the group distribution loop. Fingerprints contain verified state and
+    /// device registrations, never mutable ratchet records.
+    pub(crate) skdm_retry:
+        Arc<std::sync::Mutex<HashMap<(ChannelId, String), (String, std::time::Instant, u32)>>>,
     pub(crate) sender_cert_cache: Arc<std::sync::Mutex<Option<VerifiedSenderCert>>>,
 }
 
@@ -59,6 +65,7 @@ impl Clone for SignalService {
             encrypt_lock_lru: self.encrypt_lock_lru.clone(),
             unrestricted_access: self.unrestricted_access.clone(),
             sender_cert_cache: self.sender_cert_cache.clone(),
+            skdm_retry: self.skdm_retry.clone(),
         }
     }
 }
@@ -89,6 +96,7 @@ impl SignalService {
             encrypt_lock_lru: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             unrestricted_access: Arc::default(),
             sender_cert_cache: Arc::default(),
+            skdm_retry: Arc::default(),
         }
     }
 }
@@ -122,6 +130,23 @@ mod tests {
 
         let service = SignalService::new(key_store.clone(), settings_repo.clone());
         (service, key_store, settings_repo)
+    }
+
+    #[tokio::test]
+    async fn session_snapshot_excludes_corrupt_and_archived_records() {
+        let file = NamedTempFile::new().unwrap();
+        let (service, keys, _) = setup_service(file.path()).await;
+        keys.store_session("peer:1", &[0xff]).unwrap();
+        keys.store_session("peer:2", &SessionRecord::new_fresh().serialize().unwrap())
+            .unwrap();
+        keys.store_session("other:3", &[0xff]).unwrap();
+        assert!(
+            service
+                .session_device_registrations("peer")
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

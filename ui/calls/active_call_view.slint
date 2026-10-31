@@ -28,6 +28,21 @@ component ParticipantTile inherits Rectangle {
     in property <bool> show-video: true;
     in property <bool> interactive: true;
     callback clicked();
+    callback video-size(string, length, length, bool);
+    in property <int> video-layout-revision;
+    private property <string> video-id: participant.user-id;
+    private property <bool> screen-frame: participant.is-screen-sharing;
+    function report-size() {
+        if root.video-id != "" && root.width > 0px && root.height > 0px {
+            root.video-size(root.video-id, root.width, root.height, root.screen-frame);
+        }
+    }
+    changed width => { root.report-size(); }
+    changed height => { root.report-size(); }
+    changed video-layout-revision => { root.report-size(); }
+    changed video-id => { root.report-size(); }
+    changed screen-frame => { root.report-size(); }
+
 
     accessible-role: button;
     accessible-label: root.participant.display-name;
@@ -176,6 +191,8 @@ export component ActiveCallView inherits Rectangle {
     // See CallControls: phone route toggle vs desktop output picker.
     in property <bool> speaker-toggle: false;
     in property <bool> speaker-on: false;
+    callback video-size(string, length, length, bool);
+    in property <int> video-layout-revision;
     in property <image> local-video-frame;
     in property <[image]> remote-video-frames;
     private property <CallParticipantData> empty-participant;
@@ -304,6 +321,8 @@ export component ActiveCallView inherits Rectangle {
                 video-frame: source-index >= 0 && source-index == call-data.participants.length - 1 ? local-video-frame
                     : source-index >= 0 && remote-video-frames.length > source-index ? remote-video-frames[source-index] : local-video-frame;
                 is-local: source-index == call-data.participants.length - 1;
+                video-layout-revision: root.video-layout-revision;
+                video-size(id, width, height, screen) => { root.video-size(id, width, height, screen); }
                 clicked => {
                     if source-index >= 0 && source-index < call-data.participants.length {
                         let was-maximized = root.maximized-index == idx;

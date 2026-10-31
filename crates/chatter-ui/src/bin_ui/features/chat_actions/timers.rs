@@ -95,13 +95,12 @@ pub fn start_video_progress_timer(window: &MainWindow) {
             Duration::from_millis(16),
             move || {
                 if let Some(w) = weak_window.upgrade() {
+                    let size = w.window().size();
+                    chatter_core::media::display_frame::set_video_display_bounds(size.width, size.height);
                     // Take latest frame from buffer and render it
                     if let Some(frame) = video_state::take_frame() {
-                        let image = crate::bin_ui::slint_conversions::rgb_to_slint_image(
-                            frame.width,
-                            frame.height,
-                            &frame.rgb_data,
-                        );
+                        let image = slint::Image::from_rgb8(
+                            frame.pixels);
                         w.global::<crate::ChatPane>().set_video_player_frame(image);
                     }
 

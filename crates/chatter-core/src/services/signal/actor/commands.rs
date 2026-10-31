@@ -142,6 +142,10 @@ pub(crate) enum SignalCommand {
         our_address: ProtocolAddress,
         response: oneshot::Sender<Result<bool, ServiceError>>,
     },
+    SessionDevices {
+        recipient: String,
+        response: oneshot::Sender<Result<Vec<(u32, Option<u32>)>, ServiceError>>,
+    },
     HasSession {
         address: ProtocolAddress,
         response: oneshot::Sender<Result<bool, ServiceError>>,

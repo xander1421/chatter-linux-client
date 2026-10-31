@@ -25,11 +25,112 @@ fn next_arrival_serial() -> i32 {
     NEXT_ARRIVAL_SERIAL.fetch_add(1, Ordering::Relaxed)
 }
 
+#[derive(Default)]
+struct SidebarIndex {
+    model: slint::ModelRc<crate::ChatRowData>,
+    flat: slint::ModelRc<crate::SidebarRowData>,
+    positions: std::collections::HashMap<String, usize>,
+    flat_positions: std::collections::HashMap<String, usize>,
+    pinned: usize,
+    foldered: std::collections::HashSet<String>,
+}
+thread_local! {
+    static SIDEBAR_INDEX: std::cell::RefCell<SidebarIndex> = Default::default();
+    static SECTION_REFRESH_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn index_sidebar(window: &MainWindow) {
+    use slint::Model;
+    let pane = window.global::<crate::SidebarPane>();
+    let model = pane.get_chat_rows();
+    let flat = pane.get_flat_rows();
+    let mut index = SidebarIndex {
+        model: model.clone(),
+        flat: flat.clone(),
+        ..Default::default()
+    };
+    for (i, row) in model.iter().enumerate() {
+        index.pinned += usize::from(row.is_pinned);
+        index.positions.insert(row.conversation_id.to_string(), i);
+    }
+    for section in pane.get_custom_sections().iter() {
+        index.foldered.extend(
+            section
+                .conversations
+                .iter()
+                .map(|row| row.conversation_id.to_string()),
+        );
+    }
+    for (i, row) in flat.iter().enumerate() {
+        if row.kind == "chat" {
+            index
+                .flat_positions
+                .insert(row.chat.conversation_id.to_string(), i);
+        }
+    }
+    SIDEBAR_INDEX.with(|slot| *slot.borrow_mut() = index);
+}
+
+/// Patch the projected chat in place, including its move within the contiguous
+/// main-chat block. Folder policy and ordering still come from core snapshots.
+fn patch_flat_chat(
+    window: &MainWindow,
+    old_index: usize,
+    new_index: usize,
+    row: crate::ChatRowData,
+) {
+    use slint::Model;
+    let pane = window.global::<crate::SidebarPane>();
+    if pane.get_archive_open() {
+        return;
+    }
+    let patched = SIDEBAR_INDEX.with(|slot| {
+        let mut index = slot.borrow_mut();
+        let Some(from) = index
+            .flat_positions
+            .get(row.conversation_id.as_str())
+            .copied()
+        else {
+            return false;
+        };
+        let to = from - old_index + new_index;
+        let Some(mut flat_row) = index.flat.row_data(from) else {
+            return false;
+        };
+        flat_row.chat = row;
+        if from == to {
+            index.flat.set_row_data(to, flat_row);
+        } else if let Some(vec) = index
+            .flat
+            .as_any()
+            .downcast_ref::<slint::VecModel<crate::SidebarRowData>>()
+        {
+            vec.remove(from);
+            vec.insert(to, flat_row);
+        } else {
+            return false;
+        }
+        for position in index.flat_positions.values_mut() {
+            if *position == from {
+                *position = to;
+            } else if to <= *position && *position < from {
+                *position += 1;
+            } else if from < *position && *position <= to {
+                *position -= 1;
+            }
+        }
+        true
+    });
+    if !patched {
+        refresh_flat_rows(window);
+    }
+}
+
 /// Project the two retained source models into the one virtualized sidebar
 /// model. Core owns the ordering and expanded-folder policy; this adapter
 /// only attaches Slint values to those slots.
 pub(crate) fn refresh_flat_rows(window: &MainWindow) {
-    use chatter_core::ui::sidebar_data::{sidebar_slots, SidebarSlot};
+    use chatter_core::ui::sidebar_data::{SidebarSlot, sidebar_slots};
     use slint::{Model, ModelRc, VecModel};
 
     let pane = window.global::<crate::SidebarPane>();
@@ -50,8 +151,11 @@ pub(crate) fn refresh_flat_rows(window: &MainWindow) {
                 SidebarSlot::Empty => ("empty", None, None),
                 SidebarSlot::Loading => ("loading", None, None),
                 SidebarSlot::Chat(index) => ("chat", chats.row_data(index), None),
-                SidebarSlot::SectionHeader(index) => ("section-header", None, sections.get(index).cloned()),
-                SidebarSlot::SectionChat(index, row) => ("section-chat", sections[index].conversations.row_data(row), sections.get(index).cloned()),
+                SidebarSlot::SectionHeader(index) => {
+                    ("section-header", None, sections.get(index).cloned())
+                }
+                SidebarSlot::SectionChat(index, row) => ("section-chat", sections[index].conversations.row_data(row), sections.get(index).cloned(),
+                ),
                 SidebarSlot::Bottom => ("bottom", None, None),
             };
             let key = match slot {
@@ -126,6 +230,7 @@ pub(crate) fn refresh_flat_rows(window: &MainWindow) {
     } else {
         pane.set_flat_rows(ModelRc::new(VecModel::from(rows)));
     }
+    index_sidebar(window);
 }
 
 /// Clear only the marked incarnation: a newer message may promote the same row
@@ -141,19 +246,27 @@ fn settle_arrivals(
     slint::Timer::single_shot(Duration::from_millis(16), move || {
         use slint::Model;
         for (id, serial) in arrivals {
-            if let Some(index) = (0..model.row_count()).find(|&i| {
+            let index = SIDEBAR_INDEX.with(|slot| {
+                let cached = slot.borrow();
+                (cached.model == model)
+                    .then(|| cached.positions.get(id.as_str()).copied())
+                    .flatten()
+            });
+            if let Some(index) = index.filter(|&index| {
                 model
-                    .row_data(i)
-                    .is_some_and(|row| row.conversation_id == id && row.arrival_serial == serial)
+                    .row_data(index)
+                    .is_some_and(|row| row.arrival_serial == serial)
             }) {
                 if let Some(mut row) = model.row_data(index) {
                     row.arrival_serial = 0;
-                    model.set_row_data(index, row);
+                    model.set_row_data(index, row.clone());
+                    if let Some(window) = weak.upgrade() {
+                        if window.global::<crate::SidebarPane>().get_chat_rows() == model {
+                            patch_flat_chat(&window, index, index, row);
+                        }
+                    }
                 }
             }
-        }
-        if let Some(window) = weak.upgrade() {
-            refresh_flat_rows(&window);
         }
     });
 }
@@ -177,7 +290,8 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 _ => false,
             })
         }).collect();
-        chatter_core::ui::sidebar_data::sidebar_focus_target(&visible, current.max(0) as usize, move_by)
+        chatter_core::ui::sidebar_data::sidebar_focus_target(&visible, current.max(0) as usize, move_by,
+            )
             .map_or(current, |index| index as i32)
     });
     let navigation_client = ui_ctx.clone();
@@ -187,8 +301,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let pane = window.global::<crate::SidebarPane>();
         if let Some(target) = navigation_client.adjacent_sidebar_conversation(
             direction > 0,
-            pane.get_archive_open(),
-        ) {
+            pane.get_archive_open()) {
             pane.set_active_tab("chats".into());
             pane.set_mobile_show_chat(true);
             select_conversation(&window, target);
@@ -249,7 +362,8 @@ fn wire_context_menu_mute(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.global::<crate::SidebarPane>().on_set_conversation_muted(move |row_id, kind, muted| {
         let Some(w) = weak.upgrade() else { return };
         let kind = crate::bin_ui::converters::conversation_type(kind);
-        let Some(conv) = ctx.resolve_row_conversation(row_id.as_str(), &kind) else { return };
+        let Some(conv) = ctx.resolve_row_conversation(row_id.as_str(), &kind) else { return;
+            };
         match ctx.mute_conversation(conv, muted) {
             Ok(()) => {
                 w.global::<crate::SidebarPane>().set_row_context_menu_muted(muted);
@@ -272,7 +386,8 @@ fn wire_context_menu_mute_for(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
     window.global::<crate::SidebarPane>().on_set_conversation_muted_for(move |row_id, kind, seconds| {
         let Some(w) = weak.upgrade() else { return };
         let kind = crate::bin_ui::converters::conversation_type(kind);
-        let Some(conv) = ctx.resolve_row_conversation(row_id.as_str(), &kind) else { return };
+        let Some(conv) = ctx.resolve_row_conversation(row_id.as_str(), &kind) else { return;
+            };
         let seconds = u64::try_from(seconds).ok().filter(|s| *s > 0);
         match ctx.mute_conversation_for(conv, seconds) {
             Ok(()) => {
@@ -304,7 +419,8 @@ fn wire_context_menu_mark_unread(window: &MainWindow, ui_ctx: &Arc<ChatterClient
     let weak = window.as_weak();
     window.global::<crate::SidebarPane>().on_mark_conversation_unread(move |row_id, kind| {
         let kind = crate::bin_ui::converters::conversation_type(kind);
-        let Some(conv) = ctx.resolve_row_conversation(row_id.as_str(), &kind) else { return };
+        let Some(conv) = ctx.resolve_row_conversation(row_id.as_str(), &kind) else { return;
+            };
         if let Err(error) = ctx.conversation(conv).mark_as_unread() {
             tracing::warn!(%error, "Could not mark conversation unread");
         }
@@ -318,7 +434,8 @@ fn wire_context_menu_mark_read(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
     let weak = window.as_weak();
     window.global::<crate::SidebarPane>().on_mark_conversation_read(move |row_id, kind| {
         let kind = crate::bin_ui::converters::conversation_type(kind);
-        let Some(conv) = ctx.resolve_row_conversation(row_id.as_str(), &kind) else { return };
+        let Some(conv) = ctx.resolve_row_conversation(row_id.as_str(), &kind) else { return;
+            };
         let ctx = ctx.clone();
         let weak = weak.clone();
         tokio::spawn(async move {
@@ -435,7 +552,8 @@ pub(crate) fn refresh_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
         let model = window.global::<crate::SidebarPane>().get_archived_rows();
         for i in 0..model.row_count() {
             if let Some(mut item) = model.row_data(i) {
-                let selected = row_is_active(&active, item.conversation_type, item.conversation_id.as_str());
+                let selected = row_is_active(&active, item.conversation_type, item.conversation_id.as_str(),
+                );
                 if item.is_selected != selected {
                     item.is_selected = selected;
                     model.set_row_data(i, item);
@@ -539,9 +657,15 @@ pub(crate) fn refresh_section_badges(window: &MainWindow, ui_ctx: &Arc<ChatterCl
     {
         return;
     }
+    if SECTION_REFRESH_PENDING.with(|pending| pending.replace(true)) {
+        return;
+    }
     let weak = slint::ComponentHandle::as_weak(window);
     let ui_ctx = ui_ctx.clone();
-    tokio::spawn(async move { sections::refresh_sections_ui(&weak, &ui_ctx) });
+    slint::Timer::single_shot(Duration::ZERO, move || {
+        SECTION_REFRESH_PENDING.with(|pending| pending.set(false));
+        tokio::spawn(async move { sections::refresh_sections_ui(&weak, &ui_ctx) });
+    });
 }
 
 /// Apply pinned message state to the UI.
@@ -636,7 +760,6 @@ pub fn apply_thread_reply_badges(
     mention_count: u32,
 ) {
     use chatter_core::state::ActiveConversation;
-    refresh_section_badges(window, ui_ctx);
     let key = match conversation {
         ActiveConversation::ServerDm { peer_id } => peer_id.to_string(),
         ActiveConversation::Channel(id) => id.to_string(),
@@ -661,7 +784,9 @@ pub fn apply_thread_reply_badges(
             }
         }
     }
-    if !found {
+    let foldered = SIDEBAR_INDEX.with(|slot| slot.borrow().foldered.contains(&key));
+    if !found && foldered { refresh_section_badges(window, ui_ctx); }
+    if !found && !foldered {
         let (weak, ui_ctx) = (window.as_weak(), ui_ctx.clone());
         tokio::spawn(async move { rebuild_chat_list(&weak, &ui_ctx) });
     }
@@ -684,10 +809,6 @@ fn update_sidebar_row(
     use chatter_core::state::ActiveConversation;
     use slint::Model;
 
-    // Every received and sent message funnels through here, so this is where
-    // a foldered conversation's badge gets a chance to move.
-    refresh_section_badges(window, ui_ctx);
-
     let key = match conversation {
         ActiveConversation::ServerDm { peer_id } => peer_id.to_string(),
         ActiveConversation::Channel(id) => id.to_string(),
@@ -702,12 +823,29 @@ fn update_sidebar_row(
     else {
         return false;
     };
-    let Some(i) = (0..vec.row_count()).find(|&i| {
-        vec.row_data(i)
-            .is_some_and(|r| r.conversation_id.as_str() == key)
-    }) else {
-        return false;
+    let valid = SIDEBAR_INDEX.with(|slot| {
+        let index = slot.borrow();
+        index.model == model
+            && index.positions.len() == vec.row_count()
+            && index.flat == window.global::<crate::SidebarPane>().get_flat_rows()
+    });
+    if !valid {
+        index_sidebar(window);
+    }
+    let Some(i) = SIDEBAR_INDEX.with(|slot| slot.borrow().positions.get(&key).copied()) else {
+        let foldered = SIDEBAR_INDEX.with(|slot| slot.borrow().foldered.contains(&key));
+        if foldered {
+            refresh_section_badges(window, ui_ctx);
+        }
+        return foldered;
     };
+    if !vec
+        .row_data(i)
+        .is_some_and(|row| row.conversation_id.as_str() == key)
+    {
+        index_sidebar(window);
+        return false;
+    }
     let mut row = vec.row_data(i).expect("located sidebar row");
     row.last_message = preview.into();
     row.timestamp = timestamp.into();
@@ -718,12 +856,12 @@ fn update_sidebar_row(
         row.mention_count = n;
     }
     crate::bin_ui::converters::channel::refresh_row_accessible_label(&mut row);
-    let slot = chatter_core::ui::sidebar_data::chat_row_top_slot(
+    let pinned = SIDEBAR_INDEX.with(|index| index.borrow().pinned);
+    let slot = chatter_core::ui::sidebar_data::chat_row_top_slot_from_pinned_count(
         row.is_pinned,
-        (0..vec.row_count())
-            .filter(|&index| index != i)
-            .filter_map(|index| vec.row_data(index).map(|r| r.is_pinned)),
+        pinned.saturating_sub(usize::from(row.is_pinned)),
     );
+    let projected_row = row.clone();
     if i == slot {
         vec.set_row_data(i, row);
     } else {
@@ -733,7 +871,19 @@ fn update_sidebar_row(
         vec.insert(slot, row);
         settle_arrivals(window.as_weak(), model.clone(), vec![arrival]);
     }
-    refresh_flat_rows(window);
+    SIDEBAR_INDEX.with(|index| {
+        for position in index.borrow_mut().positions.values_mut() {
+            if *position == i {
+                *position = slot;
+            } else if slot <= *position && *position < i {
+                *position += 1;
+            } else if i < *position && *position <= slot {
+                *position -= 1;
+            }
+        }
+    });
+    // Use the actual row after its arrival serial was set.
+    patch_flat_chat(window, i, slot, vec.row_data(slot).unwrap_or(projected_row));
     true
 }
 
@@ -745,6 +895,10 @@ fn update_sidebar_row(
 /// same rows.
 pub(crate) fn rebuild_chat_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     let rows = ui_ctx.sidebar_rows();
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+    for bytes in rows.iter().filter_map(|row| row.avatar_bytes.as_deref()) {
+        crate::bin_ui::decode_cache::avatar_guarded(bytes, generation);
+    }
     let ui_ctx = ui_ctx.clone();
     run_ui!(weak, |w| {
         apply_chat_list(&w, &ui_ctx, rows);
@@ -764,19 +918,30 @@ pub(crate) fn refresh_draft_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient
 
 fn rebuild_archived_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     let rows = ui_ctx.archived_sidebar_rows();
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+    for bytes in rows.iter().filter_map(|row| row.avatar_bytes.as_deref()) {
+        crate::bin_ui::decode_cache::avatar_guarded(bytes, generation);
+    }
     let ui_ctx = ui_ctx.clone();
     run_ui!(weak, |w| {
         use crate::bin_ui::converters::ChatRowExt;
         use slint::Model;
         let active = ui_ctx.active_conversation();
-        let rows = rows.into_iter().map(|row| {
-            let mut row = row.to_slint();
-            row.is_selected = row_is_active(&active, row.conversation_type, row.conversation_id.as_str());
-            row
-        }).collect::<Vec<_>>();
+        let rows = rows
+            .into_iter()
+            .map(|row| {
+                let mut row = row.to_slint();
+                row.is_selected =
+                    row_is_active(&active, row.conversation_type, row.conversation_id.as_str());
+                row
+            })
+            .collect::<Vec<_>>();
         let pane = w.global::<crate::SidebarPane>();
         let model = pane.get_archived_rows();
-        if let Some(vec) = model.as_any().downcast_ref::<slint::VecModel<crate::ChatRowData>>() {
+        if let Some(vec) = model
+            .as_any()
+            .downcast_ref::<slint::VecModel<crate::ChatRowData>>()
+        {
             reconcile_chat_rows(vec, rows, false);
         } else {
             pane.set_archived_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
@@ -961,7 +1126,7 @@ pub(crate) fn close_open_conversation(w: &MainWindow, ui_ctx: &Arc<ChatterClient
     w.invoke_refresh_screen_protection();
     w.global::<crate::ChatPane>()
         .set_messages(slint::ModelRc::new(
-            slint::VecModel::<crate::MessageItemData>::default(),
+            crate::bin_ui::message_model::MessageModel::default(),
         ));
     // No name = nothing open: the pane shows "Select a conversation".
     w.global::<crate::ChatPane>().set_channel_name("".into());

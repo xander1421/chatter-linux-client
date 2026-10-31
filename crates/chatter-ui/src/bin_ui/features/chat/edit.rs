@@ -509,7 +509,9 @@ pub fn apply_message_edit_in_conversation(
         .map(|(kind, id)| ui_ctx.mention_members(kind, &id)).unwrap_or_default();
     let broadcast = matches!(kind, Some(chatter_core::domain::message::ConversationType::Channel | chatter_core::domain::message::ConversationType::AnonGroup));
     crate::bin_ui::converters::apply_edit(&mut preview_row, new_text, &members, broadcast);
-    super::edit_messages(w, |model| {
+    // Text edits do not change sender/time/day or system/call/deleted flags.
+    {
+        let model = w.global::<crate::ChatPane>().get_messages();
         for i in 0..model.row_count() {
             let Some(mut row) = model.row_data(i) else {
                 continue;
@@ -524,7 +526,7 @@ pub fn apply_message_edit_in_conversation(
                 break;
             }
         }
-    });
+    }
     let preview =
         crate::bin_ui::features::auth::inbox::utils::generate_preview_from_ui_message(&preview_row);
     let mut pins: Vec<_> = w

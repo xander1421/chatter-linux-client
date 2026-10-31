@@ -159,6 +159,9 @@ export component AppConversationLayout inherits Rectangle {
     callback identity-change-accept-clicked();
     callback invite-member();
     callback list-geometry(float, float, bool);
+    in property <bool> history-has-newer;
+    in property <int> history-head-offset;
+    callback request-latest();
     callback load-more();
     callback mention-triggered(string);
     callback message-clicked(string);
@@ -405,6 +408,9 @@ export component AppConversationLayout inherits Rectangle {
         root.view-attachment(id);
     }
     audio-seek(id, pos) => { root.audio-seek(id, pos); }
+    history-has-newer: root.history-has-newer;
+    history-head-offset: root.history-head-offset;
+    request-latest => { root.request-latest(); }
     load-more => { root.load-more(); }
     visible-media-rows(first, last) => { root.visible-media-rows(first, last); }
     send(text) => { return root.send(text); }

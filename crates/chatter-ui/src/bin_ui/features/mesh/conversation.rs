@@ -66,7 +66,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
     );
     apply_header(window, ui_ctx, &row);
     window.global::<crate::ChatPane>().set_messages(ModelRc::new(
-        VecModel::from(Vec::<MessageItemData>::new()),
+        crate::bin_ui::message_model::MessageModel::from(Vec::<MessageItemData>::new()),
     ));
     super::refresh_rows(window, ui_ctx);
 
@@ -127,7 +127,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
                 .map(|m| m.to_slint_with_user(&local_user))
                 .collect();
             w.global::<crate::ChatPane>()
-                .set_messages(ModelRc::new(VecModel::from(items)));
+                .set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::from(items)));
             w.global::<crate::ChatPane>().set_loading_messages(false);
             w.global::<crate::ChatPane>().set_is_at_bottom(true);
         });
@@ -301,7 +301,7 @@ pub(super) fn append_incoming(
     }
     window
         .global::<crate::ChatPane>()
-        .set_messages(ModelRc::new(VecModel::from(items)));
+        .set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::from(items)));
     window.global::<crate::ChatPane>().set_is_at_bottom(true);
     // Insert synchronously to preserve stream order and delivery updates;
     // hydrate only media fields after shared preparation completes.
@@ -318,7 +318,7 @@ pub(super) fn append_incoming(
                 }
                 row
             }).collect();
-            window.global::<crate::ChatPane>().set_messages(ModelRc::new(VecModel::from(items)));
+            window.global::<crate::ChatPane>().set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::from(items)));
         });
     });
 }
@@ -344,6 +344,6 @@ pub(super) fn apply_delivery(window: &MainWindow, message_id: &str, label: &str)
     if changed {
         window
             .global::<crate::ChatPane>()
-            .set_messages(ModelRc::new(VecModel::from(items)));
+            .set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::from(items)));
     }
 }

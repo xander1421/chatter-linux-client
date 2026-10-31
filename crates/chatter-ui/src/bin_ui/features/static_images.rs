@@ -17,6 +17,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     let mut revision = client.session_revision();
     let mut pending: HashMap<String, tokio_util::sync::CancellationToken> = HashMap::new();
     let mut retry: HashMap<String, std::time::Instant> = HashMap::new();
+    let mut settled: Option<(slint::ModelRc<crate::MessageItemData>, usize, usize, u64)> = None;
     let timer = Timer::default();
     timer.start(TimerMode::Repeated, Duration::from_millis(80), move || {
         let Some(window) = weak.upgrade() else { return };
@@ -27,6 +28,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             }
             pending.clear();
             retry.clear();
+            settled = None;
             loader = Arc::new(StaticPreviewLoader::default());
             revision = client.session_revision();
         }
@@ -44,13 +46,21 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         }
         let first = pane.get_message_first_visible_row().max(0) as usize;
         let last = pane.get_message_last_visible_row().max(0) as usize;
+        let model_revision = messages
+            .as_any()
+            .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+            .map(|model| model.revision.get());
+        let current = model_revision.map(|revision| (messages.clone(), first, last, revision));
+        if current.is_some() && current == settled {
+            return;
+        }
         let mut visible = HashSet::new();
         let mut candidates = Vec::new();
-        // Slint's visible indices are estimates within one row. Decode the
-        // reported rows first, then their one-row margin.
+        // Variable-height rows make the reported indices approximate. Use the
+        // same cushion as GIF/video admission and eviction.
         let rows = (first..=last.min(messages.row_count().saturating_sub(1)))
-            .chain(first.checked_sub(1))
-            .chain((last + 1 < messages.row_count()).then_some(last + 1));
+            .chain((first.saturating_sub(8)..first))
+            .chain(((last + 1)..=(last + 8).min(messages.row_count().saturating_sub(1))));
         for row in rows {
             let Some(message) = messages.row_data(row) else {
                 continue;
@@ -68,6 +78,9 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                 visible.insert(id.clone());
                 candidates.push(id);
             }
+        }
+        if candidates.is_empty() && pending.is_empty() {
+            settled = current;
         }
         pending.retain(|id, token| {
             if !visible.contains(id) {
@@ -128,15 +141,17 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                         .global::<ChatPane>()
                         .get_message_last_visible_row()
                         .max(0) as usize;
-                    for row in first.saturating_sub(1)
-                        ..=(last + 1).min(messages.row_count().saturating_sub(1))
+                    for row in first.saturating_sub(8)
+                        ..=(last + 8).min(messages.row_count().saturating_sub(1))
                     {
-                        let Some(mut message) = messages.row_data(row) else {
+                        let Some(message) = messages.row_data(row) else {
                             continue;
                         };
-                        let mut changed = false;
-                        let mut attachments: Vec<_> = message.attachments.iter().collect();
-                        for attachment in &mut attachments {
+                        let attachments = message.attachments;
+                        for index in 0..attachments.row_count() {
+                            let Some(mut attachment) = attachments.row_data(index) else {
+                                continue;
+                            };
                             if attachment.id.as_str() != id.as_str() {
                                 continue;
                             }
@@ -146,12 +161,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                                 attachment.width = result.width as i32;
                                 attachment.height = result.height as i32;
                             }
-                            changed = true;
-                        }
-                        if changed {
-                            message.attachments =
-                                slint::ModelRc::new(slint::VecModel::from(attachments));
-                            messages.set_row_data(row, message);
+                            attachments.set_row_data(index, attachment);
                         }
                     }
                 });

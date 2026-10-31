@@ -231,13 +231,14 @@ impl MessageService {
         } else {
             None
         };
+        let sessions = self
+            .signal_service
+            .session_device_registrations(member)
+            .await
+            .unwrap_or_default();
         let mut devices: Vec<u32> = match own {
             Some(ids) => ids.into_iter().collect(),
-            None => self
-                .signal_service
-                .session_devices(member)
-                .await
-                .unwrap_or_default(),
+            None => sessions.iter().map(|(device, _)| *device).collect(),
         };
         // A peer's added device we could not open a session with yet.
         for (user, device) in self.unreached_peer_devices.lock().iter() {
@@ -248,7 +249,15 @@ impl MessageService {
         devices
             .into_iter()
             .filter(|&d| member != our_user_id || d != our_device_id)
-            .map(|d| (d, self.signal_service.session_registration_id(member, d)))
+            .map(|d| {
+                (
+                    d,
+                    sessions
+                        .iter()
+                        .find(|(device, _)| *device == d)
+                        .and_then(|(_, registration)| *registration),
+                )
+            })
             .collect()
     }
 
@@ -263,6 +272,20 @@ impl MessageService {
         our_user_id: &str,
         our_device_id: u32,
     ) -> Result<Vec<UserId>, MessageError> {
+        Ok(self
+            .members_lacking_sender_key_devices(channel_id, our_user_id, our_device_id)
+            .await?
+            .into_iter()
+            .map(|(user, _)| user)
+            .collect())
+    }
+
+    async fn members_lacking_sender_key_devices(
+        &self,
+        channel_id: &ChannelId,
+        our_user_id: &str,
+        our_device_id: u32,
+    ) -> Result<Vec<(UserId, Vec<(u32, Option<u32>)>)>, MessageError> {
         let holders = self
             .signal_service
             .sender_key_holders(channel_id)
@@ -276,7 +299,7 @@ impl MessageService {
                 .sender_key_devices(&user, our_user_id, our_device_id)
                 .await;
             if lacks_sender_key(&holders, &user, &devices, user == our_user_id) {
-                lacking.push(user_id);
+                lacking.push((user_id, devices));
             }
         }
         Ok(lacking)
@@ -341,8 +364,8 @@ impl MessageService {
     /// the whole send would let one unreachable member mute the channel. That
     /// member reads this message only if its SKDM lands before the next one.
     ///
-    /// an unreachable member costs a prekey fetch per send; add a
-    /// per-member backoff if that shows up against the fetch limiter.
+    /// Failed automatic deliveries use bounded cooldown; a verified roster or
+    /// registration change, key rotation, or successful delivery resets it.
     pub(crate) async fn distribute_sender_key_to_new_members(
         &self,
         channel_id: &ChannelId,
@@ -374,7 +397,7 @@ impl MessageService {
             .map_err(MessageError::Storage)?
             .ok_or(MessageError::NotLoggedIn)?;
         let lacking = self
-            .members_lacking_sender_key(channel_id, &our_user_id, our_device_id)
+            .members_lacking_sender_key_devices(channel_id, &our_user_id, our_device_id)
             .await?;
         if lacking.is_empty() {
             return Ok(());
@@ -382,13 +405,96 @@ impl MessageService {
 
         let skdm = self.create_sender_key_for_channel(channel_id).await?;
         crate::services::gateway::submission::mark_submission_started()?;
-        for member_id in &lacking {
-            if let Err(e) = self.send_skdm_to_member(channel_id, member_id, &skdm).await {
+        let verified = self.group_gate().for_distribution(channel_id)?;
+        let generation = libsignal_protocol::SenderKeyDistributionMessage::try_from(
+            skdm.distribution_message.as_slice(),
+        )
+        .and_then(|message| message.chain_id())
+        .map_err(|e| MessageError::EncryptionFailed(e.to_string()))?;
+        {
+            let now = std::time::Instant::now();
+            self.signal_service
+                .skdm_retry
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|_, (_, next, _)| *next + std::time::Duration::from_secs(900) > now);
+        }
+        for (member_id, mut devices) in lacking {
+            devices.sort_unstable();
+            let fingerprint = format!(
+                "{our_user_id}:{our_device_id}:{generation}:{}:{:?}:{devices:?}",
+                verified.revision(),
+                verified.state_hash()
+            );
+            let key = (*channel_id, member_id.to_string());
+            let now = std::time::Instant::now();
+            let attempts = {
+                let gate = self
+                    .signal_service
+                    .skdm_retry
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if !skdm_retry_due(gate.get(&key), &fingerprint, now) {
+                    continue;
+                }
+                gate.get(&key)
+                    .filter(|(old, _, _)| old == &fingerprint)
+                    .map_or(0, |(_, _, attempts)| *attempts)
+            };
+            let result = self
+                .send_skdm_to_member(channel_id, &member_id, &skdm)
+                .await;
+            // A partial deposit is success for availability, but the devices
+            // still lacking the key must also observe cooldown.
+            let current_devices = self
+                .sender_key_devices(&member_id.to_string(), &our_user_id, our_device_id)
+                .await;
+            let holders = self
+                .signal_service
+                .sender_key_holders(channel_id)
+                .map_err(crypto)?;
+            let incomplete = lacks_sender_key(
+                &holders,
+                &member_id.to_string(),
+                &current_devices,
+                member_id.to_string() == our_user_id,
+            );
+            if result.is_err() || incomplete {
+                let mut gate = self
+                    .signal_service
+                    .skdm_retry
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if gate.len() >= 4096 && !gate.contains_key(&key) {
+                    if let Some(oldest) = gate
+                        .iter()
+                        .min_by_key(|(_, (_, next, _))| *next)
+                        .map(|(key, _)| key.clone())
+                    {
+                        gate.remove(&oldest);
+                    }
+                }
+                let delay = skdm_retry_delay(attempts, rand::random::<u8>());
+                gate.insert(
+                    key,
+                    (
+                        fingerprint,
+                        std::time::Instant::now() + delay,
+                        attempts.saturating_add(1),
+                    ),
+                );
+
                 tracing::warn!(
-                    %channel_id, %member_id, error = %e,
+                    %channel_id, %member_id, error = ?result.err(),
                     "Could not hand our sender key to a member's new devices before sending; \
                      they cannot read this message unless it lands first"
                 );
+            } else {
+                self.signal_service
+                    .skdm_retry
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&key);
             }
         }
         Ok(())
@@ -491,6 +597,11 @@ impl MessageService {
             ));
         }
         self.record_sender_key_holders(channel_id, &member_id_str, &outcome);
+        self.signal_service
+            .skdm_retry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&(*channel_id, member_id_str.clone()));
 
         tracing::info!(
             channel_id = %channel_id,
@@ -554,5 +665,51 @@ impl MessageService {
             .map_err(|e| {
                 MessageError::EncryptionFailed(format!("Failed to create sender key: {}", e))
             })
+    }
+}
+
+fn skdm_retry_due(
+    entry: Option<&(String, std::time::Instant, u32)>,
+    fingerprint: &str,
+    now: std::time::Instant,
+) -> bool {
+    !entry.is_some_and(|(old, next, _)| old == fingerprint && now < *next)
+}
+
+/// Exponential 5s..15min delay with up to 25% jitter, capped overall.
+fn skdm_retry_delay(attempts: u32, jitter: u8) -> std::time::Duration {
+    let base = 5u64.saturating_mul(1u64 << attempts.min(10));
+    std::time::Duration::from_millis(
+        (base * 1000 + base * u64::from(jitter) * 250 / 255).min(900_000),
+    )
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::{skdm_retry_delay, skdm_retry_due};
+    #[test]
+    fn failed_distribution_waits_but_state_changes_and_success_release_it() {
+        let now = std::time::Instant::now();
+        let failed = (
+            "generation:membership:devices:registrations".to_owned(),
+            now + std::time::Duration::from_secs(5),
+            1,
+        );
+        assert!(!skdm_retry_due(Some(&failed), &failed.0, now));
+        assert!(skdm_retry_due(Some(&failed), &failed.0, failed.1));
+        assert!(skdm_retry_due(
+            Some(&failed),
+            "changed-generation-or-roster",
+            now
+        ));
+        assert!(skdm_retry_due(None, &failed.0, now));
+    }
+
+    #[test]
+    fn failed_distribution_cooldown_is_jittered_and_bounded() {
+        assert_eq!(skdm_retry_delay(0, 0).as_secs(), 5);
+        assert!(skdm_retry_delay(0, 255) > skdm_retry_delay(0, 0));
+        assert_eq!(skdm_retry_delay(u32::MAX, 255).as_secs(), 900);
+        assert!(skdm_retry_delay(3, 0) > skdm_retry_delay(2, 255));
     }
 }

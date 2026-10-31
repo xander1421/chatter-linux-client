@@ -9,6 +9,7 @@ async fn resync_clock_conflict_keeps_local_history_and_allows_later_rows() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .unwrap();
+    bind_test_owner(&client);
     let inbound = ChannelInbound::new(
         client.messages().clone(),
         client.attachments().clone(),

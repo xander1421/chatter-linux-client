@@ -143,6 +143,7 @@ fn upsert_message_in_ui(w: &MainWindow, pending_id: &str, item: crate::MessageIt
     let mut item = Some(item);
     let mut drop_pending = false;
     super::helpers::edit_messages(w, |model| {
+        let mut changed = Vec::new();
         let row_of = |id: &str| {
             (0..model.row_count()).rev().find(|&i| {
                 model
@@ -160,10 +161,14 @@ fn upsert_message_in_ui(w: &MainWindow, pending_id: &str, item: crate::MessageIt
                 drop_pending = true;
                 item = None;
             }
-            (Some(i), false) => model.set_row_data(i, item.take().expect("set once")),
+            (Some(i), false) => {
+                model.set_row_data(i, item.take().expect("set once"));
+                changed.push(i);
+            }
             (None, true) => item = None,
             (None, false) => {}
         }
+        changed
     });
     if drop_pending {
         // Through the shared removal so a selection on the row is released.

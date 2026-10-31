@@ -338,8 +338,15 @@ pub(super) async fn handle_message_received(
                     );
                     if let Some(vec_model) = current_model
                         .as_any()
-                        .downcast_ref::<VecModel<MessageItemData>>()
+                        .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
                     {
+                        if vec_model.has_newer.get() && insert_pos == vec_model.row_count() {
+                            vec_model.note_deferred();
+                            if !new_msg.is_own {
+                                let pane = w.global::<crate::ChatPane>();
+                                pane.set_unread_count(pane.get_unread_count().saturating_add(1));
+                            }
+                        } else {
                         vec_model.insert(insert_pos, new_msg);
                         if conv_type == chatter_core::domain::message::ConversationType::Channel {
                             // Continuation depends only on the previous row, so a
@@ -354,11 +361,12 @@ pub(super) async fn handle_message_received(
                                 insert_pos + 1,
                             );
                         }
+                        }
                         tracing::info!(insert_pos, "[UI_RECV] inserted via VecModel.insert");
                     } else {
                         let mut messages: Vec<MessageItemData> = current_model.iter().collect();
                         messages.insert(insert_pos, new_msg);
-                        let model = VecModel::from(messages);
+                        let model = crate::bin_ui::message_model::MessageModel::from(messages);
                         if conv_type == chatter_core::domain::message::ConversationType::Channel {
                             crate::bin_ui::features::chat::recompute_channel_continuations(&model);
                         }
@@ -369,7 +377,7 @@ pub(super) async fn handle_message_received(
                 }
             }
 
-            if was_at_bottom {
+            if was_at_bottom && !w.global::<crate::ChatPane>().get_history_has_newer() {
                 w.global::<crate::ChatPane>().set_is_at_bottom(true);
             }
         }
@@ -465,12 +473,7 @@ pub(crate) fn set_own_status_at(w: &MainWindow, timestamps: &[u64], status: &str
     let pane = w.global::<crate::ChatPane>();
     // The open thread panel keeps its own model; its replies have a status too.
     for messages in [pane.get_messages(), pane.get_thread_replies()] {
-        let Some(model) = messages
-            .as_any()
-            .downcast_ref::<VecModel<MessageItemData>>()
-        else {
-            continue;
-        };
+        let model = &messages;
         for i in 0..model.row_count() {
             if remaining == 0 {
                 return;
@@ -533,12 +536,7 @@ pub(super) fn handle_delivery_status_update(
                                 new_status,
                             )
                             .into();
-                        if let Some(model) = messages
-                            .as_any()
-                            .downcast_ref::<VecModel<MessageItemData>>()
-                        {
-                            model.set_row_data(i, updated);
-                        }
+                        messages.set_row_data(i, updated);
                         remaining -= 1;
                     }
                 }
@@ -823,12 +821,7 @@ pub(super) fn handle_persisted_delivery_status(
         let pane = w.global::<crate::ChatPane>();
         // The open thread panel keeps its own model; ticks there must move too.
         for messages in [pane.get_messages(), pane.get_thread_replies()] {
-            let Some(model) = messages
-                .as_any()
-                .downcast_ref::<VecModel<MessageItemData>>()
-            else {
-                continue;
-            };
+            let model = &messages;
             for i in 0..model.row_count() {
                 let Some(mut message) = model.row_data(i) else {
                     continue;

@@ -319,6 +319,9 @@ export component MainChatShell inherits Rectangle {
                     header-last-seen: ChatPane.header-last-seen;
                     highlighted-message-id: ChatPane.highlighted-message-id;
                     history-load-failed <=> ChatPane.history-load-failed;
+                    history-has-newer: ChatPane.history-has-newer;
+                    history-head-offset: ChatPane.history-head-offset;
+                    request-latest => { ChatPane.request-latest(); }
                     identity-change-attributed: ChatPane.identity-change-attributed;
                     identity-change-detail: ChatPane.identity-change-detail;
                     identity-change-title: ChatPane.identity-change-title;

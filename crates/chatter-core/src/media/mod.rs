@@ -8,6 +8,7 @@ pub mod audio_player;
 pub mod album;
 pub mod audio_recorder;
 pub mod decoder;
+pub mod display_frame;
 #[cfg(all(
     feature = "desktop-native",
     not(any(target_os = "android", target_os = "ios"))

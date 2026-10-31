@@ -737,12 +737,10 @@ fn patch_edited_row(
                 }
         })
     });
-    let (Some(i), Some(model)) = (
-        hit,
-        rows.as_any().downcast_ref::<VecModel<MessageItemData>>(),
-    ) else {
+    let Some(i) = hit else {
         return false;
     };
+    let model = rows;
     let Some(mut row) = model.row_data(i) else {
         return false;
     };
@@ -754,12 +752,7 @@ fn patch_edited_row(
 /// Increment the "N replies" indicator on a thread root bubble in the main list.
 fn adjust_root_reply_count(w: &MainWindow, root_id: &str, delta: i32) {
     let messages = w.global::<crate::ChatPane>().get_messages();
-    let Some(model) = messages
-        .as_any()
-        .downcast_ref::<VecModel<MessageItemData>>()
-    else {
-        return;
-    };
+    let model = &messages;
     for i in 0..messages.row_count() {
         let Some(msg) = messages.row_data(i) else {
             continue;
@@ -780,12 +773,7 @@ fn adjust_root_reply_count(w: &MainWindow, root_id: &str, delta: i32) {
 /// thread). For a delete whose thread is no longer known.
 pub(crate) fn refresh_root_reply_counts(w: &MainWindow, ui_ctx: &ChatterClient) {
     let messages = w.global::<crate::ChatPane>().get_messages();
-    let Some(model) = messages
-        .as_any()
-        .downcast_ref::<VecModel<MessageItemData>>()
-    else {
-        return;
-    };
+    let model = &messages;
     for i in 0..model.row_count() {
         let Some(mut row) = model.row_data(i) else {
             continue;

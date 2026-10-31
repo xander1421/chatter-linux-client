@@ -223,6 +223,15 @@ impl MessageService {
         Ok(self.resolve_stored_quotes(page))
     }
 
+    /// Reload the discarded newer end of a retained history window.
+    pub fn get_newer_messages_local_asc(
+        &self, channel_id: &ChannelId, conversation_type: &ConversationType,
+        after: &crate::domain::ids::MessageId, page_size: u32,
+    ) -> Result<Vec<Message>, MessageError> {
+        let page = self.message_repo.list_newer_for_channel_asc(channel_id,conversation_type,after,page_size)?;
+        Ok(self.resolve_stored_quotes(page))
+    }
+
     /// The conversation's rows from `target` to the newest, oldest first —
     /// the list a jump to a message older than what is loaded installs (a
     /// search hit, a quote, a pin). Cursor pages stay at or below 200 rows;
@@ -414,5 +423,35 @@ impl MessageService {
             .list_pinned_all(channel_id, conversation_type)
             .map(|messages| self.resolve_stored_quotes(messages))
             .map_err(MessageError::from)
+    }
+}
+
+/// Keep three pages around the viewport. Protect unread/search/selection rows;
+/// if their span exceeds the budget, correctness takes precedence until that
+/// interaction ends. The UI owns notifications, core owns retention policy.
+pub fn retained_history_range(count: usize, first: usize, last: usize, protected: &[usize]) -> std::ops::Range<usize> {
+    let budget = crate::config::MESSAGE_PAGE_SIZE as usize * 3;
+    if count <= budget { return 0..count; }
+    let mut lo = first.saturating_sub(8).min(count);
+    let mut hi = last.saturating_add(9).min(count).max(lo);
+    for &index in protected.iter().filter(|&&index| index < count) { lo=lo.min(index); hi=hi.max(index+1); }
+    let keep = budget.max(hi-lo).min(count);
+    let start = lo.saturating_sub((keep.saturating_sub(hi-lo))/2).min(count-keep);
+    start..start+keep
+}
+
+#[cfg(test)]
+mod retained_window_tests {
+    use super::retained_history_range;
+    #[test]
+    fn viewport_unread_and_selection_anchors_survive_window_pressure() {
+        assert_eq!(retained_history_range(90,0,20,&[]),0..90);
+        let window = retained_history_range(1000,400,420,&[]);
+        assert_eq!(window.len(),150);
+        assert!(window.start <= 392 && window.end >= 429);
+        let window = retained_history_range(1000,900,920,&[10,950]);
+        assert!(window.contains(&10) && window.contains(&950));
+        assert!(window.start <= 892 && window.end >= 929);
+        assert_eq!(retained_history_range(1000,990,999,&[]).end,1000);
     }
 }

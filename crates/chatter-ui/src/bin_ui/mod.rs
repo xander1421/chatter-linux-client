@@ -9,6 +9,7 @@ pub mod decode_cache;
 pub mod features;
 pub mod gif_state;
 pub mod haptics;
+pub mod message_model;
 pub mod preview_state;
 pub mod slint_conversions;
 pub mod ui_helpers;

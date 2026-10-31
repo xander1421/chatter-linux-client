@@ -102,6 +102,7 @@ mod pins_read;
 mod reactions;
 mod queries_edits;
 mod threads_listing;
+mod history_window;
 mod read_delivery;
 mod reaction_projection_write;
 
