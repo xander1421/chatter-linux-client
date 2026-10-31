@@ -74,6 +74,7 @@ pub(crate) fn show_pending_bubble(
         .map(|r| (r.sender_name.clone(), r.preview.clone()))
         .unwrap_or_default();
     let reply_thumbnail = send.reply.as_ref().and_then(|r| r.thumbnail.clone());
+    let status = if send.is_upload_queued() { "upload-queued" } else { "sending" };
     let row = pending_message_id(send);
     let text = send.text.clone();
     let conversation = send.conversation;
@@ -127,7 +128,7 @@ pub(crate) fn show_pending_bubble(
             thumb_w,
             thumb_h,
             &Default::default(),
-            "sending",
+            status,
         );
         upsert_message_in_ui(&w, &row, item);
     });
@@ -812,6 +813,13 @@ pub async fn deliver(
     send: ComposerSend,
     send_started: std::time::Instant,
 ) -> bool {
+    if send.is_upload_queued() {
+        let auth = ui_ctx.auth_snapshot();
+        show_pending_bubble(&weak, &ui_ctx, &send,
+            &auth.current_user_id.map(|id| id.to_string()).unwrap_or_default(),
+            &auth.display_name.unwrap_or_else(|| "Me".into()));
+    }
+    if !ui_ctx.await_composer_turn(&send).await { return false; }
     let mut parts = send.ordered_parts().into_iter();
     let mut first = true;
     while let Some(part) = parts.next() {
@@ -888,6 +896,7 @@ async fn deliver_inner(
         text,
         reply,
         attachments: pending_attachments,
+        ..
     } = send;
     if !ui_ctx.has_auth_identity() {
         return PartOutcome::Unsent;

@@ -884,3 +884,163 @@ async fn downloaded_preview_cannot_adopt_session_when_first_polled_late() {
         matches!(error, crate::services::attachment::AttachmentError::InvalidAttachment(ref detail) if detail == "image preview owner changed")
     );
 }
+
+#[tokio::test]
+async fn overlapping_batches_wait_in_accept_order_even_if_polled_backwards() {
+    let (client, _dir) = client();
+    open(&client, ChannelId::new());
+    client.chat_state().add_pending_attachment(staged("first.jpg"));
+    let first = client.begin_composer_send("first".into(), None).unwrap();
+    client.chat_state().add_pending_attachment(staged("second.jpg"));
+    let second = client.begin_composer_send("second".into(), None).unwrap();
+    let third = client.begin_composer_send("third".into(), None).unwrap();
+    assert_eq!(first.attachments[0].filename, "first.jpg");
+    assert_eq!(second.attachments[0].filename, "second.jpg");
+    assert_ne!(first.attempt_id, second.attempt_id);
+    assert!(!first.is_upload_queued());
+    assert!(second.is_upload_queued());
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(10), client.await_composer_turn(&third)).await.is_err());
+    assert!(client.await_composer_turn(&first).await);
+    drop(first);
+    assert!(client.await_composer_turn(&second).await);
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(10), client.await_composer_turn(&third)).await.is_err());
+    drop(second);
+    assert!(client.await_composer_turn(&third).await);
+}
+
+#[tokio::test]
+async fn cancelled_middle_batch_cannot_let_a_later_batch_pass_the_active_send() {
+    let (client, _dir) = client();
+    open(&client, ChannelId::new());
+    let first = client.begin_composer_send("first".into(), None).unwrap();
+    let middle = client.begin_composer_send("cancelled".into(), None).unwrap();
+    let last = client.begin_composer_send("last".into(), None).unwrap();
+    drop(middle);
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(10), client.await_composer_turn(&last)).await.is_err());
+    drop(first);
+    assert!(client.await_composer_turn(&last).await);
+}
+
+#[tokio::test]
+async fn queued_sends_are_bounded_without_consuming_the_next_draft() {
+    let (client, _dir) = client();
+    open(&client, ChannelId::new());
+    let sends: Vec<_> = (0..32).map(|i| client.begin_composer_send(i.to_string(), None).unwrap()).collect();
+    client.chat_state().add_pending_attachment(staged("kept.jpg"));
+    assert!(client.begin_composer_send("kept".into(), None).unwrap_err().contains("queue is full"));
+    assert_eq!(client.pending_attachments()[0].filename, "kept.jpg");
+    drop(sends);
+}
+
+#[tokio::test]
+async fn another_conversation_does_not_wait_and_a_retired_session_cannot_submit() {
+    let (client, _dir) = client();
+    open(&client, ChannelId::new());
+    let first = client.begin_composer_send("first".into(), None).unwrap();
+    let queued = client.begin_composer_send("queued".into(), None).unwrap();
+    open(&client, ChannelId::new());
+    let independent = client.begin_composer_send("independent".into(), None).unwrap();
+    assert!(client.await_composer_turn(&independent).await);
+    client.auth_state().invalidate_session();
+    assert!(!client.await_composer_turn(&queued).await);
+    drop(first);
+}
+
+#[tokio::test]
+async fn queued_batches_survive_restart_as_unsent_owner_local_drafts() {
+    let (client, dir) = client();
+    let owner = client.auth_state().get().current_user_id.unwrap();
+    let channel = ChannelId::new();
+    open(&client, channel);
+    client.chat_state().add_pending_attachment(staged("first.jpg"));
+    let first = client.begin_composer_send("first caption".into(), None).unwrap();
+    client.chat_state().add_pending_attachment(staged("second.jpg"));
+    let second = client.begin_composer_send("second caption".into(), None).unwrap();
+    drop((first, second, client));
+    let client = client_in(&dir);
+    client.auth_state().set_logged_in(owner, 1, "Test user".into());
+    open(&client, channel);
+    let first = client.take_parked_send(true).unwrap();
+    assert_eq!(first.text, "first caption");
+    assert_eq!(first.attachments[0].filename, "first.jpg");
+    assert!(first.queue_ticket.is_none());
+    // Simulate consuming the recovered tray before asking for the next draft.
+    client.chat_state().clear_pending_attachments();
+    let second = client.take_parked_send(true).unwrap();
+    assert_eq!(second.text, "second caption");
+    assert_eq!(second.attachments[0].filename, "second.jpg");
+    assert!(second.queue_ticket.is_none());
+    assert!(client.take_parked_send(true).is_none());
+}
+
+#[tokio::test]
+async fn a_live_upload_claim_accepts_the_next_batch_but_does_not_start_it() {
+    let (client, _dir) = client();
+    let conversation = ActiveConversation::Channel(ChannelId::new());
+    open(&client, conversation.channel_id().unwrap());
+    let first = client.begin_composer_send("first".into(), None).unwrap();
+    let key = client.retain_send_attempt(first.attempt_id, conversation, &first.text,
+        &first.attachments, None, None).unwrap();
+    assert!(client.ensure_send_available(conversation).is_err());
+    client.chat_state().add_pending_attachment(staged("next.jpg"));
+    let second = client.begin_composer_send("next".into(), None).unwrap();
+    assert_eq!(second.attachments[0].filename, "next.jpg");
+    assert!(second.is_upload_queued());
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(10), client.await_composer_turn(&second)).await.is_err());
+    crate::client::send_attempt::settle_failure(&client.services.database, &key,
+        first.attempt_id, false, None, crate::services::gateway::SendError::NotLoggedIn).unwrap();
+    drop(first);
+    assert!(client.await_composer_turn(&second).await);
+    client.ensure_send_available(conversation).unwrap();
+}
+
+#[tokio::test]
+async fn queued_intents_are_cleared_at_signout_and_cancelled_with_their_conversation() {
+    let (client, _dir) = client();
+    let owner = client.auth_state().get().current_user_id.unwrap();
+    let channel = ChannelId::new();
+    open(&client, channel);
+    let first = client.begin_composer_send("first".into(), None).unwrap();
+    let original = _dir.path().join("queued-original.jpg");
+    std::fs::write(&original, b"fixture original").unwrap();
+    let staging_input = _dir.path().join("picker-owned.jpg");
+    std::fs::copy(&original, &staging_input).unwrap();
+    let sheltered = client.stage_owned_file(staging_input);
+    assert_ne!(sheltered, original);
+    let mut attachment = staged("queued-original.jpg");
+    attachment.path = sheltered.clone();
+    client.chat_state().add_pending_attachment(attachment);
+    let queued = client.begin_composer_send("queued".into(), None).unwrap();
+    client.clear_composer_conversation(ActiveConversation::Channel(channel));
+    assert!(!sheltered.exists());
+    assert!(original.exists());
+    assert!(!client.await_composer_turn(&first).await);
+    assert!(!client.await_composer_turn(&queued).await);
+    let count = || {
+        let conn = client.services.database.read_connection().unwrap();
+        conn.query_row("SELECT count(*) FROM settings WHERE key GLOB ?1", rusqlite::params![format!("ui.composer_queue.{owner}:*")], |r| r.get::<_, i64>(0)).unwrap()
+    };
+    assert_eq!(count(), 0);
+    open(&client, ChannelId::new());
+    let other = client.begin_composer_send("other".into(), None).unwrap();
+    assert_eq!(count(), 1);
+    client.clear_composer_session();
+    assert_eq!(count(), 0);
+    assert!(!client.await_composer_turn(&other).await);
+}
+
+#[tokio::test]
+async fn queue_storage_failure_keeps_the_staged_attachment_and_does_not_claim_a_turn() {
+    let (client, _dir) = client();
+    open(&client, ChannelId::new());
+    client.chat_state().add_pending_attachment(staged("kept.jpg"));
+    client.services.database.connection().unwrap().execute_batch(
+        "CREATE TRIGGER reject_composer_queue BEFORE INSERT ON settings WHEN NEW.key GLOB 'ui.composer_queue.*' BEGIN SELECT RAISE(ABORT,'injected queue write failure'); END;"
+    ).unwrap();
+    assert!(client.begin_composer_send("kept caption".into(), None).is_err());
+    assert_eq!(client.pending_attachments()[0].filename, "kept.jpg");
+    client.services.database.connection().unwrap().execute_batch("DROP TRIGGER reject_composer_queue").unwrap();
+    let send = client.begin_composer_send("kept caption".into(), None).unwrap();
+    assert_eq!(send.attachments[0].filename, "kept.jpg");
+    assert!(!send.is_upload_queued());
+}

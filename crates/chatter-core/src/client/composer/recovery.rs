@@ -525,6 +525,7 @@ impl ChatterClient {
             .chat_state()
             .take_thread_attachment_trays_for(message_ids);
         self.release_staged_files(&thread_trays);
+        self.cancel_queued_conversation(conversation);
         let mut parked = self.parked_sends.lock();
         parked.retain(|send| {
             if send.conversation == conversation {
@@ -692,6 +693,7 @@ impl ChatterClient {
                 text: send.text,
                 reply: send.reply,
                 attachments,
+                queue_ticket: None,
             });
         }
         drop(parked);

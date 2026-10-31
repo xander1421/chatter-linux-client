@@ -192,13 +192,13 @@ export component MessageFooter inherits HorizontalLayout {
             // that queue's flush failed: a word, not a tick —
             // neither has reached the server, and "failed"
             // must never read as delivered.
-            if root.is-own && !root.mesh-delivery && (root.delivery-status == "sending" || root.delivery-status == "waiting-tor"): Text {
-                text: root.delivery-status == "waiting-tor" ? "waiting for Tor" : "sending";
+            if root.is-own && !root.mesh-delivery && (root.delivery-status == "sending" || root.delivery-status == "waiting-tor" || root.delivery-status == "upload-queued"): Text {
+                text: root.delivery-status == "upload-queued" ? "queued" : root.delivery-status == "waiting-tor" ? "waiting for Tor" : "sending";
                 color: root.overlay-media ? #ffffff : Colors.text-muted;
                 font-size: Typography.xs;
                 font-italic: true;
                 accessible-role: text;
-                accessible-label: root.delivery-status == "waiting-tor" ? "Waiting for Tor" : "Sending";
+                accessible-label: root.delivery-status == "upload-queued" ? "Queued behind an earlier send; upload has not started" : root.delivery-status == "waiting-tor" ? "Waiting for Tor" : "Sending";
             }
 
             if root.is-own && !root.mesh-delivery && root.delivery-status == "parked": Text {
@@ -276,7 +276,7 @@ export component MessageFooter inherits HorizontalLayout {
                 }
             }
 
-            if root.is-own && !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "waiting-tor" && root.delivery-status != "failed" && root.delivery-status != "unconfirmed" && root.delivery-status != "parked": ticks := Rectangle {
+            if root.is-own && !root.mesh-delivery && root.delivery-status != "upload-queued" && root.delivery-status != "sending" && root.delivery-status != "waiting-tor" && root.delivery-status != "failed" && root.delivery-status != "unconfirmed" && root.delivery-status != "parked": ticks := Rectangle {
                 // Only a receipt earns the second tick; an own row whose
                 // status is still empty (a Saved photo just sent) is "sent".
                 property <bool> double-tick: root.delivery-status == "delivered" || root.delivery-status == "read";

@@ -284,6 +284,7 @@ impl ClientBuilder {
             server_monitor_started: AtomicBool::new(false),
             server_contact_deferred: AtomicBool::new(false),
             composer_drafts: Mutex::new(std::collections::HashMap::new()),
+            composer_queue: Mutex::new(Vec::new()),
             composer_draft_revision: Mutex::new(0),
             composer_draft_owner: Mutex::new(None),
             parked_sends: Mutex::new(Vec::new()),
@@ -593,6 +594,7 @@ pub struct ChatterClient {
     /// Mirrored to the signed-in account's settings row on every change
     /// (`persist_composer_drafts`), so it survives a restart.
     composer_drafts: Mutex<std::collections::HashMap<String, ComposerDraft>>,
+    composer_queue: Mutex<Vec<std::sync::Weak<composer::queue::QueueTicket>>>,
     composer_draft_revision: Mutex<u64>,
     /// The account whose persisted drafts the map holds, deleted at sign-out.
     composer_draft_owner: Mutex<Option<crate::domain::UserId>>,
