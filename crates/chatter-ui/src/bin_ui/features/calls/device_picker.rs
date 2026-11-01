@@ -14,72 +14,20 @@ use crate::ScreenSourceData;
 use chatter_core::calls::{ScreenCapture, ScreenSourceType};
 use chatter_core::client::ChatterClient;
 
-// Display the actual snapshot identity, never infer a device from ordering/default flags.
-fn selected_audio_name<'a>(devices: impl IntoIterator<Item = (&'a str, &'a str)>, selected: &str) -> String {
-    devices.into_iter().find(|(id, _)| *id == selected)
-        .map(|(_, name)| name.to_owned()).unwrap_or_else(|| "Device unavailable".into())
-}
-
 /// Wire device picker callbacks for audio device and screen source selection.
 pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
 
-    let refresh_generation = std::rc::Rc::new(std::cell::Cell::new(0u64));
-    window.global::<crate::CallView>().on_refresh_audio_controls({
-        let weak = weak.clone();
-        let ui_ctx = ui_ctx.clone();
-        move || {
-            let Some(w) = weak.upgrade() else { return };
-            let view = w.global::<crate::CallView>();
-            let generation = refresh_generation.get().wrapping_add(1);
-            refresh_generation.set(generation);
-            #[cfg(target_os = "android")]
-            {
-                // Models and selected IDs are published from AudioManager acknowledgements.
-                use slint::Model;
-                let selected = view.get_selected_audio_output_id();
-                let devices: Vec<_> = view.get_audio_output_devices().iter().collect();
-                let name = selected_audio_name(devices.iter().map(|d| (d.id.as_str(), d.name.as_str())), selected.as_str());
-                view.set_audio_input_name(name.clone().into());
-                view.set_audio_output_name(name.into());
-            }
-            #[cfg(not(target_os = "android"))]
-            {
-                let weak = weak.clone();
-                let ui_ctx = ui_ctx.clone();
-                let refresh_generation = refresh_generation.clone();
-                let call_id = view.get_active_call_data().call_id;
-                let session = ui_ctx.auth_snapshot().session_revision;
-                slint::spawn_local(async move {
-                    for output in [false, true] {
-                        let result = ui_ctx.call_audio_device_snapshot(output).await;
-                        let Some(w) = weak.upgrade() else { return };
-                        let view = w.global::<crate::CallView>();
-                        if refresh_generation.get() != generation
-                            || !view.get_audio_controls_visible()
-                            || view.get_active_call_data().call_id != call_id
-                            || ui_ctx.auth_snapshot().session_revision != session { return; }
-                        let name = match result {
-                            Ok((devices, selected)) => selected_audio_name(devices.iter().map(|d| (d.id.as_str(), d.name.as_str())), &selected),
-                            Err(_) => "Device unavailable".into(),
-                        };
-                        if output { view.set_audio_output_name(name.into()); }
-                        else { view.set_audio_input_name(name.into()); }
-                    }
-                }).unwrap();
-            }
-        }
-    });
-
+    // Desktop refreshes an open device picker on hotplug (actual selection after
+    // fallback). Android uses the native AudioManager route picker, which keeps
+    // itself current, so no Slint-side polling is needed there.
+    #[cfg(not(target_os = "android"))]
     {
-        // Refresh an open picker on hotplug, including actual selection after fallback.
         thread_local! { static REFRESH: slint::Timer = slint::Timer::default(); }
         let weak = weak.clone();
         REFRESH.with(|timer| timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(2), move || {
             let Some(w) = weak.upgrade() else { return };
             let view = w.global::<crate::CallView>();
-            if view.get_audio_controls_visible() { view.invoke_refresh_audio_controls(); }
-            #[cfg(not(target_os = "android"))]
             if view.get_device_picker_visible() {
                 match view.get_device_picker_type().as_str() {
                     "audio" => view.invoke_show_audio_device_picker(),
@@ -377,19 +325,4 @@ fn picker_error(window: &MainWindow, message: &str) {
     window.set_toast_message(message.into());
     window.set_toast_variant("error".into());
     window.set_toast_visible(true);
-}
-
-#[cfg(test)]
-mod audio_name_tests {
-    use super::selected_audio_name;
-
-    #[test]
-    fn selected_audio_name_tracks_acknowledged_identity_and_unavailable() {
-        let rows = [("system-default", "System default"), ("usb", "USB headset"), ("builtin", "Built-in speaker")];
-        assert_eq!(selected_audio_name(rows, "usb"), "USB headset");
-        assert_eq!(selected_audio_name(rows, "builtin"), "Built-in speaker");
-        assert_eq!(selected_audio_name(rows, "system-default"), "System default");
-        assert_eq!(selected_audio_name(rows, "removed"), "Device unavailable");
-        assert_eq!(selected_audio_name(rows, ""), "Device unavailable");
-    }
 }

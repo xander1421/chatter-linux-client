@@ -630,10 +630,6 @@ export component MainWindow inherits Window {
         }
 
         key-pressed(event) => {
-            if (CallView.audio-controls-visible && (event.text == Key.Back || event.text == Key.Escape)) {
-                CallView.audio-controls-visible = false;
-                return accept;
-            }
             if (shortcuts.handle-command(event)) { return accept; }
             if (event.text == Key.Back || (event.text == Key.Escape && ChatPane.link-confirm-url != "") || (event.text == Key.Escape
                 && root.active-modal == "none"

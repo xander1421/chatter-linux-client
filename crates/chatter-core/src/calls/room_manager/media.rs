@@ -606,8 +606,23 @@ impl RoomManager {
 
     /// Toggle microphone mute.
     pub fn set_microphone_muted(&self, muted: bool) {
-        let mut capture = self.audio_capture.write();
-        capture.set_muted(muted);
+        self.audio_capture.write().set_muted(muted);
+        // Starving the capture source does not reliably stop the published
+        // track — on some platforms the RTP sender keeps emitting — so also
+        // mute the publication itself, which disables the sender and signals
+        // the mute to the SFU and remote peers.
+        let sid = self.microphone_track_sid.read().clone();
+        if let Some(sid) = sid {
+            if let Some(room) = self.room.read().as_ref() {
+                if let Some(publication) = room.local_participant().get_track_publication(&sid) {
+                    if muted {
+                        publication.mute();
+                    } else {
+                        publication.unmute();
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) fn reconnect_microphone_device(&self) -> Option<Option<String>> {

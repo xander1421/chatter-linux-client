@@ -12,6 +12,14 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Doze-tolerant heartbeat that revives the messaging service (and its
+         in-process ntfy listener) after the OS suspends/kills it. Exact-and-
+         allow-while-idle also grants the brief background FGS-start window the
+         alarm receiver needs. USE_EXACT_ALARM is install-granted (API 33+);
+         SCHEDULE_EXACT_ALARM covers 31-32. Delivery of calls/messages while
+         backgrounded is the app's core function. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- Shield's Tor directory and hidden-service sockets need network access
          while locked; a CPU wake lock alone does not bypass Doze. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -116,6 +124,12 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- Doze-tolerant heartbeat alarm target: revives the messaging service
+             (and its in-process ntfy SSE listener) if the OS suspended or killed
+             it while backgrounded. Triggered only by our own explicit alarm
+             PendingIntent, so it needs no intent-filter and stays unexported. -->
+        <receiver android:name=".MessagingKeepAliveReceiver" android:exported="false" />
 
         <!-- Keeps the BLE mesh radio running while the app is backgrounded.
              Started and stopped by MeshBleBridge; nothing binds to it. The

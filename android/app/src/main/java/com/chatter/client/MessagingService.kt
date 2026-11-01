@@ -3,6 +3,7 @@ package com.chatter.client
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.AlarmManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
@@ -13,6 +14,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 
 /** Keeps the process owning core's inbox poller and ntfy listeners runnable.
@@ -84,7 +86,20 @@ class MessagingService : Service() {
         } else {
             // Core is already running, or a previous start owns startup.
         }
-        return START_NOT_STICKY
+        // Keep a Doze-tolerant heartbeat armed so a backgrounded or killed
+        // process (whose in-process ntfy SSE listener died with it) is revived.
+        if (!stopRequested && wasSignedIn(this)) scheduleKeepAlive(this)
+        // START_STICKY: let the OS recreate the service (with a null intent,
+        // handled above) after a low-memory kill, so push delivery resumes.
+        return START_STICKY
+    }
+
+    // Swiped from recents: the hosting process is about to die, taking the SSE
+    // listener with it. Re-arm via alarm so delivery comes back on its own
+    // instead of staying dead until the user reopens the app.
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        if (!stopRequested && wasSignedIn(this)) scheduleRestartSoon(this)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -125,9 +140,51 @@ class MessagingService : Service() {
         }
         fun stop(context: Context) {
             stopRequested = true
+            cancelKeepAlive(context)
             if (pendingStarts == 0) {
                 context.stopService(Intent(context, MessagingService::class.java))
             }
+        }
+
+        private const val KEEPALIVE_REQUEST = 0x4349
+        private const val KEEPALIVE_INTERVAL_MS = 15L * 60L * 1000L
+
+        private fun keepAlivePending(context: Context): PendingIntent =
+            PendingIntent.getBroadcast(
+                context,
+                KEEPALIVE_REQUEST,
+                Intent(context, MessagingKeepAliveReceiver::class.java),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+
+        /** (Re)arm one Doze-tolerant heartbeat. Each firing re-arms the next via
+         * MessagingKeepAliveReceiver, so the chain self-sustains while signed in. */
+        fun scheduleKeepAlive(context: Context) {
+            armAlarm(context, KEEPALIVE_INTERVAL_MS)
+        }
+
+        private fun scheduleRestartSoon(context: Context) {
+            armAlarm(context, 2_000L)
+        }
+
+        private fun armAlarm(context: Context, delayMs: Long) {
+            val am = context.getSystemService(AlarmManager::class.java) ?: return
+            val at = SystemClock.elapsedRealtime() + delayMs
+            val pending = keepAlivePending(context)
+            // Exact-and-allow-while-idle fires in Doze AND grants the brief
+            // background foreground-service-start allowlist the receiver needs to
+            // revive the service. Fall back to the inexact variant when exact
+            // alarms aren't permitted (API 31+ user revocation) rather than throw.
+            if (Build.VERSION.SDK_INT >= 31 && !am.canScheduleExactAlarms()) {
+                am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pending)
+            } else {
+                am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pending)
+            }
+        }
+
+        fun cancelKeepAlive(context: Context) {
+            context.getSystemService(AlarmManager::class.java)
+                ?.cancel(keepAlivePending(context))
         }
     }
 }
