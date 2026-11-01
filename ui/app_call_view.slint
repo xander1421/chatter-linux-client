@@ -126,10 +126,6 @@ export global CallView {
     callback call-end();
     callback call-peer-audio-mute-toggle(string);
     callback call-peer-video-pause-toggle(string);
-    in-out property <bool> audio-controls-visible: false;
-    in-out property <string> audio-input-name: "Loading microphone…";
-    in-out property <string> audio-output-name: "Loading output…";
-    callback refresh-audio-controls();
     callback show-audio-device-picker();
     callback show-audio-output-picker();
     callback show-screen-source-picker();
