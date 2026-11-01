@@ -8,46 +8,63 @@ import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Materials } from "../theme/materials.slint";
 
-// Small visual caret with a separate 44 x 48 pointer/keyboard target.
-component AudioSelector inherits Rectangle {
+// A device-route button with its own device-select caret overlaid on the top
+// edge. Tapping the body runs `clicked` (mute / speaker); tapping the caret
+// runs `select`, which opens that one category's device list.
+component DeviceButton inherits Rectangle {
+    in property <image> icon;
     in property <string> label;
+    in property <string> select-label;
+    in property <bool> active;
+    in property <bool> enabled: true;
     callback clicked();
+    callback select();
     width: 44px;
     height: 48px;
-    accessible-role: button;
-    accessible-label: root.label;
-    accessible-action-default => { root.clicked(); }
-    key := FocusScope {
-        key-pressed(event) => {
-            if event.text == Key.Space || event.text == Key.Return {
-                root.clicked();
-                return accept;
-            }
-            return reject;
-        }
+    IconAction {
+        width: 44px;
+        height: 48px;
+        icon: root.icon;
+        label: root.label;
+        active: root.active;
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
     }
-    Rectangle {
-        width: 26px;
-        height: 26px;
+    // Selector caret sits on top of the button's top edge, its own target.
+    caret := Rectangle {
+        width: 22px;
+        height: 16px;
         x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        border-radius: 13px;
-        background: touch.pressed ? Materials.pressed : Colors.fill-secondary;
+        y: 1px;
+        border-radius: 8px;
+        background: ctouch.pressed ? Materials.pressed : Colors.fill-secondary;
         border-width: key.has-focus ? 2px : 0px;
         border-color: Colors.focus-ring;
+        accessible-role: button;
+        accessible-label: root.select-label;
+        accessible-action-default => { root.select(); }
+        key := FocusScope {
+            key-pressed(event) => {
+                if event.text == Key.Space || event.text == Key.Return {
+                    root.select();
+                    return accept;
+                }
+                return reject;
+            }
+        }
         Image {
             source: Icons.chevron-left;
             transform-rotation: 90deg;
-            width: 14px;
-            height: 14px;
+            width: 12px;
+            height: 12px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             colorize: Colors.text-primary;
         }
-    }
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        ctouch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.select(); }
+        }
     }
 }
 
@@ -78,8 +95,8 @@ export component CallControls inherits GlassSurface {
     callback toggle-video();
     callback toggle-screen-share();
     callback end-call();
+    callback show-audio-input();
     callback show-audio-output();
-    callback show-audio-popover();
     callback toggle-speaker();
 
     height: 48px;
@@ -87,35 +104,27 @@ export component CallControls inherits GlassSurface {
         alignment: center;
         spacing: 0px;
         padding: 0px;
-        // Mute button
-        IconAction {
-            size: button-size;
-            width: 44px;
-            height: 48px;
+        // Microphone: body toggles mute, caret opens the input-device list.
+        DeviceButton {
             icon: root.is-muted ? Icons.mic-off : Icons.mic;
             label: root.is-muted ? "Unmute microphone" : "Mute microphone";
-            active: is-muted;
-            clicked => { toggle-mute(); }
+            select-label: root.speaker-toggle ? "Select microphone, linked audio route" : "Select microphone";
+            active: root.is-muted;
+            clicked => { root.toggle-mute(); }
+            select => { root.show-audio-input(); }
         }
-
-        AudioSelector {
-            label: root.speaker-toggle ? "Select microphone, linked audio route" : "Select microphone";
-            clicked => { root.show-audio-popover(); }
-        }
-        IconAction {
-            width: 44px;
-            height: 48px;
+        // Output: body toggles speaker (phone) or opens output list (desktop);
+        // caret always opens the output-device list.
+        DeviceButton {
             icon: Icons.volume-2;
             label: root.speaker-toggle ? "Toggle speaker" : "Select audio output";
+            select-label: root.speaker-toggle ? "Select output, linked audio route" : "Select output";
             active: root.speaker-toggle && root.speaker-on;
             clicked => {
                 if root.speaker-toggle { root.toggle-speaker(); }
                 else { root.show-audio-output(); }
             }
-        }
-        AudioSelector {
-            label: root.speaker-toggle ? "Select output, linked audio route" : "Select output";
-            clicked => { root.show-audio-popover(); }
+            select => { root.show-audio-output(); }
         }
 
         // Video toggle — always available so the user can turn the camera on

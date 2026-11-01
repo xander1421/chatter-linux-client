@@ -56,17 +56,6 @@ export component AppCallDock inherits ActiveCallView {
             }
         }
         end-call => { root.call-end(); root.active-call-fullscreen = false; }
-        audio-controls-visible <=> CallView.audio-controls-visible;
-        audio-input-name: CallView.audio-input-name;
-        audio-output-name: CallView.audio-output-name;
-        show-audio-popover => {
-            CallView.audio-controls-visible = !CallView.audio-controls-visible;
-            if CallView.audio-controls-visible {
-                CallView.audio-input-name = "Loading microphone…";
-                CallView.audio-output-name = "Loading output…";
-                CallView.refresh-audio-controls();
-            }
-        }
         show-audio-input => { CallView.show-audio-device-picker(); }
         show-audio-output => { root.show-audio-output-picker(); }
         peer-audio-mute-toggle(uid) => { root.call-peer-audio-mute-toggle(uid); }

@@ -1,4 +1,3 @@
-import { AudioControlsPopover } from "audio_controls_popover.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { IconAction } from "../components/icon_action.slint";
 import { Elevation } from "../theme/elevation.slint";
@@ -242,15 +241,8 @@ export component ActiveCallView inherits Rectangle {
     callback toggle-video();
     callback toggle-screen-share();
     callback end-call();
-    in-out property <bool> audio-controls-visible;
-    in property <string> audio-input-name;
-    in property <string> audio-output-name;
-    callback show-audio-popover();
     callback show-audio-input();
     callback show-audio-output();
-    changed show => { if !root.show { root.audio-controls-visible = false; } }
-    property <string> audio-call-id: root.call-data.call-id;
-    changed audio-call-id => { root.audio-controls-visible = false; }
     callback toggle-speaker();
     // Per-peer local controls — only the local viewer is affected.
     callback peer-audio-mute-toggle(string);
@@ -623,24 +615,10 @@ export component ActiveCallView inherits Rectangle {
                 toggle-video => { root.toggle-video(); }
                 toggle-screen-share => { root.toggle-screen-share(); }
                 end-call => { root.end-call(); }
-                show-audio-popover => { root.show-audio-popover(); }
+                show-audio-input => { root.show-audio-input(); }
                 show-audio-output => { root.show-audio-output(); }
             }
         }
-    }
-
-    if root.audio-controls-visible && root.show: TouchArea {
-        clicked => { root.audio-controls-visible = false; }
-    }
-    if root.audio-controls-visible && root.show: AudioControlsPopover {
-        linked: root.speaker-toggle;
-        input-name: root.audio-input-name;
-        output-name: root.audio-output-name;
-        input-requested => { root.audio-controls-visible = false; root.show-audio-input(); }
-        output-requested => { root.audio-controls-visible = false; root.show-audio-output(); }
-        width: min(308px, root.width);
-        x: (root.width - self.width) / 2;
-        y: root.height - root.controls-height - Spacing.sm - self.height - 4px;
     }
 
     pure function format-duration(seconds: int) -> string {
