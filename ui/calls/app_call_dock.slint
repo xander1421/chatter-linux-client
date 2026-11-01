@@ -22,13 +22,11 @@ export component AppCallDock inherits ActiveCallView {
     callback call-toggle-screen-share();
     callback call-toggle-speaker();
     callback call-toggle-video();
-    callback show-audio-device-picker();
-    callback show-audio-output-picker();
     callback show-screen-source-picker();
+    callback show-audio-output-picker();
 
-        // Take the chat column's full vertical slot when
-        // fullscreen, otherwise stay as a fixed dock (the
-        // child component caps its own height to 280px).
+        // Fullscreen fills the chat column. Otherwise the child computes a
+        // responsive call area, with more room on tablet and desktop.
         vertical-stretch: root.active-call-fullscreen ? 1 : 0;
         show: root.active-call-visible;
         fullscreen: root.active-call-fullscreen;
@@ -37,6 +35,8 @@ export component AppCallDock inherits ActiveCallView {
         select-tile-indices(participants, pinned_id) => {
             return CallView.select-call-tile-indices(participants, pinned_id);
         }
+        video-layout-revision: CallView.call-video-layout-revision;
+        video-size(id, width, height, screen) => { CallView.report-call-video-size(id, width, height, screen); }
         is-muted: root.call-is-muted;
         is-video-enabled: root.call-is-video-enabled;
         is-screen-sharing: root.call-is-screen-sharing;
@@ -56,8 +56,19 @@ export component AppCallDock inherits ActiveCallView {
             }
         }
         end-call => { root.call-end(); root.active-call-fullscreen = false; }
-        show-audio-settings => { root.show-audio-device-picker(); }
-        show-audio-output-settings => { root.show-audio-output-picker(); }
+        audio-controls-visible <=> CallView.audio-controls-visible;
+        audio-input-name: CallView.audio-input-name;
+        audio-output-name: CallView.audio-output-name;
+        show-audio-popover => {
+            CallView.audio-controls-visible = !CallView.audio-controls-visible;
+            if CallView.audio-controls-visible {
+                CallView.audio-input-name = "Loading microphone…";
+                CallView.audio-output-name = "Loading output…";
+                CallView.refresh-audio-controls();
+            }
+        }
+        show-audio-input => { CallView.show-audio-device-picker(); }
+        show-audio-output => { root.show-audio-output-picker(); }
         peer-audio-mute-toggle(uid) => { root.call-peer-audio-mute-toggle(uid); }
         peer-video-pause-toggle(uid) => { root.call-peer-video-pause-toggle(uid); }
         fullscreen-toggle => {

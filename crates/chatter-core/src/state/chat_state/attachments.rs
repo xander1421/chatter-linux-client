@@ -165,11 +165,13 @@ impl ChatState {
         conversation: ActiveConversation,
         revision: u64,
         attachment: PendingAttachment,
-    ) {
+    ) -> bool {
+        let mut accepted = false;
         self.store.update(|state| {
             if state.attachment_revision != revision {
                 return;
             }
+            accepted = true;
             let key = conversation.channel_id();
             if state.active_channel_id == key {
                 state.pending_attachments.push(attachment);
@@ -181,6 +183,7 @@ impl ChatState {
                     .push(attachment);
             }
         });
+        accepted
     }
 
     /// Add a pending attachment for the current message.

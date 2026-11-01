@@ -348,6 +348,10 @@ impl SignalService {
     }
 
     fn reset_sender_key_holders(&self, channel_id: &ChannelId) -> Result<(), ServiceError> {
+        self.skdm_retry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|(channel, _), _| channel != channel_id);
         self.settings_repo
             .delete(&Self::sender_key_holders_key(channel_id))
             .map_err(ServiceError::Storage)?;

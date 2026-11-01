@@ -12,8 +12,7 @@ use crate::domain::UserId;
 use crate::domain::jarvis::{
     EntityKnowledge, JarvisContext, JarvisConversation, JarvisFact, JarvisSummary, SubjectType,
 };
-use crate::local_ai::vector_store::VectorSearchResult;
-use crate::services::semantic_search::SemanticSearchService;
+
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 
 use super::error::JarvisError;
@@ -27,10 +26,6 @@ pub(crate) const HISTORY_TURN_LIMIT: u32 = 60;
 pub struct ContextBuilder {
     memory_repo: Arc<JarvisMemoryRepository>,
     graph_repo: Arc<JarvisGraphRepository>,
-    /// Embedding-based recall over indexed channel messages. `None` when the
-    /// active provider has no embedding support (e.g. mistralrs-only setup) —
-    /// retrieval then degrades to keyword facts + entity graph.
-    semantic: Option<Arc<SemanticSearchService>>,
 }
 
 /// Built context for a Jarvis query.
@@ -47,7 +42,7 @@ pub struct BuiltContext {
     /// Conversation summaries.
     pub summaries: Vec<JarvisSummary>,
     /// Semantically similar past messages (embedding recall).
-    pub semantic_messages: Vec<VectorSearchResult>,
+    pub semantic_messages: Vec<RetrievedMessage>,
 }
 
 impl BuiltContext {
@@ -143,17 +138,25 @@ impl BuiltContext {
     }
 }
 
+/// Retained context DTO; no embedding generator or local model is constructed.
+#[derive(Debug, Clone)]
+pub struct RetrievedMessage {
+    pub source_id: String,
+    pub source_type: crate::storage::repositories::vector_repo::EmbeddingSourceType,
+    pub channel_id: Option<String>,
+    pub content_preview: String,
+    pub score: f32,
+}
+
 impl ContextBuilder {
     /// Create a new context builder.
     pub fn new(
         memory_repo: Arc<JarvisMemoryRepository>,
         graph_repo: Arc<JarvisGraphRepository>,
-        semantic: Option<Arc<SemanticSearchService>>,
     ) -> Self {
         Self {
             memory_repo,
             graph_repo,
-            semantic,
         }
     }
 
@@ -209,24 +212,35 @@ impl ContextBuilder {
         Ok(built)
     }
 
-    /// `build` plus embedding-based recall of similar past messages.
-    ///
-    /// A semantic-search failure (provider down, no embedding model) is
-    /// logged and skipped — memory retrieval must never fail an ask.
-    pub async fn build_with_semantic(
+    /// Build retained facts, entities and conversation context without local indexing.
+    pub async fn build_for_query(
         &self,
         context: &JarvisContext,
         query: &str,
         author_id: Option<&UserId>,
     ) -> Result<BuiltContext, JarvisError> {
-        let mut built = self.build(context, query, author_id)?;
-        if let Some(semantic) = &self.semantic {
-            match semantic.search_hybrid(query, 5).await {
-                Ok(hits) => built.semantic_messages = hits,
-                Err(e) => tracing::debug!("hybrid recall skipped: {e}"),
-            }
+        self.build(context, query, author_id)
+    }
+
+    /// Remote context includes only this owner's new remote conversation.
+    /// Legacy facts, entities, summaries and local history never enter the prompt.
+    pub fn build_remote(
+        &self,
+        context: &JarvisContext,
+        owner: &UserId,
+    ) -> Result<BuiltContext, JarvisError> {
+        let remote = context.for_remote(owner);
+        let mut history = self
+            .memory_repo
+            .get_recent_conversations(&remote, HISTORY_TURN_LIMIT)?;
+        let mut bytes: usize = history.iter().map(|turn| turn.content.len()).sum();
+        while bytes > 32_000 && history.len() > 2 {
+            bytes -= history.remove(0).content.len();
         }
-        Ok(built)
+        Ok(BuiltContext {
+            history,
+            ..Default::default()
+        })
     }
 
     /// Build minimal context (just recent history).
@@ -277,6 +291,62 @@ mod tests {
     use crate::domain::jarvis::Role;
 
     #[test]
+    fn remote_history_excludes_legacy_memory_other_owners_and_other_contexts() {
+        use crate::domain::jarvis::JarvisFact;
+        use crate::storage::Database;
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("privacy.db"), "fixture-pass").unwrap());
+        db.run_migrations().unwrap();
+        let memory = Arc::new(JarvisMemoryRepository::new(db.clone()));
+        let builder = ContextBuilder::new(memory.clone(), Arc::new(JarvisGraphRepository::new(db)));
+        let owner = UserId::new();
+        let other = UserId::new();
+        let context = JarvisContext::general();
+        let remote = context.for_remote(&owner);
+        assert_eq!(remote.for_remote(&owner), remote);
+        for (ctx, text) in [
+            (context.clone(), "legacy private conversation"),
+            (context.for_remote(&other), "other owner conversation"),
+            (
+                JarvisContext::channel(crate::domain::ChannelId::new()).for_remote(&owner),
+                "other channel conversation",
+            ),
+            (remote.clone(), "permitted remote history"),
+        ] {
+            memory
+                .insert_conversation(&JarvisConversation::user_message(&ctx, text.into()))
+                .unwrap();
+        }
+        memory
+            .upsert_fact(&JarvisFact::about_user(
+                &owner,
+                "likes",
+                "legacy private fact",
+            ))
+            .unwrap();
+        let built = builder.build_remote(&context, &owner).unwrap();
+        assert_eq!(built.history.len(), 1);
+        assert_eq!(built.history[0].content, "permitted remote history");
+        assert!(built.user_facts.is_empty() && built.query_facts.is_empty());
+        assert!(
+            built.entity_knowledge.is_empty()
+                && built.summaries.is_empty()
+                && built.semantic_messages.is_empty()
+        );
+        assert_eq!(
+            memory.get_recent_conversations(&context, 10).unwrap().len(),
+            1
+        );
+        assert_eq!(
+            memory
+                .get_facts_about(SubjectType::User, &owner.to_string())
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
     fn test_history_is_not_rendered_into_system_prompt() {
         // History goes to the model as real chat turns (JarvisService::ask),
         // never as system-prompt text.
@@ -304,10 +374,9 @@ mod tests {
 
     #[test]
     fn test_semantic_hits_render_in_prompt() {
-        use crate::local_ai::vector_store::VectorSearchResult;
         use crate::storage::repositories::vector_repo::EmbeddingSourceType;
         let context = BuiltContext {
-            semantic_messages: vec![VectorSearchResult {
+            semantic_messages: vec![RetrievedMessage {
                 source_id: "m1".into(),
                 source_type: EmbeddingSourceType::Message,
                 channel_id: Some("c1".into()),
@@ -331,10 +400,9 @@ mod tests {
 
     #[test]
     fn test_estimated_tokens() {
-        use crate::local_ai::vector_store::VectorSearchResult;
         use crate::storage::repositories::vector_repo::EmbeddingSourceType;
         let mut context = BuiltContext::default();
-        context.semantic_messages.push(VectorSearchResult {
+        context.semantic_messages.push(RetrievedMessage {
             source_id: "m1".into(),
             source_type: EmbeddingSourceType::Message,
             channel_id: None,

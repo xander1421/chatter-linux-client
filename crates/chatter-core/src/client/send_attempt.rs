@@ -99,7 +99,8 @@ fn claim(db: &Database, key: &str, pending: &PendingSend) -> Result<(), SendErro
             "Cannot retain pending send".into(),
         ))
     })?;
-    let conn = db.connection().map_err(storage_error)?;
+    let mut connection = db.connection().map_err(storage_error)?;
+    let conn = connection.transaction().map_err(|e| storage_error(StorageError::Database(e)))?;
     let completed: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1)",
@@ -130,6 +131,12 @@ fn claim(db: &Database, key: &str, pending: &PendingSend) -> Result<(), SendErro
             SendError::SendInProgress
         });
     }
+    // Queue → durable wire journal is one transaction. After a crash an
+    // intent is either recoverable as unsent, or protected by its exact claim.
+    conn.execute("DELETE FROM settings WHERE key=?1", params![
+        super::composer::queue::queued_key(&key_owner(key), &pending.attempt_id)
+    ]).map_err(|e| storage_error(StorageError::Database(e)))?;
+    conn.commit().map_err(|e| storage_error(StorageError::Database(e)))?;
     Ok(())
 }
 fn discard_preparation(db: &Database, key: &str, attempt: &str) -> Result<(), SendError> {
@@ -447,6 +454,7 @@ impl ChatterClient {
                     text: pending.text.clone(),
                     reply,
                     attachments,
+                    queue_ticket: None,
                 },
                 false,
             );
@@ -510,6 +518,34 @@ mod tests {
             process: Some(PROCESS.clone()),
         }
     }
+    #[test]
+    fn queue_handoff_and_wire_claim_commit_or_rollback_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("handoff.db"), "test-only").unwrap();
+        db.run_migrations().unwrap();
+        let pending = pending();
+        let key = "send.unresolved.v1:owner:channel";
+        let queued = super::super::composer::queue::queued_key("owner", &pending.attempt_id);
+        {
+            let conn = db.connection().unwrap();
+            conn.execute("INSERT INTO settings(key,value,updated_at) VALUES(?1,'intent','now')", params![queued]).unwrap();
+            conn.execute_batch("CREATE TRIGGER reject_queue_handoff BEFORE DELETE ON settings WHEN OLD.value='intent' BEGIN SELECT RAISE(ABORT,'injected handoff failure'); END;").unwrap();
+        }
+        assert!(claim(&db, key, &pending).is_err());
+        assert!(read_pending(&db, key).unwrap().is_none());
+        {
+            let conn = db.connection().unwrap();
+            let count: i64 = conn.query_row("SELECT count(*) FROM settings WHERE key=?1", params![queued], |r|r.get(0)).unwrap();
+            assert_eq!(count, 1);
+            conn.execute_batch("DROP TRIGGER reject_queue_handoff").unwrap();
+        }
+        claim(&db, key, &pending).unwrap();
+        assert_eq!(read_pending(&db, key).unwrap().unwrap().attempt_id, pending.attempt_id);
+        let conn = db.connection().unwrap();
+        let count: i64 = conn.query_row("SELECT count(*) FROM settings WHERE key=?1", params![queued], |r|r.get(0)).unwrap();
+        assert_eq!(count, 0);
+    }
+
     #[test]
     fn accepted_but_response_lost_blocks_new_identity_after_reopen() {
         let dir = tempfile::tempdir().unwrap();

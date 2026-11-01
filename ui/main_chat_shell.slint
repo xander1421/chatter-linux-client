@@ -77,6 +77,12 @@ export component MainChatShell inherits Rectangle {
         // Keep the sidebar and chat at a fixed origin while notices change.
         // Layer order: chat column (-2), floating notices (-1), then
         // the pushed modal layer (0).
+    property <length> normal-sidebar-offset:
+        SidebarPane.sidebar-hidden || CallView.active-call-fullscreen ? 0px
+        : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : Spacing.sidebar-width-collapsed)
+        : Spacing.sidebar-width;
+    property <bool> call-hides-sidebar: !root.compact-layout && CallView.active-call-visible
+        && root.width - root.normal-sidebar-offset < 308px;
     background: transparent;
 
         VerticalLayout {
@@ -90,7 +96,7 @@ export component MainChatShell inherits Rectangle {
 
         // Sidebar (width controlled by collapsed state; mobile-mode for full-width).
         // Hidden entirely in call-fullscreen so the call view fills the whole window.
-        if !CallView.active-call-fullscreen: AppSidebarHost {
+        if !CallView.active-call-fullscreen && !root.call-hides-sidebar: AppSidebarHost {
             width: parent.width;
             height: parent.height;
             chat-push-progress: root.chat-push-progress;
@@ -133,10 +139,9 @@ export component MainChatShell inherits Rectangle {
             // The dock and floating header are translucent. Paint the chat
             // canvas across their whole page so list rows cannot show through.
             background: Materials.ambient;
+            // Reserve the complete control bar and unmount the covered sidebar.
             x: root.compact-layout ? parent.width * (1 - root.chat-push-progress)
-                : SidebarPane.sidebar-hidden || CallView.active-call-fullscreen ? 0px
-                : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : Spacing.sidebar-width-collapsed)
-                : Spacing.sidebar-width;
+                : root.call-hides-sidebar ? 0px : root.normal-sidebar-offset;
             y: 0px;
             width: root.compact-layout ? parent.width : parent.width - self.x;
             height: parent.height;
@@ -196,7 +201,6 @@ export component MainChatShell inherits Rectangle {
                         call-toggle-screen-share() => { CallView.call-toggle-screen-share(); }
                         call-toggle-speaker() => { CallView.call-toggle-speaker(); }
                         call-toggle-video() => { CallView.call-toggle-video(); }
-                        show-audio-device-picker() => { CallView.show-audio-device-picker(); }
                         show-audio-output-picker() => { CallView.show-audio-output-picker(); }
                         show-screen-source-picker() => { CallView.show-screen-source-picker(); }
                     }
@@ -255,7 +259,6 @@ export component MainChatShell inherits Rectangle {
                     channel-has-avatar: ChatPane.channel-has-avatar;
                     channel-id: ChatPane.channel-id;
                     channel-name: ChatPane.channel-name;
-                    chat-can-forward: ChatPane.chat-can-forward;
                     chat-list-scrolling <=> ChatPane.chat-list-scrolling;
                     chat-menu-secret-chat <=> ChatPane.chat-menu-secret-chat;
                     chat-menu-settings <=> ChatPane.chat-menu-settings;
@@ -316,6 +319,9 @@ export component MainChatShell inherits Rectangle {
                     header-last-seen: ChatPane.header-last-seen;
                     highlighted-message-id: ChatPane.highlighted-message-id;
                     history-load-failed <=> ChatPane.history-load-failed;
+                    history-has-newer: ChatPane.history-has-newer;
+                    history-head-offset: ChatPane.history-head-offset;
+                    request-latest => { ChatPane.request-latest(); }
                     identity-change-attributed: ChatPane.identity-change-attributed;
                     identity-change-detail: ChatPane.identity-change-detail;
                     identity-change-title: ChatPane.identity-change-title;
@@ -380,7 +386,6 @@ export component MainChatShell inherits Rectangle {
                     composer-gif-search-changed(arg0) => { ChatPane.composer-gif-search-changed(arg0); }
                     composer-gif-selected(arg0, arg1) => { ChatPane.composer-gif-selected(arg0, arg1); }
                     emoji-clicked() => { ChatPane.emoji-clicked(); }
-                    forward-message-action(arg0, arg1) => { ChatPane.forward-message-action(arg0, arg1); }
                     gif-clicked() => { ChatPane.gif-clicked(); }
                     identity-change-accept-clicked() => { ChatPane.identity-change-accept-clicked(); }
                     invite-member() => { ChatPane.invite-member(); }

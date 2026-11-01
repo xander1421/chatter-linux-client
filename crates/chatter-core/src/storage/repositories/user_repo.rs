@@ -487,7 +487,7 @@ impl UserRepository {
     /// treating it as ours would silently discard mail from someone the user
     /// never blocked.
     pub fn is_blocked(&self, user_id: &UserId, peer_id: &UserId) -> Result<bool, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let status: Option<i32> = conn
             .query_row(
                 "SELECT status FROM friendships WHERE user_id = ?1 AND friend_id = ?2",
@@ -701,13 +701,21 @@ impl UserRepository {
         friend_id: &UserId,
         key: &[u8; 32],
     ) -> Result<bool, StorageError> {
+        self.set_friend_profile_key_admitted(user_id, friend_id, key, None)
+    }
+
+    pub(crate) fn set_friend_profile_key_admitted(&self, user_id: &UserId, friend_id: &UserId, key: &[u8; 32], session: Option<&crate::state::receive_session::ReceiveSession>) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
-        let changed = conn.execute(
+        let tx = conn.unchecked_transaction()?;
+        if let Some(session) = session { session.check_owner(&tx)?; }
+        let changed = tx.execute(
             "INSERT INTO peer_profile_keys (user_id, peer_id, profile_key) VALUES (?1, ?2, ?3) \
              ON CONFLICT (user_id, peer_id) DO UPDATE SET profile_key = excluded.profile_key \
              WHERE profile_key IS NOT excluded.profile_key",
             params![user_id.to_string(), friend_id.to_string(), key.as_slice()],
         )?;
+        if let Some(session) = session { session.check()?; }
+        tx.commit()?;
         Ok(changed > 0)
     }
 

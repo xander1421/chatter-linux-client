@@ -284,6 +284,11 @@
             .set(keys::CURRENT_USER_ID, &t.alice_id.to_string())
             .unwrap();
         m.settings_repo.set(keys::CURRENT_DEVICE_ID, &7u32).unwrap();
+        // The SQL-only owner switch is intentionally rejected: the fixture
+        // must also enter Alice's actual second-device auth session.
+        assert!(matches!(m.receive_session().unwrap().check_owner(&m.database.read_connection().unwrap()),
+            Err(crate::error::StorageError::InvalidData(_))));
+        t.bob.auth_state().set_logged_in(t.alice_id, 7, "fixture".into());
         let skdm = t
             .alice
             .signal()

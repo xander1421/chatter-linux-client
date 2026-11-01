@@ -223,8 +223,24 @@ impl UnifiedMessageRepository {
     /// tombstone is written even when the row is absent: a delete that races
     /// ahead of the message itself must still win.
     pub fn delete(&self, id: &MessageId) -> Result<(), StorageError> {
+        self.delete_admitted(id, None).map(|_| ())
+    }
+
+    pub(crate) fn delete_received(&self, id: &MessageId, channel: ChannelId, session: &crate::state::receive_session::ReceiveSession) -> Result<Option<Message>, StorageError> {
+        self.delete_admitted(id, Some((channel, session)))
+    }
+
+    fn delete_admitted(&self, id: &MessageId, receive: Option<(ChannelId, &crate::state::receive_session::ReceiveSession)>) -> Result<Option<Message>, StorageError> {
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
+        let existing = if let Some((channel, session)) = receive {
+            session.check_owner(&tx)?;
+            let existing = self.get_with_connection(&tx, id)?;
+            if existing.as_ref().is_some_and(|row| row.conversation_id != channel) {
+                return Err(StorageError::InvalidData("delete channel mismatch".into()));
+            }
+            existing
+        } else { None };
         queue_message_attachments(&tx, id)?;
         tx.execute(
             "INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)",
@@ -235,15 +251,18 @@ impl UnifiedMessageRepository {
             "DELETE FROM messages WHERE id = ?1",
             params![id.to_string()],
         )?;
+        // An unseen target still needs its tombstone. Preserve NotFound for
+        // callers while committing suppression of a delayed receive.
+        if let Some((_, session)) = receive { session.check()?; }
+        tx.commit()?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("Message {}", id)));
         }
-        tx.commit()?;
         drop(conn);
         if let Err(error) = super::super::attachment_repo::AttachmentRepository::retry_pending_cleanup(&self.db) {
             tracing::warn!(%error, "attachment cleanup will be retried");
         }
-        Ok(())
+        Ok(existing)
     }
 
     /// Clear retained reply snapshots before their disappearing parent is

@@ -32,6 +32,31 @@ pub const DEFAULT_GROUP_MAILBOX_TTL_DAYS: i64 = 30;
 /// `anon_group_mailboxes`).
 pub const GROUP_MAILBOX_REFRESH_LEAD_DAYS: i64 = 7;
 
+struct InviteContext<'a> {
+    me: UserId,
+    profile_key: Option<[u8; 32]>,
+    display_name: Option<String>,
+    avatar: Option<Vec<u8>>,
+    pending: Option<&'a super::PendingAnonGroupInvite>,
+    session: Option<&'a super::InviteSession<'a>>,
+}
+
+impl InviteContext<'_> {
+    async fn admit(&self) -> Result<Option<tokio::sync::MutexGuard<'_, ()>>, AnonGroupError> {
+        match self.session {
+            Some(session) => Ok(Some(session.admit().await?)),
+            None => Ok(None),
+        }
+    }
+
+    fn check_pending(&self, service: &AnonGroupService) -> Result<(), AnonGroupError> {
+        if let Some(invite) = self.pending {
+            service.anon_group_repo.require_current_invite(invite)?;
+        }
+        Ok(())
+    }
+}
+
 impl AnonGroupService {
     /// Get the current user ID.
     pub fn current_user_id(&self) -> Result<UserId, AnonGroupError> {
@@ -354,83 +379,43 @@ impl AnonGroupService {
         inviter_display_name: Option<String>,
         inviter_avatar: Option<Vec<u8>>,
     ) -> Result<AnonGroup, AnonGroupError> {
-        let current_user = self.current_user_id()?;
-
-        // A repeated authenticated owner invitation repairs a lost JoinAck using
-        // the existing mailbox. It must never recreate membership or rotate keys.
-        if let Some(existing) = self.anon_group_repo.get_group(&group_id)? {
-            if existing.is_blocked() || existing.owner_id != owner_id || inviter_id != owner_id {
-                return Err(AnonGroupError::InvalidData(
-                    "Invitation does not match existing group owner".into(),
-                ));
-            }
-            let own = self
-                .anon_group_repo
-                .get_member(&group_id, &current_user)?
-                .ok_or(AnonGroupError::MemberNotFound(current_user))?;
-            let owner = self
-                .anon_group_repo
-                .get_member(&group_id, &owner_id)?
-                .ok_or(AnonGroupError::MemberNotFound(owner_id))?;
-            let mailbox = self
-                .anon_group_repo
-                .get_mailbox(&group_id)?
-                .ok_or_else(|| {
-                    AnonGroupError::InvalidData("Existing group mailbox unavailable".into())
-                })?;
-            if mailbox.is_expired()
-                || own.mailbox_pk != Some(mailbox.public_key)
-                || owner.mailbox_pk != Some(inviter_mailbox_pk)
-            {
-                return Err(AnonGroupError::InvalidData(
-                    "Invitation mailbox does not match current membership".into(),
-                ));
-            }
-            self.send_join_ack(
-                &owner_id,
-                group_id,
-                &inviter_mailbox_pk,
-                &mailbox.public_key,
-            )
-            .await?;
-            return Ok(existing);
-        }
-
-        // 1. Create group locally as member
-        let group = AnonGroup::from_invite(group_id, group_name, owner_id);
-        self.anon_group_repo.insert_group(&group)?;
-
-        // 2. Create our mailbox for this group
-        let mailbox = self.create_group_mailbox(&group_id).await?;
-        self.anon_group_repo.insert_mailbox(&mailbox)?;
-
-        // 3. Add ourselves as member with our profile
-        let profile_key = self.get_my_profile_key();
-        let my_display_name = self.get_my_display_name();
-        let my_avatar = self.get_my_avatar();
-        let my_member = AnonGroupMember::with_mailbox(
+        self.accept_invite_bound(
             group_id,
-            current_user,
-            AnonGroupRole::Member,
-            mailbox.public_key,
+            group_name,
+            owner_id,
+            inviter_id,
+            inviter_device_id,
+            inviter_mailbox_pk,
+            inviter_profile_key,
+            inviter_display_name,
+            inviter_avatar,
+            None,
+            None,
         )
-        .with_profile(profile_key, my_display_name, my_avatar);
-        self.anon_group_repo
-            .accept_ordered_self(&my_member, TimestampNanos::now().as_u64())?;
+        .await
+    }
 
-        // 4. Add inviter with their mailbox key and profile.
-        //
-        // SECURITY: default the inviter to `Member`, NOT `Owner`. The invite
-        // envelope is sealed-sender-authenticated as coming from `inviter_id`
-        // but carries no proof that this user owns the group. Trusting the
-        // invite to assert ownership lets any group member relay an invite
-        // and be recorded as Owner until the next authoritative member-list
-        // broadcast overwrites the row. During that window, role-gated
-        // local actions (UI controls, kick/ban prompts) trust the wrong
-        // actor. Member is the safe lower bound; the next member-list
-        // signal upgrades to Owner / Admin if applicable.
-        let inviter_member = AnonGroupMember {
+    pub(crate) async fn accept_invite_bound(
+        &self,
+        group_id: AnonGroupId,
+        group_name: String,
+        owner_id: UserId,
+        inviter_id: UserId,
+        inviter_device_id: u32,
+        inviter_mailbox_pk: [u8; 32],
+        inviter_profile_key: Option<[u8; 32]>,
+        inviter_display_name: Option<String>,
+        inviter_avatar: Option<Vec<u8>>,
+        pending: Option<&super::PendingAnonGroupInvite>,
+        session: Option<&super::InviteSession<'_>>,
+    ) -> Result<AnonGroup, AnonGroupError> {
+        // Profile and identity are captured together under lifecycle admission,
+        // before the serialization or registration await can change sessions.
+        let context = self.capture_invite_context(pending, session).await?;
+        let group = AnonGroup::from_invite(group_id, group_name, owner_id);
+        let inviter = AnonGroupMember {
             device_id: Some(inviter_device_id),
+            // The sealed invitation authenticates a sender, not an owner role.
             ..AnonGroupMember::with_mailbox(
                 group_id,
                 inviter_id,
@@ -439,27 +424,176 @@ impl AnonGroupService {
             )
             .with_profile(inviter_profile_key, inviter_display_name, inviter_avatar)
         };
-        self.anon_group_repo.add_member(&inviter_member)?;
+        self.finish_invite(
+            group,
+            inviter,
+            self.create_group_mailbox(&group_id),
+            &context,
+            |mailbox| async move {
+                self.send_join_ack(
+                    &inviter_id,
+                    group_id,
+                    &inviter_mailbox_pk,
+                    &mailbox.public_key,
+                )
+                .await
+            },
+        )
+        .await
+    }
 
-        // 5. Record our join once, even if the acknowledgment needs a retry.
+    async fn finish_invite<F, A>(
+        &self,
+        group: AnonGroup,
+        inviter: AnonGroupMember,
+        create_mailbox: impl std::future::Future<Output = Result<AnonGroupMailbox, AnonGroupError>>,
+        context: &InviteContext<'_>,
+        join_ack: F,
+    ) -> Result<AnonGroup, AnonGroupError>
+    where
+        F: FnOnce(AnonGroupMailbox) -> A,
+        A: std::future::Future<Output = Result<(), AnonGroupError>>,
+    {
+        let _acceptance = self.invite_acceptance.lock().await;
+        let (group, mailbox) = self
+            .prepare_invited_group_bound(group, inviter, create_mailbox, context)
+            .await?;
+        let _admission = context.admit().await?;
+        context.check_pending(self)?;
+        let current_user = context.me;
+        let own = self
+            .anon_group_repo
+            .get_member(&group.id, &current_user)?
+            .ok_or(AnonGroupError::MemberNotFound(current_user))?;
         self.store_system_message(
-            &group_id,
+            &group.id,
             Some(current_user),
             crate::domain::message::SystemMessage::UserJoined(current_user),
-            TimestampNanos::now().as_u64(),
+            own.joined_at.timestamp_nanos_opt().unwrap_or(0) as u64,
         )?;
-
-        // 6. Send JoinAck to inviter's anonymous mailbox
-        self.send_join_ack(
-            &inviter_id,
-            group_id,
-            &inviter_mailbox_pk,
-            &mailbox.public_key,
-        )
-        .await?;
-
-        tracing::info!("Joined secret group");
+        drop(_admission);
+        join_ack(mailbox).await?;
+        let _admission = context.admit().await?;
+        if let Some(invite) = context.pending {
+            self.anon_group_repo.remove_exact_pending_invite(invite)?;
+        }
         Ok(group)
+    }
+
+    /// Prepare a durable acceptance before sending JoinAck. Mailbox registration
+    /// happens first; an empty token batch or remote failure cannot expose a
+    /// half-written group. The future is lazy so retries never spend a new token.
+    #[cfg(test)]
+    async fn prepare_invited_group(
+        &self,
+        group: AnonGroup,
+        inviter: AnonGroupMember,
+        create_mailbox: impl std::future::Future<Output = Result<AnonGroupMailbox, AnonGroupError>>,
+    ) -> Result<(AnonGroup, AnonGroupMailbox), AnonGroupError> {
+        let context = self.capture_invite_context(None, None).await?;
+        self.prepare_invited_group_bound(group, inviter, create_mailbox, &context)
+            .await
+    }
+
+    async fn capture_invite_context<'a>(
+        &self,
+        pending: Option<&'a super::PendingAnonGroupInvite>,
+        session: Option<&'a super::InviteSession<'a>>,
+    ) -> Result<InviteContext<'a>, AnonGroupError> {
+        let _admission = match session {
+            Some(session) => Some(session.admit().await?),
+            None => None,
+        };
+        let me = self.current_user_id()?;
+        if session.is_some_and(|session| session.user != me) {
+            return Err(AnonGroupError::NotLoggedIn);
+        }
+        Ok(InviteContext {
+            me,
+            profile_key: self.get_my_profile_key(),
+            display_name: self.get_my_display_name(),
+            avatar: self.get_my_avatar(),
+            pending,
+            session,
+        })
+    }
+
+    async fn prepare_invited_group_bound(
+        &self,
+        mut group: AnonGroup,
+        inviter: AnonGroupMember,
+        create_mailbox: impl std::future::Future<Output = Result<AnonGroupMailbox, AnonGroupError>>,
+        context: &InviteContext<'_>,
+    ) -> Result<(AnonGroup, AnonGroupMailbox), AnonGroupError> {
+        let me = context.me;
+        let admission = context.admit().await?;
+        context.check_pending(self)?;
+
+        if let Some(existing) = self.anon_group_repo.get_group(&group.id)? {
+            if !existing.status.can_receive()
+                || existing.owner_id != group.owner_id
+                || inviter.user_id != group.owner_id
+            {
+                return Err(AnonGroupError::InvalidData(
+                    "Invitation does not match existing group owner".into(),
+                ));
+            }
+            let own = self.anon_group_repo.get_member(&group.id, &me)?;
+            let owner = self
+                .anon_group_repo
+                .get_member(&group.id, &group.owner_id)?;
+            let mailbox = self.anon_group_repo.get_mailbox(&group.id)?;
+            if let (Some(own), Some(owner), Some(mailbox)) = (&own, &owner, &mailbox) {
+                if mailbox.is_expired()
+                    || own.mailbox_pk != Some(mailbox.public_key)
+                    || owner.mailbox_pk != inviter.mailbox_pk
+                    || owner.device_id != inviter.device_id
+                {
+                    return Err(AnonGroupError::InvalidData(
+                        "Invitation mailbox does not match current membership".into(),
+                    ));
+                }
+                return Ok((existing, mailbox.clone()));
+            }
+            // Repair exactly the historical failure before mailbox persistence.
+            // Never rebuild a roster or overwrite an existing mailbox/trust binding.
+            if !self
+                .anon_group_repo
+                .is_uninitialized_invited_group(&existing, &me)?
+            {
+                return Err(AnonGroupError::InvalidData(
+                    "Existing group acceptance is inconsistent".into(),
+                ));
+            }
+            group = existing;
+        }
+        // The production future checks Tor and claims its prefetched token
+        // synchronously on its first poll. Admit that write too, then release
+        // lifecycle admission as soon as registration actually suspends.
+        let mut create_mailbox = std::pin::pin!(create_mailbox);
+        let first_poll = futures::poll!(&mut create_mailbox);
+        drop(admission);
+        let mailbox = match first_poll {
+            std::task::Poll::Ready(result) => result?,
+            std::task::Poll::Pending => create_mailbox.await?,
+        };
+        let _admission = context.admit().await?;
+        let own =
+            AnonGroupMember::with_mailbox(group.id, me, AnonGroupRole::Member, mailbox.public_key)
+                .with_profile(
+                    context.profile_key,
+                    context.display_name.clone(),
+                    context.avatar.clone(),
+                );
+        self.anon_group_repo.initialize_invited_group(
+            &group,
+            &mailbox,
+            &own,
+            &inviter,
+            TimestampNanos::now().as_u64(),
+            context.pending,
+        )?;
+        Ok((group, mailbox))
     }
 
     /// Refresh (rotate) our mailbox for a specific anonymous group.
@@ -679,3 +813,6 @@ impl AnonGroupService {
         Ok(refreshed)
     }
 }
+
+#[cfg(test)]
+mod tests;

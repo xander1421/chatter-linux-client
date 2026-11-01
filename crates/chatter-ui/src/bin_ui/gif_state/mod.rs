@@ -37,13 +37,13 @@ pub(crate) fn fit_frame(data: Vec<u8>, width: u32, height: u32, max_width: u32, 
     let Some(source) = image::RgbaImage::from_raw(width, height, data) else {
         return (Vec::new(), 0, 0);
     };
-    let resized = image::imageops::thumbnail(&source, max_width.max(1), max_height.max(1));
+    let resized = image::DynamicImage::ImageRgba8(source)
+        .thumbnail(max_width.max(1), max_height.max(1))
+        .into_rgba8();
     let (width, height) = resized.dimensions();
     (resized.into_raw(), width, height)
 }
 
-/// Raw frame data that can be sent between threads.
-pub(crate) type RawFrame = (Vec<u8>, u32, u32, u64); // (data, width, height, delay_ms)
 
 #[cfg(test)]
 mod tests {

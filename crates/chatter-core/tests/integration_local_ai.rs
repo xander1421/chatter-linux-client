@@ -2,6 +2,8 @@
 //!
 //! Run with: cargo test --test integration_local_ai --features local-ai -- --nocapture
 
+#![cfg(feature = "local-ai")]
+
 #[cfg(feature = "local-ai")]
 mod local_ai_tests {
     use mistralrs::{

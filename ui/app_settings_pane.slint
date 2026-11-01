@@ -1,4 +1,3 @@
-import { LocalAIProviderData, CatalogModelData } from "settings/settings_screen.slint";
 
 // Settings and AI presentation state and actions.
 export global SettingsPane {
@@ -45,7 +44,6 @@ export global SettingsPane {
     in property <string> settings-backup-retry-error: "";
 
     // AI settings properties
-    in-out property <bool> settings-local-ai-enabled: false;
     // Cloud AI (off-device)
     in-out property <bool> settings-ai-prefer-cloud: false;
     in-out property <string> settings-cloud-ai-mode: "direct-anthropic";
@@ -53,17 +51,6 @@ export global SettingsPane {
     in property <bool> settings-cloud-ai-configured: false;
     in property <string> settings-cloud-ai-status: "";
     in property <string> settings-cloud-ai-balance: "";
-    in-out property <string> settings-local-ai-model-id: "";
-    in property <bool> settings-local-ai-loading: false;
-    in property <string> settings-local-ai-status: "";
-    in property <string> settings-local-ai-error: "";
-    in property <string> settings-local-ai-hardware-summary: "";
-    in property <bool> settings-local-ai-detecting: false;
-    in property <[LocalAIProviderData]> settings-local-ai-providers: [];
-    in property <string> settings-local-ai-active-provider: "";
-    in property <[string]> settings-local-ai-models: [];
-    in property <string> settings-local-ai-active-model: "";
-    in property <[CatalogModelData]> settings-local-ai-catalog: [];
 
     // Settings
     callback settings-edit-profile();
@@ -95,13 +82,6 @@ export global SettingsPane {
     in property <bool> settings-message-backup-busy: false;
 
     // AI settings callbacks
-    callback settings-local-ai-enabled-changed(bool);
-    callback settings-local-ai-load-model(string);
-    callback settings-local-ai-unload-model();
-    callback settings-local-ai-refresh();
-    callback settings-local-ai-select-provider(string);
-    callback settings-local-ai-select-model(string);
-    callback settings-local-ai-download(string);
 
     // Cloud AI settings callbacks
     callback settings-ai-prefer-cloud-changed(bool);

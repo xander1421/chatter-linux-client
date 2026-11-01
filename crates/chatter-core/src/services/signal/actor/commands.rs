@@ -2,6 +2,10 @@ use super::*;
 
 /// Commands sent to the Signal Actor.
 pub(crate) enum SignalCommand {
+    /// FIFO fence: earlier submitted crypto has finished before acknowledgement.
+    Barrier { response: oneshot::Sender<()> },
+    #[cfg(test)]
+    TestPause { entered: oneshot::Sender<()>, resume: oneshot::Receiver<()> },
     GetIdentityFingerprint {
         response: oneshot::Sender<Result<String, ServiceError>>,
     },
@@ -137,6 +141,10 @@ pub(crate) enum SignalCommand {
         channel_id: ChannelId,
         our_address: ProtocolAddress,
         response: oneshot::Sender<Result<bool, ServiceError>>,
+    },
+    SessionDevices {
+        recipient: String,
+        response: oneshot::Sender<Result<Vec<(u32, Option<u32>)>, ServiceError>>,
     },
     HasSession {
         address: ProtocolAddress,

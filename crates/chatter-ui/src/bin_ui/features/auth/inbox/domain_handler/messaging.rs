@@ -15,18 +15,21 @@ use chatter_core::domain::message::Message;
 /// Resolves sender name + attachments, inserts into the Slint message model
 /// if the conversation is active, updates sidebar preview, and triggers
 /// attachment auto-download.
-pub(super) fn handle_message_received(
+pub(super) async fn handle_message_received(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     message: Message,
 ) {
+    let session = ui_ctx.session_guard();
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
     let is_call_end = matches!(
         &message.content,
         chatter_core::domain::message::MessageContent::Call(call)
             if call.call_type == chatter_core::domain::message::CallMessageType::Ended
     );
     let message = if message.conversation_type
-        == chatter_core::domain::message::ConversationType::SavedMessages || is_call_end
+        == chatter_core::domain::message::ConversationType::SavedMessages
+        || is_call_end
     {
         let Some(stored) = ui_ctx.get_message_local(&message.id).filter(|stored| {
             stored.conversation_type == message.conversation_type
@@ -75,7 +78,8 @@ pub(super) fn handle_message_received(
         &resolved_attachments,
         sender_avatar.map(std::sync::Arc::<[u8]>::from),
     );
-    display_data.mention_members = ui_ctx.mention_members(&message.conversation_type, &message.conversation_id);
+    display_data.mention_members =
+        ui_ctx.mention_members(&message.conversation_type, &message.conversation_id);
     crate::bin_ui::converters::mark_disappearing(&ui_ctx, std::slice::from_mut(&mut display_data));
 
     // Reply metadata — mirror the reload batch so a LIVE-received reply shows the
@@ -89,7 +93,14 @@ pub(super) fn handle_message_received(
             ui_ctx.reply_parent_media(&message),
         );
     }
-    display_data.decode_attachment_thumbnails();
+    let mut prepared =
+        crate::bin_ui::converters::prepare_display_media_guarded(vec![display_data], true, generation).await;
+    if !session.is_current() {
+        return;
+    }
+    let Some(display_data) = prepared.pop() else {
+        return;
+    };
 
     let current_user_id = ui_ctx
         .auth_snapshot()
@@ -153,6 +164,11 @@ pub(super) fn handle_message_received(
         let ui_ctx_dl = ui_ctx.clone();
         let weak_dl = window.clone();
         let conv_id = conversation_id.to_string();
+        let download_session = ui_ctx_dl.session_guard();
+        let download_owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(
+            &ui_ctx_dl,
+            ui_ctx_dl.active_conversation(),
+        );
         tokio::spawn(async move {
             super::super::attachment_download::download_attachments(
                 &downloadable,
@@ -160,6 +176,8 @@ pub(super) fn handle_message_received(
                 weak_dl,
                 conv_id,
                 own_sent,
+                download_session,
+                download_owner,
             )
             .await;
         });
@@ -184,6 +202,9 @@ pub(super) fn handle_message_received(
         .unwrap_or(false);
 
     let _ = slint::invoke_from_event_loop(move || {
+        if !session.is_current() {
+            return;
+        }
         let Some(w) = weak.upgrade() else { return };
 
         // A message ends its sender's typing. Keyed by conversation, like the
@@ -273,7 +294,9 @@ pub(super) fn handle_message_received(
                     let key_refs: Vec<(u64, &str)> =
                         keys.iter().map(|(t, s)| (*t, s.as_str())).collect();
                     chatter_core::domain::message::ordered_insert_position(
-                        &key_refs, new_ts, &new_sender,
+                        &key_refs,
+                        new_ts,
+                        &new_sender,
                     )
                 }
             };
@@ -305,18 +328,17 @@ pub(super) fn handle_message_received(
                     );
                 }
                 chatter_core::domain::message::InsertPosition::At(insert_pos) => {
-                    // Only the arriving message can carry a not-yet-registered
-                    // GIF; scan it, not the whole model (which was O(N) per
-                    // received message). Done before `new_msg` is moved in.
-                    crate::bin_ui::gif_state::auto_register_gifs_in_message(
-                        weak.clone(),
-                        ui_ctx_ui.clone(),
-                        &new_msg,
-                    );
                     if let Some(vec_model) = current_model
                         .as_any()
-                        .downcast_ref::<VecModel<MessageItemData>>()
+                        .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
                     {
+                        if vec_model.has_newer.get() && insert_pos == vec_model.row_count() {
+                            vec_model.note_deferred();
+                            if !new_msg.is_own {
+                                let pane = w.global::<crate::ChatPane>();
+                                pane.set_unread_count(pane.get_unread_count().saturating_add(1));
+                            }
+                        } else {
                         vec_model.insert(insert_pos, new_msg);
                         if conv_type == chatter_core::domain::message::ConversationType::Channel {
                             // Continuation depends only on the previous row, so a
@@ -331,11 +353,12 @@ pub(super) fn handle_message_received(
                                 insert_pos + 1,
                             );
                         }
+                        }
                         tracing::info!(insert_pos, "[UI_RECV] inserted via VecModel.insert");
                     } else {
                         let mut messages: Vec<MessageItemData> = current_model.iter().collect();
                         messages.insert(insert_pos, new_msg);
-                        let model = VecModel::from(messages);
+                        let model = crate::bin_ui::message_model::MessageModel::from(messages);
                         if conv_type == chatter_core::domain::message::ConversationType::Channel {
                             crate::bin_ui::features::chat::recompute_channel_continuations(&model);
                         }
@@ -346,7 +369,12 @@ pub(super) fn handle_message_received(
                 }
             }
 
-            if was_at_bottom {
+            // Inserts and same-count snapshot replacements have now published.
+            crate::bin_ui::gif_state::auto_register_gifs_from_messages(
+                w.as_weak(), ui_ctx_ui.clone(),
+            );
+
+            if was_at_bottom && !w.global::<crate::ChatPane>().get_history_has_newer() {
                 w.global::<crate::ChatPane>().set_is_at_bottom(true);
             }
         }
@@ -442,12 +470,7 @@ pub(crate) fn set_own_status_at(w: &MainWindow, timestamps: &[u64], status: &str
     let pane = w.global::<crate::ChatPane>();
     // The open thread panel keeps its own model; its replies have a status too.
     for messages in [pane.get_messages(), pane.get_thread_replies()] {
-        let Some(model) = messages
-            .as_any()
-            .downcast_ref::<VecModel<MessageItemData>>()
-        else {
-            continue;
-        };
+        let model = &messages;
         for i in 0..model.row_count() {
             if remaining == 0 {
                 return;
@@ -510,12 +533,7 @@ pub(super) fn handle_delivery_status_update(
                                 new_status,
                             )
                             .into();
-                        if let Some(model) = messages
-                            .as_any()
-                            .downcast_ref::<VecModel<MessageItemData>>()
-                        {
-                            model.set_row_data(i, updated);
-                        }
+                        messages.set_row_data(i, updated);
                         remaining -= 1;
                     }
                 }
@@ -599,7 +617,10 @@ pub(super) fn handle_message_edit(
     let message_id = message_id.to_string();
     let author = author_id.to_string();
     let members = ui_ctx.mention_members(&conversation_type, &conversation_id);
-    let broadcast = matches!(conversation_type, ConversationType::Channel | ConversationType::AnonGroup);
+    let broadcast = matches!(
+        conversation_type,
+        ConversationType::Channel | ConversationType::AnonGroup
+    );
 
     let ui_ctx = ui_ctx.clone();
     crate::run_history_ui!(window, owner, |w| {
@@ -797,22 +818,18 @@ pub(super) fn handle_persisted_delivery_status(
         let pane = w.global::<crate::ChatPane>();
         // The open thread panel keeps its own model; ticks there must move too.
         for messages in [pane.get_messages(), pane.get_thread_replies()] {
-            let Some(model) = messages
-                .as_any()
-                .downcast_ref::<VecModel<MessageItemData>>()
-            else {
-                continue;
-            };
+            let model = &messages;
             for i in 0..model.row_count() {
                 let Some(mut message) = model.row_data(i) else {
                     continue;
                 };
                 if message.message_id.as_str() == message_id {
-                    message.delivery_status = chatter_core::services::message::advance_delivery_status(
-                        message.delivery_status.as_str(),
-                        &status,
-                    )
-                    .into();
+                    message.delivery_status =
+                        chatter_core::services::message::advance_delivery_status(
+                            message.delivery_status.as_str(),
+                            &status,
+                        )
+                        .into();
                     message.failure_reason = failure_reason.clone().into();
                     model.set_row_data(i, message);
                     // message_id is unique across both models; done.

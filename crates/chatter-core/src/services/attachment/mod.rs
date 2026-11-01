@@ -8,9 +8,13 @@ mod media;
 mod range_decrypt;
 mod sanitize;
 mod upload;
+mod work;
 
+pub use work::run_attachment_work;
+
+pub(crate) use media::image_preview_ciphertext_limit;
 pub use media::{
-    GifDecodeResult, GifFullDecodeResult, ImageDecodeResult, ThumbnailOwner,
+    GifDecodeResult, GifFullDecodeResult, ImageDecodeResult, ImagePreview, ThumbnailOwner,
     register_video_thumbnail_extractor,
 };
 pub use range_decrypt::{CbcRangeDecryptor, CbcRangeReader};
@@ -542,6 +546,10 @@ impl AttachmentService {
         &self,
         pointers: &[AttachmentPointer],
     ) -> Result<Vec<AttachmentId>, crate::error::StorageError> {
+        self.create_from_pointers_admitted(pointers, None)
+    }
+
+    pub(crate) fn create_from_pointers_admitted(&self, pointers: &[AttachmentPointer], session: Option<&crate::state::receive_session::ReceiveSession>) -> Result<Vec<AttachmentId>, crate::error::StorageError> {
         use crate::domain::attachment::{Attachment, AttachmentStatus, FileMetadata};
 
         let mut ids = Vec::with_capacity(pointers.len());
@@ -624,7 +632,7 @@ impl AttachmentService {
                 secret_chat: self.secret_chat,
             };
 
-            let inserted = self.attachment_repo.insert_or_raise_secret(&attachment)?;
+            let inserted = self.attachment_repo.insert_or_raise_secret_admitted(&attachment, session)?;
             ids.push(att_id);
             if self.secret_chat {
                 // Nothing about a secret chat's file reaches the log.
@@ -693,14 +701,33 @@ impl AttachmentService {
     /// Returns the decoded thumbnail bytes (JPEG/WebP), or `None` when the
     /// attachment has no thumbnail sidecar or the fetch/decrypt fails.
     pub async fn ensure_thumbnail(&self, attachment_id: &AttachmentId) -> Option<Vec<u8>> {
-        self.for_download(attachment_id)
-            .ok()?
-            .ensure_thumbnail_routed(attachment_id)
+        self.ensure_thumbnail_guarded(attachment_id, Arc::new(|| true))
             .await
     }
 
-    async fn ensure_thumbnail_routed(&self, attachment_id: &AttachmentId) -> Option<Vec<u8>> {
-        let mut attachment = self.attachment_repo.get(attachment_id).ok()??;
+    pub async fn ensure_thumbnail_guarded(
+        &self,
+        attachment_id: &AttachmentId,
+        owner: ThumbnailOwner,
+    ) -> Option<Vec<u8>> {
+        if !owner() {
+            return None;
+        }
+        self.for_download(attachment_id)
+            .ok()?
+            .ensure_thumbnail_routed(attachment_id, owner)
+            .await
+    }
+
+    async fn ensure_thumbnail_routed(
+        &self,
+        attachment_id: &AttachmentId,
+        owner: ThumbnailOwner,
+    ) -> Option<Vec<u8>> {
+        if !owner() {
+            return None;
+        }
+        let attachment = self.attachment_repo.get(attachment_id).ok()??;
 
         // Already have the decoded bytes locally (sender's own upload, or a
         // previous fetch) — no network.
@@ -714,7 +741,10 @@ impl AttachmentService {
         let key_vec = attachment.metadata.thumbnail_key.clone()?;
         let digest_vec = attachment.metadata.thumbnail_digest.clone()?;
         let plaintext_size = attachment.metadata.thumbnail_plaintext_size? as usize;
-        if key_vec.len() != KEY_SET_LENGTH || digest_vec.len() != 32 {
+        if plaintext_size > 4 * 1024 * 1024
+            || key_vec.len() != KEY_SET_LENGTH
+            || digest_vec.len() != 32
+        {
             tracing::warn!("Thumbnail sidecar refs malformed");
             return None;
         }
@@ -728,37 +758,55 @@ impl AttachmentService {
         // Over Tor in anon mode; cdn_http_get already fails on non-2xx.
         let ciphertext = match self.cdn_http_get(&dl.download_url).await {
             Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::warn!(error = %e, "Thumbnail sidecar GET failed");
+            Err(_) => {
+                tracing::warn!("Thumbnail sidecar GET failed");
                 return None;
             }
         };
 
-        // Decrypt — verifies whole-ciphertext digest + trailing HMAC.
-        let mut key = [0u8; KEY_SET_LENGTH];
-        key.copy_from_slice(&key_vec);
-        let mut digest = [0u8; 32];
-        digest.copy_from_slice(&digest_vec);
-        let plaintext = match crate::crypto::attachment_crypto::AttachmentCrypto::decrypt(
-            &ciphertext,
-            &key,
-            &digest,
-            plaintext_size,
-        ) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(error = %e, "Thumbnail sidecar decrypt failed");
+        let repo = self.attachment_repo.clone();
+        run_attachment_work(move || {
+            if !owner() {
                 return None;
             }
-        };
+            // Decrypt — verifies whole-ciphertext digest + trailing HMAC.
+            let mut key = [0u8; KEY_SET_LENGTH];
+            key.copy_from_slice(&key_vec);
+            let mut digest = [0u8; 32];
+            digest.copy_from_slice(&digest_vec);
+            let plaintext = match crate::crypto::attachment_crypto::AttachmentCrypto::decrypt(
+                &ciphertext,
+                &key,
+                &digest,
+                plaintext_size,
+            ) {
+                Ok(p) => p,
+                Err(_) => {
+                    tracing::warn!("Thumbnail sidecar decrypt failed");
+                    return None;
+                }
+            };
 
-        // Cache into the local record for instant subsequent previews.
-        attachment.metadata.thumbnail = Some(plaintext.clone());
-        if let Err(e) = self.attachment_repo.update(&attachment) {
-            tracing::debug!(error = %e, "Failed to persist fetched thumbnail (continuing)");
-        }
-        tracing::debug!(bytes = plaintext.len(), "Fetched thumbnail sidecar");
-        Some(plaintext)
+            // Do not overwrite concurrent transfer state, resurrect a replaced
+            // encrypted source, or persist after account/session revocation.
+            if !owner() {
+                return None;
+            }
+            if !repo
+                .cache_authenticated_thumbnail(&attachment, &plaintext)
+                .ok()?
+            {
+                return None;
+            }
+            tracing::debug!(bytes = plaintext.len(), "Fetched thumbnail sidecar");
+            if !owner() {
+                return None;
+            }
+            Some(plaintext)
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     /// Get attachment metadata without loading content.
@@ -879,14 +927,8 @@ mod secret_chat_origin_tests {
             .create_from_pointers(&[pointer("plain-key")])
             .unwrap()[0];
 
-        assert_eq!(
-            service.get(&secret).unwrap().unwrap().secret_chat,
-            true
-        );
-        assert_eq!(
-            service.get(&plain).unwrap().unwrap().secret_chat,
-            false
-        );
+        assert_eq!(service.get(&secret).unwrap().unwrap().secret_chat, true);
+        assert_eq!(service.get(&plain).unwrap().unwrap().secret_chat, false);
         assert!(routed_secret(&service, &secret), "secret-chat row left Tor");
         assert!(!routed_secret(&service, &plain));
     }
@@ -911,7 +953,6 @@ mod secret_chat_origin_tests {
         assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, true);
         assert!(routed_secret(&service, &id));
     }
-
 
     /// Normal and secret receipts of the same unknown CDN key racing: the
     /// row ends secret whichever wins the insert.

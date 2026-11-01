@@ -551,6 +551,20 @@ mod tests {
         svc.process_incoming_content(&f.group_id, &f.owner, &kick(&f, &f.owner_key))
             .unwrap();
         assert!(!is_member(&f, &f.mallory));
+        // A successful kick stores a system notice. Assert posts separately
+        // so that notice cannot be mistaken for delivery from the kicked peer.
+        let posts = || {
+            svc.get_messages_asc(&f.group_id, None, 50)
+                .unwrap()
+                .into_iter()
+                .filter(|message| !message.content.is_system())
+                .count()
+        };
+        assert!(svc.get_messages_asc(&f.group_id, None, 50).unwrap().iter().any(|message|
+            matches!(&message.content, crate::domain::message::MessageContent::System(
+                crate::domain::message::SystemMessage::UserRemoved { removed, .. }
+            ) if *removed == f.mallory)
+        ));
 
         // Mallory kept the mailbox keys and posts anyway.
         assert!(
@@ -558,7 +572,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert_eq!(stored(&f), 0);
+        assert_eq!(posts(), 0);
         // A later roster that still leaves her out delivers nothing either.
         let events = svc
             .process_incoming_content(&f.group_id, &f.owner, &member_list(&f, &[f.owner]))
@@ -569,7 +583,7 @@ mod tests {
                 .all(|e| matches!(e, DomainEvent::AnonGroupMemberListReceived { .. })),
             "{events:?}"
         );
-        assert_eq!(stored(&f), 0);
+        assert_eq!(posts(), 0);
     }
 
     #[tokio::test]

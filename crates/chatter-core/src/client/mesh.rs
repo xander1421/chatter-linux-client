@@ -48,7 +48,8 @@ impl ChatterClient {
     pub fn mesh_private_channel_nearby_peers(
         &self,
         id: &str,
-    ) -> Result<Vec<(crate::services::mesh::MeshPeer, bool)>, crate::services::mesh::MeshError> {
+    ) -> Result<Vec<(crate::services::mesh::MeshPeer, bool)>, crate::services::mesh::MeshError>
+    {
         self.mesh().private_channel_nearby_peers(id)
     }
 
@@ -349,8 +350,10 @@ impl ChatterClient {
         peer: &str,
         active_scope: &str,
     ) -> Result<Vec<(String, String)>, crate::services::mesh::MeshError> {
-        self.mesh()
-            .private_channels_invitable_for(&chatter_mesh::ids::PeerId::from_str(peer), active_scope)
+        self.mesh().private_channels_invitable_for(
+            &chatter_mesh::ids::PeerId::from_str(peer),
+            active_scope,
+        )
     }
 
     #[cfg(feature = "mesh")]
@@ -783,11 +786,10 @@ impl ChatterClient {
     ) -> Result<String, crate::services::mesh::MeshError> {
         self.mesh().send_file(path)
     }
-    crate::service_accessor!(local_ai, LocalAIService, local_ai_service);
     crate::service_accessor!(
-        http_local_ai,
-        crate::services::local_ai_service::HttpLocalAIService,
-        http_local_ai_service
+        remote_ai,
+        crate::services::remote_ai_service::RemoteAIService,
+        remote_ai_service
     );
     crate::service_accessor!(dm_bootstrap, DmBootstrapService, dm_bootstrap_service);
     crate::service_accessor!(

@@ -231,16 +231,78 @@ mod reconnect_initialization_tests {
     }
 
     #[tokio::test]
+    async fn repeated_default_microphone_publish_preserves_muted_capture() {
+        let (manager, _) = RoomManager::new();
+        manager.microphone_requested.store(true, std::sync::atomic::Ordering::SeqCst);
+        manager.set_microphone_muted(true);
+        // No room is installed: success proves a repeated default request did
+        // not enter the replacement/unpublication path (which needs a room).
+        manager.publish_microphone(None).await.unwrap();
+        assert!(manager.is_microphone_muted());
+        assert!(matches!(manager.publish_microphone(Some("other")).await,
+            Err(CallError::NotInCall)));
+    }
+
+    #[tokio::test]
+    async fn terminal_connection_releases_only_its_own_microphone() {
+        assert!(crate::system::null_audio(), "run with CHATTER_NULL_AUDIO=1");
+        let (manager, _) = RoomManager::new();
+        manager.audio_capture.write().start(None).unwrap();
+        manager.connection_generation.store(2, std::sync::atomic::Ordering::SeqCst);
+        RoomManager::release_connection_microphone(&manager.audio_capture, &manager.connection_generation, 1);
+        assert!(manager.audio_capture.read().has_source());
+        RoomManager::release_connection_microphone(&manager.audio_capture, &manager.connection_generation, 2);
+        assert!(!manager.audio_capture.read().has_source());
+        assert!(!manager.is_microphone_muted());
+    }
+
+    #[tokio::test]
+    async fn disconnect_releases_capture_and_reconnect_restores_intent() {
+        assert!(crate::system::null_audio(), "run with CHATTER_NULL_AUDIO=1");
+        for muted in [false, true] {
+            let (manager, _) = RoomManager::new();
+            for _ in 0..2 {
+                manager.audio_capture.write().start_muted(Some("chosen-input"), muted).unwrap();
+                manager.microphone_requested.store(true, std::sync::atomic::Ordering::SeqCst);
+                assert!(manager.audio_capture.read().has_source());
+                manager.disconnect_for_reconnect().await;
+                assert!(!manager.audio_capture.read().has_source(), "disconnect must release native source");
+                assert_eq!(manager.reconnect_microphone_device(), Some(Some("chosen-input".into())));
+                assert_eq!(manager.is_microphone_muted(), muted);
+            }
+            manager.disconnect().await;
+            assert!(!manager.audio_capture.read().has_source());
+            manager.stop_microphone().await;
+            assert!(manager.reconnect_microphone_device().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn final_disconnect_admits_ordinary_microphone_publication_again() {
+        assert!(crate::system::null_audio(), "run with CHATTER_NULL_AUDIO=1");
+        let (manager, _) = RoomManager::new();
+        for _ in 0..2 {
+            manager.audio_capture.write().start(None).unwrap();
+            manager.microphone_requested.store(true, std::sync::atomic::Ordering::SeqCst);
+            manager.disconnect().await;
+            assert!(manager.reconnect_microphone_device().is_none());
+            // With no room, entering publication returns NotInCall. Returning
+            // Ok here would prove stale intent skipped the new microphone.
+            assert!(matches!(manager.publish_microphone(None).await, Err(CallError::NotInCall)));
+        }
+    }
+
+    #[tokio::test]
     async fn muted_microphone_request_survives_teardown_until_explicit_stop() {
         let (manager, _) = RoomManager::new();
         manager
             .microphone_requested
             .store(true, std::sync::atomic::Ordering::SeqCst);
         manager.set_microphone_muted(true);
-        assert!(manager.reconnect_microphone_device().is_some());
+        assert_eq!(manager.reconnect_microphone_device(), Some(None));
         assert!(manager.is_microphone_muted());
-        manager.disconnect().await;
-        assert!(manager.reconnect_microphone_device().is_some());
+        manager.disconnect_for_reconnect().await;
+        assert_eq!(manager.reconnect_microphone_device(), Some(None));
         manager.stop_microphone().await;
         assert!(manager.reconnect_microphone_device().is_none());
     }

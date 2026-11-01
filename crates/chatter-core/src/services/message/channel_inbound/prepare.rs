@@ -45,31 +45,56 @@ impl ChannelInbound {
         proto_msg: &chat_v1::Message,
         channel_id: ChannelId,
         skip_own: bool,
+        session: &ReceiveSession,
     ) -> Result<Message, Ingested> {
-        // The server keeps a message this user deleted for themselves (or a
-        // peer deleted for everyone); every catch-up re-fetch hands it back.
-        if let Ok(id) = proto_msg.id.parse::<crate::domain::ids::MessageId>() {
-            match self.messages.message_repo.is_tombstoned(&id) {
-                Ok(false) => {}
-                Ok(true) => return Err(Ingested::Dropped),
-                Err(e) => {
-                    tracing::warn!(%channel_id, message_id = %id, error = %e,
-                        "Failed to check delete tombstone; dropping");
-                    return Err(Ingested::RetryableFailure);
+        session.check().map_err(|_| Ingested::RetryableFailure)?;
+        // Copy metadata only: ciphertext can be large and stays on this task.
+        let metadata = preflight_metadata(proto_msg);
+        let admitted = session.clone();
+        let messages = self.messages.clone();
+        let preflight = self
+            .messages
+            .database
+            .run_blocking(move || {
+                admitted.check()?;
+                if let Ok(id) = metadata.id.parse::<crate::domain::ids::MessageId>() {
+                    if messages.message_repo.is_tombstoned(&id)? {
+                        return Ok((Some(Ingested::Dropped), None, None));
+                    }
                 }
-            }
-        }
-
-        // A deleted send whose canonical id never came back, recognised by
-        // its exact request key: tombstoned and dropped.
-        match self.cancelled_own_post(proto_msg, channel_id) {
-            Ok(false) => {}
-            Ok(true) => return Err(Ingested::Dropped),
-            Err(e) => {
-                tracing::warn!(%channel_id, error = %e,
-                    "Failed to check cancelled sends; dropping");
-                return Err(Ingested::RetryableFailure);
-            }
+                if !metadata.send_request_key.is_empty() {
+                    if let Ok(owner) = messages.settings_repo.current_user_id() {
+                        if super::super::channel_send::settle_cancelled_deposit_admitted(
+                            &messages.database,
+                            owner,
+                            channel_id,
+                            &metadata,
+                            Some(&admitted),
+                        )? {
+                            return Ok((Some(Ingested::Dropped), None, None));
+                        }
+                    }
+                }
+                if Self::drop_blocked_sender(&messages, &metadata, channel_id)? {
+                    return Ok((Some(Ingested::Dropped), None, None));
+                }
+                let user = messages.settings_repo.current_user_id().ok();
+                let device = messages
+                    .settings_repo
+                    .get::<u32>(
+                        crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID,
+                    )
+                    .ok()
+                    .flatten();
+                Ok((None, user, device))
+            })
+            .await;
+        let (outcome, current_user, current_device) = preflight.map_err(|error| {
+            tracing::warn!(%channel_id, %error, "Channel metadata preflight failed");
+            Ingested::RetryableFailure
+        })?;
+        if let Some(outcome) = outcome {
+            return Err(outcome);
         }
 
         let sender_id: Option<UserId> = if proto_msg.author_id.is_empty() {
@@ -87,15 +112,6 @@ impl ChannelInbound {
         {
             return Err(Ingested::Dropped);
         }
-        match Self::drop_blocked_sender(&self.messages, proto_msg, channel_id) {
-            Ok(true) => return Err(Ingested::Dropped),
-            Ok(false) => {}
-            Err(error) => {
-                tracing::warn!(%channel_id, %error, "Failed to check blocked channel sender");
-                return Err(Ingested::RetryableFailure);
-            }
-        }
-        let current_user = self.messages.settings_repo.current_user_id().ok();
         let is_own_user = sender_id.is_some() && sender_id == current_user;
         // THIS device's send: already on screen from the optimistic send, and
         // we cannot decrypt our own sender-key ciphertext anyway. A send from
@@ -104,7 +120,7 @@ impl ChannelInbound {
         // ours, as before.)
         if skip_own && is_own_user {
             let device_id = proto_msg.author_device_id;
-            if device_id == 0 || Some(device_id) == self.current_device_id() {
+            if device_id == 0 || Some(device_id) == current_device {
                 return Err(Ingested::OwnMessage);
             }
         }
@@ -140,19 +156,29 @@ impl ChannelInbound {
             // Our own message from THIS device: we never hold receive state for
             // our own sender key, so it cannot decrypt — and the row is already
             // stored from the send. Trying anyway asked ourselves for an SKDM.
-            if is_own_user && self.current_device_id() == Some(device_id) {
+            if is_own_user && current_device == Some(device_id) {
                 return Err(Ingested::OwnMessage);
             }
             // Already held (a catch-up re-fetch): the first decrypt consumed the
             // message key, so a second one fails as a duplicate — which is not a
             // failure, and must not ask the sender for a resend.
             if let Ok(id) = proto_msg.id.parse::<crate::domain::ids::MessageId>() {
-                match self.messages.get_message_local(&id) {
-                    Ok(Some(existing)) if !is_newer_edit(proto_msg, &existing) => {
-                        return Err(Ingested::Dropped);
-                    }
+                let messages = self.messages.clone();
+                let metadata = preflight_metadata(proto_msg);
+                let duplicate = self
+                    .messages
+                    .database
+                    .run_blocking(move || {
+                        Ok(messages
+                            .message_repo
+                            .get(&id)?
+                            .is_some_and(|existing| !is_newer_edit(&metadata, &existing)))
+                    })
+                    .await;
+                match duplicate {
+                    Ok(true) => return Err(Ingested::Dropped),
+                    Ok(false) => {}
                     Err(_) => return Err(Ingested::RetryableFailure),
-                    _ => {}
                 }
             }
 
@@ -160,7 +186,14 @@ impl ChannelInbound {
             // channel (Signal drops group messages from non-members). A sender
             // the server alone vouches for is dropped before decrypting — and
             // before it can draw a SenderKeyRequest or a resend request.
-            if !self.messages.group_gate().admits(&channel_id, &sid) {
+            let messages = self.messages.clone();
+            let admitted = self
+                .messages
+                .database
+                .run_blocking(move || Ok(messages.group_gate().admits(&channel_id, &sid)))
+                .await
+                .map_err(|_| Ingested::RetryableFailure)?;
+            if !admitted {
                 tracing::warn!(%channel_id, %sid, message_id = %proto_msg.id,
                     "Group message from a sender outside the verified membership; dropped");
                 return Err(Ingested::Dropped);
@@ -228,7 +261,12 @@ impl ChannelInbound {
                     }
                     // The sender's verified (revision, state_hash): fork or
                     // staleness check against ours.
-                    self.messages.check_group_stamp(&channel_id, &dm);
+                    let messages = self.messages.clone();
+                    let stamp = content_v1::DataMessage { group_state_revision: dm.group_state_revision, group_state_hash: dm.group_state_hash.clone(), ..Default::default() };
+                    let admitted = session.clone();
+                    self.messages.database.run_blocking(move || messages.check_group_stamp_received(&channel_id, &stamp, &admitted))
+                        .await.map_err(|_| Ingested::RetryableFailure)?;
+                    session.check().map_err(|_| Ingested::RetryableFailure)?;
 
                     if current_user != Some(sid)
                         && let Some(key) = dm
@@ -239,11 +277,11 @@ impl ChannelInbound {
                         let Some(us) = current_user else {
                             return Err(Ingested::RetryableFailure);
                         };
-                        match self
-                            .messages
-                            .user_repo
-                            .set_friend_profile_key(&us, &sid, &key)
-                        {
+                        let users = self.messages.user_repo.clone();
+                        let admitted = session.clone();
+                        let result = self.messages.database.run_blocking(move || users.set_friend_profile_key_admitted(&us, &sid, &key, Some(&admitted))).await;
+                        session.check().map_err(|_| Ingested::RetryableFailure)?;
+                        match result {
                             Ok(true) => {
                                 if let Err(error) = self.users.get_user_profile(&sid).await {
                                     tracing::warn!(%sid, %error, "Could not refresh channel sender profile");
@@ -267,10 +305,15 @@ impl ChannelInbound {
 
                     inbound_quote = dm.quote.clone();
 
-                    if !dm.attachments.is_empty()
-                        && let Err(error) = self.attachments.create_from_pointers(&dm.attachments)
-                    {
-                        tracing::warn!(%error, "Failed to store attachment records");
+                    session.check().map_err(|_| Ingested::RetryableFailure)?;
+                    if !dm.attachments.is_empty() {
+                        let attachments = self.attachments.clone();
+                        let pointers = dm.attachments.clone();
+                        let admitted = session.clone();
+                        if let Err(error) = self.messages.database.run_blocking(move || attachments.create_from_pointers_admitted(&pointers, Some(&admitted))).await {
+                            tracing::warn!(%error, "Failed to store attachment records");
+                        }
+                        session.check().map_err(|_| Ingested::RetryableFailure)?;
                     }
 
                     let files: Vec<chat_v1::FileMetadata> = dm
@@ -404,7 +447,13 @@ impl ChannelInbound {
             proto_msg.clone()
         };
 
-        let conv_type = conversation_type_for_channel(&self.messages.channel_repo, &channel_id);
+        let channels = self.messages.channel_repo.clone();
+        let conv_type = self
+            .messages
+            .database
+            .run_blocking(move || Ok(conversation_type_for_channel(&channels, &channel_id)))
+            .await
+            .map_err(|_| Ingested::RetryableFailure)?;
         let mut message = match proto_to_domain_message_with_sender(
             &decrypted, sender_id, conv_type,
         ) {
@@ -415,11 +464,22 @@ impl ChannelInbound {
             }
         };
 
-        crate::services::gateway::inbound::apply_inbound_quote(
-            &mut message,
-            inbound_quote.as_ref(),
-            &self.messages.message_repo,
-        );
+        if inbound_quote.is_some() {
+            let repo = self.messages.message_repo.clone();
+            message = self
+                .messages
+                .database
+                .run_blocking(move || {
+                    crate::services::gateway::inbound::apply_inbound_quote(
+                        &mut message,
+                        inbound_quote.as_ref(),
+                        &repo,
+                    );
+                    Ok(message)
+                })
+                .await
+                .map_err(|_| Ingested::RetryableFailure)?;
+        }
         // Our own message is stored read by the repository
         // (`UnifiedMessageRepository::stored_is_read`), on this path and every other.
 
@@ -433,6 +493,7 @@ impl ChannelInbound {
         &self,
         proto_msg: &chat_v1::Message,
         channel_id: ChannelId,
+        session: &ReceiveSession,
     ) -> Result<bool, crate::error::StorageError> {
         if proto_msg.send_request_key.is_empty() {
             return Ok(false);
@@ -440,19 +501,62 @@ impl ChannelInbound {
         let Ok(owner) = self.messages.settings_repo.current_user_id() else {
             return Ok(false);
         };
-        super::super::channel_send::settle_cancelled_deposit(
+        super::super::channel_send::settle_cancelled_deposit_admitted(
             &self.messages.database,
             owner,
             channel_id,
             proto_msg,
+            Some(session),
         )
     }
+}
 
-    fn current_device_id(&self) -> Option<u32> {
-        self.messages
-            .settings_repo
-            .get::<u32>(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)
-            .ok()
-            .flatten()
+/// Fields consumed by tombstone, cancelled-send, block and edit checks only.
+pub(crate) fn preflight_metadata(proto: &chat_v1::Message) -> chat_v1::Message {
+    chat_v1::Message {
+        id: proto.id.clone(),
+        channel_id: proto.channel_id.clone(),
+        author_id: proto.author_id.clone(),
+        author_device_id: proto.author_device_id,
+        timestamp: proto.timestamp,
+        send_request_key: proto.send_request_key.clone(),
+        edited: proto.edited,
+        edited_at: proto.edited_at,
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+
+    #[test]
+    fn preflight_preserves_check_fields_without_copying_payload() {
+        let proto = chat_v1::Message {
+            id: "message".into(),
+            channel_id: ChannelId::new().to_string(),
+            author_id: UserId::new().to_string(),
+            author_device_id: 7,
+            timestamp: 123,
+            send_request_key: vec![1; 32],
+            edited: true,
+            edited_at: 456,
+            content: Some(chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Text(
+                    "payload".repeat(1024),
+                )),
+            }),
+            ..Default::default()
+        };
+        let metadata = preflight_metadata(&proto);
+        assert_eq!(metadata.id, proto.id);
+        assert_eq!(metadata.channel_id, proto.channel_id);
+        assert_eq!(metadata.author_id, proto.author_id);
+        assert_eq!(metadata.author_device_id, proto.author_device_id);
+        assert_eq!(metadata.timestamp, proto.timestamp);
+        assert_eq!(metadata.send_request_key, proto.send_request_key);
+        assert_eq!(metadata.edited, proto.edited);
+        assert_eq!(metadata.edited_at, proto.edited_at);
+        assert!(metadata.content.is_none());
     }
 }

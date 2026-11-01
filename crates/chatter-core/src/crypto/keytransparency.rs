@@ -110,6 +110,26 @@ pub enum KtError {
     ConsistencyUnavailable,
 }
 
+impl KtError {
+    /// Constant metadata only: no peer, proof, pin, or error payload is logged.
+    pub(crate) fn trace_rejection(&self) {
+        match self {
+            Self::Malformed(_) => tracing::warn!(target: "kt_reject::malformed", "key transparency rejected"),
+            Self::PinUnreadable => tracing::warn!(target: "kt_reject::pin_unreadable", "key transparency rejected"),
+            Self::WrongLeafKey => tracing::warn!(target: "kt_reject::wrong_leaf", "key transparency rejected"),
+            Self::VrfInvalid => tracing::warn!(target: "kt_reject::vrf_invalid", "key transparency rejected"),
+            Self::IdentityKeyMismatch => tracing::warn!(target: "kt_reject::value_mismatch", "key transparency rejected"),
+            Self::InclusionInvalid => tracing::warn!(target: "kt_reject::inclusion_invalid", "key transparency rejected"),
+            Self::TreeHeadSignatureInvalid => tracing::warn!(target: "kt_reject::tree_head_signature", "key transparency rejected"),
+            Self::ConsistencyEpochOrder => tracing::warn!(target: "kt_reject::consistency_epoch_order", "key transparency rejected"),
+            Self::ConsistencyRootMismatch => tracing::warn!(target: "kt_reject::consistency_root_mismatch", "key transparency rejected"),
+            Self::ConsistencyLogNotAppendOnly => tracing::warn!(target: "kt_reject::not_append_only", "key transparency rejected"),
+            Self::PrefixRootNotInLog => tracing::warn!(target: "kt_reject::prefix_not_in_log", "key transparency rejected"),
+            Self::ConsistencyUnavailable => tracing::warn!(target: "kt_reject::consistency_unavailable", "key transparency rejected"),
+        }
+    }
+}
+
 impl std::fmt::Display for KtError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -571,6 +591,7 @@ pub fn verify_consistency_proof(response: &GetConsistencyProofResponse) -> Resul
         || proof.old_epoch != old_sth.epoch
         || proof.new_epoch != new_sth.epoch
     {
+        tracing::warn!(target: "kt_proof::epoch_binding_mismatch", "KT continuity rejected");
         return Err(KtError::ConsistencyEpochOrder);
     }
 

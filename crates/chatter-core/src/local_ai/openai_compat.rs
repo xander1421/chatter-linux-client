@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn chat_request_serializes_openai_shape() {
-        use crate::local_ai::backend::{ChatRole, GenerateParams};
+        use crate::ai_protocol::{ChatRole, GenerateParams};
         let messages = vec![ChatMessage {
             role: ChatRole::User,
             content: "hello".into(),

@@ -213,6 +213,20 @@ impl SettingsRepository {
     /// Uses upsert semantics: creates if new, updates if exists.
     pub fn set<T: Serialize>(&self, key: &str, value: &T) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
+        Self::set_with_connection(&conn, key, value)
+    }
+
+    pub(crate) fn set_received<T: Serialize>(&self, key: &str, value: &T, session: &crate::state::receive_session::ReceiveSession) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let tx = conn.unchecked_transaction()?;
+        session.check_owner(&tx)?;
+        Self::set_with_connection(&tx, key, value)?;
+        session.check()?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn set_with_connection<T: Serialize>(conn: &rusqlite::Connection, key: &str, value: &T) -> Result<(), StorageError> {
         let json = serde_json::to_string(value).map_err(|e| {
             StorageError::InvalidData(format!("Failed to serialize setting '{}': {}", key, e))
         })?;
@@ -227,6 +241,16 @@ impl SettingsRepository {
             params![key, json, now],
         )?;
 
+        Ok(())
+    }
+
+    pub(crate) fn delete_received(&self, key: &str, session: &crate::state::receive_session::ReceiveSession) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let tx = conn.unchecked_transaction()?;
+        session.check_owner(&tx)?;
+        tx.execute("DELETE FROM settings WHERE key=?1", [key])?;
+        session.check()?;
+        tx.commit()?;
         Ok(())
     }
 

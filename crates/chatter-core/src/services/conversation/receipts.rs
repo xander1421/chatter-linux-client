@@ -55,6 +55,19 @@ impl ConversationHandle {
         self.send_receipt_with_recovery(timestamps, false).await
     }
 
+    /// This caller already owns durable retry state; do not duplicate it in the
+    /// session-local recovery queue or interpret "already queued" as delivered.
+    pub(crate) async fn send_durable_channel_delivery(&self, author: UserId, timestamps: &[u64]) -> ConversationResult {
+        let ActiveConversation::Channel(channel) = self.conversation else {
+            return Err(ConversationError::NoConversation);
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.client.messages().send_channel_receipt_to_author(channel, author, timestamps.to_vec(), false),
+        ).await.unwrap_or_else(|_| Err(crate::services::MessageError::Network(crate::error::NetworkError::Timeout)))
+            .map_err(ConversationError::Message)
+    }
+
     pub(super) async fn send_delivery_receipt_once(
         &self,
         timestamps: &[u64],

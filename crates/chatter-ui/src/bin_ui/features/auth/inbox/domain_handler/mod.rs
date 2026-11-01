@@ -160,25 +160,10 @@ pub async fn handle_domain_event(
         // Message Events (handled by EventHandlers state store)
         // =========================================================================
         DomainEvent::MessageReceived { ref message } => {
-            let is_server_dm = matches!(
-                message.conversation_type,
-                chatter_core::domain::message::ConversationType::ServerDm
-            );
-            messaging::handle_message_received(window, ui_ctx, message.clone());
-            // A DM carries the sender's profile key (Signal-style); the gateway
-            // just stored it. Re-sync the sidebar so list_friends_with_profiles
-            // decrypts + persists the peer's real display name + avatar and the
-            // row re-renders (fallback "User <id>" → real name, initials →
-            // avatar). Refreshes on every DM receive; fine for
-            // low-volume friend DMs, revisit if it shows up in profiling.
-            // This runs on the runtime, where a Weak never upgrades — the
-            // refresh has to be scheduled onto the UI thread.
-            if is_server_dm {
-                let ui_ctx = ui_ctx.clone();
-                crate::run_ui!(window, |w| {
-                    crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
-                });
-            }
+            // Profile-key changes already emit ProfileKeyReceived in core;
+            // UserProfileUpdated refreshes the committed profile separately.
+            // A normal message only patches its own sidebar row.
+            messaging::handle_message_received(window, ui_ctx, message.clone()).await;
         }
 
         DomainEvent::MessageDeliveryChanged {
@@ -317,20 +302,22 @@ pub async fn handle_domain_event(
             crate::run_ui!(window, |w| {
                 for id in &conversation_ids {
                     helpers::update_unread_count(&w, &ui_ctx, &id.to_string(), 0);
+                    crate::bin_ui::features::sidebar::refresh_section_member(&w, &ui_ctx, &id.to_string());
                 }
-                crate::bin_ui::features::sidebar::refresh_section_badges(&w, &ui_ctx);
             });
         }
         // Read on another of our devices: core marked the messages read;
         // rows and badges are rebuilt from storage (a sync can read only some).
         DomainEvent::ConversationsRead {
+            conversation_ids,
             from_other_device: true,
-            ..
         } => {
             crate::bin_ui::features::sidebar::rebuild_chat_list(window, ui_ctx);
             let ui_ctx = ui_ctx.clone();
             crate::run_ui!(window, |w| {
-                crate::bin_ui::features::sidebar::refresh_section_badges(&w, &ui_ctx);
+                for id in &conversation_ids {
+                    crate::bin_ui::features::sidebar::refresh_section_member(&w, &ui_ctx, &id.to_string());
+                }
                 helpers::recompute_total_unread(&w, &ui_ctx);
             });
         }
@@ -403,6 +390,11 @@ pub async fn handle_domain_event(
                 let ui_ctx_dl = ui_ctx.clone();
                 let weak = window.clone();
                 let conv_id = channel_id.to_string();
+                let download_session = ui_ctx_dl.session_guard();
+                let download_owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(
+                    &ui_ctx_dl,
+                    ui_ctx_dl.active_conversation(),
+                );
                 tokio::spawn(async move {
                     super::attachment_download::download_attachments(
                         &downloadable,
@@ -410,6 +402,8 @@ pub async fn handle_domain_event(
                         weak,
                         conv_id,
                         false,
+                        download_session,
+                        download_owner,
                     )
                     .await;
                 });
@@ -546,7 +540,7 @@ pub async fn handle_domain_event(
             display_name: _,
             message,
         } => {
-            messaging::handle_message_received(window, ui_ctx, message);
+            messaging::handle_message_received(window, ui_ctx, message).await;
             messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
             // We rejoined a channel that is open as read-only: give the
             // composer back, as a leave took it away.
@@ -565,7 +559,7 @@ pub async fn handle_domain_event(
             // so the composer gives way to the notice and the sidebar row is
             // rebuilt from core (its preview, and no "Leave channel" in its menu).
             let we_left = ui_ctx.session_current_user_id() == Some(user_id);
-            messaging::handle_message_received(window, ui_ctx, message);
+            messaging::handle_message_received(window, ui_ctx, message).await;
             messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
             if we_left {
                 crate::bin_ui::features::chat::refresh_send_notice(window, ui_ctx, channel_id);
@@ -663,7 +657,7 @@ pub async fn handle_domain_event(
         // A note-to-self sent from a sibling device. Core stored it; show it
         // like any received message (inserted only if Saved Messages is open).
         DomainEvent::MessageSnapshotChanged { message } => {
-            messaging::handle_message_received(window, ui_ctx, message);
+            messaging::handle_message_received(window, ui_ctx, message).await;
         }
 
         // Catch-up announces newly inserted messages individually; this cycle

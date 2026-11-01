@@ -23,19 +23,21 @@ const WIN_H: f32 = 900.0;
 /// size between pumps forces a full relayout (a same-size event is a no-op).
 fn pump_at(w: &MainWindow, width: f32, height: f32) {
     w.window().set_size(slint::LogicalSize::new(width, height));
-    // Re-entering run() after quit returns immediately. Drive real frames and
-    // wall-clock time so size/focus/height animations settle on every pump.
-    for _ in 0..12 {
-        w.window()
-            .dispatch_event(slint::platform::WindowEvent::Resized {
-                size: slint::LogicalSize::new(width, height),
-            });
-        slint::Timer::single_shot(std::time::Duration::from_millis(1), || {
-            slint::quit_event_loop().unwrap();
-        });
-        w.run().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+    // ComponentHandle::run() hides the window on return, enqueueing another
+    // Quit in this backend. Keep it shown between pumps so later runs cannot
+    // consume a stale Quit instead of advancing timers and spring animations.
+    w.show().unwrap();
+    let settled = std::rc::Rc::new(std::cell::Cell::new(false));
+    let capture = settled.clone();
+    slint::Timer::single_shot(std::time::Duration::from_millis(1000), move || {
+        capture.set(true);
+        slint::quit_event_loop().unwrap();
+    });
+    slint::run_event_loop_until_quit().unwrap();
+    assert!(
+        settled.get(),
+        "layout pump returned before its settling timer"
+    );
 }
 
 fn click(w: &MainWindow, label: &str) {
@@ -357,49 +359,26 @@ fn composer_drawer_and_recording_have_usable_geometry() {
         w.global::<chatter_ui::ChatPane>()
             .set_composer_gif_picker_visible(false);
         pump_at(&w, width, height);
-        assert!(
-            testing::ElementHandle::find_by_accessible_label(&w, "Record voice message")
-                .next()
-                .is_none()
-        );
-        assert!(
-            testing::ElementHandle::find_by_accessible_label(&w, "Send message")
-                .next()
-                .is_some()
-        );
-        w.global::<chatter_ui::ChatPane>()
-            .set_composer_text("".into());
-        pump_at(&w, width, height);
-        assert!(
-            testing::ElementHandle::find_by_accessible_label(&w, "Record voice message")
-                .next()
-                .is_some()
-        );
-        assert!(
-            testing::ElementHandle::find_by_accessible_label(&w, "Send message")
-                .next()
-                .is_none()
-        );
+        composer_terminal_actions(&w, width, height);
         w.global::<chatter_ui::ChatPane>()
             .set_composer_text("Draft stays here".into());
+        w.global::<VoiceRecording>().set_owner("main".into());
         w.global::<VoiceRecording>().set_active(true);
-        w.global::<VoiceRecording>().set_locked(true);
         pump_at(&w, width, height);
         let composer = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
             .next()
             .unwrap();
-        assert!(composer.size().height >= 112.0);
+        // Each explicit action must fit inside the recording row.
+        let bottom = composer.absolute_position().y + composer.size().height;
         let mut last_right = composer.absolute_position().x;
-        for label in [
-            "Cancel voice message",
-            "Lock recording",
-            "Send voice message",
-        ] {
+        for label in ["Cancel voice message", "Send voice message"] {
             let control = testing::ElementHandle::find_by_accessible_label(&w, label)
                 .next()
                 .unwrap();
             assert!(control.size().width >= 48.0 && control.size().height >= 48.0);
             assert!(control.absolute_position().x >= last_right);
+            assert!(control.absolute_position().y >= composer.absolute_position().y);
+            assert!(control.absolute_position().y + control.size().height <= bottom + 1.0);
             last_right = control.absolute_position().x + control.size().width;
         }
         assert_eq!(
@@ -436,43 +415,39 @@ fn composer_drawer_and_recording_have_usable_geometry() {
         w.global::<chatter_ui::ChatPane>()
             .set_composer_text("".into());
         pump_at(&w, width, height);
-        // Measure a slide in window coordinates: expanding the recording row
-        // moves the microphone, but must not increase the lock threshold.
+        // Tap-to-record owns capture until an explicit Cancel or Send. A
+        // pointer release must not implicitly finish the voice message.
         let weak = w.as_weak();
         w.global::<VoiceRecording>().on_start(move || {
-            let w = weak.upgrade().unwrap();
-            w.global::<VoiceRecording>().set_active(true);
-            w.global::<VoiceRecording>().set_locked(false);
+            weak.upgrade()
+                .unwrap()
+                .global::<VoiceRecording>()
+                .set_active(true);
         });
-        let mic = testing::ElementHandle::find_by_accessible_label(&w, "Record voice message")
-            .next()
-            .unwrap();
-        let p = mic.absolute_position();
-        let size = mic.size();
-        let position = slint::LogicalPosition::new(p.x + size.width / 2.0, p.y + size.height / 2.0);
-        w.window()
-            .dispatch_event(slint::platform::WindowEvent::PointerPressed {
-                position,
-                button: slint::platform::PointerEventButton::Left,
-            });
+        let cancels = std::rc::Rc::new(std::cell::Cell::new(0));
+        let capture = cancels.clone();
+        let weak = w.as_weak();
+        w.global::<VoiceRecording>().on_cancel(move || {
+            capture.set(capture.get() + 1);
+            weak.upgrade()
+                .unwrap()
+                .global::<VoiceRecording>()
+                .set_active(false);
+        });
+        click(&w, "Record voice message");
         pump_at(&w, width, height);
-        let slid = slint::LogicalPosition::new(position.x, position.y - 65.0);
-        w.window()
-            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: slid });
-        assert!(
-            w.global::<VoiceRecording>().get_locked(),
-            "recording expansion changed slide-to-lock distance"
-        );
-        w.window()
-            .dispatch_event(slint::platform::WindowEvent::PointerReleased {
-                position: slid,
-                button: slint::platform::PointerEventButton::Left,
-            });
-        assert_eq!(
-            finishes.get(),
-            1,
-            "releasing a locked recording must not send"
-        );
+        assert!(w.global::<VoiceRecording>().get_active());
+        assert_eq!(finishes.get(), 1, "tap/release must not send a recording");
+        click(&w, "Cancel voice message");
+        assert_eq!(cancels.get(), 1);
+        assert!(!w.global::<VoiceRecording>().get_active());
+        pump_at(&w, width, height);
+        click(&w, "Record voice message");
+        pump_at(&w, width, height);
+        assert!(w.global::<VoiceRecording>().get_active());
+        click(&w, "Send voice message");
+        assert_eq!(finishes.get(), 2, "explicit recording Send must finish");
+        assert_eq!(cancels.get(), 1);
         w.global::<VoiceRecording>().set_active(false);
         w.global::<chatter_ui::ChatPane>()
             .set_composer_text("Draft stays here".into());
@@ -504,4 +479,147 @@ fn composer_drawer_and_recording_have_usable_geometry() {
             "mount replayed the previous emoji insertion"
         );
     }
+}
+
+/// Exercise the real composer through its public input paths. Label search
+/// includes the mounted, transparent microphone during the Send transition.
+fn composer_terminal_actions(w: &MainWindow, width: f32, height: f32) {
+    use chatter_ui::{ChatPane, VoiceRecording};
+    use std::{cell::Cell, rc::Rc};
+    let starts = Rc::new(Cell::new(0));
+    let capture = starts.clone();
+    w.global::<VoiceRecording>()
+        .on_start(move || capture.set(capture.get() + 1));
+    let sends = Rc::new(Cell::new(0));
+    let capture = sends.clone();
+    w.global::<ChatPane>().on_send(move |text| {
+        assert!(!text.is_empty());
+        capture.set(capture.get() + 1);
+        false // Keep the draft so each input path can be exercised independently.
+    });
+    let mic = || {
+        testing::ElementHandle::find_by_accessible_label(w, "Record voice message")
+            .next()
+            .expect("mounted microphone")
+    };
+    let key = |text: slint::SharedString| {
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+    };
+
+    // Empty-draft positive controls: pointer, accessible action, and keyboard
+    // must all reach recording, otherwise the negative controls prove nothing.
+    w.global::<ChatPane>().set_composer_text("".into());
+    pump_at(w, width, height);
+    assert_eq!(mic().accessible_enabled(), Some(true));
+    assert!(mic().computed_opacity() > 0.99);
+    assert!(
+        testing::ElementHandle::find_by_accessible_label(w, "Send message")
+            .next()
+            .is_none()
+    );
+    click(w, "Record voice message");
+    assert_eq!(starts.get(), 1, "empty-draft pointer recording");
+    mic().invoke_accessible_default_action();
+    assert_eq!(starts.get(), 2, "empty-draft accessible recording");
+    click(w, "Message input");
+    // Tab order includes other composer controls and varies with platform.
+    // Walk with real keys, inspecting focus without activating other buttons.
+    let mic_has_focus = || {
+        let window = i_slint_core::window::WindowInner::from_pub(w.window());
+        let mut item = window.focus_item.borrow().upgrade();
+        while let Some(current) = item {
+            if current
+                .accessible_string_property(
+                    i_slint_core::accessibility::AccessibleStringProperty::Label,
+                )
+                .is_some_and(|label| label == "Record voice message")
+            {
+                return true;
+            }
+            item =
+                current.parent_item(i_slint_core::item_tree::ParentItemTraversalMode::StopAtPopups);
+        }
+        false
+    };
+    for _ in 0..64 {
+        key(slint::platform::Key::Tab.into());
+        if mic_has_focus() {
+            break;
+        }
+    }
+    assert!(
+        mic_has_focus(),
+        "empty microphone must be keyboard reachable"
+    );
+    key(slint::platform::Key::Space.into());
+    assert_eq!(
+        starts.get(),
+        3,
+        "Space on focused empty microphone must record"
+    );
+
+    // Keep keyboard focus from the working microphone, then make it inactive.
+    w.global::<ChatPane>()
+        .set_composer_text("Draft stays here".into());
+    pump_at(w, width, height);
+    let microphone = mic();
+    let send = testing::ElementHandle::find_by_accessible_label(w, "Send message")
+        .next()
+        .expect("nonempty draft must offer Send");
+    println!(
+        "composer {width}x{height}: mic opacity={} enabled={:?}, Send opacity={}",
+        microphone.computed_opacity(),
+        microphone.accessible_enabled(),
+        send.computed_opacity()
+    );
+    assert!(
+        microphone.computed_opacity() <= 0.001,
+        "settled microphone must not render"
+    );
+    assert_eq!(microphone.accessible_enabled(), Some(false));
+    assert!(
+        send.computed_opacity() > 0.99,
+        "Send must render after settling"
+    );
+    microphone.invoke_accessible_default_action();
+    assert_eq!(
+        starts.get(),
+        3,
+        "inactive microphone accepted accessible activation"
+    );
+    println!(
+        "inactive microphone retains keyboard focus: {}",
+        mic_has_focus()
+    );
+    key(slint::platform::Key::Space.into());
+    let after_space = starts.get();
+    key(slint::platform::Key::Return.into());
+    let after_keyboard = starts.get();
+    println!(
+        "record callbacks: before=3 after-default=3 after-Space={after_space} after-Return={after_keyboard}"
+    );
+    // Both controls occupy the same terminal slot. A physical click there
+    // must send rather than start recording, even though the mic is mounted.
+    let before = sends.get();
+    click(w, "Record voice message");
+    assert_eq!(
+        starts.get(),
+        after_keyboard,
+        "transparent microphone intercepted pointer input"
+    );
+    assert_eq!(sends.get(), before + 1, "terminal-slot pointer must send");
+    send.invoke_accessible_default_action();
+    assert_eq!(sends.get(), before + 2, "Send accessible action must work");
+    println!("terminal-slot pointer and accessible Send callbacks both passed");
+    assert_eq!(
+        after_space, 3,
+        "inactive microphone accepted Space activation"
+    );
+    assert_eq!(
+        after_keyboard, 3,
+        "inactive microphone accepted Return activation"
+    );
 }

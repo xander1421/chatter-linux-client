@@ -411,9 +411,8 @@ pub fn decide_after_failure(
 /// [`MAX_RETAIN_AGE_NS`] is the real bound; this one is a runaway guard for the
 /// case where the loop is somehow spinning far faster than its configured
 /// pacing. It is set above what a day of the *fastest* configured interval can
-/// produce — `InboxConfig::poll_interval` is 5s, so 24h is at most ~17_280
-/// deliveries — precisely so that it does not fire first in normal operation
-/// and shorten the window an SKDM or a bootstrap response has to arrive in.
+/// produce at idle cadence. Active polling can consume the count budget first;
+/// cooldowns bound repeated work without skipping a retained envelope.
 pub const MAX_RETAIN_ATTEMPTS: u32 = 20_000;
 
 /// How long we keep re-offering an envelope to ourselves before giving up.
@@ -453,7 +452,7 @@ pub const MAX_RETAIN_AGE_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
 #[derive(Debug, Default)]
 pub struct RetryBudget {
     /// envelope id -> (deliveries seen, when we first saw it).
-    attempts: parking_lot::Mutex<std::collections::HashMap<String, (u32, u64)>>,
+    attempts: parking_lot::Mutex<std::collections::HashMap<String, (u32, u64, u64)>>,
 }
 
 impl RetryBudget {
@@ -469,11 +468,29 @@ impl RetryBudget {
     /// how long the message sat on the server before we ever fetched it.
     pub fn record_attempt(&self, envelope_id: &str, now_ns: u64) -> (u32, u64) {
         let mut attempts = self.attempts.lock();
-        let entry = attempts
-            .entry(envelope_id.to_string())
-            .or_insert((0, now_ns));
-        entry.0 += 1;
-        *entry
+        // Eviction resets only a retry budget, never ACKs or skips server mail.
+        // This bounds process memory even when an envelope disappears upstream.
+        if attempts.len() >= 4096 && !attempts.contains_key(envelope_id) {
+            if let Some(oldest) = attempts.iter().min_by_key(|(_, value)| value.1).map(|(id, _)| id.clone()) {
+                attempts.remove(&oldest);
+            }
+        }
+        let entry = attempts.entry(envelope_id.to_string()).or_insert((0, now_ns, 0));
+        entry.0 = entry.0.saturating_add(1);
+        let delay_ns = (2_000_000_000u64 << entry.0.saturating_sub(1).min(4)).min(30_000_000_000);
+        entry.2 = now_ns.saturating_add(delay_ns);
+        (entry.0, entry.1)
+    }
+
+    /// A cooldown is not an ACK: callers keep the cursor below this envelope.
+    pub fn should_attempt(&self, envelope_id: &str, now_ns: u64) -> bool {
+        self.attempts.lock().get(envelope_id).is_none_or(|entry| now_ns >= entry.2)
+    }
+
+    /// Successfully applied mail may have supplied the missing key material.
+    /// Reset timing only, retaining the original attempt/age loss budget.
+    pub fn retry_after_progress(&self) {
+        for entry in self.attempts.lock().values_mut() { entry.2 = 0; }
     }
 
     /// Drop the counter — call this whenever the envelope is acked, so the map
@@ -780,5 +797,25 @@ mod tests {
              store reads; calling it permanent deletes mail we merely failed to \
              understand"
         );
+    }
+}
+
+
+#[cfg(test)]
+mod cooldown_tests {
+    use super::*;
+    #[test]
+    fn key_progress_wakes_retained_mail_without_resetting_loss_budget() {
+        let budget = RetryBudget::new();
+        assert!(budget.should_attempt("mail", 10));
+        assert_eq!(budget.record_attempt("mail", 10), (1, 10));
+        assert!(!budget.should_attempt("mail", 11));
+        budget.retry_after_progress();
+        assert!(budget.should_attempt("mail", 11));
+        assert_eq!(budget.record_attempt("mail", 11), (2, 10));
+        assert!(!budget.should_attempt("mail", 2_000_000_011));
+        assert!(budget.should_attempt("mail", 4_000_000_011));
+        budget.forget("mail");
+        assert!(budget.should_attempt("mail", 11));
     }
 }

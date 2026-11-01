@@ -269,6 +269,25 @@ mod reconnect_timer_boundary_tests {
 mod reconnect_camera_tests {
     use super::*;
 
+    #[test]
+    fn microphone_selection_survives_reconnect_retries() {
+        // None means no microphone; Some(None) must still republish the default.
+        for microphone in [None, Some(None), Some(Some("chosen microphone".into()))] {
+            let mut saved = None;
+            remember_reconnect_media(&mut saved, || ReconnectMedia {
+                microphone: microphone.clone(),
+                camera: None,
+                muted: true,
+            });
+            for _ in 0..2 {
+                remember_reconnect_media(&mut saved, || panic!("replaced preserved intent"));
+            }
+            let media = saved.unwrap();
+            assert_eq!(media.microphone, microphone);
+            assert!(media.muted);
+        }
+    }
+
     #[tokio::test]
     async fn nondefault_camera_arguments_survive_failed_attempts_and_restore() {
         let config = VideoCaptureConfig {
@@ -278,7 +297,7 @@ mod reconnect_camera_tests {
         };
         let mut saved = None;
         remember_reconnect_media(&mut saved, || ReconnectMedia {
-            microphone: Some("selected-mic".into()),
+            microphone: Some(Some("selected-mic".into())),
             camera: Some(("/dev/video7".into(), config.clone())),
             muted: true,
         });
@@ -288,7 +307,13 @@ mod reconnect_camera_tests {
         }
         let media = saved.as_ref().unwrap();
         assert!(media.muted);
-        assert_eq!(media.microphone.as_deref(), Some("selected-mic"));
+        assert_eq!(
+            media
+                .microphone
+                .as_ref()
+                .and_then(|device| device.as_deref()),
+            Some("selected-mic")
+        );
         let mut observed = None;
         restore_camera_with(media.camera.clone(), |device, settings| {
             observed = Some((device, settings));

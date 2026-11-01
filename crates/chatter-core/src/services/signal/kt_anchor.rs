@@ -132,6 +132,7 @@ pub fn classify_head(
     if offered_epoch < pin.epoch {
         // Rollback: a validly signed head from before the one we accepted.
         // Nothing about the signature is wrong; the epoch is.
+        tracing::warn!(target: "kt_pin::offered_older_than_pin", "KT continuity rejected");
         return Err(KtError::ConsistencyEpochOrder);
     }
 
@@ -141,6 +142,7 @@ pub fn classify_head(
         } else {
             // Two different signed roots at one epoch. The only way to produce
             // this is to sign two trees, so it is a fork by definition.
+            tracing::warn!(target: "kt_pin::same_epoch_different_root", "KT continuity rejected");
             Err(KtError::ConsistencyRootMismatch)
         };
     }

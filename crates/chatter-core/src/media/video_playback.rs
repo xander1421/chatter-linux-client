@@ -211,7 +211,31 @@ impl VideoPlayer {
     where
         F: FnMut(u32, u32, Vec<u8>) + Send + 'static,
     {
-        if data.is_empty() {
+        Self::start_from_source(
+            decoder::VideoSource::Memory(std::sync::Arc::new(data)),
+            frame_callback,
+        )
+    }
+
+    /// Stream an authenticated attachment through the software fallback.
+    pub fn start_from_range<F>(
+        range: std::sync::Arc<crate::services::attachment::CbcRangeDecryptor>,
+        frame_callback: F,
+    ) -> Result<Self, MediaError>
+    where
+        F: FnMut(u32, u32, Vec<u8>) + Send + 'static,
+    {
+        Self::start_from_source(decoder::VideoSource::Range(range), frame_callback)
+    }
+
+    fn start_from_source<F>(
+        data: decoder::VideoSource,
+        frame_callback: F,
+    ) -> Result<Self, MediaError>
+    where
+        F: FnMut(u32, u32, Vec<u8>) + Send + 'static,
+    {
+        if data.len() == 0 {
             return Err(MediaError::InvalidFormat("empty video data".to_string()));
         }
 
@@ -303,7 +327,7 @@ where
 
 /// Run the video playback loop from memory.
 fn run_playback_from_memory<F>(
-    data: Vec<u8>,
+    data: decoder::VideoSource,
     state: SharedPlayerState,
     frame_callback: F,
 ) -> Result<(), MediaError>
@@ -311,7 +335,11 @@ where
     F: FnMut(u32, u32, Vec<u8>) + Send + 'static,
 {
     let mut dec = decoder::create_decoder()?;
-    let info = dec.open_memory(data)?;
+    let info = match data {
+        decoder::VideoSource::Memory(data) => dec
+            .open_memory(std::sync::Arc::try_unwrap(data).unwrap_or_else(|data| (*data).clone()))?,
+        decoder::VideoSource::Range(range) => dec.open_range(range)?,
+    };
 
     run_playback_impl(&mut *dec, info, state, frame_callback)
 }

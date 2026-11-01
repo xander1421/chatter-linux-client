@@ -76,6 +76,7 @@ impl SignalService {
             }
             Ok(kt_anchor::AnchorOutcome::Unchanged) => Ok(()),
             Err(e) => {
+                e.trace_rejection();
                 tracing::error!(
                     recipient = %recipient_id,
                     offered_epoch = sth.epoch,
@@ -243,6 +244,7 @@ impl SignalService {
                 Ok(())
             }
             Err(e) => {
+                e.trace_rejection();
                 tracing::error!(
                     recipient = %recipient_id,
                     error = %e,

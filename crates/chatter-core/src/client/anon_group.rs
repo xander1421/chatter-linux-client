@@ -365,18 +365,27 @@ impl ChatterClient {
         inviter_avatar: Option<Vec<u8>>,
     ) -> Result<crate::domain::anon_group::AnonGroup, crate::services::anon_group::AnonGroupError>
     {
-        self.anon_groups()
-            .accept_invite(
-                group_id,
-                group_name,
-                owner_id,
-                inviter_id,
-                inviter_device_id,
-                inviter_mailbox_pk,
-                inviter_profile_key,
-                inviter_display_name,
-                inviter_avatar,
-            )
+        let session = self.anon_group_invite_session()?;
+        let send_session =
+            crate::services::gateway::submission::SendSession::capture(self.auth_state());
+        crate::services::gateway::submission::SEND_SESSION
+            .scope(send_session, async {
+                self.anon_groups()
+                    .accept_invite_bound(
+                        group_id,
+                        group_name,
+                        owner_id,
+                        inviter_id,
+                        inviter_device_id,
+                        inviter_mailbox_pk,
+                        inviter_profile_key,
+                        inviter_display_name,
+                        inviter_avatar,
+                        None,
+                        Some(&session),
+                    )
+                    .await
+            })
             .await
     }
 
@@ -389,19 +398,65 @@ impl ChatterClient {
         self.anon_groups().list_pending_invites()
     }
 
+    pub(crate) fn anon_group_invite_session(
+        &self,
+    ) -> Result<
+        crate::services::anon_group::InviteSession<'_>,
+        crate::services::anon_group::AnonGroupError,
+    > {
+        let snapshot = self.auth_state().get();
+        Ok(crate::services::anon_group::InviteSession {
+            auth: self.auth_state(),
+            lifecycle: &self.auth_lifecycle_lock,
+            user: snapshot
+                .current_user_id
+                .ok_or(crate::services::anon_group::AnonGroupError::NotLoggedIn)?,
+            revision: snapshot.session_revision,
+        })
+    }
+
     pub async fn accept_pending_anon_group_invite(
         &self,
         group_id: crate::domain::anon_group::AnonGroupId,
     ) -> Result<crate::domain::anon_group::AnonGroup, crate::services::anon_group::AnonGroupError>
     {
-        self.anon_groups().accept_pending_invite(group_id).await
+        let session = self.anon_group_invite_session()?;
+        let send_session =
+            crate::services::gateway::submission::SendSession::capture(self.auth_state());
+        let invite = {
+            let _admission = session.admit().await?;
+            self.anon_groups()
+                .anon_group_repo
+                .get_pending_invite(&group_id)?
+                .ok_or_else(|| {
+                    crate::services::anon_group::AnonGroupError::InvalidData(
+                        "Invitation no longer pending".into(),
+                    )
+                })?
+        };
+        crate::services::gateway::submission::SEND_SESSION
+            .scope(
+                send_session,
+                self.anon_groups()
+                    .accept_pending_invite_bound(invite, Some(&session)),
+            )
+            .await
     }
 
     pub async fn decline_pending_anon_group_invite(
         &self,
         group_id: &crate::domain::anon_group::AnonGroupId,
     ) -> Result<(), crate::services::anon_group::AnonGroupError> {
-        self.anon_groups().decline_pending_invite(group_id).await
+        let session = self.anon_group_invite_session()?;
+        let send_session =
+            crate::services::gateway::submission::SendSession::capture(self.auth_state());
+        crate::services::gateway::submission::SEND_SESSION
+            .scope(
+                send_session,
+                self.anon_groups()
+                    .decline_pending_invite_bound(group_id, Some(&session)),
+            )
+            .await
     }
 }
 

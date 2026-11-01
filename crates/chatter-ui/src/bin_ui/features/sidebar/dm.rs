@@ -391,7 +391,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     |m| ui_ctx.reply_parent_missing_for(m),
                     |m| ui_ctx.reply_parent_media(m),
                     |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-                );
+                ).await;
                 crate::bin_ui::converters::mark_disappearing(&ui_ctx, &mut display_messages);
 
                 let initial_count = display_messages.len();
@@ -409,7 +409,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                     let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_preview_with_user(&current_user_id)).collect();
                     tracing::info!(before_count = before, replacing_with = slint_messages.len(), "[UI_OPEN_DM] anon DM run_ui replacing messages");
-                    w.global::<crate::ChatPane>().set_messages(ModelRc::new(VecModel::from(slint_messages)));
+                    w.global::<crate::ChatPane>().set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::from(slint_messages)));
                     crate::trace_chat_open_model(initial_count, 0);
                     tracing::info!(kind = "secret_dm", stage = "model_replaced", rows = initial_count, elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
                     tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
@@ -507,7 +507,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 |m| ui_ctx.reply_parent_missing_for(m),
                 |m| ui_ctx.reply_parent_media(m),
                 |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-            );
+            ).await;
             crate::bin_ui::converters::mark_disappearing(&ui_ctx, &mut display_messages);
             tracing::info!(kind = "dm", stage = "display_built", rows = display_messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
 
@@ -535,7 +535,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 pane.set_is_at_bottom(unread_index.is_none());
                 let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                 let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_preview_with_user(&current_user_id)).collect();
-                w.global::<crate::ChatPane>().set_messages(ModelRc::new(VecModel::from(slint_messages)));
+                w.global::<crate::ChatPane>().set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::from(slint_messages)));
                 tracing::info!(kind = "dm", stage = "model_replaced", rows = display_messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
                 crate::trace_chat_open_model(display_messages.len(), 0);
                 tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");

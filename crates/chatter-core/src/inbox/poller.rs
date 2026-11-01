@@ -21,6 +21,10 @@ use super::state::{InboxState, InboxStats};
 struct DeviceQueueCursor {
     owner: Option<(String, u32, u64)>,
     after_id: i64,
+    // A finite traversal may inspect newer pages while the redelivery floor
+    // stays behind retained mail. At end of traversal it wraps to that floor.
+    scan_after_id: Option<i64>,
+    retained_floor: Option<i64>,
 }
 
 impl DeviceQueueCursor {
@@ -29,8 +33,30 @@ impl DeviceQueueCursor {
         if self.owner.as_ref() != Some(&owner) {
             self.owner = Some(owner);
             self.after_id = 0;
+            self.scan_after_id = None;
+            self.retained_floor = None;
         }
     }
+
+    fn processed_page(&mut self, batch_max: i64, lowest_retained: Option<i64>, has_more: bool) {
+        let high = batch_max.max(self.scan_after_id.unwrap_or(self.after_id));
+        if let Some(retained) = lowest_retained {
+            self.retained_floor = Some(self.retained_floor.map_or(retained, |old| old.min(retained)));
+        }
+        self.after_id = next_after_id(high, self.retained_floor);
+        self.scan_after_id = has_more.then_some(high);
+        if !has_more { self.retained_floor = None; }
+    }
+}
+
+/// Response deadlines cover mutex admission too, and drop the in-flight RPC
+/// before the provider retries its unchanged durable GUID batch.
+async fn ack_response_deadline<T>(
+    budget: std::time::Duration,
+    operation: impl std::future::Future<Output = Result<T, crate::error::NetworkError>>,
+) -> Result<T, crate::error::NetworkError> {
+    tokio::time::timeout(budget, operation).await
+        .unwrap_or(Err(crate::error::NetworkError::Timeout))
 }
 
 /// Where the next `GetDeviceMessages` should resume from.
@@ -80,6 +106,7 @@ pub struct InboxPoller {
     // For device queue, we use queue_id (int64) for pagination, not string
     cursor: RwLock<DeviceQueueCursor>,
     last_activity: RwLock<Option<Instant>>,
+    empty_polls: std::sync::atomic::AtomicU32,
 }
 
 impl InboxPoller {
@@ -120,6 +147,7 @@ impl InboxPoller {
             state,
             cursor: RwLock::new(DeviceQueueCursor::default()),
             last_activity: RwLock::new(None),
+            empty_polls: std::sync::atomic::AtomicU32::new(0),
         }
     }
 
@@ -169,6 +197,11 @@ impl InboxPoller {
                     .send(InboxEvent::PollCompleted { count, has_more });
 
                 // Update last activity if we got messages
+                if count == 0 {
+                    let _ = self.empty_polls.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |value| Some(value.saturating_add(1)));
+                } else {
+                    self.reset_idle_backoff();
+                }
                 if count > 0 {
                     *self.last_activity.write() = Some(Instant::now());
 
@@ -199,14 +232,17 @@ impl InboxPoller {
     /// same decision: `after_id` is exclusive, so a message below it is never
     /// requested again, and a retained message below it is one the server still
     /// holds and we will never ask for. See [`next_after_id`].
-    pub fn advance_after_id(&self, batch_max: i64, lowest_retained: Option<i64>) {
-        self.cursor.write().after_id = next_after_id(batch_max, lowest_retained);
+    pub fn advance_after_id(&self, batch_max: i64, lowest_retained: Option<i64>, has_more: bool) {
+        self.cursor.write().processed_page(batch_max, lowest_retained, has_more);
     }
 
     /// Perform a single poll request.
     async fn poll_once(&self) -> Result<(Vec<DeviceMessage>, bool), InboxError> {
         // Poll for messages
-        let after_id = self.cursor.read().after_id;
+        let after_id = {
+            let cursor = self.cursor.read();
+            cursor.scan_after_id.unwrap_or(cursor.after_id)
+        };
 
         tracing::info!(after_id, "Acquiring message client lock...");
         let response = {
@@ -283,6 +319,20 @@ impl InboxPoller {
         }
     }
 
+    /// Direct transport only: push wakes reset this bounded fallback. Shield
+    /// retains its original privacy pacing and responsive leases still override.
+    pub fn direct_idle_interval(&self) -> std::time::Duration {
+        let base = self.current_interval();
+        if base != self.config.poll_interval_idle { return base }
+        let empty = self.empty_polls.load(std::sync::atomic::Ordering::Relaxed);
+        base.saturating_mul(1u32 << empty.saturating_sub(1).min(3))
+            .min(base.max(std::time::Duration::from_secs(30)))
+    }
+
+    pub fn reset_idle_backoff(&self) {
+        self.empty_polls.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Set the current state.
     fn set_state(&self, state: InboxState) {
         *self.state.write() = state;
@@ -301,10 +351,19 @@ impl InboxPoller {
         for chunk in message_ids.chunks(self.config.ack_batch_size as usize) {
             let chunk_ids: Vec<String> = chunk.to_vec();
 
-            let result = {
+            // Bound admission and the response, not only dead-peer detection.
+            // On cancellation the provider retains these GUIDs for idempotent retry.
+            let budget = if self.grpc_pool.transport_mode()
+                == crate::network::grpc::client_pool::TransportMode::Onion
+            {
+                std::time::Duration::from_secs(95)
+            } else {
+                std::time::Duration::from_secs(15)
+            };
+            let result = ack_response_deadline(budget, async {
                 let mut client = self.message_client.lock().await;
                 client.acknowledge_messages(chunk_ids.clone()).await
-            };
+            }).await;
 
             if let Err(e) = result {
                 let _ = self.event_tx.send(InboxEvent::AcknowledgeFailed {
@@ -327,6 +386,38 @@ impl InboxPoller {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn hung_ack_is_cancelled_and_releases_the_client_for_retry() {
+        let client = Mutex::new(());
+        let result = ack_response_deadline(std::time::Duration::from_millis(20), async {
+            let _guard = client.lock().await;
+            std::future::pending::<Result<(), crate::error::NetworkError>>().await
+        }).await;
+        assert!(matches!(result, Err(crate::error::NetworkError::Timeout)));
+        assert!(client.try_lock().is_ok(), "timed-out RPC must release poll/ACK client admission");
+        let next = ack_response_deadline(std::time::Duration::from_secs(1), async {
+            let _guard = client.lock().await;
+            Ok::<_, crate::error::NetworkError>(())
+        }).await;
+        assert!(next.is_ok(), "the GUID retry must be able to use the same client");
+    }
+
+    #[test]
+    fn retained_full_pages_do_not_starve_newer_mail_and_are_revisited() {
+        let mut cursor = DeviceQueueCursor::default();
+        cursor.processed_page(100, Some(1), true);
+        assert_eq!(cursor.after_id, 0, "retained envelope stays above the redelivery floor");
+        assert_eq!(cursor.scan_after_id, Some(100));
+        cursor.processed_page(200, Some(101), true);
+        assert_eq!(cursor.after_id, 0);
+        assert_eq!(cursor.scan_after_id, Some(200), "two poison pages cannot hide valid newer mail");
+        cursor.processed_page(201, None, false);
+        assert_eq!(cursor.scan_after_id, None);
+        assert_eq!(cursor.after_id, 0, "end of traversal must re-offer every retained envelope");
+        cursor.processed_page(101, None, false);
+        assert_eq!(cursor.after_id, 101, "after successful redelivery the floor may advance");
+    }
 
     #[test]
     fn pagination_follows_device_address_across_relogin_and_transport_switch() {

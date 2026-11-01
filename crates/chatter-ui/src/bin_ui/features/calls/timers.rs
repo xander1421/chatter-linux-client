@@ -201,6 +201,36 @@ const VIDEO_PUSH_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_m
 
 pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFrames) {
     stop_video_frame_timer();
+    let targets = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+        String,
+        (u32, u32, bool),
+    >::new()));
+    let layout_targets = targets.clone();
+    let layout_window = window.as_weak();
+    window
+        .global::<crate::CallView>()
+        .on_report_call_video_size(move |id, width, height, screen| {
+            let Some(w) = layout_window.upgrade() else {
+                return;
+            };
+            let scale = w.window().scale_factor();
+            if let Ok(mut targets) = layout_targets.lock() {
+                targets.insert(
+                    id.to_string(),
+                    (
+                        (width * scale).ceil() as u32,
+                        (height * scale).ceil() as u32,
+                        screen,
+                    ),
+                );
+            }
+        });
+    let call_view = window.global::<crate::CallView>();
+    call_view
+        .set_call_video_layout_revision(call_view.get_call_video_layout_revision().wrapping_add(1));
+    #[cfg(target_os = "linux")]
+    let mut prepared =
+        std::collections::HashMap::<String, (u64, (u32, u32, bool), Arc<Vec<u8>>, u32, u32)>::new();
     let weak = window.as_weak();
     let first_frame_logged = Arc::new(AtomicBool::new(false));
     let first_for_cb = first_frame_logged.clone();
@@ -209,7 +239,7 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
     // Frame id last handed to the UI per participant: an unchanged frame is
     // neither copied nor re-wrapped (CPU path only).
     #[cfg(not(target_os = "linux"))]
-    let mut pushed_ids = std::collections::HashMap::<String, u64>::new();
+    let mut pushed_ids = std::collections::HashMap::<String, (u64, (u32, u32, bool))>::new();
 
     let stop = shared_frames.subscribe(
         crate::rt_handle(),
@@ -217,6 +247,7 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
         move |snapshot| {
             // Drop this frame if the previous push hasn't landed on the UI
             // thread yet. Better stale pixels than frozen input.
+            #[cfg(not(target_os = "linux"))]
             if ui_busy_for_cb.swap(true, Ordering::Relaxed) {
                 return;
             }
@@ -232,21 +263,32 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                 let batch: Vec<(String, Arc<Vec<u8>>, u32, u32, u32, u64)> = snapshot
                     .iter()
                     .map(|(id, frame)| {
+                        let target = targets.lock().ok().and_then(|targets| targets.get(id).copied()).unwrap_or((0, 0, true));
+                        let entry = prepared.entry(
+                            id.clone()).or_insert_with(|| (u64::MAX,(0,0,false),Arc::new(Vec::new()),0,0));
+                        if entry.0 != frame.frame_id || entry.1 != target {
+                            let (pixels,width,height) = chatter_core::media::display_frame::rgba_for_display(
+                                frame.rgba_data.clone(),
+                            frame.width,
+                            frame.height,target.0,target.1,target.2);
+                            *entry = (frame.frame_id,target,pixels,width,height);
+                        }
+                        let (pixels,width,height) = (entry.2.clone(),entry.3,entry.4);
                         (
                             id.clone(),
-                            frame.rgba_data.clone(),
-                            frame.width,
-                            frame.height,
+                            pixels,
+                            width,
+                            height,
                             frame.rotation_degrees,
                             frame.frame_id,
                         )
                     })
                     .collect();
-                crate::bin_ui::video::gl_call::publish_batch(batch);
+                prepared.retain(|id, _| snapshot.iter().any(|(sid,_)| sid == id));
+                if !crate::bin_ui::video::gl_call::publish_batch(batch) { return; }
 
                 let weak_invoke = weak.clone();
                 let first_inner = first_for_cb.clone();
-                let ui_busy_for_invoke = ui_busy_for_cb.clone();
                 let dispatch = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak_invoke.upgrade() {
                         if !first_inner.swap(true, Ordering::Relaxed) {
@@ -259,10 +301,9 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                         // model update; we only need to provoke a present.
                         w.window().request_redraw();
                     }
-                    ui_busy_for_invoke.store(false, Ordering::Relaxed);
                 });
                 if dispatch.is_err() {
-                    ui_busy_for_cb.store(false, Ordering::Relaxed);
+                    crate::bin_ui::video::gl_call::clear_redraw_pending();
                 }
             }
 
@@ -282,10 +323,15 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                     snapshot
                         .iter()
                         .map(|(id, frame)| {
-                            let changed = pushed.insert(id.clone(), frame.frame_id) != Some(frame.frame_id);
-                            (id.clone(), changed.then(|| slint::SharedPixelBuffer::clone_from_slice(
-                                &frame.rgba_data, frame.width, frame.height,
-                            )))
+                            let target = targets.lock().ok().and_then(|targets| targets.get(id).copied()).unwrap_or((0, 0, true));
+                            let key = (frame.frame_id, target);
+                            let changed = pushed.insert(id.clone(), key) != Some(key);
+                            (id.clone(), changed.then(|| {
+                                let (pixels, width, height) = chatter_core::media::display_frame::rgba_for_display(
+                                    frame.rgba_data.clone(), frame.width, frame.height, target.0, target.1, target.2);
+                                slint::SharedPixelBuffer::clone_from_slice(
+                                &pixels, width, height)
+                            }))
                         })
                         .collect()
                 };

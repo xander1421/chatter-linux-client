@@ -19,7 +19,13 @@ impl ChannelInbound {
         proto_msg: &chat_v1::Message,
         channel_id: ChannelId,
     ) -> Ingested {
-        let message = match self.prepare(proto_msg, channel_id, true).await {
+        let Ok(session) = self.messages.receive_session() else { return Ingested::RetryableFailure };
+        self.ingest_edit_with_session(proto_msg, channel_id, session).await
+    }
+
+    pub(crate) async fn ingest_edit_with_session(&self, proto_msg: &chat_v1::Message, channel_id: ChannelId, session: ReceiveSession) -> Ingested {
+        if session.check().is_err() { return Ingested::RetryableFailure; }
+        let message = match self.prepare(proto_msg, channel_id, true, &session).await {
             Ok(m) => m,
             Err(outcome) => return outcome,
         };
@@ -30,33 +36,32 @@ impl ChannelInbound {
         // The server names the edited row by id; it must be the author's. Its
         // `sent_at` is the target (an encrypted edit's DataMessage clock need
         // not be the original's).
-        let target_sent_at = match self.messages.get_message_local(&message.id) {
-            Ok(Some(existing)) if existing.sender_id != Some(author) => {
-                tracing::warn!(%channel_id, message_id = %message.id, %author,
-                    "Server edit names another author's message; dropped");
-                return Ingested::Dropped;
-            }
-            Ok(Some(existing)) => existing.sent_at,
-            Ok(None) => message.sent_at,
-            Err(e) => {
-                tracing::warn!(%channel_id, message_id = %message.id, error = %e,
-                    "Failed to read the edited message; dropped");
-                return Ingested::RetryableFailure;
-            }
-        };
-        let body = message.as_text().unwrap_or_default();
+        let messages = self.messages.clone();
         let edit_ts = proto_msg.edited_at;
-        match self.messages.apply_channel_edit(
-            &channel_id,
-            &author,
-            target_sent_at,
-            body,
-            edit_ts,
-            edit_ts,
+        self.messages.database.run_blocking(move || {
+            session.check()?;
+            Ok(Self::apply_edit_unit(&messages, &session, message, channel_id, author, edit_ts))
+        }).await.unwrap_or(Ingested::RetryableFailure)
+    }
+
+    fn apply_edit_unit(
+        messages: &MessageService,
+        session: &ReceiveSession,
+        message: Message,
+        channel_id: ChannelId,
+        author: UserId,
+        edit_ts: u64,
+    ) -> Ingested {
+        let body = message.as_text().unwrap_or_default();
+        let modifiers = crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(messages.database.clone());
+        match modifiers.apply_received_edit_admitted(
+            &messages.message_repo, &author, Some(channel_id), message.sent_at,
+            body, edit_ts, edit_ts, Some(&message.id), Some(session),
         ) {
             Ok(Some(edited)) => {
-                let _ = self
-                    .event_bus()
+                if session.check().is_err() { return Ingested::RetryableFailure; }
+                let _ = messages
+                    .event_bus
                     .domain_sender()
                     .send(DomainEvent::MessageEdited {
                         message_id: edited.id,
@@ -64,7 +69,7 @@ impl ChannelInbound {
                         channel_id,
                         conversation_type: edited.conversation_type,
                         author_id: author,
-                        target_sent_timestamp: target_sent_at,
+                        target_sent_timestamp: edited.sent_at,
                     });
                 Ingested::Stored
             }

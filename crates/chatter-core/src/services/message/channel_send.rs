@@ -69,6 +69,17 @@ pub(crate) fn settle_cancelled_deposit(
     channel: ChannelId,
     post: &crate::proto::chat_v1::Message,
 ) -> Result<bool, StorageError> {
+    settle_cancelled_deposit_admitted(db, owner, channel, post, None)
+}
+
+pub(crate) fn settle_cancelled_deposit_admitted(
+    db: &Database,
+    owner: UserId,
+    channel: ChannelId,
+    post: &crate::proto::chat_v1::Message,
+    session: Option<&crate::state::receive_session::ReceiveSession>,
+) -> Result<bool, StorageError> {
+    if let Some(session) = session { session.check()?; }
     if post.send_request_key.len() != 32
         || post.author_id.parse::<UserId>().ok() != Some(owner)
     {
@@ -94,11 +105,13 @@ pub(crate) fn settle_cancelled_deposit(
     };
     let mut conn = db.connection()?;
     let tx = conn.transaction()?;
+    if let Some(session) = session { session.check_owner(&tx)?; }
     let learned = tx.execute("UPDATE settings SET value=json_set(value,'$.server_id',?2) WHERE key=?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.server_id') IS NULL",params![key,id.to_string()])? == 1;
     // An explicit delete-for-everyone was waiting for exactly this id.
     let remote = learned && tx.execute("UPDATE settings SET value=json_set(value,'$.phase','deleting','$.attempts',0,'$.next_at',0) WHERE key=?1 AND json_extract(value,'$.remote_delete')",params![key])? == 1;
     tx.execute("INSERT OR IGNORE INTO deleted_messages(id) VALUES(?1)", params![id.to_string()])?;
     tx.execute("DELETE FROM messages WHERE id=?1", params![id.to_string()])?;
+    if let Some(session) = session { session.check()?; }
     tx.commit()?;
     tracing::info!(message_id = %id, remote, "Deleted send's deposit recognised by its request key; tombstoned");
     Ok(true)
@@ -1100,6 +1113,45 @@ pub(crate) fn spawn_channel_send_recovery(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_deposit_queued_under_old_receive_session_cannot_mutate_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("fenced-journal.db"), "fixture-only").unwrap());
+        db.run_migrations().unwrap();
+        let owner = UserId::new();
+        let channel = ChannelId::new();
+        let request = MessageId::new();
+        let settings = crate::storage::repositories::settings_repo::SettingsRepository::new(db.clone());
+        settings.set_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &owner.to_string()).unwrap();
+        settings.set(&key(owner, request), &serde_json::json!({"phase":"unresolved","channel_id":channel,"device":3})).unwrap();
+        let state = crate::state::AuthState::new();
+        state.set_logged_in(owner, 3, "fixture".into());
+        let session = crate::state::receive_session::ReceiveSession::capture(&state).unwrap();
+        let post = crate::proto::chat_v1::Message {
+            id: MessageId::new().to_string(), channel_id: channel.to_string(), author_id: owner.to_string(),
+            author_device_id: 3, send_request_key: send_request_key(owner, 3, channel, &request.to_string()).to_vec(),
+            ..Default::default()
+        };
+        let id = post.id.clone();
+        let writer = db.connection().unwrap();
+        let work_db = db.clone();
+        let (started, waiting) = std::sync::mpsc::channel();
+        let job = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            settle_cancelled_deposit_admitted(&work_db, owner, channel, &post, Some(&session))
+        });
+        waiting.recv().unwrap();
+        state.set_logged_in(owner, 3, "new revision".into());
+        drop(writer);
+        assert!(job.join().unwrap().is_err());
+        let journal: serde_json::Value = settings.get(&key(owner, request)).unwrap().unwrap();
+        assert!(journal.get("server_id").is_none());
+        assert_eq!(journal["phase"], "unresolved");
+        let tombstoned: bool = db.read_connection().unwrap().query_row(
+            "SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id=?1)", [id], |row| row.get(0)).unwrap();
+        assert!(!tombstoned);
+    }
 
     /// Same key as the server's (`send_idempotency_test.go` known answer);
     /// the request id's case does not matter.

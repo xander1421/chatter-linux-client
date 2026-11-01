@@ -15,7 +15,7 @@ use std::time::Duration;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use crate::local_ai::backend::{
+use crate::ai_protocol::{
     AvailableModel, BackendError, ChatMessage, ChatResponse, ChatRole, GenerateParams,
     LocalAIBackend,
 };

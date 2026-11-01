@@ -56,7 +56,6 @@ import { InviteUser } from "modals/invite_member.slint";
 import { QuickSwitcherItem, SearchResult, CalendarDay } from "components/unified_search.slint";
 
 // Import settings
-import { LocalAIProviderData, CatalogModelData } from "settings/settings_screen.slint";
 import { PinnedItem } from "modals/pinned_messages.slint";
 export { PinnedItem }
 import { MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData } from "modals/jarvis_memory.slint";
@@ -72,15 +71,15 @@ import { ActiveCallView, IncomingCallData, ActiveCallData, CallParticipantData, 
 import { ShieldWash } from "anon_mode/shield_wash.slint";
 
 // Re-export types for Rust binding
-export { ChatRowData, CustomSectionData, SidebarRowData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, ChannelInviteData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
+export { ChatRowData, CustomSectionData, SidebarRowData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, ChannelInviteData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
 
 export component MainWindow inherits Window {
     // Unread chats in the title, as Signal Desktop ("Signal (3)"): it is what
     // the taskbar and window switcher show while the window is in the back.
     title: SidebarPane.total-unread-count > 0 ? "Chatter (" + SidebarPane.total-unread-count + ")" : "Chatter";
     icon: @image-url("../assets/icon-256.png");
-    // Responsive: allow narrow widths for phones (360dp minimum)
-    min-width: 360px;
+    // Responsive: compact call controls also fit 320dp phones.
+    min-width: 320px;
     min-height: 480px;
     preferred-width: 800px;
     preferred-height: 600px;
@@ -566,6 +565,13 @@ export component MainWindow inherits Window {
         if root.other-menu-open {
             SidebarPane.row-context-menu-open = false;
             SidebarPane.section-context-menu-open = false;
+            // Taking focus off the composer hides the soft keyboard (a TextInput
+            // FocusOut sends InputMethodRequest::Disable), the same move `changed
+            // active-modal` makes. Without it the raised IME shrank the hold-menu's
+            // band to below its primary rows, so "More"/"Delete" fell under the
+            // keyboard and needed a scroll to reach. Mobile only: on desktop the
+            // menu takes keyboard focus itself for arrow-key navigation.
+            if root.is-mobile-platform { back-scope.focus(); }
         }
     }
     // Modals scroll their card clear of the keyboard only while it is up
@@ -624,6 +630,10 @@ export component MainWindow inherits Window {
         }
 
         key-pressed(event) => {
+            if (CallView.audio-controls-visible && (event.text == Key.Back || event.text == Key.Escape)) {
+                CallView.audio-controls-visible = false;
+                return accept;
+            }
             if (shortcuts.handle-command(event)) { return accept; }
             if (event.text == Key.Back || (event.text == Key.Escape && ChatPane.link-confirm-url != "") || (event.text == Key.Escape
                 && root.active-modal == "none"

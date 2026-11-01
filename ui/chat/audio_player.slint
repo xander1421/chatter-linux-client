@@ -37,7 +37,7 @@ export component AudioPlayer inherits HorizontalLayout {
     callback audio-seek(string, float);     // attachment-id, 0..1 seek position
     callback more-clicked(length, length);  // absolute x, y for the context menu
 
-    property <bool> is-this-playing: root.attachment-id == root.current-playing-attachment-id;
+    property <bool> is-this-playing: root.attachment-id != "" && root.attachment-id == root.current-playing-attachment-id;
     property <length> button-size: root.compact ? 28px : 40px;
     property <length> icon-size: root.compact ? 12px : 16px;
     property <length> track-width: root.compact ? 160px : 180px;
@@ -118,7 +118,9 @@ export component AudioPlayer inherits HorizontalLayout {
             }
 
             Rectangle {
+                x: 0px;
                 y: parent.height - 2px;
+                visible: root.is-this-playing && root.displayed-progress > 0;
                 height: 2px;
                 width: parent.width * root.displayed-progress;
                 background: Colors.primary;

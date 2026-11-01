@@ -54,9 +54,8 @@ fn pending_message_id(send: &ComposerSend) -> String {
 /// A decode-then-insert callback would not have that property: it could run
 /// after the removal and leave a "sending" row behind for good.
 ///
-/// Thumbnails: `to_slint` loads an image by its local path through Slint's
-/// image cache, which the attachment tray filled when the file was staged,
-/// so the common case decodes nothing here.
+/// Thumbnails reuse the tray's bounded decoded cache. Missing previews remain
+/// placeholders; inserting the pending row never performs IO or decoding.
 pub(crate) fn show_pending_bubble(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
@@ -75,6 +74,11 @@ pub(crate) fn show_pending_bubble(
         .map(|r| (r.sender_name.clone(), r.preview.clone()))
         .unwrap_or_default();
     let reply_thumbnail = send.reply.as_ref().and_then(|r| r.thumbnail.clone());
+    let status = if send.is_upload_queued() {
+        "upload-queued"
+    } else {
+        "sending"
+    };
     let row = pending_message_id(send);
     let text = send.text.clone();
     let conversation = send.conversation;
@@ -107,9 +111,18 @@ pub(crate) fn show_pending_bubble(
             })
             .unwrap_or_else(|| (slint::Image::default(), false, 0, 0));
         let kind = ui_ctx.conversation_type_of(&conversation);
-        let members = kind.as_ref().zip(conversation.channel_id())
-            .map(|(kind, id)| ui_ctx.mention_members(kind, &id)).unwrap_or_default();
-        let broadcast = matches!(kind, Some(chatter_core::domain::message::ConversationType::Channel | chatter_core::domain::message::ConversationType::AnonGroup));
+        let members = kind
+            .as_ref()
+            .zip(conversation.channel_id())
+            .map(|(kind, id)| ui_ctx.mention_members(kind, &id))
+            .unwrap_or_default();
+        let broadcast = matches!(
+            kind,
+            Some(
+                chatter_core::domain::message::ConversationType::Channel
+                    | chatter_core::domain::message::ConversationType::AnonGroup
+            )
+        );
         let item = super::helpers::build_own_message_item(
             &row,
             &user_id,
@@ -128,7 +141,7 @@ pub(crate) fn show_pending_bubble(
             thumb_w,
             thumb_h,
             &Default::default(),
-            "sending",
+            status,
         );
         upsert_message_in_ui(&w, &row, item);
     });
@@ -144,6 +157,7 @@ fn upsert_message_in_ui(w: &MainWindow, pending_id: &str, item: crate::MessageIt
     let mut item = Some(item);
     let mut drop_pending = false;
     super::helpers::edit_messages(w, |model| {
+        let mut changed = Vec::new();
         let row_of = |id: &str| {
             (0..model.row_count()).rev().find(|&i| {
                 model
@@ -161,10 +175,14 @@ fn upsert_message_in_ui(w: &MainWindow, pending_id: &str, item: crate::MessageIt
                 drop_pending = true;
                 item = None;
             }
-            (Some(i), false) => model.set_row_data(i, item.take().expect("set once")),
+            (Some(i), false) => {
+                model.set_row_data(i, item.take().expect("set once"));
+                changed.push(i);
+            }
             (None, true) => item = None,
             (None, false) => {}
         }
+        changed
     });
     if drop_pending {
         // Through the shared removal so a selection on the row is released.
@@ -258,7 +276,10 @@ fn pending_attachment_to_display_data(
         is_download_failed: false,
         progress: 0.0,
         thumbnail_bytes: std::sync::Arc::<[u8]>::from(Vec::new()),
-        thumbnail_pixels: None,
+        thumbnail_pixels: crate::bin_ui::decode_cache::cached_thumbnail(
+            &attachment.id.to_string(),
+            0,
+        ),
     }
 }
 
@@ -340,19 +361,26 @@ fn set_send_notice(
     }
     let read_only = ui_ctx.is_former_channel(&channel_id);
     let can_rejoin = ui_ctx.can_rejoin_channel(&channel_id);
-    let blocked = ui_ctx.blocked_dm_peer(ui_ctx.active_conversation()).is_some();
-    let notice = if blocked { "You blocked this person.".to_string() } else { notice };
+    let blocked = ui_ctx
+        .blocked_dm_peer(ui_ctx.active_conversation())
+        .is_some();
+    let notice = if blocked {
+        "You blocked this person.".to_string()
+    } else {
+        notice
+    };
     // A role change (`ChannelMemberUpdated`) lands here too, so the header's
     // invite button follows promotion and demotion.
     let actions = ui_ctx.conversation_actions(ui_ctx.active_conversation());
     // The membership banner and public badge travel with the notice: both say
     // whether (and why) this channel can be posted to.
     let membership = ui_ctx.channel_membership_header(&channel_id);
-    let answer = !blocked && ui_ctx
-        .secret_chat_gate(&chatter_core::domain::anon_dm::AnonDmId::from_uuid(
-            *channel_id.as_uuid(),
-        ))
-        .is_some_and(|g| g.offers_answer());
+    let answer = !blocked
+        && ui_ctx
+            .secret_chat_gate(&chatter_core::domain::anon_dm::AnonDmId::from_uuid(
+                *channel_id.as_uuid(),
+            ))
+            .is_some_and(|g| g.offers_answer());
     let weak = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
@@ -416,50 +444,66 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_send_notice(window, ui_ctx);
     let unblock_ctx = ui_ctx.clone();
     let unblock_weak = window.as_weak();
-    window.global::<crate::ChatPane>().on_unblock_clicked(move || {
-        let Some(peer) = unblock_ctx.blocked_dm_peer(unblock_ctx.active_conversation()) else { return };
-        let ctx = unblock_ctx.clone();
-        let weak = unblock_weak.clone();
-        tokio::spawn(async move {
-            if let Err(error) = ctx.unblock_profile_user(&peer).await {
-                tracing::error!(%error, "unblock from chat failed");
+    window
+        .global::<crate::ChatPane>()
+        .on_unblock_clicked(move || {
+            let Some(peer) = unblock_ctx.blocked_dm_peer(unblock_ctx.active_conversation()) else {
                 return;
-            }
-            let channel = ctx.chat_snapshot().active_channel_id;
-            if let Some(channel) = channel {
-                show_send_notice(&weak, &ctx, channel);
-            }
-            crate::bin_ui::features::auth::initial_data::refresh_friends_list(weak.clone(), ctx.clone());
-            crate::bin_ui::features::modals::friends::refresh_blocked_users(weak.clone(), &ctx);
-            crate::run_ui!(weak, |w| {
-                crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ctx);
-                if w.global::<crate::ModalHostState>().get_profile_user_id().as_str() == peer.to_string() {
-                    w.global::<crate::ModalHostState>().set_profile_is_blocked(false);
+            };
+            let ctx = unblock_ctx.clone();
+            let weak = unblock_weak.clone();
+            tokio::spawn(async move {
+                if let Err(error) = ctx.unblock_profile_user(&peer).await {
+                    tracing::error!(%error, "unblock from chat failed");
+                    return;
                 }
+                let channel = ctx.chat_snapshot().active_channel_id;
+                if let Some(channel) = channel {
+                    show_send_notice(&weak, &ctx, channel);
+                }
+                crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                    weak.clone(),
+                    ctx.clone(),
+                );
+                crate::bin_ui::features::modals::friends::refresh_blocked_users(weak.clone(), &ctx);
+                crate::run_ui!(weak, |w| {
+                    crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ctx);
+                    if w.global::<crate::ModalHostState>()
+                        .get_profile_user_id()
+                        .as_str()
+                        == peer.to_string()
+                    {
+                        w.global::<crate::ModalHostState>()
+                            .set_profile_is_blocked(false);
+                    }
+                });
             });
         });
-    });
     let rejoin_ctx = ui_ctx.clone();
     let rejoin_weak = window.as_weak();
-    window.global::<crate::ChatPane>().on_rejoin_clicked(move || {
-        let Some(channel) = rejoin_ctx.chat_snapshot().active_channel_id else { return };
-        let ctx = rejoin_ctx.clone();
-        let weak = rejoin_weak.clone();
-        tokio::spawn(async move {
-            if let Err(error) = ctx.join_channel(&channel, None).await {
-                tracing::warn!(%error, "rejoin from chat failed");
-                let message = error.user_message();
-                crate::run_ui!(weak, |w| {
-                    w.set_toast_message(message.into());
-                    w.set_toast_variant("error".into());
-                    w.set_toast_visible(true);
-                });
+    window
+        .global::<crate::ChatPane>()
+        .on_rejoin_clicked(move || {
+            let Some(channel) = rejoin_ctx.chat_snapshot().active_channel_id else {
                 return;
-            }
-            refresh_send_notice(&weak, &ctx, channel);
-            crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ctx);
+            };
+            let ctx = rejoin_ctx.clone();
+            let weak = rejoin_weak.clone();
+            tokio::spawn(async move {
+                if let Err(error) = ctx.join_channel(&channel, None).await {
+                    tracing::warn!(%error, "rejoin from chat failed");
+                    let message = error.user_message();
+                    crate::run_ui!(weak, |w| {
+                        w.set_toast_message(message.into());
+                        w.set_toast_variant("error".into());
+                        w.set_toast_visible(true);
+                    });
+                    return;
+                }
+                refresh_send_notice(&weak, &ctx, channel);
+                crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ctx);
+            });
         });
-    });
     let chat_state = ui_ctx.clone();
     let ui_ctx_jarvis = ui_ctx.clone();
 
@@ -490,7 +534,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return true;
             }
 
-            // Local AI channel: every send routes to Jarvis, nothing networks.
+            // Virtual assistant: explicit requests route through core remote-AI policy.
             #[cfg(feature = "jarvis")]
             if let Some(id) = chat_state.chat_snapshot().active_channel_id {
                 if chatter_core::client::is_jarvis_channel(&id) {
@@ -712,7 +756,10 @@ pub fn composer_is_empty(w: &MainWindow) -> bool {
 
 /// Freeze the composer into a send (core decides whether it may go) and
 /// clear what it took. `Err` is what to tell the user; nothing was consumed.
-pub fn take_composer_send(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) -> Result<ComposerSend, String> {
+pub fn take_composer_send(
+    w: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+) -> Result<ComposerSend, String> {
     if w.global::<crate::ChatPane>().get_composer_is_editing() {
         return Err("Finish editing first.".into());
     }
@@ -808,6 +855,22 @@ pub async fn deliver(
     send: ComposerSend,
     send_started: std::time::Instant,
 ) -> bool {
+    if send.is_upload_queued() {
+        let auth = ui_ctx.auth_snapshot();
+        show_pending_bubble(
+            &weak,
+            &ui_ctx,
+            &send,
+            &auth
+                .current_user_id
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+            &auth.display_name.unwrap_or_else(|| "Me".into()),
+        );
+    }
+    if !ui_ctx.await_composer_turn(&send).await {
+        return false;
+    }
     let mut parts = send.ordered_parts().into_iter();
     let mut first = true;
     while let Some(part) = parts.next() {
@@ -865,7 +928,11 @@ pub async fn deliver(
     true
 }
 
-enum PartOutcome { Sent, Retained, Unsent }
+enum PartOutcome {
+    Sent,
+    Retained,
+    Unsent,
+}
 
 async fn deliver_inner(
     weak: slint::Weak<MainWindow>,
@@ -884,6 +951,7 @@ async fn deliver_inner(
         text,
         reply,
         attachments: pending_attachments,
+        ..
     } = send;
     if !ui_ctx.has_auth_identity() {
         return PartOutcome::Unsent;
@@ -910,7 +978,9 @@ async fn deliver_inner(
         .map(|r| (r.sender_name.clone(), r.preview.clone()))
         .unwrap_or_default();
     let quote = quote_intent(reply.as_ref());
-    if reply.is_some() && quote.is_none() { return PartOutcome::Unsent; }
+    if reply.is_some() && quote.is_none() {
+        return PartOutcome::Unsent;
+    }
 
     tracing::info!(
         ?conversation,
@@ -1028,37 +1098,54 @@ async fn deliver_inner(
     };
 
     // Decode attachment thumbnails off the UI thread.
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
     let mut attachment_display: Vec<_> = ui_result
         .attachments
         .iter()
         .map(attachment_to_display_data)
         .collect();
-    #[cfg(target_os = "android")]
-    {
-        let client = ui_ctx.clone();
-        attachment_display = tokio::task::spawn_blocking(move || {
-            for (index, att) in attachment_display.iter_mut().enumerate() {
-                if index < 4 {
-                    att.derive_video_thumbnail(&client);
-                }
+    let client = ui_ctx.clone();
+    let reply_bytes = ui_result.reply_thumbnail_bytes;
+    let (mut attachment_display, mut reply_thumbnail_rgba) =
+        chatter_core::services::attachment::run_attachment_work(move || {
+            if generation != crate::bin_ui::decode_cache::thumbnail_generation() {
+                return (attachment_display, None);
             }
-            crate::bin_ui::converters::decode_inline_thumbnails(&mut attachment_display);
-            attachment_display
+            #[cfg(target_os = "android")]
+            for att in attachment_display.iter_mut().take(4) {
+                att.derive_video_thumbnail(&client);
+            }
+            let _ = client;
+            crate::bin_ui::converters::decode_inline_thumbnails_guarded(
+                &mut attachment_display,
+                generation,
+            );
+            let reply = reply_bytes.as_deref().and_then(|bytes| {
+                chatter_core::media::ImageProcessor::inline_pixels_from_memory(bytes).ok()
+            });
+            if generation != crate::bin_ui::decode_cache::thumbnail_generation() {
+                for att in &mut attachment_display {
+                    att.thumbnail_pixels = None;
+                }
+                return (attachment_display, None);
+            }
+            (attachment_display, reply)
         })
         .await
-        .unwrap_or_default();
-    }
-    #[cfg(not(target_os = "android"))]
-    crate::bin_ui::converters::decode_inline_thumbnails(&mut attachment_display);
+        .unwrap_or_else(|_| {
+            (
+                ui_result
+                    .attachments
+                    .iter()
+                    .map(attachment_to_display_data)
+                    .collect(),
+                None,
+            )
+        });
 
     let ui_ctx_for_gifs = ui_ctx.clone();
     let sent_text = text.clone();
     let timestamp_str = ui_result.timestamp_display.clone();
-    let reply_thumbnail_rgba = ui_result
-        .reply_thumbnail_bytes
-        .as_ref()
-        .and_then(|bytes| image::load_from_memory(bytes).ok())
-        .map(|img| img.to_rgba8());
     let reply_media = ui_result.reply_parent_media.clone();
     let msg_id = ui_result.message_id_effective.clone();
     let delivery_status = ui_result.delivery_status;
@@ -1072,6 +1159,12 @@ async fn deliver_inner(
     let _ = slint::invoke_from_event_loop(move || {
         if !ui_ctx.composer_session_is_current(session_revision) {
             return;
+        }
+        if generation != crate::bin_ui::decode_cache::thumbnail_generation() {
+            for attachment in &mut attachment_display {
+                attachment.thumbnail_pixels = None;
+            }
+            reply_thumbnail_rgba = None;
         }
         let Some(w) = weak.upgrade() else {
             tracing::error!("[UI_SEND] weak.upgrade() returned None; own bubble dropped");
@@ -1120,9 +1213,18 @@ async fn deliver_inner(
                     })
                     .unwrap_or_else(|| (slint::Image::default(), false, 0, 0));
             let kind = ui_ctx.conversation_type_of(&conversation);
-            let members = kind.as_ref().zip(conversation.channel_id())
-                .map(|(kind, id)| ui_ctx.mention_members(kind, &id)).unwrap_or_default();
-            let broadcast = matches!(kind, Some(chatter_core::domain::message::ConversationType::Channel | chatter_core::domain::message::ConversationType::AnonGroup));
+            let members = kind
+                .as_ref()
+                .zip(conversation.channel_id())
+                .map(|(kind, id)| ui_ctx.mention_members(kind, &id))
+                .unwrap_or_default();
+            let broadcast = matches!(
+                kind,
+                Some(
+                    chatter_core::domain::message::ConversationType::Channel
+                        | chatter_core::domain::message::ConversationType::AnonGroup
+                )
+            );
             let mut msg_item = super::helpers::build_own_message_item(
                 &msg_id,
                 &current_user_id,
@@ -1167,15 +1269,12 @@ async fn deliver_inner(
             if let Some(text) = stored.as_ref().and_then(|m| m.reply_to_text.as_deref()) {
                 msg_item.reply_to_preview = text.into();
             }
-            // Only this message can carry a not-yet-registered GIF; scan it,
-            // not the whole model. Done before `msg_item` is moved into upsert.
-            crate::bin_ui::gif_state::auto_register_gifs_in_message(
+            // Bind GIF targets to the models actually installed by the upsert.
+            upsert_message_in_ui(&w, &pending_id, msg_item);
+            crate::bin_ui::gif_state::auto_register_gifs_from_messages(
                 w.as_weak(),
                 ui_ctx_for_gifs,
-                &msg_item,
             );
-            // In place of the pending row, so the bubble does not move.
-            upsert_message_in_ui(&w, &pending_id, msg_item);
             tracing::debug!(
                 elapsed_ms = send_started.elapsed().as_millis(),
                 "send: bubble appended"
@@ -1194,7 +1293,6 @@ async fn deliver_inner(
                 w.global::<crate::ChatPane>()
                     .set_composer_placeholder(BOOTSTRAP_PLACEHOLDER.into());
             }
-
         }
 
         // Stored but not delivered: the bubble says "not sent"
@@ -1206,7 +1304,11 @@ async fn deliver_inner(
             w.global::<crate::Haptics>().invoke_error();
         }
     });
-    if stored_failure { PartOutcome::Retained } else { PartOutcome::Sent }
+    if stored_failure {
+        PartOutcome::Retained
+    } else {
+        PartOutcome::Sent
+    }
 }
 
 /// Handle Jarvis slash commands (/ask, /summarize, /knowledge, /remember).

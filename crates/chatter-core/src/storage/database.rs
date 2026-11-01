@@ -23,6 +23,8 @@ const READER_POOL_SIZE: usize = 2;
 
 /// SQLCipher database connection pool.
 pub struct Database {
+    /// Bound outstanding blocking jobs to the existing readers plus one writer.
+    blocking_jobs: Arc<tokio::sync::Semaphore>,
     /// Writer connection with mutex for thread-safe access.
     writer: Arc<Mutex<Connection>>,
     /// Pool of reader connections.
@@ -30,8 +32,7 @@ pub struct Database {
     /// Path to database file.
     path: PathBuf,
     /// One core consumer of committed message inserts, independent of UI events.
-    message_stores:
-        Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::domain::message::Message>>>,
+    message_stores: Arc<tokio::sync::Notify>,
     /// Earliest retry time per owner for retained anonymous submissions.
     pub(crate) retained_retry_due: Mutex<HashMap<String, Option<i64>>>,
 }
@@ -184,28 +185,29 @@ impl Drop for PooledReader<'_> {
 }
 
 impl Database {
-    /// Replace the consumer when a new authenticated core session starts.
-    pub(crate) fn subscribe_message_stores(
-        &self,
-    ) -> tokio::sync::mpsc::UnboundedReceiver<crate::domain::message::Message> {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        *self.message_stores.lock() = Some(tx);
-        tracing::info!(database = ?self.path, database_instance = ?std::ptr::from_ref(self), "Committed message store consumer subscribed");
-        rx
+    /// Execute a complete synchronous repository operation away from runtime workers.
+    /// Admission is asynchronous; cancellation cannot release capacity before an
+    /// already running database operation has actually finished.
+    pub(crate) async fn run_blocking<T, F>(&self, operation: F) -> Result<T, StorageError>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T, StorageError> + Send + 'static,
+    {
+        let permit = self.blocking_jobs.clone().acquire_owned().await
+            .map_err(|_| StorageError::ConnectionPool("Database worker closed".into()))?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            operation()
+        }).await.map_err(|_| StorageError::ConnectionPool("Database worker failed".into()))?
     }
 
-    pub(crate) fn announce_message_store(&self, message: &crate::domain::message::Message) {
-        match self.message_stores.lock().as_ref() {
-            Some(tx) if tx.send(message.clone()).is_err() => {
-                tracing::warn!(database = ?self.path, database_instance = ?std::ptr::from_ref(self), message_id = %message.id,
-                    "Committed message store consumer stopped");
-            }
-            None => {
-                tracing::warn!(database = ?self.path, database_instance = ?std::ptr::from_ref(self), message_id = %message.id,
-                    "Committed message store has no consumer");
-            }
-            Some(_) => {}
-        }
+    /// Coalesced wake hints: durable receipt obligations live in SQL.
+    pub(crate) fn subscribe_message_stores(&self) -> Arc<tokio::sync::Notify> {
+        self.message_stores.clone()
+    }
+
+    pub(crate) fn announce_message_store(&self, _message: &crate::domain::message::Message) {
+        self.message_stores.notify_one();
     }
 
     /// Open an encrypted SQLCipher database.
@@ -292,7 +294,8 @@ impl Database {
         ));
 
         Ok(Self {
-            message_stores: Mutex::new(None),
+            blocking_jobs: Arc::new(tokio::sync::Semaphore::new(READER_POOL_SIZE + 1)),
+            message_stores: Arc::new(tokio::sync::Notify::new()),
             retained_retry_due: Mutex::new(HashMap::new()),
             writer: Arc::new(Mutex::new(conn)),
             readers,
@@ -416,5 +419,44 @@ impl Database {
             tracing::warn!(%error, "pending attachment cleanup will be retried");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod blocking_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelled_waiters_do_not_release_running_database_job_capacity() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("jobs.db"), "fixture-only").unwrap());
+        let (entered, mut entries) = tokio::sync::mpsc::channel(READER_POOL_SIZE + 1);
+        let mut gates = Vec::new();
+        let mut tasks = Vec::new();
+        for _ in 0..=READER_POOL_SIZE {
+            let (release, wait) = std::sync::mpsc::channel();
+            gates.push(release);
+            let db = db.clone();
+            let entered = entered.clone();
+            tasks.push(tokio::spawn(async move {
+                db.run_blocking(move || {
+                    let _ = entered.blocking_send(());
+                    let _ = wait.recv_timeout(Duration::from_secs(2));
+                    Ok(())
+                }).await
+            }));
+        }
+        for _ in 0..=READER_POOL_SIZE { entries.recv().await.unwrap(); }
+        for task in tasks { task.abort(); }
+        let entered_fourth = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = entered_fourth.clone();
+        let waiting = db.run_blocking(move || {
+            observed.store(true, Ordering::SeqCst);
+            Ok(())
+        });
+        assert!(tokio::time::timeout(Duration::from_millis(20), waiting).await.is_err());
+        assert!(!entered_fourth.load(Ordering::SeqCst), "cancelling async callers must not admit extra blocking operations");
+        for gate in gates { let _ = gate.send(()); }
+        tokio::time::timeout(Duration::from_secs(2), db.run_blocking(|| Ok(()))).await.unwrap().unwrap();
     }
 }

@@ -321,23 +321,45 @@ impl SectionService {
 /// Order one section's conversations. Pinned rows always come first; the mode
 /// decides the order within each group.
 pub(crate) fn sort_conversations(conversations: &mut [SectionConversation], mode: SectionSortMode) {
-    conversations.sort_by(|a, b| {
-        b.is_pinned
-            .cmp(&a.is_pinned)
-            .then_with(|| match mode {
-                // Newest first; conversations with no messages sink to the bottom.
-                SectionSortMode::Recent => b.last_message_at.cmp(&a.last_message_at),
-                SectionSortMode::Unread => (b.unread_count > 0)
-                    .cmp(&(a.unread_count > 0))
-                    .then_with(|| b.last_message_at.cmp(&a.last_message_at)),
-                SectionSortMode::Alphabetical => a
-                    .display_name
-                    .to_lowercase()
-                    .cmp(&b.display_name.to_lowercase()),
-            })
-            // Ties resolve by id so the order never flickers between refreshes.
-            .then_with(|| a.conversation_id.cmp(&b.conversation_id))
-    });
+    conversations.sort_by(|a, b| compare_section_conversations(a, b, mode));
+}
+
+/// Shared total order for full snapshots and single-row folder updates.
+pub(crate) fn compare_section_conversations(
+    a: &SectionConversation,
+    b: &SectionConversation,
+    mode: SectionSortMode,
+) -> std::cmp::Ordering {
+    b.is_pinned
+        .cmp(&a.is_pinned)
+        .then_with(|| match mode {
+            // Newest first; conversations with no messages sink to the bottom.
+            SectionSortMode::Recent => b.last_message_at.cmp(&a.last_message_at),
+            SectionSortMode::Unread => (b.unread_count > 0)
+                .cmp(&(a.unread_count > 0))
+                .then_with(|| b.last_message_at.cmp(&a.last_message_at)),
+            SectionSortMode::Alphabetical => a
+                .display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase()),
+        })
+        // Ties resolve by id so the order never flickers between refreshes.
+        .then_with(|| a.conversation_id.cmp(&b.conversation_id))
+}
+
+/// Reinsert a changed member in an already ordered folder. Only that folder's
+/// shifted range is touched; the same total order drives structural snapshots.
+pub fn replace_section_conversation(
+    conversations: &mut Vec<SectionConversation>,
+    from: usize,
+    conversation: SectionConversation,
+    mode: SectionSortMode,
+) -> usize {
+    conversations.remove(from);
+    let to = conversations
+        .partition_point(|other| compare_section_conversations(other, &conversation, mode).is_lt());
+    conversations.insert(to, conversation);
+    to
 }
 
 #[cfg(test)]
@@ -363,6 +385,54 @@ mod tests {
 
     fn ids(list: &[SectionConversation]) -> Vec<&str> {
         list.iter().map(|c| c.conversation_id.as_str()).collect()
+    }
+
+    #[test]
+    fn incremental_member_updates_match_full_sort_for_all_modes() {
+        for mode in [
+            SectionSortMode::Recent,
+            SectionSortMode::Unread,
+            SectionSortMode::Alphabetical,
+        ] {
+            let original = vec![
+                conv("a", "Zulu", 0, None, true),
+                conv("b", "alpha", 2, Some(10), false),
+                conv("c", "ALPHA", 0, Some(10), false),
+                conv("d", "Beta", 0, Some(20), true),
+                conv("e", "Echo", 0, None, false),
+            ];
+            for key in ["a", "b", "c", "d", "e"] {
+                for unread in [0, 1, 19] {
+                    for at in [None, Some(10), Some(100)] {
+                        let mut incremental = original.clone();
+                        sort_conversations(&mut incremental, mode);
+                        let from = incremental
+                            .iter()
+                            .position(|c| c.conversation_id == key)
+                            .unwrap();
+                        let mut changed = incremental[from].clone();
+                        changed.unread_count = unread;
+                        changed.last_message_at = at;
+                        let mut expected = incremental.clone();
+                        expected[from] = changed.clone();
+                        sort_conversations(&mut expected, mode);
+                        let to =
+                            replace_section_conversation(&mut incremental, from, changed, mode);
+                        assert_eq!(incremental[to].conversation_id, key);
+                        assert_eq!(
+                            incremental
+                                .iter()
+                                .map(|c| &c.conversation_id)
+                                .collect::<Vec<_>>(),
+                            expected
+                                .iter()
+                                .map(|c| &c.conversation_id)
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -27,9 +27,109 @@
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use signal_media::sanitize::{mp4, webp};
+use signal_media::sanitize::webp;
 
 use super::AttachmentError;
+
+// Bound each movie's sample tables and privacy metadata independently of media
+// payload size. 16 MiB leaves room for hundreds of thousands of sample entries
+// while keeping parser and privacy-copy memory practical on phones. This is a
+// supported-metadata budget, not a duration/file-size or total RSS guarantee.
+const MAX_MP4_METADATA_SIZE: u64 = 16 * 1024 * 1024;
+
+fn mp4_config() -> mp4san::Config {
+    mp4san::Config::builder()
+        .max_metadata_size(MAX_MP4_METADATA_SIZE)
+        .build()
+}
+
+fn check_mp4_metadata_size(size: u64) -> Result<(), AttachmentError> {
+    if size > MAX_MP4_METADATA_SIZE {
+        return Err(AttachmentError::InvalidAttachment(format!(
+            "MP4 metadata exceeds the {} MiB upload budget; export with fewer metadata/sample-table entries",
+            MAX_MP4_METADATA_SIZE / (1024 * 1024)
+        )));
+    }
+    Ok(())
+}
+
+// mp4san can pad a relocated head to the old mdat offset. Its moov
+// configuration does not bound this allocation, so preflight that span too.
+const MAX_MP4_RELOCATED_HEAD_SIZE: u64 = 32 * 1024 * 1024;
+
+fn preflight_mp4<R: Read + Seek>(reader: &mut R) -> Result<(), AttachmentError> {
+    let io = |e| AttachmentError::FileError(format!("MP4 preflight io: {e}"));
+    let bad = |m: &str| AttachmentError::InvalidAttachment(format!("malformed MP4 rejected: {m}"));
+    let len = reader.seek(SeekFrom::End(0)).map_err(io)?;
+    reader.seek(SeekFrom::Start(0)).map_err(io)?;
+    // Preserve the non-isom carve-out. ftyp is separately capped at 1024
+    // payload bytes by mp4san, before allocation. Inspect only that bounded
+    // header here; let mp4san diagnose malformed/oversized ftyp itself.
+    let mut first = [0u8; 1040];
+    let n = read_up_to(reader, &mut first).map_err(io)?;
+    if n < 8 || &first[4..8] != b"ftyp" {
+        reader.seek(SeekFrom::Start(0)).map_err(io)?;
+        return Ok(());
+    }
+    let size32 = u32::from_be_bytes(first[..4].try_into().unwrap());
+    let (header, size) = if size32 == 1 && n >= 16 {
+        (16, u64::from_be_bytes(first[8..16].try_into().unwrap()))
+    } else {
+        (8, if size32 == 0 { len } else { size32 as u64 })
+    };
+    if size > n as u64
+        || size < (header + 8) as u64
+        || !first[header + 8..size as usize]
+            .chunks_exact(4)
+            .any(|brand| brand == b"isom")
+    {
+        reader.seek(SeekFrom::Start(0)).map_err(io)?;
+        return Ok(());
+    }
+    let mut offset = 0;
+    let mut movie_offset = None;
+    let mut media_offset = None;
+    while offset < len {
+        reader.seek(SeekFrom::Start(offset)).map_err(io)?;
+        let mut bytes = [0; 16];
+        let n = read_up_to(reader, &mut bytes).map_err(io)?;
+        if n < 8 {
+            return Err(bad("truncated box header"));
+        }
+        let size32 = u32::from_be_bytes(bytes[..4].try_into().unwrap());
+        let (header, size) = match size32 {
+            0 => (8, len - offset),
+            1 if n >= 16 => (16, u64::from_be_bytes(bytes[8..16].try_into().unwrap())),
+            1 => return Err(bad("truncated largesize")),
+            size => (8, size as u64),
+        };
+        match &bytes[4..8] {
+            b"moov" => {
+                check_mp4_metadata_size(size)?; // Before any metadata read/allocation.
+                if movie_offset.replace(offset).is_some() {
+                    return Err(bad("multiple moov boxes unsupported"));
+                }
+            }
+            b"mdat" => {
+                media_offset.get_or_insert(offset);
+            }
+            _ => {}
+        }
+        if size < header || size > len - offset {
+            return Err(bad("box size out of bounds"));
+        }
+        offset += size;
+    }
+    if let (Some(movie), Some(media)) = (movie_offset, media_offset) {
+        if movie > media && media > MAX_MP4_RELOCATED_HEAD_SIZE {
+            return Err(AttachmentError::InvalidAttachment(
+                "MP4 relocation padding exceeds the 32 MiB upload budget; export without large leading padding".into()
+            ));
+        }
+    }
+    reader.seek(SeekFrom::Start(0)).map_err(io)?;
+    Ok(())
+}
 
 /// Result of sanitizing outgoing media bytes.
 #[derive(Debug, PartialEq, Eq)]
@@ -146,6 +246,176 @@ fn strip_png_metadata(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentError> {
     Ok(if dropped { Some(out) } else { None })
 }
 
+// The file path uses fixed scratch storage even for a multi-GB IDAT or JPEG
+// entropy tail. Do not size a buffer from an untrusted segment/chunk length.
+const IMAGE_COPY_BUFFER_SIZE: usize = 8192;
+
+fn image_io_error(e: std::io::Error) -> AttachmentError {
+    AttachmentError::FileError(format!("sanitize image io: {e}"))
+}
+
+fn malformed_image(format: &str, message: &str) -> AttachmentError {
+    AttachmentError::InvalidAttachment(format!("malformed {format} rejected: {message}"))
+}
+
+fn read_image_exact(
+    input: &mut impl Read,
+    buf: &mut [u8],
+    format: &str,
+) -> Result<(), AttachmentError> {
+    input.read_exact(buf).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            malformed_image(format, "truncated input")
+        } else {
+            image_io_error(e)
+        }
+    })
+}
+
+/// Copy or discard an already bounds-checked span, still detecting a source
+/// truncated after its length was obtained. Discarding reads (rather than seeks)
+/// ensures missing metadata bytes/CRCs cannot silently pass validation.
+fn transfer_image_span(
+    input: &mut impl Read,
+    output: &mut impl std::io::Write,
+    mut len: u64,
+    keep: bool,
+    format: &str,
+) -> Result<(), AttachmentError> {
+    let mut scratch = [0u8; IMAGE_COPY_BUFFER_SIZE];
+    while len != 0 {
+        let count = len.min(scratch.len() as u64) as usize;
+        read_image_exact(input, &mut scratch[..count], format)?;
+        if keep {
+            output
+                .write_all(&scratch[..count])
+                .map_err(image_io_error)?;
+        }
+        len -= count as u64;
+    }
+    Ok(())
+}
+
+/// File equivalent of `strip_jpeg_metadata`: preserve its marker policy,
+/// including copying the entire tail verbatim from SOS (or an early EOI).
+fn stream_jpeg_metadata(
+    input: &mut impl Read,
+    output: &mut impl std::io::Write,
+    len: u64,
+) -> Result<bool, AttachmentError> {
+    let bad = |m| malformed_image("JPEG", m);
+    let mut remaining = len.checked_sub(2).ok_or_else(|| bad("truncated SOI"))?;
+    let mut soi = [0u8; 2];
+    read_image_exact(input, &mut soi, "JPEG")?;
+    output.write_all(&soi).map_err(image_io_error)?;
+    let mut dropped = false;
+    loop {
+        // Match the bytes parser's four-byte lookahead, even for standalone
+        // markers and SOS/EOI. Do not consume the next segment's bytes early.
+        if remaining < 4 {
+            return Err(bad("truncated before SOS"));
+        }
+        let mut marker = [0u8; 2];
+        read_image_exact(input, &mut marker, "JPEG")?;
+        remaining -= 2;
+        if marker[0] != 0xFF {
+            return Err(bad("expected marker"));
+        }
+        if marker[1] == 0x01 || (0xD0..=0xD7).contains(&marker[1]) {
+            output.write_all(&marker).map_err(image_io_error)?;
+            continue;
+        }
+        if marker[1] == 0xDA || marker[1] == 0xD9 {
+            output.write_all(&marker).map_err(image_io_error)?;
+            transfer_image_span(input, output, remaining, true, "JPEG")?;
+            return Ok(dropped);
+        }
+        let mut size = [0u8; 2];
+        read_image_exact(input, &mut size, "JPEG")?;
+        let segment_len = u64::from(u16::from_be_bytes(size));
+        if segment_len < 2 || segment_len > remaining {
+            return Err(bad("segment length out of bounds"));
+        }
+        let drop = marker[1] == 0xE1 || marker[1] == 0xFE;
+        if drop {
+            dropped = true;
+        } else {
+            output.write_all(&marker).map_err(image_io_error)?;
+            output.write_all(&size).map_err(image_io_error)?;
+        }
+        transfer_image_span(input, output, segment_len - 2, !drop, "JPEG")?;
+        remaining -= segment_len;
+    }
+}
+
+/// File equivalent of `strip_png_metadata`. Retained chunks (including their
+/// original CRCs) are copied byte-exactly; CRC verification/PNG decoding is not
+/// performed by the bytes parser and is not added here. Parsing ends at IEND.
+fn stream_png_metadata(
+    input: &mut impl Read,
+    output: &mut impl std::io::Write,
+    len: u64,
+) -> Result<bool, AttachmentError> {
+    let bad = |m| malformed_image("PNG", m);
+    let mut remaining = len
+        .checked_sub(8)
+        .ok_or_else(|| bad("truncated signature"))?;
+    let mut signature = [0u8; 8];
+    read_image_exact(input, &mut signature, "PNG")?;
+    output.write_all(&signature).map_err(image_io_error)?;
+    let mut dropped = false;
+    while remaining != 0 {
+        if remaining < 8 {
+            return Err(bad("truncated chunk header"));
+        }
+        let mut header = [0u8; 8];
+        read_image_exact(input, &mut header, "PNG")?;
+        // Widen before arithmetic: a u32 chunk length plus header/CRC must
+        // neither wrap on 32-bit Android nor allocate a chunk-sized buffer.
+        let chunk_len = u64::from(u32::from_be_bytes(header[..4].try_into().unwrap()));
+        let total = chunk_len + 12;
+        if total > remaining {
+            return Err(bad("chunk length out of bounds"));
+        }
+        let ty = &header[4..];
+        let drop = matches!(ty, b"eXIf" | b"tEXt" | b"zTXt" | b"iTXt" | b"tIME");
+        if drop {
+            dropped = true;
+        } else {
+            output.write_all(&header).map_err(image_io_error)?;
+        }
+        transfer_image_span(input, output, chunk_len + 4, !drop, "PNG")?;
+        if ty == b"IEND" {
+            break;
+        }
+        remaining -= total;
+    }
+    Ok(dropped)
+}
+
+/// Own the partial output throughout parsing and flushing. All errors and the
+/// unchanged case drop/unlink the temp; only a complete rewrite escapes.
+fn sanitize_image_to_temp(
+    input: &mut impl Read,
+    len: u64,
+    jpeg: bool,
+    directory: &Path,
+) -> Result<Option<tempfile::NamedTempFile>, AttachmentError> {
+    use std::io::{BufWriter, Write};
+    let mut temp = tempfile::NamedTempFile::new_in(directory).map_err(image_io_error)?;
+    let dropped = {
+        let mut output = BufWriter::with_capacity(IMAGE_COPY_BUFFER_SIZE, temp.as_file_mut());
+        let dropped = if jpeg {
+            stream_jpeg_metadata(input, &mut output, len)?
+        } else {
+            stream_png_metadata(input, &mut output, len)?
+        };
+        output.flush().map_err(image_io_error)?;
+        dropped
+    };
+    Ok(if dropped { Some(temp) } else { None })
+}
+
 /// Sanitize outgoing media bytes before they leave the device.
 ///
 /// Returns [`SanitizeOutcome::Rewritten`] when the MP4 metadata had to be
@@ -205,7 +475,7 @@ pub fn validate_media(content: &[u8]) -> Result<(), AttachmentError> {
 /// streaming (file-path) upload path, where attachments may be multi-GB.
 ///
 /// Same coverage and policy as [`sanitize_media`]. Returns `Some(temp)` holding
-/// the rewritten MP4 when the metadata had to be relocated/stripped (caller
+/// the rewritten media when metadata had to be relocated/stripped (caller
 /// encrypts the temp file instead of the original); `None` when the original
 /// can be uploaded as-is.
 ///
@@ -232,40 +502,28 @@ pub fn sanitize_media_file(
     }
 
     if looks_like_jpeg(&magic[..n]) || looks_like_png(&magic[..n]) {
-        // Photos are small (attachment cap already enforced upstream) — load,
-        // strip losslessly, write a temp if anything was dropped.
-        let content = std::fs::read(path)
-            .map_err(|e| AttachmentError::FileError(format!("Failed to read image: {e}")))?;
-        let stripped = if looks_like_jpeg(&content) {
-            strip_jpeg_metadata(&content)?
-        } else {
-            strip_png_metadata(&content)?
-        };
-        let Some(bytes) = stripped else {
-            return Ok(None);
-        };
+        // Use the descriptor that was sniffed, not a second path lookup. Only
+        // fixed-size input/output buffers are held while streaming to our temp.
+        let len = file.metadata().map_err(image_io_error)?.len();
         super::ensure_attachments_dir().map_err(|e| {
             AttachmentError::FileError(format!("Failed to create attachments dir: {e}"))
         })?;
-        let mut out = tempfile::NamedTempFile::new_in(super::attachments_dir()).map_err(|e| {
-            AttachmentError::FileError(format!("Failed to create sanitize temp: {e}"))
-        })?;
-        use std::io::Write;
-        out.write_all(&bytes).map_err(|e| {
-            AttachmentError::FileError(format!("Failed to write stripped image: {e}"))
-        })?;
-        out.flush().map_err(|e| {
-            AttachmentError::FileError(format!("Failed to flush stripped image: {e}"))
-        })?;
-        return Ok(Some(out));
+        return sanitize_image_to_temp(
+            &mut BufReader::with_capacity(IMAGE_COPY_BUFFER_SIZE, file),
+            len,
+            looks_like_jpeg(&magic[..n]),
+            &super::attachments_dir(),
+        );
     }
 
     if !looks_like_mp4(&magic[..n]) {
         return Ok(None);
     }
 
+    preflight_mp4(&mut file)?;
+
     // mp4san's sync API over the file directly (mediasan impls Skip for File).
-    let sanitized = match mp4san::sanitize(BufReader::new(&mut file)) {
+    let sanitized = match mp4san::sanitize_with_config(BufReader::new(&mut file), mp4_config()) {
         Ok(s) => s,
         // Same carve-out as the bytes path: non-isom ftyp is outside scope.
         Err(mp4san::Error::Parse(report))
@@ -279,7 +537,7 @@ pub fn sanitize_media_file(
         }
         Err(e) => {
             return Err(AttachmentError::InvalidAttachment(format!(
-                "malformed MP4 rejected: {e}"
+                "MP4 rejected (metadata budget: 16 MiB; export a smaller metadata/sample table if exceeded): {e}"
             )));
         }
     };
@@ -322,7 +580,7 @@ pub fn sanitize_media_file(
 
 /// File-streaming variant of [`strip_mp4_privacy_boxes`] for the case where
 /// mp4san reports the layout already clean: walk top-level boxes via seeks,
-/// load only `moov` into memory (it is small), and if udta/meta must go,
+/// load only budget-checked `moov` into memory, and if udta/meta must go,
 /// stream-copy the file into a temp with the stripped moov spliced in.
 fn strip_mp4_file_privacy_boxes(
     file: &mut std::fs::File,
@@ -335,7 +593,7 @@ fn strip_mp4_file_privacy_boxes(
     file.seek(SeekFrom::Start(0)).map_err(ferr)?;
 
     // Pass 1: find moov, strip in memory.
-    let mut boxes: Vec<(u64, u64, bool)> = Vec::new(); // (offset, size, is_moov)
+    let mut moov_span = None; // One span only; never retain a table of input boxes.
     let mut stripped_moov: Option<Vec<u8>> = None;
     let mut off = 0u64;
     while off < file_len {
@@ -357,11 +615,15 @@ fn strip_mp4_file_privacy_boxes(
             }
             s => s,
         };
-        if size < 8 || off + size > file_len {
+        if size < (if size32 == 1 { 16 } else { 8 }) || size > file_len - off {
             return Err(bad("box size out of bounds"));
         }
         let is_moov = &ty == b"moov";
         if is_moov {
+            check_mp4_metadata_size(size)?;
+            if moov_span.replace((off, size)).is_some() {
+                return Err(bad("multiple moov boxes unsupported"));
+            }
             let len = usize::try_from(size).map_err(|_| bad("moov too large"))?;
             let mut moov = vec![0u8; len];
             file.seek(SeekFrom::Start(off)).map_err(ferr)?;
@@ -371,7 +633,6 @@ fn strip_mp4_file_privacy_boxes(
             }
             stripped_moov = strip_mp4_privacy_boxes(&moov)?;
         }
-        boxes.push((off, size, is_moov));
         off += size;
     }
 
@@ -385,15 +646,20 @@ fn strip_mp4_file_privacy_boxes(
     })?;
     let mut out = tempfile::NamedTempFile::new_in(super::attachments_dir())
         .map_err(|e| AttachmentError::FileError(format!("Failed to create sanitize temp: {e}")))?;
-    for (boff, bsize, is_moov) in boxes {
-        if is_moov {
+    let (moov_offset, moov_size) = moov_span.expect("stripped moov has a span");
+    // Stream the prefix and suffix; replacing privacy boxes with free boxes
+    // preserves the extent and every absolute chunk offset.
+    for (offset, len) in [
+        (0, moov_offset),
+        (moov_offset + moov_size, file_len - moov_offset - moov_size),
+    ] {
+        if offset != 0 {
             out.write_all(&new_moov).map_err(ferr)?;
-        } else {
-            file.seek(SeekFrom::Start(boff)).map_err(ferr)?;
-            let copied = std::io::copy(&mut file.take(bsize), out.as_file_mut()).map_err(ferr)?;
-            if copied != bsize {
-                return Err(bad("box copy truncated"));
-            }
+        }
+        file.seek(SeekFrom::Start(offset)).map_err(ferr)?;
+        let copied = std::io::copy(&mut file.take(len), out.as_file_mut()).map_err(ferr)?;
+        if copied != len {
+            return Err(bad("box copy truncated"));
         }
     }
     out.flush().map_err(ferr)?;
@@ -447,11 +713,12 @@ fn strip_mp4_privacy_boxes(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentErr
             }
             s => (8u64, s),
         };
-        if size < hdr || i as u64 + size > data.len() as u64 {
+        if size < hdr || size > (data.len() - i) as u64 {
             return Err(bad("box size out of bounds"));
         }
         let end = i + size as usize;
         if ty == b"moov" {
+            check_mp4_metadata_size(size)?;
             if hdr == 16 {
                 return Err(bad("moov with 64-bit size unsupported"));
             }
@@ -478,7 +745,7 @@ fn strip_mp4_privacy_boxes(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentErr
                     }
                     s => (8u64, s),
                 };
-                if csize < chdr || j as u64 + csize > end as u64 {
+                if csize < chdr || csize > (end - j) as u64 {
                     return Err(bad("moov child size out of bounds"));
                 }
                 if cty == b"udta" || cty == b"meta" {
@@ -507,7 +774,9 @@ fn strip_mp4_privacy_boxes(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentErr
 }
 
 async fn sanitize_mp4(content: &[u8]) -> Result<SanitizeOutcome, AttachmentError> {
-    match mp4::sanitize(futures::io::Cursor::new(content), None).await {
+    preflight_mp4(&mut std::io::Cursor::new(content))?;
+    match mp4san::sanitize_async_with_config(futures::io::Cursor::new(content), mp4_config()).await
+    {
         Ok(sanitized) => match sanitized.metadata {
             Some(metadata) => {
                 let start = usize::try_from(sanitized.data.offset).map_err(|_| {
@@ -540,14 +809,17 @@ async fn sanitize_mp4(content: &[u8]) -> Result<SanitizeOutcome, AttachmentError
         },
         // Not an isom-brand MP4 (HEIC photo, QuickTime .mov, …): outside
         // mp4san's supported scope — treated as a non-covered format.
-        Err(mp4::Error::Parse(report))
-            if matches!(report.kind, mp4::ParseError::UnsupportedFormat(_)) =>
+        Err(mp4san::Error::Parse(report))
+            if matches!(
+                report.get_ref(),
+                mp4san::parse::ParseError::UnsupportedFormat(_)
+            ) =>
         {
-            tracing::debug!(kind = %report.kind, "ftyp file outside mp4san scope, passing through");
+            tracing::debug!("ftyp file outside mp4san scope, passing through");
             Ok(SanitizeOutcome::Unchanged)
         }
         Err(e) => Err(AttachmentError::InvalidAttachment(format!(
-            "malformed MP4 rejected: {e}"
+            "MP4 rejected (metadata budget: 16 MiB; export a smaller metadata/sample table if exceeded): {e}"
         ))),
     }
 }
@@ -601,6 +873,152 @@ mod tests {
 
     /// Minimal valid lossless WebP (from webpsan's doc example).
     const VALID_WEBP: &[u8] = b"RIFF\x14\0\0\0WEBPVP8L\x08\0\0\0\x2f\0\0\0\0\x88\x88\x08";
+
+    #[test]
+    fn oversized_declared_moov_rejected_before_payload_read() {
+        // Only 28 bytes on disk; accepting this declaration would allocate
+        // hundreds of MiB before discovering EOF with the old defaults.
+        for size in [MAX_MP4_METADATA_SIZE + 9, 512 * 1024 * 1024] {
+            let input = [
+                ftyp(),
+                (size as u32).to_be_bytes().to_vec(),
+                b"moov".to_vec(),
+            ]
+            .concat();
+            let dependency_error =
+                mp4san::sanitize_with_config(std::io::Cursor::new(&input), mp4_config())
+                    .unwrap_err();
+            match dependency_error {
+                mp4san::Error::Parse(report) => assert!(matches!(
+                    report.get_ref(),
+                    mp4san::parse::ParseError::InvalidInput
+                )),
+                other => panic!("expected preallocation size rejection, got {other:?}"),
+            }
+            let mut file = tempfile::NamedTempFile::new().unwrap();
+            std::io::Write::write_all(&mut file, &input).unwrap();
+            for result in [
+                sanitize_media_file(file.path()).map(|_| ()),
+                sanitize_media(&input).map(|_| ()),
+            ] {
+                let error = result.unwrap_err().to_string();
+                assert!(error.contains("16 MiB"), "{error}");
+                // mp4san reports its size check, rather than an EOF read error.
+                assert!(error.contains("metadata"), "{error}");
+            }
+            assert_eq!(std::fs::read(file.path()).unwrap(), input);
+        }
+        assert!(check_mp4_metadata_size(MAX_MP4_METADATA_SIZE).is_ok());
+        assert!(check_mp4_metadata_size(MAX_MP4_METADATA_SIZE + 1).is_err());
+    }
+
+    #[test]
+    fn privacy_pass_independently_checks_metadata_budget() {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        let size = MAX_MP4_METADATA_SIZE + 1;
+        file.write_all(&(size as u32).to_be_bytes()).unwrap();
+        file.write_all(b"moov").unwrap();
+        file.as_file_mut().set_len(size).unwrap();
+        let error = strip_mp4_file_privacy_boxes(file.as_file_mut())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("16 MiB"), "{error}");
+    }
+
+    #[test]
+    fn malformed_extended_sizes_are_rejected_without_overflow() {
+        let mut movie = moov();
+        movie.extend_from_slice(&1u32.to_be_bytes());
+        movie.extend_from_slice(b"udta");
+        movie.extend_from_slice(&u64::MAX.to_be_bytes());
+        let size = movie.len() as u32;
+        movie[..4].copy_from_slice(&size.to_be_bytes());
+        assert!(strip_mp4_privacy_boxes(&movie).is_err());
+        let input = [
+            ftyp(),
+            1u32.to_be_bytes().to_vec(),
+            b"moov".to_vec(),
+            u64::MAX.to_be_bytes().to_vec(),
+        ]
+        .concat();
+        assert!(preflight_mp4(&mut std::io::Cursor::new(input)).is_err());
+    }
+
+    #[test]
+    fn relocation_padding_budget_is_checked_before_dependency_allocation() {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&ftyp()).unwrap();
+        // Sparse 512 MiB leading free box followed by mdat and trailing moov.
+        let padding = 512 * 1024 * 1024u32;
+        file.write_all(&padding.to_be_bytes()).unwrap();
+        file.write_all(b"free").unwrap();
+        file.seek(SeekFrom::Start(ftyp().len() as u64 + padding as u64))
+            .unwrap();
+        file.write_all(&mdat()).unwrap();
+        file.write_all(&moov()).unwrap();
+        let error = sanitize_media_file(file.path()).unwrap_err().to_string();
+        assert!(error.contains("relocation padding"), "{error}");
+        assert!(error.contains("32 MiB"), "{error}");
+        // Budget applies only when relocation can build padding: an already
+        // streamable file with the same huge free extent stays streamable.
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(&ftyp()).unwrap();
+        file.write_all(&moov()).unwrap();
+        let free_size = padding - moov().len() as u32;
+        file.write_all(&free_size.to_be_bytes()).unwrap();
+        file.write_all(b"free").unwrap();
+        file.as_file_mut()
+            .set_len(ftyp().len() as u64 + padding as u64 + 8)
+            .unwrap();
+        assert!(sanitize_media_file(file.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn many_top_level_boxes_stream_without_retaining_a_box_table() {
+        use std::io::Write;
+        let mut movie = moov();
+        movie.extend_from_slice(&12u32.to_be_bytes());
+        movie.extend_from_slice(b"udtaGPS!");
+        let movie_len = movie.len() as u32;
+        movie[..4].copy_from_slice(&movie_len.to_be_bytes());
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&ftyp()).unwrap();
+        file.write_all(&movie).unwrap();
+        // A million boxes used to require a growing ~24 MiB tuple table.
+        let free = [8u32.to_be_bytes().as_slice(), b"free"].concat();
+        for _ in 0..1_000_000 {
+            file.write_all(&free).unwrap();
+        }
+        file.write_all(&mdat()).unwrap();
+        let original_len = file.as_file().metadata().unwrap().len();
+        let output = sanitize_media_file(file.path()).unwrap().unwrap();
+        assert_eq!(output.as_file().metadata().unwrap().len(), original_len);
+        assert!(sanitize_media_file(output.path()).unwrap().is_none());
+        let mut prefix = vec![0; ftyp().len() + movie.len()];
+        std::fs::File::open(output.path())
+            .unwrap()
+            .read_exact(&mut prefix)
+            .unwrap();
+        assert!(!prefix.windows(4).any(|w| w == b"GPS!" || w == b"udta"));
+        assert_eq!(file.as_file().metadata().unwrap().len(), original_len);
+    }
+
+    #[test]
+    fn file_gps_fixture_matches_bytes_and_revalidates() {
+        let input = include_bytes!("../../../tests/fixtures/gps/location.mp4");
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut file, input).unwrap();
+        let output = sanitize_media_file(file.path()).unwrap().unwrap();
+        let bytes = std::fs::read(output.path()).unwrap();
+        assert_eq!(
+            sanitize_media(input).unwrap(),
+            SanitizeOutcome::Rewritten(bytes.clone())
+        );
+        assert!(validate_media(&bytes).is_ok());
+        assert_eq!(std::fs::read(file.path()).unwrap(), input);
+    }
 
     #[test]
     fn mp4_with_trailing_moov_is_rewritten_to_sanitized_layout() {
@@ -682,6 +1100,31 @@ mod tests {
                     .unwrap()
                     .unwrap();
                 let streamed = std::fs::read(stripped_file.path()).unwrap();
+                let relocated = sanitize_media_file(file.path()).unwrap().unwrap();
+                let relocated_bytes = std::fs::read(relocated.path()).unwrap();
+                let expected = sanitize_media(&input).unwrap();
+                assert_eq!(
+                    expected,
+                    SanitizeOutcome::Rewritten(relocated_bytes.clone())
+                );
+                assert!(validate_media(&relocated_bytes).is_ok());
+                let table_kind = if wide { b"co64" } else { b"stco" };
+                let table = relocated_bytes
+                    .windows(4)
+                    .position(|w| w == table_kind)
+                    .unwrap();
+                let entry = table + 12;
+                let relocated_offset = if wide {
+                    u64::from_be_bytes(relocated_bytes[entry..entry + 8].try_into().unwrap())
+                        as usize
+                } else {
+                    u32::from_be_bytes(relocated_bytes[entry..entry + 4].try_into().unwrap())
+                        as usize
+                };
+                assert_eq!(
+                    &relocated_bytes[relocated_offset..relocated_offset + sample.len()],
+                    sample
+                );
                 for output in [&memory, &streamed] {
                     // Follow the actual chunk table, not a rewritten-length expectation.
                     let kind = if wide { b"co64" } else { b"stco" };
@@ -971,3 +1414,7 @@ mod tests {
         assert!(validate_media(&input).is_ok());
     }
 }
+
+#[cfg(test)]
+#[path = "sanitize_stream_tests.rs"]
+mod streaming_tests;

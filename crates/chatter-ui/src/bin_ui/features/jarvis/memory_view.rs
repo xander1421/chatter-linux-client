@@ -84,7 +84,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 chatter_core::state::ActiveConversation::Channel(id)
                                     if chatter_core::client::is_jarvis_channel(&id)) {
                                 w.global::<crate::ChatPane>()
-                                    .set_messages(ModelRc::new(VecModel::default()));
+                                    .set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::default()));
                             }
                         }
                     });

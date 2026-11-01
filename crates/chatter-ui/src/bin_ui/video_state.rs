@@ -38,7 +38,7 @@ static USING_GL_VIDEO: AtomicBool = AtomicBool::new(false);
 pub struct FrameData {
     pub width: u32,
     pub height: u32,
-    pub rgb_data: Vec<u8>,
+    pub pixels: slint::SharedPixelBuffer<slint::Rgb8Pixel>,
 }
 
 /// Video playback state.
@@ -104,6 +104,10 @@ impl LoadRequest {
     }
 
     fn publish_frame(&self, width: u32, height: u32, rgb_data: Vec<u8>) {
+        if !self.is_current() { return; }
+        // Prepare the presentation buffer on the decoder thread. The UI only
+        // wraps the shared pixels; it never copies a full RGB frame on a tick.
+        let pixels = slint::SharedPixelBuffer::clone_from_slice(&rgb_data, width, height);
         let Ok(generation) = LOAD_GENERATION.lock() else {
             return;
         };
@@ -114,7 +118,7 @@ impl LoadRequest {
             *buffer = Some(FrameData {
                 width,
                 height,
-                rgb_data,
+                pixels,
             });
         }
     }
@@ -319,18 +323,27 @@ fn start_software_range<F>(
 ) where
     F: FnOnce(Result<(f64, String), String>) + Send + 'static,
 {
-    // Full-decrypt fallback is existing desktop behavior; keep it off the UI thread.
-    std::thread::spawn(move || {
-        if !request.is_current() {
-            return;
-        }
-        let data = dec.read_range(0, dec.plaintext_size());
-        start_video_software(data, filename, request, on_ready);
-    });
+    start_video_software_source(SoftwareSource::Range(dec), filename, request, on_ready);
+}
+
+enum SoftwareSource {
+    Memory(Vec<u8>),
+    Range(Arc<chatter_core::services::attachment::CbcRangeDecryptor>),
 }
 
 fn start_video_software<F>(data: Vec<u8>, filename: String, request: LoadRequest, on_ready: F)
 where
+    F: FnOnce(Result<(f64, String), String>) + Send + 'static,
+{
+    start_video_software_source(SoftwareSource::Memory(data), filename, request, on_ready);
+}
+
+fn start_video_software_source<F>(
+    data: SoftwareSource,
+    filename: String,
+    request: LoadRequest,
+    on_ready: F,
+) where
     F: FnOnce(Result<(f64, String), String>) + Send + 'static,
 {
     std::thread::spawn(move || {
@@ -344,9 +357,13 @@ where
             if !request.matches(*generation) {
                 return;
             }
-            let player = VideoPlayer::start_from_memory(data, move |width, height, rgb_data| {
+            let callback = move |width, height, rgb_data| {
                 frame_request.publish_frame(width, height, rgb_data);
-            });
+            };
+            let player = match data {
+                SoftwareSource::Memory(data) => VideoPlayer::start_from_memory(data, callback),
+                SoftwareSource::Range(range) => VideoPlayer::start_from_range(range, callback),
+            };
             let player = match player {
                 Ok(player) => player,
                 Err(error) => {
@@ -547,7 +564,7 @@ mod loader_tests {
         };
         current.publish_frame(1, 1, vec![1, 2, 3]);
         old.publish_frame(1, 1, vec![9, 9, 9]);
-        assert_eq!(take_frame().unwrap().rgb_data, vec![1, 2, 3]);
+        assert_eq!(take_frame().unwrap().pixels.as_bytes(), &[1, 2, 3]);
         let cancelled = LoadRequest {
             generation: 42,
             still_current: Arc::new(|| false),
@@ -569,7 +586,7 @@ mod loader_tests {
         stop_generation(Some(43));
         assert_eq!(*LOAD_GENERATION.lock().unwrap(), 44);
         assert_eq!(VIDEO_STATE.lock().unwrap().filename, "keep new player");
-        assert_eq!(take_frame().unwrap().rgb_data, vec![1, 2, 3]);
+        assert_eq!(take_frame().unwrap().pixels.as_bytes(), &[1, 2, 3]);
         *VIDEO_STATE.lock().unwrap() = VideoState::default();
     }
 }

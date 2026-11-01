@@ -154,13 +154,18 @@ pub extern "system" fn Java_com_chatter_client_MessagingService_nativeStartHeadl
 #[cfg(target_os = "android")]
 async fn android_core(
     allow_signed_out: bool,
-) -> Result<(std::sync::Arc<chatter_core::client::ChatterClient>, bool), chatter_core::client::StartupError> {
+) -> Result<
+    (std::sync::Arc<chatter_core::client::ChatterClient>, bool),
+    chatter_core::client::StartupError,
+> {
     tracing::info!("Android core: waiting for startup lock");
     let _lock = ANDROID_CORE_LOCK.lock().await;
     tracing::info!("Android core: startup lock acquired");
     if let Some(client) = ANDROID_CLIENT.get() {
         if !allow_signed_out && !client.is_logged_in() {
-            return Err(chatter_core::client::StartupError { kind: chatter_core::client::StartupErrorKind::Other });
+            return Err(chatter_core::client::StartupError {
+                kind: chatter_core::client::StartupErrorKind::Other,
+            });
         }
         if client.is_logged_in()
             && !ANDROID_SERVICES_READY.load(std::sync::atomic::Ordering::Acquire)
@@ -195,7 +200,9 @@ async fn android_core(
     tracing::info!("Android core: client opened");
     client.restore_session();
     if !client.is_logged_in() && !allow_signed_out {
-        return Err(chatter_core::client::StartupError { kind: chatter_core::client::StartupErrorKind::Other });
+        return Err(chatter_core::client::StartupError {
+            kind: chatter_core::client::StartupErrorKind::Other,
+        });
     }
     crate::platform::android::call_actions::register_call_client(client.clone());
     crate::platform::android::notification_route::register_client(client.clone());
@@ -223,7 +230,9 @@ async fn android_core(
     client.set_app_visible(ANDROID_ACTIVITY_VISIBLE.load(std::sync::atomic::Ordering::Acquire));
     tracing::info!("Android core: client published");
     if !allow_signed_out && !ANDROID_SERVICES_READY.load(std::sync::atomic::Ordering::Acquire) {
-        return Err(chatter_core::client::StartupError { kind: chatter_core::client::StartupErrorKind::Other });
+        return Err(chatter_core::client::StartupError {
+            kind: chatter_core::client::StartupErrorKind::Other,
+        });
     }
     Ok((client, connected))
 }
@@ -560,6 +569,10 @@ fn init_tracing() {
             // Release logs must not be made verbose through RUST_LOG.
             tracing_subscriber::EnvFilter::new("warn")
         }
+        // Call setup uses only constant metadata targets; event values still
+        // go through the unchanged release redactor.
+        .add_directive("call_setup=info".parse().unwrap())
+        .add_directive("gif_playback=info".parse().unwrap())
         .add_directive("glycin=warn".parse().unwrap())
         .add_directive("glycin_utils=warn".parse().unwrap())
         .add_directive("zbus=warn".parse().unwrap());
@@ -804,7 +817,7 @@ pub async fn app_init() -> Result<AppState, chatter_core::client::StartupError> 
         window.global::<JarvisGlobal>().set_enabled(true);
         window
             .global::<JarvisGlobal>()
-            .set_opted_in(ui_ctx.local_ai_enabled().unwrap_or(false));
+            .set_opted_in(ui_ctx.remote_ai_enabled());
     }
 
     // FEAT-5: the create-channel "AI assistant" template. Same mirror pattern,
@@ -1273,7 +1286,10 @@ fn app_run(state: AppState) {
 pub async fn app_main() {
     loop {
         match app_init().await {
-            Ok(state) => { app_run(state); break; }
+            Ok(state) => {
+                app_run(state);
+                break;
+            }
             Err(error) if show_startup_error(error) => continue,
             Err(_) => break,
         }

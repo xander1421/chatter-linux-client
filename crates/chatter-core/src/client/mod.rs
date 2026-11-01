@@ -30,22 +30,23 @@ pub mod events;
 mod jarvis;
 #[cfg(feature = "jarvis")]
 pub use jarvis::{
-    JARVIS_CHANNEL_NAME, JarvisRow, JarvisSessionOwner, is_jarvis_channel, jarvis_channel_id, jarvis_channel_reply_text,
+    JARVIS_CHANNEL_NAME, JarvisRow, JarvisSessionOwner, is_jarvis_channel, jarvis_channel_id,
+    jarvis_channel_reply_text,
 };
 mod link_device;
 pub mod membership;
-mod messaging;
 mod mentions;
+mod messaging;
 mod search_visible;
 mod send_attempt;
 pub use search_visible::{SearchPage, VisibleSearchHit};
 pub use send_attempt::await_send_with_notice;
 mod receipts;
+pub use crate::network::connection::ConnectionState;
 pub use anon_group::{AnonGroupInviteCandidate, PrivateGroupRoster};
 pub use messaging::{ChannelInviteRow, ForwardDestination, InviteCandidate, ReplyParentMedia};
 pub use profile::{FriendCodeConnection, FriendCodeConnectionError};
 pub use secret_chat::{SecretChatError, SecretChatGate};
-pub use crate::network::connection::ConnectionState;
 
 /// Rows removed by a local expiry sweep and attachments no longer referenced
 /// by any stored message.
@@ -133,16 +134,18 @@ impl From<crate::storage::mesh_binding_store::PeerBinding> for MeshBindingStatus
     }
 }
 
-mod notification;
 mod activity;
+mod notification;
 pub use activity::ActivityStatus;
 mod picker_history;
 mod pin;
 pub use pin::PinnedDisplayItem;
+mod lifecycle_diagnostics;
+mod presence;
+mod presence_owner;
+pub mod preview;
 mod profile;
 mod profile_visibility;
-mod presence;
-pub mod preview;
 mod push_config;
 mod secret_chat;
 mod shared_content;
@@ -163,7 +166,6 @@ use crate::events::{DomainEvent, EventBus};
 use crate::inbox::DeviceInboxProvider;
 use crate::mailbox::group::GroupFanout;
 use crate::proto::content_v1::AttachmentPointer;
-use crate::services::ai::LocalAIService;
 use crate::services::ai_service::AIService;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
@@ -247,7 +249,9 @@ impl ClientBuilder {
             self.notification_sink,
         )?;
         let services = ctx.core_services();
-        let activity = Arc::new(crate::services::activity_service::ActivityService::new(services.database.clone()));
+        let activity = Arc::new(crate::services::activity_service::ActivityService::new(
+            services.database.clone(),
+        ));
         let anon_mode = services.message_service.shield_mode.clone();
         let client = Arc::new(ChatterClient {
             ctx,
@@ -282,6 +286,7 @@ impl ClientBuilder {
             server_monitor_started: AtomicBool::new(false),
             server_contact_deferred: AtomicBool::new(false),
             composer_drafts: Mutex::new(std::collections::HashMap::new()),
+            composer_queue: Mutex::new(Vec::new()),
             composer_draft_revision: Mutex::new(0),
             composer_draft_owner: Mutex::new(None),
             parked_sends: Mutex::new(Vec::new()),
@@ -361,10 +366,18 @@ impl StartupError {
 
     pub fn details(self) -> &'static str {
         match self.kind {
-            StartupErrorKind::Storage => "Local storage initialization failed. Check available space and access to the app data folder, then retry.",
-            StartupErrorKind::Keyring => "The system credential store did not provide the database key. Unlock the credential store, then retry.",
-            StartupErrorKind::Network => "Network setup failed. Check your connection and server settings, then retry.",
-            StartupErrorKind::Other => "An initialization step failed. Retry, or restart the app if the problem continues.",
+            StartupErrorKind::Storage => {
+                "Local storage initialization failed. Check available space and access to the app data folder, then retry."
+            }
+            StartupErrorKind::Keyring => {
+                "The system credential store did not provide the database key. Unlock the credential store, then retry."
+            }
+            StartupErrorKind::Network => {
+                "Network setup failed. Check your connection and server settings, then retry."
+            }
+            StartupErrorKind::Other => {
+                "An initialization step failed. Retry, or restart the app if the problem continues."
+            }
         }
     }
 }
@@ -381,8 +394,12 @@ impl From<ClientError> for StartupError {
         use crate::error::SystemError;
         let kind = match error {
             ClientError::Init(ContextError::Storage(_)) => StartupErrorKind::Storage,
-            ClientError::Init(ContextError::System(SystemError::Keyring(_))) => StartupErrorKind::Keyring,
-            ClientError::Init(ContextError::Network(_)) | ClientError::Connection(_) => StartupErrorKind::Network,
+            ClientError::Init(ContextError::System(SystemError::Keyring(_))) => {
+                StartupErrorKind::Keyring
+            }
+            ClientError::Init(ContextError::Network(_)) | ClientError::Connection(_) => {
+                StartupErrorKind::Network
+            }
             _ => StartupErrorKind::Other,
         };
         Self { kind }
@@ -591,6 +608,7 @@ pub struct ChatterClient {
     /// Mirrored to the signed-in account's settings row on every change
     /// (`persist_composer_drafts`), so it survives a restart.
     composer_drafts: Mutex<std::collections::HashMap<String, ComposerDraft>>,
+    composer_queue: Mutex<Vec<std::sync::Weak<composer::queue::QueueTicket>>>,
     composer_draft_revision: Mutex<u64>,
     /// The account whose persisted drafts the map holds, deleted at sign-out.
     composer_draft_owner: Mutex<Option<crate::domain::UserId>>,
@@ -614,34 +632,34 @@ pub struct ChatterClient {
 
 pub use crate::services::user::ReceivedFriendRequestProfile;
 
-mod core_access;
-mod call_facade;
-mod mesh;
-mod backup;
-mod trust;
-mod event_streams;
-mod ai_settings;
 mod account_settings;
-mod sidebar;
+mod ai_settings;
 mod auth_state;
+mod backup;
+mod call_facade;
+mod core_access;
+mod event_streams;
+mod mesh;
+mod sidebar;
+mod trust;
 pub use auth_state::{ConversationGuard, SessionGuard};
-mod thread;
-mod shield;
-mod infrastructure;
-mod startup;
-mod outgoing;
 mod conversation_listing;
-pub use conversation_listing::{member_roster_rows, MemberRosterRow};
-mod social;
-mod profile_facade;
-mod presence_facade;
-mod integration_facade;
-mod sync_facade;
-mod messaging_settings;
-mod shutdown;
+mod infrastructure;
+mod outgoing;
+mod shield;
+mod startup;
+mod thread;
+pub use conversation_listing::{MemberRosterRow, member_roster_rows};
 mod bridges;
+mod integration_facade;
+mod messaging_settings;
+mod presence_facade;
+mod profile_facade;
 mod push_facade;
 mod server_records;
+mod shutdown;
+mod social;
+mod sync_facade;
 
 #[cfg(test)]
 mod facade_tests;
@@ -698,12 +716,18 @@ async fn upload_attachments(
             }
             continue;
         }
-        let staged = client
-            .map(|client| client.staged_upload_file(&att.path))
-            .transpose()?
-            .flatten();
-        let upload_path = staged.as_ref().map(|(_, path)| path.as_path()).unwrap_or(&att.path);
-        match attachment_service.upload_to_cdn_encrypted(upload_path).await {
+        let staged = match client {
+            Some(client) => client.staged_upload_file(&att.path).await?,
+            None => None,
+        };
+        let upload_path = staged
+            .as_ref()
+            .map(|(_, path)| path.as_path())
+            .unwrap_or(&att.path);
+        match attachment_service
+            .upload_to_cdn_encrypted(upload_path)
+            .await
+        {
             Ok(res) => {
                 pointers.push(res.to_attachment_pointer());
                 if let Ok(Some(full_att)) = attachment_service.get(&res.attachment_id) {

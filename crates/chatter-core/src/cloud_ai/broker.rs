@@ -13,7 +13,7 @@
 //! must stay that way. Routing to a different host is a different backend, not
 //! a setting.
 
-use crate::local_ai::backend::{
+use crate::ai_protocol::{
     AvailableModel, BackendError, ChatMessage, ChatResponse, ChatRole, GenerateParams,
     LocalAIBackend,
 };

@@ -142,6 +142,7 @@ pub async fn poll_group_mailboxes(
 
                 for msg in poll_result.messages {
                     total_messages += 1;
+                    if !retry_budget.should_attempt(&msg.message_id, ack_policy::now_ns()) { continue; }
 
                     // Per NDSS '21: Group mailbox messages are sealed sender encrypted.
                     // The sender identity is revealed during SSDecVer (decryption).
@@ -189,6 +190,7 @@ pub async fn poll_group_mailboxes(
 
                 // Acknowledge processed messages using mailbox_id (works for both server-managed and anon groups)
                 if !message_ids.is_empty() {
+                    retry_budget.retry_after_progress();
                     let ack_ids_for_log = message_ids.clone();
                     let ack_result = group_fanout
                         .acknowledge_by_mailbox_id(&poll_result.mailbox_id, message_ids)

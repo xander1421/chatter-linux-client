@@ -598,6 +598,58 @@ impl KeyStore {
         Ok(())
     }
 
+    /// Commit an admitted sealed-send batch with one writer guard and transaction.
+    /// Identity changes invalidate verification and archive every old device
+    /// ratchet before the staged destination records replace their own rows.
+    pub(crate) fn commit_signal_send(
+        &self,
+        identities: &[(String, Vec<u8>)],
+        sessions: &[(String, Vec<u8>)],
+    ) -> Result<(), StorageError> {
+        use rusqlite::OptionalExtension;
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let now = Utc::now().to_rfc3339();
+        for (account, identity) in identities {
+            let old: Option<Vec<u8>> = tx
+                .query_row(
+                    "SELECT identity_key FROM remote_identities WHERE address = ?1",
+                    [account],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if old.as_ref().is_some_and(|old| old != identity) {
+                tx.execute("UPDATE peer_verification SET is_verified = 0, verified_at = NULL WHERE peer_user_id = ?1", [account])?;
+                let records = {
+                    let mut stmt =
+                        tx.prepare("SELECT address, record FROM sessions WHERE address LIKE ?1")?;
+                    let rows = stmt.query_map([format!("{account}:%")], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                    })?;
+                    rows.collect::<Result<Vec<_>, _>>()?
+                };
+                for (address, bytes) in records {
+                    let archive = || -> Result<Vec<u8>, libsignal_protocol::SignalProtocolError> {
+                        let mut record = libsignal_protocol::SessionRecord::deserialize(&bytes)?;
+                        record.archive_current_state()?;
+                        record.serialize()
+                    };
+                    let record = archive().map_err(|e| StorageError::InvalidData(e.to_string()))?;
+                    tx.execute(
+                        "UPDATE sessions SET record = ?2, updated_at = ?3 WHERE address = ?1",
+                        params![address, record, now],
+                    )?;
+                }
+            }
+            tx.execute("INSERT INTO remote_identities(address,identity_key,first_seen_at,updated_at) VALUES(?1,?2,?3,?3) ON CONFLICT(address) DO UPDATE SET identity_key=excluded.identity_key,updated_at=excluded.updated_at", params![account,identity,now])?;
+        }
+        for (address, record) in sessions {
+            tx.execute("INSERT INTO sessions(address,record,updated_at) VALUES(?1,?2,?3) ON CONFLICT(address) DO UPDATE SET record=excluded.record,updated_at=excluded.updated_at", params![address,record,now])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Delete a session record.
     ///
     /// This is NOT how sessions are invalidated — identity changes and peer
@@ -1293,5 +1345,56 @@ impl KeyStore {
         }
         tx.commit()?;
         Ok(artifact.cloned())
+    }
+}
+
+#[cfg(test)]
+mod staged_send_tests {
+    use super::*;
+
+    fn setup() -> (tempfile::NamedTempFile, Arc<Database>, KeyStore) {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let db = Arc::new(Database::open(file.path(), "fixture").unwrap());
+        db.run_migrations().unwrap();
+        let keys = KeyStore::new(db.clone());
+        (file, db, keys)
+    }
+
+    #[test]
+    fn staged_send_rolls_back_identity_and_all_sessions_on_late_write_failure() {
+        let (_file, db, keys) = setup();
+        keys.save_identity("peer", &[1]).unwrap();
+        keys.store_session("peer:1", &[10]).unwrap();
+        db.connection().unwrap().execute_batch("CREATE TEMP TRIGGER fail_staged_session BEFORE INSERT ON sessions WHEN NEW.address = 'peer:2' BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;").unwrap();
+        assert!(
+            keys.commit_signal_send(
+                &[("new-peer".into(), vec![2])],
+                &[("peer:1".into(), vec![11]), ("peer:2".into(), vec![12])]
+            )
+            .is_err()
+        );
+        assert_eq!(keys.load_session("peer:1").unwrap(), Some(vec![10]));
+        assert_eq!(keys.load_session("peer:2").unwrap(), None);
+        assert_eq!(keys.get_identity("new-peer").unwrap(), None);
+    }
+
+    #[test]
+    fn staged_send_identity_change_invalidates_verification_atomically() {
+        let (_file, _db, keys) = setup();
+        keys.save_identity("peer", &[1]).unwrap();
+        keys.set_peer_verified("peer", "fixture", true).unwrap();
+        let fresh = libsignal_protocol::SessionRecord::new_fresh()
+            .serialize()
+            .unwrap();
+        keys.store_session("peer:1", &fresh).unwrap();
+        keys.commit_signal_send(
+            &[("peer".into(), vec![2])],
+            &[("peer:2".into(), fresh.clone())],
+        )
+        .unwrap();
+        assert!(!keys.is_peer_verified("peer").unwrap());
+        assert_eq!(keys.get_identity("peer").unwrap(), Some(vec![2]));
+        assert!(keys.load_session("peer:1").unwrap().is_some());
+        assert_eq!(keys.load_session("peer:2").unwrap(), Some(fresh));
     }
 }

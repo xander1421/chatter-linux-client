@@ -9,12 +9,16 @@ pub mod android_screen;
 mod audio_capture;
 mod audio_playback;
 pub mod audio_route;
+pub mod audio_format;
 mod room_manager;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod screen_capture;
+#[cfg(not(target_os = "ios"))]
+mod screen_share_policy;
 pub mod shared_frames;
 pub mod tiles;
 pub(crate) mod timing;
+pub(crate) mod setup_diagnostics;
 mod video_capture;
 mod video_playback;
 

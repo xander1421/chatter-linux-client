@@ -13,6 +13,8 @@ use std::sync::atomic::Ordering;
 use prost::Message as _;
 use unicode_segmentation::UnicodeSegmentation;
 
+pub(super) mod queue;
+
 use super::ChatterClient;
 use crate::domain::anon_dm::AnonDmId;
 use crate::domain::anon_group::AnonGroupId;
@@ -64,6 +66,7 @@ pub struct ComposerSend {
     pub text: String,
     pub reply: Option<ComposerReply>,
     pub attachments: Vec<PendingAttachment>,
+    pub(crate) queue_ticket: Option<std::sync::Arc<queue::QueueTicket>>,
 }
 
 /// Keep encoded text below half the sealed inbox cap. The other half is for
@@ -108,6 +111,10 @@ fn split_composer_text(text: &str) -> Vec<String> {
 }
 
 impl ComposerSend {
+    pub fn is_upload_queued(&self) -> bool {
+        self.queue_ticket.as_ref().is_some_and(|ticket| ticket.is_waiting())
+    }
+
     /// Normal messages, in wire order. Attachments and the quote belong to the
     /// first part; each later part receives its own send identity.
     pub fn ordered_parts(self) -> Vec<Self> {
@@ -120,6 +127,7 @@ impl ComposerSend {
             text,
             reply: if index == 0 { self.reply.clone() } else { None },
             attachments: if index == 0 { self.attachments.clone() } else { vec![] },
+            queue_ticket: self.queue_ticket.clone(),
         }).collect()
     }
 }
@@ -336,10 +344,10 @@ impl ChatterClient {
         conversation: crate::state::ActiveConversation,
         revision: u64,
         attachment: crate::state::PendingAttachment,
-    ) {
+    ) -> bool {
         self.services
             .chat_state
-            .add_pending_attachment_for(conversation, revision, attachment);
+            .add_pending_attachment_for(conversation, revision, attachment)
     }
 
     pub fn add_pending_attachment(&self, attachment: crate::state::PendingAttachment) {
@@ -410,8 +418,7 @@ impl ChatterClient {
         {
             return Err("Send the Jarvis request on its own first.".into());
         }
-        self.ensure_send_available(conversation)
-            .map_err(|e| e.to_string())?;
+        let ticket = self.reserve_composer_turn(conversation, session_revision)?;
         if !self.composer_session_is_current(session_revision) {
             return Err("The account session changed. Nothing was sent.".into());
         }
@@ -419,14 +426,22 @@ impl ChatterClient {
             .chat_state()
             .take_pending_attachments_for(conversation, chat.attachment_revision)
             .ok_or_else(|| "The conversation changed. Nothing was sent.".to_string())?;
-        Ok(ComposerSend {
+        let send = ComposerSend {
             attempt_id: uuid::Uuid::new_v4(),
             session_revision,
             conversation,
             text,
             reply,
             attachments,
-        })
+            queue_ticket: Some(ticket),
+        };
+        if let Err(error) = self.persist_queued_composer(&send) {
+            for attachment in send.attachments {
+                self.chat_state().add_pending_attachment_for(conversation, chat.attachment_revision, attachment);
+            }
+            return Err(error);
+        }
+        Ok(send)
     }
 
     /// Freeze a thread composer without touching the main conversation's tray.
@@ -470,6 +485,7 @@ impl ChatterClient {
             text,
             reply,
             attachments,
+            queue_ticket: None,
         })
     }
 
@@ -489,7 +505,7 @@ impl ChatterClient {
         quote: Option<crate::services::gateway::QuoteIntent>,
     ) -> Option<Result<super::messaging::SendMessageUiResult, crate::services::gateway::SendError>>
     {
-        if !self.composer_session_is_current(send.session_revision) {
+        if !self.await_composer_turn(send).await {
             return None;
         }
         Some(
@@ -557,6 +573,7 @@ impl ChatterClient {
             let repo = self.settings_repo();
             let drafts_deleted = repo.delete(&Self::composer_drafts_key(owner));
             let recovery_deleted = repo.delete(&Self::composer_recovery_key(owner));
+            self.delete_queued_composers(owner);
             if drafts_deleted.is_err() || recovery_deleted.is_err() {
                 tracing::warn!("persisted composer drafts not deleted at sign-out");
             }
@@ -580,16 +597,29 @@ impl ChatterClient {
     /// input, until [`Self::take_parked_send`] finds room for it.
     pub fn recover_composer_send(
         &self,
-        send: ComposerSend,
+        mut send: ComposerSend,
         composer_empty: bool,
     ) -> Option<ComposerSend> {
         if !self.composer_session_is_current(send.session_revision) {
             return None;
         }
+        if send.queue_ticket.as_ref().is_some_and(|ticket| ticket.is_cancelled()) {
+            return None;
+        }
+        match self.park_unstarted_queued_send(&send) {
+            Ok(false) => {},
+            Ok(true) | Err(()) => return None,
+        }
+        // A completed failed task no longer owns admission. Keeping its
+        // recoverable draft must not hold later accepted batches forever.
+        let ticket = send.queue_ticket.take();
         if self.composer_has_room(send.conversation, composer_empty) {
             return Some(send);
         }
         let (_drafts, _) = self.composer_drafts_for_session();
+        if ticket.as_ref().is_some_and(|ticket| ticket.is_cancelled()) {
+            return None;
+        }
         if !self.composer_session_is_current(send.session_revision) {
             return None;
         }
@@ -763,6 +793,7 @@ impl ChatterClient {
             self.parked_sends.lock().clear();
             if let Some(owner) = auth.current_user_id {
                 self.restore_composer_recovery(owner, auth.session_revision);
+                self.restore_queued_composers(owner, auth.session_revision);
             }
         }
         (drafts, changed_session)

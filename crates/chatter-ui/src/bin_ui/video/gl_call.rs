@@ -177,6 +177,8 @@ struct CallGlState {
     /// from the per-participant call textures so it is never subject to the
     /// miss-frame drop logic. Uploaded via [`upload_media_player_frame`].
     player_tex: Option<CallTexture>,
+    remote_keys: Vec<Option<(String, u64, u32, u32)>>,
+    local_key: Option<(String, u64, u32, u32)>,
 }
 
 thread_local! {
@@ -195,6 +197,11 @@ thread_local! {
 type InboxEntry = (Arc<Vec<u8>>, u32, u32, u32, u64);
 
 // `HashMap::new` is not const, so the mutex cannot be a plain static.
+static REDRAW_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn clear_redraw_pending() {
+    REDRAW_PENDING.store(false, std::sync::atomic::Ordering::Release);
+}
+
 static CALL_FRAME_INBOX: LazyLock<Mutex<HashMap<String, InboxEntry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -208,17 +215,19 @@ fn inbox() -> &'static Mutex<HashMap<String, InboxEntry>> {
 /// participant set so that participants who vanished from the snapshot also
 /// vanish from the inbox (and eventually get their texture dropped). Entries
 /// are `(participant_id, rgba, width, height, rotation, generation)`.
-pub fn publish_batch(frames: Vec<(String, Arc<Vec<u8>>, u32, u32, u32, u64)>) {
+pub fn publish_batch(frames: Vec<(String, Arc<Vec<u8>>, u32, u32, u32, u64)>) -> bool {
     if let Ok(mut map) = inbox().lock() {
         map.clear();
         for (id, rgba, w, h, rot, generation) in frames {
             map.insert(id, (rgba, w, h, rot, generation));
         }
     }
+    !REDRAW_PENDING.swap(true, std::sync::atomic::Ordering::AcqRel)
 }
 
 /// Clear the inbox (call teardown / call end).
 pub fn clear_inbox() {
+    clear_redraw_pending();
     if let Ok(mut map) = inbox().lock() {
         map.clear();
     }
@@ -265,6 +274,8 @@ pub fn on_rendering_setup(graphics_api: &slint::GraphicsAPI<'_>) {
             textures: HashMap::new(),
             model: None,
             player_tex: None,
+            remote_keys: Vec::new(),
+            local_key: None,
         });
     });
     tracing::info!("gl_call: GL texture uploader initialized for call video");
@@ -280,6 +291,9 @@ pub fn on_rendering_setup(graphics_api: &slint::GraphicsAPI<'_>) {
 /// `window` is the `MainWindow`; we set `call_remote_video_frames` on it with
 /// the persistent model populated with `BorrowedOpenGLTexture` images.
 pub fn on_before_rendering(window: &crate::MainWindow) {
+    // Release before snapshotting: a concurrent publisher can schedule the
+    // next present, while this one always consumes the newest queued pixels.
+    clear_redraw_pending();
     CALL_GL.with(|cell| {
         let mut guard = cell.borrow_mut();
         let state = match guard.as_mut() {
@@ -301,6 +315,8 @@ pub fn on_before_rendering(window: &crate::MainWindow) {
             gl,
             textures,
             model,
+            remote_keys,
+            local_key,
             ..
         } = state;
 
@@ -472,33 +488,36 @@ pub fn on_before_rendering(window: &crate::MainWindow) {
             .get_active_call_data()
             .participants;
         let remote_count = participants.row_count().saturating_sub(1);
-        let images: Vec<slint::Image> = (0..remote_count)
-            .map(|i| {
-                let pid = participants
-                    .row_data(i)
-                    .map(|p| p.user_id.to_string())
-                    .unwrap_or_default();
-                match textures.get(&pid) {
-                    Some(tex) if tex.width != 0 && tex.height != 0 => {
-                        // SAFETY: `tex.id` is a live, non-zero GL 2D RGBA texture
-                        // kept alive in `state.textures` across presents; Slint
-                        // reads it later in the same frame's draw. Never deleted
-                        // mid-frame (drops happen above, teardown in on_teardown).
-                        unsafe {
-                            slint::BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(
-                                tex.id,
-                                [tex.width, tex.height].into(),
-                            )
-                            .build()
-                        }
+        let key_for = |index| {
+            let pid = participants.row_data(index)?.user_id.to_string();
+            let tex = textures.get(&pid)?;
+            (tex.width != 0 && tex.height != 0).then_some((
+                pid,
+                tex.last_generation,
+                tex.width,
+                tex.height,
+            ))
+        };
+        let new_keys: Vec<_> = (0..remote_count).map(key_for).collect();
+        let new_local_key = participants.row_count().checked_sub(1).and_then(key_for);
+        if model.is_some() && *remote_keys == new_keys && *local_key == new_local_key {
+            return;
+        }
+        let image_for = |key: &Option<(String, u64, u32, u32)>| {
+            key.as_ref()
+                .and_then(|(pid, _, _, _)| textures.get(pid))
+                .map(|tex| {
+                    // SAFETY: the texture stays alive across this frame's draw.
+                    unsafe {
+                        slint::BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(
+                            tex.id,
+                            [tex.width, tex.height].into(),
+                        )
+                        .build()
                     }
-                    // No texture (stream absent / avatar tile) → blank slot keeps
-                    // positions aligned; the tile's is-video-enabled guard shows
-                    // the avatar instead.
-                    _ => slint::Image::default(),
-                }
-            })
-            .collect();
+                })
+                .unwrap_or_default()
+        };
 
         // Populate the persistent model in place and bind it once. `model` is
         // the destructured `&mut Option<Rc<VecModel<Image>>>` field.
@@ -514,47 +533,27 @@ pub fn on_before_rendering(window: &crate::MainWindow) {
             }
         };
 
-        let new_len = images.len();
+        let new_len = new_keys.len();
         let old_len = vm.row_count();
-        for (i, img) in images.into_iter().enumerate() {
+        for (i, key) in new_keys.iter().enumerate() {
             if i < old_len {
-                vm.set_row_data(i, img);
+                if remote_keys.get(i) != Some(key) {
+                    vm.set_row_data(i, image_for(key));
+                }
             } else {
-                vm.push(img);
+                vm.push(image_for(key));
             }
         }
         for i in (new_len..old_len).rev() {
             vm.remove(i);
         }
-
-        // Local self-preview: the last tile is "You", excluded from the remote
-        // list above and bound to `local-video-frame`. Its capture feed is teed
-        // into the shared store under the local participant id, so look up that
-        // texture and publish it. Blank when absent (camera/screen off) → the
-        // tile's is-video-enabled guard falls back to the avatar.
-        let local_img = participants
-            .row_data(participants.row_count().saturating_sub(1))
-            .map(|p| p.user_id.to_string())
-            .and_then(|pid| {
-                textures
-                    .get(&pid)
-                    .filter(|t| t.width != 0 && t.height != 0)
-                    .map(|tex| {
-                        // SAFETY: same invariants as the remote textures above — live,
-                        // non-zero RGBA 2D texture kept in `state.textures` across the draw.
-                        unsafe {
-                            slint::BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(
-                                tex.id,
-                                [tex.width, tex.height].into(),
-                            )
-                            .build()
-                        }
-                    })
-            })
-            .unwrap_or_default();
-        window
-            .global::<crate::CallView>()
-            .set_call_local_video_frame(local_img);
+        if *local_key != new_local_key {
+            window
+                .global::<crate::CallView>()
+                .set_call_local_video_frame(image_for(&new_local_key));
+        }
+        *remote_keys = new_keys;
+        *local_key = new_local_key;
     });
 }
 

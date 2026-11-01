@@ -82,7 +82,8 @@ pub struct GroupKeyStatus {
 
 #[derive(Clone)]
 pub(super) struct ReconnectMedia {
-    pub(super) microphone: Option<String>,
+    /// Outer option records publication intent; inner option is the requested device.
+    pub(super) microphone: Option<Option<String>>,
     pub(super) camera: Option<(String, VideoCaptureConfig)>,
     pub(super) muted: bool,
 }

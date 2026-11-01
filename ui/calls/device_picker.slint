@@ -103,6 +103,7 @@ export component DevicePicker inherits Rectangle {
     in property <[ScreenSourceData]> screen-windows: [];
     in property <string> selected-screen-id: "";
 
+    in property <bool> linked-audio: false;
     callback audio-selected(string);
     callback audio-output-selected(string);
     callback screen-selected(string);
@@ -179,6 +180,13 @@ export component DevicePicker inherits Rectangle {
 
                     device-list := VerticalLayout {
                         spacing: Spacing.xs;
+
+                        if root.linked-audio && picker-type != "screen": Text {
+                            text: "Microphone and output change together. The check mark shows the active device.";
+                            font-size: Typography.sm;
+                            color: Colors.text-secondary;
+                            wrap: word-wrap;
+                        }
 
                         // Audio input devices (microphones)
                         if picker-type == "audio": VerticalLayout {

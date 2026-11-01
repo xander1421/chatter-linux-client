@@ -10,6 +10,28 @@ impl RoomManager {
         AudioCapture::list_devices()
     }
 
+    #[cfg(not(target_os = "android"))]
+    pub fn audio_device_snapshot(&self, output: bool) -> Result<(Vec<AudioDevice>, String), CallError> {
+        let mut devices = if output { AudioCapture::list_output_devices()? } else { AudioCapture::list_devices()? };
+        let (actual, requested) = if output {
+            self.audio_playback.read().as_ref().map(|p| p.selected_output()).unwrap_or_default()
+        } else {
+            let capture = self.audio_capture.read();
+            (capture.applied_device().to_owned(), capture.selected_device().map(str::to_owned))
+        };
+        let missing = requested.as_ref().is_some_and(|id| !devices.iter().any(|d| &d.id == id));
+        let effective = devices.iter().find(|d| d.id == actual).or_else(|| if actual.is_empty() { devices.iter().find(|d| d.is_default) } else { None })
+            .map(|d| d.name.as_str()).unwrap_or("system route");
+        let label = if missing { format!("System default — {} (preferred device disconnected)", effective) }
+            else { format!("System default — {}", effective) };
+        for device in &mut devices { device.is_default = false; }
+        let default_id = super::super::audio_format::SYSTEM_DEFAULT.to_owned();
+        devices.insert(0, AudioDevice { id: default_id.clone(), name: label, is_default: true });
+        let selected = if requested.is_none() || missing { default_id }
+            else { devices.iter().find(|d| d.id == actual).map(|d| d.id.clone()).unwrap_or_default() };
+        Ok((devices, selected))
+    }
+
     /// List available video input devices.
     pub fn list_video_devices() -> Result<Vec<VideoDevice>, CallError> {
         VideoCapture::list_devices()
@@ -31,7 +53,11 @@ impl RoomManager {
     /// * `device_id` - Optional device ID (uses default if None)
     pub async fn publish_microphone(&self, device_id: Option<&str>) -> Result<(), CallError> {
         if self.microphone_requested.load(std::sync::atomic::Ordering::SeqCst) {
-            return self.switch_microphone(device_id).await;
+            return if device_id.is_some() {
+                self.switch_microphone(device_id.filter(|id| *id != super::super::audio_format::SYSTEM_DEFAULT)).await
+            } else {
+                Ok(())
+            };
         }
         self.publish_microphone_restored(device_id, false).await
     }
@@ -51,12 +77,7 @@ impl RoomManager {
         // Start audio capture
         let audio_source = {
             let mut capture = self.audio_capture.write();
-            let source = capture.start(device_id)?;
-            // Pause a restored muted capture before publishing the new track.
-            if muted {
-                capture.set_muted(true);
-            }
-            source
+            capture.start_muted(device_id, muted)?
         };
 
         // Create and publish track
@@ -90,10 +111,8 @@ impl RoomManager {
             room.as_ref().ok_or(CallError::NotInCall)?.local_participant()
         };
         let mut replacement = AudioCapture::new();
-        let source = replacement.start(device_id)?;
-        if self.audio_capture.read().is_muted() {
-            replacement.set_muted(true);
-        }
+        let muted = self.audio_capture.read().is_muted();
+        let source = replacement.start_muted(device_id, muted)?;
         let track = LocalAudioTrack::create_audio_track("microphone", RtcAudioSource::Native(source));
         let options = TrackPublishOptions {
             source: TrackSource::Microphone,
@@ -161,21 +180,23 @@ impl RoomManager {
                     screen_share: false,
                 });
 
-        // Start video capture
-        let (video_source, ready_rx) = {
-            let mut capture = self.video_capture.write();
-            capture.start(device_path, config, local_preview)?
+        // A room reconnect retires publication, not the call-owned capture.
+        let retained = self.camera_capture_retained.swap(false, Ordering::SeqCst)
+            .then(|| self.video_capture.read().active_source()).flatten();
+        let video_source = if let Some(source) = retained {
+            source
+        } else {
+            let (source, ready_rx) = self.video_capture.write()
+                .start(device_path, config, local_preview)?;
+            if !matches!(
+                tokio::time::timeout(std::time::Duration::from_secs(60), ready_rx).await,
+                Ok(Ok(()))
+            ) {
+                self.video_capture.write().stop();
+                return Err(CallError::CameraUnavailable);
+            }
+            source
         };
-
-        // The capture thread reports readiness only after a real camera frame.
-        // Await without blocking the call worker's local executor.
-        if !matches!(
-            tokio::time::timeout(std::time::Duration::from_secs(60), ready_rx).await,
-            Ok(Ok(()))
-        ) {
-            self.video_capture.write().stop();
-            return Err(CallError::CameraUnavailable);
-        }
 
         // Create and publish track
         let video_track =
@@ -397,12 +418,13 @@ impl RoomManager {
         };
 
         let publication = local_participant
-            .publish_track(LocalTrack::Video(video_track), publish_options)
+            .publish_track(LocalTrack::Video(video_track.clone()), publish_options)
             .await
             .map_err(|e| CallError::TrackPublishFailed(e.to_string()))?;
 
         let sid = publication.sid();
         *self.screen_share_track_sid.write() = Some(sid.clone());
+        self.start_screen_adaptation(video_track, width, height, target_fps);
 
         tracing::info!(
             "Published screen share track (H.265/NVENC, degradation=disabled, simulcast off, {} fps cap, {} Mbps, {}x{}, sid={})",
@@ -452,23 +474,37 @@ impl RoomManager {
             }
         };
         let source = NativeVideoSource::new(VideoResolution { width, height }, true);
-        if !android_screen::install_source(token, source.clone()) {
-            return Err(CallError::TrackPublishFailed("Screen share stopped".into()));
-        }
-        let track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source));
+        let track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source.clone()));
+        // H.264 is broadly supported by Android MediaCodec; Hardware selects
+        // CreateAndroidVideoEncoderFactory, never the desktop NVENC backend.
+        let max_bitrate = if android_screen::is_metered() {
+            2_000_000
+        } else {
+            ((width as u64 * height as u64) * 16).clamp(10_000_000, 150_000_000)
+        };
         let options = TrackPublishOptions {
             source: TrackSource::Screenshare,
+            video_codec: VideoCodec::H264,
+            video_encoder: VideoEncoderBackend::Hardware,
+            degradation_preference: Some(DegradationPreference::MaintainFramerateAndResolution),
+            simulcast: false,
+            video_encoding: Some(VideoEncoding {
+                max_bitrate,
+                max_framerate: 60.0,
+            }),
             ..Default::default()
         };
         let publication = local_participant
-            .publish_track(LocalTrack::Video(track), options)
+            .publish_track(LocalTrack::Video(track.clone()), options)
             .await
             .map_err(|error| {
                 android_screen::stop();
                 CallError::TrackPublishFailed(error.to_string())
             })?;
         *self.screen_share_track_sid.write() = Some(publication.sid());
-        if !android_screen::is_running() {
+        self.start_screen_adaptation(track, width, height, 60);
+        // Only release the buffered first frame once the sender is published.
+        if !android_screen::install_source(token, source) {
             self.stop_screen_share().await;
             return Err(CallError::TrackPublishFailed("Screen share stopped".into()));
         }
@@ -500,6 +536,7 @@ impl RoomManager {
     /// capture loop ends, so remote viewers freeze on the last frame instead of
     /// showing the avatar. Mirrors `stop_screen_share`.
     pub async fn stop_camera(&self) {
+        self.camera_capture_retained.store(false, std::sync::atomic::Ordering::SeqCst);
         {
             let mut capture = self.video_capture.write();
             capture.stop();
@@ -534,6 +571,9 @@ impl RoomManager {
     /// subscription it had first.
     #[cfg(not(target_os = "ios"))]
     pub async fn stop_screen_share(&self) {
+        if let Some(task) = self.screen_adaptation.write().take() {
+            task.abort();
+        }
         #[cfg(not(target_os = "android"))]
         {
             let mut capture = self.screen_capture.write();
@@ -570,10 +610,33 @@ impl RoomManager {
         capture.set_muted(muted);
     }
 
-    pub(crate) fn reconnect_microphone_device(&self) -> Option<String> {
+    pub(crate) fn reconnect_microphone_device(&self) -> Option<Option<String>> {
         self.microphone_requested
             .load(std::sync::atomic::Ordering::SeqCst)
-            .then(|| self.audio_capture.read().device_name().to_string())
+            .then(|| self.audio_capture.read().selected_device().map(str::to_owned))
+    }
+
+    #[cfg(not(target_os = "android"))]
+    pub fn refresh_audio_devices(&self) {
+        self.audio_capture.write().refresh_device();
+        if let Some(playback) = self.audio_playback.read().as_ref() {
+            if let Err(error) = playback.refresh_device() {
+                tracing::warn!(%error, "Could not refresh call output");
+            }
+        }
+    }
+
+    pub fn recover_microphone_stream(&self) {
+        if let Err(error) = self.audio_capture.write().recover_stream() {
+            tracing::error!(%error, "Could not recover microphone capture stream");
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn recover_audio_output_stream(&self) {
+        if let Some(playback) = self.audio_playback.read().as_ref() {
+            if let Err(error) = playback.recover_stream() { tracing::warn!(%error, "Could not reopen call output"); }
+        }
     }
 
     /// Check if microphone is muted.

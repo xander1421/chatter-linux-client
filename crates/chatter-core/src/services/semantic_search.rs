@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
+use crate::ai_protocol::BackendError;
 use crate::error::ServiceError;
-use crate::local_ai::backend::BackendError;
 use crate::local_ai::embeddings::EmbeddingGenerator;
 use crate::local_ai::ollama::OllamaBackend;
 use crate::local_ai::vector_store::{VectorSearchResult, VectorStore};

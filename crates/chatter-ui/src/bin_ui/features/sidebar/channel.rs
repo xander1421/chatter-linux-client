@@ -65,7 +65,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Clear inline GIF animations to free memory
             crate::bin_ui::gif_state::clear_inline_gifs();
 
-            // Local AI channel: no network, no pins, no read-marks — load Jarvis
+            // Device-stored assistant history: opening submits no remote prompt — load Jarvis
             // history and stop.
             #[cfg(feature = "jarvis")]
             if crate::bin_ui::features::jarvis::is_jarvis_channel_str(&channel_id_str) {
@@ -368,10 +368,10 @@ pub(crate) async fn load_channel_into_ui_owned(
     // 2. Load messages — use the channel's actual conversation type so
     // SavedMessages (stored as ConversationType::SavedMessages) round-trip correctly.
     let conv_type = channel.conversation_type();
-    let messages = match anchor.opening_page(
-        chatter_core::config::MESSAGE_PAGE_SIZE as u32,
-        |limit| ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, limit),
-    ) {
+    let messages = match anchor
+        .opening_page(chatter_core::config::MESSAGE_PAGE_SIZE as u32, |limit| {
+            ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, limit)
+        }) {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!("Failed to list channel messages: {}", e);
@@ -410,7 +410,8 @@ pub(crate) async fn load_channel_into_ui_owned(
         |m| ui_ctx.reply_parent_missing_for(m),
         |m| ui_ctx.reply_parent_media(m),
         |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-    );
+    )
+    .await;
     crate::bin_ui::converters::mark_disappearing(&ui_ctx, &mut display_messages);
     crate::bin_ui::converters::apply_reply_counts(
         &mut display_messages,
@@ -463,7 +464,7 @@ pub(crate) async fn load_channel_into_ui_owned(
             .iter()
             .map(|m| m.to_slint_preview_with_user(&current_user_id))
             .collect();
-        let model = VecModel::from(slint_messages);
+        let model = crate::bin_ui::message_model::MessageModel::from(slint_messages);
         if conversation_type == chatter_core::domain::message::ConversationType::Channel {
             crate::bin_ui::features::chat::recompute_channel_continuations(&model);
         }

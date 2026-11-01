@@ -37,6 +37,10 @@ name = "ui_render"
 required-features = ["ui-test-debug"]
 
 [[test]]
+name = "ui_call_audio_menu"
+required-features = ["ui-test-debug"]
+
+[[test]]
 name = "ui_call_bubble"
 required-features = ["ui-test-debug"]
 
@@ -50,6 +54,10 @@ required-features = ["ui-test-debug"]
 
 [[test]]
 name = "ui_reaction_footer"
+required-features = ["ui-test-debug"]
+
+[[test]]
+name = "ui_remote_ai_settings"
 required-features = ["ui-test-debug"]
 
 [dependencies]
@@ -129,6 +137,7 @@ i-slint-backend-selector = { version = "=1.17.1", default-features = false, opti
 # JNI bindings for Android system APIs (notifications, window insets).
 # These live in chatter-ui (platform layer), not chatter-core (platform-neutral).
 jni = "0.22.4"
+serde_json = "1"
 # Pinned libwebrtc exposes this JavaVM type at its one initialization boundary.
 jni_021 = { package = "jni", version = "=0.21.1" }
 ndk-context = "0.1"

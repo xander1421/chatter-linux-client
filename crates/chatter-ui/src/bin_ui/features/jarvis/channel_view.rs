@@ -1,4 +1,4 @@
-//! Local AI channel — the Jarvis conversation rendered as a normal channel.
+//! Virtual assistant channel — the Jarvis conversation rendered as a normal channel.
 //!
 //! The channel is virtual: nil-UUID id, injected by
 //! `ChatterClient::sidebar_channels`, never touches the network. History is
@@ -14,7 +14,7 @@ use chatter_core::client::{ChatterClient, JarvisRow, jarvis_channel_reply_text};
 use super::local_messages::{push_rows, row_to_item};
 use crate::{MainWindow, MessageItemData, run_ui};
 
-/// Whether a Slint-side channel-id string refers to the local AI channel.
+/// Whether a Slint-side channel-id string refers to the virtual assistant channel.
 pub fn is_jarvis_channel_str(channel_id: &str) -> bool {
     channel_id
         .parse::<chatter_core::domain::ids::ChannelId>()
@@ -56,8 +56,9 @@ pub async fn load_jarvis_channel_into_ui(
         w.global::<crate::ChatPane>().set_has_pinned_messages(false);
 
         let items: Vec<MessageItemData> = rows.into_iter().map(row_to_item).collect();
-        w.global::<crate::ChatPane>()
-            .set_messages(ModelRc::new(VecModel::from(items)));
+        w.global::<crate::ChatPane>().set_messages(ModelRc::new(
+            crate::bin_ui::message_model::MessageModel::from(items),
+        ));
         w.global::<crate::ChatPane>().set_loading_messages(false);
         w.global::<crate::ChatPane>().set_is_at_bottom(true);
     });

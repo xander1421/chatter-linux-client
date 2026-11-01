@@ -40,6 +40,8 @@ export global CallView {
     // Bound to ActiveCallView.fullscreen. Hides the ChatLayout sibling.
     in-out property <bool> active-call-fullscreen: false;
     in property <ActiveCallData> active-call-data;
+    in-out property <int> call-video-layout-revision;
+    callback report-call-video-size(string, length, length, bool);
     pure callback select-call-tile-indices([CallParticipantData], string) -> [int];
     in-out property <bool> call-is-muted: false;
     in-out property <bool> call-is-video-enabled: true;
@@ -124,6 +126,10 @@ export global CallView {
     callback call-end();
     callback call-peer-audio-mute-toggle(string);
     callback call-peer-video-pause-toggle(string);
+    in-out property <bool> audio-controls-visible: false;
+    in-out property <string> audio-input-name: "Loading microphone…";
+    in-out property <string> audio-output-name: "Loading output…";
+    callback refresh-audio-controls();
     callback show-audio-device-picker();
     callback show-audio-output-picker();
     callback show-screen-source-picker();

@@ -127,12 +127,7 @@ pub fn handle_receipt(
                         let mut updated_msg = msg.clone();
                         updated_msg.delivery_status = new_status.into();
 
-                        if let Some(model) = messages
-                            .as_any()
-                            .downcast_ref::<VecModel<MessageItemData>>()
-                        {
-                            model.set_row_data(i, updated_msg);
-                        }
+                        messages.set_row_data(i, updated_msg);
                     }
                 }
             }
@@ -180,12 +175,7 @@ pub fn handle_pin(
                     let mut updated_msg = msg.clone();
                     updated_msg.is_pinned = is_pinned;
 
-                    if let Some(model) = messages
-                        .as_any()
-                        .downcast_ref::<VecModel<MessageItemData>>()
-                    {
-                        model.set_row_data(i, updated_msg);
-                    }
+                    messages.set_row_data(i, updated_msg);
 
                     // Update pinned-bar substate
                     if let Ok(msg_id) = msg

@@ -11,6 +11,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 impl UnifiedMessageRepository {
     pub fn allocate_reaction_clock(&self, reactor: &UserId) -> Result<u64, StorageError> {
+        self.allocate_reaction_clock_admitted(reactor, None)
+    }
+
+    pub(crate) fn allocate_reaction_clock_admitted(&self, reactor: &UserId, session: Option<&crate::state::receive_session::ReceiveSession>) -> Result<u64, StorageError> {
         let wall = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|elapsed| elapsed.as_nanos())
@@ -18,14 +22,25 @@ impl UnifiedMessageRepository {
         let wall = u64::try_from(wall)
             .map_err(|_| StorageError::InvalidData("Reaction clock overflow".into()))?;
         let mut conn = self.db.connection()?;
-        allocate_with_conn(&mut conn, &reactor.to_string(), wall)
+        if let Some(session) = session { session.check_owner(&conn)?; }
+        allocate_with_conn_admitted(&mut conn, &reactor.to_string(), wall, session)
     }
 }
 
+#[cfg(test)]
 fn allocate_with_conn(
     conn: &mut rusqlite::Connection,
     actor: &str,
     wall: u64,
+) -> Result<u64, StorageError> {
+    allocate_with_conn_admitted(conn, actor, wall, None)
+}
+
+fn allocate_with_conn_admitted(
+    conn: &mut rusqlite::Connection,
+    actor: &str,
+    wall: u64,
+    session: Option<&crate::state::receive_session::ReceiveSession>,
 ) -> Result<u64, StorageError> {
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     // Local allocator state is deliberately retained across deletion of targets.
@@ -42,6 +57,7 @@ fn allocate_with_conn(
     )?;
     let next = next_clock(wall, known)?;
     tx.execute("INSERT INTO reaction_send_clocks(actor_id,action_ts) VALUES(?1,?2) ON CONFLICT(actor_id) DO UPDATE SET action_ts=excluded.action_ts", params![actor, next as i64])?;
+    if let Some(session) = session { session.check()?; }
     tx.commit()?;
     Ok(next)
 }

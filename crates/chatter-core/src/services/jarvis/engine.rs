@@ -1,27 +1,31 @@
-//! Jarvis inference engine — dispatches to the active local AI provider.
-//!
-//! Jarvis text generation runs either against an HTTP provider (Ollama,
-//! LM Studio, llama.cpp, vLLM via `AnyBackend`) or the in-process mistralrs
-//! actor. The engine is shared behind a lock so a settings change can hot-swap
-//! the provider without rebuilding Jarvis.
+//! Remote assistant inference, with explicit conversation policy checks.
+//! Local compatibility engines compile only with the non-default local-ai feature.
 
 use std::sync::{Arc, RwLock};
 
 use crate::ai_policy::policy::{AiAccess, Silo as AiSilo};
+use crate::ai_protocol::{ChatMessage, ChatRole, GenerateParams, LocalAIBackend};
 use crate::cloud_ai::{AnyCloudBackend, CloudSettings};
-use crate::local_ai::backend::{ChatMessage, ChatRole, GenerateParams, LocalAIBackend};
+#[cfg(feature = "local-ai")]
 use crate::local_ai::providers::{AnyBackend, ProviderKind};
+#[cfg(feature = "local-ai")]
 use crate::local_ai::settings::LocalAISettings;
-use crate::services::ai::{LocalAIActorHandle, SampleParams};
+#[cfg(feature = "local-ai")]
+use crate::services::ai::LocalAIActorHandle;
+use crate::services::ai::SampleParams;
 
 use super::error::JarvisError;
 
 /// The concrete engine driving Jarvis completions.
 pub enum JarvisEngine {
+    /// No configured remote provider; never falls back to a local process.
+    Disabled,
     /// In-process mistralrs actor (real with the `local-ai` feature, stub without).
+    #[cfg(feature = "local-ai")]
     InProcess(LocalAIActorHandle),
     /// Local HTTP provider with the model to use. The model is interior-mutable
     /// so a missing-model completion can self-heal to an installed model.
+    #[cfg(feature = "local-ai")]
     Http {
         backend: Arc<AnyBackend>,
         model: RwLock<String>,
@@ -37,6 +41,7 @@ pub enum JarvisEngine {
 impl JarvisEngine {
     /// Pick the engine for the current settings. `MistralRs` (or any HTTP
     /// provider that fails to construct) falls back to the in-process actor.
+    #[cfg(feature = "local-ai")]
     pub fn from_settings(settings: &LocalAISettings, actor: LocalAIActorHandle) -> Self {
         if settings.active_provider != ProviderKind::MistralRs {
             if let Some(backend) = AnyBackend::for_kind(settings.active_provider, settings) {
@@ -76,6 +81,8 @@ impl JarvisEngine {
     pub fn silo(&self) -> crate::ai_policy::policy::Silo {
         use crate::ai_policy::policy::Silo;
         match self {
+            Self::Disabled => Silo::Local,
+            #[cfg(feature = "local-ai")]
             Self::InProcess(_) | Self::Http { .. } => Silo::Local,
             Self::Cloud { .. } => Silo::Cloud,
         }
@@ -87,8 +94,8 @@ impl JarvisEngine {
     }
 
     /// Does this chat error mean "the model isn't installed on the provider"?
-    fn is_missing_model(err: &crate::local_ai::backend::BackendError) -> bool {
-        use crate::local_ai::backend::BackendError;
+    fn is_missing_model(err: &crate::ai_protocol::BackendError) -> bool {
+        use crate::ai_protocol::BackendError;
         match err {
             BackendError::ModelNotFound(_) => true,
             BackendError::InferenceFailed(msg) => {
@@ -112,7 +119,7 @@ impl JarvisEngine {
     }
 
     /// First installed model that looks like a chat model (skip embedders).
-    fn pick_chat_model(models: &[crate::local_ai::backend::AvailableModel]) -> Option<String> {
+    fn pick_chat_model(models: &[crate::ai_protocol::AvailableModel]) -> Option<String> {
         models.iter().map(|m| m.name.clone()).find(|name| {
             let n = name.to_lowercase();
             !n.contains("embed") && !n.contains("minilm") && !n.contains("bge")
@@ -125,6 +132,8 @@ impl JarvisEngine {
         params: SampleParams,
     ) -> Result<String, JarvisError> {
         match self {
+            Self::Disabled => Err(JarvisError::NoModel),
+            #[cfg(feature = "local-ai")]
             Self::InProcess(actor) => {
                 // The actor takes one flat prompt; render the turns as text.
                 let mut full = String::new();
@@ -144,6 +153,7 @@ impl JarvisEngine {
                     .await
                     .map_err(JarvisError::from)
             }
+            #[cfg(feature = "local-ai")]
             Self::Http { backend, model } => {
                 Self::complete_via(backend.as_ref(), model, messages, params).await
             }
@@ -194,12 +204,8 @@ impl JarvisEngine {
     }
 }
 
-/// Clone-able handle to the Jarvis engines, one per silo.
-///
-/// Both are held at once rather than one hot-swapped engine, because the silo
-/// is decided *per conversation*: with a single cloud engine installed, a DM
-/// would be refused outright instead of quietly falling back to the local
-/// model, which is what "DMs use local AI" is supposed to mean.
+/// Shared remote engine and disabled fallback. Legacy local engines are only
+/// available in builds explicitly enabling the non-default local-ai feature.
 #[derive(Clone)]
 pub struct SharedJarvisEngine {
     local: Arc<RwLock<Arc<JarvisEngine>>>,
@@ -229,8 +235,8 @@ impl SharedJarvisEngine {
         self.cloud.read().expect("engine lock poisoned").is_some()
     }
 
-    /// The engine for a silo. Cloud falls back to local when not configured -
-    /// a missing API key should degrade to the local model, not to nothing.
+    /// Select a configured remote provider. Normal clients retain a Disabled
+    /// fallback, so missing credentials never start a local provider.
     fn engine_for(&self, silo: AiSilo) -> Arc<JarvisEngine> {
         if silo == AiSilo::Cloud {
             if let Some(cloud) = self.cloud.read().expect("engine lock poisoned").clone() {
@@ -294,7 +300,7 @@ impl SharedJarvisEngine {
 
     /// Completion gated by a conversation's AI policy.
     ///
-    /// The enforcement point for `local_ai::policy`: refuses before any
+    /// The enforcement point for the conversation AI policy: refuses before any
     /// content is sent when the active engine is a cloud provider and the
     /// conversation only permits local inference (DMs, anon transports), or
     /// when AI is denied outright (mesh-delivered traffic).
@@ -316,10 +322,19 @@ impl SharedJarvisEngine {
         engine.complete(messages, params).await
     }
 
-    /// Provider description for logging/UI ("ollama", "built-in", …).
+    /// Describe the configured remote provider without submitting a request.
     pub fn describe(&self) -> String {
-        match &**self.local.read().expect("engine lock poisoned") {
+        let engine = self
+            .cloud
+            .read()
+            .expect("engine lock poisoned")
+            .clone()
+            .unwrap_or_else(|| self.local.read().expect("engine lock poisoned").clone());
+        match engine.as_ref() {
+            JarvisEngine::Disabled => "Remote AI not configured".into(),
+            #[cfg(feature = "local-ai")]
             JarvisEngine::InProcess(_) => "built-in".to_string(),
+            #[cfg(feature = "local-ai")]
             JarvisEngine::Http { backend, model } => {
                 format!("{} ({})", backend.name(), model.read().expect("model lock"))
             }
@@ -330,7 +345,7 @@ impl SharedJarvisEngine {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "local-ai"))]
 mod tests {
     use super::*;
 
@@ -519,12 +534,8 @@ mod silo_selection_tests {
     use crate::ai_policy::policy::Silo;
     use crate::cloud_ai::CloudSettings;
 
-    fn shared_local() -> SharedJarvisEngine {
-        let settings = LocalAISettings::default();
-        SharedJarvisEngine::new(JarvisEngine::from_settings(
-            &settings,
-            LocalAIActorHandle::spawn(),
-        ))
+    fn shared_unconfigured() -> SharedJarvisEngine {
+        SharedJarvisEngine::new(JarvisEngine::Disabled)
     }
 
     fn cloud_engine() -> JarvisEngine {
@@ -544,7 +555,7 @@ mod silo_selection_tests {
 
     #[test]
     fn cloud_is_absent_until_installed() {
-        let shared = shared_local();
+        let shared = shared_unconfigured();
         assert!(!shared.has_cloud());
 
         shared.set_cloud(Some(cloud_engine()));
@@ -554,39 +565,26 @@ mod silo_selection_tests {
         assert!(!shared.has_cloud());
     }
 
-    /// Asking for Cloud without one configured must degrade to the local
-    /// model, not fail. A missing API key should cost quality, not the feature.
     #[tokio::test]
-    async fn cloud_request_without_a_cloud_engine_falls_back_to_local() {
-        let shared = shared_local();
-        assert!(!shared.has_cloud());
-
-        // Whether this succeeds depends on a local provider being up, which
-        // is not what is under test. The property is that it fell through to
-        // the local engine instead of being refused for having no cloud one.
-        match shared
+    async fn unconfigured_remote_engine_fails_without_a_local_fallback() {
+        let shared = shared_unconfigured();
+        let error = shared
             .complete_conversation_in(
                 AiAccess::LocalOrCloud,
                 Silo::Cloud,
-                user("hi"),
+                user("fixture"),
                 SampleParams::default(),
             )
             .await
-        {
-            Ok(_) => {} // local provider answered - fallback worked
-            Err(err) => assert!(
-                !matches!(err, JarvisError::NotPermitted(_)),
-                "asking for cloud without one configured was refused instead of \
-                 falling back to local: {err:?}"
-            ),
-        }
+            .unwrap_err();
+        assert!(matches!(error, JarvisError::NoModel));
     }
 
     /// The bug this whole structure prevents: a cloud engine installed
     /// globally must not serve a DM.
     #[tokio::test]
     async fn a_dm_never_reaches_an_installed_cloud_engine() {
-        let shared = shared_local();
+        let shared = shared_unconfigured();
         shared.set_cloud(Some(cloud_engine()));
         assert!(shared.has_cloud());
 
@@ -603,28 +601,25 @@ mod silo_selection_tests {
         assert!(matches!(err, JarvisError::NotPermitted(_)), "{err:?}");
     }
 
-    /// And a DM asking for Local still works while cloud is installed.
     #[tokio::test]
-    async fn a_dm_still_gets_the_local_engine_while_cloud_is_installed() {
-        let shared = shared_local();
+    async fn private_request_stays_unavailable_even_with_cloud_configured() {
+        let shared = shared_unconfigured();
         shared.set_cloud(Some(cloud_engine()));
-
-        if let Err(err) = shared
+        let error = shared
             .complete_conversation_in(
                 AiAccess::LocalOnly,
                 Silo::Local,
-                user("private"),
+                user("private fixture"),
                 SampleParams::default(),
             )
             .await
-        {
-            assert!(!matches!(err, JarvisError::NotPermitted(_)), "{err:?}");
-        }
+            .unwrap_err();
+        assert!(matches!(error, JarvisError::NoModel));
     }
 
     #[tokio::test]
     async fn mesh_is_refused_in_either_silo() {
-        let shared = shared_local();
+        let shared = shared_unconfigured();
         shared.set_cloud(Some(cloud_engine()));
 
         for silo in [Silo::Local, Silo::Cloud] {

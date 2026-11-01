@@ -152,9 +152,7 @@ impl std::io::Read for CbcRangeReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         // Seeking past EOF is allowed, so `pos` can exceed usize on 32-bit.
         let off = usize::try_from(self.pos).unwrap_or(usize::MAX);
-        let chunk = self.dec.read_range(off, buf.len());
-        let n = chunk.len();
-        buf[..n].copy_from_slice(&chunk);
+        let n = self.dec.read_range_into(off, buf);
         self.pos += n as u64;
         Ok(n)
     }

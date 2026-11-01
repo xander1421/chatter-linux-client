@@ -12,6 +12,7 @@
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use jni::Env;
 use jni::objects::{JObject, JObjectArray, JString, JValue};
@@ -22,7 +23,8 @@ use super::activity;
 
 /// Single in-flight picker request. A new pick replaces (and thereby cancels)
 /// any prior pending one — the UI only ever opens one chooser at a time.
-static PENDING: Mutex<Option<oneshot::Sender<Vec<PathBuf>>>> = Mutex::new(None);
+static PENDING: Mutex<Option<(i64, oneshot::Sender<Vec<PathBuf>>)>> = Mutex::new(None);
+static NEXT_REQUEST: AtomicI64 = AtomicI64::new(1);
 
 /// Open the Android document picker and await the chosen files.
 ///
@@ -31,11 +33,15 @@ static PENDING: Mutex<Option<oneshot::Sender<Vec<PathBuf>>>> = Mutex::new(None);
 /// propagated — the caller treats empty as "nothing to attach").
 pub async fn pick_files(mime_types: &[&str]) -> Vec<PathBuf> {
     let (tx, rx) = oneshot::channel();
-    *PENDING.lock().unwrap() = Some(tx);
+    let request = NEXT_REQUEST.fetch_add(1, Ordering::Relaxed);
+    *PENDING.lock().unwrap() = Some((request, tx));
 
-    if let Err(e) = launch(mime_types) {
+    if let Err(e) = launch(mime_types, request) {
         tracing::error!("Android file picker: failed to launch chooser: {e}");
-        *PENDING.lock().unwrap() = None;
+        let mut pending = PENDING.lock().unwrap();
+        if pending.as_ref().is_some_and(|(id, _)| *id == request) {
+            pending.take();
+        }
         return Vec::new();
     }
 
@@ -44,7 +50,7 @@ pub async fn pick_files(mime_types: &[&str]) -> Vec<PathBuf> {
 }
 
 /// JNI: invoke `MainActivity.launchFilePicker(String[] mimeTypes)`.
-fn launch(mime_types: &[&str]) -> Result<(), String> {
+fn launch(mime_types: &[&str], request: i64) -> Result<(), String> {
     activity::with_jni_env(|env| {
         let act = activity::activity()?;
 
@@ -63,8 +69,8 @@ fn launch(mime_types: &[&str]) -> Result<(), String> {
         let res = env.call_method(
             act,
             jni::jni_str!("launchFilePicker"),
-            jni::jni_sig!("([Ljava/lang/String;)V"),
-            &[JValue::Object(&arr_obj)],
+            jni::jni_sig!("([Ljava/lang/String;J)V"),
+            &[JValue::Object(&arr_obj), JValue::Long(request)],
         );
         if res.is_err() {
             activity::clear_exception(env);
@@ -80,8 +86,9 @@ fn launch(mime_types: &[&str]) -> Result<(), String> {
 pub extern "system" fn Java_com_chatter_client_MainActivity_nativeOnFilesPicked(
     mut env: jni::EnvUnowned<'_>,
     _this: JObject,
+    request: jni::sys::jlong,
     paths: JObjectArray,
-) {
+) -> jni::sys::jboolean {
     env.with_env(|env| -> jni::errors::Result<_> {
         Ok((|| {
             let files = read_string_array(env, &paths)
@@ -92,9 +99,12 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeOnFilesPicked(
                 });
 
             tracing::info!("Android file picker: {} file(s) returned", files.len());
-            if let Some(tx) = PENDING.lock().unwrap().take() {
-                let _ = tx.send(files);
+            let mut pending = PENDING.lock().unwrap();
+            if pending.as_ref().is_some_and(|(id, _)| *id == request) {
+                let (_, tx) = pending.take().unwrap();
+                return tx.send(files).is_ok() as jni::sys::jboolean;
             }
+            jni::sys::JNI_FALSE
         })())
     })
     .resolve::<jni::errors::LogErrorAndDefault>()

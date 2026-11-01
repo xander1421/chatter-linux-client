@@ -49,7 +49,7 @@ export component AppShortcuts inherits FocusScope {
             }
         }
         if (!event.modifiers.control) { return false; }
-        // Ctrl+J: open the local AI channel
+        // Ctrl+J: open the virtual assistant channel
         if (root.active-modal == "none" && !SearchPane.unified-search-open
             && JarvisGlobal.enabled && JarvisGlobal.opted-in && event.modifiers.control && event.text == "j") {
             SidebarPane.active-tab = "chats";

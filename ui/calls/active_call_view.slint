@@ -1,3 +1,4 @@
+import { AudioControlsPopover } from "audio_controls_popover.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { IconAction } from "../components/icon_action.slint";
 import { Elevation } from "../theme/elevation.slint";
@@ -5,8 +6,8 @@ import { Materials } from "../theme/materials.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // Active call view as a dock on top of the chat pane (Discord-style).
 //
-// Renders a compact header strip (title + duration + verification), a bounded
-// video/avatar grid, and a floating control pill. Defaults to a dock; the
+// Renders a separate call header, a participant stage, and verification
+// directly above the call controls. Defaults to a dock; the
 // maximize button grows it to fill the whole window (app.slint hides the
 // sidebar + chat while `fullscreen`). Hidden when `show` is false — collapses
 // to zero height so the surrounding chat layout reclaims the space.
@@ -14,6 +15,7 @@ import { GlassSurface } from "../components/glass_surface.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { HeaderButton } from "../components/header_button.slint";
 import { Icons } from "../theme/icons.slint";
 import { Avatar } from "../components/avatar.slint";
@@ -27,6 +29,21 @@ component ParticipantTile inherits Rectangle {
     in property <bool> show-video: true;
     in property <bool> interactive: true;
     callback clicked();
+    callback video-size(string, length, length, bool);
+    in property <int> video-layout-revision;
+    private property <string> video-id: participant.user-id;
+    private property <bool> screen-frame: participant.is-screen-sharing;
+    function report-size() {
+        if root.video-id != "" && root.width > 0px && root.height > 0px {
+            root.video-size(root.video-id, root.width, root.height, root.screen-frame);
+        }
+    }
+    changed width => { root.report-size(); }
+    changed height => { root.report-size(); }
+    changed video-layout-revision => { root.report-size(); }
+    changed video-id => { root.report-size(); }
+    changed screen-frame => { root.report-size(); }
+
 
     accessible-role: button;
     accessible-label: root.participant.display-name;
@@ -175,6 +192,8 @@ export component ActiveCallView inherits Rectangle {
     // See CallControls: phone route toggle vs desktop output picker.
     in property <bool> speaker-toggle: false;
     in property <bool> speaker-on: false;
+    callback video-size(string, length, length, bool);
+    in property <int> video-layout-revision;
     in property <image> local-video-frame;
     in property <[image]> remote-video-frames;
     private property <CallParticipantData> empty-participant;
@@ -223,8 +242,15 @@ export component ActiveCallView inherits Rectangle {
     callback toggle-video();
     callback toggle-screen-share();
     callback end-call();
-    callback show-audio-settings();
-    callback show-audio-output-settings();
+    in-out property <bool> audio-controls-visible;
+    in property <string> audio-input-name;
+    in property <string> audio-output-name;
+    callback show-audio-popover();
+    callback show-audio-input();
+    callback show-audio-output();
+    changed show => { if !root.show { root.audio-controls-visible = false; } }
+    property <string> audio-call-id: root.call-data.call-id;
+    changed audio-call-id => { root.audio-controls-visible = false; }
     callback toggle-speaker();
     // Per-peer local controls — only the local viewer is affected.
     callback peer-audio-mute-toggle(string);
@@ -232,22 +258,19 @@ export component ActiveCallView inherits Rectangle {
     // Asks the parent layout to grow the dock to the full viewport.
     callback fullscreen-toggle();
 
-    // Dock: collapses to zero height when hidden so parent VerticalLayout
-    // reclaims the space and the underlying chat header/messages fill it.
-    // In fullscreen mode `vertical-stretch: 1` (set by the parent in
-    // app.slint) plus a large `max-height` lets the dock grow to occupy the
-    // full chat-column slot. Otherwise it's a responsive dock: ~45% of the
-    // window height, clamped so chat stays visible on tall screens and the
-    // dock isn't oversized on short/mobile ones (was a fixed 280px band that
-    // ignored the viewport).
-    // Voice-only calls (no camera, no screen share anywhere) collapse to a
-    // compact strip — a tall grid of empty avatar tiles wastes the chat area.
-    // Phones (`speaker-toggle`) get 48dp touch targets on the control row.
+    // The call is the primary task on a wide screen, including voice calls.
+    // Keep the conversation below it; fullscreen still uses the entire slot.
+    property <bool> spacious: root.width >= 600px;
     property <length> button-size: speaker-toggle ? Spacing.touch-target-min : Spacing.button-height;
-    property <length> controls-height: button-size + 6px;
-    property <length> dock-height: any-video
-        ? clamp(viewport-height * 0.45, 240px, 560px)
-        : 100px + controls-height + Spacing.sm;
+    // Retain the compact audio selectors’ 48px control row.
+    property <length> controls-height: 48px;
+    property <length> verification-height: call-data.is-encrypted ? 36px * Appearance.text-grow : 0px;
+    property <length> call-header-height: max(button-size, 32px * Appearance.text-grow);
+    property <length> voice-stage-height: tile-indices.length > 2 ? 200px : 140px;
+    property <length> dock-height: spacious
+        ? clamp(viewport-height * 0.60, 360px, 840px)
+        : any-video ? clamp(viewport-height * 0.48, 320px, 560px)
+        : voice-stage-height + call-header-height + verification-height + controls-height + Spacing.sm;
     visible: show;
     min-height: show ? (fullscreen ? 0px : dock-height) : 0px;
     max-height: show ? (fullscreen ? 100000px : dock-height) : 0px;
@@ -255,8 +278,49 @@ export component ActiveCallView inherits Rectangle {
     background: Colors.surface.with-alpha(0.6);
 
     if show: VerticalLayout {
-        // Video grid area — bounded, tiles scale to fit
+        // Status and duration have their own row, never painted over a person.
         Rectangle {
+            height: root.call-header-height;
+            accessible-role: groupbox;
+            accessible-label: "Call information";
+            HorizontalLayout {
+                padding-left: Spacing.lg;
+                padding-right: Spacing.sm;
+                spacing: Spacing.md;
+                Text {
+                    accessible-role: text;
+                    accessible-label: "Call duration";
+                    accessible-value: self.text;
+                    text: root.is-connecting ? "Calling…" : root.format-duration(call-data.duration-seconds);
+                    font-size: Typography.sm;
+                    color: Colors.text-secondary;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                }
+                if call-data.participant-count > 2: Text {
+                    accessible-role: text;
+                    accessible-label: "Call participants";
+                    accessible-value: call-data.participant-count;
+                    text: call-data.participant-count + " people";
+                    font-size: Typography.xs;
+                    color: Colors.text-muted;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                HeaderButton {
+                    touch: root.speaker-toggle;
+                    icon: fullscreen ? Icons.minimize : Icons.maximize;
+                    label: fullscreen ? "Exit full screen" : "Full screen";
+                    clicked => { root.fullscreen-toggle(); }
+                }
+            }
+        }
+
+        // Video grid area — bounded, tiles scale to fit.
+        Rectangle {
+            accessible-role: groupbox;
+            accessible-label: "Call participants grid";
             vertical-stretch: 1;
             background: transparent;
 
@@ -296,6 +360,8 @@ export component ActiveCallView inherits Rectangle {
                 video-frame: source-index >= 0 && source-index == call-data.participants.length - 1 ? local-video-frame
                     : source-index >= 0 && remote-video-frames.length > source-index ? remote-video-frames[source-index] : local-video-frame;
                 is-local: source-index == call-data.participants.length - 1;
+                video-layout-revision: root.video-layout-revision;
+                video-size(id, width, height, screen) => { root.video-size(id, width, height, screen); }
                 clicked => {
                     if source-index >= 0 && source-index < call-data.participants.length {
                         let was-maximized = root.maximized-index == idx;
@@ -352,108 +418,6 @@ export component ActiveCallView inherits Rectangle {
                                     call-data.participants[tile-indices[maximized-index]].user-id);
                         }
                     }
-                }
-            }
-
-            // Call info overlay — top-left: duration, participant count, and
-            // the security indicator (SAS emojis when available, else lock).
-            GlassSurface {
-                material-level: 3;
-                elevation: 0;
-
-                x: Spacing.sm + Spacing.xs;
-                y: Spacing.sm + Spacing.xs;
-                width: info-row.preferred-width + Spacing.md;
-                height: 24px;
-                border-radius: self.height / 2;
-
-                info-row := HorizontalLayout {
-                    padding-left: Spacing.sm;
-                    padding-right: Spacing.sm;
-                    spacing: Spacing.sm;
-
-                    Text {
-                        // Dialling a DM/anon peer: timer hasn't started yet, so
-                        // "0:00" would read as a stuck call — say what's happening.
-                        text: root.is-connecting ? "Calling…" : format-duration(call-data.duration-seconds);
-                        font-size: Typography.xs;
-                        color: Colors.text-secondary;
-                        vertical-alignment: center;
-                    }
-
-                    if call-data.participant-count > 2: HorizontalLayout {
-                        spacing: Spacing.xs;
-
-                        Image {
-                            source: Icons.users;
-                            width: 11px;
-                            height: 11px;
-                            colorize: Colors.text-secondary;
-                            y: (parent.height - self.height) / 2;
-                        }
-                        Text {
-                            text: call-data.participant-count;
-                            font-size: Typography.xs;
-                            color: Colors.text-secondary;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    if call-data.is-encrypted && call-data.verification-emoji-1 != "": HorizontalLayout {
-                        spacing: Spacing.xxs;
-
-                        // Lock prefix — marks the emoji cluster as the E2EE
-                        // verification code (SAS), not reactions.
-                        Image {
-                            source: Icons.lock;
-                            width: 11px;
-                            height: 11px;
-                            colorize: Colors.primary;
-                            y: (parent.height - self.height) / 2;
-                        }
-                        Text { accessible-role: text; accessible-label: "Call verification emoji 1: " + call-data.verification-emoji-1; font-family: Typography.font-family-emoji; text: call-data.verification-emoji-1; font-size: Typography.xs; vertical-alignment: center; }
-                        Text { accessible-role: text; accessible-label: "Call verification emoji 2: " + call-data.verification-emoji-2; font-family: Typography.font-family-emoji; text: call-data.verification-emoji-2; font-size: Typography.xs; vertical-alignment: center; }
-                        Text { accessible-role: text; accessible-label: "Call verification emoji 3: " + call-data.verification-emoji-3; font-family: Typography.font-family-emoji; text: call-data.verification-emoji-3; font-size: Typography.xs; vertical-alignment: center; }
-                        Text { accessible-role: text; accessible-label: "Call verification emoji 4: " + call-data.verification-emoji-4; font-family: Typography.font-family-emoji; text: call-data.verification-emoji-4; font-size: Typography.xs; vertical-alignment: center; }
-                    }
-
-                    if call-data.is-encrypted && call-data.verification-emoji-1 != "" && call-data.verification-key-version != "": Text {
-                        accessible-role: text;
-                        accessible-label: "Call key version " + call-data.verification-key-version;
-                        text: "v" + call-data.verification-key-version;
-                        font-size: Typography.xs;
-                        color: Colors.text-secondary;
-                        vertical-alignment: center;
-                    }
-
-                    if call-data.is-encrypted && call-data.verification-emoji-1 == "": Image {
-                        source: Icons.lock;
-                        width: 12px;
-                        height: 12px;
-                        colorize: Colors.primary.with-alpha(0.7);
-                        y: (parent.height - self.height) / 2;
-                    }
-                }
-            }
-
-            // Fullscreen toggle — top-right of the call dock. Visible in both
-            // grid and maximized modes. Asks the parent layout to expand the
-            // dock to cover the chat area.
-            // The shared header control on a scrim, so it reads over video.
-            GlassSurface {
-                material-level: 3;
-                elevation: 0;
-
-                x: parent.width - self.width - Spacing.sm;
-                y: Spacing.sm;
-                width: fullscreen-button.width;
-                height: self.width;
-                border-radius: self.height / 2;
-
-                fullscreen-button := HeaderButton {
-                    icon: fullscreen ? Icons.minimize : Icons.maximize;
-                    label: fullscreen ? "Exit full screen" : "Full screen";
-                    clicked => { root.fullscreen-toggle(); }
                 }
             }
 
@@ -599,6 +563,42 @@ export component ActiveCallView inherits Rectangle {
             }
         }
 
+        // A centered verification line belongs with the controls, not a tile.
+        // Preserve each emoji and the key version as separate accessible values.
+        if call-data.is-encrypted: Rectangle {
+            height: root.verification-height;
+            accessible-role: groupbox;
+            accessible-label: "Call verification";
+            accessible-description: "Compare these four emojis with everyone in the call.";
+            HorizontalLayout {
+                alignment: center;
+                spacing: Spacing.sm;
+                if call-data.verification-emoji-1 != "": HorizontalLayout {
+                    spacing: Spacing.sm;
+                    Text { accessible-role: text; accessible-label: "Call verification emoji 1: " + call-data.verification-emoji-1; font-family: Typography.font-family-emoji; color: Colors.text-primary; text: call-data.verification-emoji-1; font-size: Typography.lg; vertical-alignment: center; }
+                    Text { accessible-role: text; accessible-label: "Call verification emoji 2: " + call-data.verification-emoji-2; font-family: Typography.font-family-emoji; color: Colors.text-primary; text: call-data.verification-emoji-2; font-size: Typography.lg; vertical-alignment: center; }
+                    Text { accessible-role: text; accessible-label: "Call verification emoji 3: " + call-data.verification-emoji-3; font-family: Typography.font-family-emoji; color: Colors.text-primary; text: call-data.verification-emoji-3; font-size: Typography.lg; vertical-alignment: center; }
+                    Text { accessible-role: text; accessible-label: "Call verification emoji 4: " + call-data.verification-emoji-4; font-family: Typography.font-family-emoji; color: Colors.text-primary; text: call-data.verification-emoji-4; font-size: Typography.lg; vertical-alignment: center; }
+                }
+                if call-data.verification-emoji-1 != "" && call-data.verification-key-version != "": Text {
+                    accessible-role: text;
+                    accessible-label: "Call key version " + call-data.verification-key-version;
+                    text: "v" + call-data.verification-key-version;
+                    font-size: Typography.xs;
+                    color: Colors.text-muted;
+                    vertical-alignment: center;
+                }
+                if call-data.verification-emoji-1 == "": Text {
+                    accessible-role: text;
+                    accessible-label: "Call verification pending";
+                    text: "Verification pending";
+                    font-size: Typography.xs;
+                    color: Colors.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
         // Control pill in its own row under the stage, so it never covers a
         // tile (it used to float over them and hide the names).
         HorizontalLayout {
@@ -606,9 +606,8 @@ export component ActiveCallView inherits Rectangle {
             padding-bottom: Spacing.sm;
 
             CallControls {
-                // Six desktop actions need more than 296px; otherwise the
-                // rightmost end-call target is clipped by the control pill.
-                width: min(root.speaker-toggle ? 288px : 376px, root.width - 2 * Spacing.md);
+                // Seven separate targets fit a 320px phone in one row.
+                width: 308px;
                 height: controls-height;
                 button-size: root.button-size;
                 is-connected: root.call-data.is-connected;
@@ -624,10 +623,24 @@ export component ActiveCallView inherits Rectangle {
                 toggle-video => { root.toggle-video(); }
                 toggle-screen-share => { root.toggle-screen-share(); }
                 end-call => { root.end-call(); }
-                show-audio-settings => { root.show-audio-settings(); }
-                show-audio-output-settings => { root.show-audio-output-settings(); }
+                show-audio-popover => { root.show-audio-popover(); }
+                show-audio-output => { root.show-audio-output(); }
             }
         }
+    }
+
+    if root.audio-controls-visible && root.show: TouchArea {
+        clicked => { root.audio-controls-visible = false; }
+    }
+    if root.audio-controls-visible && root.show: AudioControlsPopover {
+        linked: root.speaker-toggle;
+        input-name: root.audio-input-name;
+        output-name: root.audio-output-name;
+        input-requested => { root.audio-controls-visible = false; root.show-audio-input(); }
+        output-requested => { root.audio-controls-visible = false; root.show-audio-output(); }
+        width: min(308px, root.width);
+        x: (root.width - self.width) / 2;
+        y: root.height - root.controls-height - Spacing.sm - self.height - 4px;
     }
 
     pure function format-duration(seconds: int) -> string {

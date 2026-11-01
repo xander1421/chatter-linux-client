@@ -122,6 +122,7 @@ impl<K: Eq + Hash + Clone, V: Clone> ByteLru<K, V> {
 }
 
 struct Caches {
+    generation: u64,
     /// Keyed by a hash of the avatar's encoded bytes, so a changed avatar is
     /// a new entry rather than a stale hit.
     avatars: ByteLru<u64, Pixels>,
@@ -135,6 +136,7 @@ struct Caches {
 impl Caches {
     fn new() -> Self {
         Self {
+            generation: 0,
             avatars: ByteLru::new(AVATAR_BUDGET),
             thumbnails: ByteLru::new(THUMBNAIL_BUDGET),
             gifs: ByteLru::new(GIF_BUDGET),
@@ -142,6 +144,7 @@ impl Caches {
     }
 
     fn wipe(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
         self.avatars.clear();
         self.thumbnails.clear();
         self.gifs.clear();
@@ -166,7 +169,7 @@ fn pixel_bytes(p: &Pixels) -> usize {
 }
 
 fn to_pixels(img: image::DynamicImage) -> Pixels {
-    let rgba = img.to_rgba8();
+    let rgba = img.into_rgba8();
     let (w, h) = rgba.dimensions();
     Pixels::clone_from_slice(rgba.as_raw(), w, h)
 }
@@ -174,21 +177,39 @@ fn to_pixels(img: image::DynamicImage) -> Pixels {
 /// A sender avatar decoded at [`AVATAR_PX`], shared by every row it appears
 /// on. `None` when the bytes do not decode.
 pub fn avatar(bytes: &[u8]) -> Option<Pixels> {
+    avatar_guarded(bytes, thumbnail_generation())
+}
+
+pub fn avatar_guarded(bytes: &[u8], generation: u64) -> Option<Pixels> {
+    if generation != thumbnail_generation() {
+        return None;
+    }
     if bytes.is_empty() {
         return None;
     }
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
     let key = hasher.finish();
-    if let Some(hit) = caches().avatars.get(&key) {
-        return Some(hit);
+    {
+        let mut cache = caches();
+        if cache.generation != generation {
+            return None;
+        }
+        if let Some(hit) = cache.avatars.get(&key) {
+            return Some(hit);
+        }
     }
     // Decoded outside the lock: two threads racing on one avatar both decode,
     // which is the old cost, not a correctness problem.
-    let pixels = image::load_from_memory(bytes)
+    let pixels = chatter_core::media::ImageProcessor::inline_pixels_from_memory(bytes)
         .ok()
+        .map(image::DynamicImage::ImageRgba8)
         .map(|img| to_pixels(img.thumbnail(AVATAR_PX, AVATAR_PX)))?;
-    caches()
+    let mut cache = caches();
+    if cache.generation != generation {
+        return None;
+    }
+    cache
         .avatars
         .insert(key, pixels.clone(), pixel_bytes(&pixels));
     Some(pixels)
@@ -202,15 +223,59 @@ pub fn thumbnail(
     source_len: usize,
     decode: impl FnOnce() -> Option<image::DynamicImage>,
 ) -> Option<Pixels> {
+    thumbnail_guarded(id, source_len, thumbnail_generation(), decode)
+}
+
+pub fn thumbnail_guarded(
+    id: &str,
+    source_len: usize,
+    generation: u64,
+    decode: impl FnOnce() -> Option<image::DynamicImage>,
+) -> Option<Pixels> {
     let key = (id.to_string(), source_len);
-    if let Some(hit) = caches().thumbnails.get(&key) {
-        return Some(hit);
+    {
+        let mut cache = caches();
+        if cache.generation != generation {
+            return None;
+        }
+        if let Some(hit) = cache.thumbnails.get(&key) {
+            return Some(hit);
+        }
     }
     let pixels = decode().map(to_pixels)?;
-    caches()
+    let mut cache = caches();
+    // Logout/Android pause may wipe while the decoder is running. Never
+    // repopulate that cleared cache or publish old pixels after the wipe.
+    if cache.generation != generation {
+        return None;
+    }
+    cache
         .thumbnails
         .insert(key, pixels.clone(), pixel_bytes(&pixels));
     Some(pixels)
+}
+
+/// Capture before asynchronous core preparation; lock/logout revokes the token.
+pub fn thumbnail_generation() -> u64 {
+    caches().generation
+}
+
+/// Cache already prepared pixels only if the initiating cache lifetime remains.
+pub fn prepared_thumbnail(id: &str, generation: u64, image: image::DynamicImage) -> Option<Pixels> {
+    let pixels = to_pixels(image);
+    let mut cache = caches();
+    if cache.generation != generation {
+        return None;
+    }
+    cache
+        .thumbnails
+        .insert((id.to_string(), 0), pixels.clone(), pixel_bytes(&pixels));
+    Some(pixels)
+}
+
+/// Read already prepared tray pixels without any file IO or decoding.
+pub fn cached_thumbnail(id: &str, source_len: usize) -> Option<Pixels> {
+    caches().thumbnails.get(&(id.to_string(), source_len))
 }
 
 pub fn gif(id: &str) -> Option<GifFrames> {
@@ -218,8 +283,16 @@ pub fn gif(id: &str) -> Option<GifFrames> {
 }
 
 pub fn put_gif(id: &str, frames: Vec<Pixels>, delays: Vec<u64>) {
+    put_gif_guarded(id, thumbnail_generation(), frames, delays);
+}
+
+pub fn put_gif_guarded(id: &str, generation: u64, frames: Vec<Pixels>, delays: Vec<u64>) {
     let bytes = frames.iter().map(pixel_bytes).sum();
-    caches().gifs.insert(
+    let mut cache = caches();
+    if cache.generation != generation {
+        return;
+    }
+    cache.gifs.insert(
         id.to_string(),
         GifFrames {
             frames: Arc::new(frames),
@@ -238,6 +311,7 @@ pub fn evict_attachments(ids: &std::collections::HashSet<String>) {
 
 /// Drop every decoded image.
 pub fn wipe() {
+    chatter_core::media::static_preview::wipe();
     caches().wipe();
 }
 
@@ -295,6 +369,81 @@ mod tests {
         on_lock();
         assert!(is_empty());
         assert!(gif("gif-1").is_none());
+    }
+
+    #[test]
+    fn wipe_during_thumbnail_decode_cannot_repopulate_cache() {
+        let _g = guard();
+        wipe();
+        assert!(
+            thumbnail("stale", 0, || {
+                on_lock();
+                Some(image::DynamicImage::new_rgba8(8, 8))
+            })
+            .is_none()
+        );
+        assert!(cached_thumbnail("stale", 0).is_none());
+    }
+
+    #[test]
+    fn one_wipe_revokes_every_subsequent_decode_in_the_initiating_batch() {
+        let _g = guard();
+        wipe();
+        let generation = thumbnail_generation();
+        assert!(
+            thumbnail_guarded("first", 10, generation, || {
+                on_lock();
+                Some(image::DynamicImage::new_rgba8(8, 8))
+            })
+            .is_none()
+        );
+        assert!(
+            thumbnail_guarded("second", 10, generation, || panic!(
+                "revoked decoder started"
+            ))
+            .is_none()
+        );
+        assert!(avatar_guarded(&webp(8, 8), generation).is_none());
+        assert!(is_empty());
+    }
+
+    #[test]
+    fn asynchronous_preparation_cannot_cache_after_its_generation_was_wiped() {
+        let _g = guard();
+        let generation = thumbnail_generation();
+        on_lock();
+        assert!(
+            prepared_thumbnail(
+                "stale-async",
+                generation,
+                image::DynamicImage::new_rgba8(8, 8)
+            )
+            .is_none()
+        );
+        assert!(cached_thumbnail("stale-async", 0).is_none());
+    }
+
+    #[test]
+    fn delayed_gif_preparation_cannot_repopulate_after_logout() {
+        let _g = guard();
+        wipe();
+        let generation = thumbnail_generation();
+        on_logout();
+        put_gif_guarded(
+            "stale-gif",
+            generation,
+            vec![Pixels::new(4, 4), Pixels::new(4, 4)],
+            vec![40, 60],
+        );
+        assert!(gif("stale-gif").is_none());
+        put_gif_guarded(
+            "current-gif",
+            thumbnail_generation(),
+            vec![Pixels::new(4, 4), Pixels::new(4, 4)],
+            vec![40, 60],
+        );
+        assert_eq!(gif("current-gif").unwrap().delays.as_slice(), &[40, 60]);
+        wipe();
     }
 
     #[test]

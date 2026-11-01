@@ -594,27 +594,9 @@ impl AnonGroupRepository {
         member: &AnonGroupMember,
         now: u64,
     ) -> Result<(), StorageError> {
-        use rusqlite::OptionalExtension;
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
-        let previous: i64 = tx.query_row("SELECT MAX(admitted_at,removed_at,changed_at) FROM anon_group_member_order WHERE group_id = ?1 AND user_id = ?2",
-            params![member.group_id.to_string(),member.user_id.to_string()],|r|r.get(0)).optional()?.unwrap_or(0);
-        let group_clock: i64 = tx
-            .query_row(
-                "SELECT MAX(roster_at,update_at) FROM anon_group_order WHERE group_id = ?1",
-                [member.group_id.to_string()],
-                |r| r.get(0),
-            )
-            .optional()?
-            .unwrap_or(0);
-        let admission =
-            membership_timestamp(now)?.max(previous.max(group_clock).checked_add(1).ok_or_else(
-                || StorageError::InvalidData("Anonymous membership clock exhausted".into()),
-            )?);
-        write_ordered_member(&tx, member)?;
-        tx.execute("INSERT INTO anon_group_member_order(group_id,user_id,admitted_at,changed_at) VALUES (?1,?2,?3,?3)
-            ON CONFLICT(group_id,user_id) DO UPDATE SET admitted_at = excluded.admitted_at,changed_at = excluded.changed_at",
-            params![member.group_id.to_string(),member.user_id.to_string(),admission])?;
+        accept_self_in_transaction(&tx, member, now)?;
         tx.commit()?;
         Ok(())
     }
@@ -689,4 +671,30 @@ impl AnonGroupRepository {
         tx.commit()?;
         Ok(true)
     }
+}
+
+pub(super) fn accept_self_in_transaction(
+    conn: &rusqlite::Connection,
+    member: &AnonGroupMember,
+    now: u64,
+) -> Result<(), StorageError> {
+    let previous: i64 = conn.query_row("SELECT MAX(admitted_at,removed_at,changed_at) FROM anon_group_member_order WHERE group_id = ?1 AND user_id = ?2",
+            params![member.group_id.to_string(),member.user_id.to_string()],|r|r.get(0)).optional()?.unwrap_or(0);
+    let group_clock: i64 = conn
+        .query_row(
+            "SELECT MAX(roster_at,update_at) FROM anon_group_order WHERE group_id = ?1",
+            [member.group_id.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(0);
+    let admission =
+        membership_timestamp(now)?.max(previous.max(group_clock).checked_add(1).ok_or_else(
+            || StorageError::InvalidData("Anonymous membership clock exhausted".into()),
+        )?);
+    write_ordered_member(conn, member)?;
+    conn.execute("INSERT INTO anon_group_member_order(group_id,user_id,admitted_at,changed_at) VALUES (?1,?2,?3,?3)
+            ON CONFLICT(group_id,user_id) DO UPDATE SET admitted_at = excluded.admitted_at,changed_at = excluded.changed_at",
+            params![member.group_id.to_string(),member.user_id.to_string(),admission])?;
+    Ok(())
 }

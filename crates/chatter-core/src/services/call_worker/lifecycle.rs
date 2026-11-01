@@ -1,4 +1,5 @@
 use super::*;
+use crate::calls::setup_diagnostics::{Phase, observe};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn initiate_call_impl(
@@ -27,13 +28,16 @@ pub(super) async fn initiate_call_impl(
         CallType::Group => ProtoCallType::Video,
     };
 
+    tracing::info!(target: "call_setup::create_worker_begin", "Call setup diagnostic");
     // Create call on server
     let response = {
         let mut client = call_client.lock().await;
-        client
-            .create_call(&channel_id.to_string(), title, proto_type, None)
-            .await
-            .map_err(|e| CallError::ServerError(e.to_string()))?
+        let result = observe(
+            Phase::CreateRpc,
+            client.create_call(&channel_id.to_string(), title, proto_type, None),
+        )
+        .await;
+        result.map_err(|e| CallError::ServerError(e.to_string()))?
     };
 
     // Once the server returns an identity, all subsequent errors/cancellation
@@ -139,6 +143,7 @@ pub(super) async fn join_call_impl(
         return Err(CallError::AlreadyInCall);
     }
 
+    tracing::info!(target: "call_setup::join_worker_begin", "Call setup diagnostic");
     let timing = crate::calls::timing::CallTiming::new("join_requested_worker");
 
     // Join call on server
@@ -147,7 +152,7 @@ pub(super) async fn join_call_impl(
         let rpc_started = std::time::Instant::now();
         tracing::info!(stage = "join_call_rpc_begin", %call_id, elapsed_us = 0u64, "Call stage");
         timing.mark("join_rpc_begin");
-        let joined = client.join_call(&call_id.to_string()).await;
+        let joined = observe(Phase::JoinRpc, client.join_call(&call_id.to_string())).await;
         let stage = if joined.is_ok() {
             "join_call_rpc_succeeded"
         } else {
@@ -474,8 +479,8 @@ pub(super) async fn reconnect_impl(
 
     tracing::info!(call_id = %call_id, "Attempting reconnection");
 
-    // Disconnect current connection first
-    room_manager.disconnect().await;
+    // Capture belongs to the call, not the replaceable room transport.
+    room_manager.disconnect_for_reconnect().await;
 
     // Get a new token by rejoining the call
     let response = {
@@ -530,7 +535,7 @@ pub(super) async fn restore_reconnected_media(
     // authenticated gate and catch-up installation. Preserve its device.
     if let Some(device) = media.microphone {
         if let Err(error) = room_manager
-            .publish_microphone_restored(Some(&device), media.muted)
+            .publish_microphone_restored(device.as_deref(), media.muted)
             .await
         {
             tracing::warn!(%error, "reconnect microphone restoration failed");

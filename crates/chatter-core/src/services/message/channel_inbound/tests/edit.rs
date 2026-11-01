@@ -29,6 +29,7 @@ async fn server_channel_edits_follow_the_edit_rules() {
             &1u32,
         )
         .unwrap();
+    bind_test_owner(&client);
     let inbound = ChannelInbound::new(
         client.messages().clone(),
         client.attachments().clone(),

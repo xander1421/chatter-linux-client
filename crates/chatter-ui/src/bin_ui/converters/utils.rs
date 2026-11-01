@@ -23,24 +23,7 @@ pub fn reaction_counts_to_entries(
 ///
 /// Returns None if the bytes are empty or can't be decoded.
 pub fn avatar_bytes_to_image(bytes: &[u8]) -> Option<slint::Image> {
-    if bytes.is_empty() {
-        return None;
-    }
-    match image::load_from_memory(bytes) {
-        Ok(img) => {
-            let rgba = img.to_rgba8();
-            let (w, h) = rgba.dimensions();
-            Some(crate::bin_ui::slint_conversions::rgba_to_slint_image(
-                rgba.as_raw(),
-                w,
-                h,
-            ))
-        }
-        Err(e) => {
-            tracing::warn!("Failed to decode avatar image: {:?}", e);
-            None
-        }
-    }
+    crate::bin_ui::decode_cache::avatar(bytes).map(slint::Image::from_rgba8)
 }
 
 /// Format file size in human-readable form.

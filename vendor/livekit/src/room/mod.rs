@@ -851,8 +851,11 @@ impl Room {
         self.inner.rtc_engine.fail_transport_during_next_resume();
     }
 
-    pub async fn get_stats(&self) -> EngineResult<SessionStats> {
-        self.inner.rtc_engine.get_stats().await
+    /// The snapshot future owns the session, so callers can release their room
+    /// lock before awaiting the native stats callback.
+    pub fn get_stats(&self) -> impl std::future::Future<Output = EngineResult<SessionStats>> + Send + 'static {
+        let inner = self.inner.clone();
+        async move { inner.rtc_engine.get_stats().await }
     }
 
     pub fn subscribe(&self) -> mpsc::UnboundedReceiver<RoomEvent> {

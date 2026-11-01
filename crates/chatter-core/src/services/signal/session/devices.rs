@@ -331,28 +331,21 @@ impl SignalService {
     /// fetches of `reconcile_devices` leave a session per current device,
     /// which is what Shield may use without naming the peer.
     pub async fn session_devices(&self, recipient_id: &str) -> Result<Vec<u32>, ServiceError> {
-        let ids = session_device_ids(
-            recipient_id,
-            self.key_store
-                .list_sessions_for_user(recipient_id)
-                .map_err(ServiceError::Storage)?
-                .iter()
-                .map(|(address, _)| address.as_str()),
-        );
-        let mut usable = Vec::with_capacity(ids.len());
-        for device_id in ids {
-            let Ok(device) = DeviceId::try_from(device_id) else {
-                continue;
-            };
-            if self
-                .actor
-                .has_session(ProtocolAddress::new(recipient_id.to_string(), device))
-                .await?
-            {
-                usable.push(device_id);
-            }
-        }
-        Ok(usable)
+        Ok(self
+            .session_device_registrations(recipient_id)
+            .await?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect())
+    }
+
+    /// One actor turn reads and validates each stored session once. This is a
+    /// discovery snapshot; encryption still loads authoritative ratchet state.
+    pub(crate) async fn session_device_registrations(
+        &self,
+        recipient_id: &str,
+    ) -> Result<Vec<(u32, Option<u32>)>, ServiceError> {
+        self.actor.session_devices(recipient_id.to_owned()).await
     }
 }
 

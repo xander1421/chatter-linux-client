@@ -14,8 +14,8 @@ use crate::MainWindow;
 use crate::bin_ui::converters::messages_to_display_batch_deferred;
 
 thread_local! {
-    static PENDING_VISIBLE_THUMBNAILS: std::cell::RefCell<std::collections::HashSet<String>> =
-        std::cell::RefCell::new(std::collections::HashSet::new());
+    static PENDING_VISIBLE_THUMBNAILS: std::cell::RefCell<std::collections::HashMap<String, super::history_owner::HistoryOwner>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 thread_local! {
@@ -121,9 +121,89 @@ fn wire_visible_media(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .global::<crate::ChatPane>()
         .on_visible_media_rows(move |first, last| {
             if let Some(w) = weak.upgrade() {
+                if maintain_history_window(&w, &client, first, last) { return; }
                 refresh_visible_media(&w, &client, first, last);
             }
         });
+}
+
+/// Retain a viewport window, leaving all messages durable in core storage.
+fn maintain_history_window(
+    w: &MainWindow,
+    client: &Arc<ChatterClient>,
+    first: i32,
+    last: i32,
+) -> bool {
+    let pane = w.global::<crate::ChatPane>();
+    if pane.get_loading_messages() || last < first || last < 0 {
+        return false;
+    }
+    let conversation = client.active_conversation();
+    let Some(channel) = conversation.channel_id() else {
+        return false;
+    };
+    if client.message_is_loading(&channel) {
+        return false;
+    }
+    let rows = pane.get_messages();
+    let Some(model) = rows
+        .as_any()
+        .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+    else {
+        return false;
+    };
+    if model.has_newer.get() && (last as usize).saturating_add(16) >= model.row_count() {
+        let cursor = model.newer_cursor.borrow().clone().or_else(|| {
+            model
+                .row_data(model.row_count().saturating_sub(1))
+                .map(|row| row.message_id.to_string())
+        });
+        if let Some(cursor) = cursor.and_then(|id| id.parse().ok()) {
+            load_history(
+                w,
+                client,
+                HistoryLoad::Newer(cursor, model.deferred_revision.get()),
+            );
+        }
+        return false;
+    }
+    // Active gestures and navigation keep their complete selection/target.
+    if pane.get_selection_mode()
+        || !pane.get_highlighted_message_id().is_empty()
+        || (pane.get_unread_index() >= 0 && pane.get_unread_count() > 0)
+        || model.has_pending()
+    {
+        return false;
+    }
+    let mut protected = Vec::new();
+    if pane.get_unread_index() >= 0 {
+        protected.push(pane.get_unread_index() as usize);
+    }
+    if let Some(index) = model.row_of(pane.get_thread_root_message_id().as_str()) {
+        protected.push(index);
+    }
+    let range = chatter_core::services::message::retained_history_range(
+        model.row_count(),
+        first.max(0) as usize,
+        last as usize,
+        &protected,
+    );
+    if range.start == 0 && range.end == model.row_count() {
+        return false;
+    }
+    let (front, _) = model.retain_range(range);
+    if front > 0 {
+        if pane.get_unread_index() >= 0 {
+            pane.set_unread_index(pane.get_unread_index() - front as i32);
+        }
+        pane.set_history_head_offset(pane.get_history_head_offset().saturating_add(front as i32));
+        crate::bin_ui::features::chat::recompute_continuation_at(model, 0);
+    }
+    pane.set_history_has_newer(model.has_newer.get());
+    if model.has_newer.get() {
+        pane.set_is_at_bottom(false);
+    }
+    true
 }
 
 // Keep one small scroll cushion so a thumbnail is ready before its row enters
@@ -178,6 +258,7 @@ pub(crate) fn refresh_visible_media(
     first: i32,
     last: i32,
 ) {
+    crate::bin_ui::gif_state::auto_register_gifs_from_messages(window.as_weak(), ui_ctx.clone());
     if window.global::<crate::ChatPane>().get_loading_messages() || last < first || last < 0 {
         return;
     }
@@ -186,6 +267,11 @@ pub(crate) fn refresh_visible_media(
         return;
     }
     let owner = super::history_owner::HistoryOwner::capture(ui_ctx, conversation);
+    PENDING_VISIBLE_THUMBNAILS.with(|pending| {
+        pending
+            .borrow_mut()
+            .retain(|_, request| request.is_current())
+    });
     let model = window.global::<crate::ChatPane>().get_messages();
     let row_count = model.row_count();
     let Some(window_rows) = media_window(first, last, row_count) else {
@@ -198,11 +284,18 @@ pub(crate) fn refresh_visible_media(
     // made a long conversation scroll janky.
     let prev = LAST_MEDIA_WINDOW.with(|w| w.get());
     for index in media_evict_rows(prev, *window_rows.start(), *window_rows.end(), row_count) {
-        let Some(row) = model.row_data(index) else { continue };
-        if let Some(attachments) = row.attachments.as_any()
-            .downcast_ref::<slint::VecModel<crate::MessageAttachmentData>>() {
+        let Some(row) = model.row_data(index) else {
+            continue;
+        };
+        if let Some(attachments) = row
+            .attachments
+            .as_any()
+            .downcast_ref::<slint::VecModel<crate::MessageAttachmentData>>()
+        {
             for attachment_index in 0..attachments.row_count() {
-                let Some(mut attachment) = attachments.row_data(attachment_index) else { continue };
+                let Some(mut attachment) = attachments.row_data(attachment_index) else {
+                    continue;
+                };
                 if attachment.has_thumbnail {
                     attachment.thumbnail = slint::Image::default();
                     attachment.has_thumbnail = false;
@@ -211,9 +304,7 @@ pub(crate) fn refresh_visible_media(
             }
         }
     }
-    LAST_MEDIA_WINDOW.with(|w| {
-        w.set(Some((*window_rows.start(), *window_rows.end(), row_count)))
-    });
+    LAST_MEDIA_WINDOW.with(|w| w.set(Some((*window_rows.start(), *window_rows.end(), row_count))));
     let mut ids = Vec::new();
     for index in window_rows {
         let Some(row) = model.row_data(index) else {
@@ -223,12 +314,22 @@ pub(crate) fn refresh_visible_media(
             // The grid paints at most ten media tiles. Hidden overflow remains
             // available to the viewer but needs no inline thumbnail texture.
             if (attachment.is_image || attachment.is_video)
+                // Static images use the bounded, cancellable core preview loader.
+                && (!attachment.is_image || attachment.mime_type == "image/gif"
+                    || attachment.filename.to_lowercase().ends_with(".gif"))
                 && (attachment.album_count < 2 || attachment.album_index < 10)
                 && !attachment.has_thumbnail
             {
                 let id = attachment.id.to_string();
-                let inserted = PENDING_VISIBLE_THUMBNAILS
-                    .with(|pending| pending.borrow_mut().insert(id.clone()));
+                let inserted = PENDING_VISIBLE_THUMBNAILS.with(|pending| {
+                    let mut pending = pending.borrow_mut();
+                    if pending.contains_key(&id) {
+                        false
+                    } else {
+                        pending.insert(id.clone(), owner.clone());
+                        true
+                    }
+                });
                 if inserted {
                     ids.push(id);
                 }
@@ -240,55 +341,20 @@ pub(crate) fn refresh_visible_media(
         let weak = window.as_weak();
         let client = ui_ctx.clone();
         let owner = owner.clone();
+        let session = ui_ctx.session_guard();
+        let generation = crate::bin_ui::decode_cache::thumbnail_generation();
         crate::rt_handle().spawn(async move {
-            let parsed = id.parse::<chatter_core::domain::ids::AttachmentId>();
-            let pixels = if let Ok(attachment_id) = parsed {
-                let metadata = client.get_attachment_metadata(&attachment_id);
-                let cached = metadata
-                    .as_ref()
-                    .and_then(|attachment| attachment.metadata.thumbnail.clone())
-                    .filter(|bytes| !bytes.is_empty());
-                let local = metadata.is_some_and(|attachment| {
-                    attachment.content_location
-                        == chatter_core::domain::attachment::ContentLocation::OnFilesystem
-                });
-                let bytes = if cached.is_some() {
-                    cached
-                } else if local {
-                    // This derives a durable thumbnail from the authenticated
-                    // downloaded original when an old sidecar is absent.
-                    let work_client = client.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let _ = work_client.decrypt_and_get_image_info(&attachment_id);
-                        work_client
-                            .get_attachment_metadata(&attachment_id)
-                            .and_then(|attachment| attachment.metadata.thumbnail)
-                    })
-                    .await
-                    .ok()
-                    .flatten()
-                } else {
-                    client.ensure_attachment_thumbnail(&attachment_id).await
+            let (pixels, dimensions) =
+                match hydrate_visible_media(&client, &id, session, &owner, generation).await {
+                    Some((pixels, dimensions)) => (Some(pixels), dimensions),
+                    None => (None, None),
                 };
-                if let Some(bytes) = bytes {
-                    let decode_id = id.clone();
-                    tokio::task::spawn_blocking(move || {
-                        crate::bin_ui::decode_cache::thumbnail(&decode_id, bytes.len(), || {
-                            image::load_from_memory(&bytes).ok().map(|img| img.thumbnail(320, 320))
-                        })
-                    })
-                    .await
-                    .ok()
-                    .flatten()
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
             let _ = slint::invoke_from_event_loop(move || {
                 PENDING_VISIBLE_THUMBNAILS.with(|pending| {
-                    pending.borrow_mut().remove(&id);
+                    let mut pending = pending.borrow_mut();
+                    if owner.is_current() {
+                        pending.remove(&id);
+                    }
                 });
                 let Some(w) = weak.upgrade() else { return };
                 if !owner.is_current() {
@@ -297,10 +363,13 @@ pub(crate) fn refresh_visible_media(
                 let Some(pixels) = pixels else { return };
                 let model = w.global::<crate::ChatPane>().get_messages();
                 let Some(window_rows) = media_window(
-                    w.global::<crate::ChatPane>().get_message_first_visible_row(),
+                    w.global::<crate::ChatPane>()
+                        .get_message_first_visible_row(),
                     w.global::<crate::ChatPane>().get_message_last_visible_row(),
                     model.row_count(),
-                ) else { return };
+                ) else {
+                    return;
+                };
                 for row_index in window_rows {
                     let Some(row) = model.row_data(row_index) else {
                         continue;
@@ -311,6 +380,10 @@ pub(crate) fn refresh_visible_media(
                             continue;
                         };
                         if attachment.id.as_str() == id && !attachment.has_thumbnail {
+                            if let Some((width, height)) = dimensions {
+                                attachment.width = width as i32;
+                                attachment.height = height as i32;
+                            }
                             attachment.thumbnail = slint::Image::from_rgba8(pixels.clone());
                             attachment.has_thumbnail = true;
                             if let Some(attachments) = row
@@ -326,6 +399,35 @@ pub(crate) fn refresh_visible_media(
             });
         });
     }
+}
+
+/// Core owns routing/authentication/bounded decoding for every viewport miss.
+async fn hydrate_visible_media(
+    client: &Arc<ChatterClient>,
+    id: &str,
+    session: chatter_core::client::SessionGuard,
+    owner: &super::history_owner::HistoryOwner,
+    generation: u64,
+) -> Option<(crate::bin_ui::decode_cache::Pixels, Option<(u32, u32)>)> {
+    if !owner.is_current() || !session.is_current() {
+        return None;
+    }
+    if let Some(pixels) = crate::bin_ui::decode_cache::cached_thumbnail(id, 0) {
+        return Some((pixels, None));
+    }
+    let preview = client
+        .prepare_visible_attachment_preview(id.parse().ok()?, session)
+        .await?;
+    if !owner.is_current() {
+        return None;
+    }
+    let dimensions = Some((preview.width, preview.height));
+    let pixels = crate::bin_ui::decode_cache::prepared_thumbnail(
+        id,
+        generation,
+        image::DynamicImage::ImageRgba8(preview.pixels),
+    )?;
+    Some((pixels, dimensions))
 }
 
 fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -826,6 +928,15 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
+    let latest_window = window.as_weak();
+    let latest_client = ui_ctx.clone();
+    window
+        .global::<crate::ChatPane>()
+        .on_request_latest(move || {
+            if let Some(w) = latest_window.upgrade() {
+                load_history(&w, &latest_client, HistoryLoad::Newest);
+            }
+        });
     window.global::<crate::ChatPane>().on_load_more(move || {
         if let Some(w) = weak_window.upgrade() {
             let oldest = w
@@ -843,6 +954,12 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Row of the open list holding `message_id`.
 fn row_of(w: &MainWindow, message_id: &str) -> Option<usize> {
     let messages = w.global::<crate::ChatPane>().get_messages();
+    if let Some(model) = messages
+        .as_any()
+        .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+    {
+        return model.row_of(message_id);
+    }
     (0..messages.row_count()).find(|&i| {
         messages
             .row_data(i)
@@ -920,6 +1037,8 @@ fn report_jump_unavailable_later(
 enum HistoryLoad {
     /// One page older than the oldest loaded row, inserted above it.
     Older(MessageId),
+    Newer(MessageId, u64),
+    Newest,
     /// The newest rows grown back to this message, installed in place of the
     /// list, then jumped to.
     Reaching(MessageId),
@@ -947,6 +1066,18 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
     };
     let jump = matches!(load, HistoryLoad::Reaching(_));
     let Some(owner) = super::history_owner::HistoryOwner::admit_older(ui_ctx, conversation) else {
+        if matches!(load, HistoryLoad::Newest) {
+            let request = super::history_owner::HistoryOwner::capture(ui_ctx, conversation);
+            let weak = w.as_weak();
+            let client = ui_ctx.clone();
+            slint::Timer::single_shot(std::time::Duration::from_millis(16), move || {
+                if request.is_current() {
+                    if let Some(w) = weak.upgrade() {
+                        load_history(&w, &client, HistoryLoad::Newest);
+                    }
+                }
+            });
+        }
         if jump {
             w.set_toast_message("History is still loading. Try again in a moment.".into());
             w.set_toast_variant("info".into());
@@ -968,6 +1099,15 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
             HistoryLoad::Older(before) => {
                 ui_ctx.get_older_messages_local_asc(&channel_id, &conversation_type, before)
             }
+            HistoryLoad::Newer(after, _) => {
+                ui_ctx.get_newer_messages_local_asc(&channel_id, &conversation_type, after)
+            }
+            HistoryLoad::Newest => ui_ctx.get_messages_local_asc(
+                &channel_id,
+                &conversation_type,
+                None,
+                chatter_core::config::MESSAGE_PAGE_SIZE as u32,
+            ),
             HistoryLoad::Reaching(target) => {
                 ui_ctx.get_messages_local_reaching(&channel_id, &conversation_type, target)
             }
@@ -995,6 +1135,56 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
             }
         };
         if messages.is_empty() {
+            if matches!(load, HistoryLoad::Newest) {
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if !owner.is_current() {
+                        return;
+                    }
+                    let pane = w.global::<crate::ChatPane>();
+                    let pending = pane
+                        .get_messages()
+                        .iter()
+                        .filter(|row| row.message_id.starts_with("pending:"))
+                        .collect::<Vec<_>>();
+                    pane.set_messages(ModelRc::new(
+                        crate::bin_ui::message_model::MessageModel::from(pending),
+                    ));
+                    pane.set_history_has_newer(false);
+                    pane.set_is_at_bottom(true);
+                });
+                return;
+            }
+            if let HistoryLoad::Newer(_, revision) = load {
+                let weak = weak.clone();
+                let client = ui_ctx.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if !owner.is_current() {
+                        return;
+                    }
+                    let pane = w.global::<crate::ChatPane>();
+                    let rows = pane.get_messages();
+                    let Some(model) = rows
+                        .as_any()
+                        .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+                    else {
+                        return;
+                    };
+                    if model.deferred_revision.get() == revision {
+                        model.has_newer.set(false);
+                        pane.set_history_has_newer(false);
+                    } else {
+                        maintain_history_window(
+                            &w,
+                            &client,
+                            pane.get_message_first_visible_row(),
+                            pane.get_message_last_visible_row(),
+                        );
+                    }
+                });
+                return;
+            }
             tracing::debug!("No older messages for channel: {}", channel_id);
             if jump {
                 report_jump_unavailable_later(weak, owner);
@@ -1002,12 +1192,13 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
             return;
         }
 
+        let fetched_cursor = messages.last().map(|row| row.id.to_string());
         let messages = chatter_core::services::disappearing::visible_history_messages(messages);
         if !owner.is_current() {
             return;
         }
         // Convert older messages to display data
-        let mut display_messages = messages_to_display_batch_deferred(
+        let mut display_messages = crate::rt_handle().block_on(messages_to_display_batch_deferred(
             &messages,
             |ms| ui_ctx.message_sender_display_names(ms),
             |m| ui_ctx.message_sender_avatar(m),
@@ -1016,7 +1207,7 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
             |m| ui_ctx.reply_parent_missing_for(m),
             |m| ui_ctx.reply_parent_media(m),
             |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-        );
+        ));
         crate::bin_ui::converters::mark_disappearing(&ui_ctx, &mut display_messages);
         crate::bin_ui::converters::apply_reply_counts(
             &mut display_messages,
@@ -1041,9 +1232,77 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
                 .map(|d| d.to_slint_preview_with_user(&current_user_id))
                 .collect();
 
+            if matches!(load, HistoryLoad::Newest) {
+                let pane = w.global::<crate::ChatPane>();
+                let mut rows = slint_messages;
+                let target = rows
+                    .last()
+                    .map(|row| row.message_id.to_string())
+                    .unwrap_or_default();
+                // Pending rows are read at apply time: a send that already
+                // failed/settled cannot be resurrected by this async reload.
+                rows.extend(
+                    pane.get_messages()
+                        .iter()
+                        .filter(|row| row.message_id.starts_with("pending:")),
+                );
+                install_and_jump(&w, &ui_ctx, owner, rows, target);
+                let rows = pane.get_messages();
+                if let Some(model) = rows
+                    .as_any()
+                    .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+                {
+                    model.has_newer.set(true);
+                    *model.newer_cursor.borrow_mut() = fetched_cursor;
+                    pane.set_history_has_newer(true);
+                }
+                return;
+            }
+            if let HistoryLoad::Newer(_, _) = load {
+                let pane = w.global::<crate::ChatPane>();
+                let rows = pane.get_messages();
+                if let Some(model) = rows
+                    .as_any()
+                    .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+                {
+                    let fresh = ui_ctx.unseen_history_rows(slint_messages, model.ids(), |row| {
+                        row.message_id.as_str()
+                    });
+                    let start = if model.has_pending() {
+                        0
+                    } else {
+                        model.row_count()
+                    };
+                    model.append_page(fresh);
+                    *model.newer_cursor.borrow_mut() = fetched_cursor;
+                    if pane.get_conversation_kind() == crate::ConversationKind::Channel {
+                        for index in start..model.row_count() {
+                            crate::bin_ui::features::chat::recompute_continuation_at(model, index);
+                        }
+                    }
+                    // Continue over invisible expired rows and close the gap
+                    // only after an empty page observes no deferred live input.
+                    maintain_history_window(
+                        &w,
+                        &ui_ctx,
+                        pane.get_message_first_visible_row(),
+                        pane.get_message_last_visible_row(),
+                    );
+                }
+                return;
+            }
             let HistoryLoad::Reaching(target) = load else {
                 let current_model = w.global::<crate::ChatPane>().get_messages();
-                let current_ids = current_model.iter().map(|msg| msg.message_id.to_string());
+                let current_ids = current_model
+                    .as_any()
+                    .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+                    .map(|model| model.ids())
+                    .unwrap_or_else(|| {
+                        current_model
+                            .iter()
+                            .map(|msg| msg.message_id.to_string())
+                            .collect()
+                    });
 
                 // Prepend older messages (older go at top), skipping
                 // duplicates. Inserted in place: rows added above the
@@ -1057,9 +1316,9 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
                 );
                 tracing::debug!("Loaded {} older messages for channel", older.len());
                 crate::bin_ui::features::chat::edit_messages(&w, |model| {
-                    for (i, msg) in older.into_iter().enumerate() {
-                        model.insert(i, msg);
-                    }
+                    let count = model.prepend(older);
+                    // Only the prepended page and the old first row can change.
+                    (0..=count).collect()
                 });
                 return;
             };
@@ -1086,7 +1345,17 @@ fn install_and_jump(
 ) {
     let pane = w.global::<crate::ChatPane>();
     pane.set_loading_messages(true);
-    pane.set_messages(ModelRc::new(slint::VecModel::from(rows)));
+    pane.set_messages(ModelRc::new(
+        crate::bin_ui::message_model::MessageModel::from(rows),
+    ));
+    let rows = pane.get_messages();
+    if let Some(model) = rows
+        .as_any()
+        .downcast_ref::<crate::bin_ui::message_model::MessageModel>()
+    {
+        model.has_newer.set(true);
+        pane.set_history_has_newer(true);
+    }
     let weak = w.as_weak();
     let ui_ctx = ui_ctx.clone();
     slint::Timer::single_shot(std::time::Duration::from_millis(50), move || {
@@ -1101,4 +1370,145 @@ fn install_and_jump(
             report_jump_unavailable(&w);
         }
     });
+}
+
+#[cfg(test)]
+mod visible_preview_tests {
+    use super::*;
+
+    #[test]
+    fn visible_hydration_is_small_durable_and_cannot_adopt_a_late_view_or_session() {
+        const CHILD: &str = "CHATTER_VISIBLE_IMAGE_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let test = format!(
+                "{}::visible_hydration_is_small_durable_and_cannot_adopt_a_late_view_or_session",
+                module_path!().split_once("::").unwrap().1
+            );
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &test, "--nocapture", "--test-threads=1"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return;
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _runtime = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        let database = chatter_core::system::Directories::with_base_dir(dir.path().to_path_buf())
+            .unwrap()
+            .database_path();
+        std::fs::write(
+            database
+                .parent()
+                .unwrap()
+                .join(chatter_core::system::keyring::NO_KEYRING_MARKER),
+            b"",
+        )
+        .unwrap();
+        let client = ChatterClient::builder()
+            .data_dir(dir.path().to_string_lossy().to_string())
+            .build()
+            .unwrap();
+        let a = ActiveConversation::Channel(chatter_core::domain::ids::ChannelId::new());
+        let b = ActiveConversation::Channel(chatter_core::domain::ids::ChannelId::new());
+        client.select_conversation(a);
+        let mut plaintext = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2048, 1024)
+            .write_to(&mut plaintext, image::ImageFormat::Jpeg)
+            .unwrap();
+        let encrypted =
+            chatter_core::crypto::attachment_crypto::AttachmentCrypto::encrypt(plaintext.get_ref())
+                .unwrap();
+        let source = chatter_core::domain::attachment::Attachment {
+            id: chatter_core::domain::ids::AttachmentId::new(),
+            metadata: chatter_core::domain::attachment::FileMetadata::new(
+                "visible.jpg".into(),
+                "image/jpeg".into(),
+                plaintext.get_ref().len() as u64,
+            ),
+            status: chatter_core::domain::attachment::AttachmentStatus::Ready,
+            content_location: chatter_core::domain::attachment::ContentLocation::OnFilesystem,
+            remote_url: Some("owned-visible-image".into()),
+            encryption_key: Some(encrypted.key.to_vec()),
+            encryption_iv: Some(encrypted.digest.to_vec()),
+            created_at: chrono::Utc::now(),
+            secret_chat: false,
+        };
+        client
+            .attachments()
+            .attachment_repo()
+            .insert(&source)
+            .unwrap();
+        chatter_core::services::attachment::ensure_attachments_dir().unwrap();
+        let path = chatter_core::services::attachment::attachment_file_path(&source.id);
+        std::fs::write(&path, &encrypted.ciphertext).unwrap();
+        let id = source.id.to_string();
+        // Construct requests before the executor gets a chance to poll them.
+        // Neither an A->B->A selection nor a changed account may be adopted.
+        for logout in [false, true] {
+            let owner = super::super::history_owner::HistoryOwner::begin(&client, a);
+            let pending = hydrate_visible_media(
+                &client,
+                &id,
+                client.session_guard(),
+                &owner,
+                crate::bin_ui::decode_cache::thumbnail_generation(),
+            );
+            if logout {
+                client.testing_invalidate_session();
+            } else {
+                client.select_conversation(b);
+                super::super::history_owner::HistoryOwner::begin(&client, b);
+                client.select_conversation(a);
+                super::super::history_owner::HistoryOwner::begin(&client, a);
+            }
+            assert!(runtime.block_on(pending).is_none());
+            assert!(
+                client
+                    .get_attachment_metadata(&source.id)
+                    .unwrap()
+                    .metadata
+                    .thumbnail
+                    .is_none()
+            );
+        }
+        let owner = super::super::history_owner::HistoryOwner::begin(&client, a);
+        let (pixels, dimensions) = runtime
+            .block_on(hydrate_visible_media(
+                &client,
+                &id,
+                client.session_guard(),
+                &owner,
+                crate::bin_ui::decode_cache::thumbnail_generation(),
+            ))
+            .unwrap();
+        assert_eq!((pixels.width(), pixels.height()), (320, 160));
+        assert_eq!(dimensions, Some((2048, 1024)));
+        assert_eq!(std::fs::read(&path).unwrap(), encrypted.ciphertext);
+        // Simulate eviction/reopen: the authenticated original must not be
+        // needed again, even after the decoded-memory cache has been wiped.
+        std::fs::remove_file(&path).unwrap();
+        crate::bin_ui::decode_cache::on_lock();
+        let (pixels, dimensions) = runtime
+            .block_on(hydrate_visible_media(
+                &client,
+                &id,
+                client.session_guard(),
+                &owner,
+                crate::bin_ui::decode_cache::thumbnail_generation(),
+            ))
+            .unwrap();
+        assert_eq!((pixels.width(), pixels.height()), (320, 160));
+        assert_eq!(dimensions, Some((2048, 1024)));
+    }
 }

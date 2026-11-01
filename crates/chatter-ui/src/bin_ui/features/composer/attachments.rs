@@ -16,6 +16,8 @@ use crate::{MainWindow, PendingAttachmentData};
 thread_local! {
     /// The tray is rendered from several UI paths which hold only a client
     /// reference. Keep a weak handle for background preview work.
+    static PREVIEW_JOBS: std::cell::RefCell<std::collections::HashSet<(u64, AttachmentId, PathBuf)>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
     static PREVIEW_CLIENT: std::cell::RefCell<std::sync::Weak<chatter_core::client::ChatterClient>> =
         std::cell::RefCell::new(std::sync::Weak::new());
 }
@@ -36,41 +38,9 @@ pub(crate) async fn process_and_add_file(
     revision: u64,
     weak: &Weak<MainWindow>,
 ) -> Result<(), String> {
-    // Get file metadata for display
-    let metadata = tokio::fs::metadata(&file_path)
-        .await
-        .map_err(|e| format!("Failed to read file metadata {:?}: {}", file_path, e))?;
-
-    let filename = file_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .to_string();
-
-    let mime_type = mime_guess::from_path(&file_path)
-        .first_or_octet_stream()
-        .to_string();
-
-    // Generate temporary ID for UI tracking (real ID assigned at upload time)
-    let temp_id = AttachmentId::new();
-
-    tracing::debug!(
-        "Queued attachment: {} ({} bytes, {})",
-        filename,
-        staged_size.unwrap_or(metadata.len()),
-        mime_type
-    );
-
-    // Add to pending attachments for composer UI
-    // File will be encrypted and uploaded when message is sent
-    let pending = PendingAttachment::new(
-        temp_id,
-        filename,
-        file_path.to_path_buf(),
-        staged_size.unwrap_or(metadata.len()),
-        mime_type,
-    );
-    chat_state.add_pending_attachment_for(conversation, revision, pending);
+    chat_state
+        .prepare_pending_file(file_path, staged_size, conversation, revision)
+        .await?;
 
     // Update UI immediately
     update_attachments_ui(chat_state, weak);
@@ -95,45 +65,67 @@ pub(crate) fn render_attachments(
     w: &MainWindow,
     attachments: &[chatter_core::state::PendingAttachment],
 ) {
-    let slint_attachments: Vec<PendingAttachmentData> = attachments
+    // Retain ready images on refresh rather than discarding all thumbnails
+    // whenever the next file is staged or an entry is removed.
+    let old = w.global::<crate::ChatPane>().get_pending_attachments();
+    let old_rows: std::collections::HashMap<_, _> =
+        old.iter().map(|row| (row.id.to_string(), row)).collect();
+    let rows: Vec<_> = attachments
         .iter()
-        .map(pending_attachment_to_slint)
+        .map(|attachment| {
+            old_rows
+                .get(&attachment.id.to_string())
+                .cloned()
+                .unwrap_or_else(|| pending_attachment_to_slint(attachment))
+        })
         .collect();
+    w.global::<crate::ChatPane>()
+        .set_pending_attachments(ModelRc::new(VecModel::from(rows)));
 
-    let model = ModelRc::new(VecModel::from(slint_attachments));
-    w.global::<crate::ChatPane>().set_pending_attachments(model);
-
-    // Ciphertext cannot be handed to Slint's path loader. Authenticate,
-    // thumbnail and decode it off the UI thread, then update only the tray
-    // entry that still owns this path (navigation/removal may have intervened).
     let client = PREVIEW_CLIENT.with(|slot| slot.borrow().upgrade());
     if let Some(client) = client {
-        let session = crate::bin_ui::features::history_owner::SessionOwner::capture(&client);
-        let chat_state = client.clone();
-        for attachment in attachments.iter().filter(|a| {
-            a.mime_type.starts_with("image/")
-                && a.path
-                    .components()
-                    .any(|part| part.as_os_str() == "composer-staging")
-        }) {
+        let revision = client.session_revision();
+        let current: std::collections::HashSet<_> = attachments
+            .iter()
+            .map(|a| (revision, a.id, a.path.clone()))
+            .collect();
+        PREVIEW_JOBS.with(|jobs| jobs.borrow_mut().retain(|key| current.contains(key)));
+        for (index, attachment) in ChatterClient::pending_preview_files(attachments) {
             let path = attachment.path.clone();
             let id = attachment.id;
+            let key = (revision, id, path.clone());
+            if !PREVIEW_JOBS.with(|jobs| jobs.borrow_mut().insert(key)) {
+                continue;
+            }
             let weak = w.as_weak();
             let client = client.clone();
-            let chat_state = chat_state.clone();
-            let session = session.clone();
-            crate::rt_handle().spawn_blocking(move || {
-                let Some(bytes) = client.staged_image_preview(&path) else {
-                    return;
-                };
-                let pixels =
-                    crate::bin_ui::decode_cache::thumbnail(&id.to_string(), bytes.len(), || {
-                        image::load_from_memory(&bytes).ok()
-                    });
+            let session = crate::bin_ui::features::history_owner::SessionOwner::capture(&client);
+            crate::rt_handle().spawn(async move {
+                let worker_session = session.clone();
+                let worker_path = path.clone();
+                let worker_client = client.clone();
+                let pixels = chatter_core::services::attachment::run_attachment_work(move || {
+                    if !worker_session.is_current()
+                        || !worker_client
+                            .pending_attachments()
+                            .iter()
+                            .any(|a| a.id == id && a.path == worker_path)
+                    {
+                        return None;
+                    }
+                    crate::bin_ui::decode_cache::thumbnail(&id.to_string(), 0, || {
+                        worker_client
+                            .pending_image_pixels(&worker_path)
+                            .map(image::DynamicImage::ImageRgba8)
+                    })
+                })
+                .await
+                .ok()
+                .flatten();
                 let Some(pixels) = pixels else { return };
                 let _ = slint::invoke_from_event_loop(move || {
                     if !session.is_current()
-                        || !chat_state
+                        || !client
                             .pending_attachments()
                             .iter()
                             .any(|a| a.id == id && a.path == path)
@@ -148,15 +140,18 @@ pub(crate) fn render_attachments(
                     else {
                         return;
                     };
-                    for index in 0..model.row_count() {
-                        let Some(mut row) = model.row_data(index) else {
-                            continue;
-                        };
-                        if row.id == id.to_string() {
+                    let id = id.to_string();
+                    let index = if model.row_data(index).is_some_and(|row| row.id == id) {
+                        Some(index)
+                    } else {
+                        (0..model.row_count())
+                            .find(|&i| model.row_data(i).is_some_and(|row| row.id == id))
+                    };
+                    if let Some(index) = index {
+                        if let Some(mut row) = model.row_data(index) {
                             row.thumbnail = Image::from_rgba8(pixels);
                             row.has_thumbnail = true;
                             model.set_row_data(index, row);
-                            break;
                         }
                     }
                 });
@@ -219,6 +214,7 @@ pub(crate) fn wire_attachment_clicked(
             let snapshot = chat_state.chat_snapshot();
             let conversation = snapshot.active_conversation;
             let revision = snapshot.attachment_revision;
+            let picker_session = chat_state.session_guard();
 
             tracing::info!(
                 conversation = ?conversation,
@@ -260,6 +256,9 @@ pub(crate) fn wire_attachment_clicked(
                     tracing::info!("Selected {} file(s) for attachment", selected_files.len());
 
                     for file_path in selected_files {
+                        if !picker_session.is_current() {
+                            break;
+                        }
                         if let Err(e) = process_and_add_file(
                             file_path,
                             None,
@@ -297,7 +296,22 @@ pub(crate) fn wire_attachment_clicked(
                         // The SAF copy sits in the purgeable cache dir and is ours:
                         // move it where a restart finds it (core owns the dir).
                         let source = file_path;
-                        let file_path = ui_ctx_attach.stage_owned_file(source.clone());
+                        if !picker_session.is_current() {
+                            let _ = tokio::fs::remove_file(&source).await;
+                            if let Some(parent) = source.parent() {
+                                let _ = tokio::fs::remove_dir(parent).await;
+                            }
+                            continue;
+                        }
+                        let file_path =
+                            match ui_ctx_attach.stage_owned_file_async(source.clone()).await {
+                                Ok(path) => path,
+                                Err(error) => {
+                                    let _ = tokio::fs::remove_file(&source).await;
+                                    tracing::error!(%error, "Attachment staging failed");
+                                    continue;
+                                }
+                            };
                         if file_path == source {
                             let _ = tokio::fs::remove_file(&source).await;
                             tracing::warn!("Could not encrypt selected attachment");
@@ -305,7 +319,7 @@ pub(crate) fn wire_attachment_clicked(
                         }
                         if let Err(e) = process_and_add_file(
                             file_path.clone(),
-                            ui_ctx_attach.staged_file_size(&file_path),
+                            None,
                             &chat_state,
                             conversation,
                             revision,
@@ -398,7 +412,14 @@ pub(crate) fn wire_paste_image(
 
             // Clipboard bytes are app-owned. Move the PNG out of the shared
             // system temp directory before keeping it in a recoverable tray.
-            let staged = ui_ctx.stage_owned_file(path.clone());
+            let staged = match ui_ctx.stage_owned_file_async(path.clone()).await {
+                Ok(staged) => staged,
+                Err(error) => {
+                    let _ = tokio::fs::remove_file(&path).await;
+                    tracing::error!(%error, "Paste staging failed");
+                    return;
+                }
+            };
             if staged == path {
                 let _ = tokio::fs::remove_file(&path).await;
                 tracing::warn!("Could not stage pasted image");
@@ -406,7 +427,7 @@ pub(crate) fn wire_paste_image(
             }
             match process_and_add_file(
                 staged.clone(),
-                ui_ctx.staged_file_size(&staged),
+                None,
                 &chat_state,
                 conversation,
                 revision,
@@ -496,4 +517,79 @@ pub(crate) fn wire_remove_attachment(
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn batch_preparation_inside_slint_future_keeps_event_loop_responsive() {
+        const CHILD: &str = "CHATTER_BATCH_PREPARATION_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let test = format!(
+                "{}::batch_preparation_inside_slint_future_keeps_event_loop_responsive",
+                module_path!().split_once("::").unwrap().1
+            );
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &test, "--nocapture", "--test-threads=1"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return;
+        }
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _runtime = runtime.enter();
+        let ui_thread = std::thread::current().id();
+        let responsive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let event_seen = responsive.clone();
+        let notifier = std::thread::spawn(move || {
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+            slint::invoke_from_event_loop(move || {
+                event_seen.store(true, std::sync::atomic::Ordering::SeqCst);
+                release_tx.send(()).unwrap();
+            })
+            .unwrap();
+        });
+        let completed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let results = completed.clone();
+        slint::spawn_local(async move {
+            let first = chatter_core::services::attachment::run_attachment_work(move || {
+                assert_ne!(std::thread::current().id(), ui_thread);
+                entered_tx.send(()).unwrap();
+                // ONLY the event loop can release this worker. Inline work
+                // deadlocks until the watchdog fails, independent of speed.
+                release_rx
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .unwrap();
+                assert!(responsive.load(std::sync::atomic::Ordering::SeqCst));
+                0
+            })
+            .await
+            .unwrap();
+            results.borrow_mut().push(first);
+            for index in 1..8 {
+                results.borrow_mut().push(
+                    chatter_core::services::attachment::run_attachment_work(move || index)
+                        .await
+                        .unwrap(),
+                );
+            }
+            slint::quit_event_loop().unwrap();
+        })
+        .unwrap();
+        slint::run_event_loop().unwrap();
+        notifier.join().unwrap();
+        assert_eq!(*completed.borrow(), (0..8).collect::<Vec<_>>());
+    }
 }

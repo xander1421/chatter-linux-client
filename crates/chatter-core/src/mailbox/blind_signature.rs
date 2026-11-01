@@ -89,8 +89,13 @@ impl ServerPublicKey {
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|_| MailboxError::InvalidServerKey("clock before Unix epoch".into()))?
             .as_nanos() as u64;
-        verify_manifest_in_log(manifest)?;
+        verify_manifest_in_log(manifest).inspect_err(|_| {
+            tracing::warn!(target: "token_manifest::kt_proof", "manifest verification failed");
+        })?;
         Self::verify_manifest_at(manifest, &crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES, now)
+            .inspect_err(|_| {
+                tracing::warn!(target: "token_manifest::signature_schedule_or_key", "manifest verification failed");
+            })
     }
 
     /// Fetch the manifest with `fetch`, check it with [`Self::from_manifest`],
@@ -127,6 +132,8 @@ impl ServerPublicKey {
         kt_anchor::hold_head_locked(&pin, settings, sth, fetch_consistency)
             .await
             .map_err(|e| {
+                e.trace_rejection();
+                tracing::warn!(target: "token_manifest::consistency", "manifest verification failed");
                 MailboxError::InvalidServerKey(format!(
                     "manifest tree head contradicts this device's pinned head: {e}"
                 ))
@@ -212,6 +219,7 @@ fn verify_manifest_in_log(m: &GetBlindSignaturePublicKeyResponse) -> Result<(), 
     })?;
     let digest = Sha256::digest(manifest_bytes(m));
     crate::crypto::verify_kt_proof(&manifest_label(&m.key_id), &digest, proof).map_err(|e| {
+        e.trace_rejection();
         MailboxError::InvalidServerKey(format!("manifest key-transparency proof: {e}"))
     })
 }

@@ -898,6 +898,54 @@ mod unread_badge_tests {
     }
 
     #[tokio::test]
+    async fn incremental_folder_member_matches_snapshot_and_muted_header_policy() {
+        let (client, _dir) = build_test_client();
+        let peer = UserId::new();
+        befriend(&client, peer);
+        let id = peer.to_string();
+        client.create_section("Folder", "", Some((&id, ConversationType::ServerDm))).unwrap();
+        assert!(client.set_conversation_pinned(&id, true));
+        let sections = client.list_sections_with_conversations().unwrap();
+        let stale = sections[0].conversations[0].clone();
+        receive(&client, ChannelId::from(peer), ConversationType::ServerDm, 100);
+        let (metadata, row, contribution) = client.refresh_section_row_async(stale.clone()).await.unwrap();
+        assert_eq!(contribution, 1);
+        let full = client.list_sections_with_conversations().unwrap();
+        let full_row = client.section_rows(&full).remove(0).remove(0);
+        assert_eq!(metadata.last_message_at, full[0].conversations[0].last_message_at);
+        assert_eq!(metadata.unread_count, 1);
+        assert!(metadata.is_pinned && row.is_pinned);
+        assert_eq!(row.last_message, full_row.last_message);
+        assert_eq!(row.timestamp_at, full_row.timestamp_at);
+        assert_eq!(row.unread_count, full_row.unread_count);
+        assert_eq!(client.section_member_unread_badge(&metadata), client.section_unread_badge(&full[0]));
+        client.mute_conversation(ActiveConversation::ServerDm { peer_id: peer }, true).unwrap();
+        let (metadata, row, contribution) = client.refresh_section_row_async(stale).await.unwrap();
+        assert_eq!(contribution, 0);
+        assert_eq!(row.unread_count, 1);
+        assert!(row.is_muted);
+        assert_eq!(client.section_member_unread_badge(&metadata), 0);
+        assert_eq!(client.section_unread_badge(&client.list_sections_with_conversations().unwrap()[0]), 0);
+    }
+
+    #[tokio::test]
+    async fn incoming_pending_folder_request_keeps_synthetic_row_badge_out_of_header() {
+        let (client, _dir) = build_test_client();
+        client.auth_state().set_logged_in(UserId::new(), 1, "Me".into());
+        let mut dm = crate::domain::anon_dm::AnonDm::new_initiated(UserId::new());
+        dm.initiated_by_us = false;
+        client.anon_dms().anon_dm_repo().insert_conversation(&dm).unwrap();
+        client.create_section("Secret", "", Some((&dm.id.to_string(), ConversationType::AnonDm))).unwrap();
+        let sections = client.list_sections_with_conversations().unwrap();
+        let (metadata, row, contribution) = client.refresh_section_row_async(sections[0].conversations[0].clone()).await.unwrap();
+        assert_eq!(contribution, 0);
+        assert_eq!(row.unread_count, 1);
+        assert_eq!(metadata.unread_count, 0);
+        assert_eq!(client.section_member_unread_badge(&metadata), 0);
+        assert_eq!(client.section_unread_badge(&sections[0]), 0);
+    }
+
+    #[tokio::test]
     async fn badges_are_absolute_and_follow_the_mode() {
         let (client, _dir) = build_test_client();
         let peer = UserId::new();

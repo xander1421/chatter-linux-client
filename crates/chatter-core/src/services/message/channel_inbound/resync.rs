@@ -26,14 +26,44 @@ impl ChannelInbound {
         proto_msg: &chat_v1::Message,
         channel_id: ChannelId,
     ) -> Result<(), MessageError> {
+        let session = self.messages.receive_session()?;
+        self.ingest_resynced_with_session(proto_msg, channel_id, session).await
+    }
+
+    pub(crate) async fn ingest_resynced_with_session(&self, proto_msg: &chat_v1::Message, channel_id: ChannelId, session: ReceiveSession) -> Result<(), MessageError> {
+        session.check()?;
+        let inbound = self.clone();
+        let proto = proto_msg.clone();
+        let preflight_session = session.clone();
+        let action = self.messages.database.run_blocking(move || {
+            preflight_session.check()?;
+            Ok(inbound.resync_preflight(&proto, channel_id, &preflight_session))
+        }).await??;
+        match action {
+            ResyncAction::Skip => return Ok(()),
+            ResyncAction::Insert => ensure_resync_ingested(self.ingest_with_session(proto_msg, channel_id, false, PresenceHint::KnownPresent, session.clone()).await)?,
+            ResyncAction::Edit => ensure_resync_ingested(self.ingest_edit_with_session(proto_msg, channel_id, session.clone()).await)?,
+            ResyncAction::Existing => {}
+        }
+        let messages = self.messages.clone();
+        let proto = proto_msg.clone();
+        self.messages.database.run_blocking(move || {
+            session.check()?;
+            Ok(messages.reconcile_channel_reactions(&proto, channel_id))
+        }).await?
+    }
+
+    /// Per-row metadata is used only to choose decrypt/edit work; persistence
+    /// rereads current state transactionally and never writes this snapshot.
+    fn resync_preflight(&self, proto_msg: &chat_v1::Message, channel_id: ChannelId, session: &ReceiveSession) -> Result<ResyncAction, MessageError> {
         let id = proto_msg
             .id
             .parse::<crate::domain::ids::MessageId>()
             .map_err(|_| MessageError::InvalidContent("invalid resync message id".into()))?;
         if self.messages.message_repo.is_tombstoned(&id)?
-            || self.cancelled_own_post(proto_msg, channel_id)?
+            || self.cancelled_own_post(proto_msg, channel_id, session)?
         {
-            return Ok(());
+            return Ok(ResyncAction::Skip);
         }
         // Validate the server envelope even when ciphertext was already consumed.
         // Empty authors remain valid for anonymous rows; nonempty identities
@@ -59,7 +89,7 @@ impl ChannelInbound {
             ));
         }
         if Self::drop_blocked_sender(&self.messages, proto_msg, channel_id)? {
-            return Ok(());
+            return Ok(ResyncAction::Skip);
         }
         let content = proto_msg
             .content
@@ -108,17 +138,13 @@ impl ChannelInbound {
                 "resync local channel mismatch".into(),
             ));
         }
-        match &existing {
-            // Never seen: store it as the server has it, edit included.
-            None => {
-                ensure_resync_ingested(self.ingest(proto_msg, channel_id, false).await)?;
-            }
-            Some(local) if is_newer_edit(proto_msg, local) => {
-                ensure_resync_ingested(self.ingest_edit(proto_msg, channel_id).await)?;
-            }
-            Some(_) => {}
-        }
-        self.messages
-            .reconcile_channel_reactions(proto_msg, channel_id)
+        Ok(match existing {
+            None => ResyncAction::Insert,
+            Some(local) if is_newer_edit(proto_msg, &local) => ResyncAction::Edit,
+            Some(_) => ResyncAction::Existing,
+        })
     }
 }
+
+#[derive(Clone, Copy)]
+enum ResyncAction { Skip, Insert, Edit, Existing }

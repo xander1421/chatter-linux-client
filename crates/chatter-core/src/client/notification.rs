@@ -79,7 +79,10 @@ impl ChatterClient {
         let revision = self.auth_state().get().session_revision;
         let client = self.clone();
         tokio::spawn(async move {
+            let phase = super::lifecycle_diagnostics::Phase::NotificationStart;
+            phase.requested();
             let _lifecycle = client.auth_lifecycle_lock.lock().await;
+            let _scope = phase.acquired();
             if client.auth_state().session_is_current(revision) {
                 client.start_authed_notification_streams_locked();
             }
@@ -101,7 +104,10 @@ impl ChatterClient {
             let client = self.clone();
             tokio::spawn(async move {
                 {
+                    let phase = super::lifecycle_diagnostics::Phase::NotificationRetire;
+                    phase.requested();
                     let _lifecycle = client.auth_lifecycle_lock.lock().await;
+                    let _scope = phase.acquired();
                     if !client.auth_state().session_is_current(revision) {
                         return;
                     }
@@ -132,7 +138,10 @@ impl ChatterClient {
                     } else {
                         return;
                     }
+                    let phase = super::lifecycle_diagnostics::Phase::NotificationRetire;
+                    phase.requested();
                     let _lifecycle = client.auth_lifecycle_lock.lock().await;
+                    let _scope = phase.acquired();
                     if !client.auth_state().session_is_current(revision) {
                         return;
                     }

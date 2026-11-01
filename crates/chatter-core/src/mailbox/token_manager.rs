@@ -537,7 +537,7 @@ impl TokenManager {
     /// the send with `NoTokensAvailable`.
     pub fn claim_prefetched_token(&self) -> Result<MailboxToken, MailboxError> {
         self.claim_available_token()?.ok_or_else(|| {
-            tracing::warn!(
+            tracing::warn!(target: "token_claim::no_prefetched_tokens",
                 "TokenManager: pre-fetched token batch is empty; refusing to request-then-spend"
             );
             MailboxError::NoTokensAvailable

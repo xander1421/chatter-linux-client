@@ -1,0 +1,88 @@
+import { Button } from "../components/button.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
+import { Icons } from "../theme/icons.slint";
+import { Colors } from "../theme/colors.slint";
+
+component DevicePill inherits Button {
+    in property <string> device-name;
+    in property <image> device-icon;
+    text: "";
+    variant: "secondary";
+    min-width: 0px;
+    height: 48px;
+    border-radius: 24px;
+    HorizontalLayout {
+        padding: 8px;
+        spacing: 4px;
+        Image {
+            source: root.device-icon;
+            width: 16px;
+            height: 16px;
+            colorize: Colors.text-primary;
+        }
+        Text {
+            text: root.device-name;
+            min-width: 0px;
+            horizontal-stretch: 1;
+            overflow: elide;
+            font-size: 13px;
+            color: Colors.text-primary;
+            vertical-alignment: center;
+        }
+        Image {
+            source: Icons.chevron-left;
+            transform-rotation: -90deg;
+            width: 12px;
+            height: 12px;
+            colorize: Colors.text-primary;
+        }
+    }
+}
+
+export component AudioControlsPopover inherits GlassSurface {
+    in property <bool> linked;
+    in property <string> input-name;
+    in property <string> output-name;
+    callback input-requested();
+    callback output-requested();
+    material-level: 3;
+    border-radius: 16px;
+    height: root.linked ? 88px : 60px;
+    VerticalLayout {
+        padding: 6px;
+        spacing: 0px;
+        HorizontalLayout {
+            spacing: 4px;
+            DevicePill {
+                horizontal-stretch: 1;
+                width: (parent.width - 4px) / 2;
+                height: 48px;
+                device-name: root.input-name;
+                label: "Microphone: " + root.input-name;
+                device-icon: Icons.mic;
+                variant: "secondary";
+                clicked => {
+                    root.input-requested();
+                }
+            }
+            DevicePill {
+                horizontal-stretch: 1;
+                width: (parent.width - 4px) / 2;
+                height: 48px;
+                device-name: root.output-name;
+                label: "Output: " + root.output-name;
+                device-icon: Icons.volume-2;
+                variant: "secondary";
+                clicked => {
+                    root.output-requested();
+                }
+            }
+        }
+        if root.linked: Text {
+            text: "Microphone + output are linked";
+            color: Colors.text-secondary;
+            font-size: 12px;
+            horizontal-alignment: center;
+        }
+    }
+}

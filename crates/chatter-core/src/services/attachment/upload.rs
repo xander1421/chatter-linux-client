@@ -21,6 +21,22 @@ const MULTIPART_THRESHOLD: u64 = 100 * 1024 * 1024;
 /// allocates a multi-GB Vec.
 const MAX_MULTIPART_PARTS: u64 = 10_000;
 
+// Server currently selects 16 MiB (attachment.go). Allow headroom while
+// bounding four concurrent buffered PUTs, including anonymous HTTP transport.
+const MAX_MULTIPART_PART_SIZE: u64 = 32 * 1024 * 1024;
+
+fn checked_part_len(len: u64) -> Result<usize, AttachmentError> {
+    if len == 0 || len > MAX_MULTIPART_PART_SIZE {
+        return Err(AttachmentError::NetworkError(format!(
+            "server multipart part size {len} is outside client budget (1..={} bytes); retry with a compatible server",
+            MAX_MULTIPART_PART_SIZE
+        )));
+    }
+    usize::try_from(len).map_err(|_| {
+        AttachmentError::NetworkError("multipart part size overflows this device".into())
+    })
+}
+
 /// Split `total` bytes into (offset, len) ranges of `part_size` (last may be smaller).
 fn part_ranges(total: u64, part_size: u64) -> Vec<(u64, u64)> {
     let mut ranges = Vec::new();
@@ -46,6 +62,7 @@ impl AttachmentService {
     ) -> Result<String, AttachmentError> {
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
+        let part_len = checked_part_len(len)?;
         let mut last_err = String::new();
         for attempt in 0..3 {
             // Read the exact byte range fresh each attempt.
@@ -55,7 +72,7 @@ impl AttachmentService {
             f.seek(std::io::SeekFrom::Start(offset))
                 .await
                 .map_err(|e| AttachmentError::FileError(format!("seek: {}", e)))?;
-            let mut buf = vec![0u8; len as usize];
+            let mut buf = vec![0u8; part_len];
             f.read_exact(&mut buf)
                 .await
                 .map_err(|e| AttachmentError::FileError(format!("read part: {}", e)))?;
@@ -151,7 +168,7 @@ impl AttachmentService {
         // into memory. Malformed MP4/WebP is rejected; other formats untouched.
         let sanitized_temp = {
             let p = file_path.to_path_buf();
-            tokio::task::spawn_blocking(move || super::sanitize::sanitize_media_file(&p))
+            super::run_attachment_work(move || super::sanitize::sanitize_media_file(&p))
                 .await
                 .map_err(|e| AttachmentError::FileError(format!("Sanitize task failed: {e}")))??
         };
@@ -213,7 +230,7 @@ impl AttachmentService {
         let output_path = temp_file.path().to_path_buf();
 
         let encrypt_start = std::time::Instant::now();
-        let encrypt_result = tokio::task::spawn_blocking(move || {
+        let encrypt_result = super::run_attachment_work(move || {
             AttachmentCrypto::encrypt_file_to_file(&input_path, &output_path)
         })
         .await
@@ -523,16 +540,11 @@ impl AttachmentService {
         let cdn_key = create.cdn_key.clone();
         let upload_id = create.upload_id.clone();
         let part_size = create.part_size as u64;
-        // Guard against a malformed server response: part_size 0 would make
-        // part_ranges loop forever (offset never advances), growing an
-        // unbounded Vec until OOM. Fail loudly instead.
-        if part_size == 0 {
+        if let Err(error) = checked_part_len(part_size) {
             let _ = file_client
                 .abort_attachment_multipart_upload(&cdn_key, &upload_id)
                 .await;
-            return Err(AttachmentError::NetworkError(
-                "server returned part_size 0 for multipart upload".to_string(),
-            ));
+            return Err(error);
         }
         // Reject an absurd implied part count (e.g. hostile part_size=1) BEFORE
         // part_ranges builds the Vec — otherwise it allocates ~ciphertext/part_size
@@ -880,7 +892,7 @@ impl AttachmentService {
             #[cfg(feature = "desktop-gstreamer")]
             {
                 let path_for_waveform = file_path.to_path_buf();
-                meta.waveform = match tokio::task::spawn_blocking(move || {
+                meta.waveform = match super::run_attachment_work(move || {
                     crate::media::extract_waveform(&path_for_waveform)
                 })
                 .await
@@ -901,7 +913,7 @@ impl AttachmentService {
             }
 
             let path_for_duration = file_path.to_path_buf();
-            meta.duration_ms = tokio::task::spawn_blocking(move || {
+            meta.duration_ms = super::run_attachment_work(move || {
                 crate::media::AudioPlayer::get_duration(&path_for_duration)
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0)
@@ -911,7 +923,7 @@ impl AttachmentService {
         } else if mime_type.starts_with("image/") {
             // Image processing - use spawn_blocking for large images
             let path_for_dims = file_path.to_path_buf();
-            let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+            let (orig_w, orig_h) = super::run_attachment_work(move || {
                 crate::media::ImageProcessor::get_dimensions(&path_for_dims).unwrap_or((0, 0))
             })
             .await
@@ -921,7 +933,7 @@ impl AttachmentService {
 
             // Generate thumbnail in blocking thread (large images can take time/memory)
             let path_for_thumb = file_path.to_path_buf();
-            match tokio::task::spawn_blocking(move || {
+            match super::run_attachment_work(move || {
                 crate::media::ImageProcessor::generate_thumbnail_bytes(&path_for_thumb)
             })
             .await
@@ -952,7 +964,7 @@ impl AttachmentService {
             #[cfg(target_os = "android")]
             {
                 let path_for_video = file_path.to_path_buf();
-                match tokio::task::spawn_blocking(move || {
+                match super::run_attachment_work(move || {
                     crate::media::analyze_video(&path_for_video)
                 })
                 .await
@@ -968,9 +980,12 @@ impl AttachmentService {
                         meta.width = Some(video.width);
                         meta.height = Some(video.height);
                         meta.duration_ms = video.duration_ms;
-                        tracing::info!(width = video.width, height = video.height,
+                        tracing::info!(
+                            width = video.width,
+                            height = video.height,
                             has_thumbnail = meta.thumbnail.is_some(),
-                            "Android video metadata extracted");
+                            "Android video metadata extracted"
+                        );
                     }
                     Ok(Err(e)) => tracing::warn!("Failed to analyze Android video: {e}"),
                     Err(e) => tracing::warn!("Android video metadata task panicked: {e}"),
@@ -979,14 +994,14 @@ impl AttachmentService {
             #[cfg(feature = "desktop-gstreamer")]
             {
                 let path_for_thumb = file_path.to_path_buf();
-                match tokio::task::spawn_blocking(move || {
+                match super::run_attachment_work(move || {
                     crate::media::extract_video_thumbnail(&path_for_thumb)
                 })
                 .await
                 {
                     Ok(Ok((bytes, thumb_w, thumb_h, vid_duration_ms))) => {
                         let path_for_dims = file_path.to_path_buf();
-                        let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+                        let (orig_w, orig_h) = super::run_attachment_work(move || {
                             crate::media::get_video_dimensions(&path_for_dims)
                                 .unwrap_or((thumb_w, thumb_h))
                         })
@@ -1014,12 +1029,12 @@ impl AttachmentService {
                         tracing::warn!("Failed to generate video thumbnail: {}", e);
                         let path_for_dims = file_path.to_path_buf();
                         let path_for_dur = file_path.to_path_buf();
-                        let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+                        let (orig_w, orig_h) = super::run_attachment_work(move || {
                             crate::media::get_video_dimensions(&path_for_dims).unwrap_or((0, 0))
                         })
                         .await
                         .unwrap_or((0, 0));
-                        let vid_duration = tokio::task::spawn_blocking(move || {
+                        let vid_duration = super::run_attachment_work(move || {
                             crate::media::get_video_duration(&path_for_dur).unwrap_or(0)
                         })
                         .await
@@ -1254,6 +1269,26 @@ mod size_cap_tests {
 #[cfg(test)]
 mod part_range_tests {
     use super::*;
+
+    #[test]
+    fn multipart_part_bytes_are_bounded_before_allocation() {
+        assert_eq!(
+            checked_part_len(16 * 1024 * 1024).unwrap(),
+            16 * 1024 * 1024
+        );
+        assert_eq!(
+            checked_part_len(MAX_MULTIPART_PART_SIZE).unwrap() as u64,
+            MAX_MULTIPART_PART_SIZE
+        );
+        for invalid in [
+            0,
+            MAX_MULTIPART_PART_SIZE + 1,
+            2 * 1024 * 1024 * 1024,
+            u64::MAX,
+        ] {
+            assert!(checked_part_len(invalid).is_err());
+        }
+    }
 
     #[test]
     fn part_ranges_covers_exactly() {

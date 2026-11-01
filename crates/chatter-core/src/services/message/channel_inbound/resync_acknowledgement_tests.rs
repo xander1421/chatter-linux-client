@@ -33,6 +33,7 @@ async fn peer_channel_reaction_survives_empty_or_partial_server_resync() {
         .build()
         .unwrap();
     let own = UserId::new();
+    client.auth_state().set_logged_in(own, 1, "fixture".into());
     let peer = UserId::new();
     let author = UserId::new();
     let id = ChannelId::new();

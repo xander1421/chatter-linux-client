@@ -17,12 +17,7 @@ use super::context_builder::ContextBuilder;
 use super::engine::SharedJarvisEngine;
 use super::entity_extractor::{EntityExtractor, ExtractedEntity};
 use super::error::JarvisError;
-use super::fact_extractor::FactExtractor;
 use super::memory_manager::{CompressionConfig, MemoryManager, MemoryStats};
-
-/// Supplies live app state (channel names, friends) for the system prompt.
-/// A closure so Jarvis needs no dependency on channel/user services.
-pub type AppContextFn = Arc<dyn Fn() -> String + Send + Sync>;
 
 /// Jarvis AI assistant service.
 ///
@@ -37,14 +32,10 @@ pub struct JarvisService {
     ai: SharedJarvisEngine,
     /// Entity extractor.
     extractor: EntityExtractor,
-    /// LLM fact extractor (background write path).
-    fact_extractor: Arc<FactExtractor>,
     /// Context builder.
     context_builder: ContextBuilder,
     /// Memory manager.
     memory_manager: MemoryManager,
-    /// App-context bridge (channels, friends) for grounded answers.
-    app_context: Option<AppContextFn>,
     /// One compression at a time; a turn that finds it held skips.
     compress_lock: tokio::sync::Mutex<()>,
 }
@@ -55,12 +46,9 @@ impl JarvisService {
         memory_repo: Arc<JarvisMemoryRepository>,
         graph_repo: Arc<JarvisGraphRepository>,
         ai: SharedJarvisEngine,
-        semantic: Option<Arc<crate::services::semantic_search::SemanticSearchService>>,
     ) -> Self {
         let extractor = EntityExtractor::new(ai.clone());
-        let fact_extractor = Arc::new(FactExtractor::new(ai.clone(), memory_repo.clone()));
-        let context_builder =
-            ContextBuilder::new(memory_repo.clone(), graph_repo.clone(), semantic);
+        let context_builder = ContextBuilder::new(memory_repo.clone(), graph_repo.clone());
         let memory_manager =
             MemoryManager::new(memory_repo.clone(), graph_repo.clone(), ai.clone());
 
@@ -69,18 +57,10 @@ impl JarvisService {
             graph_repo,
             ai,
             extractor,
-            fact_extractor,
             context_builder,
             memory_manager,
-            app_context: None,
             compress_lock: tokio::sync::Mutex::new(()),
         }
-    }
-
-    /// Attach the app-context bridge (builder style).
-    pub fn with_app_context(mut self, f: AppContextFn) -> Self {
-        self.app_context = Some(f);
-        self
     }
 
     // ========================================================================
@@ -118,67 +98,27 @@ impl JarvisService {
         author_id: Option<&UserId>,
         silo: crate::ai_policy::policy::Silo,
     ) -> Result<String, JarvisError> {
-        // 1. Build enriched context (keyword + entity graph + semantic recall)
-        let built_context = self
-            .context_builder
-            .build_with_semantic(context, query, author_id)
-            .await?;
-
-        // 2. Store the user's query + write-path fact harvest: regex fast-path
-        //    synchronously (deterministic, free), LLM extraction+consolidation
-        //    in the background so the reply is never delayed.
-        self.memory_manager
-            .store_user_message(context, query, author_id)?;
-        if let Some(user_id) = author_id {
-            let _ = self.extract_user_facts(user_id, query, context);
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                let extractor = self.fact_extractor.clone();
-                let (q, uid, ctx) = (query.to_string(), *user_id, context.clone());
-                handle.spawn(async move {
-                    match extractor.extract_and_store(&q, &uid, &ctx).await {
-                        Ok(n) if n > 0 => tracing::debug!(facts = n, "LLM write path stored facts"),
-                        Ok(_) => {}
-                        Err(e) => tracing::debug!("LLM fact extraction skipped: {e}"),
-                    }
-                });
-            }
+        use crate::ai_policy::policy::{Silo, ai_access};
+        use crate::ai_protocol::{ChatMessage, ChatRole};
+        let access = ai_access(&context.conversation_type(), false);
+        if !access.permits_silo(silo) {
+            return Err(JarvisError::NotPermitted(
+                "Remote AI is not permitted in this conversation".into(),
+            ));
         }
-
-        // 3. Build the real chat-turn array: system (persona + memory), then
-        //    the stored conversation as genuine user/assistant turns, then the
-        //    new query. Chat models are trained on this shape — history-as-a-
-        //    text-blob loses multi-turn coherence.
-        use crate::local_ai::backend::{ChatMessage, ChatRole};
-
-        let persona = "You are Jarvis, the user's personal AI assistant running \
-            locally on their device. You have persistent memory: facts the user \
-            shares are stored automatically, so when asked to remember something, \
-            simply confirm it. Answer directly and use the context below when \
-            relevant.";
-        let system_context = built_context.to_system_prompt();
-        let mut system = if system_context.is_empty() {
-            persona.to_string()
-        } else {
-            format!("{persona}\n\n{system_context}")
-        };
-        if let Some(app_context) = &self.app_context {
-            let app = app_context();
-            if !app.is_empty() {
-                system.push_str(
-                    "\n\n## App Context\nLive data from the user's Chatter app. \
-                     Answer questions about their channels and friends directly \
-                     from this data:\n",
-                );
-                system.push_str(&app);
-            }
+        if silo != Silo::Cloud || !self.ai.has_cloud() {
+            return Err(JarvisError::NoModel);
         }
-
-        let mut messages = Vec::with_capacity(built_context.history.len() + 2);
+        let owner = author_id
+            .ok_or_else(|| JarvisError::NotPermitted("Sign in before using remote AI".into()))?;
+        let remote = context.for_remote(owner);
+        let built = self.context_builder.build_remote(context, owner)?;
+        let mut messages = Vec::with_capacity(built.history.len() + 2);
         messages.push(ChatMessage {
             role: ChatRole::System,
-            content: system,
+            content: "You are the user's remote AI assistant. Answer the request directly using this remote conversation. Do not claim to run on the device or to remember facts outside this conversation.".into(),
         });
-        for turn in &built_context.history {
+        for turn in &built.history {
             messages.push(ChatMessage {
                 role: match turn.role {
                     crate::domain::jarvis::Role::User => ChatRole::User,
@@ -192,34 +132,19 @@ impl JarvisService {
             role: ChatRole::User,
             content: query.to_string(),
         });
-
-        // 4. Generate response (budget covers thinking models' <think> spend)
+        self.memory_manager
+            .store_user_message(&remote, query, Some(owner))?;
         let params = SampleParams {
             max_tokens: 1024,
-            temperature: 0.7,
-            top_p: 0.9,
-            top_k: 40,
-            repeat_penalty: 1.1,
-            disable_thinking: false,
-            json_schema: None,
+            ..Default::default()
         };
-
-        // Policy gate: a DM or anon conversation refuses a cloud engine here,
-        // before any message content leaves the device.
-        let access = crate::ai_policy::policy::ai_access(&context.conversation_type(), false);
         let response = self
             .ai
             .complete_conversation_in(access, silo, messages, params)
             .await?;
         let response = response.trim().to_string();
-
-        // 5. Store the response
         self.memory_manager
-            .store_assistant_message(context, &response)?;
-
-        // 6. Extract and store entities from the response (background)
-        let _ = self.observe_message(context, &response, None, None).await;
-
+            .store_assistant_message(&remote, &response)?;
         Ok(response)
     }
 
@@ -283,57 +208,13 @@ impl JarvisService {
             .map_err(JarvisError::from)
     }
 
-    /// Summarize a conversation.
+    /// Summarize only the owner's explicitly remote conversation history.
     pub async fn summarize_conversation(
         &self,
         context: &JarvisContext,
+        owner: &UserId,
     ) -> Result<String, JarvisError> {
-        let conversations = self.memory_repo.get_recent_conversations(context, 50)?;
-
-        if conversations.is_empty() {
-            return Ok("No conversation history to summarize.".to_string());
-        }
-
-        let conversation_text: Vec<String> = conversations
-            .iter()
-            .map(|c| {
-                let role = match c.role {
-                    crate::domain::jarvis::Role::User => "User",
-                    crate::domain::jarvis::Role::Assistant => "Jarvis",
-                    crate::domain::jarvis::Role::System => "System",
-                };
-                format!("{}: {}", role, c.content)
-            })
-            .collect();
-
-        let prompt = format!(
-            r#"Summarize this conversation, highlighting:
-1. Main topics discussed
-2. Key decisions or conclusions
-3. Action items or next steps
-
-Conversation:
-{}
-
-Summary:"#,
-            conversation_text.join("\n")
-        );
-
-        let params = SampleParams {
-            max_tokens: 300,
-            temperature: 0.3,
-            top_p: 0.9,
-            top_k: 40,
-            repeat_penalty: 1.0,
-            disable_thinking: true,
-            json_schema: None,
-        };
-
-        let access = crate::ai_policy::policy::ai_access(&context.conversation_type(), false);
-        self.ai
-            .complete_gated(access, prompt, params)
-            .await
-            .map_err(JarvisError::from)
+        self.ask_in(context, "Summarize this remote conversation, highlighting main topics, decisions and next steps.", Some(owner), crate::ai_policy::policy::Silo::Cloud).await
     }
 
     // ========================================================================
@@ -523,6 +404,28 @@ Summary:"#,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unavailable_or_private_remote_requests_do_not_write_history() {
+        use crate::services::jarvis::engine::JarvisEngine;
+        use crate::storage::Database;
+        use crate::ai_policy::policy::Silo;
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("remote.db"), "fixture-pass").unwrap());
+        db.run_migrations().unwrap();
+        let memory = Arc::new(JarvisMemoryRepository::new(db.clone()));
+        let service = JarvisService::new(memory.clone(), Arc::new(JarvisGraphRepository::new(db)), SharedJarvisEngine::new(JarvisEngine::Disabled));
+        let owner = UserId::new();
+        let general = JarvisContext::general();
+        assert!(matches!(service.ask_in(&general, "fixture", Some(&owner), Silo::Cloud).await, Err(JarvisError::NoModel)));
+        let private = JarvisContext::dm(crate::domain::ChannelId::new());
+        assert!(matches!(service.ask_in(&private, "fixture", Some(&owner), Silo::Cloud).await, Err(JarvisError::NotPermitted(_))));
+        assert!(matches!(service.summarize_conversation(&private, &owner).await, Err(JarvisError::NotPermitted(_))));
+        for context in [general, private] {
+            assert_eq!(memory.count_conversations(&context).unwrap(), 0);
+            assert_eq!(memory.count_conversations(&context.for_remote(&owner)).unwrap(), 0);
+        }
+    }
 
     #[test]
     fn test_extract_after_phrase() {

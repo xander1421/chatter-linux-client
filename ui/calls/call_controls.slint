@@ -1,3 +1,4 @@
+import { Colors } from "../theme/colors.slint";
 import { IconAction } from "../components/icon_action.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // Call control bar with mute, video, screen share, and end call buttons
@@ -7,10 +8,53 @@ import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Materials } from "../theme/materials.slint";
 
+// Small visual caret with a separate 44 x 48 pointer/keyboard target.
+component AudioSelector inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    width: 44px;
+    height: 48px;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+    key := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    Rectangle {
+        width: 26px;
+        height: 26px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 13px;
+        background: touch.pressed ? Materials.pressed : Colors.fill-secondary;
+        border-width: key.has-focus ? 2px : 0px;
+        border-color: Colors.focus-ring;
+        Image {
+            source: Icons.chevron-left;
+            transform-rotation: 90deg;
+            width: 14px;
+            height: 14px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: Colors.text-primary;
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
 export component CallControls inherits GlassSurface {
     material-level: 3;
     elevation: 3;
-    border-radius: self.height / 2;
+    border-radius: Spacing.radius-lg;
     property <float> arrival: 0;
     init => { root.arrival = 1; }
     opacity: arrival;
@@ -23,9 +67,8 @@ export component CallControls inherits GlassSurface {
     in property <bool> is-video-enabled: true;
     in property <bool> is-screen-sharing: false;
     in property <bool> is-video-call: true;
-    // Phones: the speaker button toggles the call route (earpiece/headset vs
-    // loudspeaker) and `speaker-on` is the route actually applied. Desktop
-    // leaves it false and the button opens the output device picker.
+    // Phones show linked microphone/output routes; desktop shows independent devices.
+    // `speaker-on` reflects the communication route acknowledged by Android.
     in property <bool> speaker-toggle: false;
     in property <bool> speaker-on: false;
     // Shared minimum target at both densities.
@@ -35,52 +78,44 @@ export component CallControls inherits GlassSurface {
     callback toggle-video();
     callback toggle-screen-share();
     callback end-call();
-    callback show-audio-settings();
-    callback show-audio-output-settings();
+    callback show-audio-output();
+    callback show-audio-popover();
     callback toggle-speaker();
 
-    height: max(Spacing.button-height, button-size) + Spacing.sm;
-
+    height: 48px;
     HorizontalLayout {
         alignment: center;
-        spacing: root.speaker-toggle ? Spacing.xs : Spacing.sm;
-        padding-left: root.speaker-toggle ? Spacing.xs : Spacing.md;
-        padding-right: root.speaker-toggle ? Spacing.xs : Spacing.md;
-        padding-top: (root.height - button-size) / 2;
-        padding-bottom: (root.height - button-size) / 2;
-
-        // Audio settings button (device picker). Not on phones
-        // (`speaker-toggle`): one mic, and the route is the speaker button.
-        if !root.speaker-toggle: IconAction {
-            size: button-size;
-            icon: Icons.settings;
-            label: "Audio input settings";
-            active: false;
-            clicked => { show-audio-settings(); }
-        }
-
-        // Speaker: route toggle on phones, output device picker on desktop
-        IconAction {
-            size: button-size;
-            icon: Icons.volume-2;
-            label: root.speaker-toggle ? "Toggle speaker" : "Audio output settings";
-            active: root.speaker-toggle && root.speaker-on;
-            clicked => {
-                if root.speaker-toggle {
-                    root.toggle-speaker();
-                } else {
-                    root.show-audio-output-settings();
-                }
-            }
-        }
-
+        spacing: 0px;
+        padding: 0px;
         // Mute button
         IconAction {
             size: button-size;
+            width: 44px;
+            height: 48px;
             icon: root.is-muted ? Icons.mic-off : Icons.mic;
             label: root.is-muted ? "Unmute microphone" : "Mute microphone";
             active: is-muted;
             clicked => { toggle-mute(); }
+        }
+
+        AudioSelector {
+            label: root.speaker-toggle ? "Select microphone, linked audio route" : "Select microphone";
+            clicked => { root.show-audio-popover(); }
+        }
+        IconAction {
+            width: 44px;
+            height: 48px;
+            icon: Icons.volume-2;
+            label: root.speaker-toggle ? "Toggle speaker" : "Select audio output";
+            active: root.speaker-toggle && root.speaker-on;
+            clicked => {
+                if root.speaker-toggle { root.toggle-speaker(); }
+                else { root.show-audio-output(); }
+            }
+        }
+        AudioSelector {
+            label: root.speaker-toggle ? "Select output, linked audio route" : "Select output";
+            clicked => { root.show-audio-popover(); }
         }
 
         // Video toggle — always available so the user can turn the camera on
@@ -88,6 +123,8 @@ export component CallControls inherits GlassSurface {
         // the neutral state; teal means it is on.
         IconAction {
             size: button-size;
+            width: 44px;
+            height: 48px;
             enabled: root.is-connected;
             icon: root.is-video-enabled ? Icons.video : Icons.video-off;
             label: root.is-video-enabled ? "Turn camera off" : "Turn camera on";
@@ -98,6 +135,8 @@ export component CallControls inherits GlassSurface {
         // Screen share toggle (system consent is requested on Android).
         IconAction {
             size: button-size;
+            width: 44px;
+            height: 48px;
             enabled: root.is-connected || root.is-screen-sharing;
             icon: Icons.monitor;
             label: root.is-screen-sharing ? "Stop sharing screen" : "Share screen";
@@ -105,14 +144,10 @@ export component CallControls inherits GlassSurface {
             clicked => { toggle-screen-share(); }
         }
 
-        // Spacer
-        if !root.speaker-toggle: Rectangle {
-            width: Spacing.sm;
-            background: transparent;
-        }
-
         IconAction {
             size: root.button-size;
+            width: 44px;
+            height: 48px;
             icon: Icons.phone-off;
             label: "End call";
             destructive: true;

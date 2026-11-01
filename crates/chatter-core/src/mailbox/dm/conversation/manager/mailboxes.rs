@@ -111,7 +111,8 @@ impl super::DmConversationManager {
         let mut stmt = conn
             .prepare(
                 "SELECT conversation_id, mailbox_public_key, mailbox_private_key, id
-                 FROM dm_mailboxes WHERE expires_at > ?1",
+                 FROM dm_mailboxes WHERE expires_at > ?1
+                 ORDER BY conversation_id, created_at, id",
             )
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
 

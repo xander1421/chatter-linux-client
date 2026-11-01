@@ -51,6 +51,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.global::<crate::CallView>().on_accept_incoming_call({
         let weak = weak.clone();
         move |call_id| {
+            tracing::info!(target: "call_setup::accept_ui_tapped", "Call setup diagnostic");
             let call_id_str = call_id.to_string();
             let weak = weak.clone();
             let ui_ctx = ctx_for_accept.clone();
@@ -110,6 +111,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         return;
                     }
                 }
+                tracing::info!(target: "call_setup::accept_permissions_ready", "Call setup diagnostic");
                 tokio::spawn(accept(weak, ui_ctx, call_id_str, replaces_active, revision));
             })
             .unwrap();

@@ -14,6 +14,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
+use gst_video::prelude::*;
 
 use super::{DecodedAudio, DecodedFrame, VideoDecoder, VideoInfo};
 use crate::error::MediaError;
@@ -62,6 +63,7 @@ pub struct GStreamerDecoder {
     position_ms: Arc<Mutex<u64>>,
     /// AppSrc for memory-based playback (kept alive for the pipeline lifetime)
     _appsrc: Option<gst_app::AppSrc>,
+    output_dimensions: Option<(u32,u32)>,
 }
 
 impl GStreamerDecoder {
@@ -79,6 +81,7 @@ impl GStreamerDecoder {
             info: None,
             position_ms: Arc::new(Mutex::new(0)),
             _appsrc: None,
+            output_dimensions: None,
         })
     }
 
@@ -112,7 +115,9 @@ impl GStreamerDecoder {
         if crate::system::null_audio() {
             let fakesink = gst::ElementFactory::make("fakesink")
                 .build()
-                .map_err(|e| MediaError::PlaybackError(format!("Failed to create fakesink: {e}")))?;
+                .map_err(|e| {
+                MediaError::PlaybackError(format!("Failed to create fakesink: {e}"))
+            })?;
             playbin.set_property("audio-sink", &fakesink);
         }
 
@@ -183,6 +188,13 @@ impl GStreamerDecoder {
 
     /// Build the GStreamer pipeline for in-memory data using appsrc.
     fn build_pipeline_from_memory(&mut self, data: Vec<u8>) -> Result<VideoInfo, MediaError> {
+        self.build_pipeline_from_source(super::VideoSource::Memory(Arc::new(data)))
+    }
+
+    fn build_pipeline_from_source(
+        &mut self,
+        data: super::VideoSource,
+    ) -> Result<VideoInfo, MediaError> {
         // Initialize GStreamer lazily (only once)
         ensure_gst_init()?;
 
@@ -204,7 +216,7 @@ impl GStreamerDecoder {
         tracing::info!(
             "Memory pipeline: data_len={}, detected format: {:?}",
             data_len,
-            Self::detect_video_caps(&data).map(|c| c.to_string())
+            Self::detect_video_caps(&data.read(0, 64)).map(|c| c.to_string())
         );
 
         // Store data for seeking - Arc allows sharing between callbacks
@@ -245,10 +257,17 @@ impl GStreamerDecoder {
                         std::cmp::min(65536, data.len() - *pos)
                     };
 
-                    let slice = &data[*pos..*pos + chunk_size];
+                    // An appsink demand hint is not a memory budget. Keep each
+                    // authenticated range bounded even for large seeks/demands.
+                    let chunk_size = chunk_size.min(256 * 1024);
+                    let bytes = data.read(*pos, chunk_size);
+                    if bytes.len() != chunk_size {
+                        let _ = appsrc.end_of_stream();
+                        return;
+                    }
                     let offset = *pos as u64;
 
-                    let mut buffer = gst::Buffer::from_slice(slice.to_vec());
+                    let mut buffer = gst::Buffer::from_slice(bytes);
                     {
                         let buffer_ref = buffer.get_mut().unwrap();
                         buffer_ref.set_offset(offset);
@@ -871,7 +890,24 @@ impl VideoDecoder for GStreamerDecoder {
         self.build_pipeline_from_memory(data)
     }
 
+    fn open_range(
+        &mut self,
+        range: Arc<crate::services::attachment::CbcRangeDecryptor>,
+    ) -> Result<VideoInfo, MediaError> {
+        self.build_pipeline_from_source(super::VideoSource::Range(range))
+    }
+
     fn decode_video_frame(&mut self) -> Result<Option<DecodedFrame>, MediaError> {
+        if let (Some(info), Some(sink)) = (&self.info, &self.video_sink) {
+            let (w,h) = crate::media::display_frame::video_display_bounds();
+            let dimensions = crate::media::display_frame::fit_dimensions(info.width,info.height,w,h,true);
+            if self.output_dimensions != Some(dimensions) && dimensions.0 > 0 && dimensions.1 > 0 {
+                sink.set_caps(Some(&gst::Caps::builder("video/x-raw")
+                    .field("format", "RGB").field("width", dimensions.0 as i32)
+                    .field("height", dimensions.1 as i32).build()));
+                self.output_dimensions = Some(dimensions);
+            }
+        }
         let video_sink = self
             .video_sink
             .as_ref()
@@ -935,11 +971,20 @@ impl VideoDecoder for GStreamerDecoder {
         let height = video_info.height();
 
         // Map buffer for reading
-        let map = buffer
-            .map_readable()
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to map buffer: {}", e)))?;
+        let frame = gst_video::VideoFrameRef::from_buffer_ref_readable(buffer, &video_info)
+            .map_err(|e| MediaError::PlaybackError(format!("Failed to map frame: {}", e)))?;
 
-        let data = map.as_slice().to_vec();
+        let plane = frame.plane_data(0).map_err(|e| MediaError::PlaybackError(e.to_string()))?;
+        let stride = frame.plane_stride()[0] as usize;
+        let row_bytes = width as usize * 3;
+        let mut data = Vec::with_capacity(row_bytes * height as usize);
+        for y in 0..height as usize {
+            let start = y * stride;
+            let Some(row) = plane.get(start..start + row_bytes) else {
+                return Err(MediaError::PlaybackError("Truncated RGB frame".into()));
+            };
+            data.extend_from_slice(row);
+        }
 
         // Use buffer PTS (Presentation Time Stamp) for the frame's actual timestamp.
         // This is the correct timestamp for this specific frame.
@@ -1144,6 +1189,7 @@ impl VideoDecoder for GStreamerDecoder {
     }
 
     fn close(&mut self) {
+        self.output_dimensions = None;
         if let Some(pipeline) = self.pipeline.take() {
             pipeline.set_state(gst::State::Null).ok();
         }

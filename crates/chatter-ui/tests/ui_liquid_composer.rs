@@ -6,6 +6,7 @@ slint::slint! {
     import { MessageComposer } from "../../ui/chat/message_composer.slint";
     import { Colors } from "../../ui/theme/colors.slint";
     import { Appearance } from "../../ui/theme/appearance.slint";
+    import { PendingAttachmentData } from "../../ui/chat/composer_types.slint";
 
     export component LiquidHarness inherits Window {
         width: 420px;
@@ -13,6 +14,7 @@ slint::slint! {
         background: Colors.background;
         in-out property <string> draft: "";
         in-out property <bool> replying: false;
+        in property <[PendingAttachmentData]> attachments;
         callback theme(string);
         callback motion(bool);
         theme(value) => { Appearance.theme = value; }
@@ -25,8 +27,60 @@ slint::slint! {
             mobile: true;
             text <=> root.draft;
             is-replying: root.replying;
+            pending-attachments: root.attachments;
             reply-to-sender: "Morgan";
             reply-to-preview: "A message between the droplets";
+        }
+    }
+}
+
+#[test]
+fn attachment_rows_fill_available_width_and_center_previews() {
+    slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
+        mock_time: true,
+        threading: false,
+        renderer_name: Some("software".into()),
+    }))).unwrap();
+    let window = LiquidHarness::new().unwrap();
+    window.show().unwrap();
+    let input = native_input(&window);
+    let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(32, 32);
+    pixels.make_mut_slice().fill(slint::Rgba8Pixel::new(241, 17, 139, 255));
+    let thumbnail = slint::Image::from_rgba8(pixels);
+    for width in [320.0, 768.0] {
+        window.window().set_size(slint::LogicalSize::new(width, 270.0));
+        for theme in ["light", "dark"] {
+            window.invoke_theme(theme.into());
+            for count in [1, 8] {
+                window.set_attachments(slint::ModelRc::new(slint::VecModel::from(
+                    (0..count).map(|i| PendingAttachmentData {
+                        id: format!("fixture-{i}").into(), filename: format!("photo-{i}.jpg").into(),
+                        size_display: "4 MB".into(), category: "image".into(),
+                        is_ready: true, has_thumbnail: true, thumbnail: thumbnail.clone(),
+                    }).collect::<Vec<_>>()
+                )));
+                advance(600);
+                let frame = window.window().take_snapshot().unwrap();
+                let (x, _, w, _) = rect(&window, "ComposerAttachmentStrip::attachment-scroll");
+                let action = |label| testing::ElementHandle::find_by_accessible_label(&window, label)
+                    .find(|e| e.size().width > 0.0).expect("visible composer action");
+                let left = action("Emoji & GIF picker");
+                let right = action("Attach file");
+                assert!(x <= left.absolute_position().x + 8.0, "attachment row left inset at {width}px/{count}");
+                assert!(x + w >= right.absolute_position().x + right.size().width - 8.0,
+                    "attachment row leaves reserved action space at {width}px/{count}");
+                let remove = action("Remove attachment");
+                let ys: Vec<_> = frame.as_bytes().chunks_exact(4).enumerate()
+                    .filter(|(_, p)| p[..3] == [241, 17, 139])
+                    .map(|(i, _)| (i / frame.width() as usize) as f32).collect();
+                assert!(!ys.is_empty(), "fixture preview rendered");
+                let center = (ys.iter().copied().fold(f32::INFINITY, f32::min)
+                    + ys.iter().copied().fold(f32::NEG_INFINITY, f32::max) + 1.0) / 2.0;
+                let card_center = remove.absolute_position().y + remove.size().height / 2.0;
+                assert!((center - card_center).abs() <= 1.0,
+                    "preview is not centered: {center} vs {card_center} at {width}px/{count}");
+                assert!(native_input(&window) == input, "attachment changes retain the native input");
+            }
         }
     }
 }

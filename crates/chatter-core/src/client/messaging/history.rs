@@ -69,6 +69,14 @@ impl ChatterClient {
         )
     }
 
+    pub fn get_newer_messages_local_asc(
+        &self, channel_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+        after: &crate::domain::ids::MessageId,
+    ) -> Result<Vec<crate::domain::message::Message>, crate::services::message::MessageError> {
+        self.messages().get_newer_messages_local_asc(channel_id,conversation_type,after,crate::config::MESSAGE_PAGE_SIZE as u32)
+    }
+
     /// See [`crate::services::message::MessageService::get_messages_local_reaching`].
     pub fn get_messages_local_reaching(
         &self,

@@ -258,6 +258,12 @@ class MainActivity : GameActivity() {
         cameraAnalysis = null
         cameraProvider = null
         cameraExecutor.shutdown()
+        synchronized(filePickerRequest) {
+            pickerDestroyed = true
+            val cancelledPick = filePickerRequest.getAndSet(0)
+            if (cancelledPick != 0L) nativeOnFilesPicked(cancelledPick, emptyArray())
+        }
+        pickerCopies.shutdown()
         torNetworkCallback?.let { callback ->
             val connectivity = getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
                 as ConnectivityManager
@@ -417,7 +423,7 @@ class MainActivity : GameActivity() {
     fun stopCallAudio() = callAudio.stop()
 
     @Suppress("unused")
-    fun applyAudioRoute(route: Int) = callAudio.apply(route)
+    fun applyCommunicationDevice(key: String) = callAudio.applyDevice(key)
 
     /** Implemented in Rust. Initializes libwebrtc with the app's JavaVM. */
     private external fun nativeInitWebrtc()
@@ -517,6 +523,7 @@ class MainActivity : GameActivity() {
     override fun onResume() {
         super.onResume()
         activityResumed = true
+        callAudio.retryMediaService()
         applySecureScreen()
         // A prelaunched Activity can be resumed without ever gaining focus.
         messagingBackground = !window.decorView.hasWindowFocus()
@@ -807,22 +814,45 @@ class MainActivity : GameActivity() {
     // --- File picker (Storage Access Framework) --------------------------------
     // Registered at construction (before onStart), per the ComponentActivity
     // contract that GameActivity inherits through AppCompatActivity.
+    private val pickerCopies = java.util.concurrent.Executors.newSingleThreadExecutor { task ->
+        Thread(task, "attachment-picker-copy").apply { isDaemon = true }
+    }
+    private val filePickerRequest = java.util.concurrent.atomic.AtomicLong(0)
+    @Volatile private var pickerDestroyed = false
     private val openDocuments =
         registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-            // SAF returns content:// URIs with transient read grants. Copy each
-            // into our cache dir so Rust gets plain filesystem paths it can read.
-            val paths = uris.mapNotNull { copyToCache(it) }
-            // A pick that cannot be read (provider error, a stale media entry
-            // whose file is gone) otherwise vanished without a word.
-            if (paths.size < uris.size) {
-                val failed = uris.size - paths.size
-                Toast.makeText(
-                    this,
-                    if (failed == 1) "Couldn't read that file" else "Couldn't read $failed files",
-                    Toast.LENGTH_SHORT,
-                ).show()
+            val request = filePickerRequest.get()
+            if (request == 0L || pickerDestroyed) return@registerForActivityResult
+            // Preserve selection order and one-copy-at-a-time IO off the main
+            // loop. No bitmap/full-file byte arrays are allocated here.
+            pickerCopies.execute {
+                val paths = uris.mapNotNull { uri ->
+                    if (pickerDestroyed || filePickerRequest.get() != request) null else copyToCache(uri)
+                }
+                val delivered = synchronized(filePickerRequest) {
+                    if (pickerDestroyed || filePickerRequest.get() != request) false else {
+                        filePickerRequest.set(0)
+                        nativeOnFilesPicked(request, paths.toTypedArray())
+                    }
+                }
+                if (!delivered) {
+                    // Receiver cancelled/replaced or Activity was destroyed.
+                    paths.forEach { path ->
+                        val file = File(path)
+                        file.delete()
+                        file.parentFile?.delete()
+                    }
+                } else if (paths.size < uris.size) {
+                    val failed = uris.size - paths.size
+                    runOnUiThread {
+                        if (!pickerDestroyed) Toast.makeText(
+                            this,
+                            if (failed == 1) "Couldn't read that file" else "Couldn't read $failed files",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }
             }
-            nativeOnFilesPicked(paths.toTypedArray())
         }
 
     @Volatile private var backupDestination: Uri? = null
@@ -881,9 +911,20 @@ class MainActivity : GameActivity() {
 
     /** Called from Rust (JNI) to open the document chooser. */
     @Suppress("unused")
-    fun launchFilePicker(mimeTypes: Array<String>) {
+    fun launchFilePicker(mimeTypes: Array<String>, request: Long) {
         val types = if (mimeTypes.isEmpty()) arrayOf("*/*") else mimeTypes
-        runOnUiThread { openDocuments.launch(types) }
+        runOnUiThread {
+            if (pickerDestroyed || !filePickerRequest.compareAndSet(0, request)) {
+                nativeOnFilesPicked(request, emptyArray())
+            } else {
+                try {
+                    openDocuments.launch(types)
+                } catch (_: Exception) {
+                    filePickerRequest.compareAndSet(request, 0)
+                    nativeOnFilesPicked(request, emptyArray())
+                }
+            }
+        }
     }
 
     private fun copyToCache(uri: Uri): String? {
@@ -924,13 +965,14 @@ class MainActivity : GameActivity() {
             ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
 
     /** Implemented in Rust (libchatter_ui.so). Delivers picked file paths. */
-    private external fun nativeOnFilesPicked(paths: Array<String>)
+    private external fun nativeOnFilesPicked(request: Long, paths: Array<String>): Boolean
 
     // --- Runtime permissions ---------------------------------------------------
     private val permissionRequest =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
             val granted = result.filterValues { it }.keys.toTypedArray()
             val denied = result.filterValues { !it }.keys.toTypedArray()
+            callAudio.retryMediaService()
             nativeOnPermissionsResult(granted, denied)
         }
 
@@ -1050,8 +1092,21 @@ class MainActivity : GameActivity() {
                     CameraSelector.DEFAULT_BACK_CAMERA
                 }
                 try {
-                    provider.unbindAll()
-                    provider.bindToLifecycle(this, selector, analysis)
+                    CallMediaService.withCamera(this) { owner ->
+                        if (owner == null || isDestroyed || requestGeneration != cameraRequestGeneration) {
+                            analysis.clearAnalyzer()
+                            if (cameraAnalysis === analysis) cameraAnalysis = null
+                            if (owner == null) Log.w(TAG, "Call camera service unavailable")
+                            return@withCamera
+                        }
+                        try {
+                            provider.unbindAll()
+                            provider.bindToLifecycle(owner, selector, analysis)
+                        } catch (error: Exception) {
+                            Log.e(TAG, "Call camera binding failed", error)
+                            analysis.clearAnalyzer()
+                        }
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "bindToLifecycle failed", e)
                 }

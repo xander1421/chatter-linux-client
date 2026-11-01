@@ -74,6 +74,100 @@ impl ChatterClient {
         self.attachments().decrypt_and_get_image_info(attachment_id)
     }
 
+    /// Prepare a downloaded still image entirely on the bounded worker.
+    pub async fn prepare_downloaded_image_preview(
+        self: &std::sync::Arc<Self>,
+        id: crate::domain::ids::AttachmentId,
+        session: crate::client::SessionGuard,
+    ) -> Result<
+        crate::services::attachment::ImagePreview,
+        crate::services::attachment::AttachmentError,
+    > {
+        let client = self.clone();
+        crate::services::attachment::run_attachment_work(move || {
+            client.attachments().prepare_image_preview_guarded(
+                &id,
+                std::sync::Arc::new(move || session.is_current()),
+            )
+        })
+        .await
+        .map_err(|_| {
+            crate::services::attachment::AttachmentError::InvalidAttachment(
+                "image preview worker failed".into(),
+            )
+        })?
+    }
+
+    /// Viewport hydration uses exactly the same bounded preparation as inbox
+    /// delivery. A durable thumbnail prevents repeat original decryption.
+    pub async fn prepare_visible_attachment_preview(
+        self: &std::sync::Arc<Self>,
+        id: crate::domain::ids::AttachmentId,
+        session: crate::client::SessionGuard,
+    ) -> Option<crate::services::attachment::ImagePreview> {
+        let client = self.clone();
+        let lookup_session = session.clone();
+        let derive_local = crate::services::attachment::run_attachment_work(move || {
+            if !lookup_session.is_current() {
+                return None;
+            }
+            let attachment = client.get_attachment_metadata(&id)?;
+            Some(attachment.metadata.is_image() && attachment.has_local_content())
+        })
+        .await
+        .ok()
+        .flatten()?;
+        if derive_local {
+            self.prepare_downloaded_image_preview(id, session)
+                .await
+                .ok()
+        } else {
+            self.ensure_attachment_preview(id, session).await
+        }
+    }
+
+    /// Fetch/authenticate the sidecar, then decode only small model pixels.
+    pub async fn ensure_attachment_preview(
+        self: &std::sync::Arc<Self>,
+        id: crate::domain::ids::AttachmentId,
+        session: crate::client::SessionGuard,
+    ) -> Option<crate::services::attachment::ImagePreview> {
+        let fetch_session = session.clone();
+        let bytes = self
+            .attachments()
+            .ensure_thumbnail_guarded(&id, std::sync::Arc::new(move || fetch_session.is_current()))
+            .await?;
+        let client = self.clone();
+        crate::services::attachment::run_attachment_work(move || {
+            if !session.is_current() {
+                return None;
+            }
+            let pixels =
+                crate::services::attachment::AttachmentService::decode_image_sidecar(&bytes)
+                    .ok()?;
+            let attachment = client.get_attachment_metadata(&id)?;
+            if !session.is_current() {
+                return None;
+            }
+            Some(crate::services::attachment::ImagePreview {
+                width: attachment
+                    .metadata
+                    .width
+                    .filter(|n| *n > 0)
+                    .unwrap_or(pixels.width()),
+                height: attachment
+                    .metadata
+                    .height
+                    .filter(|n| *n > 0)
+                    .unwrap_or(pixels.height()),
+                pixels,
+            })
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
     /// Decrypt a video attachment and extract a thumbnail frame.
     ///
     /// Blocking platform decode — call from a background thread. Used to derive a

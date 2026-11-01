@@ -1,6 +1,11 @@
 use super::*;
 
 impl MessageService {
+    pub(crate) fn receive_session(&self) -> Result<crate::state::receive_session::ReceiveSession, crate::error::StorageError> {
+        let state = self.receive_auth.get().ok_or_else(|| crate::error::StorageError::InvalidData("Receive auth state unavailable".into()))?;
+        crate::state::receive_session::ReceiveSession::capture(state)
+    }
+
     /// Keep only history rows that are not already visible in the conversation.
     /// A fetched page can overlap the current model after a live delivery.
     pub fn unseen_history_rows<T>(
@@ -73,6 +78,7 @@ impl MessageService {
                 std::collections::HashMap::new(),
             )),
             eviction_resends: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+            receive_auth: Arc::new(std::sync::OnceLock::new()),
             channel_state_sync: Arc::new(parking_lot::RwLock::new(None)),
         }
     }
@@ -220,6 +226,15 @@ impl MessageService {
             Some(before),
             page_size,
         )?;
+        Ok(self.resolve_stored_quotes(page))
+    }
+
+    /// Reload the discarded newer end of a retained history window.
+    pub fn get_newer_messages_local_asc(
+        &self, channel_id: &ChannelId, conversation_type: &ConversationType,
+        after: &crate::domain::ids::MessageId, page_size: u32,
+    ) -> Result<Vec<Message>, MessageError> {
+        let page = self.message_repo.list_newer_for_channel_asc(channel_id,conversation_type,after,page_size)?;
         Ok(self.resolve_stored_quotes(page))
     }
 
@@ -414,5 +429,35 @@ impl MessageService {
             .list_pinned_all(channel_id, conversation_type)
             .map(|messages| self.resolve_stored_quotes(messages))
             .map_err(MessageError::from)
+    }
+}
+
+/// Keep three pages around the viewport. Protect unread/search/selection rows;
+/// if their span exceeds the budget, correctness takes precedence until that
+/// interaction ends. The UI owns notifications, core owns retention policy.
+pub fn retained_history_range(count: usize, first: usize, last: usize, protected: &[usize]) -> std::ops::Range<usize> {
+    let budget = crate::config::MESSAGE_PAGE_SIZE as usize * 3;
+    if count <= budget { return 0..count; }
+    let mut lo = first.saturating_sub(8).min(count);
+    let mut hi = last.saturating_add(9).min(count).max(lo);
+    for &index in protected.iter().filter(|&&index| index < count) { lo=lo.min(index); hi=hi.max(index+1); }
+    let keep = budget.max(hi-lo).min(count);
+    let start = lo.saturating_sub((keep.saturating_sub(hi-lo))/2).min(count-keep);
+    start..start+keep
+}
+
+#[cfg(test)]
+mod retained_window_tests {
+    use super::retained_history_range;
+    #[test]
+    fn viewport_unread_and_selection_anchors_survive_window_pressure() {
+        assert_eq!(retained_history_range(90,0,20,&[]),0..90);
+        let window = retained_history_range(1000,400,420,&[]);
+        assert_eq!(window.len(),150);
+        assert!(window.start <= 392 && window.end >= 429);
+        let window = retained_history_range(1000,900,920,&[10,950]);
+        assert!(window.contains(&10) && window.contains(&950));
+        assert!(window.start <= 892 && window.end >= 929);
+        assert_eq!(retained_history_range(1000,990,999,&[]).end,1000);
     }
 }

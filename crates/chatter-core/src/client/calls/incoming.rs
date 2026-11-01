@@ -137,7 +137,9 @@ impl ChatterClient {
         replaces_active: bool,
         revision: u64,
     ) -> Result<AcceptedIncomingCall, ClientError> {
+        tracing::info!(target: "call_setup::accept_core_begin", "Call setup diagnostic");
         let _lifecycle = self.auth_lifecycle_lock.lock().await;
+        tracing::info!(target: "call_setup::accept_lifecycle_acquired", "Call setup diagnostic");
         if !self.call_session_is_current(revision) {
             return Err(ClientError::Inbox("Call session expired".into()));
         }
@@ -150,17 +152,19 @@ impl ChatterClient {
             .for_presentation_session(revision);
 
         let handle = CallHandle::from(call_id);
-        let snapshot = worker
-            .orch_accept_presented(
+        let snapshot = crate::calls::setup_diagnostics::observe(
+            crate::calls::setup_diagnostics::Phase::OrchestratorAccept,
+            worker.orch_accept_presented(
                 handle.clone(),
                 replaces_active,
                 self.call_signaling().group_call_invites.clone(),
-            )
-            .await
-            .map_err(|e| match e {
-                crate::error::CallError::NotInCall => ClientError::CallEnded,
-                other => ClientError::Inbox(other.to_string()),
-            })?;
+            ),
+        )
+        .await
+        .map_err(|e| match e {
+            crate::error::CallError::NotInCall => ClientError::CallEnded,
+            other => ClientError::Inbox(other.to_string()),
+        })?;
         // The call has left the ringing set, so its ring notification goes —
         // whether the answer came from the in-app modal or the notification's
         // own Accept, and whether or not the connect below succeeds.

@@ -208,7 +208,9 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                     }
                     let pinned_count = ui_ctx.pinned_total_count();
-                    super::edit_messages(&w, |model| {
+                    // Pinning does not change any continuation input.
+                    {
+                        let model = w.global::<crate::ChatPane>().get_messages();
                         for i in 0..model.row_count() {
                             let Some(mut m) = model.row_data(i) else {
                                 continue;
@@ -224,7 +226,7 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 model.set_row_data(i, m);
                             }
                         }
-                    });
+                    }
                     let thread_rows = w.global::<crate::ChatPane>().get_thread_replies();
                     for i in 0..thread_rows.row_count() {
                         if let Some(mut m) = thread_rows.row_data(i)

@@ -15,7 +15,8 @@ export component KeyFocus inherits Rectangle {
         height: 0px;
         enabled: root.enabled;
         key-pressed(event) => {
-            if event.text == Key.Space || event.text == Key.Return {
+            // A focused scope can keep receiving keys after it is disabled.
+            if root.enabled && (event.text == Key.Space || event.text == Key.Return) {
                 root.activate();
                 return accept;
             }

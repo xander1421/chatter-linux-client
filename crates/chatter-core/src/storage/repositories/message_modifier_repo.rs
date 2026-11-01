@@ -145,32 +145,57 @@ impl MessageModifierRepository {
         edit_ts: u64,
         server_ts: u64,
     ) -> Result<Option<Message>, StorageError> {
+        self.apply_received_edit_admitted(messages, author, conversation, target_sent_at, new_body, edit_ts, server_ts, None, None)
+    }
+
+    pub(crate) fn apply_received_edit_admitted(
+        &self,
+        messages: &MessageRepository,
+        author: &UserId,
+        conversation: Option<ChannelId>,
+        target_sent_at: u64,
+        new_body: &str,
+        edit_ts: u64,
+        server_ts: u64,
+        target_id: Option<&crate::domain::ids::MessageId>,
+        session: Option<&crate::state::receive_session::ReceiveSession>,
+    ) -> Result<Option<Message>, StorageError> {
+        let conn = self.db.connection()?;
+        let tx = conn.unchecked_transaction()?;
+        if let Some(session) = session { session.check_owner(&tx)?; }
+        let existing = if let Some(id) = target_id {
+            messages.get_with_connection(&tx, id)?
+        } else {
+            // Retain the generic API's sender/time resolution for other callers.
+            let id: Option<String> = tx.query_row("SELECT id FROM messages WHERE sender_id=?1 AND sent_at=?2",
+                params![author.to_string(), target_sent_at as i64], |r| r.get(0)).optional()?;
+            id.map(|id| id.parse().map_err(|_| StorageError::InvalidData("Invalid message ID".into())))
+                .transpose()?.map(|id| messages.get_with_connection(&tx, &id)).transpose()?.flatten()
+        };
+        let target_sent_at = existing.as_ref().map(|row| row.sent_at).unwrap_or(target_sent_at);
         let received = if server_ts > 0 { server_ts } else { edit_ts };
-        if received.abs_diff(target_sent_at) > EDIT_MAX_AGE_NS {
-            tracing::info!(%author, target_sent_at, edit_ts, server_ts, "Edit more than 48h from its message dropped");
-            return Ok(None);
-        }
-        let Some(mut message) = messages.get_by_sender_timestamp(author, target_sent_at)? else {
-            self.queue_edit(
-                author,
-                target_sent_at,
-                conversation,
-                new_body,
-                edit_ts,
-                crate::util::time::TimestampNanos::now().as_u64(),
-            )?;
+        if received.abs_diff(target_sent_at) > EDIT_MAX_AGE_NS { return Ok(None); }
+        let Some(mut message) = existing else {
+            Self::upsert_with_connection(&tx, author, target_sent_at, "edit", None, "", conversation,
+                Some(new_body), edit_ts, false, crate::util::time::TimestampNanos::now().as_u64())?;
+            if let Some(session) = session { session.check()?; }
+            tx.commit()?;
             return Ok(None);
         };
         let edited_at = edit_time(edit_ts);
-        if conversation.is_some_and(|c| c != message.conversation_id)
+        if message.sender_id != Some(*author)
+            || (session.is_some() && !matches!(message.conversation_type, ConversationType::Channel | ConversationType::AnonGroup))
+            || conversation.is_some_and(|c| c != message.conversation_id)
             || message.is_deleted
             || message.edited_at.is_some_and(|shown| shown >= edited_at)
-        {
-            return Ok(None);
-        }
+        { return Ok(None); }
         set_edited(&mut message, new_body, edited_at);
         message.updated_at = chrono::Utc::now();
-        messages.update(&message)?;
+        let content = serde_json::to_string(&message.content).map_err(|e| StorageError::InvalidData(e.to_string()))?;
+        tx.execute("UPDATE messages SET content_json=?1, is_edited=1, edited_at=?2, updated_at=?3, content_type=?5 WHERE id=?4",
+            params![content, edited_at.to_rfc3339(), message.updated_at.to_rfc3339(), message.id.to_string(), if matches!(message.content, MessageContent::Mixed(_)) { 6 } else { 0 }])?;
+        if let Some(session) = session { session.check()?; }
+        tx.commit()?;
         Ok(Some(message))
     }
 
@@ -342,7 +367,25 @@ impl MessageModifierRepository {
     ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
-        tx.execute(
+        Self::upsert_with_connection(&tx, author, target_sent_at, kind, actor, emoji, conversation, body, action_ts, remove, now)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn upsert_with_connection(
+        conn: &Connection,
+        author: &UserId,
+        target_sent_at: u64,
+        kind: &str,
+        actor: Option<&UserId>,
+        emoji: &str,
+        conversation: Option<ChannelId>,
+        body: Option<&str>,
+        action_ts: u64,
+        remove: bool,
+        now: u64,
+    ) -> Result<(), StorageError> {
+        conn.execute(
             "INSERT INTO pending_message_modifiers
                  (author_id, target_sent_at, kind, actor_id, emoji, conversation_id, body, action_ts, remove, received_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
@@ -364,8 +407,7 @@ impl MessageModifierRepository {
                 now as i64
             ],
         )?;
-        prune(&tx, now)?;
-        tx.commit()?;
+        prune(conn, now)?;
         Ok(())
     }
 }

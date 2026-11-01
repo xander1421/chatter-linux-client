@@ -18,6 +18,7 @@ async fn failed_sqlite_write_is_not_acknowledged_by_live_or_resync_ingestion() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .unwrap();
+    super::tests::bind_test_owner(&client);
     let inbound = ChannelInbound::new(
         client.messages().clone(),
         client.attachments().clone(),

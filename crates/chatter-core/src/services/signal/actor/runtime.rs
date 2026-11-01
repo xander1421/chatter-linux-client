@@ -12,6 +12,12 @@ impl SignalActorHandle {
             runtime.block_on(async {
                 while let Some(cmd) = receiver.recv().await {
                     match cmd {
+                        SignalCommand::Barrier { response } => { let _ = response.send(()); }
+                        #[cfg(test)]
+                        SignalCommand::TestPause { entered, resume } => {
+                            let _ = entered.send(());
+                            let _ = resume.await;
+                        }
                         SignalCommand::GetIdentityFingerprint { response } => {
                             use libsignal_protocol::IdentityKeyStore;
                             let res = store.get_identity_key_pair().await
@@ -262,6 +268,7 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::CompleteCallKeyExchange { our_ephemeral_private, peer_ephemeral_public, peer_id, call_id, we_are_caller, response } => {
+                            tracing::info!(target: "call_setup::dm_crypto_actor_begin", "Call setup diagnostic");
                             use libsignal_protocol::IdentityKeyStore;
                             use crate::crypto::{EphemeralCallKey, derive_call_key_ephemeral};
 
@@ -440,6 +447,25 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
+                        SignalCommand::SessionDevices { recipient, response } => {
+                            let res = store.key_store().list_sessions_for_user(&recipient)
+                                .map_err(ServiceError::Storage)
+                                .map(|rows| {
+                                    let prefix = format!("{recipient}:");
+                                    let mut devices: Vec<_> = rows.into_iter().filter_map(|(address, bytes)| {
+                                        let device = address.strip_prefix(&prefix)?.parse::<u32>().ok()?;
+                                        libsignal_protocol::DeviceId::try_from(device).ok()?;
+                                        let record = SessionRecord::deserialize(&bytes).ok()?;
+                                        if !record.has_usable_sender_chain(std::time::SystemTime::now(), libsignal_protocol::SessionUsabilityRequirements::empty()).unwrap_or(false) {
+                                            return None;
+                                        }
+                                        Some((device, record.remote_registration_id().ok().filter(|id| *id != 0)))
+                                    }).collect();
+                                    devices.sort_unstable_by_key(|(id, _)| *id);
+                                    devices
+                                });
+                            let _ = response.send(res);
+                        }
                         SignalCommand::HasSession { address, response } => {
                             let session_key = format!("{}:{}", address.name(), address.device_id());
                             let res = store.key_store().load_session(&session_key)

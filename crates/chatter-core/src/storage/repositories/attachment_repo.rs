@@ -33,7 +33,7 @@ pub struct AttachmentRepository {
 
 impl AttachmentRepository {
     /// Cache a derived preview without modifying status, paths or encryption material.
-    pub fn cache_video_thumbnail(
+    pub fn cache_authenticated_thumbnail(
         &self,
         source: &Attachment,
         bytes: &[u8],
@@ -42,6 +42,29 @@ impl AttachmentRepository {
         Ok(conn.execute(
             "UPDATE attachments SET thumbnail_bytes = ?1 WHERE id = ?2 AND encryption_key = ?3 AND encryption_iv = ?4",
             params![bytes, source.id.to_string(), source.encryption_key, source.encryption_iv],
+        )? == 1)
+    }
+
+    /// Store derived image dimensions with the preview, without reverting a
+    /// concurrent transfer status/path update or accepting a replaced key.
+    pub fn cache_image_preview(
+        &self,
+        source: &Attachment,
+        bytes: &[u8],
+        original: (u32, u32),
+        thumbnail: (u32, u32),
+    ) -> Result<bool, StorageError> {
+        let mut metadata = source.metadata.clone();
+        metadata.width = Some(original.0);
+        metadata.height = Some(original.1);
+        metadata.thumbnail_width = Some(thumbnail.0);
+        metadata.thumbnail_height = Some(thumbnail.1);
+        metadata.thumbnail = None; // pixels live only in the dedicated BLOB
+        let blob = db_serialize(&metadata)?;
+        let conn = self.db.connection()?;
+        Ok(conn.execute(
+            "UPDATE attachments SET thumbnail_bytes = ?1, metadata_blob = ?2 WHERE id = ?3 AND encryption_key = ?4 AND encryption_iv = ?5",
+            params![bytes, blob, source.id.to_string(), source.encryption_key, source.encryption_iv],
         )? == 1)
     }
 
@@ -252,8 +275,13 @@ impl AttachmentRepository {
     /// a secret one, and a secret receipt that loses the insert race still
     /// marks the winner's row. Returns whether this call inserted the row.
     pub fn insert_or_raise_secret(&self, attachment: &Attachment) -> Result<bool, StorageError> {
+        self.insert_or_raise_secret_admitted(attachment, None)
+    }
+
+    pub(crate) fn insert_or_raise_secret_admitted(&self, attachment: &Attachment, session: Option<&crate::state::receive_session::ReceiveSession>) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
+        if let Some(session) = session { session.check_owner(&tx)?; }
         let metadata_blob = db_serialize(&attachment.metadata)?;
         let secret = attachment.secret_chat;
         let inserted = tx.execute(
@@ -291,6 +319,7 @@ impl AttachmentRepository {
                 )));
             }
         }
+        if let Some(session) = session { session.check()?; }
         tx.commit()?;
         Ok(inserted)
     }

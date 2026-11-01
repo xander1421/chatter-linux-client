@@ -2,17 +2,28 @@
 //!
 //! Manages animated GIF playback for message thumbnails in the chat view.
 
+use i_slint_core::model::{ModelChangeListener, ModelChangeListenerContainer};
 use slint::ComponentHandle;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
-use std::time::Duration;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::pin::Pin;
+use std::sync::{Arc, LazyLock, RwLock};
+use std::time::{Duration, Instant};
 
 use slint::{Image, Model, Timer, TimerMode, Weak};
 
-use super::{INLINE_ANIMATION_BYTES, MAX_INLINE_GIF_BYTES, MAX_INLINE_GIFS, INLINE_FRAME_PX};
+use super::{INLINE_ANIMATION_BYTES, INLINE_FRAME_PX, MAX_INLINE_GIF_BYTES, MAX_INLINE_GIFS};
 use crate::MainWindow;
 
+// Workers consult this membership before decode and on every composited frame.
+static ADMITTED: LazyLock<RwLock<HashSet<String>>> = LazyLock::new(|| RwLock::new(HashSet::new()));
+type AttachmentTarget = (slint::ModelRc<crate::MessageAttachmentData>, usize);
 thread_local! {
+    static BINDING_EPOCH: Cell<u64> = const { Cell::new(0) };
+    static PLAYBACK_PHASES: Cell<u8> = const { Cell::new(0) };
+    static MODEL_WATCH: RefCell<Option<(slint::ModelRc<crate::MessageItemData>, Pin<Box<ModelChangeListenerContainer<GifModelWatch>>>)>> = const { RefCell::new(None) };
+    static ANIMATED: RefCell<Vec<AttachmentTarget>> = const { RefCell::new(Vec::new()) };
+    static TARGETS: RefCell<HashMap<String, Vec<AttachmentTarget>>> = RefCell::new(HashMap::new());
     /// Inline GIF animations for message thumbnails (attachment_id -> frames).
     pub(super) static INLINE_GIFS: RefCell<HashMap<String, InlineGifState>> = RefCell::new(HashMap::new());
     /// LRU order for inline GIFs (front = oldest, back = newest).
@@ -21,9 +32,77 @@ thread_local! {
     static INLINE_TIMER: RefCell<Option<Timer>> = const { RefCell::new(None) };
     /// Window weak reference for inline GIF updates.
     pub(super) static INLINE_WINDOW: RefCell<Option<Weak<MainWindow>>> = const { RefCell::new(None) };
+    static INLINE_CLIENT: RefCell<Option<std::sync::Weak<chatter_core::client::ChatterClient>>> = const { RefCell::new(None) };
+    static INLINE_REQUESTED: RefCell<HashMap<String, Instant>> = RefCell::new(HashMap::new());
     /// Last message-list offset seen by the GIF timer. A changed offset means
     /// the user is dragging or a fling is moving rows this frame.
     static INLINE_LAST_SCROLL_POSITION: Cell<Option<f32>> = const { Cell::new(None) };
+}
+
+// At most seven constant messages per conversation open, never per-frame
+// values or attachment identifiers. These distinguish admission, decoding and
+// model publication on release devices where verbose logging stays disabled.
+fn trace_playback_phase(phase: u8) {
+    PLAYBACK_PHASES.with(|phases| {
+        if phases.get() & phase != 0 {
+            return;
+        }
+        phases.set(phases.get() | phase);
+        match phase {
+            1 => tracing::info!(target: "gif_playback::index_empty", "index_empty"),
+            2 => tracing::info!(target: "gif_playback::index_ready", "index_ready"),
+            4 => tracing::info!(target: "gif_playback::decode_requested", "decode_requested"),
+            8 => tracing::info!(target: "gif_playback::animation_registered", "animation_registered"),
+            16 => tracing::info!(target: "gif_playback::scroll_held", "scroll_held"),
+            32 => tracing::info!(target: "gif_playback::frame_written", "frame_written"),
+            64 => tracing::info!(target: "gif_playback::preview_written", "preview_written"),
+            _ => {}
+        }
+    });
+}
+
+/// Message rows can replace their nested attachment model without changing
+/// the viewport or row count. Coalesce notifications after publication, even
+/// while the playback clock is idle. Frame writes only touch nested models.
+struct GifModelWatch {
+    epoch: u64,
+    queued: Cell<bool>,
+    window: Weak<MainWindow>,
+    client: std::sync::Weak<chatter_core::client::ChatterClient>,
+    owner: crate::bin_ui::features::history_owner::HistoryOwner,
+}
+impl GifModelWatch {
+    fn changed(self: Pin<&Self>) {
+        if self.queued.replace(true) {
+            return;
+        }
+        let window = self.window.clone();
+        let client = self.client.clone();
+        let owner = self.owner.clone();
+        let epoch = self.epoch;
+        Timer::single_shot(Duration::ZERO, move || {
+            if !owner.is_current() || BINDING_EPOCH.with(|current| current.get() != epoch) {
+                return;
+            }
+            if let Some(client) = client.upgrade() {
+                auto_register_gifs_from_messages(window, client);
+            }
+        });
+    }
+}
+impl ModelChangeListener for GifModelWatch {
+    fn row_changed(self: Pin<&Self>, _: usize) {
+        self.changed();
+    }
+    fn row_added(self: Pin<&Self>, _: usize, _: usize) {
+        self.changed();
+    }
+    fn row_removed(self: Pin<&Self>, _: usize, _: usize) {
+        self.changed();
+    }
+    fn reset(self: Pin<&Self>) {
+        self.changed();
+    }
 }
 
 /// State for an inline animated GIF in message list.
@@ -41,10 +120,13 @@ pub(crate) struct InlineGifState {
 
 impl InlineGifState {
     pub(super) fn bytes(&self) -> usize {
-        self.frames.iter().map(|frame| {
-            let size = frame.size();
-            size.width as usize * size.height as usize * 4
-        }).sum()
+        self.frames
+            .iter()
+            .map(|frame| {
+                let size = frame.size();
+                size.width as usize * size.height as usize * 4
+            })
+            .sum()
     }
     pub(crate) fn current_image(&self) -> Image {
         self.frames
@@ -53,24 +135,14 @@ impl InlineGifState {
             .unwrap_or_default()
     }
 
-    fn current_delay_ms(&self) -> u64 {
-        self.delays.get(self.current_frame).copied().unwrap_or(100)
-    }
-
     /// Advance time and return true if frame changed.
     pub(crate) fn tick(&mut self, elapsed_ms: u64) -> bool {
-        self.accumulated_ms += elapsed_ms;
-        let delay = self.current_delay_ms();
-
-        if self.accumulated_ms >= delay {
-            self.accumulated_ms -= delay;
-            if !self.frames.is_empty() {
-                self.current_frame = (self.current_frame + 1) % self.frames.len();
-            }
-            true
-        } else {
-            false
-        }
+        chatter_core::media::gif::animator::advance_playback(
+            &self.delays,
+            &mut self.current_frame,
+            &mut self.accumulated_ms,
+            elapsed_ms,
+        )
     }
 }
 
@@ -83,11 +155,18 @@ pub(super) fn insert_inline_gif(att_id: String, state: InlineGifState) {
     INLINE_LRU.with(|lru| {
         let mut lru = lru.borrow_mut();
         lru.retain(|id| id != &att_id);
-        INLINE_GIFS.with(|gifs| { gifs.borrow_mut().remove(&att_id); });
-        while lru.len() >= MAX_INLINE_GIFS || INLINE_GIFS.with(|gifs| {
-            gifs.borrow().values().map(InlineGifState::bytes).sum::<usize>()
-                > MAX_INLINE_GIF_BYTES.saturating_sub(new_bytes)
-        }) {
+        INLINE_GIFS.with(|gifs| {
+            gifs.borrow_mut().remove(&att_id);
+        });
+        while lru.len() >= MAX_INLINE_GIFS
+            || INLINE_GIFS.with(|gifs| {
+                gifs.borrow()
+                    .values()
+                    .map(InlineGifState::bytes)
+                    .sum::<usize>()
+                    > MAX_INLINE_GIF_BYTES.saturating_sub(new_bytes)
+            })
+        {
             if let Some(oldest) = lru.pop_front() {
                 INLINE_GIFS.with(|gifs| {
                     gifs.borrow_mut().remove(&oldest);
@@ -128,7 +207,7 @@ pub fn register_inline_gif_from_buffers(
     buffers: Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>>,
     delays: Vec<u64>,
 ) -> Option<Image> {
-    if buffers.len() <= 1 {
+    if buffers.is_empty() {
         return None;
     }
 
@@ -149,7 +228,7 @@ pub fn register_inline_gif_from_images(
     frames: Vec<Image>,
     delays: Vec<u64>,
 ) -> Option<Image> {
-    if frames.len() <= 1 {
+    if frames.is_empty() {
         return None;
     }
 
@@ -157,7 +236,7 @@ pub fn register_inline_gif_from_images(
     let frame_count = frames.len();
     let att_id_string = attachment_id.to_string();
 
-    // Check if this GIF already exists (progressive update) - preserve playback position
+    // Duplicate completions keep the current playback position.
     let (current_frame, accumulated_ms) = INLINE_GIFS.with(|gifs| {
         if let Some(existing) = gifs.borrow().get(&att_id_string) {
             // Preserve position, but clamp to new frame count
@@ -176,6 +255,7 @@ pub fn register_inline_gif_from_images(
     };
 
     insert_inline_gif(att_id_string, state);
+    trace_playback_phase(8);
 
     tracing::info!(
         "Registered inline GIF animation: id={}, frames={}",
@@ -199,7 +279,7 @@ pub fn unregister_inline_gif(attachment_id: &str) {
 
     // Stop timer if no more GIFs
     let should_stop = INLINE_GIFS.with(|gifs| gifs.borrow().is_empty());
-    if should_stop {
+    if should_stop && !super::picker::has_picker_gifs() {
         stop_inline_timer();
     }
 }
@@ -213,9 +293,14 @@ pub(super) fn start_inline_timer_if_needed() {
         }
 
         let timer = Timer::default();
+        let mut last_tick = Instant::now();
         // Run at ~30fps for smooth animation
         timer.start(TimerMode::Repeated, Duration::from_millis(33), move || {
-            tick_inline_gifs(33);
+            let now = Instant::now();
+            let elapsed = now.duration_since(last_tick).as_millis() as u64;
+            last_tick += Duration::from_millis(elapsed);
+            super::picker::tick_picker_gifs(elapsed);
+            tick_inline_gifs(elapsed);
         });
 
         *timer_cell.borrow_mut() = Some(timer);
@@ -246,6 +331,10 @@ fn tick_inline_gifs(elapsed_ms: u64) {
     else {
         return;
     };
+    if ANIMATED.with(|targets| targets.borrow().is_empty()) && !super::picker::has_picker_gifs() {
+        stop_inline_timer();
+        return;
+    }
     // Replacing a GIF's attachment row schedules another full render while
     // the message list is already re-laying out under the finger. Hold the
     // current frame whenever its offset moves; playback resumes at rest.
@@ -256,33 +345,45 @@ fn tick_inline_gifs(elapsed_ms: u64) {
         moved
     });
     if moved {
+        trace_playback_phase(16);
         return;
     }
-    let messages = w.global::<crate::ChatPane>().get_messages();
-    let Some(rows) = rows_to_animate(
-        w.global::<crate::ChatPane>()
-            .get_message_first_visible_row(),
-        w.global::<crate::ChatPane>().get_message_last_visible_row(),
-        messages.row_count(),
-    ) else {
-        return;
-    };
-
-    // Every visible occurrence of a registered GIF: (its attachments, index, row).
+    // The viewport observer indexes GIF attachment slots once per range
+    // change. A clock tick never clones message rows or scans text/photo rows.
+    let targets = ANIMATED.with(|targets| targets.borrow().clone());
     let mut shown = Vec::new();
-    for msg_idx in rows {
-        let Some(msg) = messages.row_data(msg_idx) else {
+    for (attachments, index) in targets {
+        let Some(att) = attachments.row_data(index) else {
             continue;
         };
-        for att_idx in 0..msg.attachments.row_count() {
-            if let Some(att) = msg.attachments.row_data(att_idx) {
-                if INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(att.id.as_str())) {
-                    shown.push((msg.attachments.clone(), att_idx, att));
-                }
+        if INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(att.id.as_str())) {
+            shown.push((attachments, index, att));
+            continue;
+        }
+        let request = INLINE_REQUESTED.with(|requests| {
+            let mut requests = requests.borrow_mut();
+            if requests
+                .get(att.id.as_str())
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(5))
+            {
+                return false;
+            }
+            requests.insert(att.id.to_string(), Instant::now());
+            true
+        });
+        if request {
+            if let Some(client) =
+                INLINE_CLIENT.with(|c| c.borrow().as_ref().and_then(|c| c.upgrade()))
+            {
+                register_gif_attachment(att.id.to_string(), client, w.as_weak());
             }
         }
     }
     if shown.is_empty() {
+        let has_targets = ANIMATED.with(|targets| !targets.borrow().is_empty());
+        if !has_targets && !super::picker::has_picker_gifs() {
+            stop_inline_timer();
+        }
         return;
     }
 
@@ -314,6 +415,7 @@ fn tick_inline_gifs(elapsed_ms: u64) {
         att.thumbnail = frame.clone();
         att.has_thumbnail = true;
         model.set_row_data(att_idx, att);
+        trace_playback_phase(32);
     }
 }
 
@@ -334,46 +436,70 @@ fn rows_to_animate(
     (first <= last).then_some(first..=last)
 }
 
+fn rows_to_admit(first: i32, last: i32, count: usize) -> Option<std::ops::RangeInclusive<usize>> {
+    if last < first || last < 0 || count == 0 {
+        return None;
+    }
+    let start = (first.max(0) as usize).saturating_sub(8);
+    let end = (last as usize).saturating_add(8).min(count - 1);
+    (start <= end).then_some(start..=end)
+}
+
 /// Show `image` as the thumbnail of attachment `attachment_id`, wherever it
 /// is in the message model. A one-off scan (a GIF's first frame); the
 /// animation itself goes through `tick_inline_gifs`, which looks only at the
 /// visible rows.
 fn set_attachment_thumbnail(window: &MainWindow, attachment_id: &str, image: Image) {
-    let messages = window.global::<crate::ChatPane>().get_messages();
-    for msg_idx in 0..messages.row_count() {
-        let Some(msg) = messages.row_data(msg_idx) else {
-            continue;
+    let _ = window;
+    TARGETS.with(|targets| {
+        let targets = targets.borrow();
+        let Some(slots) = targets.get(attachment_id) else {
+            return;
         };
-        for att_idx in 0..msg.attachments.row_count() {
-            let Some(mut att) = msg.attachments.row_data(att_idx) else {
+        for (model, index) in slots {
+            let Some(mut att) = model.row_data(*index) else {
                 continue;
             };
             if att.id.as_str() != attachment_id {
                 continue;
             }
-            if let Some(model) = msg
-                .attachments
-                .as_any()
-                .downcast_ref::<slint::VecModel<crate::MessageAttachmentData>>()
-            {
-                att.thumbnail = image;
-                att.has_thumbnail = true;
-                model.set_row_data(att_idx, att);
+            if att.width <= 0 || att.height <= 0 {
+                let size = image.size();
+                att.width = size.width as i32;
+                att.height = size.height as i32;
             }
-            return;
+            att.thumbnail = image.clone();
+            att.is_downloading = false;
+            att.progress = 1.0;
+            att.has_thumbnail = true;
+            model.set_row_data(*index, att);
+            trace_playback_phase(64);
         }
-    }
+    });
 }
 
 /// Clear all inline GIF animations.
 pub fn clear_inline_gifs() {
+    BINDING_EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
+    PLAYBACK_PHASES.with(|phases| phases.set(0));
+    MODEL_WATCH.with(|watch| watch.borrow_mut().take());
+    INLINE_LAST_SCROLL_POSITION.with(|last| last.set(None));
+    TARGETS.with(|targets| targets.borrow_mut().clear());
+    ANIMATED.with(|targets| targets.borrow_mut().clear());
+    if let Ok(mut admitted) = ADMITTED.write() {
+        admitted.clear();
+    }
+    INLINE_CLIENT.with(|c| c.borrow_mut().take());
+    INLINE_REQUESTED.with(|r| r.borrow_mut().clear());
     INLINE_GIFS.with(|gifs| {
         gifs.borrow_mut().clear();
     });
     INLINE_LRU.with(|lru| {
         lru.borrow_mut().clear();
     });
-    stop_inline_timer();
+    if !super::picker::has_picker_gifs() {
+        stop_inline_timer();
+    }
 }
 
 /// Auto-register all GIF attachments from current messages for animation.
@@ -390,34 +516,114 @@ pub fn auto_register_gifs_from_messages(
         return;
     };
 
-    let messages = w.global::<crate::ChatPane>().get_messages();
+    INLINE_CLIENT.with(|c| *c.borrow_mut() = Some(Arc::downgrade(&ui_ctx)));
+    INLINE_WINDOW.with(|c| *c.borrow_mut() = Some(window_weak.clone()));
+    let pane = w.global::<crate::ChatPane>();
+    let messages = pane.get_messages();
+    MODEL_WATCH.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if let Some((model, watch)) = slot.as_ref() {
+            if *model == messages && watch.owner.is_current() {
+                watch.queued.set(false);
+                return;
+            }
+        }
+        let watch = Box::pin(ModelChangeListenerContainer::new(GifModelWatch {
+            epoch: BINDING_EPOCH.with(Cell::get),
+            queued: Cell::new(false),
+            window: window_weak.clone(),
+            client: Arc::downgrade(&ui_ctx),
+            owner: crate::bin_ui::features::history_owner::HistoryOwner::capture(
+                &ui_ctx,
+                ui_ctx.active_conversation(),
+            ),
+        }));
+        messages
+            .model_tracker()
+            .attach_peer(watch.as_ref().model_peer());
+        *slot = Some((messages.clone(), watch));
+    });
+    let rows = rows_to_admit(
+        pane.get_message_first_visible_row(),
+        pane.get_message_last_visible_row(),
+        messages.row_count(),
+    );
+    let animate = rows_to_animate(
+        pane.get_message_first_visible_row(),
+        pane.get_message_last_visible_row(),
+        messages.row_count(),
+    );
+    let mut animated = Vec::new();
+    let mut targets: HashMap<String, Vec<AttachmentTarget>> = HashMap::new();
+    let mut collect = |msg: crate::MessageItemData, animate: bool, admit_new: bool| {
+        for index in 0..msg.attachments.row_count() {
+            let Some(att) = msg.attachments.row_data(index) else {
+                continue;
+            };
+            if (att.mime_type == "image/gif" || att.filename.to_lowercase().ends_with(".gif"))
+                && (att.album_count < 2 || att.album_index < 10)
+                && (admit_new
+                    || INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(att.id.as_str())))
+            {
+                if animate {
+                    animated.push((msg.attachments.clone(), index));
+                }
+                targets
+                    .entry(att.id.to_string())
+                    .or_default()
+                    .push((msg.attachments.clone(), index));
+            }
+        }
+    };
+    if let Some(rows) = rows {
+        for index in rows {
+            if let Some(msg) = messages.row_data(index) {
+                collect(
+                    msg,
+                    animate.as_ref().is_some_and(|rows| rows.contains(&index)),
+                    true,
+                );
+            }
+        }
+    }
+    // Thread slots can reuse an already registered animation. The panel has
+    // no viewport report here, so it must not admit unseen decode work.
+    if pane.get_thread_panel_visible() {
+        for msg in pane.get_thread_replies().iter() {
+            collect(msg, true, false);
+        }
+    }
+    let ids: Vec<_> = targets.keys().cloned().collect();
+    trace_playback_phase(if animated.is_empty() { 1 } else { 2 });
+    if let Ok(mut admitted) = ADMITTED.write() {
+        *admitted = ids.iter().cloned().collect();
+    }
+    TARGETS.with(|slot| *slot.borrow_mut() = targets);
+    ANIMATED.with(|slot| *slot.borrow_mut() = animated);
+    if !ids.is_empty() {
+        start_inline_timer_if_needed();
+    }
     let mut gif_ids = Vec::new();
-    for msg_idx in 0..messages.row_count() {
-        if let Some(msg) = messages.row_data(msg_idx) {
-            collect_unregistered_gif_ids(&msg, &mut gif_ids);
+    for id in ids {
+        if INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(&id)) {
+            continue;
+        }
+        let request = INLINE_REQUESTED.with(|requests| {
+            let mut requests = requests.borrow_mut();
+            if requests
+                .get(&id)
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(5))
+            {
+                return false;
+            }
+            requests.insert(id.clone(), Instant::now());
+            true
+        });
+        if request {
+            gif_ids.push(id);
         }
     }
     register_gif_ids(gif_ids, ui_ctx, window_weak);
-}
-
-/// Append the not-yet-registered GIF attachment ids in one message.
-fn collect_unregistered_gif_ids(msg: &crate::MessageItemData, out: &mut Vec<String>) {
-    use slint::Model;
-    for att_idx in 0..msg.attachments.row_count() {
-        if let Some(att) = msg.attachments.row_data(att_idx) {
-            let id_str = att.id.as_str();
-            // QUICK CHECK: already registered? skip the string conversions.
-            if INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(id_str)) {
-                continue;
-            }
-            let mime = att.mime_type.to_string();
-            let filename = att.filename.to_string();
-            // GIFs are real attachments (uploaded to our CDN).
-            if mime == "image/gif" || filename.to_lowercase().ends_with(".gif") {
-                out.push(id_str.to_string());
-            }
-        }
-    }
 }
 
 fn register_gif_ids(
@@ -434,203 +640,240 @@ fn register_gif_ids(
     }
 }
 
-/// Register GIFs from a single message — the hot receive/send path. Avoids
-/// rescanning the whole model on every added message (older messages' GIFs are
-/// already registered from their own receive/open).
-pub fn auto_register_gifs_in_message(
-    window_weak: Weak<MainWindow>,
-    ui_ctx: std::sync::Arc<chatter_core::client::ChatterClient>,
-    msg: &crate::MessageItemData,
-) {
-    let mut gif_ids = Vec::new();
-    collect_unregistered_gif_ids(msg, &mut gif_ids);
-    register_gif_ids(gif_ids, ui_ctx, window_weak);
-}
-
 /// Register a single GIF attachment for inline animation.
 ///
 /// This is called after sending a message with GIF attachments.
-/// Spawns an independent background thread to decrypt/decode, then registers on UI thread.
+/// Queues decryption/decode on the bounded GIF pool, then registers on the UI thread.
 ///
 /// This function returns immediately - all work happens in background.
-/// Safe to call from any context (including nested runtimes).
+/// Call on the UI thread; this does not enter or block an async runtime.
 pub fn register_gif_attachment(
     attachment_id: String,
     ui_ctx: std::sync::Arc<chatter_core::client::ChatterClient>,
     window_weak: slint::Weak<crate::MainWindow>,
 ) {
+    let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(
+        &ui_ctx,
+        ui_ctx.active_conversation(),
+    );
+    register_gif_attachment_guarded(attachment_id, ui_ctx, window_weak, owner);
+}
+
+pub(crate) fn register_gif_attachment_guarded(
+    attachment_id: String,
+    ui_ctx: std::sync::Arc<chatter_core::client::ChatterClient>,
+    window_weak: slint::Weak<crate::MainWindow>,
+    owner: crate::bin_ui::features::history_owner::HistoryOwner,
+) {
+    INLINE_CLIENT.with(|c| *c.borrow_mut() = Some(std::sync::Arc::downgrade(&ui_ctx)));
+    start_inline_timer_if_needed();
     // Optimization: Check if already registered (O(1) in UI thread)
     let already_registered = INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(&attachment_id));
     if already_registered {
         return;
     }
 
-    // Spawn independent thread to avoid runtime context issues
-    std::thread::spawn(move || {
-        use chatter_core::domain::attachment::ContentLocation;
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+    let visible = ADMITTED
+        .read()
+        .is_ok_and(|ids| ids.contains(&attachment_id));
+    if !visible {
+        return;
+    }
+    trace_playback_phase(4);
+    chatter_core::media::gif::workers::submit(
+        format!("inline:{attachment_id}:{generation}"),
+        visible,
+        move || {
+            if !owner.is_current()
+                || !ADMITTED
+                    .read()
+                    .is_ok_and(|ids| ids.contains(&attachment_id))
+                || generation != crate::bin_ui::decode_cache::thumbnail_generation()
+            {
+                return;
+            }
+            use chatter_core::domain::attachment::ContentLocation;
 
-        // Decoded on an earlier open: no decrypt, no decode.
-        if let Some(cached) = crate::bin_ui::decode_cache::gif(&attachment_id) {
-            let _ = slint::invoke_from_event_loop(move || {
-                let first = register_inline_gif_from_buffers(
-                    &attachment_id,
-                    cached.frames.to_vec(),
-                    cached.delays.to_vec(),
-                );
-                if let (Some(first), Some(w)) = (first, window_weak.upgrade()) {
-                    set_attachment_thumbnail(&w, &attachment_id, first);
+            // Decoded on an earlier open: no decrypt, no decode.
+            if let Some(cached) = crate::bin_ui::decode_cache::gif(&attachment_id) {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if !owner.is_current()
+                        || !ADMITTED
+                            .read()
+                            .is_ok_and(|ids| ids.contains(&attachment_id))
+                        || generation != crate::bin_ui::decode_cache::thumbnail_generation()
+                    {
+                        return;
+                    }
+                    let first = register_inline_gif_from_buffers(
+                        &attachment_id,
+                        cached.frames.to_vec(),
+                        cached.delays.to_vec(),
+                    );
+                    if let (Some(first), Some(w)) = (first, window_weak.upgrade()) {
+                        set_attachment_thumbnail(&w, &attachment_id, first);
+                    }
+                });
+                return;
+            }
+
+            // Parse attachment ID
+            let att_id: chatter_core::domain::ids::AttachmentId = match attachment_id.parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    tracing::debug!(
+                        "Invalid attachment ID for GIF registration: {}",
+                        attachment_id
+                    );
+                    return;
                 }
-            });
-            return;
-        }
+            };
 
-        // Parse attachment ID
-        let att_id: chatter_core::domain::ids::AttachmentId = match attachment_id.parse() {
-            Ok(id) => id,
-            Err(_) => {
-                tracing::debug!(
-                    "Invalid attachment ID for GIF registration: {}",
-                    attachment_id
-                );
+            // Check if attachment has content on filesystem
+            let attachment = match ui_ctx.get_attachment_metadata(&att_id) {
+                Some(att) if att.content_location == ContentLocation::OnFilesystem => att,
+                _ => {
+                    tracing::debug!("GIF {} not ready on filesystem yet", attachment_id);
+                    return;
+                }
+            };
+
+            // Check if it's a GIF
+            if attachment.metadata.mime_type != "image/gif" {
                 return;
             }
-        };
 
-        // Check if attachment has content on filesystem
-        let attachment = match ui_ctx.get_attachment(&att_id) {
-            Some(att) if att.content_location == ContentLocation::OnFilesystem => att,
-            _ => {
-                tracing::debug!("GIF {} not ready on filesystem yet", attachment_id);
+            // Full HMAC authentication precedes all decoding. Pull bounded plaintext
+            // ranges; never retain or clone the complete decrypted original.
+            let range = match ui_ctx.open_attachment_range(&att_id) {
+                Ok(range) => std::sync::Arc::new(range),
+                Err(_) => return,
+            };
+            if !owner.is_current() {
                 return;
             }
-        };
-
-        // Check if it's a GIF
-        if attachment.metadata.mime_type != "image/gif" {
-            return;
-        }
-
-        // Decrypt to memory (uses streaming for large files)
-        let data = match ui_ctx.decrypt_attachment_auto(&att_id) {
-            Ok(buffer) => buffer.as_slice().to_vec(),
-            Err(e) => {
-                tracing::debug!("Could not decrypt GIF {}: {}", attachment_id, e);
-                return;
-            }
-        };
-
-        // Decode first frame immediately for instant display
-        use chatter_core::media::gif::decode_first_frame_only;
-
-        let first_frame = match decode_first_frame_only(&data) {
-            Ok(Some(f)) => f,
-            Ok(None) => return, // Not a GIF or empty
-            Err(e) => {
-                tracing::debug!("Failed to decode GIF first frame {}: {}", attachment_id, e);
-                return;
-            }
-        };
-
-        tracing::debug!("Decoded first frame of GIF {} immediately", attachment_id);
-
-        // Register first frame on UI thread immediately (for instant display)
-        let att_id_for_ui = attachment_id.clone();
-        let window_weak_clone = window_weak.clone();
-        let (first_rgba, first_width, first_height) = super::fit_frame(
-            first_frame.data, first_frame.width, first_frame.height, INLINE_FRAME_PX, INLINE_FRAME_PX,
-        );
-
-        let _ = slint::invoke_from_event_loop(move || {
-            // Show first frame immediately
-            let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(
-                &first_rgba,
-                first_width,
-                first_height,
+            use image::AnimationDecoder;
+            let reader = std::io::BufReader::new(
+                chatter_core::services::attachment::CbcRangeReader::new(range),
             );
+            let decoder = match chatter_core::media::gif::bounded_gif_decoder(reader) {
+                Ok(decoder) => decoder,
+                Err(_) => return,
+            };
+            let frames_iter = decoder.into_frames();
+            // Keep decoding bounded in memory until the retained set is final.
+            // Uploaded batches cannot be thinned after a later frame raises the stride.
+            let mut selected = chatter_core::media::gif::DecimatedGif::default();
+            const MAX_FRAMES: usize = 100;
 
-            if let Some(w) = window_weak_clone.upgrade() {
-                set_attachment_thumbnail(&w, &att_id_for_ui, first_image);
-            }
-            tracing::info!("Displayed sent GIF first frame: {}", att_id_for_ui);
-        });
+            for (_idx, frame_result) in frames_iter.enumerate() {
+                if !owner.is_current()
+                    || !ADMITTED
+                        .read()
+                        .is_ok_and(|ids| ids.contains(&attachment_id))
+                    || generation != crate::bin_ui::decode_cache::thumbnail_generation()
+                {
+                    return;
+                }
+                let frame = match frame_result {
+                    Ok(f) => f,
+                    Err(e) => {
+                        tracing::warn!("GIF frame {} error for {}: {}", _idx, attachment_id, e);
+                        continue;
+                    }
+                };
 
-        // Now decode remaining frames progressively and start animation
-        use image::AnimationDecoder;
-        use image::codecs::gif::GifDecoder;
-        use std::io::Cursor;
+                let delay = frame.delay();
+                let (numer, denom) = delay.numer_denom_ms();
+                let delay_ms = if denom == 0 {
+                    100
+                } else {
+                    (numer as u64) / (denom as u64)
+                };
+                let delay_ms = chatter_core::media::gif::animator::normalize_delay_ms(delay_ms);
 
-        let cursor = Cursor::new(&data);
-        let decoder = match GifDecoder::new(cursor) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::warn!("Failed to create GIF decoder for {}: {}", attachment_id, e);
-                return;
-            }
-        };
+                let buffer = frame.into_buffer();
+                let (width, height) = buffer.dimensions();
+                let (raw_data, width, height) = super::fit_frame(
+                    buffer.into_raw(),
+                    width,
+                    height,
+                    INLINE_FRAME_PX,
+                    INLINE_FRAME_PX,
+                );
 
-        let frames_iter = decoder.into_frames();
-        // Keep decoding bounded in memory until the retained set is final.
-        // Uploaded batches cannot be thinned after a later frame raises the stride.
-        let mut selected = chatter_core::media::gif::DecimatedGif::default();
-        const MAX_FRAMES: usize = 100;
-
-        for (_idx, frame_result) in frames_iter.enumerate() {
-            let frame = match frame_result {
-                Ok(f) => f,
-                Err(e) => {
-                    tracing::warn!("GIF frame {} error for {}: {}", _idx, attachment_id, e);
+                if raw_data.is_empty() {
                     continue;
                 }
-            };
-
-            let delay = frame.delay();
-            let (numer, denom) = delay.numer_denom_ms();
-            let delay_ms = if denom == 0 {
-                100
-            } else {
-                (numer as u64) / (denom as u64)
-            };
-            let delay_ms = delay_ms.max(20);
-
-            let buffer = frame.into_buffer();
-            let (width, height) = buffer.dimensions();
-            let (raw_data, width, height) = super::fit_frame(
-                buffer.into_raw(), width, height, INLINE_FRAME_PX, INLINE_FRAME_PX,
-            );
-
-            if raw_data.is_empty() {
-                continue;
-            }
-            let bytes = raw_data.len();
-            let pixel_buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                &raw_data, width, height,
-            );
-            selected = chatter_core::media::gif::decimate_gif_frame(
-                selected, pixel_buffer, delay_ms, bytes, MAX_FRAMES, INLINE_ANIMATION_BYTES,
-            );
-        }
-
-        if selected.frames.len() > 1 {
-            let (all_buffers, all_delays): (Vec<_>, Vec<_>) = selected.frames.into_iter()
-                .map(|sample| (sample.frame, sample.delay_ms)).unzip();
-            crate::bin_ui::decode_cache::put_gif(
-                &attachment_id,
-                all_buffers.clone(),
-                all_delays.clone(),
-            );
-            let att_id_full = attachment_id.clone();
-            let weak = window_weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(first_image) = register_inline_gif_from_buffers(
-                    &att_id_full, all_buffers, all_delays,
-                ) {
-                    if let Some(w) = weak.upgrade() {
-                        set_attachment_thumbnail(&w, &att_id_full, first_image);
-                    }
+                let bytes = raw_data.len();
+                let pixel_buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                    &raw_data, width, height,
+                );
+                if _idx == 0 {
+                    let first = pixel_buffer.clone();
+                    let weak = window_weak.clone();
+                    let id = attachment_id.clone();
+                    let first_owner = owner.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if !first_owner.is_current()
+                            || !ADMITTED.read().is_ok_and(|ids| ids.contains(&id))
+                            || generation != crate::bin_ui::decode_cache::thumbnail_generation()
+                        {
+                            return;
+                        }
+                        if let Some(w) = weak.upgrade() {
+                            set_attachment_thumbnail(&w, &id, Image::from_rgba8(first));
+                        }
+                    });
                 }
-            });
-        }
-    });
+                selected = chatter_core::media::gif::decimate_gif_frame(
+                    selected,
+                    pixel_buffer,
+                    delay_ms,
+                    bytes,
+                    MAX_FRAMES,
+                    INLINE_ANIMATION_BYTES,
+                );
+            }
+
+            if selected.frames.len() > 1 {
+                let (all_buffers, all_delays): (Vec<_>, Vec<_>) = selected
+                    .frames
+                    .into_iter()
+                    .map(|sample| (sample.frame, sample.delay_ms))
+                    .unzip();
+                if !owner.is_current() {
+                    return;
+                }
+                crate::bin_ui::decode_cache::put_gif_guarded(
+                    &attachment_id,
+                    generation,
+                    all_buffers.clone(),
+                    all_delays.clone(),
+                );
+                let att_id_full = attachment_id.clone();
+                let weak = window_weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if !owner.is_current()
+                        || !ADMITTED
+                            .read()
+                            .is_ok_and(|ids| ids.contains(&attachment_id))
+                        || generation != crate::bin_ui::decode_cache::thumbnail_generation()
+                    {
+                        return;
+                    }
+                    if let Some(first_image) =
+                        register_inline_gif_from_buffers(&att_id_full, all_buffers, all_delays)
+                    {
+                        if let Some(w) = weak.upgrade() {
+                            set_attachment_thumbnail(&w, &att_id_full, first_image);
+                        }
+                    }
+                });
+            }
+        },
+    );
 }
 
 // Note: legacy unit tests that constructed an `AttachmentService` directly were
@@ -643,6 +886,105 @@ pub fn register_gif_attachment(
 #[cfg(test)]
 mod tests {
     use super::rows_to_animate;
+
+    #[test]
+    fn published_models_rebind_and_restart_idle_gif_playback() {
+        use super::*;
+        use slint::{ModelRc, VecModel};
+        i_slint_backend_testing::init_no_event_loop();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        let client = chatter_core::client::ChatterClient::builder()
+            .data_dir(dir.path().to_string_lossy().to_string())
+            .build()
+            .unwrap();
+        let window = MainWindow::new().unwrap();
+        let pane = window.global::<crate::ChatPane>();
+        let frame = |color| {
+            Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
+                &[color, 0, 0, 255],
+                1,
+                1,
+            ))
+        };
+        let first = frame(10);
+        let second = frame(200);
+        let row = || {
+            let attachments = ModelRc::new(VecModel::from(vec![crate::MessageAttachmentData {
+                id: "playback-fixture".into(),
+                mime_type: "image/gif".into(),
+                thumbnail: first.clone(),
+                has_thumbnail: true,
+                ..Default::default()
+            }]));
+            crate::MessageItemData {
+                attachments,
+                ..Default::default()
+            }
+        };
+        clear_inline_gifs();
+        init_inline_animations(window.as_weak());
+        insert_inline_gif(
+            "playback-fixture".into(),
+            InlineGifState {
+                frames: vec![first.clone(), second.clone()],
+                delays: vec![80, 80],
+                current_frame: 0,
+                accumulated_ms: 0,
+            },
+        );
+        let messages = std::rc::Rc::new(VecModel::from(vec![row()]));
+        pane.set_messages(messages.clone().into());
+        // Opening before layout must not admit whole history or leave a clock.
+        pane.set_message_last_visible_row(-1);
+        auto_register_gifs_from_messages(window.as_weak(), client.clone());
+        tick_inline_gifs(80);
+        assert!(INLINE_TIMER.with(|t| t.borrow().is_none()));
+        pane.set_message_first_visible_row(0);
+        pane.set_message_last_visible_row(0);
+        auto_register_gifs_from_messages(window.as_weak(), client.clone());
+        tick_inline_gifs(80);
+        let detached = messages.row_data(0).unwrap().attachments;
+        assert_eq!(detached.row_data(0).unwrap().thumbnail, second);
+        // Same count and viewport, new nested model: notifications rebind it.
+        messages.set_row_data(0, row());
+        slint::platform::update_timers_and_animations();
+        tick_inline_gifs(80);
+        let installed = messages.row_data(0).unwrap().attachments;
+        assert_eq!(installed.row_data(0).unwrap().thumbnail, first);
+        assert_eq!(detached.row_data(0).unwrap().thumbnail, second);
+        tick_inline_gifs(80);
+        assert_eq!(installed.row_data(0).unwrap().thumbnail, second);
+        assert_eq!(detached.row_data(0).unwrap().thumbnail, second);
+        // Empty visible model stops the clock; publication wakes it again.
+        messages.set_vec(Vec::new());
+        slint::platform::update_timers_and_animations();
+        tick_inline_gifs(80);
+        assert!(INLINE_TIMER.with(|t| t.borrow().is_none()));
+        messages.push(row());
+        slint::platform::update_timers_and_animations();
+        assert!(INLINE_TIMER.with(|t| t.borrow().is_some()));
+        assert_eq!(ANIMATED.with(|t| t.borrow().len()), 1);
+        // A hidden thread cannot retain playback slots.
+        pane.set_thread_replies(ModelRc::new(VecModel::from(vec![row()])));
+        pane.set_thread_panel_visible(false);
+        auto_register_gifs_from_messages(window.as_weak(), client);
+        assert_eq!(ANIMATED.with(|t| t.borrow().len()), 1);
+        // A queued model refresh cannot resurrect a cleared playback session.
+        messages.set_row_data(0, row());
+        clear_inline_gifs();
+        slint::platform::update_timers_and_animations();
+        assert!(ANIMATED.with(|t| t.borrow().is_empty()));
+        assert!(INLINE_TIMER.with(|t| t.borrow().is_none()));
+    }
+
+    #[test]
+    fn admission_stays_in_viewport_cushion() {
+        assert_eq!(super::rows_to_admit(100, 102, 10000), Some(92..=110));
+        assert_eq!(super::rows_to_admit(0, -1, 10000), None);
+        assert_eq!(super::rows_to_admit(20, 10, 10000), None);
+    }
 
     #[test]
     fn no_list_animates_nothing() {

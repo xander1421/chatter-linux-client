@@ -68,6 +68,26 @@ impl MessageService {
         }
     }
 
+    pub(crate) fn record_reaction_received(
+        &self,
+        session: &crate::state::receive_session::ReceiveSession,
+        scope: &crate::domain::reaction::ReactionScope,
+        target_sender: &UserId,
+        target_sent_at_ns: u64,
+        reactor: &UserId,
+        emoji: &str,
+        remove: bool,
+    ) -> Result<bool, MessageError> {
+        let current = self.current_user_id()?;
+        let action_ts = self.message_repo.allocate_reaction_clock_admitted(reactor, Some(session))?;
+        let result = if remove {
+            self.message_repo.remove_reaction_outcome_at_admitted(scope, target_sender, target_sent_at_ns, reactor, &current, emoji, action_ts, Some(session))
+        } else {
+            self.message_repo.add_reaction_outcome_at_admitted(scope, target_sender, target_sent_at_ns, reactor, &current, emoji, action_ts, Some(session))
+        }?;
+        Ok(result.changed)
+    }
+
     /// Outgoing completion requires action evidence, not a visible INSERT/DELETE.
     pub(crate) fn record_reaction_completion_at(
         &self,

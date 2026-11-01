@@ -11,11 +11,11 @@
 use std::sync::Arc;
 
 use crate::ai_policy::channel_ai::{self, SiloPreference};
-use crate::cloud_ai::{CloudMode, CloudProviderKind, CloudSettings};
-use crate::error::ServiceError;
-use crate::local_ai::backend::{
+use crate::ai_protocol::{
     AvailableModel, BackendError, ChatMessage, ChatResponse, GenerateParams, LocalAIBackend,
 };
+use crate::cloud_ai::{CloudMode, CloudProviderKind, CloudSettings};
+use crate::error::ServiceError;
 use crate::local_ai::embeddings::EmbeddingGenerator;
 use crate::local_ai::model_manager::ModelManager;
 use crate::local_ai::ollama::OllamaBackend;
@@ -127,7 +127,7 @@ impl HttpLocalAIService {
     /// Simple prompt → response helper (wraps as a user message).
     pub async fn prompt(&self, text: &str) -> Result<String, HttpLocalAIError> {
         let messages = vec![ChatMessage {
-            role: crate::local_ai::backend::ChatRole::User,
+            role: crate::ai_protocol::ChatRole::User,
             content: text.to_string(),
         }];
         let response = self.chat(&messages, None).await?;
