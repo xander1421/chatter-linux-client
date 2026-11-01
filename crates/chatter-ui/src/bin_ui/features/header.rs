@@ -182,10 +182,24 @@ fn maintain_history_window(
     if let Some(index) = model.row_of(pane.get_thread_root_message_id().as_str()) {
         protected.push(index);
     }
+    // At the bottom — including the transient top layout while a conversation
+    // is still opening on its newest message — the retained window must stay
+    // anchored to the tail. Feeding the live (top) visible rows here would
+    // evict the newest messages, set has_newer, drop is-at-bottom, and open the
+    // chat scrolled up with a visible jump down to the tail. Only a reader who
+    // has actually scrolled up (is-at-bottom false) trims the tail to free
+    // memory; protected rows are still honored either way.
+    let count = model.row_count();
+    let (first_eff, last_eff) = if pane.get_is_at_bottom() {
+        let tail = count.saturating_sub(1);
+        (tail, tail)
+    } else {
+        (first.max(0) as usize, last as usize)
+    };
     let range = chatter_core::services::message::retained_history_range(
-        model.row_count(),
-        first.max(0) as usize,
-        last as usize,
+        count,
+        first_eff,
+        last_eff,
         &protected,
     );
     if range.start == 0 && range.end == model.row_count() {
