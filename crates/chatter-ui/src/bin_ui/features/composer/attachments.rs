@@ -313,50 +313,93 @@ pub(crate) fn wire_attachment_clicked(
             }
             #[cfg(target_os = "android")]
             {
-                tokio::spawn(async move {
-                    // Telegram-style source chooser: gallery photo picker (no
-                    // permission), the SAF document picker, or the in-app camera.
-                    // Whatever the source, Kotlin hands back cache-dir paths
-                    // through the same callback the plain picker uses, so the
-                    // staging loop below is identical for all three.
-                    let selected_files =
-                        crate::platform::android::file_picker::pick_via_chooser().await;
-                    finish_picker(&weak, &chat_state, conversation, revision);
+                // Open the themed source sheet (Gallery / Camera / Video / File).
+                // The chosen tile fires `composer-attach-source`, which launches
+                // that source and runs the staging pipeline (wire_attach_source).
+                let _ = (&chat_state, &ui_ctx_attach, &revision, &picker_session, &weak);
+                w.global::<crate::ChatPane>()
+                    .set_composer_attach_sheet_visible(true);
+            }
+            // iOS has no picker yet: chatter-core's file_picker is desktop-only
+            // (rfd) and there's no UIDocumentPickerViewController bridge. Warn
+            // rather than no-op silently.
+            #[cfg(target_os = "ios")]
+            {
+                let _ = (&chat_state, &weak, &ui_ctx_attach);
+                tracing::warn!("File picker not yet implemented on iOS");
+                w.invoke_finish_attachment_picker(true);
+            }
+        });
+}
 
+/// Wire the attachment-source sheet (Android). A tile fires `composer-attach-source`
+/// with the chosen source (0 gallery, 1 file, 2 camera photo, 3 camera video);
+/// launch that source and stage whatever it returns through the same pipeline the
+/// plain picker uses. On desktop the sheet never opens, so this is a no-op.
+pub(crate) fn wire_attach_source(
+    window: &MainWindow,
+    ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
+) {
+    let weak_window = window.as_weak();
+    let ui_ctx_attach = ui_ctx.clone();
+    let chat_state = ui_ctx.clone();
+
+    window
+        .global::<crate::ChatPane>()
+        .on_composer_attach_source(move |source: i32| {
+            let _ = (&weak_window, &ui_ctx_attach, &chat_state, source);
+            #[cfg(target_os = "android")]
+            {
+                let weak = weak_window.clone();
+                let chat_state = chat_state.clone();
+                let ui_ctx_attach = ui_ctx_attach.clone();
+                let Some(w) = weak.upgrade() else { return };
+
+                let snapshot = chat_state.chat_snapshot();
+                let conversation = snapshot.active_conversation;
+                let revision = snapshot.attachment_revision;
+                let picker_session = chat_state.session_guard();
+                if matches!(conversation, ActiveConversation::None) {
+                    w.invoke_finish_attachment_picker(true);
+                    return;
+                }
+
+                tokio::spawn(async move {
+                    let selected_files =
+                        crate::platform::android::file_picker::pick_source(source).await;
+                    finish_picker(&weak, &chat_state, conversation, revision);
                     if selected_files.is_empty() {
-                        tracing::debug!("File picker cancelled or no files selected");
+                        tracing::debug!("Attachment source cancelled or produced nothing");
                         return;
                     }
-
                     tracing::info!("Selected {} file(s) for attachment", selected_files.len());
-
                     for file_path in selected_files {
-                        // The SAF copy sits in the purgeable cache dir and is ours:
-                        // move it where a restart finds it (core owns the dir).
-                        let source = file_path;
+                        // SAF/camera copies land in the purgeable cache dir and are
+                        // ours: move them where a restart finds them (core owns it).
+                        let origin = file_path;
                         if !picker_session.is_current() {
-                            let _ = tokio::fs::remove_file(&source).await;
-                            if let Some(parent) = source.parent() {
+                            let _ = tokio::fs::remove_file(&origin).await;
+                            if let Some(parent) = origin.parent() {
                                 let _ = tokio::fs::remove_dir(parent).await;
                             }
                             continue;
                         }
-                        let file_path =
-                            match ui_ctx_attach.stage_owned_file_async(source.clone()).await {
+                        let staged =
+                            match ui_ctx_attach.stage_owned_file_async(origin.clone()).await {
                                 Ok(path) => path,
                                 Err(error) => {
-                                    let _ = tokio::fs::remove_file(&source).await;
+                                    let _ = tokio::fs::remove_file(&origin).await;
                                     tracing::error!(%error, "Attachment staging failed");
                                     continue;
                                 }
                             };
-                        if file_path == source {
-                            let _ = tokio::fs::remove_file(&source).await;
+                        if staged == origin {
+                            let _ = tokio::fs::remove_file(&origin).await;
                             tracing::warn!("Could not encrypt selected attachment");
                             continue;
                         }
                         if let Err(e) = process_and_add_file(
-                            file_path.clone(),
+                            staged.clone(),
                             None,
                             &chat_state,
                             conversation,
@@ -368,26 +411,15 @@ pub(crate) fn wire_attachment_clicked(
                             ui_ctx_attach.release_staged_files(&[PendingAttachment::new(
                                 AttachmentId::new(),
                                 String::new(),
-                                file_path,
+                                staged,
                                 0,
                                 String::new(),
                             )]);
                             tracing::error!("{}", e);
                         }
                     }
-
-                    // One render for the whole selection (see desktop arm).
                     update_attachments_ui(&chat_state, &weak);
                 });
-            }
-            // iOS has no picker yet: chatter-core's file_picker is desktop-only
-            // (rfd) and there's no UIDocumentPickerViewController bridge. Warn
-            // rather than no-op silently.
-            #[cfg(target_os = "ios")]
-            {
-                let _ = (&chat_state, &weak, &ui_ctx_attach);
-                tracing::warn!("File picker not yet implemented on iOS");
-                w.invoke_finish_attachment_picker(true);
             }
         });
 }

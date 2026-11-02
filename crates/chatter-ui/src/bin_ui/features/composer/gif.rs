@@ -392,19 +392,35 @@ async fn fetch_full_gif_frames(
     generation: u64,
     session: chatter_core::client::SessionGuard,
 ) -> Option<RawGifFrames> {
-    // Bound fetched originals waiting for shared decode admission as well.
+    // Bound fetched originals waiting for shared decode admission. Several at
+    // once: each preview is a gRPC round-trip proxied to the GIF provider, so a
+    // single permit serialized all ~20 trending fetches end to end (fetch then
+    // decode then the next) — the "mega slow" load. With a pool of permits the
+    // fetches overlap and one slow URL no longer blocks the rest.
     static FETCH: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
-        std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(1)));
+        std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(6)));
     let current =
         move || session.is_current() && generation == crate::bin_ui::gif_state::picker_generation();
     let fetch = FETCH.clone().acquire_owned().await.ok()?;
     if !current() {
         return None;
     }
-    let bytes = match ui_ctx.fetch_gif_media(url).await {
-        Ok(b) => b,
-        Err(_) => {
+    // Time-box the fetch: without it a hung or dead preview URL holds its permit
+    // forever, and the picker reopened after a send stalled on "Loading" because
+    // a stranded fetch never released (OPEN-ITEMS: GIF picker stall after send).
+    let bytes = match tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        ui_ctx.fetch_gif_media(url),
+    )
+    .await
+    {
+        Ok(Ok(b)) => b,
+        Ok(Err(_)) => {
             tracing::warn!("GIF preview fetch failed");
+            return None;
+        }
+        Err(_) => {
+            tracing::warn!("GIF preview fetch timed out");
             return None;
         }
     };

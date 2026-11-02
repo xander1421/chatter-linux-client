@@ -1,0 +1,119 @@
+import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+
+// One attachment source. `source` is the index the Android launcher expects:
+// 0 = gallery (photo/video), 1 = file (SAF document), 2 = camera photo,
+// 3 = camera video. Matches MainActivity.launchAttachmentSource.
+component AttachTile inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <color> tint;
+    in property <bool> touch;
+    callback clicked();
+
+    horizontal-stretch: 1;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+
+    VerticalLayout {
+        spacing: Spacing.xs;
+        alignment: center;
+
+        HorizontalLayout {
+            alignment: center;
+            disc := Rectangle {
+                width: root.touch ? 60px : 52px;
+                height: self.width;
+                border-radius: self.width / 2;
+                background: root.tint.with-alpha(tile-touch.pressed ? 0.34 : 0.22);
+                animate background { duration: Materials.motion-quick; easing: Materials.glide; }
+                Image {
+                    source: root.icon;
+                    width: parent.width * 0.44;
+                    height: self.width;
+                    colorize: root.tint;
+                }
+            }
+        }
+        Text {
+            text: root.label;
+            color: Colors.text-secondary;
+            font-size: Typography.xs;
+            horizontal-alignment: center;
+        }
+    }
+
+    tile-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Telegram/iOS-style bottom sheet for picking an attachment source. The parent
+// positions it (docked to the bottom on a phone) and draws the backdrop; this
+// is just the card and its tiles.
+export component AttachSheet inherits Rectangle {
+    in property <bool> touch;
+    // Fires the Android source index (see AttachTile).
+    callback source(int);
+
+    background: Colors.surface;
+    border-top-left-radius: Spacing.radius-lg;
+    border-top-right-radius: Spacing.radius-lg;
+    border-width: 1px;
+    border-color: Colors.divider;
+    height: content.preferred-height;
+
+    content := VerticalLayout {
+        padding: Spacing.md;
+        padding-bottom: Spacing.lg;
+        spacing: Spacing.md;
+
+        // Grabber.
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 36px;
+                height: 4px;
+                border-radius: 2px;
+                background: Colors.text-secondary.with-alpha(0.35);
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Spacing.sm;
+            AttachTile {
+                touch: root.touch;
+                icon: Icons.image;
+                label: "Gallery";
+                tint: Colors.primary;
+                clicked => { root.source(0); }
+            }
+            AttachTile {
+                touch: root.touch;
+                icon: Icons.camera;
+                label: "Camera";
+                tint: #34c759;
+                clicked => { root.source(2); }
+            }
+            AttachTile {
+                touch: root.touch;
+                icon: Icons.video;
+                label: "Video";
+                tint: #ff9500;
+                clicked => { root.source(3); }
+            }
+            AttachTile {
+                touch: root.touch;
+                icon: Icons.file;
+                label: "File";
+                tint: #5ac8fa;
+                clicked => { root.source(1); }
+            }
+        }
+    }
+}

@@ -328,6 +328,9 @@ export global ModalHostState {
     callback friends-generate-code(bool);   // bool = private mode
     callback friends-generate-qr(bool);     // bool = private mode
     callback friends-copy-code();
+    // Hand the friend code to the OS share sheet (Android ACTION_SEND chooser);
+    // on desktop it falls back to copying, since there is no system share sheet.
+    callback friends-share-code();
     // Paste the system clipboard into the friend-code input. Slint's
     // built-in `Ctrl+V` reads via copypasta (winit), which uses a
     // different Wayland selection protocol than `wl-copy` / arboard's

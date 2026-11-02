@@ -49,21 +49,17 @@ pub async fn pick_files(mime_types: &[&str]) -> Vec<PathBuf> {
     rx.await.unwrap_or_default()
 }
 
-/// Open the Telegram-style attachment source chooser (gallery photo picker /
-/// document picker / in-app camera) and await the files the chosen source
-/// produced.
-///
-/// Every source delivers through the same `nativeOnFilesPicked` callback the
-/// plain document picker uses, so the result funnels into one staging pipeline
-/// and the caller treats a chooser pick exactly like a file pick. Empty on
-/// cancel (of either the chooser or the chosen source).
-pub async fn pick_via_chooser() -> Vec<PathBuf> {
+/// Launch one attachment source directly (the themed Slint sheet already chose
+/// it): 0 gallery (photo/video), 1 file (SAF), 2 camera photo, 3 camera video.
+/// Results arrive through the same `nativeOnFilesPicked` callback. Empty on
+/// cancel or error.
+pub async fn pick_source(source: i32) -> Vec<PathBuf> {
     let (tx, rx) = oneshot::channel();
     let request = NEXT_REQUEST.fetch_add(1, Ordering::Relaxed);
     *PENDING.lock().unwrap() = Some((request, tx));
 
-    if let Err(e) = launch_chooser(request) {
-        tracing::error!("Android attachment chooser: failed to open: {e}");
+    if let Err(e) = launch_source(request, source) {
+        tracing::error!("Android attachment source {source}: failed to launch: {e}");
         let mut pending = PENDING.lock().unwrap();
         if pending.as_ref().is_some_and(|(id, _)| *id == request) {
             pending.take();
@@ -71,19 +67,18 @@ pub async fn pick_via_chooser() -> Vec<PathBuf> {
         return Vec::new();
     }
 
-    // Sender is dropped (→ Err) if a newer pick replaces this one.
     rx.await.unwrap_or_default()
 }
 
-/// JNI: invoke `MainActivity.launchAttachmentChooser(long request)`.
-fn launch_chooser(request: i64) -> Result<(), String> {
+/// JNI: invoke `MainActivity.launchAttachmentSource(long request, int source)`.
+fn launch_source(request: i64, source: i32) -> Result<(), String> {
     activity::with_jni_env(|env| {
         let act = activity::activity()?;
         let res = env.call_method(
             act,
-            jni::jni_str!("launchAttachmentChooser"),
-            jni::jni_sig!("(J)V"),
-            &[JValue::Long(request)],
+            jni::jni_str!("launchAttachmentSource"),
+            jni::jni_sig!("(JI)V"),
+            &[JValue::Long(request), JValue::Int(source)],
         );
         if res.is_err() {
             activity::clear_exception(env);

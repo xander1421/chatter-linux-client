@@ -101,6 +101,7 @@ export component FriendsModal inherits Rectangle {
     callback generate-code(bool);  // bool = private mode
     callback generate-qr(bool);    // bool = private mode
     callback copy-code();
+    callback share-code();
     callback paste-code();                   // System clipboard → code-input
     callback scan-code();                    // Camera QR → code-input
     callback connect-via-code(string);       // Core routes private and server-managed codes
@@ -294,6 +295,7 @@ export component FriendsModal inherits Rectangle {
                         generate-code(value) => { root.generate-code(value); }
                         generate-qr(value) => { root.generate-qr(value); }
                         copy-code => { root.copy-code(); }
+                        share-code => { root.share-code(); }
                         paste-code => { root.paste-code(); }
                         scan-code => { root.scan-code(); }
                         connect-via-code(value) => { root.connect-via-code(value); }

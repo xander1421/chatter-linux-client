@@ -44,6 +44,7 @@ export component AppConversationLayout inherits Rectangle {
     in property <[GifData]> composer-gif-picker-results;
     in-out property <string> composer-gif-picker-search;
     in-out property <bool> composer-gif-picker-visible;
+    in-out property <bool> composer-attach-sheet-visible;
     in property <bool> composer-gifs-available;
     in-out property <bool> composer-is-editing;
     in property <bool> composer-is-replying;
@@ -143,6 +144,7 @@ export component AppConversationLayout inherits Rectangle {
     in-out property <length> viewer-origin-y;
     in property <length> window-width;
     callback attachment-clicked();
+    callback composer-attach-source(int);
     callback audio-seek(string, float);
     callback cancel-upload(string);
     callback cancel-edit();
@@ -330,6 +332,7 @@ export component AppConversationLayout inherits Rectangle {
     gif-search-changed(query) => { root.composer-gif-search-changed(query); }
     emoji-picker-visible <=> root.composer-emoji-picker-visible;
     gif-picker-visible <=> root.composer-gif-picker-visible;
+    attach-sheet-visible <=> root.composer-attach-sheet-visible;
     gifs-available: root.composer-gifs-available;
 
     settings-clicked => { root.chat-settings-clicked(); }
@@ -421,6 +424,7 @@ export component AppConversationLayout inherits Rectangle {
     cancel-edit => { root.cancel-edit(); }
     cancel-reply => { root.cancel-reply(); }
     attachment-clicked => { root.attachment-clicked(); }
+    composer-attach-source(s) => { root.composer-attach-source(s); }
     paste-image => { root.paste-image(); }
     emoji-clicked => { root.emoji-clicked(); }
     gif-clicked => { root.gif-clicked(); }

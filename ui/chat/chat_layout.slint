@@ -1,5 +1,6 @@
 import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
 import { GifPicker, GifData } from "../components/gif_picker.slint";
+import { AttachSheet } from "attach_sheet.slint";
 import { Icons } from "../theme/icons.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Button } from "../components/button.slint";
@@ -99,6 +100,8 @@ export component ChatLayout inherits Rectangle {
     // Picker properties
     in-out property <bool> emoji-picker-visible: false;
     in-out property <bool> gif-picker-visible: false;
+    // The attachment-source bottom sheet (Gallery / Camera / Video / File).
+    in-out property <bool> attach-sheet-visible: false;
 
     in property <[EmojiData]> emoji-list;
     in-out property <int> emoji-category;
@@ -302,6 +305,9 @@ export component ChatLayout inherits Rectangle {
     callback cancel-edit();
     callback cancel-reply();
     callback attachment-clicked();
+    // Android attachment source chosen in the sheet (0 gallery, 1 file, 2 camera
+    // photo, 3 camera video); the glue launches that source and closes the sheet.
+    callback composer-attach-source(int);
     callback paste-image();
     callback emoji-clicked();
     callback gif-clicked();
@@ -986,6 +992,26 @@ export component ChatLayout inherits Rectangle {
                 }
             }
 
+        }
+    }
+
+    // Attachment-source bottom sheet. A dimmed backdrop (tap to dismiss) with
+    // the sheet docked to the bottom on a phone, or centred low on desktop.
+    if root.attach-sheet-visible: Rectangle {
+        z: 60;
+        width: 100%;
+        height: 100%;
+        background: #000000.with-alpha(0.45);
+        TouchArea { clicked => { root.attach-sheet-visible = false; } }
+        AttachSheet {
+            touch: root.mobile;
+            x: root.mobile ? 0px : (parent.width - self.width) / 2;
+            width: root.mobile ? parent.width : min(parent.width, 460px);
+            y: parent.height - self.height - (root.mobile ? 0px : Spacing.lg);
+            source(s) => {
+                root.attach-sheet-visible = false;
+                root.composer-attach-source(s);
+            }
         }
     }
 }

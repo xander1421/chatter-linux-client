@@ -33,6 +33,7 @@ export component FindTab inherits VerticalLayout {
     callback generate-code(bool);
     callback generate-qr(bool);
     callback copy-code();
+    callback share-code();
     callback paste-code();
     callback scan-code();
     callback connect-via-code(string);
@@ -101,11 +102,22 @@ export component FindTab inherits VerticalLayout {
             }
         }
 
+        // Share is the hero way to hand out your code — opens the OS share
+        // sheet so the code goes straight into another app. Copy is the quiet
+        // fallback.
+        Button {
+            touch: root.mobile-mode;
+            horizontal-stretch: 1;
+            text: "Share my code";
+            variant: "primary";
+            clicked => { root.share-code(); }
+        }
+
         Button {
             touch: root.mobile-mode;
             horizontal-stretch: 1;
             text: "Copy my code";
-            variant: "primary";
+            variant: "secondary";
             clicked => { root.copy-code(); }
         }
 
@@ -117,25 +129,27 @@ export component FindTab inherits VerticalLayout {
             clicked => { root.scan-code(); }
         }
 
-        // Paste a code / link — compact single row.
+        // Add someone by their code — input on its own line, actions beneath it.
+        Input {
+            horizontal-stretch: 1;
+            placeholder: "Paste a code or link";
+            text <=> root.code-input;
+            caret-end-seq: root.code-caret-end-seq;
+            edited => { root.code-edited(); }
+            accepted(code) => { root.connect-via-code(code); }
+        }
         HorizontalLayout {
             spacing: Spacing.sm;
-            Input {
-                horizontal-stretch: 1;
-                placeholder: "Paste a code or link";
-                text <=> root.code-input;
-                caret-end-seq: root.code-caret-end-seq;
-                edited => { root.code-edited(); }
-                accepted(code) => { root.connect-via-code(code); }
-            }
             Button {
                 touch: root.mobile-mode;
+                horizontal-stretch: 1;
                 text: "Paste";
-                variant: "ghost";
+                variant: "secondary";
                 clicked => { root.paste-code(); }
             }
             Button {
                 touch: root.mobile-mode;
+                horizontal-stretch: 1;
                 text: "Add";
                 variant: "primary";
                 loading: root.loading;

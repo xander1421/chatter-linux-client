@@ -156,6 +156,22 @@ class MainActivity : GameActivity() {
     }
 
 
+    // Friend-code "Share my code": hand the code to the OS share sheet so it
+    // can go into any app. Plain text only; the code is not a secret.
+    fun shareText(value: String) {
+        runOnUiThread {
+            try {
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, value)
+                }
+                startActivity(Intent.createChooser(send, null))
+            } catch (_: Exception) {
+                android.widget.Toast.makeText(this, "Nothing to share to", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     // Called only after an explicit tap; duplicate validation at the native edge.
     fun openWebLink(value: String) {
         runOnUiThread {
@@ -947,38 +963,28 @@ class MainActivity : GameActivity() {
      * waiting Rust future completes.
      */
     @Suppress("unused")
-    fun launchAttachmentChooser(request: Long) {
+    // The source was already chosen in the app's own themed sheet
+    // (ui/chat/attach_sheet.slint), so this launches it directly — no Android
+    // dialog. source: 0 gallery (photo/video), 1 file (SAF), 2 camera photo,
+    // 3 camera video. Results arrive through the same deliver* callbacks, which
+    // release the request slot acquired here.
+    fun launchAttachmentSource(request: Long, source: Int) {
         runOnUiThread {
-            // Acquire the single in-flight slot exactly as launchFilePicker does;
-            // the chosen source then inherits this request id and its result
-            // callback (deliverPickedUris / deliverCapture) releases it.
             if (pickerDestroyed || !filePickerRequest.compareAndSet(0, request)) {
                 nativeOnFilesPicked(request, emptyArray())
                 return@runOnUiThread
             }
-            val items = arrayOf("Photo or video", "File", "Take photo", "Record video")
             try {
-                android.app.AlertDialog.Builder(this)
-                    .setTitle("Add attachment")
-                    .setItems(items) { _, which ->
-                        try {
-                            when (which) {
-                                0 -> pickVisualMedia.launch(
-                                    androidx.activity.result.PickVisualMediaRequest(
-                                        ActivityResultContracts.PickVisualMedia.ImageAndVideo))
-                                1 -> openDocuments.launch(arrayOf("*/*"))
-                                2 -> beginCapture(video = false)
-                                else -> beginCapture(video = true)
-                            }
-                        } catch (_: Exception) {
-                            Log.e(TAG, "Attachment source launch failed")
-                            failPendingPick()
-                        }
-                    }
-                    .setOnCancelListener { failPendingPick() }
-                    .show()
+                when (source) {
+                    0 -> pickVisualMedia.launch(
+                        androidx.activity.result.PickVisualMediaRequest(
+                            ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                    1 -> openDocuments.launch(arrayOf("*/*"))
+                    2 -> beginCapture(video = false)
+                    else -> beginCapture(video = true)
+                }
             } catch (_: Exception) {
-                Log.e(TAG, "Attachment chooser failed")
+                Log.e(TAG, "Attachment source launch failed")
                 failPendingPick()
             }
         }

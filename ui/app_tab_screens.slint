@@ -194,6 +194,9 @@ export component AppTabScreens inherits Rectangle {
         copy-code => {
             ModalHostState.friends-copy-code();
         }
+        share-code => {
+            ModalHostState.friends-share-code();
+        }
         can-scan: root.is-mobile-platform;
         paste-code => {
             ModalHostState.friends-paste-code();

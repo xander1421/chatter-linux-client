@@ -323,6 +323,17 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
+    // The attachment-source sheet is an overlay over the composer.
+    if window
+        .global::<crate::ChatPane>()
+        .get_composer_attach_sheet_visible()
+    {
+        window
+            .global::<crate::ChatPane>()
+            .set_composer_attach_sheet_visible(false);
+        return true;
+    }
+
     // The composer's emoji and GIF pickers are overlays too, and since the
     // emoji picker now stays open across insertions (§112u) Back is the
     // natural way to dismiss it.

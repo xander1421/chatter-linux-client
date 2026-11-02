@@ -279,6 +279,7 @@ export component MainChatShell inherits Rectangle {
                     composer-gif-picker-results: ChatPane.composer-gif-picker-results;
                     composer-gif-picker-search <=> ChatPane.composer-gif-picker-search;
                     composer-gif-picker-visible <=> ChatPane.composer-gif-picker-visible;
+                    composer-attach-sheet-visible <=> ChatPane.composer-attach-sheet-visible;
                     composer-gifs-available: ChatPane.composer-gifs-available;
                     composer-is-editing <=> ChatPane.composer-is-editing;
                     composer-is-replying: ChatPane.composer-is-replying;
@@ -374,6 +375,7 @@ export component MainChatShell inherits Rectangle {
                     viewer-origin-y <=> root.viewer-origin-y;
                     window-width: root.width;
                     attachment-clicked() => { ChatPane.attachment-clicked(); }
+                    composer-attach-source(s) => { ChatPane.composer-attach-source(s); }
                     audio-seek(arg0, arg1) => { ChatPane.audio-seek(arg0, arg1); }
                     cancel-upload(arg0) => { ChatPane.cancel-upload(arg0); }
                     cancel-edit() => { ChatPane.cancel-edit(); }

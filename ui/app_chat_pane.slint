@@ -184,6 +184,7 @@ export global ChatPane {
     callback composer-emoji-skin-tone-changed(int); // skin tone index
     // ========== Composer GIF picker state ==========
     in-out property <bool> composer-gif-picker-visible: false;
+    in-out property <bool> composer-attach-sheet-visible: false;
     // Set with the conversation kind from core (`gif_picker_available`).
     in property <bool> composer-gifs-available: true;
     in property <bool> composer-gif-picker-loading: false;
@@ -365,6 +366,7 @@ export global ChatPane {
     callback cancel-edit();
     callback cancel-reply();
     callback attachment-clicked();
+    callback composer-attach-source(int);
     callback paste-image();
     callback emoji-clicked();
     callback gif-clicked();
