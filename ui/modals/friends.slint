@@ -142,19 +142,22 @@ export component FriendsModal inherits Rectangle {
     Modal {
         floating-content: root.mobile-mode;
         show: root.show-modal;
-        title: "Contacts";
+        title: root.showing-add ? "Add a friend" : "Contacts";
         modal-width: 680px;
         max-modal-height: max(240px, root.height - 96px);
         // On a phone this is the Contacts screen, not a dialog over the chat
         // list — the bottom tab bar navigates to it the same way Telegram's
         // does, so it gets the whole viewport.
         full-screen: root.mobile-mode;
-        root-screen: root.root-screen;
+        // In the Add sheet the modal shows its back chevron (not a root screen)
+        // so Back / swipe returns to the Friends list instead of exiting.
+        root-screen: root.root-screen && !root.showing-add;
         bottom-inset: root.bottom-inset;
         fill-height: root.mobile-mode;
 
         close => {
-            root.close();
+            if (root.showing-add) { root.showing-add = false; }
+            else { root.close(); }
         }
 
         VerticalLayout {
@@ -164,7 +167,9 @@ export component FriendsModal inherits Rectangle {
             // Main tab bar — Neo. Same box height as the dismissal control in
             // the header row above it, so the two rows share one baseline
             // instead of the tabs sitting 4px short of the touch floor.
-            GlassSurface {
+            // Hidden inside the Add sheet: there it is its own screen (own
+            // title + back chevron), not a tab of Contacts.
+            if !root.showing-add: GlassSurface {
                 material-enabled: root.mobile-mode;
                 elevation: 0;
                 z: 1;
@@ -224,7 +229,7 @@ export component FriendsModal inherits Rectangle {
                 }
             }
 
-            Rectangle {
+            if !root.showing-add: Rectangle {
                 height: 1px;
                 background: Colors.divider;
             }
@@ -255,7 +260,7 @@ export component FriendsModal inherits Rectangle {
 
                 // ===== Add-friend sheet (opened by the contacts + FAB) =====
                 // Opaque backdrop so it covers the tab content underneath.
-                if root.showing-add: Rectangle { background: Materials.ambient; z: 4; }
+                if root.showing-add: Rectangle { background: Materials.ambient; z: 4; TouchArea {} }
                 find-scroll := Flickable {
                     visible: root.showing-add;
                     z: 5;

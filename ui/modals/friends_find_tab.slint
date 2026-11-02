@@ -6,10 +6,10 @@ import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { UserSearchData } from "friends_data.slint";
 
-// Add-friend tab = the code/QR exchange, nothing else. Finding people by name
-// or @handle lives in global search (the header Search); this tab is for
-// "let someone add me" (your QR is the hero) and "add someone who shared a
-// code" (scan / paste). Shield on → the private code starts a secret chat.
+// Add-friend sheet (opened by the Contacts + FAB). Tight, iOS-like: your QR is
+// the hero, Copy is the action, Scan / paste a code are the ways to add someone.
+// The modal header supplies the back chevron + title, so this has no header.
+// Name/@handle search lives in global search, not here.
 export component FindTab inherits VerticalLayout {
     in property <string> active-tab;
     in property <bool> mobile-mode;
@@ -23,7 +23,7 @@ export component FindTab inherits VerticalLayout {
     in property <image> qr-code-image;
     in-out property <bool> show-qr;
     in property <bool> effective-private-mode;
-    // Kept for host bindings; name search now lives in global search, not here.
+    // Kept for host bindings; name search now lives in global search.
     in-out property <string> search-query;
     in property <bool> search-active;
     in property <bool> search-performed;
@@ -37,10 +37,8 @@ export component FindTab inherits VerticalLayout {
     callback scan-code();
     callback connect-via-code(string);
     callback code-edited();
-    callback close-add();   // the sheet's Back / dismiss
+    callback close-add();
 
-    // Make the QR the hero: generate the code + QR as soon as the tab exists,
-    // so it is shown on open, not after a tap.
     function ensure-code() {
         if (root.my-code == "") { root.generate-code(root.effective-private-mode); }
         if (!root.show-qr) { root.generate-qr(root.effective-private-mode); }
@@ -51,28 +49,11 @@ export component FindTab inherits VerticalLayout {
     VerticalLayout {
         init => { root.ensure-code(); }
         vertical-stretch: 1;
-        spacing: Spacing.md;
+        spacing: Spacing.sm;
 
-        HorizontalLayout {
-            spacing: Spacing.sm;
-            Button {
-                touch: root.mobile-mode;
-                text: "Back";
-                variant: "ghost";
-                clicked => { root.close-add(); }
-            }
-            Text {
-                horizontal-stretch: 1;
-                text: root.effective-private-mode ? "Start a secret chat" : "Add a friend";
-                color: Colors.text-primary;
-                font-size: Typography.lg;
-                font-weight: Typography.bold;
-                vertical-alignment: center;
-            }
-        }
-
-        // ===== QR hero =====
+        // ===== QR hero (tight) =====
         Rectangle {
+            vertical-stretch: 0;
             background: Colors.surface;
             border-radius: Spacing.radius-lg;
             drop-shadow-blur: Elevation.card-blur;
@@ -82,103 +63,66 @@ export component FindTab inherits VerticalLayout {
             border-color: Elevation.card-rim;
 
             VerticalLayout {
-                padding: Spacing.lg;
-                spacing: Spacing.md;
+                padding: Spacing.sm;
+                spacing: Spacing.xs;
                 alignment: center;
 
                 HorizontalLayout {
                     alignment: center;
                     Rectangle {
-                        width: 240px;
-                        height: 240px;
+                        width: 236px;
+                        height: 236px;
                         background: white;
                         border-radius: Spacing.radius-md;
                         Image {
                             source: root.qr-code-image;
-                            width: 212px;
-                            height: 212px;
+                            width: 224px;
+                            height: 224px;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             image-fit: contain;
                         }
-                        // Placeholder ring until the QR renders.
                         if !root.show-qr || root.my-code == "": Text {
                             text: "…";
                             color: #999;
-                            font-size: Typography.huge;
+                            font-size: Typography.xl;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
-                        }
-                    }
-                }
-
-                // The code itself, selectable, with copy / refresh.
-                Rectangle {
-                    height: 40px;
-                    background: Colors.inset;
-                    border-radius: Spacing.radius-sm;
-                    HorizontalLayout {
-                        padding-left: Spacing.sm;
-                        padding-right: Spacing.sm;
-                        Text {
-                            text: root.my-code != "" ? root.my-code : "Creating your code…";
-                            color: root.my-code != "" ? Colors.text-primary : Colors.text-muted;
-                            font-size: Typography.xs;
-                            font-family: Typography.font-family-mono;
-                            vertical-alignment: center;
-                            overflow: elide;
-                            horizontal-stretch: 1;
-                        }
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: Spacing.sm;
-                    Button {
-                        touch: root.mobile-mode;
-                        horizontal-stretch: 1;
-                        text: "Copy code";
-                        variant: "primary";
-                        clicked => { root.copy-code(); }
-                    }
-                    Button {
-                        touch: root.mobile-mode;
-                        text: "Refresh";
-                        variant: "ghost";
-                        clicked => {
-                            root.generate-code(root.effective-private-mode);
-                            root.generate-qr(root.effective-private-mode);
                         }
                     }
                 }
 
                 Text {
-                    width: max(0px, parent.width - parent.padding * 2);
-                    text: root.effective-private-mode
-                        ? "Friends scan this or paste your code to start a secret chat with you."
-                        : "Friends scan this or paste your code to add you.";
+                    text: root.effective-private-mode ? "Scan to start a secret chat with me" : "Scan to add me";
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
-                    wrap: word-wrap;
-                    height: self.preferred-height;
                 }
             }
         }
 
-        // ===== Add someone who shared a code =====
-        Text {
-            text: "Add someone";
-            color: Colors.text-secondary;
-            font-size: Typography.xs;
-            font-weight: Typography.medium;
+        Button {
+            touch: root.mobile-mode;
+            horizontal-stretch: 1;
+            text: "Copy my code";
+            variant: "primary";
+            clicked => { root.copy-code(); }
         }
 
+        if root.can-scan: Button {
+            touch: root.mobile-mode;
+            horizontal-stretch: 1;
+            text: "Scan a code";
+            variant: "secondary";
+            clicked => { root.scan-code(); }
+        }
+
+        // Paste a code / link — compact single row.
         HorizontalLayout {
             spacing: Spacing.sm;
             Input {
                 horizontal-stretch: 1;
-                placeholder: "Paste a code or invite link";
+                placeholder: "Paste a code or link";
                 text <=> root.code-input;
                 caret-end-seq: root.code-caret-end-seq;
                 edited => { root.code-edited(); }
@@ -192,19 +136,11 @@ export component FindTab inherits VerticalLayout {
             }
             Button {
                 touch: root.mobile-mode;
-                text: "Connect";
+                text: "Add";
                 variant: "primary";
                 loading: root.loading;
                 clicked => { root.connect-via-code(root.code-input); }
             }
-        }
-
-        if root.can-scan: Button {
-            touch: root.mobile-mode;
-            horizontal-stretch: 1;
-            text: "Scan a QR code";
-            variant: "secondary";
-            clicked => { root.scan-code(); }
         }
 
         if root.code-status != "": Text {

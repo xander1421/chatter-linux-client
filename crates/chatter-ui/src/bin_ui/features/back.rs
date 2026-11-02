@@ -367,6 +367,18 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
+    // The Contacts "Add a friend" sheet is an overlay over the Friends list,
+    // not a stacked screen. Back returns to the list instead of leaving the tab.
+    if window
+        .global::<crate::ModalHostState>()
+        .get_friends_show_add()
+    {
+        window
+            .global::<crate::ModalHostState>()
+            .set_friends_show_add(false);
+        return true;
+    }
+
     // Recovery codes remain in the encrypted local database until Continue.
     // Keep their screen present while the user is deciding where to save them.
     if window.get_active_modal().as_str() == "recovery-codes" {

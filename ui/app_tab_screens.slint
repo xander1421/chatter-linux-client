@@ -114,6 +114,8 @@ export component AppTabScreens inherits Rectangle {
         init => {
             // "find" is no longer a tab; recover any stale value.
             if (ModalHostState.friends-modal-tab == "find") { ModalHostState.friends-modal-tab = "friends"; }
+            // Always land on the Friends list; the + opens the Add sheet.
+            ModalHostState.friends-show-add = false;
         }
         z: -1;
         mobile-mode: root.compact-layout;
