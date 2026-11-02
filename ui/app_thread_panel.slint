@@ -108,6 +108,7 @@ export component AppThreadPanel inherits Rectangle {
             ChatPane.view-attachment(id);
         }
         audio-seek(id, pos) => { ChatPane.audio-seek(id, pos); }
+        cancel-upload(id) => { ChatPane.cancel-upload(id); }
         more-clicked(sender-id, timestamp-ns, x, y) => {
             root.context-menu-preview-message = self.menu-preview-message;
             root.context-menu-preview-row-x = self.menu-preview-row-x;

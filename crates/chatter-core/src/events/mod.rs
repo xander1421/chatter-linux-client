@@ -45,7 +45,7 @@ pub use bus::EventBus;
 
 // Re-export DomainEvent from inbox::handlers (the authoritative definition)
 // Do NOT duplicate - use the canonical definition
-pub use crate::inbox::handlers::DomainEvent;
+pub use crate::inbox::handlers::{AttachmentUploadState, DomainEvent};
 
 // Re-export EventHandlers
 pub use handlers::EventHandlers;

@@ -162,7 +162,10 @@ impl ChatterClient {
             client: client.clone(),
             path: Some(path.clone()),
         };
-        crate::services::attachment::run_attachment_work(move || {
+        // Placeholder/metadata only: run it under the wider metadata gate, NOT
+        // the single decode permit, so staging several files shows all their
+        // tray tiles at once instead of trickling in behind each decode.
+        crate::services::attachment::run_attachment_metadata(move || {
             let metadata = std::fs::metadata(&path)
                 .map_err(|e| format!("Failed to read attachment metadata: {e}"))?;
             let filename = path

@@ -290,6 +290,7 @@ export component ChatLayout inherits Rectangle {
     in property <bool> history-has-newer;
     in property <int> history-head-offset;
     callback request-latest();
+    callback cancel-upload(string);  // attachment ID — abort one in-flight upload
     callback load-more();
     callback list-geometry(float, float, bool);
     callback visible-media-rows(int, int);
@@ -429,6 +430,9 @@ export component ChatLayout inherits Rectangle {
         }
         audio-seek(id, pos) => {
             root.audio-seek(id, pos);
+        }
+        cancel-upload(id) => {
+            root.cancel-upload(id);
         }
         list-geometry(visible, content, seeking) => {
             root.list-geometry(visible, content, seeking);

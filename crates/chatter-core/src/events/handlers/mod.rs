@@ -227,6 +227,9 @@ impl EventHandlers {
             event @ DomainEvent::MessageSendFailed { .. } => self.handle_messages_event(event),
             // Chat-list presentation only; no state store holds it.
             DomainEvent::MessageSent { .. } => {}
+            // UI-only: the composer's in-flight bubble renders this; no state
+            // store reacts to outgoing per-file upload progress.
+            DomainEvent::AttachmentUploadProgress { .. } => {}
             event @ DomainEvent::KeyExchangeReceived { .. } => self.handle_key_exchange_event(event),
             event @ DomainEvent::SenderKeyReceived { .. } => self.handle_key_exchange_event(event),
             event @ DomainEvent::GroupMailboxReceived { .. } => self.handle_key_exchange_event(event),

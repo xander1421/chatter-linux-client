@@ -26,6 +26,7 @@ mod message_actions;
 mod pdf_preview;
 mod timers;
 mod transfer_status;
+pub(crate) use transfer_status::update_attachment_upload_state;
 mod video_player;
 
 /// Wire message action callbacks.

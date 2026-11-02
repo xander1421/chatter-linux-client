@@ -21,12 +21,40 @@ use crate::inbox::events::FriendRequestInfo;
 // Domain Events
 // ============================================================================
 
+/// Per-file outgoing-upload state for the composer's in-flight bubble.
+///
+/// A message's attachments upload one at a time (see
+/// `client::upload_attachments`); this is the state the UI draws per tile so a
+/// multi-file send streams — each file visibly queues, uploads, then lands —
+/// instead of the whole batch appearing at once. `Uploading` is indeterminate
+/// (a spinner), not a byte percentage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentUploadState {
+    /// Accepted for send, waiting its turn behind an earlier file.
+    Queued,
+    /// Being encrypted and streamed to the CDN right now.
+    Uploading,
+    /// Uploaded; its pointer is in the message.
+    Sent,
+    /// Upload failed; the send is aborted.
+    Failed,
+    /// The user cancelled this file; the rest of the message still goes.
+    Cancelled,
+}
+
 /// Domain events emitted by inbox dispatchers.
 ///
 /// These events flow to UI and storage layers via broadcast channels.
 /// Dispatchers emit events; consumers subscribe and react.
 #[derive(Debug, Clone)]
 pub enum DomainEvent {
+    /// Per-file progress of an outgoing attachment upload, keyed by the tray
+    /// (pending) attachment id the in-flight bubble renders. Emitted by
+    /// `client::upload_attachments` as each file of a send is processed.
+    AttachmentUploadProgress {
+        attachment_id: crate::domain::ids::AttachmentId,
+        state: AttachmentUploadState,
+    },
     /// New chat message received.
     MessageReceived {
         /// The complete message with content, sender, channel.
@@ -665,6 +693,8 @@ impl DomainEvent {
             DomainEvent::MessageEdited { channel_id, .. } => Some(*channel_id),
             DomainEvent::MessageDeleted { channel_id, .. } => *channel_id,
             DomainEvent::AttachmentReady { channel_id, .. } => Some(*channel_id),
+            // Outgoing upload progress is keyed by attachment, not channel.
+            DomainEvent::AttachmentUploadProgress { .. } => None,
             DomainEvent::TypingStarted { channel_id, .. } => Some(*channel_id),
             DomainEvent::TypingStopped { channel_id, .. } => Some(*channel_id),
             DomainEvent::MessageDeliveryChanged { channel_id, .. } => Some(*channel_id),

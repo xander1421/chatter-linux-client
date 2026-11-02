@@ -354,6 +354,7 @@ export global ChatPane {
     in-out property <bool> history-has-newer;
     in-out property <int> history-head-offset;
     callback request-latest();
+    callback cancel-upload(string);  // attachment ID — abort one in-flight upload
     callback load-more();
     callback visible-media-rows(int, int);
     callback send(string) -> bool;
