@@ -112,7 +112,8 @@ export component AppTabScreens inherits Rectangle {
     // Friends Modal
     if SidebarPane.active-tab == "contacts": FriendsModal {
         init => {
-            if (ModalHostState.friends-modal-tab == "find") { ModalHostState.friends-modal-switch-tab("find"); }
+            // "find" is no longer a tab; recover any stale value.
+            if (ModalHostState.friends-modal-tab == "find") { ModalHostState.friends-modal-tab = "friends"; }
         }
         z: -1;
         mobile-mode: root.compact-layout;
@@ -150,6 +151,7 @@ export component AppTabScreens inherits Rectangle {
         search-active: ModalHostState.friends-search-active;
         search-performed: ModalHostState.friends-search-performed;
         search-result: ModalHostState.friends-search-result;
+        showing-add <=> ModalHostState.friends-show-add;
         search-changed(q) => { ModalHostState.friends-search-changed(q); }
         add-searched-friend(uid) => { ModalHostState.friends-add-searched-friend(uid); }
 

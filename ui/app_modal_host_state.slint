@@ -193,6 +193,8 @@ export global ModalHostState {
     in property <bool> friends-search-active: false;      // a lookup is in flight
     in property <bool> friends-search-performed: false;   // a query has resolved (drives no-match copy)
     in property <UserSearchData> friends-search-result;
+    // The Add-friend sheet (QR/code) is opened by the contacts + FAB, not a tab.
+    in-out property <bool> friends-show-add: false;
     // Forward message modal properties
     in property <string> forward-message-preview: "";
     in property <bool> forward-contact-share: false;

@@ -4,14 +4,12 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
-import { Avatar } from "../components/avatar.slint";
 import { UserSearchData } from "friends_data.slint";
 
-// Add-friend tab. Identity-first: search a name or @handle (exact match,
-// no enumeration — the privacy model invite-member already uses) and add from
-// a person preview. Adding by code / showing your own code is the secondary,
-// "let someone add me" path below. In Shield, a new contact is a secret chat
-// over Tor; that is the only thing that changes, driven by the global toggle.
+// Add-friend tab = the code/QR exchange, nothing else. Finding people by name
+// or @handle lives in global search (the header Search); this tab is for
+// "let someone add me" (your QR is the hero) and "add someone who shared a
+// code" (scan / paste). Shield on → the private code starts a secret chat.
 export component FindTab inherits VerticalLayout {
     in property <string> active-tab;
     in property <bool> mobile-mode;
@@ -25,13 +23,13 @@ export component FindTab inherits VerticalLayout {
     in property <image> qr-code-image;
     in-out property <bool> show-qr;
     in property <bool> effective-private-mode;
-    // Username-first search.
+    // Kept for host bindings; name search now lives in global search, not here.
     in-out property <string> search-query;
     in property <bool> search-active;
     in property <bool> search-performed;
     in property <UserSearchData> search-result;
     callback search-changed(string);
-    callback add-searched-friend(string);  // user_id
+    callback add-searched-friend(string);
     callback generate-code(bool);
     callback generate-qr(bool);
     callback copy-code();
@@ -39,19 +37,44 @@ export component FindTab inherits VerticalLayout {
     callback scan-code();
     callback connect-via-code(string);
     callback code-edited();
+    callback close-add();   // the sheet's Back / dismiss
+
+    // Make the QR the hero: generate the code + QR as soon as the tab exists,
+    // so it is shown on open, not after a tap.
+    function ensure-code() {
+        if (root.my-code == "") { root.generate-code(root.effective-private-mode); }
+        if (!root.show-qr) { root.generate-qr(root.effective-private-mode); }
+    }
+
     vertical-stretch: 1;
 
-    if root.active-tab == "find": VerticalLayout {
+    VerticalLayout {
+        init => { root.ensure-code(); }
         vertical-stretch: 1;
         spacing: Spacing.md;
 
-        // ===== Hero: find someone by name / @handle =====
-        // Shield OFF only: anon mode forbids username lookup (no account link),
-        // so in Shield the private-code / secret-chat path below is the way.
-        if !root.effective-private-mode: Rectangle {
-            vertical-stretch: 0;
+        HorizontalLayout {
+            spacing: Spacing.sm;
+            Button {
+                touch: root.mobile-mode;
+                text: "Back";
+                variant: "ghost";
+                clicked => { root.close-add(); }
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: root.effective-private-mode ? "Start a secret chat" : "Add a friend";
+                color: Colors.text-primary;
+                font-size: Typography.lg;
+                font-weight: Typography.bold;
+                vertical-alignment: center;
+            }
+        }
+
+        // ===== QR hero =====
+        Rectangle {
             background: Colors.surface;
-            border-radius: Spacing.radius-md;
+            border-radius: Spacing.radius-lg;
             drop-shadow-blur: Elevation.card-blur;
             drop-shadow-offset-y: Elevation.card-offset;
             drop-shadow-color: Elevation.card-shadow;
@@ -59,301 +82,140 @@ export component FindTab inherits VerticalLayout {
             border-color: Elevation.card-rim;
 
             VerticalLayout {
-                padding: Spacing.md;
-                spacing: Spacing.sm;
+                padding: Spacing.lg;
+                spacing: Spacing.md;
+                alignment: center;
 
-                Input {
-                    horizontal-stretch: 1;
-                    placeholder: root.effective-private-mode ? "Search a name or @handle" : "Search a name or @handle";
-                    text <=> root.search-query;
-                    edited => { root.search-changed(root.search-query); }
-                    accepted(q) => { root.search-changed(q); }
-                }
-
-                // Result: one exact match → a person you can add.
-                if root.search-result.user-id != "": Rectangle {
-                    background: Colors.inset;
-                    border-radius: Spacing.radius-sm;
-
-                    HorizontalLayout {
-                        padding: Spacing.sm;
-                        spacing: Spacing.sm;
-
-                        Avatar {
-                            size: 40px;
-                            source: root.search-result.avatar-source;
-                            fallback-text: root.search-result.initials;
-                            name: root.search-result.display-name;
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 240px;
+                        height: 240px;
+                        background: white;
+                        border-radius: Spacing.radius-md;
+                        Image {
+                            source: root.qr-code-image;
+                            width: 212px;
+                            height: 212px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            image-fit: contain;
                         }
-
-                        VerticalLayout {
-                            horizontal-stretch: 1;
-                            alignment: center;
-                            spacing: Spacing.xxs;
-
-                            Text {
-                                text: root.search-result.display-name;
-                                color: Colors.text-primary;
-                                font-size: Typography.sm;
-                                font-weight: Typography.semibold;
-                                overflow: elide;
-                            }
-
-                            Text {
-                                text: "@" + root.search-result.username;
-                                color: Colors.text-secondary;
-                                font-size: Typography.xs;
-                                overflow: elide;
-                            }
-                        }
-
-                        // Already friends / pending → a quiet status chip.
-                        // Otherwise the one action: add (or start a secret chat
-                        // when Shield is on).
-                        if root.search-result.is-friend || root.search-result.request-sent: Text {
-                            text: root.search-result.is-friend ? "Already friends" : "Request sent";
-                            color: Colors.text-muted;
-                            font-size: Typography.xs;
-                            vertical-alignment: center;
-                        }
-                        if !root.search-result.is-friend && !root.search-result.request-sent: Button {
-                            touch: root.mobile-mode;
-                            text: "Add friend";
-                            variant: "primary";
-                            loading: root.loading;
-                            clicked => { root.add-searched-friend(root.search-result.user-id); }
+                        // Placeholder ring until the QR renders.
+                        if !root.show-qr || root.my-code == "": Text {
+                            text: "…";
+                            color: #999;
+                            font-size: Typography.huge;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
                         }
                     }
                 }
 
-                if root.search-result.user-id == "" && root.search-active: Text {
-                    text: "Searching…";
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
+                // The code itself, selectable, with copy / refresh.
+                Rectangle {
+                    height: 40px;
+                    background: Colors.inset;
+                    border-radius: Spacing.radius-sm;
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        Text {
+                            text: root.my-code != "" ? root.my-code : "Creating your code…";
+                            color: root.my-code != "" ? Colors.text-primary : Colors.text-muted;
+                            font-size: Typography.xs;
+                            font-family: Typography.font-family-mono;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                    }
                 }
 
-                if root.search-result.user-id == "" && !root.search-active
-                        && root.search-performed && root.search-query != "": Text {
-                    width: max(0px, parent.width - parent.padding * 2);
-                    text: "No one found for “" + root.search-query + "”. Check the handle, or add by code below.";
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    wrap: word-wrap;
-                    height: self.preferred-height;
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    Button {
+                        touch: root.mobile-mode;
+                        horizontal-stretch: 1;
+                        text: "Copy code";
+                        variant: "primary";
+                        clicked => { root.copy-code(); }
+                    }
+                    Button {
+                        touch: root.mobile-mode;
+                        text: "Refresh";
+                        variant: "ghost";
+                        clicked => {
+                            root.generate-code(root.effective-private-mode);
+                            root.generate-qr(root.effective-private-mode);
+                        }
+                    }
                 }
-
-            }
-        }
-
-        // ===== Shield hero: secret chats use a private code =====
-        if root.effective-private-mode: Rectangle {
-            vertical-stretch: 0;
-            background: Colors.surface;
-            border-radius: Spacing.radius-md;
-            drop-shadow-blur: Elevation.card-blur;
-            drop-shadow-offset-y: Elevation.card-offset;
-            drop-shadow-color: Elevation.card-shadow;
-            border-width: Elevation.rim-width;
-            border-color: Elevation.card-rim;
-
-            VerticalLayout {
-                padding: Spacing.md;
-                spacing: Spacing.xs;
 
                 Text {
-                    text: "Start a secret chat";
-                    color: Colors.text-primary;
-                    font-size: Typography.sm;
-                    font-weight: Typography.semibold;
-                }
-
-                Text {
                     width: max(0px, parent.width - parent.padding * 2);
-                    text: "Shield is on. Secret chats are anonymous over Tor and use a private code — share yours below, or paste a friend's.";
+                    text: root.effective-private-mode
+                        ? "Friends scan this or paste your code to start a secret chat with you."
+                        : "Friends scan this or paste your code to add you.";
                     color: Colors.text-secondary;
-                    font-size: Typography.xs;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
                     wrap: word-wrap;
                     height: self.preferred-height;
                 }
             }
         }
 
-        Rectangle { height: 1px; background: Colors.divider; }
+        // ===== Add someone who shared a code =====
+        Text {
+            text: "Add someone";
+            color: Colors.text-secondary;
+            font-size: Typography.xs;
+            font-weight: Typography.medium;
+        }
 
-        // ===== Secondary: add by code, or share your own =====
-        VerticalLayout {
+        HorizontalLayout {
             spacing: Spacing.sm;
-
-            Text {
-                text: "Add by code or link";
-                color: Colors.text-secondary;
-                font-size: Typography.xs;
-                font-weight: Typography.medium;
-            }
-
             Input {
                 horizontal-stretch: 1;
-                placeholder: "Paste a friend code or invite link";
+                placeholder: "Paste a code or invite link";
                 text <=> root.code-input;
                 caret-end-seq: root.code-caret-end-seq;
                 edited => { root.code-edited(); }
                 accepted(code) => { root.connect-via-code(code); }
             }
-
-            HorizontalLayout {
-                spacing: Spacing.sm;
-
-                Button {
-                    touch: root.mobile-mode;
-                    horizontal-stretch: 1;
-                    text: "Paste";
-                    variant: "ghost";
-                    clicked => { root.paste-code(); }
-                }
-
-                Button {
-                    touch: root.mobile-mode;
-                    horizontal-stretch: 1;
-                    text: "Connect";
-                    variant: "secondary";
-                    loading: root.loading;
-                    clicked => { root.connect-via-code(root.code-input); }
-                }
-            }
-
-            if root.code-status != "": Text {
-                width: max(0px, parent.width - parent.padding * 2);
-                text: root.code-status;
-                color: (root.code-status == "Friend request sent!" || root.code-status == "Secret chat started!") ? Colors.success :
-                       (root.code-status == "Copied to clipboard!" || root.code-status == "Pasted from clipboard"
-                        || root.code-status == "Secret chat is getting ready…" || root.code-status == "Connecting…"
-                        || root.code-status == "Code scanned — tap connect"
-                        || root.code-status == "Code scanned — tap Connect to send the request"
-                        || root.code-status == "Chatter uses the camera only to read your friend's QR code.") ? Colors.text-secondary : Colors.error;
-                font-size: Typography.xs;
-                wrap: word-wrap;
-                height: self.preferred-height;
-            }
-
-            Input {
-                placeholder: "Add a note (optional)";
-                text <=> root.request-note;
-            }
-
-            if root.can-scan: Button {
+            Button {
                 touch: root.mobile-mode;
-                horizontal-stretch: 1;
-                text: "Scan a friend's QR code";
+                text: "Paste";
                 variant: "ghost";
-                clicked => { root.scan-code(); }
+                clicked => { root.paste-code(); }
+            }
+            Button {
+                touch: root.mobile-mode;
+                text: "Connect";
+                variant: "primary";
+                loading: root.loading;
+                clicked => { root.connect-via-code(root.code-input); }
             }
         }
 
-        Rectangle { height: 1px; background: Colors.divider; }
-
-        // ===== Your code (so others can add you) =====
-        VerticalLayout {
-            spacing: Spacing.xs;
-
-            Text {
-                text: "Your code";
-                color: Colors.text-secondary;
-                font-size: Typography.xs;
-                font-weight: Typography.medium;
-            }
-
-            Rectangle {
-                height: 36px;
-                background: Colors.inset;
-                border-radius: Spacing.radius-sm;
-
-                HorizontalLayout {
-                    padding-left: Spacing.sm;
-                    padding-right: Spacing.sm;
-
-                    Text {
-                        text: root.my-code != "" ? root.my-code : "Tap Get code to create yours";
-                        color: root.my-code != "" ? Colors.text-primary : Colors.text-muted;
-                        font-size: Typography.xs;
-                        font-family: Typography.font-family-mono;
-                        vertical-alignment: center;
-                        overflow: elide;
-                        horizontal-stretch: 1;
-                    }
-                }
-            }
-
-            HorizontalLayout {
-                spacing: Spacing.xs;
-
-                Button {
-                    touch: root.mobile-mode;
-                    text: root.my-code == "" ? "Get code" : "Refresh";
-                    variant: "ghost";
-                    horizontal-stretch: 1;
-                    clicked => { root.generate-code(root.effective-private-mode); }
-                }
-
-                if root.my-code != "": Button {
-                    touch: root.mobile-mode;
-                    text: "Copy";
-                    variant: "ghost";
-                    horizontal-stretch: 1;
-                    clicked => { root.copy-code(); }
-                }
-
-                if root.my-code != "": Button {
-                    touch: root.mobile-mode;
-                    text: root.show-qr ? "Hide QR" : "Show QR";
-                    variant: "ghost";
-                    horizontal-stretch: 1;
-                    clicked => {
-                        if (!root.show-qr) { root.generate-qr(root.effective-private-mode); }
-                        else { root.show-qr = false; }
-                    }
-                }
-            }
-
-            if root.show-qr && root.my-code != "": Rectangle {
-                background: Colors.inset;
-                border-radius: Spacing.radius-md;
-
-                VerticalLayout {
-                    alignment: center;
-                    padding: Spacing.md;
-                    spacing: Spacing.sm;
-
-                    HorizontalLayout {
-                        alignment: center;
-
-                        Rectangle {
-                            width: 168px;
-                            height: 168px;
-                            background: white;
-                            border-radius: Spacing.radius-sm;
-
-                            Image {
-                                source: root.qr-code-image;
-                                width: 150px;
-                                height: 150px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                image-fit: contain;
-                            }
-                        }
-                    }
-
-                    Text {
-                        text: root.effective-private-mode ? "Scan to start a secret chat" : "Scan to add as a friend";
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        horizontal-alignment: center;
-                    }
-                }
-            }
+        if root.can-scan: Button {
+            touch: root.mobile-mode;
+            horizontal-stretch: 1;
+            text: "Scan a QR code";
+            variant: "secondary";
+            clicked => { root.scan-code(); }
         }
 
-        // Fill remaining space so the content sits at the top, not stretched.
+        if root.code-status != "": Text {
+            text: root.code-status;
+            color: (root.code-status == "Friend request sent!" || root.code-status == "Secret chat started!" || root.code-status == "Copied to clipboard!") ? Colors.success :
+                   (root.code-status == "Pasted from clipboard" || root.code-status == "Secret chat is getting ready…" || root.code-status == "Connecting…") ? Colors.text-secondary : Colors.error;
+            font-size: Typography.xs;
+            wrap: word-wrap;
+            height: self.preferred-height;
+        }
+
         Rectangle { vertical-stretch: 1; }
     }
 }

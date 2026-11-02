@@ -48,7 +48,10 @@ export component FriendsModal inherits Rectangle {
     property <length> row-avatar: root.mobile-mode ? Spacing.row-avatar-touch : 40px;
     property <length> row-name-size: root.mobile-mode ? Typography.base : Typography.sm;
     property <length> row-sub-size: root.mobile-mode ? Typography.sm : Typography.xs;
-    in-out property <string> active-tab: "find";  // "find", "friends", "requests", "blocked"
+    in-out property <string> active-tab: "friends";  // "friends", "requests", "blocked"
+    // Add-friend (QR/code) is a sheet over the tabs, opened by the + FAB —
+    // not a top-level tab.
+    in-out property <bool> showing-add: false;
 
     // Friends tab data
     in property <[FriendData]> friends: [];
@@ -176,7 +179,6 @@ export component FriendsModal inherits Rectangle {
                     padding: Spacing.chrome-inset;
 
                     for tab in [
-                        { id: "find", label: "Add friend" },
                         { id: "friends", label: "Friends" },
                         { id: "requests", label: "Requests" },
                         { id: "blocked", label: "Blocked" }
@@ -232,7 +234,7 @@ export component FriendsModal inherits Rectangle {
                 // On a floating card, let Add Friend's full content determine
                 // the card height. The shared Modal caps it at the viewport and
                 // scrolls its body when that content is taller than the cap.
-                min-height: !root.mobile-mode && root.active-tab == "find"
+                min-height: !root.mobile-mode && root.showing-add
                     ? max(400px, find-content.preferred-height)
                     : 400px;
                 vertical-stretch: 1;
@@ -251,12 +253,12 @@ export component FriendsModal inherits Rectangle {
                     start-dm(value) => { root.start-dm(value); }
                 }
 
-                // ===== Find Users Tab =====
-                // The full-screen Contacts page shrinks when the IME opens.
-                // Keep the lower note field reachable when the form exceeds
-                // that viewport (especially with the QR card expanded).
+                // ===== Add-friend sheet (opened by the contacts + FAB) =====
+                // Opaque backdrop so it covers the tab content underneath.
+                if root.showing-add: Rectangle { background: Materials.ambient; z: 4; }
                 find-scroll := Flickable {
-                    visible: root.active-tab == "find";
+                    visible: root.showing-add;
+                    z: 5;
                     width: parent.width;
                     height: parent.height;
                     viewport-width: self.width;
@@ -291,6 +293,7 @@ export component FriendsModal inherits Rectangle {
                         scan-code => { root.scan-code(); }
                         connect-via-code(value) => { root.connect-via-code(value); }
                         code-edited => { root.code-status = ""; }
+                        close-add => { root.showing-add = false; }
                     }
                 }
 
