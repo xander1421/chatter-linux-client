@@ -628,6 +628,95 @@ mod tests {
 }
 
 #[cfg(test)]
+mod webp_roundtrip_tests {
+    use super::*;
+
+    // The inline thumbnail is encoded lossless-WebP by generate_thumbnail_from_memory
+    // and decoded back by inline_pixels_from_memory for display. If that round-trip
+    // does not preserve pixels, stored thumbnails render as garbage (the grey/noise
+    // album tiles). This pins the round-trip.
+    #[test]
+    fn inline_thumbnail_webp_roundtrip_preserves_pixels() {
+        // A deterministic, non-flat gradient so a garbled decode is obvious.
+        let mut src = image::RgbaImage::new(200, 120);
+        for (x, y, px) in src.enumerate_pixels_mut() {
+            *px = image::Rgba([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8, 255]);
+        }
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(src)
+            .write_to(&mut png, ImageFormat::Png)
+            .unwrap();
+
+        let (webp_bytes, w, h) =
+            ImageProcessor::generate_thumbnail_from_memory(png.get_ref()).unwrap();
+        assert!(w > 0 && h > 0);
+
+        let decoded = ImageProcessor::inline_pixels_from_memory(&webp_bytes).unwrap();
+        // The thumbnail is downscaled; sample the center to avoid edge filtering.
+        let (dw, dh) = decoded.dimensions();
+        let px = decoded.get_pixel(dw / 2, dh / 2);
+        // A correct decode of this gradient is never near-black or near-white noise.
+        let [r, g, b, a] = px.0;
+        assert_eq!(a, 255, "alpha corrupted");
+        assert!(
+            !(r < 8 && g < 8 && b < 8),
+            "center pixel decoded to black — webp round-trip is broken: {:?}",
+            px.0
+        );
+        // Decoded dims must match the reported thumbnail dims (after the 320 bound).
+        assert!(dw <= 320 && dh <= 320, "unexpected thumbnail size {dw}x{dh}");
+    }
+
+    // Reproduces the cached-preview path exactly: media.rs encodes the derived
+    // thumbnail with `DynamicImage::write_to(.., ImageFormat::WebP)` and later
+    // decodes it with `inline_pixels_from_memory`. The album tiles decode to a
+    // near-uniform grey (mean ~160, tiny structure) — this asserts the real
+    // encode/decode pair keeps the image's structure.
+    #[test]
+    fn cached_preview_webp_write_to_roundtrip_keeps_structure() {
+        // Photo-like: strong diagonal gradient + per-pixel detail.
+        let mut src = image::RgbaImage::new(320, 240);
+        for (x, y, px) in src.enumerate_pixels_mut() {
+            let r = ((x * 255) / 320) as u8;
+            let g = ((y * 255) / 240) as u8;
+            let b = (((x ^ y) * 3) % 256) as u8;
+            *px = image::Rgba([r, g, b, 255]);
+        }
+        let src_dyn = image::DynamicImage::ImageRgba8(src.clone());
+
+        // EXACT media.rs cache encode.
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        src_dyn.write_to(&mut encoded, ImageFormat::WebP).unwrap();
+
+        // EXACT display decode.
+        let decoded = ImageProcessor::inline_pixels_from_memory(encoded.get_ref()).unwrap();
+        let (dw, dh) = decoded.dimensions();
+
+        // Compare a downscaled copy of the source at the decoded size: a correct
+        // decode is close; a collapsed/garbled decode diverges hugely.
+        let ref_small = image::DynamicImage::ImageRgba8(src)
+            .thumbnail(dw, dh)
+            .into_rgba8();
+        let mut max_err = 0i32;
+        let mut sum_err = 0i64;
+        let mut count = 0i64;
+        for (p, q) in decoded.pixels().zip(ref_small.pixels()) {
+            for c in 0..3 {
+                let e = (p.0[c] as i32 - q.0[c] as i32).abs();
+                max_err = max_err.max(e);
+                sum_err += e as i64;
+                count += 1;
+            }
+        }
+        let mean_err = sum_err as f64 / count as f64;
+        assert!(
+            mean_err < 12.0 && max_err < 80,
+            "webp write_to/decode diverged from source: mean_err={mean_err:.1} max_err={max_err} size={dw}x{dh} (grey-garbage decode)"
+        );
+    }
+}
+
+#[cfg(test)]
 mod preview_budget_tests {
     use super::*;
 

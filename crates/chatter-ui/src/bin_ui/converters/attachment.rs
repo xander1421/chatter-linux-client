@@ -161,18 +161,12 @@ impl AttachmentDisplayData {
                 return;
             }
         }
-        if self.is_image {
-            if let Some(path) = self.local_path.as_deref() {
-                self.thumbnail_pixels =
-                    crate::bin_ui::decode_cache::thumbnail_guarded(&self.id, 0, generation, || {
-                        chatter_core::media::ImageProcessor::inline_pixels_from_path(
-                            std::path::Path::new(path),
-                        )
-                        .ok()
-                        .map(image::DynamicImage::ImageRgba8)
-                    });
-            }
-        }
+        // No decode from `local_path`: a stored attachment file is ciphertext, and
+        // `image` guessing a format from encrypted bytes "succeeds" into garbage —
+        // the grey/noise album tiles. The only valid inline preview is the sender's
+        // decrypted `thumbnail_bytes` above; without it the attachment shows its
+        // placeholder and decrypts on open. (Populating album thumbnails from the
+        // encrypted sidecar is a separate download step — see OPEN-ITEMS.)
     }
 
     /// Convert to Slint MessageAttachmentData (must be called on UI thread).
