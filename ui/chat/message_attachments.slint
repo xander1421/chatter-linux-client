@@ -90,14 +90,18 @@ export component MessageAttachments inherits VerticalLayout {
             background: Colors.surface-hover;
             clip: true;
 
-            if attachment.has-thumbnail: Image {
-                width: 100%; height: 100%; source: attachment.thumbnail; image-fit: cover;
-            }
+            // Placeholder under the thumbnail; the thumbnail fades in over it as
+            // the loader decodes it, instead of snapping in (the "pop").
             if !attachment.has-thumbnail: Image {
                 width: 32px; height: 32px;
                 x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                 source: attachment.is-video ? Icons.play : Icons.image;
                 colorize: Colors.text-muted;
+            }
+            Image {
+                width: 100%; height: 100%; source: attachment.thumbnail; image-fit: cover;
+                opacity: attachment.has-thumbnail ? 1.0 : 0.0;
+                animate opacity { duration: 240ms; easing: ease-in-out; }
             }
             if attachment.is-video: Image {
                 width: 28px; height: 28px;
@@ -227,11 +231,14 @@ export component MessageAttachments inherits VerticalLayout {
             border-radius: root.edge-to-edge ? 0px : Spacing.radius-sm;
             clip: true;
 
-            if attachment.has-thumbnail: Image {
+            Image {
                 width: 100%;
                 height: 100%;
                 source: attachment.thumbnail;
                 image-fit: root.edge-to-edge ? cover : contain;
+                // Fade in as the loader decodes it, instead of snapping in.
+                opacity: attachment.has-thumbnail ? 1.0 : 0.0;
+                animate opacity { duration: 240ms; easing: ease-in-out; }
             }
 
             if !attachment.has-thumbnail: Rectangle {
@@ -439,11 +446,14 @@ export component MessageAttachments inherits VerticalLayout {
             border-radius: Spacing.radius-sm;
             clip: true;
 
-            if attachment.has-thumbnail: Image {
+            Image {
                 width: 100%;
                 height: 100%;
                 source: attachment.thumbnail;
                 image-fit: contain;
+                // Fade in as the loader decodes it, instead of snapping in.
+                opacity: attachment.has-thumbnail ? 1.0 : 0.0;
+                animate opacity { duration: 240ms; easing: ease-in-out; }
             }
 
             // No thumbnail: the play button IS the icon, stacked
