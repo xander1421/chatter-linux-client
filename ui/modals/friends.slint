@@ -14,8 +14,8 @@ import { FriendsTab } from "friends_friends_tab.slint";
 import { FindTab } from "friends_find_tab.slint";
 import { RequestsTab } from "friends_requests_tab.slint";
 import { BlockedTab } from "friends_blocked_tab.slint";
-import { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } from "friends_data.slint";
-export { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } from "friends_data.slint";
+import { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData, UserSearchData } from "friends_data.slint";
+export { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData, UserSearchData } from "friends_data.slint";
 
 export component FriendsModal inherits Rectangle {
     // A tab chosen by click or by a screen reader. Requests opens on the
@@ -81,6 +81,11 @@ export component FriendsModal inherits Rectangle {
     in-out property <string> request-note: "";  // Optional intro note sent with a friend request
     in-out property <image> qr-code-image;
     in-out property <bool> show-qr: false;
+    // Username-first add (exact @handle). Owned here, searched/shaped in core.
+    in-out property <string> search-query: "";
+    in property <bool> search-active: false;
+    in property <bool> search-performed: false;
+    in property <UserSearchData> search-result;
     // Shield decides which code this account generates. Redeeming a code is
     // routed by its format in core; private codes work with Shield off too.
     property <bool> effective-private-mode: AnonMode.enabled;
@@ -96,6 +101,8 @@ export component FriendsModal inherits Rectangle {
     callback paste-code();                   // System clipboard → code-input
     callback scan-code();                    // Camera QR → code-input
     callback connect-via-code(string);       // Core routes private and server-managed codes
+    callback search-changed(string);         // query → core search_users
+    callback add-searched-friend(string);    // user_id → send request / secret chat
     callback switch-tab(string);
 
     // Friends actions
@@ -271,6 +278,12 @@ export component FriendsModal inherits Rectangle {
                         qr-code-image: root.qr-code-image;
                         show-qr <=> root.show-qr;
                         effective-private-mode: root.effective-private-mode;
+                        search-query <=> root.search-query;
+                        search-active: root.search-active;
+                        search-performed: root.search-performed;
+                        search-result: root.search-result;
+                        search-changed(q) => { root.search-changed(q); }
+                        add-searched-friend(uid) => { root.add-searched-friend(uid); }
                         generate-code(value) => { root.generate-code(value); }
                         generate-qr(value) => { root.generate-qr(value); }
                         copy-code => { root.copy-code(); }

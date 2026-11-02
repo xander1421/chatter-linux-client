@@ -146,6 +146,12 @@ export component AppTabScreens inherits Rectangle {
         request-note <=> ModalHostState.friends-request-note;
         qr-code-image <=> ModalHostState.friends-qr-code-image;
         show-qr <=> ModalHostState.friends-show-qr;
+        search-query <=> ModalHostState.friends-search-query;
+        search-active: ModalHostState.friends-search-active;
+        search-performed: ModalHostState.friends-search-performed;
+        search-result: ModalHostState.friends-search-result;
+        search-changed(q) => { ModalHostState.friends-search-changed(q); }
+        add-searched-friend(uid) => { ModalHostState.friends-add-searched-friend(uid); }
 
         close => {
             SidebarPane.active-tab = "chats";

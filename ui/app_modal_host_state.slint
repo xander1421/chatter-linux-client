@@ -8,7 +8,7 @@ import { GifData } from "components/gif_picker.slint";
 import { MentionSuggestion } from "components/mention_autocomplete.slint";
 import { AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
 import { SharedContentItem, SharedTab } from "modals/mod.slint";
-import { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } from "modals/friends.slint";
+import { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData, UserSearchData } from "modals/friends.slint";
 import { ForwardTarget } from "modals/forward_message.slint";
 import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
 import { SearchResultChannel } from "modals/join_channel.slint";
@@ -187,6 +187,12 @@ export global ModalHostState {
     in-out property <string> friends-request-note: "";
     in-out property <image> friends-qr-code-image;
     in-out property <bool> friends-show-qr: false;
+    // Username-first add: exact-@handle search. Query is UI-owned; the result
+    // + flags are shaped in core (search_users) and pushed back here.
+    in-out property <string> friends-search-query: "";
+    in property <bool> friends-search-active: false;      // a lookup is in flight
+    in property <bool> friends-search-performed: false;   // a query has resolved (drives no-match copy)
+    in property <UserSearchData> friends-search-result;
     // Forward message modal properties
     in property <string> forward-message-preview: "";
     in property <bool> forward-contact-share: false;
@@ -329,6 +335,8 @@ export global ModalHostState {
     callback friends-paste-code();
     callback friends-scan-code();
     callback friends-connect-via-code(string);
+    callback friends-search-changed(string);        // query → core search_users (debounced in glue)
+    callback friends-add-searched-friend(string);   // user_id → send request (or secret chat in Shield)
     callback friends-accept-private-request(string);   // Accept anon DM request
     callback friends-decline-private-request(string);  // Decline anon DM request
     callback friends-block-private-request(string);    // Block anon DM request
