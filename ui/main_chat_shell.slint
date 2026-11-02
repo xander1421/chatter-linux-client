@@ -375,6 +375,7 @@ export component MainChatShell inherits Rectangle {
                     window-width: root.width;
                     attachment-clicked() => { ChatPane.attachment-clicked(); }
                     audio-seek(arg0, arg1) => { ChatPane.audio-seek(arg0, arg1); }
+                    cancel-upload(arg0) => { ChatPane.cancel-upload(arg0); }
                     cancel-edit() => { ChatPane.cancel-edit(); }
                     cancel-reply() => { ChatPane.cancel-reply(); }
                     chat-menu-can-start-secret-chat() => { return ModalHostState.chat-menu-can-start-secret-chat(); }

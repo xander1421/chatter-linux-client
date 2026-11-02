@@ -88,6 +88,9 @@ pub struct AttachmentDisplayData {
     pub is_downloading: bool,
     pub is_download_failed: bool,
     pub progress: f32,
+    /// Per-file outgoing send state ("" / "queued" / "uploading" / "failed" /
+    /// "cancelled"), rendered on the composer's in-flight bubble.
+    pub upload_state: String,
     /// Thumbnail JPEG bytes from sender (for instant preview without download).
     pub thumbnail_bytes: Arc<[u8]>,
     /// Decoded thumbnail, from `decode_cache` — decode before the UI thread.
@@ -222,6 +225,7 @@ impl AttachmentDisplayData {
             is_downloading: self.is_downloading,
             is_download_failed: self.is_download_failed,
             progress: self.progress,
+            upload_state: self.upload_state.clone().into(),
         }
     }
 }
@@ -315,6 +319,8 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
         is_downloading,
         is_download_failed,
         progress: 0.0, // Will be updated by progress callback
+        // A stored/received attachment is never mid-outgoing-upload.
+        upload_state: String::new(),
         // Use stored thumbnail from sender (for instant preview)
         thumbnail_bytes: {
             let bytes: Arc<[u8]> = meta.thumbnail.as_deref().unwrap_or_default().into();

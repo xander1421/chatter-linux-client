@@ -275,6 +275,9 @@ fn pending_attachment_to_display_data(
         is_downloading: false,
         is_download_failed: false,
         progress: 0.0,
+        // Staged for a send not yet started: the in-flight bubble shows each
+        // tile as queued until core's upload loop flips it to uploading/sent.
+        upload_state: "queued".to_string(),
         thumbnail_bytes: std::sync::Arc::<[u8]>::from(Vec::new()),
         thumbnail_pixels: crate::bin_ui::decode_cache::cached_thumbnail(
             &attachment.id.to_string(),

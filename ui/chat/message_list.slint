@@ -386,6 +386,7 @@ export component MessageList inherits Rectangle {
     callback load-more();
     callback attachment-clicked(string);  // attachment ID
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
+    callback cancel-upload(string);  // attachment ID — abort one in-flight upload
     callback list-geometry(float, float, bool); // visible height, content height, tail seek
     callback visible-media-rows(int, int);
 
@@ -993,6 +994,9 @@ export component MessageList inherits Rectangle {
 
                     audio-seek(id, pos) => {
                         root.audio-seek(id, pos);
+                    }
+                    cancel-upload(id) => {
+                        root.cancel-upload(id);
                     }
                 }
             }

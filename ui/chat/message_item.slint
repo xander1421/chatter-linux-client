@@ -231,6 +231,7 @@ export component MessageItem inherits Rectangle {
         root.attachment-clicked(id);
     }
     callback audio-seek(string, float);
+    callback cancel-upload(string);  // (attachment-id) — abort one in-flight upload
     callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
 
     // ── Press-and-hold gesture (touch only) ──
@@ -885,6 +886,7 @@ export component MessageItem inherits Rectangle {
                             open-other-attachment(a0) => { root.open-other-attachment(a0); }
                             request-menu(a0, a1, a2, a3, a4, a5) => { root.request-menu(a0, a1, a2, a3, a4, a5); }
                             audio-seek(a0, a1) => { root.audio-seek(a0, a1); }
+                            cancel-upload(a0) => { root.cancel-upload(a0); }
                             message-clicked(a0) => { root.message-clicked(a0); }
                         }
 

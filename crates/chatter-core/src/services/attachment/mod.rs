@@ -10,7 +10,7 @@ mod sanitize;
 mod upload;
 mod work;
 
-pub use work::run_attachment_work;
+pub use work::{run_attachment_metadata, run_attachment_work};
 
 pub(crate) use media::image_preview_ciphertext_limit;
 pub use media::{

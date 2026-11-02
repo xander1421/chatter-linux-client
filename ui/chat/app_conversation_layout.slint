@@ -144,6 +144,7 @@ export component AppConversationLayout inherits Rectangle {
     in property <length> window-width;
     callback attachment-clicked();
     callback audio-seek(string, float);
+    callback cancel-upload(string);
     callback cancel-edit();
     callback cancel-reply();
     callback chat-menu-can-start-secret-chat() -> bool;
@@ -411,6 +412,7 @@ export component AppConversationLayout inherits Rectangle {
     history-has-newer: root.history-has-newer;
     history-head-offset: root.history-head-offset;
     request-latest => { root.request-latest(); }
+    cancel-upload(id) => { root.cancel-upload(id); }
     load-more => { root.load-more(); }
     visible-media-rows(first, last) => { root.visible-media-rows(first, last); }
     send(text) => { return root.send(text); }

@@ -45,6 +45,10 @@ export struct MessageAttachmentData {
     is-downloading: bool,   // Whether download is in progress
     is-download-failed: bool, // Download can be retried by tapping the attachment
     progress: float,        // Transfer progress 0.0 to 1.0
+    // Per-file outgoing send state for the in-flight bubble, set from core's
+    // AttachmentUploadProgress event: "" (none/sent), "queued", "uploading",
+    // "failed", "cancelled". Drives the per-tile overlay and cancel X.
+    upload-state: string,
 }
 
 // One block of a markdown message body (converters/markdown.rs parse_blocks).

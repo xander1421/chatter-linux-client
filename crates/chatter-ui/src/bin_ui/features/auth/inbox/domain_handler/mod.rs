@@ -410,6 +410,24 @@ pub async fn handle_domain_event(
             }
         }
 
+        // Per-file outgoing upload progress: update just the matching tile on
+        // the in-flight bubble so a multi-file send streams (queued → uploading
+        // → sent) instead of landing as one block.
+        DomainEvent::AttachmentUploadProgress {
+            attachment_id,
+            state,
+        } => {
+            let weak = window.clone();
+            let id = attachment_id.to_string();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    crate::bin_ui::features::chat_actions::update_attachment_upload_state(
+                        &w, &id, state,
+                    );
+                }
+            });
+        }
+
         // =========================================================================
         // Anonymous Group Events
         // =========================================================================

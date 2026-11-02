@@ -42,8 +42,11 @@ pub(crate) async fn process_and_add_file(
         .prepare_pending_file(file_path, staged_size, conversation, revision)
         .await?;
 
-    // Update UI immediately
-    update_attachments_ui(chat_state, weak);
+    // The caller renders once it has staged its whole batch: rendering here,
+    // per file, rebuilt the tray model N times for N dropped/picked files
+    // (O(N²) repeater churn) and made the tiles trickle in. See the picker
+    // loops and `render_attachments`, which now reconciles in place.
+    let _ = weak;
 
     Ok(())
 }
@@ -65,23 +68,52 @@ pub(crate) fn render_attachments(
     w: &MainWindow,
     attachments: &[chatter_core::state::PendingAttachment],
 ) {
-    // Retain ready images on refresh rather than discarding all thumbnails
-    // whenever the next file is staged or an entry is removed.
-    let old = w.global::<crate::ChatPane>().get_pending_attachments();
-    let old_rows: std::collections::HashMap<_, _> =
-        old.iter().map(|row| (row.id.to_string(), row)).collect();
-    let rows: Vec<_> = attachments
-        .iter()
-        .map(|attachment| {
-            old_rows
-                .get(&attachment.id.to_string())
-                .cloned()
-                .unwrap_or_else(|| pending_attachment_to_slint(attachment))
-        })
-        .collect();
-    w.global::<crate::ChatPane>()
-        .set_pending_attachments(ModelRc::new(VecModel::from(rows)));
+    // Reconcile the tray model IN PLACE rather than replacing it wholesale.
+    // A full replace tore down and rebuilt every tile's widget on each call,
+    // so staging N files (one render per file, before this change) was O(N²)
+    // repeater churn and threw away thumbnails already decoded for unchanged
+    // tiles. Here: drop rows no longer staged, keep existing rows (and their
+    // loaded previews) in place, and insert only the newly-staged ones.
+    let pane = w.global::<crate::ChatPane>();
+    let existing = pane.get_pending_attachments();
+    if let Some(model) = existing
+        .as_any()
+        .downcast_ref::<VecModel<PendingAttachmentData>>()
+    {
+        let want: Vec<String> = attachments.iter().map(|a| a.id.to_string()).collect();
+        for i in (0..model.row_count()).rev() {
+            if let Some(row) = model.row_data(i) {
+                if !want.iter().any(|id| id.as_str() == row.id.as_str()) {
+                    model.remove(i);
+                }
+            }
+        }
+        // Staged order is append-only, so inserting a missing row at its
+        // target index preserves order without reordering existing tiles.
+        for (target, attachment) in attachments.iter().enumerate() {
+            let id = attachment.id.to_string();
+            let present =
+                (0..model.row_count()).any(|i| model.row_data(i).is_some_and(|r| r.id == id));
+            if !present {
+                let row = pending_attachment_to_slint(attachment);
+                if target <= model.row_count() {
+                    model.insert(target, row);
+                } else {
+                    model.push(row);
+                }
+            }
+        }
+    } else {
+        let slint_attachments: Vec<PendingAttachmentData> = attachments
+            .iter()
+            .map(pending_attachment_to_slint)
+            .collect();
+        pane.set_pending_attachments(ModelRc::new(VecModel::from(slint_attachments)));
+    }
 
+    // Ciphertext cannot be handed to Slint's path loader. Authenticate,
+    // thumbnail and decode it off the UI thread, then update only the tray
+    // entry that still owns this path (navigation/removal may have intervened).
     let client = PREVIEW_CLIENT.with(|slot| slot.borrow().upgrade());
     if let Some(client) = client {
         let revision = client.session_revision();
@@ -273,6 +305,9 @@ pub(crate) fn wire_attachment_clicked(
                         }
                     }
 
+                    // One render for the whole selection: all placeholder tiles
+                    // appear at once, then thumbnails fill in off-thread.
+                    update_attachments_ui(&chat_state, &weak);
                     tracing::info!("Added file(s) to pending attachments");
                 });
             }
@@ -337,6 +372,9 @@ pub(crate) fn wire_attachment_clicked(
                             tracing::error!("{}", e);
                         }
                     }
+
+                    // One render for the whole selection (see desktop arm).
+                    update_attachments_ui(&chat_state, &weak);
                 });
             }
             // iOS has no picker yet: chatter-core's file_picker is desktop-only
@@ -435,7 +473,10 @@ pub(crate) fn wire_paste_image(
             )
             .await
             {
-                Ok(()) => tracing::info!("Attached image pasted from clipboard"),
+                Ok(()) => {
+                    update_attachments_ui(&chat_state, &weak);
+                    tracing::info!("Attached image pasted from clipboard");
+                }
                 Err(e) => {
                     ui_ctx.release_staged_files(&[PendingAttachment::new(
                         AttachmentId::new(),
@@ -477,6 +518,29 @@ pub(crate) fn read_clipboard_image() -> Result<PathBuf, String> {
         .keep()
         .map_err(|e| format!("failed to keep pasted image: {e}"))?;
     Ok(path)
+}
+
+/// Wire the per-file cancel-upload callback: the X on an in-flight bubble tile
+/// aborts just that file's upload in core, leaving the rest of the send intact.
+pub(crate) fn wire_cancel_upload(
+    window: &MainWindow,
+    ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
+) {
+    let ui_ctx = ui_ctx.clone();
+    window
+        .global::<crate::ChatPane>()
+        .on_cancel_upload(move |attachment_id: SharedString| {
+            let id_str = attachment_id.to_string();
+            match id_str.parse::<AttachmentId>() {
+                Ok(id) => {
+                    tracing::info!("Cancel upload requested: {}", id_str);
+                    ui_ctx.cancel_attachment_upload(id);
+                }
+                Err(e) => {
+                    tracing::error!("Cannot cancel upload, bad attachment id '{id_str}': {e}");
+                }
+            }
+        });
 }
 
 /// Wire up the remove-attachment callback.

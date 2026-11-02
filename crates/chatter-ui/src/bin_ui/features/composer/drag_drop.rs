@@ -117,11 +117,14 @@ fn handle_dropped_file(
     let weak = weak.clone();
 
     tokio::spawn(async move {
-        if let Err(e) =
-            process_and_add_file(path, None, &chat_state, conversation, revision, &weak).await
-        {
-            tracing::warn!("Dropped file could not be staged: {e}");
-            show_drop_error(&weak, "Couldn't attach that file. Check that it is still available and try again.");
+        match process_and_add_file(path, None, &chat_state, conversation, revision, &weak).await {
+            Ok(()) => {
+                super::attachments::update_attachments_ui(&chat_state, &weak);
+            }
+            Err(e) => {
+                tracing::warn!("Dropped file could not be staged: {e}");
+                show_drop_error(&weak, "Couldn't attach that file. Check that it is still available and try again.");
+            }
         }
     });
 }
