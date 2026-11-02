@@ -49,6 +49,50 @@ pub async fn pick_files(mime_types: &[&str]) -> Vec<PathBuf> {
     rx.await.unwrap_or_default()
 }
 
+/// Open the Telegram-style attachment source chooser (gallery photo picker /
+/// document picker / in-app camera) and await the files the chosen source
+/// produced.
+///
+/// Every source delivers through the same `nativeOnFilesPicked` callback the
+/// plain document picker uses, so the result funnels into one staging pipeline
+/// and the caller treats a chooser pick exactly like a file pick. Empty on
+/// cancel (of either the chooser or the chosen source).
+pub async fn pick_via_chooser() -> Vec<PathBuf> {
+    let (tx, rx) = oneshot::channel();
+    let request = NEXT_REQUEST.fetch_add(1, Ordering::Relaxed);
+    *PENDING.lock().unwrap() = Some((request, tx));
+
+    if let Err(e) = launch_chooser(request) {
+        tracing::error!("Android attachment chooser: failed to open: {e}");
+        let mut pending = PENDING.lock().unwrap();
+        if pending.as_ref().is_some_and(|(id, _)| *id == request) {
+            pending.take();
+        }
+        return Vec::new();
+    }
+
+    // Sender is dropped (→ Err) if a newer pick replaces this one.
+    rx.await.unwrap_or_default()
+}
+
+/// JNI: invoke `MainActivity.launchAttachmentChooser(long request)`.
+fn launch_chooser(request: i64) -> Result<(), String> {
+    activity::with_jni_env(|env| {
+        let act = activity::activity()?;
+        let res = env.call_method(
+            act,
+            jni::jni_str!("launchAttachmentChooser"),
+            jni::jni_sig!("(J)V"),
+            &[JValue::Long(request)],
+        );
+        if res.is_err() {
+            activity::clear_exception(env);
+        }
+        res.map_err(|e| e.to_string())?;
+        Ok(())
+    })
+}
+
 /// JNI: invoke `MainActivity.launchFilePicker(String[] mimeTypes)`.
 fn launch(mime_types: &[&str], request: i64) -> Result<(), String> {
     activity::with_jni_env(|env| {

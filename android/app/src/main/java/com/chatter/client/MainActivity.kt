@@ -264,6 +264,9 @@ class MainActivity : GameActivity() {
             if (cancelledPick != 0L) nativeOnFilesPicked(cancelledPick, emptyArray())
         }
         pickerCopies.shutdown()
+        // A capture abandoned by Activity teardown leaves only a purgeable cache
+        // temp; drop it eagerly rather than wait for the OS to clear the cache.
+        clearPendingCapture()
         torNetworkCallback?.let { callback ->
             val connectivity = getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
                 as ConnectivityManager
@@ -821,37 +824,45 @@ class MainActivity : GameActivity() {
     @Volatile private var pickerDestroyed = false
     private val openDocuments =
         registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-            val request = filePickerRequest.get()
-            if (request == 0L || pickerDestroyed) return@registerForActivityResult
-            // Preserve selection order and one-copy-at-a-time IO off the main
-            // loop. No bitmap/full-file byte arrays are allocated here.
-            pickerCopies.execute {
-                val paths = uris.mapNotNull { uri ->
-                    if (pickerDestroyed || filePickerRequest.get() != request) null else copyToCache(uri)
-                }
-                val delivered = synchronized(filePickerRequest) {
-                    if (pickerDestroyed || filePickerRequest.get() != request) false else {
-                        filePickerRequest.set(0)
-                        nativeOnFilesPicked(request, paths.toTypedArray())
-                    }
-                }
-                if (!delivered) {
-                    // Receiver cancelled/replaced or Activity was destroyed.
-                    paths.forEach { path ->
-                        val file = File(path)
-                        file.delete()
-                        file.parentFile?.delete()
-                    }
-                } else if (paths.size < uris.size) {
-                    val failed = uris.size - paths.size
-                    runOnUiThread {
-                        if (!pickerDestroyed) Toast.makeText(
-                            this,
-                            if (failed == 1) "Couldn't read that file" else "Couldn't read $failed files",
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                    }
-                }
+            deliverPickedUris(uris)
+        }
+
+    // Android Photo Picker (androidx): images + videos, multi-select, needs NO
+    // storage permission. On devices without the system picker androidx falls
+    // back to the document picker automatically. Results go through the same
+    // request-tagged nativeOnFilesPicked path as SAF.
+    private val pickVisualMedia =
+        registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
+            deliverPickedUris(uris)
+        }
+
+    // In-app camera capture. The system camera writes into an app-private temp
+    // file we expose per-URI through the existing FileProvider; CAMERA is
+    // requested at use. TakePicture/CaptureVideo only return success, so the
+    // output file is the result. The grant flags are added because the base
+    // contracts do not set them and some camera apps need write access.
+    @Volatile private var pendingCaptureFile: File? = null
+    private var pendingCaptureVideo = false
+    private val takePhoto =
+        registerForActivityResult(object : ActivityResultContracts.TakePicture() {
+            override fun createIntent(context: android.content.Context, input: Uri): Intent =
+                super.createIntent(context, input)
+                    .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }) { ok -> deliverCapture(ok) }
+    private val captureVideo =
+        registerForActivityResult(object : ActivityResultContracts.CaptureVideo() {
+            override fun createIntent(context: android.content.Context, input: Uri): Intent =
+                super.createIntent(context, input)
+                    .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }) { ok -> deliverCapture(ok) }
+    private val cameraCapturePermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                launchPendingCapture()
+            } else {
+                clearPendingCapture()
+                failPendingPick()
+                Toast.makeText(this, "Camera permission is needed to capture", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -925,6 +936,163 @@ class MainActivity : GameActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Called from Rust (JNI) to open the Telegram-style attachment source
+     * chooser. Each source (gallery photo picker, document picker, in-app
+     * camera photo/video) resolves back through [nativeOnFilesPicked], so Rust
+     * stages whatever is returned exactly as it does a plain file pick. Cancel —
+     * of the chooser or of the chosen source — delivers an empty array so the
+     * waiting Rust future completes.
+     */
+    @Suppress("unused")
+    fun launchAttachmentChooser(request: Long) {
+        runOnUiThread {
+            // Acquire the single in-flight slot exactly as launchFilePicker does;
+            // the chosen source then inherits this request id and its result
+            // callback (deliverPickedUris / deliverCapture) releases it.
+            if (pickerDestroyed || !filePickerRequest.compareAndSet(0, request)) {
+                nativeOnFilesPicked(request, emptyArray())
+                return@runOnUiThread
+            }
+            val items = arrayOf("Photo or video", "File", "Take photo", "Record video")
+            try {
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("Add attachment")
+                    .setItems(items) { _, which ->
+                        try {
+                            when (which) {
+                                0 -> pickVisualMedia.launch(
+                                    androidx.activity.result.PickVisualMediaRequest(
+                                        ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                                1 -> openDocuments.launch(arrayOf("*/*"))
+                                2 -> beginCapture(video = false)
+                                else -> beginCapture(video = true)
+                            }
+                        } catch (_: Exception) {
+                            Log.e(TAG, "Attachment source launch failed")
+                            failPendingPick()
+                        }
+                    }
+                    .setOnCancelListener { failPendingPick() }
+                    .show()
+            } catch (_: Exception) {
+                Log.e(TAG, "Attachment chooser failed")
+                failPendingPick()
+            }
+        }
+    }
+
+    /** Release the in-flight request and tell Rust nothing was picked. */
+    private fun failPendingPick() {
+        val request = filePickerRequest.getAndSet(0)
+        if (request != 0L) nativeOnFilesPicked(request, emptyArray())
+    }
+
+    /**
+     * Copy picked content:// URIs (SAF or Photo Picker) into the cache dir and
+     * hand the resulting filesystem paths to Rust, threading the in-flight
+     * request id so a replaced/cancelled pick can't deliver to the wrong one.
+     * Mirrors the SAF OpenMultipleDocuments handler.
+     */
+    private fun deliverPickedUris(uris: List<Uri>) {
+        val request = filePickerRequest.get()
+        if (request == 0L || pickerDestroyed) return
+        // Preserve selection order and one-copy-at-a-time IO off the main loop.
+        pickerCopies.execute {
+            val paths = uris.mapNotNull { uri ->
+                if (pickerDestroyed || filePickerRequest.get() != request) null else copyToCache(uri)
+            }
+            val delivered = synchronized(filePickerRequest) {
+                if (pickerDestroyed || filePickerRequest.get() != request) false else {
+                    filePickerRequest.set(0)
+                    nativeOnFilesPicked(request, paths.toTypedArray())
+                }
+            }
+            if (!delivered) {
+                // Receiver cancelled/replaced or Activity was destroyed.
+                paths.forEach { path ->
+                    val file = File(path)
+                    file.delete()
+                    file.parentFile?.delete()
+                }
+            } else if (paths.size < uris.size) {
+                val failed = uris.size - paths.size
+                runOnUiThread {
+                    if (!pickerDestroyed) Toast.makeText(
+                        this,
+                        if (failed == 1) "Couldn't read that file" else "Couldn't read $failed files",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        }
+    }
+
+    private fun beginCapture(video: Boolean) {
+        pendingCaptureVideo = video
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA)
+            == PackageManager.PERMISSION_GRANTED) {
+            launchPendingCapture()
+        } else {
+            cameraCapturePermission.launch(android.Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun launchPendingCapture() {
+        try {
+            // Lay the capture file out exactly like copyToCache (a per-selection
+            // dir under cacheDir/picked), so Rust's staging and its cleanup
+            // (remove file + parent dir) apply unchanged whether the bytes came
+            // from SAF, the Photo Picker or the camera.
+            val dir = File(cacheDir, "picked").apply { mkdirs() }
+            val selectionDir = Files.createTempDirectory(dir.toPath(), "capture_").toFile()
+            val name = (if (pendingCaptureVideo) "video_" else "photo_") +
+                System.currentTimeMillis() + (if (pendingCaptureVideo) ".mp4" else ".jpg")
+            val file = File(selectionDir, name)
+            file.createNewFile()
+            pendingCaptureFile = file
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this, "$packageName.viewer-media", file)
+            if (pendingCaptureVideo) captureVideo.launch(uri) else takePhoto.launch(uri)
+        } catch (_: Exception) {
+            Log.e(TAG, "Camera capture launch failed")
+            clearPendingCapture()
+            failPendingPick()
+        }
+    }
+
+    private fun deliverCapture(success: Boolean) {
+        val file = pendingCaptureFile
+        pendingCaptureFile = null
+        val request = filePickerRequest.get()
+        if (request == 0L || pickerDestroyed) {
+            file?.let { it.delete(); it.parentFile?.delete() }
+            return
+        }
+        val paths = if (success && file != null && file.exists() && file.length() > 0L) {
+            arrayOf(file.absolutePath)
+        } else {
+            file?.let { it.delete(); it.parentFile?.delete() }
+            emptyArray()
+        }
+        val delivered = synchronized(filePickerRequest) {
+            if (pickerDestroyed || filePickerRequest.get() != request) false else {
+                filePickerRequest.set(0)
+                nativeOnFilesPicked(request, paths)
+            }
+        }
+        if (!delivered && paths.isNotEmpty()) {
+            val f = File(paths[0])
+            f.delete()
+            f.parentFile?.delete()
+        }
+    }
+
+    private fun clearPendingCapture() {
+        pendingCaptureFile?.let { it.delete(); it.parentFile?.delete() }
+        pendingCaptureFile = null
     }
 
     private fun copyToCache(uri: Uri): String? {

@@ -279,10 +279,13 @@ pub(crate) fn wire_attachment_clicked(
             #[cfg(target_os = "android")]
             {
                 tokio::spawn(async move {
-                    // Storage Access Framework (no permission needed). "*/*" lets the
-                    // user pick any file; images/videos/audio/docs all qualify.
+                    // Telegram-style source chooser: gallery photo picker (no
+                    // permission), the SAF document picker, or the in-app camera.
+                    // Whatever the source, Kotlin hands back cache-dir paths
+                    // through the same callback the plain picker uses, so the
+                    // staging loop below is identical for all three.
                     let selected_files =
-                        crate::platform::android::file_picker::pick_files(&["*/*"]).await;
+                        crate::platform::android::file_picker::pick_via_chooser().await;
                     finish_picker(&weak, &chat_state, conversation, revision);
 
                     if selected_files.is_empty() {
