@@ -1,7 +1,6 @@
 import { KeyFocus } from "../components/key_focus.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { VoiceRecording } from "voice_recording.slint";
-import { LiquidComposerSilhouette, DropletNeck } from "composer_geometry.slint";
 import { ComposerFormatToolbar } from "composer_format_toolbar.slint";
 import { ComposerReplyPreview } from "composer_reply_preview.slint";
 import { ComposerAttachmentStrip } from "composer_attachment_strip.slint";
@@ -184,8 +183,7 @@ export component MessageComposer inherits GlassSurface {
     // participates without being committed; attachments also raise the controls.
     // A reply raises them too; its preview gets a separate row below them.
     property <bool> raised-actions: text != "" || text-input.preedit-text != "" || root.has-attachments || root.is-replying;
-    // A damped neck spring pulls the droplets upward against gravity. Keeping
-    // velocity across target changes lets a send reverse the same moving drop.
+    // Retain velocity across target changes as controls move between rows.
     // One tick is a tenth of the shared quick duration, including speed scale.
     // A draft can already be present when this component is created. Start at
     // its settled position; `changed raised-actions` only handles later edits.
@@ -193,13 +191,9 @@ export component MessageComposer inherits GlassSurface {
     private property <float> lift-velocity: 0;
     init => { root.lift-progress = root.raised-actions ? 1 : 0; }
     property <float> lift-geometry: min(1.08, max(0, root.lift-progress));
-    // The contour can overshoot; hit targets and the field stop at their
-    // aligned endpoints so the neck never pulls a glyph across the input.
+    // Clamp the controls and field to their aligned endpoints, even while
+    // the retained transition progress settles past its target.
     property <float> lift-layout: min(1, max(0, root.lift-progress));
-    // The hit boxes follow the clamped layout; only the visual droplets bob
-    // above their landing point as the shared spring crosses its target.
-    property <length> droplet-bob: -max(0, root.lift-progress - 1) * 60px
-        + max(0, -root.lift-progress) * 20px;
     changed raised-actions => {
         if Appearance.reduce-motion {
             root.lift-progress = root.raised-actions ? 1 : 0;
@@ -257,7 +251,7 @@ export component MessageComposer inherits GlassSurface {
             + (has-attachments ? attachment-band-height + Spacing.xs : 0px)
             + (is-replying ? reply-row-height + Spacing.xs : 0px));
     // The host already pads by the measured composer height, including the
-    // attachment and reply rows. Add only the circle row as it lifts.
+    // attachment and reply rows. Add only the action row as it lifts.
     out property <length> list-clearance-extra: (root.collapsed && !root.keep-height) || root.recording-here
         ? 0px : lift-layout * (Spacing.touch-target-min + Spacing.xs);
     property <length> lower-terminal-width: show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px;
@@ -398,7 +392,7 @@ export component MessageComposer inherits GlassSurface {
     // Formatting toolbar only while text is SELECTED.
     //
     // Whatever flips this drives format-bar-height, which feeds the composer's
-    // animated `height:` below — so the composer grows 44px at that moment. On
+    // `height:` below — so the composer grows one 48px touch row. On
     // Android that growth hides the soft keyboard if it lands while the IME
     // transaction is still in flight (GameActivity logs: setSoftKeyboardActive
     // true then false). Two earlier gates both landed inside that window:
@@ -422,11 +416,10 @@ export component MessageComposer inherits GlassSurface {
     property <bool> show-formatting:
         text-input.anchor-position-byte-offset != text-input.cursor-position-byte-offset;
 
-    // Formatting bar height — 44px so the B/I/S/code buttons inside can be
-    // 44px touch targets rather than the 28px boxes measured on a phone.
-    property <length> format-bar-height: show-formatting ? 44px : 0px;
+    // Match the formatting buttons' full 48px Android touch target.
+    property <length> format-bar-height: show-formatting ? Spacing.touch-target-min : 0px;
 
-    // Bento Box — expands when user is actively typing (text is non-empty)
+    // Expand while composing without replacing the native input.
 
     // Forward focus to input
     forward-focus: text-input;
@@ -494,8 +487,7 @@ export component MessageComposer inherits GlassSurface {
                     - root.row-padding - (root.content-height - Spacing.touch-target-min) / 2);
             property <length> lower-action-y: root.row-padding + root.raised-toolbar-height + root.content-height - Spacing.touch-target-min;
 
-            // One bar surface; the circles and their temporary bridges sit above
-            // it without adding another backdrop capture.
+            // One quiet shell behind the native input; raised actions keep their slots.
             GlassSurface {
                 x: 0px;
                 y: root.raised-toolbar-height;
@@ -509,36 +501,8 @@ export component MessageComposer inherits GlassSurface {
                 backdrop-paused: root.backdrop-paused;
                 visible: !root.recording-here;
             }
-            composer-silhouette := LiquidComposerSilhouette {
-                width: parent.width;
-                height: parent.height;
-                rise: root.lift-geometry;
-                velocity: root.lift-velocity;
-                field-top: root.raised-toolbar-height / 1px;
-                trailing-drop: root.show-attachment-action;
-                visible: !root.recording-here;
-            }
-
-            DropletNeck {
-                x: root.row-padding * (1 - root.lift-layout);
-                height: parent.height;
-                rise: root.lift-geometry;
-                field-top: root.raised-toolbar-height / 1px;
-                circle-bottom: (parent.action-y + root.droplet-bob + Spacing.touch-target-min) / 1px;
-                visible: !root.recording-here;
-            }
-            if root.show-attachment-action: DropletNeck {
-                x: parent.width - root.row-padding * (1 - root.lift-layout)
-                    - Spacing.touch-target-min - (1 - root.lift-layout) * root.inline-terminal-width;
-                height: parent.height;
-                rise: root.lift-geometry;
-                field-top: root.raised-toolbar-height / 1px;
-                circle-bottom: (parent.action-y + root.droplet-bob + Spacing.touch-target-min) / 1px;
-                visible: !root.recording-here;
-            }
-
             // Reply preview directly above the field, beneath the raised
-            // action circles. Its own row remains reserved during the lift.
+            // action controls. Its own row remains reserved during the lift.
             if root.is-replying: ComposerReplyPreview {
                 x: root.row-padding;
                 y: root.action-shell-height + Spacing.xs
@@ -588,7 +552,7 @@ export component MessageComposer inherits GlassSurface {
 
             ComposerEmojiButton {
                 x: root.row-padding * (1 - root.lift-layout);
-                y: parent.action-y + root.droplet-bob;
+                y: parent.action-y;
                 lift-layout: root.lift-layout;
                 picker-open: root.picker-open;
                 mobile: root.mobile;
@@ -609,11 +573,9 @@ export component MessageComposer inherits GlassSurface {
                     - (root.lift-layout * root.lower-terminal-width
                         + (1 - root.lift-layout) * (Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width + Spacing.xs));
                 height: root.content-height;
-                // A brighter inset over the one sampled composer surface. The
-                // native TextInput stays mounted while controls lift and settle.
-                background: Appearance.glass-effects
-                    ? (Appearance.dark ? #ffffff11 : #ffffff6d)
-                    : Colors.inset;
+                // Share the shell surface rather than nesting a second bright pill.
+                // The native TextInput stays mounted while controls lift and settle.
+                background: transparent;
                 // Concentric with the shell: radius-chrome − chrome-inset.
                 border-radius: Spacing.radius-chrome-inner;
                 // The glass shell supplies the resting silhouette. Keep a
@@ -755,7 +717,7 @@ export component MessageComposer inherits GlassSurface {
             if root.show-attachment-action: ComposerAttachButton {
                 x: parent.width - root.row-padding * (1 - root.lift-layout) - Spacing.touch-target-min
                     - (1 - root.lift-layout) * root.inline-terminal-width;
-                y: parent.action-y + root.droplet-bob;
+                y: parent.action-y;
                 lift-layout: root.lift-layout;
                 disabled: root.disabled;
                 surface-material-level: root.material-level;
@@ -767,7 +729,7 @@ export component MessageComposer inherits GlassSurface {
             // lifting a finger never sends or discards the voice note.
             if !root.is-editing && MeshGlobal.active-id == "": Rectangle {
                 x: parent.width - root.row-padding - Spacing.touch-target-min;
-                // Stay beside the field while the attachment droplet lands.
+                // Stay beside the field while the attachment control changes rows.
                 y: parent.lower-action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;

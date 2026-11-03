@@ -76,8 +76,6 @@ export component ChatRow inherits Rectangle {
     property <bool> was-open: false;
     property <bool> swallow-click: false;
     property <length> drag-distance: 0px;
-    property <length> arrival-offset: root.data.arrival-serial > 0 ? 18px : 0px;
-    animate arrival-offset { duration: Materials.motion-standard; easing: Materials.spring; }
     Timer {
         interval: 180ms;
         running: root.swallow-click;
@@ -175,7 +173,7 @@ export component ChatRow inherits Rectangle {
 
     content := Rectangle {
         x: root.swipe-offset;
-        y: root.arrival-offset;
+        y: 0px;
         width: parent.width;
         height: parent.height;
         background: root.swipe-offset == 0px ? transparent : Colors.surface;

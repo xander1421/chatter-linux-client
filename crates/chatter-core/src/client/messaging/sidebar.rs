@@ -97,24 +97,20 @@ impl ChatterClient {
         None
     }
 
-    /// Typed label for a message's attachments — "🎤 Voice message",
-    /// "🎬 Video +2", "📄 report.pdf" (see `FileMetadata::preview_label`).
+    /// Plain typed label for a message's attachments — "Voice message",
+    /// "Video +2", "report.pdf" (see `FileMetadata::sidebar_preview_label`).
     /// `None` when the message carries no attachment or its metadata has not
     /// landed locally yet; the caller then falls back to a plain count.
     fn attachment_preview_label(
         &self,
         message: &crate::domain::message::Message,
     ) -> Option<String> {
-        let label = self
-            .get_attachment_metadata(message.attachments.first()?)?
-            .metadata
-            .preview_label();
-        let extra = message.attachments.len() - 1;
-        Some(if extra > 0 {
-            format!("{} +{}", label, extra)
-        } else {
-            label
-        })
+        let attachment = self.get_attachment_metadata(message.attachments.first()?)?;
+        plain_attachment_album_label(
+            &attachment.metadata,
+            message.attachments.len() - 1,
+            message.as_text(),
+        )
     }
 
     /// Flatten search snippets with the same rules as chat-row previews.
@@ -155,7 +151,12 @@ impl ChatterClient {
                 preview
             ));
         }
-        plain_sidebar_preview(&preview)
+        if label.is_some() {
+            // Metadata labels are already plain text; filenames are not Markdown.
+            preview
+        } else {
+            plain_sidebar_preview(&preview)
+        }
     }
 
     /// Preview + raw activity time of a conversation's latest message: the
@@ -893,5 +894,71 @@ impl ChatterClient {
                 .map(ActiveConversation::AnonDm);
         }
         Some(ActiveConversation::ServerDm { peer_id })
+    }
+}
+
+fn plain_attachment_album_label(
+    metadata: &crate::domain::attachment::FileMetadata,
+    extra: usize,
+    caption: Option<&str>,
+) -> Option<String> {
+    // The domain preview interprets a label's first word as an icon.
+    // Captions are user content, so provide no label when one is present.
+    if caption.is_some_and(|text| !text.is_empty()) {
+        return None;
+    }
+    let label = metadata.sidebar_preview_label();
+    if extra > 0 {
+        Some(format!("{label} +{extra}"))
+    } else {
+        Some(label)
+    }
+}
+
+#[cfg(test)]
+mod attachment_preview_tests {
+    use super::plain_attachment_album_label;
+    use crate::domain::attachment::FileMetadata;
+
+    #[test]
+    fn captions_are_user_content_and_do_not_take_a_label_prefix() {
+        use crate::domain::{
+            ids::ChannelId,
+            message::{ConversationType, Message},
+        };
+        let meta = FileMetadata::new("🎉 notes.pdf".into(), "application/pdf".into(), 1);
+        for caption in ["🎉 beach 🧑‍💻", "Voice message", "  caption  "] {
+            let message = Message::new_text(
+                ChannelId::new(),
+                ConversationType::ServerDm,
+                None,
+                caption.into(),
+                0,
+            );
+            let label = plain_attachment_album_label(&meta, 2, message.as_text());
+            assert_eq!(label, None);
+            assert_eq!(
+                message.sidebar_preview(None, label.as_deref(), None),
+                format!("\u{2068}{caption}\u{2069}")
+            );
+        }
+    }
+
+    #[test]
+    fn plain_album_labels_keep_counts_and_filename_bytes() {
+        let photo = FileMetadata::new("IMG.png".into(), "image/png".into(), 1);
+        assert_eq!(
+            plain_attachment_album_label(&photo, 0, None).as_deref(),
+            Some("Photo")
+        );
+        assert_eq!(
+            plain_attachment_album_label(&photo, 2, Some("")).as_deref(),
+            Some("Photo +2")
+        );
+        let file = FileMetadata::new("  🎉 report.pdf  ".into(), "application/pdf".into(), 1);
+        assert_eq!(
+            plain_attachment_album_label(&file, 1, None).as_deref(),
+            Some("  🎉 report.pdf   +1")
+        );
     }
 }

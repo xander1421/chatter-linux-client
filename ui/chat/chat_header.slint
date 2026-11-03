@@ -24,7 +24,7 @@ export component ChatHeader inherits GlassSurface {
     material-tint: Materials.chat-chrome;
     darkening: Materials.chat-darkening;
     elevation: 3;
-    border-radius: self.height / 2;
+    border-radius: Spacing.radius-chrome;
     property <int> typing-phase: 0;
     Timer {
         interval: 180ms / Appearance.animation-speed;
@@ -310,7 +310,7 @@ export component ChatHeader inherits GlassSurface {
                             text: root.channel-name;
                             color: name-touch.has-hover ? Colors.primary : Colors.text-primary;
                             font-size: root.header-title-size;
-                            font-weight: Typography.semibold;
+                            font-weight: Typography.medium;
                             overflow: elide;
                             vertical-alignment: center;
                         }
@@ -335,7 +335,6 @@ export component ChatHeader inherits GlassSurface {
                             text: root.mobile && root.is-dm ? "Typing" : root.typing-indicator;
                             color: Colors.text-secondary;
                             font-size: Typography.xs;
-                            font-italic: true;
                             min-width: 0px;
                             horizontal-stretch: 0;
                             overflow: elide;
@@ -436,12 +435,11 @@ export component ChatHeader inherits GlassSurface {
                     height: 6px;
                     border-radius: 3px;
                     background: Colors.primary;
-                    y: (parent.height - self.height) / 2 + 2px * Math.sin((animation-tick() / (250ms / Appearance.animation-speed) + i * 0.3) * 360deg);
+                    y: (parent.height - self.height) / 2 + (Appearance.reduce-motion ? 0px : 2px * Math.sin((animation-tick() / (250ms / Appearance.animation-speed) + i * 0.3) * 360deg));
                 }
                 Text {
                     text: "Jarvis is thinking...";
                     font-size: Typography.sm;
-                    font-italic: true;
                     color: Colors.primary;
                     vertical-alignment: center;
                 }
@@ -545,14 +543,14 @@ export component ChatHeader inherits GlassSurface {
                         width: Spacing.avatar-sm;
                         height: Spacing.avatar-sm;
                         border-radius: MeshGlobal.active-kind == "private-channel" ? Spacing.radius-md : Spacing.radius-full;
-                        background: Colors.primary.with-alpha(0.16);
+                        background: Colors.surface-hover;
                         Image {
                             source: MeshGlobal.active-kind == "private-channel" ? Icons.lock : Icons.hash;
                             width: 16px;
                             height: 16px;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
-                            colorize: Colors.primary;
+                            colorize: Colors.text-secondary;
                         }
                     }
                 }
@@ -563,7 +561,7 @@ export component ChatHeader inherits GlassSurface {
                         text: MeshGlobal.active-title;
                         color: Colors.text-primary;
                         font-size: Typography.base;
-                        font-weight: Typography.semibold;
+                        font-weight: Typography.medium;
                         overflow: elide;
                         horizontal-alignment: left;
                         min-width: 0px;

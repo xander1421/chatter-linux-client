@@ -44,7 +44,7 @@ export component ChatHeaderMenu inherits Rectangle {
     in property <bool> show: true;
     property <bool> entered: false;
     property <float> menu-progress: 0;
-    animate menu-progress { duration: Materials.motion-standard; easing: Materials.spring; }
+    animate menu-progress { duration: Materials.motion-standard; easing: Materials.settle; }
     init => { if (Appearance.reduce-motion && root.show) { root.menu-progress = 1; } }
     changed show => {
         root.entered = false;
@@ -70,11 +70,11 @@ export component ChatHeaderMenu inherits Rectangle {
         material-level: 3;
         elevation: 4;
 
-        // Keep the right edge at the ⋯ action while the card grows out of it.
-        x: root.card-x + root.card-width - self.width;
-        y: max(0px, root.card-y - 24px * (1 - root.menu-progress));
-        width: 44px + (root.card-width - 44px) * root.menu-progress;
-        height: 44px + (root.card-height - 44px) * root.menu-progress;
+        // Keep the menu aligned with its action; reveal it with a short settle.
+        x: root.card-x;
+        y: max(0px, root.card-y - 4px * (1 - root.menu-progress));
+        width: root.card-width;
+        height: root.card-height;
         border-radius: Spacing.radius-xl;
         // Eat taps on the card's own padding.
         TouchArea { }

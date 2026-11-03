@@ -1,5 +1,4 @@
 import { KeyFocus } from "../components/key_focus.slint";
-import { GlassSurface } from "../components/glass_surface.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Colors } from "../theme/colors.slint";
@@ -8,7 +7,7 @@ import { HeaderButton } from "../components/header_button.slint";
 import { ActivityBell } from "../activity/activity_bell.slint";
 import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
 
-export component SidebarHeader inherits GlassSurface {
+export component SidebarHeader inherits Rectangle {
     in property <length> panel-width;
     in property <length> top-row-height;
     in property <length> quick-link-inset;
@@ -28,11 +27,9 @@ export component SidebarHeader inherits GlassSurface {
     callback create-clicked();
     callback anon-mode-clicked();
 
-            // Bound backdrop and shadow painting to this chrome silhouette.
+            // Quiet search surface; the conversations carry the visual detail.
             clip: true;
-            material-level: 0;
-            elevation: 3;
-            background: transparent;
+            background: Colors.surface;
             border-radius: root.mobile-mode ? Spacing.radius-lg : Spacing.radius-chrome;
 
             // Pinned to the top: without x/y a sized element is centred. On a

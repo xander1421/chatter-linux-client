@@ -3,8 +3,8 @@
 import { Appearance } from "appearance.slint";
 
 export global Spacing {
-    out property <length> radius-chrome: 24px;
-    out property <length> radius-sheet: 28px;
+    out property <length> radius-chrome: 20px;
+    out property <length> radius-sheet: 24px;
     // Controls nested in chrome are concentric with it: inner radius = outer
     // radius − the inset between them, so the two curves run parallel. The
     // composer's field and buttons sit `chrome-inset` inside its shell.
@@ -26,7 +26,7 @@ export global Spacing {
     out property <length> radius-sm: 6px;
     out property <length> radius-md: 10px;
     out property <length> radius-lg: 16px;
-    out property <length> radius-xl: 20px;            // Neo bubble radius (18-24px range)
+    out property <length> radius-xl: 20px;            // Large content containers
     out property <length> radius-full: 9999px;
     // Message bubbles (text, media, call): round corners, and the outer-side
     // tail / same-sender joint corner (message_item.slint).

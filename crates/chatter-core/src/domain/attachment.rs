@@ -486,6 +486,24 @@ impl FileMetadata {
         }
     }
 
+    /// Plain attachment label for sidebar display only. Quote/protocol previews
+    /// continue to use [`Self::preview_label`]. Classify metadata directly so
+    /// user filenames (including emoji and whitespace) are never stripped.
+    #[must_use]
+    pub fn sidebar_preview_label(&self) -> String {
+        if self.is_gif() {
+            return "GIF".to_string();
+        }
+        match FileCategory::from_mime_and_filename(&self.mime_type, &self.name) {
+            FileCategory::Audio if self.waveform_samples.is_some() => "Voice message".to_string(),
+            FileCategory::Audio => "Audio".to_string(),
+            FileCategory::Image => "Photo".to_string(),
+            FileCategory::Video => "Video".to_string(),
+            _ if self.name.trim().is_empty() => "File".to_string(),
+            _ => self.name.clone(),
+        }
+    }
+
     /// Get file category based on MIME type.
     #[must_use]
     pub fn category(&self) -> FileCategory {
@@ -617,6 +635,53 @@ pub struct Thumbnail {
 #[cfg(test)]
 mod preview_label_tests {
     use super::FileMetadata;
+
+    #[test]
+    fn sidebar_labels_classify_metadata_without_decorations() {
+        for (name, mime, waveform, expected) in [
+            ("Voice message.wav", "audio/wav", true, "Voice message"),
+            (
+                "recording.ogg",
+                "application/octet-stream",
+                true,
+                "Voice message",
+            ),
+            ("song.mp3", "audio/mpeg", false, "Audio"),
+            ("song.mp3", "application/octet-stream", false, "Audio"),
+            ("animation", "image/gif", false, "GIF"),
+            ("animation.GIF", "application/octet-stream", false, "GIF"),
+            ("IMG_1.HEIC", "image/heic", false, "Photo"),
+            ("image.png", "application/octet-stream", false, "Photo"),
+            ("clip", "video/mp4", false, "Video"),
+            ("clip.mov", "application/octet-stream", false, "Video"),
+            ("report.pdf", "application/pdf", false, "report.pdf"),
+            ("script.rs", "text/plain", false, "script.rs"),
+            ("archive.zip", "application/zip", false, "archive.zip"),
+            ("unknown", "application/octet-stream", false, "unknown"),
+            (" ", "application/octet-stream", false, "File"),
+        ] {
+            let mut meta = FileMetadata::new(name.into(), mime.into(), 1);
+            meta.waveform_samples = waveform.then(|| vec![13; 32]);
+            assert_eq!(meta.sidebar_preview_label(), expected, "{name}: {mime}");
+        }
+    }
+
+    #[test]
+    fn sidebar_keeps_user_filename_bytes_and_decorated_preview_stays_unchanged() {
+        for name in [
+            "📄 report.pdf",
+            "🎉.bin",
+            "  🧑‍💻 notes.txt  ",
+            "cafe\u{301} 🥳.pdf",
+        ] {
+            let meta = FileMetadata::new(name.into(), "application/octet-stream".into(), 1);
+            assert_eq!(meta.sidebar_preview_label().as_bytes(), name.as_bytes());
+            let icon = crate::ui::file_data::category_icon(
+                super::FileCategory::from_filename(name).as_str(),
+            );
+            assert_eq!(meta.preview_label(), format!("{} {}", icon, name.trim()));
+        }
+    }
 
     #[test]
     fn every_attachment_kind_gets_a_type_label() {

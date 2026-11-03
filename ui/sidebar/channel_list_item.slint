@@ -88,6 +88,7 @@ export component ChannelListItem inherits Rectangle {
     // mouse-density list, it was just quieter about it.
     property <length> name-size: root.mobile-mode ? Typography.base : Typography.sm;
     property <length> preview-size: root.mobile-mode ? Typography.sm : Typography.xs;
+    property <length> badge-size: root.mobile-mode ? 24px : 20px;
     property <length> glyph-size: root.mobile-mode ? 24px : 16px;
     property <length> icon-box: root.mobile-mode ? Spacing.row-avatar-touch : Spacing.row-avatar-desktop;
 
@@ -112,12 +113,7 @@ export component ChannelListItem inherits Rectangle {
             root.press-active = false;
         }
     }
-    // The whole row compresses under the finger, then springs back from its
-    // own center. This keeps the avatar, text and badge moving as one surface.
-    transform-scale-x: root.press-active ? 98% : 100%;
-    transform-scale-y: root.press-active ? 96% : 100%;
-    animate transform-scale-x { duration: root.press-active ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-    animate transform-scale-y { duration: root.press-active ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+    // Press feedback changes the surface without shifting the conversation.
     animate background { duration: Materials.motion-standard; easing: Materials.glide; }
 
     // Neo 2.0 states: flat → highlight hover → inset selected.
@@ -133,8 +129,9 @@ export component ChannelListItem inherits Rectangle {
         opacity: root.selected && !root.collapsed ? 1 : 0;
         animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
         x: 0px;
-        width: 3px;
-        height: parent.height;
+        width: 2px;
+        height: 24px;
+        y: (parent.height - self.height) / 2;
         border-radius: self.width / 2;
         background: Colors.selected-indicator;
     }
@@ -278,7 +275,7 @@ export component ChannelListItem inherits Rectangle {
                 clip: true;
                 if root.draft-preview != "": HorizontalLayout {
                     width: parent.width;
-                    spacing: 3px;
+                    spacing: Spacing.xs;
                     Text { text: "Draft:"; color: Colors.danger; font-size: root.preview-size; }
                     Text { text: root.draft-preview; color: Colors.text-muted; font-size: root.preview-size; overflow: elide; horizontal-stretch: 1; }
                 }
@@ -311,11 +308,7 @@ export component ChannelListItem inherits Rectangle {
             HorizontalLayout {
                 visible: root.unread-count > 0 || self.opacity > 0;
                 opacity: root.unread-count > 0 ? 1 : 0;
-                transform-scale-x: root.unread-count > 0 ? 100% : 55%;
-                transform-scale-y: root.unread-count > 0 ? 100% : 55%;
                 animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
-                animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
-                animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
                 alignment: end;
                 spacing: Spacing.xs;
 
@@ -329,8 +322,8 @@ export component ChannelListItem inherits Rectangle {
                 }
 
                 Rectangle {
-                    width: max(20px, badge-text.preferred-width + 12px);
-                    height: 20px;
+                    width: max(root.badge-size, badge-text.preferred-width + 12px);
+                    height: root.badge-size;
                     border-radius: Spacing.radius-full;
                     background: root.is-muted ? Colors.text-muted : Colors.action-fill;
 
@@ -375,7 +368,7 @@ export component ChannelListItem inherits Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             border-radius: Spacing.radius-lg;
-            background: root.selected ? Colors.primary
+            background: root.selected ? Colors.row-selected
                       : (!root.mobile-mode && touch.has-hover) ? Colors.fill-secondary
                       : Colors.surface-hover;
 
