@@ -93,7 +93,13 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         retry.retain(|id, _| visible.contains(id));
         pending.retain(|_, token| !token.is_cancelled());
         for id in candidates {
-            if pending.len() >= 3 {
+            // Dispatch the whole visible set at once instead of 3 per 80ms tick,
+            // so an album stops filling in visible waves (the "pop"). This is not
+            // the decode-concurrency bound: core's StaticPreviewLoader holds a
+            // Semaphore(3) (media/static_preview.rs), so at most 3 actually decode
+            // at a time regardless — the extra dispatches just queue there, which
+            // removes the inter-tick stall without raising peak CPU/memory.
+            if pending.len() >= 12 {
                 break;
             }
             if pending.contains_key(&id)
