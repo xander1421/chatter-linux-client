@@ -364,6 +364,11 @@ ios = ["dep:apple-native-keyring-store"]
 local-ai = ["dep:mistralrs"]
 local-ai-cuda = ["local-ai", "mistralrs/cuda", "mistralrs/flash-attn"]
 jarvis = []
+# Compile the real Android ATrace probe harness in `media::performance_trace`.
+# OFF by default: a normal build gets the no-op stub, so the `span`/`section`/
+# `counter` call sites threaded through the media + scroll paths fold away at
+# compile time and ship nothing. Opt in for a profiling pass only.
+perf-trace = []
 # The bitchat mesh. Off by default: the radio stack has never exchanged a byte
 # with another device, so it should be opted into rather than shipped live.
 #

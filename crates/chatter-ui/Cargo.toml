@@ -67,12 +67,12 @@ chatter-core = { path = "../chatter-core", default-features = false }
 # ============================================================================
 # UI Framework - Slint
 # ============================================================================
-slint = { version = "=1.17.1", default-features = false, features = ["compat-1-2", "accessibility", "raw-window-handle-06"] }
-i-slint-backend-winit = { version = "=1.17.1", optional = true }
+slint = { version = "=1.18.1", default-features = false, features = ["compat-1-2", "accessibility", "raw-window-handle-06"] }
+i-slint-backend-winit = { version = "=1.18.1", optional = true }
 # Named directly only for `StyledText::from_paragraphs` and its paragraph types,
 # a patch in vendor/i-slint-core (see its PATCHES.md): message bodies are built
 # from our own markdown spans, never through Slint's markdown parser.
-i-slint-core = { version = "=1.17.1", default-features = false, features = ["std"] }
+i-slint-core = { version = "=1.18.1", default-features = false, features = ["std"] }
 winit = { version = "0.30", optional = true }
 
 # ============================================================================
@@ -125,7 +125,8 @@ raw-window-handle = { version = "0.6", optional = true }
 # Platform-specific: Android
 # ============================================================================
 [target.'cfg(target_os = "android")'.dependencies]
-i-slint-backend-android-activity = { version = "=1.17.1", default-features = false, features = ["aa-06", "game-activity"], optional = true }
+i-slint-renderer-skia = { version = "=1.18.1", default-features = false, optional = true }
+i-slint-backend-android-activity = { version = "=1.18.1", default-features = false, features = ["aa-06", "game-activity"], optional = true }
 android-activity = { version = "0.6", features = ["game-activity"], optional = true }
 # Slint's backend-selector unconditionally references i_slint_backend_android_activity
 # on android (api.rs uses `cfg!(...)`, which still compiles the reference). The only
@@ -133,7 +134,7 @@ android-activity = { version = "0.6", features = ["game-activity"], optional = t
 # `native-activity`, conflicting with game-activity. So we enable the selector's
 # `backend-android-activity` feature directly here — it pulls the backend crate with
 # default-features=false, letting our game-activity selection above stand alone.
-i-slint-backend-selector = { version = "=1.17.1", default-features = false, optional = true }
+i-slint-backend-selector = { version = "=1.18.1", default-features = false, optional = true }
 # JNI bindings for Android system APIs (notifications, window insets).
 # These live in chatter-ui (platform layer), not chatter-core (platform-neutral).
 jni = "0.22.4"
@@ -145,11 +146,11 @@ ndk-context = "0.1"
 [dev-dependencies]
 chatter-core = { path = "../chatter-core", default-features = false, features = ["testing"] }
 # Headless GUI test backend for VALIDATED-UI.md (slint::testing analog).
-# Pinned to =1.17.1 to match the `slint` crate exactly — the testing backend
+# Pinned to =1.18.1 to match the `slint` crate exactly — the testing backend
 # links i-slint-core, which must be the SAME version as the generated MainWindow's
 # i-slint-core or ElementHandle/Window types won't line up. default-features=false
 # keeps it lean (no mcp/protobuf/system-testing pulled in).
-i-slint-backend-testing = { version = "=1.17.1", default-features = false, features = ["renderer-software"] }
+i-slint-backend-testing = { version = "=1.18.1", default-features = false, features = ["renderer-software"] }
 
 [build-dependencies]
 # Android calls: force-keep + export the libwebrtc Java_* JNI symbols so the
@@ -227,6 +228,14 @@ quic = ["chatter-core/quic"]
 # dep:livekit so android_main can call livekit::webrtc::android::initialize_android
 # (webrtc needs the JavaVM wired before Room::connect, or it segfaults on join).
 mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "i-slint-backend-selector/backend-android-activity", "slint/std", "chatter-core/media", "call-ui", "dep:livekit"]
+# Compile the Android ATrace probe harness (core `media::performance_trace`) back
+# in for a profiling pass. OFF by default — the probes are no-ops and nothing
+# ships. `TRACE=1 android/build-android.sh` sets it.
+perf-trace = ["chatter-core/perf-trace"]
+# Device comparison only; ordinary Android builds do not enable this feature.
+experimental-prefix-flush = ["dep:i-slint-renderer-skia", "i-slint-renderer-skia/experimental-prefix-flush", "i-slint-backend-android-activity?/experimental-prefix-flush"]
+experimental-native-pacing = ["dep:i-slint-renderer-skia", "i-slint-renderer-skia/experimental-native-pacing", "i-slint-backend-android-activity?/experimental-native-pacing"]
+experimental-swappy = ["dep:i-slint-renderer-skia", "i-slint-renderer-skia/experimental-swappy", "i-slint-backend-android-activity?/experimental-swappy"]
 # iOS: leanest possible set. winit backend (i-slint-backend-winit 1.17 declares
 # objc2-ui-kit/objc2-quartz-core/block2 for iOS) and the same skia renderer
 # desktop uses — it cross-compiles and links for aarch64-apple-ios and renders
