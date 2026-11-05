@@ -13,7 +13,7 @@ export global Materials {
         ? (Appearance.dark ? #23292a52 : #ffffff61)
         : (Appearance.dark ? #202627 : #fafbfb);
     out property <color> regular: Appearance.glass-effects
-        ? (Appearance.dark ? #23292a66 : #ffffff75)
+        ? (Appearance.dark ? #2b31368c : #ffffff75)
         : (Appearance.dark ? #202627 : #fafbfb);
     // Chat header and composer float over the conversation: regular glass
     // at 70% of its tint alpha (owner 2026-10-24). Flat mode stays opaque.
@@ -33,7 +33,7 @@ export global Materials {
     // Chat headers float over message text; the heavier blur obscures glyphs
     // while this tint still shows the scene's colour and motion.
     out property <color> header-chrome: Appearance.glass-effects
-        ? (Appearance.dark ? #292f3094 : #ffffff94)
+        ? (Appearance.dark ? #262b30b0 : #ffffff94)
         : (Appearance.dark ? #292f30 : #ffffff);
     out property <color> opaque: Appearance.dark ? #202627 : #fafbfb;
     // A dark optical base bounds the white FAB glyph against either backdrop.
@@ -70,11 +70,16 @@ export global Materials {
     out property <length> blur-regular: 34px;
     out property <length> blur-thick: 38px;
     out property <length> blur-header: 42px;
-    out property <float> saturation: 1.0;
-    // Bound bright content behind dark chrome so light labels retain contrast.
-    out property <float> chrome-brightness: Appearance.dark ? -0.20 : 0.0;
-    // Edge lensing strength for the Backdrop refraction shader (0..1).
-    out property <float> refraction: 0.04;
+    // Vibrancy: a gentle saturation lift so the frost picks up colour from
+    // behind it without going muddy (Apple's frost reads clean, not tinted).
+    out property <float> saturation: 1.2;
+    // Neutral in dark mode: the dark tint carries the material; no white lift
+    // (that read too bright). Dark-mode glass is a dark translucent, not a frost.
+    out property <float> chrome-brightness: Appearance.dark ? 0.0 : 0.0;
+    // Edge lensing strength (0..1). Kept LOW: Apple's frosted chrome shows a
+    // clean blur, not visible magnification/chromatic noise. The lens is for
+    // clear-glass elements, not the bars.
+    out property <float> refraction: 0.06;
     out property <duration> feedback-duration: Appearance.reduce-motion ? 0ms : 100ms / Appearance.animation-speed;
     out property <duration> menu-duration: Appearance.reduce-motion ? 0ms : 180ms / Appearance.animation-speed;
     out property <duration> sheet-duration: Appearance.reduce-motion ? 0ms : 240ms / Appearance.animation-speed;

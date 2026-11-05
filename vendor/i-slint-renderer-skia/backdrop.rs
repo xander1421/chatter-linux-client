@@ -22,27 +22,64 @@ pub(crate) fn enabled() -> bool {
     })
 }
 
-// Rounded-rectangle signed distance and its normal make the lens follow curved corners.
-// Displacement points inward, so refraction never needs source pixels outside the layer.
+// Apple "Liquid Glass" optical model ported to SkSL. A continuous-curvature
+// squircle (superellipse, n=4) defines the panel; its gradient gives the edge
+// normal; the bevel ring near the edge lenses (magnifies) the backdrop inward
+// along that normal, splits R/B for chromatic dispersion, and lifts a
+// Schlick-Fresnel specular rim toward a fixed key light. All effects fall to
+// zero in the flat interior, so the centre samples the backdrop unchanged and
+// refraction never needs pixels outside the layer. Displacement/dispersion
+// scale with `strength` (Materials.refraction); the rim is intrinsic so glass
+// reads as glass even at low refraction. Tuned on-device.
 const LENS_SOURCE: &str = r#"
 uniform shader source;
 uniform float2 size;
 uniform float radius;
 uniform float strength;
+
+const float DISPERSION = 0.6;
+
 half4 main(float2 p) {
-    float2 halfSize = size * 0.5;
-    float2 centered = p - halfSize;
-    float2 q = abs(centered) - (halfSize - radius);
-    float2 outside = max(q, float2(0));
-    float distance = length(outside) + min(max(q.x, q.y), 0.0) - radius;
-    float2 normal = length(outside) > 0.001
-        ? normalize(outside) * sign(centered)
-        : (q.x > q.y ? float2(sign(centered.x), 0) : float2(0, sign(centered.y)));
-    float band = max(1.0, min(min(halfSize.x, halfSize.y), max(radius, 12.0)));
-    float edge = 1.0 - smoothstep(0.0, band, max(-distance, 0.0));
-    float2 sampleAt = clamp(p - normal * edge * strength * band * 0.3,
-                           float2(0.5), max(size - 0.5, float2(0.5)));
-    return source.eval(sampleAt);
+    float2 hs = size * 0.5;
+    float2 c = p - hs;
+    float2 denom = max(hs, float2(1.0));
+    float2 q = abs(c) / denom;
+    // Superellipse (n=4) distance without pow: q^4 via mults, ^(1/4) via sqrt.
+    // 1 on the edge, <1 inside. n=4 is the Apple continuous-curvature corner.
+    float2 q2 = q * q;
+    float e = sqrt(sqrt(q2.x * q2.x + q2.y * q2.y));
+    float minHalf = min(hs.x, hs.y);
+    float sdf = (e - 1.0) * minHalf;                 // <0 inside, 0 on the edge
+    // Bevel ring: 1 at the visible edge, 0 in the flat interior, squared so the
+    // lensing/dispersion stay at the very edge.
+    float bevelW = max(radius, 12.0);
+    float bevel = smoothstep(-bevelW, 0.0, sdf);
+    float edge = bevel * bevel;
+    // Flat interior: the lens and dispersion contribute nothing here, so take
+    // the backdrop in a single sample and skip the normal, displacement and
+    // the 3-tap colour split entirely. This is the bulk of a wide surface.
+    if (edge < 0.004) {
+        return source.eval(p);
+    }
+    // Outward edge normal from the superellipse gradient (q^3 via mults).
+    float2 gv = sign(c) * (q2 * q) / denom;
+    float glen = length(gv);
+    float2 grad = glen > 1e-4 ? gv / glen : float2(0.0);
+    float2 lo = float2(0.5);
+    float2 hi = max(size - 0.5, float2(0.5));
+    // Edge lensing: pull the sample inward along the normal, magnifying content
+    // toward the rim.
+    float2 baseAt = clamp(p - grad * edge * strength * bevelW * 0.6, lo, hi);
+    // Cauchy-style dispersion: R bends less, B more, across the normal at the rim.
+    float2 off = grad * (DISPERSION * strength * edge * bevelW * 0.25);
+    half4 col;
+    col.r = source.eval(clamp(baseAt - off, lo, hi)).r;
+    col.g = source.eval(baseAt).g;
+    col.b = source.eval(clamp(baseAt + off, lo, hi)).b;
+    col.a = source.eval(baseAt).a;
+    // No shader rim: the thin 1px optical edge is drawn by GlassSurface
+    // (Materials.glass-edge). Apple's edge is a crisp hairline, not a glow.
+    return col;
 }
 "#;
 
@@ -81,6 +118,20 @@ fn color_matrix(saturation: f32, brightness: f32) -> [f32; 20] {
     ]
 }
 
+/// Resolution the blur convolution runs at, as a fraction of physical pixels.
+/// The kernel removes detail finer than its radius, so the larger the blur the
+/// more aggressively its input can be downsampled with no visible change. Tiers
+/// (not a continuous ramp) keep the cache key stable and small blurs crisp.
+fn blur_downscale(blur: f32) -> f32 {
+    if blur >= 32.0 {
+        0.25
+    } else if blur >= 4.0 {
+        0.5
+    } else {
+        1.0
+    }
+}
+
 pub(crate) fn filter(
     bounds: Rect,
     blur: f32,
@@ -116,42 +167,53 @@ pub(crate) fn filter(
     }) {
         return Some(filter);
     }
-    let mut result = if blur >= 4.0 {
-        // Work in half-resolution coordinates, retaining the physical blur sigma
-        // and crop after upsampling. Small blurs keep their full-resolution detail.
+    let scale = blur_downscale(blur);
+    let mut result = if blur <= 0.0 {
+        None
+    } else if scale < 1.0 {
+        // Blur at reduced resolution, retaining the physical sigma and cropping
+        // after upsampling. A Gaussian of radius `blur` destroys detail finer
+        // than itself, so the pre-blur downsample is invisible in the result
+        // while the convolution runs on `scale^2` of the pixels. The tier
+        // deepens with the radius (see `blur_downscale`): chat chrome blurs
+        // ~100-126px physical and so take the quarter-resolution path.
         let down = image_filters::matrix_transform(
-            &skia_safe::Matrix::scale((0.5, 0.5)),
+            &skia_safe::Matrix::scale((scale, scale)),
             skia_safe::FilterMode::Linear,
             None,
         );
         let low_bounds = Rect::new(
-            bounds.left * 0.5,
-            bounds.top * 0.5,
-            bounds.right * 0.5,
-            bounds.bottom * 0.5,
+            bounds.left * scale,
+            bounds.top * scale,
+            bounds.right * scale,
+            bounds.bottom * scale,
         );
         let blurred = image_filters::blur(
-            (blur * 0.5, blur * 0.5),
+            (blur * scale, blur * scale),
             skia_safe::TileMode::Clamp,
             down,
             low_bounds,
         );
         image_filters::matrix_transform(
-            &skia_safe::Matrix::scale((2.0, 2.0)),
+            &skia_safe::Matrix::scale((1.0 / scale, 1.0 / scale)),
             skia_safe::FilterMode::Linear,
             blurred,
         )
-    } else if blur > 0.0 {
-        image_filters::blur((blur, blur), skia_safe::TileMode::Clamp, None, bounds)
     } else {
-        None
+        // Small blurs keep full-resolution detail.
+        image_filters::blur((blur, blur), skia_safe::TileMode::Clamp, None, bounds)
     };
-    // An identity matrix is still a valid backdrop source when only refraction is active.
-    result = image_filters::color_filter(
-        skia_safe::color_filters::matrix_row_major(&color_matrix(saturation, brightness), None),
-        result,
-        bounds,
-    );
+    // Saturation 1 + brightness 0 is an identity colour matrix: skip the pass
+    // and its intermediate texture. Keep it only when it is the one stage that
+    // materialises the backdrop source for a refraction-only filter (blur
+    // produced nothing). (Light mode is identity; dark-mode chrome darkens.)
+    if saturation != 1.0 || brightness != 0.0 || result.is_none() {
+        result = image_filters::color_filter(
+            skia_safe::color_filters::matrix_row_major(&color_matrix(saturation, brightness), None),
+            result,
+            bounds,
+        );
+    }
     if refraction > 0.0 {
         let effect = LENS.with(|cell| {
             cell.get_or_init(|| {
@@ -319,5 +381,87 @@ mod tests {
     fn lens_shader_and_filter_chain_are_valid() {
         RuntimeEffect::make_for_shader(LENS_SOURCE, None).expect("valid rounded glass lens SkSL");
         assert!(filter(Rect::from_wh(120.0, 80.0), 12.0, 1.7, 0.05, 0.4, 20.0).is_some());
+    }
+
+    #[test]
+    fn blur_downscale_tiers_deepen_with_radius() {
+        assert_eq!(blur_downscale(0.0), 1.0);
+        assert_eq!(blur_downscale(3.9), 1.0);
+        assert_eq!(blur_downscale(4.0), 0.5);
+        assert_eq!(blur_downscale(31.9), 0.5);
+        assert_eq!(blur_downscale(32.0), 0.25);
+        assert_eq!(blur_downscale(126.0), 0.25); // chat chrome physical blur
+    }
+
+    // CPU-raster timing benchmark for the glass backdrop pipeline. Not a GPU
+    // measurement (absolute numbers differ on-device), but a reproducible way to
+    // attribute cost to each stage and catch regressions while tuning the look.
+    //   cargo test -p i-slint-renderer-skia --release -- --ignored --nocapture bench_backdrop_apply
+    #[test]
+    #[ignore = "timing benchmark; run with --release --ignored --nocapture"]
+    fn bench_backdrop_apply() {
+        fn apply_once(
+            surface: &mut skia_safe::Surface,
+            bounds: Rect,
+            radius: f32,
+            filter: &ImageFilter,
+        ) {
+            let canvas = surface.canvas();
+            canvas.save();
+            canvas.clip_rrect(skia_safe::RRect::new_rect_xy(bounds, radius, radius), None, true);
+            canvas.save_layer(
+                &skia_safe::canvas::SaveLayerRec::default().bounds(&bounds).backdrop(filter),
+            );
+            canvas.restore();
+            canvas.restore();
+            // Force the raster work to complete before timing the next apply.
+            let info = skia_safe::ImageInfo::new(
+                (1, 1),
+                skia_safe::ColorType::RGBA8888,
+                skia_safe::AlphaType::Premul,
+                None,
+            );
+            let mut px = [0u8; 4];
+            let _ = surface.read_pixels(&info, &mut px, 4, (0, 0));
+        }
+
+        FILTERS.with(|cache| cache.borrow_mut().clear());
+        // A phone chat-header strip, physical pixels.
+        let (w, h) = (1080i32, 180i32);
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).unwrap();
+        {
+            let canvas = surface.canvas();
+            canvas.clear(skia_safe::Color::from_argb(255, 20, 40, 60));
+            let mut paint = skia_safe::Paint::default();
+            paint.set_color(skia_safe::Color::from_argb(255, 210, 130, 50));
+            for x in (0..w).step_by(24) {
+                canvas.draw_rect(Rect::from_xywh(x as f32, 0.0, 10.0, h as f32), &paint);
+            }
+        }
+        let bounds = Rect::from_wh(w as f32, h as f32);
+        let radius = 60.0;
+        // (label, blur, saturation, brightness, refraction) — chat chrome is the first row.
+        let cases: &[(&str, f32, f32, f32, f32)] = &[
+            ("liquid-glass full (blur+vibrancy+lens+disp+spec)", 126.0, 1.5, -0.14, 0.4),
+            ("blur+vibrancy only", 126.0, 1.5, -0.14, 0.0),
+            ("blur only", 126.0, 1.0, 0.0, 0.0),
+            ("lens only (no blur)", 0.0, 1.0, 0.0, 0.4),
+        ];
+        println!("\n-- backdrop apply ({w}x{h}px, radius {radius}) --");
+        for (label, blur, sat, bright, refr) in cases {
+            FILTERS.with(|cache| cache.borrow_mut().clear());
+            let Some(f) = filter(bounds, *blur, *sat, *bright, *refr, radius) else {
+                println!("  {label:52} (no filter)");
+                continue;
+            };
+            apply_once(&mut surface, bounds, radius, &f); // warm
+            let n = 120;
+            let start = std::time::Instant::now();
+            for _ in 0..n {
+                apply_once(&mut surface, bounds, radius, &f);
+            }
+            let ms = start.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
+            println!("  {label:52} {ms:7.3} ms/apply  (blur downscale {})", blur_downscale(*blur));
+        }
     }
 }
