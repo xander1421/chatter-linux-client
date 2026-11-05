@@ -1,5 +1,6 @@
 //! Viewport observation and pixel publication only; loading lives in core.
 use crate::{ChatPane, MainWindow};
+use chatter_core::media::performance_trace as trace;
 use chatter_core::{client::ChatterClient, media::static_preview::StaticPreviewLoader};
 use slint::{ComponentHandle, Model, Timer, TimerMode};
 use std::{
@@ -18,11 +19,14 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     let mut pending: HashMap<String, tokio_util::sync::CancellationToken> = HashMap::new();
     let mut retry: HashMap<String, std::time::Instant> = HashMap::new();
     let mut settled: Option<(slint::ModelRc<crate::MessageItemData>, usize, usize, u64)> = None;
+    // Previous first-visible row, for scroll-direction-aware prewarm.
+    let mut last_first: usize = usize::MAX;
     let timer = Timer::default();
     timer.start(TimerMode::Repeated, Duration::from_millis(80), move || {
         let Some(window) = weak.upgrade() else { return };
         if client.session_revision() != revision || !client.is_app_visible() || !loader.is_current()
         {
+            let _reset = trace::section(c"chatter.media.static.ui_reset");
             for token in pending.values() {
                 token.cancel();
             }
@@ -38,6 +42,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         let pane = window.global::<ChatPane>();
         let messages = pane.get_messages();
         if pane.get_message_last_visible_row() < 0 {
+            let _hidden = trace::section(c"chatter.media.static.ui_no_rows");
             for token in pending.values() {
                 token.cancel();
             }
@@ -56,11 +61,29 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         }
         let mut visible = HashSet::new();
         let mut candidates = Vec::new();
-        // Variable-height rows make the reported indices approximate. Use the
-        // same cushion as GIF/video admission and eviction.
-        let rows = (first..=last.min(messages.row_count().saturating_sub(1)))
-            .chain((first.saturating_sub(8)..first))
-            .chain(((last + 1)..=(last + 8).min(messages.row_count().saturating_sub(1))));
+        // Scroll-direction-aware prewarm cushion (was a symmetric ±8). Decode a
+        // generous band ahead in the travel direction plus a small trailing band,
+        // so opening a conversation and scrolling hit warm RAM (~2ms) and paint on
+        // the first frame instead of decoding reactively after the row is on
+        // screen (the "pop-in"). Variable-height rows make indices approximate.
+        // Bounded: rows beyond the band are still cancelled below, so peak decode
+        // and memory stay ~band-sized. The per-album cap (album_index >= 10) and
+        // the pending cap of 12 bound it further.
+        // ponytail: band sizes are a heuristic; widen the lead if flings still pop.
+        let (above, below) = if last_first == usize::MAX || first == last_first {
+            (16usize, 16usize) // open / at rest: symmetric
+        } else if first > last_first {
+            (8usize, 24usize) // scrolling toward newer/higher rows: lead below
+        } else {
+            (24usize, 8usize) // scrolling toward older/lower rows: lead above
+        };
+        last_first = first;
+        let last_row = messages.row_count().saturating_sub(1);
+        // Viewport first so a scroll during prewarm fills the visible rows before
+        // the cushion (core's Semaphore(3) takes candidates in dispatch order).
+        let rows = (first..=last.min(last_row))
+            .chain(first.saturating_sub(above)..first)
+            .chain((last + 1)..=(last + below).min(last_row));
         for row in rows {
             let Some(message) = messages.row_data(row) else {
                 continue;
@@ -84,6 +107,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         }
         pending.retain(|id, token| {
             if !visible.contains(id) {
+                let _cancel = trace::section(c"chatter.media.static.ui_cancel_offscreen");
                 token.cancel();
                 false
             } else {
@@ -113,29 +137,50 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                 continue;
             };
             let token = tokio_util::sync::CancellationToken::new();
+            let job = trace::Job::new();
+            job.event(c"chatter.media.static.demand");
+            let demand = job.span(c"chatter.media.static.demand_to_publish");
+            let queued = job.span(c"chatter.media.static.runtime_queue");
             pending.insert(id.clone(), token.clone());
             retry.insert(id.clone(), std::time::Instant::now());
+            let generation = crate::bin_ui::decode_cache::thumbnail_generation();
             let loader = loader.clone();
             let client = client.clone();
             let weak = weak.clone();
             let owner =
                 super::history_owner::HistoryOwner::capture(&client, client.active_conversation());
             crate::rt_handle().spawn(async move {
+                drop(queued);
                 let result = loader
                     .clone()
-                    .load(client.clone(), attachment_id, 640, token.clone())
+                    .load_traced(client.clone(), attachment_id, 640, token.clone(), job)
                     .await;
                 // Mark completion even on failure; the next tick can retry sidecars
                 // that arrived after the row was first displayed.
                 token.cancel();
-                let Some(result) = result else { return };
-                let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    &result.rgba,
-                    result.width,
-                    result.height,
-                );
+                let Some(result) = result else {
+                    job.event(c"chatter.media.static.no_result");
+                    return;
+                };
+                let pixels = {
+                    let _copy = trace::section(c"chatter.media.static.pixel_copy");
+                    slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                        &result.rgba,
+                        result.width,
+                        result.height,
+                    )
+                };
+                // Warm RAM cache (ref-shared with the row below), so scrolling the
+                // row off and back restores synchronously in refresh_visible_media
+                // instead of re-decoding here — the re-entry "pop-in".
+                crate::bin_ui::decode_cache::put_thumbnail_pixels(&id, generation, &pixels);
+                let publication = job.span(c"chatter.media.static.ui_queue");
                 crate::run_history_ui!(weak, owner, |window| {
+                    drop(publication);
+                    let _demand = demand;
+                    let _publish = trace::section(c"chatter.media.static.ui_publish");
                     if !client.is_app_visible() || !loader.is_current() {
+                        job.event(c"chatter.media.static.ui_invalid");
                         return;
                     }
                     let messages = window.global::<ChatPane>().get_messages();
@@ -163,17 +208,19 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                             }
                             attachment.thumbnail = slint::Image::from_rgba8(pixels.clone());
                             attachment.has_thumbnail = true;
-                            if attachment.width <= 0 || attachment.height <= 0 {
-                                attachment.width = result.width as i32;
-                                attachment.height = result.height as i32;
-                            }
+                            // Dimensions come from stored metadata in the core
+                            // mapping (converters/attachment.rs sets width/height
+                            // from meta.width/height); the reserved box is final
+                            // on first layout, so no post-decode write-back / reflow.
                             attachments.set_row_data(index, attachment);
+                            job.event(c"chatter.media.static.published");
                         }
                     }
                 });
             });
         }
         pending.retain(|_, token| !token.is_cancelled());
+        trace::counter(c"chatter.media.static.ui_pending", pending.len() as i64);
     });
     TIMER.with(|slot| *slot.borrow_mut() = Some(timer));
 }
