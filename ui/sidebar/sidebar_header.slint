@@ -6,8 +6,12 @@ import { Icons } from "../theme/icons.slint";
 import { HeaderButton } from "../components/header_button.slint";
 import { ActivityBell } from "../activity/activity_bell.slint";
 import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 
-export component SidebarHeader inherits Rectangle {
+// The home search island is chrome, so it uses the same glass material as the
+// chat header / composer / dock (owner 2026-11-05: it was a flat grey surface).
+export component SidebarHeader inherits GlassSurface {
+    material-level: 2;
     in property <length> panel-width;
     in property <length> top-row-height;
     in property <length> quick-link-inset;
@@ -27,9 +31,9 @@ export component SidebarHeader inherits Rectangle {
     callback create-clicked();
     callback anon-mode-clicked();
 
-            // Quiet search surface; the conversations carry the visual detail.
+            // Glass search island (material from GlassSurface above). The
+            // conversations carry the visual detail; the glass blurs them.
             clip: true;
-            background: Colors.surface;
             border-radius: root.mobile-mode ? Spacing.radius-lg : Spacing.radius-chrome;
 
             // Pinned to the top: without x/y a sized element is centred. On a

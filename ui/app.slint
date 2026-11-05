@@ -370,10 +370,12 @@ export component MainWindow inherits Window {
     callback toggle-anon-mode();              // sidebar button → Rust handler
     callback submit-anon-mode-pin(string);    // PIN modal submit → Rust verify
 
-    // Tablet panes share one page canvas behind their rounded chrome.
-    // A tinted window behind the sidebar and an opaque chat beside it expose
-    // a rectangular patch in the search/footer corner cutouts.
-    background: root.is-mobile-platform && !root.compact-layout
+    // Mobile (phone + tablet) paints the opaque OLED-black page canvas; the
+    // tablet's rounded panes sit on it and the phone is full-bleed single-pane.
+    // Desktop keeps the subtly tinted ambient gradient behind its glass chrome.
+    // (Was gated on !compact-layout, which left the phone on the grey ambient
+    // gradient — the owner wants true #000000 black on the phone.)
+    background: root.is-mobile-platform
         ? Colors.background : Materials.ambient;
 
     // ========== Responsive sidebar auto-collapse ==========

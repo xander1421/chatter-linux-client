@@ -6,6 +6,7 @@
 // divider, auto-follow of new messages, older history on reaching the top.
 
 import { Materials } from "../theme/materials.slint";
+import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { MessageItem } from "message_item.slint";
 import { MessageScrollPill, MessageHistoryError } from "message_list_overlays.slint";
@@ -483,9 +484,10 @@ export component MessageList inherits Rectangle {
         if (root.keeps-tail()) { root.go-to-end(); }
     }
 
-    // The same ambient page as the chat list, so a conversation is not a
-    // flat slab; the wash is static, it does not scroll with the rows.
-    background: Materials.ambient;
+    // Pure OLED-black conversation page (owner: islands = transparent glass
+    // over pure black, not a grey ambient wash). The glass chrome then blurs
+    // black where there is no content, reading as clean transparent glass.
+    background: Colors.background;
 
     // Loading state: skeleton placeholders
     if root.loading: MessageListLoading {

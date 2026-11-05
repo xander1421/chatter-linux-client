@@ -70,9 +70,11 @@ export global Materials {
     out property <length> blur-regular: 34px;
     out property <length> blur-thick: 38px;
     out property <length> blur-header: 42px;
-    // Vibrancy: a gentle saturation lift so the frost picks up colour from
-    // behind it without going muddy (Apple's frost reads clean, not tinted).
-    out property <float> saturation: 1.2;
+    // Neutral frost: no saturation lift. The lift (1.2) made the glass pick up
+    // and boost colour from content behind it (e.g. a magenta GIF read as a
+    // muddy brown-grey island — owner 2026-11-05). Apple's glass desaturates
+    // rather than boosts, so keep this neutral for a clean transparent look.
+    out property <float> saturation: 1.0;
     // Neutral in dark mode: the dark tint carries the material; no white lift
     // (that read too bright). Dark-mode glass is a dark translucent, not a frost.
     out property <float> chrome-brightness: Appearance.dark ? 0.0 : 0.0;
