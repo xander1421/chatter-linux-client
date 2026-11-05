@@ -99,6 +99,9 @@ impl CbcRangeDecryptor {
 
     /// Fill a caller-owned buffer from an authenticated attachment range.
     pub fn read_range_into(&self, off: usize, output: &mut [u8]) -> usize {
+        // One probe per caller range, never one per AES block or byte.
+        let _read =
+            crate::media::performance_trace::section(c"chatter.media.crypto.range_read_decrypt");
         if off >= self.plaintext_size || output.is_empty() {
             return 0;
         }

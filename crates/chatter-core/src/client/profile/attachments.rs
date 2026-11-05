@@ -1,4 +1,5 @@
 use super::*;
+use crate::media::performance_trace as trace;
 
 impl ChatterClient {
     /// Get an attachment record by id (local storage).
@@ -26,6 +27,7 @@ impl ChatterClient {
         crate::crypto::secure_buffer::SecureBuffer,
         crate::services::attachment::AttachmentError,
     > {
+        let _trace = trace::section(c"chatter.media.facade.decrypt_auto");
         self.attachments().decrypt_auto(attachment_id)
     }
 
@@ -41,6 +43,7 @@ impl ChatterClient {
         crate::services::attachment::CbcRangeDecryptor,
         crate::services::attachment::AttachmentError,
     > {
+        let _trace = trace::section(c"chatter.media.facade.open_range");
         self.attachments().open_range_decryptor(attachment_id)
     }
 
@@ -83,8 +86,10 @@ impl ChatterClient {
         crate::services::attachment::ImagePreview,
         crate::services::attachment::AttachmentError,
     > {
+        let _prepare = trace::current_job().span(c"chatter.media.facade.local_prepare");
         let client = self.clone();
         crate::services::attachment::run_attachment_work(move || {
+            let _trace = trace::section(c"chatter.media.facade.local_worker");
             client.attachments().prepare_image_preview_guarded(
                 &id,
                 std::sync::Arc::new(move || session.is_current()),
@@ -132,6 +137,7 @@ impl ChatterClient {
         id: crate::domain::ids::AttachmentId,
         session: crate::client::SessionGuard,
     ) -> Option<crate::services::attachment::ImagePreview> {
+        let _prepare = trace::current_job().span(c"chatter.media.facade.ensure_preview");
         let fetch_session = session.clone();
         let bytes = self
             .attachments()
@@ -140,11 +146,13 @@ impl ChatterClient {
         let client = self.clone();
         crate::services::attachment::run_attachment_work(move || {
             if !session.is_current() {
+                trace::current_job().event(c"chatter.media.facade.session_invalid");
                 return None;
             }
-            let pixels =
-                crate::services::attachment::AttachmentService::decode_image_sidecar(&bytes)
-                    .ok()?;
+            let pixels = {
+                let _decode = trace::section(c"chatter.media.sidecar.decode_resize");
+                crate::services::attachment::AttachmentService::decode_image_sidecar(&bytes).ok()?
+            };
             let attachment = client.get_attachment_metadata(&id)?;
             if !session.is_current() {
                 return None;

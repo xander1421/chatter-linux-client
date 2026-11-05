@@ -1,5 +1,6 @@
 //! Shared admission for attachment CPU/file work. Acquire before spawning so a
 //! batch queues small futures, never one decoder/allocation per selected photo.
+use crate::media::performance_trace as trace;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::Semaphore;
 
@@ -44,11 +45,21 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
+    let job = trace::current_job();
+    let wait = job.span(c"chatter.media.attachment.semaphore_wait");
     let permit = gate
         .acquire_owned()
         .await
         .expect("attachment gate stays open");
+    drop(wait);
+    let held = job.span(c"chatter.media.attachment.permit_held");
+    let queued = job.span(c"chatter.media.attachment.blocking_queue");
     tokio::task::spawn_blocking(move || {
+        drop(queued);
+        let _context = job.enter();
+        let _held = held;
+        let _worker = job.span(c"chatter.media.attachment.worker");
+        let _sync = trace::section(c"chatter.media.attachment.work");
         let _permit = permit;
         work()
     })

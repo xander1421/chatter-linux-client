@@ -15,7 +15,7 @@ use crate::util::time::TimestampNanos;
 use super::MessageError;
 
 /// Derive the `ConversationType` for a given channel ID via
-/// `Channel::conversation_type()`. Defaults to `Channel` when the row
+/// `ChannelType::conversation_type()`. Defaults to `Channel` when the row
 /// isn't available yet (channel sync race). Use at RPC boundaries that
 /// hand proto Messages to `proto_to_domain_message_with_sender` —
 /// prevents every caller from repeating the same lookup boilerplate and
@@ -24,8 +24,8 @@ pub fn conversation_type_for_channel(
     repo: &ChannelRepository,
     channel_id: &ChannelId,
 ) -> ConversationType {
-    match repo.get(channel_id) {
-        Ok(Some(ch)) => ch.conversation_type(),
+    match repo.get_channel_type(channel_id) {
+        Ok(Some(kind)) => kind.conversation_type(),
         Ok(None) => {
             tracing::debug!(
                 channel_id = %channel_id,

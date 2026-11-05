@@ -14,6 +14,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
+import android.os.Trace
 import android.media.projection.MediaProjectionManager
 import android.provider.OpenableColumns
 import android.provider.Settings
@@ -22,6 +24,7 @@ import android.util.Log
 import android.widget.Toast
 import android.view.ActionMode
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.View
@@ -207,7 +210,13 @@ class MainActivity : GameActivity() {
     }
     private external fun nativeReleasePendingVideo(token: Long)
 
+    // Explicit debug-launch experiment; never enabled by a production Intent.
+    private var diagnosticUnbufferedTouch = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        diagnosticUnbufferedTouch =
+            (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0 &&
+            intent.getBooleanExtra("chatter_unbuffered_touch", false)
         // Samsung may prelaunch this Activity before BOOT_COMPLETED without
         // creating a usable window. Preserve the durable account marker until
         // Rust restores the session; the default Kotlin false is not sign-out.
@@ -588,6 +597,37 @@ class MainActivity : GameActivity() {
 
     /** Route Back through the window's navigation callback, independent of Slint focus. */
     private external fun nativeBackPressed()
+
+    override fun processMotionEvent(event: MotionEvent): Boolean {
+        val requestUnbuffered = diagnosticUnbufferedTouch && event.actionMasked == MotionEvent.ACTION_DOWN &&
+            event.isFromSource(android.view.InputDevice.SOURCE_TOUCHSCREEN)
+        if (requestUnbuffered) {
+            mSurfaceView.requestUnbufferedDispatch(event)
+        }
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            Trace.isEnabled() && (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            Trace.setCounter("Chatter Java unbuffered issued", if (requestUnbuffered) 1L else 0L)
+        }
+        return super.processMotionEvent(event)
+    }
+
+    // Numeric, debuggable-only input-boundary diagnostics. Keep normal event
+    // delivery unchanged; do not log positions, pointer data or content.
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        val tracing = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && Trace.isEnabled() &&
+            (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (!tracing) return super.dispatchTouchEvent(event)
+        Trace.beginSection("Chatter Java touch dispatch")
+        try {
+            Trace.setCounter("Chatter Java unbuffered requested", if (diagnosticUnbufferedTouch) 1L else 0L)
+            Trace.setCounter("Chatter Java touch action", event.actionMasked.toLong())
+            Trace.setCounter("Chatter Java touch event ms", event.eventTime)
+            Trace.setCounter("Chatter Java touch age ms", SystemClock.uptimeMillis() - event.eventTime)
+            return super.dispatchTouchEvent(event)
+        } finally {
+            Trace.endSection()
+        }
+    }
 
     // GameActivity normally forwards key events to Slint. A focused item can
     // disappear or clear focus before the next Back, leaving no FocusScope to

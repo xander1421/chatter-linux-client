@@ -58,6 +58,9 @@ export component MessageItem inherits Rectangle {
     in property <bool> show-sender: true;
     in property <bool> is-anonymous: false;
     in property <bool> is-dm: false;  // When true, hide avatar/name - just bubbles
+    // Only the scrolling list opts into bounded content textures; previews stay direct.
+    in property <length> cache-viewport-width: 0px;
+    in property <length> cache-viewport-height: 0px;
     in property <bool> can-thread: true;  // Threads are a channel feature
     in property <string> failure-reason: "";
     in property <string> delivery-status: "";  // "sending", "unconfirmed", "sent", "failed", "delivered", "read" for own messages
@@ -604,12 +607,25 @@ export component MessageItem inherits Rectangle {
                         background: bubble-hovered
                             ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
                             : (root.is-own ? Colors.bubble-own : Colors.bubble-other);
-                        border-top-left-radius: parent.border-top-left-radius;
-                        border-top-right-radius: parent.border-top-right-radius;
-                        border-bottom-left-radius: parent.border-bottom-left-radius;
-                        border-bottom-right-radius: parent.border-bottom-right-radius;
-                        border-width: Elevation.rim-width;
+                        // Photo content already has the bubble's rounded clip.
+                        // Fill it once; a second rounded fill repeats coverage
+                        // work along the same edge. Keep the curved rim below.
+                        border-top-left-radius: root.photo-message ? 0px : parent.border-top-left-radius;
+                        border-top-right-radius: root.photo-message ? 0px : parent.border-top-right-radius;
+                        border-bottom-left-radius: root.photo-message ? 0px : parent.border-bottom-left-radius;
+                        border-bottom-right-radius: root.photo-message ? 0px : parent.border-bottom-right-radius;
+                        border-width: root.photo-message ? 0px : Elevation.rim-width;
                         border-color: Elevation.raised-rim;
+                        if root.photo-message: Rectangle {
+                            x: 0px; y: 0px; width: 100%; height: 100%;
+                            background: transparent;
+                            border-top-left-radius: bubble.border-top-left-radius;
+                            border-top-right-radius: bubble.border-top-right-radius;
+                            border-bottom-left-radius: bubble.border-bottom-left-radius;
+                            border-bottom-right-radius: bubble.border-bottom-right-radius;
+                            border-width: Elevation.rim-width;
+                            border-color: Elevation.raised-rim;
+                        }
                     }
 
                     // Send progress: a thin line along the bubble's bottom edge
@@ -718,6 +734,25 @@ export component MessageItem inherits Rectangle {
                     }
 
                     bubble-content := VerticalLayout {
+                        // Cache text content only. Glass, bubble fill/rim, progress,
+                        // highlight, swipe affordances and floating actions stay live.
+                        cache-rendering-hint: root.is-dm && root.content != ""
+                            && !root.has-attachments && root.attachment-count == 0
+                            && root.attachments.length == 0 && !root.photo-message
+                            && !root.is-call && !root.is-system && !root.is-deleted
+                            && !root.is-ai && !root.is-thread-reply
+                            && !root.has-reactions && root.reactions.length == 0
+                            && root.reaction-summary == ""
+                            && (!root.is-reply || (root.reply-to-category == ""
+                                && !root.reply-to-has-thumbnail && root.reply-to-attachment-id == ""))
+                            && (!root.is-own || root.delivery-status == ""
+                                || root.delivery-status == "sent" || root.delivery-status == "delivered"
+                                || root.delivery-status == "read")
+                            && self.width > 0px && self.height > 0px
+                            && self.width <= root.cache-viewport-width
+                            && self.height <= root.cache-viewport-height && self.height <= 384px
+                            // phx conversion follows window scale; round each surface axis up.
+                            && Math.ceil(self.width / 1phx) * Math.ceil(self.height / 1phx) <= 524288;
                         y: 0;
                         width: root.photo-message ? root.photo-width : self.preferred-width;
                         height: self.preferred-height;

@@ -7,6 +7,38 @@ val suppliedVersionCode = System.getenv("CHATTER_ANDROID_VERSION_CODE")
 val suppliedVersionName = System.getenv("CHATTER_ANDROID_VERSION_NAME")
 val productionRequested = System.getenv("RELEASE") == "1" ||
     gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
+// Check staged binaries too: unsetting the flag must not admit an experimental
+// .so left over from debug. The graph check also covers aggregate build tasks.
+fun rejectPrefixFlushExperiment() {
+    val stagedExperiment = file("src/main/jniLibs").walkTopDown().any { library ->
+        library.isFile && library.name == "libchatter_ui.so" &&
+            library.readBytes().toString(Charsets.ISO_8859_1).contains("debug.chatter.prefix_flush")
+    }
+    require(System.getenv("CHATTER_ANDROID_PREFIX_FLUSH_EXPERIMENT") != "1" && !stagedExperiment) {
+        "Prefix flush experiment is debug-only; restage ordinary libraries with build-android.sh before release"
+    }
+}
+if (productionRequested) rejectPrefixFlushExperiment()
+fun rejectNativePacingExperiment() {
+    val stagedExperiment = file("src/main/jniLibs").walkTopDown().any { library ->
+        library.isFile && library.name == "libchatter_ui.so" &&
+            library.readBytes().toString(Charsets.ISO_8859_1).contains("debug.chatter.native_pacing")
+    }
+    require(System.getenv("CHATTER_ANDROID_NATIVE_PACING_EXPERIMENT") != "1" && !stagedExperiment) {
+        "Native pacing experiment is debug-only; restage ordinary libraries with build-android.sh before release"
+    }
+}
+if (productionRequested) rejectNativePacingExperiment()
+gradle.taskGraph.whenReady {
+    if (allTasks.any { it.name.contains("release", ignoreCase = true) }) {
+        rejectPrefixFlushExperiment()
+        rejectNativePacingExperiment()
+    }
+}
+require(!productionRequested || (System.getenv("CHATTER_ANDROID_SWAPPY_EXPERIMENT") != "1" &&
+    !file("src/main/jniLibs/arm64-v8a/libswappy.so").exists())) {
+    "Swappy experiment is debug-only; use build-android.sh without the experiment to restage release libraries"
+}
 require(!productionRequested || (!suppliedVersionCode.isNullOrEmpty() && !suppliedVersionName.isNullOrEmpty())) {
     "Release requires CHATTER_ANDROID_VERSION_CODE and CHATTER_ANDROID_VERSION_NAME"
 }

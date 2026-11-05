@@ -1,0 +1,18 @@
+[package]
+name = "message-navigation-regression"
+version = "0.1.0"
+edition = "2024"
+publish = false
+[workspace]
+[dependencies]
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-software"] }
+i-slint-core = { version = "=1.18.1", default-features = false, features = ["std", "image-decoders", "svg"] }
+[build-dependencies]
+slint-build = "=1.18.1"
+[patch.crates-io]
+i-slint-core = { path = "../../vendor/i-slint-core" }
+i-slint-compiler = { path = "../../vendor/i-slint-compiler" }
+fontique = { path = "../../vendor/fontique" }
+parley = { path = "../../vendor/parley" }
+[profile.dev]
+debug = 0

@@ -346,17 +346,18 @@ pub fn set_light_system_bars(light: bool) {
 }
 
 /// Lift `MainActivity`'s launch cover (the theme colour painted over the
-/// SurfaceView until Slint has drawn into it) once the first frame is rendered.
+/// SurfaceView until Slint has drawn into it) after the first successful frame
+/// submission. Keep observing later frames for conversation timing/tasks,
+/// without installing a raw-GL rendering notifier on the Skia renderer.
 /// Kotlin also lifts it on a timeout, so a frame that never reports here
 /// cannot leave the app covered.
 pub fn clear_launch_cover_after_first_frame(window: &slint::Window) {
-    let mut done = false;
-    let res = window.set_rendering_notifier(move |state, _| {
-        crate::record_startup_frame(&state);
-        if done || !matches!(state, slint::RenderingState::AfterRendering) {
+    let done = std::cell::Cell::new(false);
+    let res = i_slint_backend_android_activity::set_frame_presented_callback(move || {
+        crate::record_startup_frame(&slint::RenderingState::AfterRendering);
+        if done.replace(true) {
             return;
         }
-        done = true;
         let result = (|| -> Result<(), String> {
             let act = activity()?;
             with_jni_env(|env| {
@@ -376,8 +377,9 @@ pub fn clear_launch_cover_after_first_frame(window: &slint::Window) {
             tracing::error!("Android: firstFrameDrawn failed: {e}");
         }
     });
-    if let Err(e) = res {
-        tracing::error!("Android: no rendering notifier for the launch cover: {e:?}");
+    match res {
+        Ok(()) => window.request_redraw(),
+        Err(e) => tracing::error!("Android: no frame observer for the launch cover: {e:?}"),
     }
 }
 
