@@ -6,32 +6,35 @@ use crate::diagnostics::BuildDiagnostics;
 use crate::embedded_resources::*;
 use crate::expression_tree::{Expression, ImageReference};
 use crate::object_tree::*;
-#[cfg(feature = "software-renderer")]
+#[cfg(feature = "renderer-software")]
 use image::GenericImageView;
 use smol_str::SmolStr;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
 use typed_index_collections::TiVec;
+use url::Url;
 
 /// The fonts shared with `embed_glyphs` to rasterize SVG `<text>`. Only the
 /// software renderer embeds textures, so elsewhere this is an unused placeholder.
-#[cfg(feature = "software-renderer")]
+#[cfg(feature = "renderer-software")]
 pub(crate) type SharedFontCollection = super::embed_glyphs::SharedFontCollection;
-#[cfg(not(feature = "software-renderer"))]
+#[cfg(not(feature = "renderer-software"))]
 pub(crate) type SharedFontCollection = ();
 
 pub async fn embed_images(
     doc: &Document,
     embed_files: EmbedResourcesKind,
     scale_factor: f32,
-    resource_url_mapper: &Option<Rc<dyn Fn(&str) -> Pin<Box<dyn Future<Output = Option<String>>>>>>,
+    resource_url_mapper: &Option<crate::ResourceUrlMapper>,
     font_collection: Option<&SharedFontCollection>,
     diag: &mut BuildDiagnostics,
 ) {
-    if embed_files == EmbedResourcesKind::Nothing && resource_url_mapper.is_none() {
+    // Slint SC always embeds: the images referenced by `@image-url()` are
+    // decoded into the generated code, whatever `embed_files` says.
+    if embed_files == EmbedResourcesKind::Nothing
+        && resource_url_mapper.is_none()
+        && !diag.is_slint_sc()
+    {
         return;
     }
 
@@ -43,7 +46,7 @@ pub async fn embed_images(
     let all_components = all_components;
 
     let mapped_urls = {
-        let mut urls = HashMap::<SmolStr, Option<SmolStr>>::new();
+        let mut urls = HashMap::<Url, Option<Url>>::new();
 
         if let Some(mapper) = resource_url_mapper {
             // Collect URLs (sync!):
@@ -54,8 +57,8 @@ pub async fn embed_images(
             }
 
             // Map URLs (async -- well, not really):
-            for i in urls.iter_mut() {
-                *i.1 = (*mapper)(i.0).await.map(SmolStr::new);
+            for (url, mapped) in urls.iter_mut() {
+                *mapped = (*mapper)(url).await;
             }
         }
 
@@ -79,40 +82,36 @@ pub async fn embed_images(
     }
 }
 
-/// The URL of an image reference, as expected by the resource mapper and used
-/// to key the map of mapped resources. A local image reference is an absolute
-/// filesystem path at this stage, so turn it into a `file://` URL; references
-/// that are already URLs (`data:`, `builtin:/`, `https:`, ...) pass through
-/// unchanged.
-fn image_reference_url(resource: &str) -> SmolStr {
-    if crate::pathutils::is_url(std::path::Path::new(resource)) {
-        return resource.into();
-    }
-    // `Url::from_file_path` is absent on `wasm32-unknown-unknown`, which only
-    // ever sees URL references and so never reaches this branch.
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        url::Url::from_file_path(resource)
-            .map(|url| SmolStr::from(url.as_str()))
-            .unwrap_or_else(|()| resource.into())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        resource.into()
+/// The URL handed to the resource mapper, and the key of the mapped-resource
+/// map, for a reference the mapper may rewrite. A local [`ImageReference::Path`]
+/// becomes a `file://` URL; an [`ImageReference::Url`] is used as-is. Everything
+/// else (`data:` URIs, already-embedded references) returns `None` and is left
+/// untouched.
+fn reference_mapper_url(resource_ref: &ImageReference) -> Option<Url> {
+    match resource_ref {
+        ImageReference::Url(url) => Some(url.clone()),
+        ImageReference::Path(path) => {
+            // `Url::from_file_path` is absent on `wasm32-unknown-unknown`, which
+            // only ever sees URL references and so never reaches this branch.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                Url::from_file_path(path).ok()
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = path;
+                None
+            }
+        }
+        _ => None,
     }
 }
 
-fn collect_image_urls_from_expression(
-    e: &Expression,
-    urls: &mut HashMap<SmolStr, Option<SmolStr>>,
-) {
+fn collect_image_urls_from_expression(e: &Expression, urls: &mut HashMap<Url, Option<Url>>) {
     if let Expression::ImageReference { resource_ref, .. } = e
-        && let ImageReference::AbsolutePath(path) = resource_ref
-        // `data:` URIs are embedded directly and never looked up in this map, so
-        // don't store their (potentially huge) content as a key.
-        && !path.starts_with("data:")
+        && let Some(url) = reference_mapper_url(resource_ref)
     {
-        urls.insert(image_reference_url(path), None);
+        urls.insert(url, None);
     };
 
     e.visit(|e| collect_image_urls_from_expression(e, urls));
@@ -120,7 +119,7 @@ fn collect_image_urls_from_expression(
 
 fn embed_images_from_expression(
     e: &mut Expression,
-    urls: &HashMap<SmolStr, Option<SmolStr>>,
+    urls: &HashMap<Url, Option<Url>>,
     global_embedded_resources: &RefCell<TiVec<EmbeddedResourcesIdx, EmbeddedResources>>,
     path_to_id: &mut HashMap<SmolStr, EmbeddedResourcesIdx>,
     embed_files: EmbedResourcesKind,
@@ -128,52 +127,71 @@ fn embed_images_from_expression(
     diag: &mut BuildDiagnostics,
     font_collection: Option<&SharedFontCollection>,
 ) {
-    if let Expression::ImageReference { resource_ref, source_location, nine_slice: _ } = e
-        && let ImageReference::AbsolutePath(path) = resource_ref
-    {
-        if path.starts_with("data:") {
-            // Data URIs have no external file to track, so skip for
-            // Nothing (interpreter) and ListAllResources (dependency tracking).
-            if !matches!(
-                embed_files,
-                EmbedResourcesKind::Nothing | EmbedResourcesKind::ListAllResources
-            ) {
-                let image_ref = embed_data_uri(
-                    global_embedded_resources,
-                    path_to_id,
-                    path,
-                    embed_files,
-                    scale_factor,
-                    diag,
-                    source_location,
-                    font_collection,
-                );
-                *resource_ref = image_ref;
-            }
-            return;
+    if let Expression::ImageReference { resource_ref, source_location, nine_slice: _ } = e {
+        // Apply the resource mapper. A Path/Url may be replaced with the mapped
+        // URL (e.g. a `data:` URL), so re-classify the reference.
+        if let Some(url) = reference_mapper_url(resource_ref)
+            && let Some(mapped) = urls.get(&url).cloned().flatten()
+        {
+            *resource_ref = ImageReference::from_mapped_url(mapped);
         }
 
-        // use the mapped url, falling back to the original path:
-        let mapped_path =
-            urls.get(&image_reference_url(path)).cloned().flatten().unwrap_or_else(|| path.clone());
-        *path = mapped_path;
-        if embed_files != EmbedResourcesKind::Nothing
-            && (embed_files != EmbedResourcesKind::OnlyBuiltinResources
-                || path.starts_with("builtin:/"))
-        {
-            let image_ref = embed_image(
-                global_embedded_resources,
-                path_to_id,
-                embed_files,
-                path,
-                scale_factor,
-                diag,
-                source_location,
-                font_collection,
-            );
-            if embed_files != EmbedResourcesKind::ListAllResources {
-                *resource_ref = image_ref;
+        match resource_ref {
+            ImageReference::DataUri(data) => {
+                // Data URIs have no external file to track, so skip for
+                // Nothing (interpreter) and ListAllResources (dependency tracking).
+                // Slint SC rejected the data URI when resolving @image-url(),
+                // so there is nothing left to embed.
+                if !matches!(
+                    embed_files,
+                    EmbedResourcesKind::Nothing | EmbedResourcesKind::ListAllResources
+                ) && !diag.is_slint_sc()
+                {
+                    let image_ref = embed_data_uri(
+                        global_embedded_resources,
+                        path_to_id,
+                        data,
+                        embed_files,
+                        scale_factor,
+                        diag,
+                        source_location,
+                        font_collection,
+                    );
+                    *resource_ref = image_ref;
+                }
             }
+            ImageReference::Path(_) | ImageReference::Url(_) => {
+                let is_builtin = matches!(
+                    resource_ref,
+                    ImageReference::Url(url) if url.scheme() == "builtin"
+                );
+                // Slint SC rejected URL references when resolving @image-url(),
+                // so only paths are left to embed there.
+                let embed_for_slint_sc =
+                    diag.is_slint_sc() && matches!(resource_ref, ImageReference::Path(_));
+                if embed_for_slint_sc
+                    || (embed_files != EmbedResourcesKind::Nothing
+                        && (embed_files != EmbedResourcesKind::OnlyBuiltinResources || is_builtin))
+                {
+                    let path = resource_ref.source().expect("Path/Url have a source");
+                    let image_ref = embed_image(
+                        global_embedded_resources,
+                        path_to_id,
+                        embed_files,
+                        path,
+                        scale_factor,
+                        diag,
+                        source_location,
+                        font_collection,
+                    );
+                    if embed_files != EmbedResourcesKind::ListAllResources {
+                        *resource_ref = image_ref;
+                    }
+                }
+            }
+            ImageReference::None
+            | ImageReference::EmbeddedData { .. }
+            | ImageReference::EmbeddedTexture { .. } => {}
         }
     };
 
@@ -211,8 +229,12 @@ fn embed_image(
 
     if let Some(&resource_id) = path_to_id.get(path) {
         return match global_embedded_resources.borrow()[resource_id].kind {
-            #[cfg(feature = "software-renderer")]
+            #[cfg(feature = "renderer-software")]
             EmbeddedResourcesKind::TextureData { .. } => {
+                ImageReference::EmbeddedTexture { resource_id }
+            }
+            #[cfg(feature = "slint-sc")]
+            EmbeddedResourcesKind::StaticPixels { .. } => {
                 ImageReference::EmbeddedTexture { resource_id }
             }
             _ => ImageReference::EmbeddedData { resource_id, extension: extension() },
@@ -236,7 +258,27 @@ fn embed_image(
         return ImageReference::None;
     };
 
-    #[cfg(feature = "software-renderer")]
+    #[cfg(feature = "slint-sc")]
+    if diag.slint_sc {
+        // The Slint SC runtime has no image decoder: decode now and embed the
+        // pixels into the generated code.
+        if matches!(extension().to_ascii_lowercase().as_str(), "svg" | "svgz") {
+            diag.slint_sc_error("SVG images are", source_location);
+            return ImageReference::None;
+        }
+        return match image::load_from_memory(&_file.read()) {
+            Ok(decoded) => {
+                let resource_id = push(EmbeddedResourcesKind::StaticPixels(decoded.into_rgba8()));
+                ImageReference::EmbeddedTexture { resource_id }
+            }
+            Err(err) => {
+                diag.push_error(format!("Cannot load image file {path}: {err}"), source_location);
+                ImageReference::None
+            }
+        };
+    }
+
+    #[cfg(feature = "renderer-software")]
     if embed_files == EmbedResourcesKind::EmbedTextures {
         return match load_image(_file, _scale_factor, _font_collection) {
             Ok((img, source_format, original_size)) => {
@@ -258,13 +300,13 @@ fn embed_image(
     ImageReference::EmbeddedData { resource_id, extension: extension() }
 }
 
-#[cfg(feature = "software-renderer")]
+#[cfg(feature = "renderer-software")]
 trait Pixel {
     //fn alpha(&self) -> f32;
     //fn rgb(&self) -> (u8, u8, u8);
     fn is_transparent(&self) -> bool;
 }
-#[cfg(feature = "software-renderer")]
+#[cfg(feature = "renderer-software")]
 impl Pixel for image::Rgba<u8> {
     /*fn alpha(&self) -> f32 { self[3] as f32 / 255. }
     fn rgb(&self) -> (u8, u8, u8) { (self[0], self[1], self[2]) }*/
@@ -273,7 +315,7 @@ impl Pixel for image::Rgba<u8> {
     }
 }
 
-#[cfg(feature = "software-renderer")]
+#[cfg(feature = "renderer-software")]
 fn generate_texture(
     image: image::RgbaImage,
     source_format: SourceFormat,
@@ -378,7 +420,7 @@ fn generate_texture(
     }
 }
 
-#[cfg(feature = "software-renderer")]
+#[cfg(feature = "renderer-software")]
 fn convert_image(
     image: image::RgbaImage,
     source_format: SourceFormat,
@@ -418,7 +460,7 @@ fn convert_image(
     }
 }
 
-#[cfg(feature = "software-renderer")]
+#[cfg(feature = "renderer-software")]
 enum SourceFormat {
     RgbaPremultiplied,
     Rgba,
@@ -427,7 +469,7 @@ enum SourceFormat {
 /// usvg renders SVG `<text>` against its own font database. The compiler has no
 /// `SlintContext`, so resolve those fonts against the collection shared with
 /// `embed_glyphs` (system fonts plus imported fonts) through the shared bridge.
-#[cfg(feature = "software-renderer")]
+#[cfg(feature = "renderer-software")]
 fn svg_font_options(
     font_collection: Option<&SharedFontCollection>,
 ) -> resvg::usvg::Options<'static> {
@@ -449,7 +491,7 @@ fn svg_font_options(
     })
 }
 
-#[cfg(feature = "software-renderer")]
+#[cfg(feature = "renderer-software")]
 fn load_image_from_bytes(
     data: &[u8],
     extension: Option<&str>,
@@ -522,7 +564,7 @@ fn load_image_from_bytes(
     })
 }
 
-#[cfg(feature = "software-renderer")]
+#[cfg(feature = "renderer-software")]
 fn load_image(
     file: crate::fileaccess::VirtualFile,
     scale_factor: f32,
@@ -554,7 +596,7 @@ fn embed_data_uri(
     if let Some(&resource_id) = path_to_id.get(data_uri) {
         let resources = global_embedded_resources.borrow();
         return match &resources[resource_id].kind {
-            #[cfg(feature = "software-renderer")]
+            #[cfg(feature = "renderer-software")]
             EmbeddedResourcesKind::TextureData { .. } => {
                 ImageReference::EmbeddedTexture { resource_id }
             }
@@ -580,7 +622,7 @@ fn embed_data_uri(
         id
     };
 
-    #[cfg(feature = "software-renderer")]
+    #[cfg(feature = "renderer-software")]
     if _embed_files == EmbedResourcesKind::EmbedTextures {
         match load_image_from_bytes(
             &decoded_data,

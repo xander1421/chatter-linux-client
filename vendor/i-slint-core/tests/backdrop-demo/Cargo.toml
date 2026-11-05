@@ -11,17 +11,29 @@ publish = false
 # Select the demo's software-renderer test using the app's existing feature name.
 default = ["windows-cross"]
 windows-cross = []
+skia-opacity = ["dep:i-slint-renderer-skia", "dep:i-slint-core", "dep:skia-safe", "dep:raw-window-handle"]
 
 [dependencies]
-slint = { version = "=1.17.1", default-features = false, features = ["compat-1-2", "std", "renderer-software"] }
+slint = { version = "=1.18.1", default-features = false, features = ["compat-1-2", "std", "renderer-software"] }
+
+i-slint-renderer-skia = { path = "../../../i-slint-renderer-skia", default-features = false, features = ["opengl"], optional = true }
+i-slint-core = { path = "../..", features = ["std"], optional = true }
+skia-safe = { version = "=0.153.3", features = ["gl", "textlayout"], optional = true }
+raw-window-handle = { version = "0.6", optional = true }
 
 [patch.crates-io]
+fontique = { path = "../../../fontique" }
+parley = { path = "../../../parley" }
 i-slint-compiler = { path = "../../../i-slint-compiler" }
 i-slint-core = { path = "../.." }
 
 [[test]]
 name = "backdrop_demo"
 path = "../../../../crates/chatter-ui/examples/backdrop_demo.rs"
+
+[[test]]
+name = "listview_layout"
+path = "listview_layout.rs"
 
 [profile.dev]
 debug = 0
@@ -30,3 +42,12 @@ codegen-units = 256
 [profile.dev.package."*"]
 opt-level = 2
 debug = false
+
+[[test]]
+name = "opacity_culling"
+path = "opacity_culling.rs"
+
+[[test]]
+name = "opacity_skia"
+path = "opacity_skia.rs"
+required-features = ["skia-opacity"]

@@ -22,7 +22,9 @@ override = source[start:end].replace(
 # the Editable. Execute the production override, then let a keyboard trust the
 # returned initial selection when deleting/replacing text (the S9 failure).
 harness = r'''
-class EditorInfo(var initialSelStart: Int = -1, var initialSelEnd: Int = -1)
+class EditorInfo(var initialSelStart: Int = -1, var initialSelEnd: Int = -1, var imeOptions: Int = 0) {
+    companion object { const val IME_FLAG_NO_PERSONALIZED_LEARNING: Int = 0x1000000 }
+}
 class Editable(val text: String, val start: Int, val end: Int)
 object Selection {
     fun getSelectionStart(e: Editable) = e.start
@@ -37,6 +39,7 @@ open class Surface(val connection: Connection?, val cached: EditorInfo) {
     }
 }
 class Fixed(connection: Connection?, cached: EditorInfo): Surface(connection, cached) {
+    var imeHidePending: Boolean = true
 OVERRIDE
 }
 fun main() {
@@ -47,7 +50,10 @@ fun main() {
             val attrs = EditorInfo()
             Surface(connection, stale).onCreateInputConnection(attrs)
             check(attrs.initialSelEnd != end) // The upstream restart is stale.
-            check(Fixed(connection, stale).onCreateInputConnection(attrs) === connection)
+            val fixed = Fixed(connection, stale)
+            check(fixed.onCreateInputConnection(attrs) === connection)
+            check(!fixed.imeHidePending)
+            check(attrs.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0)
             check(attrs.initialSelStart == start && attrs.initialSelEnd == end)
             for (replacement in listOf("", "x")) {
                 val result = text.replaceRange(minOf(attrs.initialSelStart, attrs.initialSelEnd),

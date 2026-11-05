@@ -7,12 +7,13 @@ use std::pin::Pin;
 
 use super::{PhysicalBorderRadius, PhysicalLength, PhysicalPoint, PhysicalRect, PhysicalSize};
 use i_slint_core::graphics::ApproxEq;
+use i_slint_core::graphics::ResolvedBrush;
 use i_slint_core::graphics::boxshadowcache::BoxShadowCache;
 use i_slint_core::graphics::euclid::num::Zero;
 use i_slint_core::graphics::euclid::{self, Vector2D};
 use i_slint_core::item_rendering::{
-    CachedRenderingData, ItemCache, ItemRenderer, ItemRendererFeatures, LayerRenderer, RenderImage,
-    RenderText,
+    BorderRectLayout, CachedRenderingData, ItemCache, ItemRenderer, ItemRendererFeatures,
+    LayerRenderer, RenderImage, RenderText,
 };
 use i_slint_core::items::{
     Backdrop, ImageFit, ImageRendering, ItemRc, Layer, Opacity, RenderingResult,
@@ -30,11 +31,19 @@ pub type SkiaBoxShadowCache = BoxShadowCache<skia_safe::Image>;
 
 #[derive(Clone, Copy)]
 struct RenderState {
+    #[cfg(feature = "painted-scroll-probe")]
+    painted_mask: u64,
+    #[cfg(feature = "painted-scroll-probe")]
+    painted_blocked: bool,
     alpha: f32,
     transform: i_slint_core::lengths::ItemTransform,
 }
 
 pub struct SkiaItemRenderer<'a> {
+    #[cfg(feature = "painted-scroll-probe")]
+    pub(crate) painted_main_target: bool,
+    #[cfg(feature = "painted-scroll-probe")]
+    painted_frame: Option<(u64,u64)>,
     pub canvas: &'a skia_safe::Canvas,
     pub scale_factor: ScaleFactor,
     pub window: &'a i_slint_core::api::Window,
@@ -45,7 +54,7 @@ pub struct SkiaItemRenderer<'a> {
     layer_cache: &'a ItemCache<Option<(PhysicalPoint, skia_safe::Image)>>,
     path_cache: &'a ItemCache<Option<(Vector2D<f32, PhysicalPx>, skia_safe::Path)>>,
     text_layout_cache: &'a sharedparley::TextLayoutCache,
-    box_shadow_cache: &'a mut SkiaBoxShadowCache,
+    box_shadow_cache: &'a SkiaBoxShadowCache,
 }
 
 impl<'a> SkiaItemRenderer<'a> {
@@ -57,15 +66,23 @@ impl<'a> SkiaItemRenderer<'a> {
         layer_cache: &'a ItemCache<Option<(PhysicalPoint, skia_safe::Image)>>,
         path_cache: &'a ItemCache<Option<(Vector2D<f32, PhysicalPx>, skia_safe::Path)>>,
         text_layout_cache: &'a sharedparley::TextLayoutCache,
-        box_shadow_cache: &'a mut SkiaBoxShadowCache,
+        box_shadow_cache: &'a SkiaBoxShadowCache,
     ) -> Self {
         Self {
+            #[cfg(feature = "painted-scroll-probe")]
+            painted_main_target: false,
+            #[cfg(feature = "painted-scroll-probe")]
+            painted_frame: i_slint_core::painted_scroll_probe::frame_token(),
             canvas,
             scale_factor: ScaleFactor::new(window.scale_factor()),
             window,
             surface,
             state_stack: Vec::new(),
             current_state: RenderState {
+                #[cfg(feature = "painted-scroll-probe")]
+                painted_mask: 0,
+                #[cfg(feature = "painted-scroll-probe")]
+                painted_blocked: false,
                 alpha: 1.0,
                 transform: i_slint_core::lengths::ItemTransform::identity(),
             },
@@ -75,6 +92,47 @@ impl<'a> SkiaItemRenderer<'a> {
             text_layout_cache,
             box_shadow_cache,
         }
+    }
+
+    #[cfg(feature = "painted-scroll-probe")]
+    fn painted_geometry(&self) -> i_slint_core::painted_scroll_probe::Geometry {
+        let mut canvas = [0.; 9];
+        self.canvas.local_to_device_as_3x3().get_9(&mut canvas);
+        let t = self.current_state.transform;
+        i_slint_core::painted_scroll_probe::Geometry {
+            canvas, logical: [t.m11, t.m12, t.m21, t.m22, t.m31, t.m32],
+        }
+    }
+    #[cfg(feature = "painted-scroll-probe")]
+    fn painted_reject_scope(&mut self, reason: i_slint_core::painted_scroll_probe::Reason) {
+        if !i_slint_core::painted_scroll_probe::frame_matches(self.painted_frame) || !self.painted_main_target { return; }
+        if self.current_state.painted_mask != 0 { i_slint_core::painted_scroll_probe::note(reason); }
+        i_slint_core::painted_scroll_probe::reject_unwitnessed(self.current_state.painted_mask);
+        self.current_state.painted_blocked = true;
+    }
+    #[cfg(feature = "painted-scroll-probe")]
+    fn painted_witness(&self, item: &ItemRc, rect: skia_safe::Rect, paint: &skia_safe::Paint, kind: u8) {
+        if !i_slint_core::painted_scroll_probe::frame_matches(self.painted_frame) || !self.painted_main_target
+            || self.current_state.painted_mask == 0 { return; }
+        let geometry = self.painted_geometry();
+        let clip = self.canvas.device_clip_bounds();
+        // local_clip_bounds() is outset by one pixel and is not containment
+        // evidence. Device bounds are integer outer bounds; require their
+        // one-pixel interior, conservatively excluding fractional/AA edges.
+        // Core independently requires the matrix to be finite/unit/translation.
+        let dx = f64::from(geometry.canvas[2]);
+        let dy = f64::from(geometry.canvas[5]);
+        let eligible = !self.current_state.painted_blocked && self.current_state.alpha == 1.
+            && paint.alpha_f() > 0. && self.canvas.is_clip_rect()
+            && rect.width() > 0. && rect.height() > 0.
+            && [rect.left, rect.top, rect.right, rect.bottom].iter().all(|n| n.is_finite())
+            && clip.is_some_and(|c| f64::from(rect.left) + dx >= f64::from(c.left) + 1.
+                && f64::from(rect.top) + dy >= f64::from(c.top) + 1.
+                && f64::from(rect.right) + dx <= f64::from(c.right) - 1.
+                && f64::from(rect.bottom) + dy <= f64::from(c.bottom) - 1.);
+        let root = ItemRc::new(item.item_tree().clone(), 0).downgrade();
+        i_slint_core::painted_scroll_probe::witness(&root, item.index(), self.current_state.painted_mask,
+            geometry, self.scale_factor.get(), kind, eligible);
     }
 
     fn default_paint(&self) -> Option<skia_safe::Paint> {
@@ -87,45 +145,48 @@ impl<'a> SkiaItemRenderer<'a> {
         }
     }
 
+    /// Skia leaves anti-aliasing off by default, which keeps an upright rectangle's edges crisp.
+    /// A transform that tilts the rectangle turns those edges into stair steps instead.
+    fn needs_anti_alias(&self) -> bool {
+        !self
+            .canvas
+            .local_to_device_as_3x3()
+            .preserves_axis_alignment()
+    }
+
     fn render_drop_shadow_image(
         canvas: &skia_safe::Canvas,
         shadow_options: &i_slint_core::graphics::boxshadowcache::BoxShadowOptions,
     ) -> Option<skia_safe::Image> {
-        let blur = shadow_options.blur.get();
-        let spread = shadow_options.spread.get();
-
-        let shape_w = (shadow_options.width.get() + 2. * spread).max(0.);
-        let shape_h = (shadow_options.height.get() + 2. * spread).max(0.);
-        if shape_w <= 0. || shape_h <= 0. {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter Skia shadow construct drop");
+        let shape_size = shadow_options.shape_size();
+        if shape_size.is_empty() {
             return None;
         }
-        // CSS rule: outer corner radius after spread = max(0, r + spread).
-        let shape_radius = (shadow_options.radius + PhysicalBorderRadius::new_uniform(spread))
-            .max(Default::default());
 
-        let canvas_size: skia_safe::Size = (shape_w + 2. * blur, shape_h + 2. * blur).into();
+        let canvas_size: skia_safe::Size = {
+            let size = shadow_options.drop_texture_size();
+            (size.width, size.height).into()
+        };
 
-        let image_info = skia_safe::ImageInfo::new(
+        let image_info = crate::image_info(
             canvas_size.to_ceil(),
             skia_safe::ColorType::RGBA8888,
             skia_safe::AlphaType::Premul,
-            None,
         );
 
-        // The shape is centered in the canvas with `blur` padding on all sides so the Gaussian blur
-        // has room to fade out into transparency.
         let rounded_rect = to_skia_rrect(
-            &PhysicalRect::new(PhysicalPoint::new(blur, blur), PhysicalSize::new(shape_w, shape_h)),
-            &shape_radius,
+            &PhysicalRect::new(shadow_options.shape_origin(), shape_size),
+            &shadow_options.outer_radius(),
         );
 
-        let mut paint = skia_safe::Paint::default();
-        paint.set_color(to_skia_color(&shadow_options.color));
+        let mut paint = crate::solid_paint(&shadow_options.color);
         paint.set_anti_alias(true);
-        if blur > 0. {
+        if shadow_options.blur.get() > 0. {
             paint.set_mask_filter(skia_safe::MaskFilter::blur(
                 skia_safe::BlurStyle::Normal,
-                blur / 2.,
+                shadow_options.blur_sigma(),
                 None,
             ));
         }
@@ -141,6 +202,8 @@ impl<'a> SkiaItemRenderer<'a> {
         canvas: &skia_safe::Canvas,
         shadow_options: &i_slint_core::graphics::boxshadowcache::BoxShadowOptions,
     ) -> Option<skia_safe::Image> {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter Skia shadow construct inset");
         let width = shadow_options.width.get();
         let height = shadow_options.height.get();
         if width < 1. || height < 1. {
@@ -155,11 +218,10 @@ impl<'a> SkiaItemRenderer<'a> {
         // Image is sized to the rectangle's geometry; the geometry rrect serves as the clip so the
         // outer blurred edge stays hidden.
         let canvas_size = skia_safe::ISize::new(width.ceil() as i32, height.ceil() as i32);
-        let image_info = skia_safe::ImageInfo::new(
+        let image_info = crate::image_info(
             canvas_size,
             skia_safe::ColorType::RGBA8888,
             skia_safe::AlphaType::Premul,
-            None,
         );
 
         let geometry_rrect = to_skia_rrect(
@@ -168,15 +230,13 @@ impl<'a> SkiaItemRenderer<'a> {
         );
 
         // Inner "hole" rrect: geometry inset by spread on each side, translated by offset.
-        // CSS: inner radius = max(0, radius - spread).
         let inner_rect = skia_safe::Rect::new(
             spread + offset_x,
             spread + offset_y,
             width - spread + offset_x,
             height - spread + offset_y,
         );
-        let inner_radius =
-            (radius - PhysicalBorderRadius::new_uniform(spread)).max(Default::default());
+        let inner_radius = shadow_options.inner_radius();
         let inner_rrect = to_skia_rrect(
             &PhysicalRect::new(
                 PhysicalPoint::new(inner_rect.left, inner_rect.top),
@@ -196,13 +256,12 @@ impl<'a> SkiaItemRenderer<'a> {
         path_builder.add_rrect(inner_rrect, None, None);
         let path = path_builder.detach();
 
-        let mut paint = skia_safe::Paint::default();
-        paint.set_color(to_skia_color(&shadow_options.color));
+        let mut paint = crate::solid_paint(&shadow_options.color);
         paint.set_anti_alias(true);
         if blur > 0. {
             paint.set_mask_filter(skia_safe::MaskFilter::blur(
                 skia_safe::BlurStyle::Normal,
-                blur / 2.,
+                shadow_options.blur_sigma(),
                 None,
             ));
         }
@@ -213,6 +272,24 @@ impl<'a> SkiaItemRenderer<'a> {
         surface_canvas.clip_rrect(geometry_rrect, None, true);
         surface_canvas.draw_path(&path, &paint);
         Some(surface.image_snapshot())
+    }
+
+    fn rectangle_brush_to_paint(
+        &self,
+        brush: Brush,
+        width: PhysicalLength,
+        height: PhysicalLength,
+    ) -> Option<skia_safe::Paint> {
+        if let Brush::SolidColor(color) = &brush
+            && color.alpha() == 255
+        {
+            let mut paint = self.default_paint().unwrap_or_default();
+            if paint.alpha_f() == 1.0 {
+                paint.set_color4f(to_skia_color4f(color), &crate::srgb_color_space());
+                return Some(paint);
+            }
+        }
+        self.brush_to_paint(brush, width, height)
     }
 
     fn brush_to_paint(
@@ -226,7 +303,7 @@ impl<'a> SkiaItemRenderer<'a> {
             brush,
             width,
             height,
-            self.scale_factor.get(),
+            self.scale_factor,
         )?;
         paint.set_shader(Some(shader));
 
@@ -238,96 +315,89 @@ impl<'a> SkiaItemRenderer<'a> {
         brush: Brush,
         width: PhysicalLength,
         height: PhysicalLength,
-        scale_factor: f32,
+        scale_factor: ScaleFactor,
     ) -> Option<(skia_safe::Paint, skia_safe::Shader)> {
-        if brush.is_transparent() {
-            return None;
+        let resolved = i_slint_core::graphics::resolve_brush(
+            &brush,
+            euclid::Size2D::from_lengths(width, height),
+            scale_factor,
+        )?;
+
+        fn gradient<'g>(
+            colors: &'g [skia_safe::Color4f],
+            pos: &'g [f32],
+            in_premul: skia_safe::gradient::interpolation::InPremul,
+        ) -> skia_safe::gradient::Gradient<'g> {
+            skia_safe::gradient::Gradient::new(
+                crate::gradient_colors(colors, pos),
+                skia_safe::gradient::Interpolation {
+                    in_premul,
+                    color_space: skia_safe::gradient::interpolation::ColorSpace::SRGB,
+                    ..Default::default()
+                },
+            )
         }
 
-        match brush {
-            Brush::SolidColor(color) => Some(skia_safe::shaders::color(to_skia_color(&color))),
+        match resolved {
+            ResolvedBrush::SolidColor(color) => Some(crate::color_shader(&color)),
 
-            Brush::LinearGradient(g) => {
-                let (start, end) = i_slint_core::graphics::line_for_angle(
-                    g.angle(),
-                    [width.get(), height.get()].into(),
-                );
-                let (colors, pos): (Vec<skia_safe::Color4f>, Vec<_>) = g
-                    .stops()
-                    .map(|s| (skia_safe::Color4f::from(to_skia_color(&s.color)), s.position))
-                    .unzip();
+            ResolvedBrush::LinearGradient(g) => {
+                let stops = to_skia_stops(&g.stops);
+                let (colors, pos) = stops.as_slices();
 
                 paint.set_dither(true);
 
-                let gradient_colors =
-                    skia_safe::gradient::Colors::new(&colors, Some(&*pos), TileMode::Clamp, None);
-                let gradient = skia_safe::gradient::Gradient::new(
-                    gradient_colors,
-                    skia_safe::gradient::Interpolation {
-                        in_premul: skia_safe::gradient::interpolation::InPremul::Yes,
-                        ..Default::default()
-                    },
-                );
                 skia_safe::gradient::shaders::linear_gradient(
-                    (skia_safe::Point::new(start.x, start.y), skia_safe::Point::new(end.x, end.y)),
-                    &gradient,
+                    (
+                        skia_safe::Point::new(g.start.x, g.start.y),
+                        skia_safe::Point::new(g.end.x, g.end.y),
+                    ),
+                    &gradient(
+                        colors,
+                        pos,
+                        skia_safe::gradient::interpolation::InPremul::Yes,
+                    ),
                     None,
                 )
             }
-            Brush::RadialGradient(g) => {
-                let (colors, pos): (Vec<skia_safe::Color4f>, Vec<_>) = g
-                    .stops()
-                    .map(|s| (skia_safe::Color4f::from(to_skia_color(&s.color)), s.position))
-                    .unzip();
-                let (cx, cy) = g.center_or_default_scaled(width.get(), height.get(), scale_factor);
-                let circle_scale =
-                    g.radius_or_default_scaled(width.get(), height.get(), scale_factor);
+            ResolvedBrush::RadialGradient(g) => {
+                let stops = to_skia_stops(&g.stops);
+                let (colors, pos) = stops.as_slices();
 
                 paint.set_dither(true);
 
-                let gradient_colors =
-                    skia_safe::gradient::Colors::new(&colors, Some(&*pos), TileMode::Clamp, None);
-                let gradient = skia_safe::gradient::Gradient::new(
-                    gradient_colors,
-                    skia_safe::gradient::Interpolation {
-                        in_premul: skia_safe::gradient::interpolation::InPremul::Yes,
-                        ..Default::default()
-                    },
-                );
-                let mut local_matrix = skia_safe::Matrix::scale((circle_scale, circle_scale));
-                local_matrix.post_translate((cx, cy));
+                let mut local_matrix = skia_safe::Matrix::scale((g.radius.get(), g.radius.get()));
+                local_matrix.post_translate((g.center.x, g.center.y));
                 skia_safe::gradient::shaders::radial_gradient(
                     (skia_safe::Point::new(0., 0.), 1.),
-                    &gradient,
+                    &gradient(
+                        colors,
+                        pos,
+                        skia_safe::gradient::interpolation::InPremul::Yes,
+                    ),
                     &local_matrix,
                 )
             }
-            Brush::ConicGradient(g) => {
-                let (colors, pos): (Vec<skia_safe::Color4f>, Vec<_>) = g
-                    .stops()
-                    .map(|s| (skia_safe::Color4f::from(to_skia_color(&s.color)), s.position))
-                    .unzip();
-                let (cx, cy) = g.center_or_default_scaled(width.get(), height.get(), scale_factor);
+            ResolvedBrush::ConicGradient(g) => {
+                let stops = to_skia_stops(&g.stops);
+                let (colors, pos) = stops.as_slices();
 
                 paint.set_dither(true);
 
                 // Skia's sweep gradient uses 0 degrees at 3 o'clock (east)
                 // We want 0 degrees at 12 o'clock (north), so we need to rotate by -90 degrees
-                let center = skia_safe::Point::new(cx, cy);
-                let gradient_colors =
-                    skia_safe::gradient::Colors::new(&colors, Some(&*pos), TileMode::Clamp, None);
-                let gradient = skia_safe::gradient::Gradient::new(
-                    gradient_colors,
-                    skia_safe::gradient::Interpolation::default(),
-                );
+                let center = skia_safe::Point::new(g.center.x, g.center.y);
                 skia_safe::gradient::shaders::sweep_gradient(
                     center,
                     (0.0, 360.0),
-                    &gradient,
+                    &gradient(
+                        colors,
+                        pos,
+                        skia_safe::gradient::interpolation::InPremul::No,
+                    ),
                     &skia_safe::Matrix::rotate_deg_pivot(-90.0, center),
                 )
             }
-            _ => None,
         }
         .map(|shader| (paint, shader))
     }
@@ -337,11 +407,10 @@ impl<'a> SkiaItemRenderer<'a> {
         image: skia_safe::Image,
         colorize_brush: Brush,
     ) -> Option<skia_safe::Image> {
-        let image_info = skia_safe::ImageInfo::new(
+        let image_info = crate::image_info(
             image.dimensions(),
             skia_safe::ColorType::RGBA8888,
             skia_safe::AlphaType::Premul,
-            None,
         );
 
         Self::brush_to_shader(
@@ -349,7 +418,7 @@ impl<'a> SkiaItemRenderer<'a> {
             colorize_brush,
             PhysicalLength::new(image.width() as f32),
             PhysicalLength::new(image.height() as f32),
-            self.scale_factor.get(),
+            self.scale_factor,
         )
         .map(|(mut paint, colorize_shader)| {
             let mut surface = self.canvas.new_surface(&image_info, None)?;
@@ -373,15 +442,26 @@ impl<'a> SkiaItemRenderer<'a> {
         item: Pin<&dyn RenderImage>,
         dest_rect: PhysicalRect,
     ) {
+        #[cfg(target_os = "android")]
+        let _item_trace = crate::renderer_trace::Section::new(c"Chatter Skia image item");
         let tiling = item.tiling();
 
         // TODO: avoid doing creating an SkImage multiple times when the same source is used in multiple image elements
+        #[cfg(target_os = "android")]
+        let cache_trace = crate::renderer_trace::Section::new(c"Chatter Skia image cache lookup");
         let skia_image = self.image_cache.get_or_update_cache_entry(item_rc, || {
+            #[cfg(target_os = "android")]
+            let _update_trace =
+                crate::renderer_trace::Section::new(c"Chatter Skia image cache update");
             let image = item.source();
             super::cached_image::as_skia_image(
                 image,
                 &|| item.target_size(),
-                if tiling != Default::default() { ImageFit::Preserve } else { item.image_fit() },
+                if tiling != Default::default() {
+                    ImageFit::Preserve
+                } else {
+                    item.image_fit()
+                },
                 self.scale_factor,
                 self.canvas,
                 self.surface,
@@ -395,6 +475,8 @@ impl<'a> SkiaItemRenderer<'a> {
                 }
             })
         });
+        #[cfg(target_os = "android")]
+        drop(cache_trace);
 
         let Some(skia_image) = skia_image else { return };
         let source = item.source();
@@ -405,10 +487,14 @@ impl<'a> SkiaItemRenderer<'a> {
             // source size.
             return;
         }
+        // Ordinary images need only one fit. Keep it on the stack; nine-slice
+        // fits retain their existing eager evaluation and ordering.
+        let single_fit;
+        let nine_fits;
         let fits = if let i_slint_core::ImageInner::NineSlice(nine) =
             <&i_slint_core::ImageInner>::from(&source)
         {
-            i_slint_core::graphics::fit9slice(
+            nine_fits = i_slint_core::graphics::fit9slice(
                 source_size.cast(),
                 nine.1,
                 dest_rect.size,
@@ -416,24 +502,47 @@ impl<'a> SkiaItemRenderer<'a> {
                 item.alignment(),
                 tiling,
             )
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+            nine_fits.as_slice()
         } else {
-            vec![i_slint_core::graphics::fit(
+            single_fit = [i_slint_core::graphics::fit(
                 item.image_fit(),
                 dest_rect.size,
-                item.source_clip().unwrap_or_else(|| euclid::Rect::from_size(source_size.cast())),
+                item.source_clip()
+                    .unwrap_or_else(|| euclid::Rect::from_size(source_size.cast())),
                 self.scale_factor,
                 item.alignment(),
                 tiling,
-            )]
+            )];
+            &single_fit
         };
 
+        #[cfg(target_os = "android")]
+        let _draw_trace = crate::renderer_trace::Section::new(c"Chatter Skia image draw");
         let _saved_canvas = self.pixel_align_origin_auto_restore();
         for fit in fits {
             self.canvas.save();
 
             let dst = to_skia_rect(&PhysicalRect::new(fit.offset, fit.size));
-            self.canvas.clip_rect(dst, None, None);
+            {
+                #[cfg(target_os = "android")]
+                let _trace = crate::renderer_trace::Section::new(c"Chatter Skia image dst clip");
+                #[cfg(target_os = "android")]
+                if crate::renderer_trace::enabled() {
+                    // Current device clip bounding area BEFORE this clip, not
+                    // image coverage, allocation size, or GPU work.
+                    let clip = self.canvas.device_clip_bounds();
+                    crate::renderer_trace::counter(
+                        c"Chatter image current device clip bbox px2",
+                        clip.map_or(0, |clip| i64::from(clip.width()) * i64::from(clip.height())),
+                    );
+                    crate::renderer_trace::counter(
+                        c"Chatter image local dst bounds px2",
+                        (f64::from(dst.width()) * f64::from(dst.height())) as i64,
+                    );
+                }
+                self.canvas.clip_rect(dst, None, None);
+            }
             let src = skia_safe::IRect::from_xywh(
                 skia_image.width() * fit.clip_rect.origin.x / source_size.width as i32,
                 skia_image.height() * fit.clip_rect.origin.y / source_size.height as i32,
@@ -495,7 +604,10 @@ impl<'a> SkiaItemRenderer<'a> {
         if let Some((layer_offset, layer_image)) =
             i_slint_core::item_rendering::render_layer(self, item_rc)
         {
-            self.canvas.translate(skia_safe::Vector::from((layer_offset.x, layer_offset.y)));
+            #[cfg(target_os = "android")]
+            let _trace = crate::renderer_trace::Section::new(c"Chatter layer blend");
+            self.canvas
+                .translate(skia_safe::Vector::from((layer_offset.x, layer_offset.y)));
             let _saved_canvas = self.pixel_align_origin_auto_restore();
             self.canvas.draw_image_with_sampling_options(
                 layer_image,
@@ -503,8 +615,11 @@ impl<'a> SkiaItemRenderer<'a> {
                 skia_safe::sampling_options::FilterMode::Linear,
                 self.default_paint().as_ref(),
             );
+            RenderingResult::ContinueRenderingWithoutChildren
+        } else {
+            // Allocation failure (including a cached None) must not hide content.
+            RenderingResult::ContinueRenderingChildren
         }
-        RenderingResult::ContinueRenderingWithoutChildren
     }
 
     // Same as pixel_align_origin_auto_restore() but can be used across function calls where
@@ -524,7 +639,8 @@ impl<'a> SkiaItemRenderer<'a> {
 
         self.canvas.save();
 
-        self.canvas.translate(device_to_local.map_point(target_point));
+        self.canvas
+            .translate(device_to_local.map_point(target_point));
 
         true
     }
@@ -542,13 +658,27 @@ impl<'a> SkiaItemRenderer<'a> {
 
         let restore_point = skia_safe::AutoCanvasRestore::guard(self.canvas, true);
 
-        self.canvas.translate(device_to_local.map_point(target_point));
+        self.canvas
+            .translate(device_to_local.map_point(target_point));
 
         Some(restore_point)
     }
 }
 
 impl ItemRenderer for SkiaItemRenderer<'_> {
+    #[cfg(feature = "painted-scroll-probe")]
+    fn observe_painted_item(&mut self, item: &ItemRc) {
+        if !i_slint_core::painted_scroll_probe::frame_matches(self.painted_frame) || !self.painted_main_target { return; }
+        let geometry = self.painted_geometry();
+        self.current_state.painted_mask = i_slint_core::painted_scroll_probe::enter(
+            &item.downgrade(), geometry, self.current_state.painted_mask,
+            !self.current_state.painted_blocked && self.current_state.alpha == 1.);
+    }
+
+    fn global_alpha_transparent(&self) -> bool {
+        self.current_state.alpha == 0.0
+    }
+
     fn draw_rectangle(
         &mut self,
         rect: Pin<&dyn i_slint_core::item_rendering::RenderRectangle>,
@@ -556,12 +686,14 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         size: LogicalSize,
         _cache: &CachedRenderingData,
     ) {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter Skia rectangle item");
         let geometry = PhysicalRect::from(size * self.scale_factor);
         if geometry.is_empty() {
             return;
         }
 
-        let paint = match self.brush_to_paint(
+        let mut paint = match self.rectangle_brush_to_paint(
             rect.background(),
             geometry.width_length(),
             geometry.height_length(),
@@ -569,6 +701,11 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
             Some(paint) => paint,
             None => return,
         };
+        paint.set_anti_alias(self.needs_anti_alias());
+        #[cfg(feature = "painted-scroll-probe")]
+        if i_slint_core::painted_scroll_probe::active() {
+            self.painted_witness(_self_rc, to_skia_rect(&geometry), &paint, 1);
+        }
         self.canvas.draw_rect(to_skia_rect(&geometry), &paint);
     }
 
@@ -579,73 +716,37 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         size: LogicalSize,
         _: &CachedRenderingData,
     ) {
-        let mut geometry = PhysicalRect::from(size * self.scale_factor);
-        if geometry.is_empty() {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter Skia border rectangle item");
+        let Some(layout) = BorderRectLayout::new(rect, size, self.scale_factor) else {
             return;
-        }
-
-        // Save the original element bounds for gradient positioning. The CSS model positions
-        // gradients relative to the border box (full element), but adjust_rect_and_border_for_inner_drawing
-        // shrinks geometry before we create the paint, which would shift the gradient center inward.
-        let original_width = geometry.width_length();
-        let original_height = geometry.height_length();
-
-        let border_color = rect.border_color();
-        let opaque_border = border_color.is_opaque();
-        let mut border_width = if border_color.is_transparent() {
-            PhysicalLength::new(0.)
-        } else {
-            rect.border_width() * self.scale_factor
         };
-
-        // Radius of rounded rect if we were to just fill the rectangle, without a border.
-        let mut fill_radius = rect.border_radius() * self.scale_factor;
-        // Skia's border radius on stroke is in the middle of the border. But we want it to be the radius of the rectangle itself.
-        // This is incorrect if fill_radius < border_width/2, but this can't be fixed. Better to have a radius a bit too big than no radius at all
-        fill_radius = fill_radius.outer(border_width / 2. + PhysicalLength::new(0.01));
-        let stroke_border_radius = fill_radius.inner(border_width / 2.);
-
-        let (background_rect, border_rect) = if opaque_border {
-            // In CSS the border is entirely towards the inside of the boundary
-            // geometry, while in femtovg the line with for a stroke is 50% in-
-            // and 50% outwards. We choose the CSS model, so the inner rectangle
-            // is adjusted accordingly.
-            adjust_rect_and_border_for_inner_drawing(&mut geometry, &mut border_width);
-
-            let rounded_rect = to_skia_rrect(&geometry, &stroke_border_radius);
-
-            (rounded_rect, rounded_rect)
-        } else {
-            let background_rect = to_skia_rrect(&geometry, &fill_radius);
-
-            // In CSS the border is entirely towards the inside of the boundary
-            // geometry, while in femtovg the line with for a stroke is 50% in-
-            // and 50% outwards. We choose the CSS model, so the inner rectangle
-            // is adjusted accordingly.
-            adjust_rect_and_border_for_inner_drawing(&mut geometry, &mut border_width);
-
-            let border_rect = to_skia_rrect(&geometry, &stroke_border_radius);
-
-            (background_rect, border_rect)
-        };
+        let brush_width = layout.brush_size.width_length();
+        let brush_height = layout.brush_size.height_length();
 
         if let Some(mut fill_paint) =
-            self.brush_to_paint(rect.background(), original_width, original_height)
+            self.rectangle_brush_to_paint(rect.background(), brush_width, brush_height)
         {
+            let background_rect = to_skia_rrect(&layout.background_rect, &layout.background_radius);
             fill_paint.set_style(skia_safe::PaintStyle::Fill);
-            if !background_rect.is_rect() {
+            if !background_rect.is_rect() || self.needs_anti_alias() {
                 fill_paint.set_anti_alias(true);
+            }
+            #[cfg(feature = "painted-scroll-probe")]
+            if i_slint_core::painted_scroll_probe::active() {
+                self.painted_witness(_self_rc, *background_rect.rect(), &fill_paint, 2);
             }
             self.canvas.draw_rrect(background_rect, &fill_paint);
         }
 
-        if border_width.get() > 0.0
+        if layout.border_width.get() > 0.0
             && let Some(mut border_paint) =
-                self.brush_to_paint(border_color, original_width, original_height)
+                self.rectangle_brush_to_paint(layout.border_color, brush_width, brush_height)
         {
+            let border_rect = to_skia_rrect(&layout.border_rect, &layout.border_radius);
             border_paint.set_style(skia_safe::PaintStyle::Stroke);
-            border_paint.set_stroke_width(border_width.get());
-            if !border_rect.is_rect() {
+            border_paint.set_stroke_width(layout.border_width.get());
+            if !border_rect.is_rect() || self.needs_anti_alias() {
                 border_paint.set_anti_alias(true);
             }
             self.canvas.draw_rrect(border_rect, &border_paint);
@@ -654,12 +755,15 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
 
     fn draw_window_background(
         &mut self,
-        _rect: Pin<&dyn i_slint_core::item_rendering::RenderRectangle>,
+        rect: Pin<&dyn i_slint_core::item_rendering::RenderRectangle>,
         _self_rc: &ItemRc,
         _size: LogicalSize,
         _cache: &CachedRenderingData,
     ) {
-        // The background is drawn directly by FemtoVG renderer (via clear_color, if necessary).
+        // Register a dependency for the partial renderer's dirty tracker. The actual rendering
+        // is done earlier in SkiaRenderer, which clears (solid color) or draws (gradient) the
+        // background before the item tree is rendered.
+        let _ = rect.background();
     }
 
     fn draw_image(
@@ -683,8 +787,16 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         size: LogicalSize,
         _cache: &CachedRenderingData,
     ) {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter Skia text item");
         let restore = self.save_canvas_and_pixel_align_origin();
-        sharedparley::draw_text(self, text, Some(self_rc), size, Some(self.text_layout_cache));
+        sharedparley::draw_text(
+            self,
+            text,
+            Some(self_rc),
+            size,
+            Some(self.text_layout_cache),
+        );
         if restore {
             self.canvas.restore();
         }
@@ -696,8 +808,10 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         self_rc: &i_slint_core::items::ItemRc,
         size: LogicalSize,
     ) {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter Skia text input item");
         let restore = self.save_canvas_and_pixel_align_origin();
-        sharedparley::draw_text_input(self, text_input, self_rc, size, None);
+        sharedparley::draw_text_input(self, text_input, self_rc, size, self.text_layout_cache);
         if restore {
             self.canvas.restore();
         }
@@ -709,6 +823,8 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         item_rc: &i_slint_core::items::ItemRc,
         size: LogicalSize,
     ) {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter Skia path item");
         let geometry = PhysicalRect::from(size * self.scale_factor);
 
         let (physical_offset, skpath): (crate::euclid::Vector2D<f32, PhysicalPx>, _) =
@@ -737,7 +853,12 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
                             );
                         }
 
-                        lyon_path::Event::Cubic { from: _, ctrl1, ctrl2, to } => {
+                        lyon_path::Event::Cubic {
+                            from: _,
+                            ctrl1,
+                            ctrl2,
+                            to,
+                        } => {
                             builder.cubic_to(
                                 to_skia_point(
                                     LogicalPoint::from_untyped(ctrl1) * self.scale_factor,
@@ -748,7 +869,11 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
                                 to_skia_point(LogicalPoint::from_untyped(to) * self.scale_factor),
                             );
                         }
-                        lyon_path::Event::End { last: _, first: _, close } => {
+                        lyon_path::Event::End {
+                            last: _,
+                            first: _,
+                            close,
+                        } => {
                             if close {
                                 builder.close();
                             }
@@ -762,7 +887,8 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
                 None => return,
             };
 
-        self.canvas.translate((physical_offset.x, physical_offset.y));
+        self.canvas
+            .translate((physical_offset.x, physical_offset.y));
 
         let anti_alias = path.anti_alias();
 
@@ -782,7 +908,7 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
                 path.fill(),
                 PhysicalLength::new(viewbox_width),
                 PhysicalLength::new(viewbox_height),
-                1.0,
+                ScaleFactor::new(1.0),
             ) {
                 // Apply the viewbox transformation to the shader
                 let transform = skia_safe::Matrix::scale((scale_x, scale_y));
@@ -792,16 +918,22 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
                 None
             }
         } else {
-            self.brush_to_paint(path.fill(), geometry.width_length(), geometry.height_length())
+            self.brush_to_paint(
+                path.fill(),
+                geometry.width_length(),
+                geometry.height_length(),
+            )
         };
 
         if let Some(mut fill_paint) = paint {
             fill_paint.set_anti_alias(anti_alias);
             self.canvas.draw_path(&skpath, &fill_paint);
         }
-        if let Some(mut border_paint) =
-            self.brush_to_paint(path.stroke(), geometry.width_length(), geometry.height_length())
-        {
+        if let Some(mut border_paint) = self.brush_to_paint(
+            path.stroke(),
+            geometry.width_length(),
+            geometry.height_length(),
+        ) {
             border_paint.set_anti_alias(anti_alias);
             border_paint.set_stroke_width((path.stroke_width() * self.scale_factor).get());
             border_paint.set_stroke_cap(match path.stroke_line_cap() {
@@ -826,6 +958,8 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         self_rc: &i_slint_core::items::ItemRc,
         _size: LogicalSize,
     ) {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter Skia shadow item");
         let offset = LogicalPoint::from_lengths(box_shadow.offset_x(), box_shadow.offset_y())
             * self.scale_factor;
         let inset = box_shadow.inset();
@@ -841,6 +975,8 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
             return;
         }
 
+        #[cfg(target_os = "android")]
+        let lookup_trace = crate::renderer_trace::Section::new(c"Chatter Skia shadow cache lookup");
         let cached_shadow_image = self.box_shadow_cache.get_box_shadow(
             self_rc,
             self.image_cache,
@@ -854,12 +990,16 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
                 }
             },
         );
+        #[cfg(target_os = "android")]
+        drop(lookup_trace);
 
         let cached_shadow_image = match cached_shadow_image {
             Some(img) => img,
             None => return,
         };
 
+        #[cfg(target_os = "android")]
+        let _use_trace = crate::renderer_trace::Section::new(c"Chatter Skia shadow use");
         if inset {
             // Inset image is sized exactly to the geometry; blit at origin.
             self.canvas.draw_image(
@@ -878,22 +1018,23 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         }
     }
 
-    fn combine_clip(
-        &mut self,
-        rect: LogicalRect,
-        radius: LogicalBorderRadius,
-        border_width: LogicalLength,
-    ) -> bool {
-        let mut rect = rect * self.scale_factor;
-        let mut border_width = border_width * self.scale_factor;
-        // In CSS the border is entirely towards the inside of the boundary
-        // geometry, while in femtovg the line with for a stroke is 50% in-
-        // and 50% outwards. We choose the CSS model, so the inner rectangle
-        // is adjusted accordingly.
-        adjust_rect_and_border_for_inner_drawing(&mut rect, &mut border_width);
-
-        let radius = radius * self.scale_factor;
-        let rounded_rect = to_skia_rrect(&rect, &radius);
+    fn combine_clip(&mut self, rect: LogicalRect, radius: LogicalBorderRadius) -> bool {
+        #[cfg(feature = "painted-scroll-probe")]
+        if i_slint_core::painted_scroll_probe::active() && !radius.is_zero() {
+            self.painted_reject_scope(i_slint_core::painted_scroll_probe::Reason::RoundedClip);
+        }
+        let rounded_rect =
+            to_skia_rrect(&(rect * self.scale_factor), &(radius * self.scale_factor));
+        #[cfg(target_os = "android")]
+        if rounded_rect.is_complex() {
+            let _attempt =
+                crate::renderer_trace::Section::new(c"Chatter Skia analytic clip attempt");
+            if crate::analytic_clip::apply(self.canvas, &rounded_rect) {
+                let _applied =
+                    crate::renderer_trace::Section::new(c"Chatter Skia analytic clip applied");
+                return self.canvas.local_clip_bounds().is_some();
+            }
+        }
         self.canvas.clip_rrect(rounded_rect, None, true);
         self.canvas.local_clip_bounds().is_some()
     }
@@ -905,7 +1046,8 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
     fn translate(&mut self, distance: LogicalVector) {
         self.current_state.transform = self.current_state.transform.pre_translate(distance.cast());
         let distance = distance * self.scale_factor;
-        self.canvas.translate(skia_safe::Vector::from((distance.x, distance.y)));
+        self.canvas
+            .translate(skia_safe::Vector::from((distance.x, distance.y)));
     }
 
     fn current_transform(&self) -> i_slint_core::lengths::ItemTransform {
@@ -913,8 +1055,10 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
     }
 
     fn rotate(&mut self, angle_in_degrees: f32) {
-        self.current_state.transform =
-            self.current_state.transform.pre_rotate(euclid::Angle::degrees(angle_in_degrees));
+        self.current_state.transform = self
+            .current_state
+            .transform
+            .pre_rotate(euclid::Angle::degrees(angle_in_degrees));
         self.canvas.rotate(angle_in_degrees, None);
     }
 
@@ -937,8 +1081,8 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         self.canvas.restore();
     }
 
-    fn scale_factor(&self) -> f32 {
-        self.scale_factor.get()
+    fn scale_factor(&self) -> ScaleFactor {
+        self.scale_factor
     }
 
     fn draw_cached_pixmap(
@@ -946,14 +1090,17 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         item_rc: &i_slint_core::items::ItemRc,
         update_fn: &dyn Fn(&mut dyn FnMut(u32, u32, &[u8])),
     ) {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter Skia pixmap item");
         let skia_image = self.image_cache.get_or_update_cache_entry(item_rc, || {
             let mut cached_image = None;
             update_fn(&mut |width: u32, height: u32, data: &[u8]| {
-                let image_info = skia_safe::ImageInfo::new(
+                #[cfg(target_os = "android")]
+                let _copy_trace = crate::renderer_trace::Section::new(c"Chatter Skia pixmap copy");
+                let image_info = crate::image_info(
                     skia_safe::ISize::new(width as i32, height as i32),
                     skia_safe::ColorType::RGBA8888,
                     skia_safe::AlphaType::Premul,
-                    None,
                 );
                 cached_image = skia_safe::images::raster_from_data(
                     &image_info,
@@ -968,20 +1115,27 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
             None => return,
         };
         let _saved_canvas = self.pixel_align_origin_auto_restore();
-        self.canvas.draw_image(skia_image, skia_safe::Point::default(), None);
+        #[cfg(target_os = "android")]
+        let _draw_trace = crate::renderer_trace::Section::new(c"Chatter Skia pixmap draw");
+        self.canvas
+            .draw_image(skia_image, skia_safe::Point::default(), None);
     }
 
     fn draw_string(&mut self, string: &str, color: i_slint_core::Color) {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter Skia string item");
         sharedparley::draw_text(
             self,
             std::pin::pin!((SharedString::from(string), Brush::from(color))),
             None,
-            logical_size_from_api(self.window.size().to_logical(self.scale_factor())),
+            logical_size_from_api(self.window.size().to_logical(self.scale_factor().get())),
             None,
         );
     }
 
     fn draw_image_direct(&mut self, image: i_slint_core::graphics::Image) {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter Skia image direct item");
         let skia_image = super::cached_image::as_skia_image(
             image.clone(),
             &|| LogicalSize::from_untyped(image.size().cast()),
@@ -996,6 +1150,8 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
             None => return,
         };
 
+        #[cfg(target_os = "android")]
+        let _draw_trace = crate::renderer_trace::Section::new(c"Chatter Skia image direct draw");
         self.canvas.draw_image(
             skia_image,
             skia_safe::Point::default(),
@@ -1017,6 +1173,10 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         item_rc: &ItemRc,
         size: LogicalSize,
     ) -> RenderingResult {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter Skia backdrop visit");
+        #[cfg(feature = "painted-scroll-probe")]
+        self.painted_reject_scope(i_slint_core::painted_scroll_probe::Reason::Backdrop);
         if self.current_state.alpha <= 0.0 {
             return RenderingResult::ContinueRenderingWithoutChildren;
         }
@@ -1061,16 +1221,32 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
             if let Some(paint) = paint.as_ref() {
                 layer = layer.paint(paint);
             }
-            self.canvas.save_layer(&layer);
+            {
+                #[cfg(target_os = "android")]
+                let _trace =
+                    crate::renderer_trace::Section::new(c"Chatter Skia backdrop save layer");
+                #[cfg(target_os = "android")]
+                if crate::renderer_trace::enabled() {
+                    // Bounds are an allocation hint only; neither area is a
+                    // measurement of the filter's actual intermediate textures.
+                    let clip = self.canvas.device_clip_bounds();
+                    crate::renderer_trace::counter(
+                        c"Chatter backdrop current device clip bbox px2",
+                        clip.map_or(0, |clip| i64::from(clip.width()) * i64::from(clip.height())),
+                    );
+                    crate::renderer_trace::counter(
+                        c"Chatter backdrop local bounds hint px2",
+                        (f64::from(bounds.width()) * f64::from(bounds.height())) as i64,
+                    );
+                }
+                self.canvas.save_layer(&layer);
+            }
             if radius > 0.0 {
                 let mut clear = skia_safe::Paint::default();
                 clear.set_anti_alias(true);
                 clear.set_blend_mode(skia_safe::BlendMode::Clear);
-                self.canvas.draw_drrect(
-                    skia_safe::RRect::new_rect(bounds),
-                    rounded,
-                    &clear,
-                );
+                self.canvas
+                    .draw_drrect(skia_safe::RRect::new_rect(bounds), rounded, &clear);
             }
             self.canvas.restore();
         }
@@ -1094,8 +1270,35 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         _size: LogicalSize,
     ) -> RenderingResult {
         let opacity = opacity_item.opacity();
+        #[cfg(feature = "painted-scroll-probe")]
+        if opacity != 1.0 {
+            self.painted_reject_scope(i_slint_core::painted_scroll_probe::Reason::Opacity);
+        }
+        // Keep this read inside the renderer's tracked call: doing it in the
+        // generic item before PartialRenderer dispatch loses damage tracking.
+        if opacity <= 0.0 {
+            #[cfg(target_os = "android")]
+            let _trace =
+                crate::renderer_trace::Section::new(c"Chatter Skia opacity skip transparent");
+            return RenderingResult::ContinueRenderingWithoutChildren;
+        }
         if Opacity::need_layer(item_rc, opacity) {
-            self.canvas.save_layer_alpha(None, (opacity * 255.) as u32);
+            {
+                #[cfg(target_os = "android")]
+                let _trace =
+                    crate::renderer_trace::Section::new(c"Chatter Skia opacity save layer");
+                #[cfg(target_os = "android")]
+                if crate::renderer_trace::enabled() {
+                    // No allocation bounds were supplied. Report only the
+                    // current device clip's bounding area, never allocation.
+                    let clip = self.canvas.device_clip_bounds();
+                    crate::renderer_trace::counter(
+                        c"Chatter opacity current device clip bbox px2",
+                        clip.map_or(0, |clip| i64::from(clip.width()) * i64::from(clip.height())),
+                    );
+                }
+                self.canvas.save_layer_alpha(None, (opacity * 255.) as u32);
+            }
             self.state_stack.push(self.current_state);
             self.current_state.alpha = 1.0;
 
@@ -1124,9 +1327,11 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         _size: LogicalSize,
     ) -> RenderingResult {
         if layer_item.cache_rendering_hint() {
+            #[cfg(feature = "painted-scroll-probe")]
+            self.painted_reject_scope(i_slint_core::painted_scroll_probe::Reason::CachedLayer);
             self.render_and_blend_layer(self_rc)
         } else {
-            self.image_cache.release(self_rc);
+            self.layer_cache.release(self_rc);
             RenderingResult::ContinueRenderingChildren
         }
     }
@@ -1145,11 +1350,22 @@ impl<'a> LayerRenderer<'a> for SkiaItemRenderer<'a> {
         _item_rc: &ItemRc,
         physical_size: euclid::Size2D<f32, PhysicalPx>,
     ) -> Option<Self::LayerTarget> {
-        let image_info = skia_safe::ImageInfo::new(
-            to_skia_size(&physical_size).to_ceil(),
+        // Called only on a cache miss/dirty entry, including failed allocations.
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter layer create");
+        let size = to_skia_size(&physical_size).to_ceil();
+        // Enforce the texture budget on actual descendant bounds too. Oversized
+        // hints render directly, without clipping or changing their contents.
+        if size.width <= 0
+            || size.height <= 0
+            || i64::from(size.width) * i64::from(size.height) > 524_288
+        {
+            return None;
+        }
+        let image_info = crate::image_info(
+            size,
             skia_safe::ColorType::RGBA8888,
             skia_safe::AlphaType::Premul,
-            None,
         );
         self.canvas.new_surface(&image_info, None)
     }
@@ -1160,6 +1376,8 @@ impl<'a> LayerRenderer<'a> for SkiaItemRenderer<'a> {
         item_rc: &ItemRc,
         bounding_rect: LogicalRect,
     ) -> Self::Image {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter layer render");
         let canvas = surface.canvas();
         canvas.clear(skia_safe::Color::TRANSPARENT);
 
@@ -1209,7 +1427,7 @@ impl GlyphRenderer for SkiaItemRenderer<'_> {
             None
         } else {
             let mut paint = self.default_paint().unwrap_or_default();
-            paint.set_shader(skia_safe::shaders::color(to_skia_color(color)));
+            paint.set_shader(crate::color_shader(color));
             Some(paint)
         }
     }
@@ -1248,6 +1466,8 @@ impl GlyphRenderer for SkiaItemRenderer<'_> {
         y_offset: sharedparley::PhysicalLength,
         glyphs_it: &mut dyn Iterator<Item = sharedparley::parley::layout::Glyph>,
     ) {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter Skia glyph run");
         let Some(type_face) = crate::font_cache::FONT_CACHE
             .with_borrow_mut(|font_cache| font_cache.font_with_variations(font, synthesis))
         else {
@@ -1256,11 +1476,51 @@ impl GlyphRenderer for SkiaItemRenderer<'_> {
         let mut font = skia_safe::Font::from_typeface(type_face, font_size.get());
         font.set_subpixel(true);
 
-        let (glyph_ids, glyph_positions): (Vec<_>, Vec<_>) = glyphs_it
-            .into_iter()
-            .map(|g| (g.id as skia_safe::GlyphId, skia_safe::Point::new(g.x, g.y + y_offset.get())))
-            .unzip();
+        // A 31-entry prefix spills at 32, avoiding a 33-entry growth baseline.
+        const INLINE_GLYPHS: usize = 31;
+        let mut inline_ids = [0; INLINE_GLYPHS];
+        let mut inline_positions = [skia_safe::Point::default(); INLINE_GLYPHS];
+        let mut inline_len = 0;
+        let mut mapped = glyphs_it.map(|g| {
+            (
+                g.id as skia_safe::GlyphId,
+                skia_safe::Point::new(g.x, g.y + y_offset.get()),
+            )
+        });
+        // Keep the iterator's reservation hint for known long runs.
+        let hint = mapped.size_hint();
+        // Preserve the original reservation path for inexact positive lower bounds.
+        let heap: Option<(Vec<_>, Vec<_>)> = if hint.0 > INLINE_GLYPHS
+            || (hint.0 > 0 && hint.1 != Some(hint.0))
+        {
+            Some(mapped.unzip())
+        } else {
+            for (id, position) in mapped.by_ref().take(INLINE_GLYPHS) {
+                inline_ids[inline_len] = id;
+                inline_positions[inline_len] = position;
+                inline_len += 1;
+            }
+            if inline_len == INLINE_GLYPHS {
+                mapped.next().map(|overflow| {
+                    inline_ids
+                        .iter()
+                        .copied()
+                        .zip(inline_positions.iter().copied())
+                        .chain(core::iter::once(overflow))
+                        .chain(mapped)
+                        .unzip()
+                })
+            } else {
+                None
+            }
+        };
+        let (glyph_ids, glyph_positions) = match &heap {
+            Some((ids, positions)) => (ids.as_slice(), positions.as_slice()),
+            None => (&inline_ids[..inline_len], &inline_positions[..inline_len]),
+        };
 
+        #[cfg(target_os = "android")]
+        let _draw_trace = crate::renderer_trace::Section::new(c"Chatter Skia glyph draw");
         self.canvas.draw_glyphs_at(
             &glyph_ids,
             skia_safe::canvas::GlyphPositions::Points(&glyph_positions),
@@ -1274,16 +1534,35 @@ impl GlyphRenderer for SkiaItemRenderer<'_> {
         &mut self,
         physical_rect: sharedparley::PhysicalRect,
         paint: Self::PlatformBrush,
+        radius: sharedparley::PhysicalLength,
+        border: Option<sharedparley::RectangleBorder<Self::PlatformBrush>>,
     ) {
-        self.canvas.draw_rect(
-            skia_safe::Rect::from_xywh(
-                physical_rect.min_x(),
-                physical_rect.min_y(),
-                physical_rect.width(),
-                physical_rect.height(),
-            ),
-            &paint,
+        let rect = skia_safe::Rect::from_xywh(
+            physical_rect.min_x(),
+            physical_rect.min_y(),
+            physical_rect.width(),
+            physical_rect.height(),
         );
+
+        if radius.get() <= 0.0 && border.is_none() {
+            self.canvas.draw_rect(rect, &paint);
+            return;
+        }
+
+        let rrect = skia_safe::RRect::new_rect_xy(rect, radius.get(), radius.get());
+        self.canvas.draw_rrect(rrect, &paint);
+
+        if let Some(sharedparley::RectangleBorder {
+            brush: mut stroke_paint,
+            width,
+        }) = border
+            && width.get() > 0.0
+        {
+            stroke_paint.set_style(skia_safe::PaintStyle::Stroke);
+            stroke_paint.set_stroke_width(width.get());
+            stroke_paint.set_anti_alias(true);
+            self.canvas.draw_rrect(rrect, &stroke_paint);
+        }
     }
 }
 
@@ -1294,7 +1573,12 @@ pub fn from_skia_rect(rect: &skia_safe::Rect) -> PhysicalRect {
 }
 
 pub fn to_skia_rect(rect: &PhysicalRect) -> skia_safe::Rect {
-    skia_safe::Rect::from_xywh(rect.origin.x, rect.origin.y, rect.size.width, rect.size.height)
+    skia_safe::Rect::from_xywh(
+        rect.origin.x,
+        rect.origin.y,
+        rect.size.width,
+        rect.size.height,
+    )
 }
 
 pub fn to_skia_rrect(rect: &PhysicalRect, radius: &PhysicalBorderRadius) -> skia_safe::RRect {
@@ -1326,18 +1610,51 @@ pub fn to_skia_size(size: &PhysicalSize) -> skia_safe::Size {
     skia_safe::Size::new(size.width, size.height)
 }
 
+const INLINE_GRADIENT_STOPS: usize = 8;
+
+enum SkiaStops {
+    Inline {
+        colors: [skia_safe::Color4f; INLINE_GRADIENT_STOPS],
+        positions: [f32; INLINE_GRADIENT_STOPS],
+        len: usize,
+    },
+    Heap(Vec<skia_safe::Color4f>, Vec<f32>),
+}
+
+impl SkiaStops {
+    fn as_slices(&self) -> (&[skia_safe::Color4f], &[f32]) {
+        match self {
+            Self::Inline { colors, positions, len } => (&colors[..*len], &positions[..*len]),
+            Self::Heap(colors, positions) => (colors, positions),
+        }
+    }
+}
+
+/// Skia copies these call-local slices synchronously during shader construction.
+/// The result is gamma encoded sRGB, like the `slint::Color` it comes from.
+fn to_skia_stops(stops: &[i_slint_core::graphics::GradientStop]) -> SkiaStops {
+    if stops.len() <= INLINE_GRADIENT_STOPS {
+        let mut colors = [skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0); INLINE_GRADIENT_STOPS];
+        let mut positions = [0.0; INLINE_GRADIENT_STOPS];
+        for (index, stop) in stops.iter().enumerate() {
+            colors[index] = to_skia_color4f(&stop.color);
+            positions[index] = stop.position;
+        }
+        SkiaStops::Inline { colors, positions, len: stops.len() }
+    } else {
+        let (colors, positions) = stops
+            .iter()
+            .map(|s| (to_skia_color4f(&s.color), s.position))
+            .unzip();
+        SkiaStops::Heap(colors, positions)
+    }
+}
+
 pub fn to_skia_color(col: &Color) -> skia_safe::Color {
     skia_safe::Color::from_argb(col.alpha(), col.red(), col.green(), col.blue())
 }
 
-fn adjust_rect_and_border_for_inner_drawing(
-    rect: &mut PhysicalRect,
-    border_width: &mut PhysicalLength,
-) {
-    // If the border width exceeds the width, just fill the rectangle.
-    *border_width = border_width.min(rect.width_length() / 2.);
-    // adjust the size so that the border is drawn within the geometry
-
-    rect.origin += PhysicalSize::from_lengths(*border_width / 2., *border_width / 2.);
-    rect.size -= PhysicalSize::from_lengths(*border_width, *border_width);
+/// Gamma encoded sRGB as well, see [`to_skia_color`].
+pub fn to_skia_color4f(col: &Color) -> skia_safe::Color4f {
+    to_skia_color(col).into()
 }

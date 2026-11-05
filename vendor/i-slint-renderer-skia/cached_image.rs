@@ -1,10 +1,9 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
-use crate::PhysicalSize;
 use i_slint_core::graphics::{
-    Image, ImageCacheKey, ImageInner, IntRect, IntSize, OpaqueImage, OpaqueImageVTable,
-    SharedImageBuffer, cache as core_cache,
+    Image, ImageCacheKey, ImageInner, IntSize, OpaqueImage, OpaqueImageVTable, SharedImageBuffer,
+    cache as core_cache,
 };
 use i_slint_core::items::ImageFit;
 use i_slint_core::lengths::{LogicalSize, ScaleFactor};
@@ -36,6 +35,8 @@ pub(crate) fn as_skia_image(
     canvas: &skia_safe::Canvas,
     surface: Option<&dyn crate::Surface>,
 ) -> Option<skia_safe::Image> {
+    #[cfg(target_os = "android")]
+    let _trace = crate::renderer_trace::Section::new(c"Chatter Skia image resolve");
     let image_inner: &ImageInner = (&image).into();
     match image_inner {
         ImageInner::None => None,
@@ -45,7 +46,10 @@ pub(crate) fn as_skia_image(
                 core_cache::replace_cached_image(
                     cache_key.clone(),
                     ImageInner::BackendStorage(vtable::VRc::into_dyn(vtable::VRc::new(
-                        SkiaCachedImage { image: img.clone(), cache_key: cache_key.clone() },
+                        SkiaCachedImage {
+                            image: img.clone(),
+                            cache_key: cache_key.clone(),
+                        },
                     ))),
                 )
             }
@@ -53,32 +57,31 @@ pub(crate) fn as_skia_image(
         }
         ImageInner::Svg(svg) => {
             // Query target_width/height here again to ensure that changes will invalidate the item rendering cache.
-            let svg_size = svg.size();
-            let fit = i_slint_core::graphics::fit(
+            let target_size = i_slint_core::graphics::scalable_render_size(
+                svg.size(),
                 image_fit,
                 target_size_fn() * scale_factor,
-                IntRect::from_size(svg_size.cast()),
                 scale_factor,
-                Default::default(), // We only care about the size, so alignments don't matter
                 Default::default(),
-            );
-            let target_size = PhysicalSize::new(
-                svg_size.cast::<f32>().width * fit.source_to_target_x,
-                svg_size.cast::<f32>().height * fit.source_to_target_y,
-            );
-            let pixels = match svg.render(Some(target_size.cast())).ok()? {
+            )?;
+            #[cfg(target_os = "android")]
+            let render_trace = crate::renderer_trace::Section::new(c"Chatter Skia SVG rasterize");
+            let pixels = match svg.render(Some(target_size)).ok()? {
                 SharedImageBuffer::RGB8(_) => unreachable!(),
                 SharedImageBuffer::RGBA8(_) => unreachable!(),
                 SharedImageBuffer::RGBA8Premultiplied(pixels) => pixels,
             };
+            #[cfg(target_os = "android")]
+            drop(render_trace);
 
-            let image_info = skia_safe::ImageInfo::new(
+            let image_info = crate::image_info(
                 skia_safe::ISize::new(pixels.width() as i32, pixels.height() as i32),
                 skia_safe::ColorType::RGBA8888,
                 skia_safe::AlphaType::Premul,
-                None,
             );
 
+            #[cfg(target_os = "android")]
+            let _copy_trace = crate::renderer_trace::Section::new(c"Chatter Skia SVG copy wrap");
             skia_safe::images::raster_from_data(
                 &image_info,
                 skia_safe::Data::new_copy(pixels.as_bytes()),
@@ -86,9 +89,9 @@ pub(crate) fn as_skia_image(
             )
         }
         ImageInner::StaticTextures(_) => todo!(),
-        ImageInner::BackendStorage(x) => {
-            vtable::VRc::borrow(x).downcast::<SkiaCachedImage>().map(|x| x.image.clone())
-        }
+        ImageInner::BackendStorage(x) => vtable::VRc::borrow(x)
+            .downcast::<SkiaCachedImage>()
+            .map(|x| x.image.clone()),
         ImageInner::BorrowedOpenGLTexture(texture) => {
             surface.and_then(|surface| surface.import_opengl_texture(canvas, texture))
         }
@@ -100,7 +103,7 @@ pub(crate) fn as_skia_image(
             canvas,
             surface,
         ),
-        #[cfg(feature = "unstable-wgpu-29")]
+        #[cfg(any(feature = "unstable-wgpu-29", feature = "unstable-wgpu-30"))]
         ImageInner::WGPUTexture(any_wgpu_texture) => {
             surface.and_then(|surface| surface.import_wgpu_texture(canvas, any_wgpu_texture))
         }
@@ -110,42 +113,73 @@ pub(crate) fn as_skia_image(
 }
 
 fn image_buffer_to_skia_image(buffer: &SharedImageBuffer) -> Option<skia_safe::Image> {
+    #[cfg(target_os = "android")]
+    let _trace = crate::renderer_trace::Section::new(c"Chatter Skia image buffer prepare");
+    // Report fully opaque images as such to Skia. This allows Skia to skip
+    // reading destination pixels back when blending, which is particularly
+    // important for the software renderer when it renders directly into
+    // write-combined (uncached) frame buffer memory, where CPU reads are an
+    // order of magnitude slower than writes. The scan happens once per image;
+    // the resulting skia_safe::Image is cached.
+    fn opaque_or(rgba_bytes: &[u8], alpha_type: skia_safe::AlphaType) -> skia_safe::AlphaType {
+        if rgba_bytes.as_chunks::<4>().0.iter().all(|px| px[3] == 255) {
+            skia_safe::AlphaType::Opaque
+        } else {
+            alpha_type
+        }
+    }
+
     let (data, bpl, size, color_type, alpha_type) = match buffer {
         SharedImageBuffer::RGB8(pixels) => {
             // RGB888 with one byte per component is not supported by Skia right now. Convert once to RGBA8 :-(
+            #[cfg(target_os = "android")]
+            let convert_trace = crate::renderer_trace::Section::new(c"Chatter Skia RGB convert");
             let rgba = pixels
                 .as_bytes()
                 .chunks(3)
                 .flat_map(|rgb| IntoIterator::into_iter([rgb[0], rgb[1], rgb[2], 255]))
                 .collect::<Vec<u8>>();
+            #[cfg(target_os = "android")]
+            drop(convert_trace);
+            #[cfg(target_os = "android")]
+            let _copy_trace = crate::renderer_trace::Section::new(c"Chatter Skia image data copy");
             (
                 skia_safe::Data::new_copy(&rgba),
                 pixels.width() as usize * 4,
                 pixels.size(),
                 skia_safe::ColorType::RGBA8888,
-                skia_safe::AlphaType::Unpremul,
+                skia_safe::AlphaType::Opaque,
             )
         }
-        SharedImageBuffer::RGBA8(pixels) => (
-            skia_safe::Data::new_copy(pixels.as_bytes()),
-            pixels.width() as usize * 4,
-            pixels.size(),
-            skia_safe::ColorType::RGBA8888,
-            skia_safe::AlphaType::Unpremul,
-        ),
-        SharedImageBuffer::RGBA8Premultiplied(pixels) => (
-            skia_safe::Data::new_copy(pixels.as_bytes()),
-            pixels.width() as usize * 4,
-            pixels.size(),
-            skia_safe::ColorType::RGBA8888,
-            skia_safe::AlphaType::Premul,
-        ),
+        SharedImageBuffer::RGBA8(pixels) => {
+            #[cfg(target_os = "android")]
+            let _copy_trace = crate::renderer_trace::Section::new(c"Chatter Skia image data copy");
+            (
+                skia_safe::Data::new_copy(pixels.as_bytes()),
+                pixels.width() as usize * 4,
+                pixels.size(),
+                skia_safe::ColorType::RGBA8888,
+                opaque_or(pixels.as_bytes(), skia_safe::AlphaType::Unpremul),
+            )
+        }
+        SharedImageBuffer::RGBA8Premultiplied(pixels) => {
+            #[cfg(target_os = "android")]
+            let _copy_trace = crate::renderer_trace::Section::new(c"Chatter Skia image data copy");
+            (
+                skia_safe::Data::new_copy(pixels.as_bytes()),
+                pixels.width() as usize * 4,
+                pixels.size(),
+                skia_safe::ColorType::RGBA8888,
+                opaque_or(pixels.as_bytes(), skia_safe::AlphaType::Premul),
+            )
+        }
     };
-    let image_info = skia_safe::ImageInfo::new(
+    let image_info = crate::image_info(
         skia_safe::ISize::new(size.width as i32, size.height as i32),
         color_type,
         alpha_type,
-        None,
     );
+    #[cfg(target_os = "android")]
+    let _raster_trace = crate::renderer_trace::Section::new(c"Chatter Skia image raster wrap");
     skia_safe::images::raster_from_data(&image_info, data, bpl)
 }

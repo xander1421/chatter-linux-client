@@ -30,11 +30,15 @@ pub use crate::unsafe_single_threaded::thread_local;
 pub use std::thread_local;
 
 pub mod accessibility;
+mod android_trace;
+#[cfg(feature = "painted-scroll-probe")]
+pub mod painted_scroll_probe;
 pub mod animations;
 pub mod api;
 pub mod callbacks;
 pub mod component_factory;
 pub mod context;
+pub mod cursor;
 pub mod data_transfer;
 pub mod date_time;
 pub mod debug_log;

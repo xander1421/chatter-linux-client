@@ -284,7 +284,7 @@ i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-acti
 # AccessKit focus change during an accessibility action; see vendor/i-slint-backend-winit/PATCHES.md.
 i-slint-backend-winit = { path = "vendor/i-slint-backend-winit" }
 
-# Slint 1.17.1 Backdrop builtin and Skia backdrop image filters.
+# Slint 1.18.1 Backdrop builtin and Skia backdrop image filters.
 i-slint-compiler = { path = "vendor/i-slint-compiler" }
 i-slint-core = { path = "vendor/i-slint-core" }
 i-slint-renderer-skia = { path = "vendor/i-slint-renderer-skia" }

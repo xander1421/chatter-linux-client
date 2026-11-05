@@ -154,10 +154,10 @@ fn scroll_room(flick: &ItemRc) -> (bool, bool) {
     let Some(f) = flick.downcast::<Flickable>() else { return (false, false) };
     let f = f.as_pin_ref();
     let size = flick.geometry().size;
-    let (offset, extent, view) = if f.viewport_height().get() > size.height + 1.0 {
-        (f.viewport_y().get(), f.viewport_height().get(), size.height)
+    let (offset, extent, view) = if f.content_height().get() > size.height + 1.0 {
+        (f.content_y().get(), f.content_height().get(), size.height)
     } else {
-        (f.viewport_x().get(), f.viewport_width().get(), size.width)
+        (f.content_x().get(), f.content_width().get(), size.width)
     };
     (offset < -1.0, offset + extent > view + 1.0)
 }
@@ -329,11 +329,11 @@ pub(crate) fn scroll<'local>(
             let Some(flick) = item.downcast::<Flickable>() else { return };
             let flick = flick.as_pin_ref();
             let size = item.geometry().size;
-            let vertical = flick.viewport_height().get() > size.height + 1.0;
+            let vertical = flick.content_height().get() > size.height + 1.0;
             let (offset, extent, view) = if vertical {
-                (Flickable::FIELD_OFFSETS.viewport_y().apply_pin(flick), flick.viewport_height().get(), size.height)
+                (Flickable::FIELD_OFFSETS.content_y().apply_pin(flick), flick.content_height().get(), size.height)
             } else {
-                (Flickable::FIELD_OFFSETS.viewport_x().apply_pin(flick), flick.viewport_width().get(), size.width)
+                (Flickable::FIELD_OFFSETS.content_x().apply_pin(flick), flick.content_width().get(), size.width)
             };
             let step = view * 0.8 * if forward != 0 { -1.0 } else { 1.0 };
             let target = (offset.get().get() + step).clamp((view - extent).min(0.0), 0.0);

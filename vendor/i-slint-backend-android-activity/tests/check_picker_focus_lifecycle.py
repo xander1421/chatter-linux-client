@@ -24,6 +24,18 @@ enable_session = source[start:end]
 
 harness = r'''
 use std::cell::{Cell, RefCell};
+mod i_slint_core { pub struct InternalToken; }
+#[derive(Default)]
+struct LogicalPosition;
+#[derive(Default)]
+struct LogicalSize;
+#[derive(Default)]
+struct Window { keyboard_clears: Cell<usize> }
+impl Window {
+    fn set_virtual_keyboard(&self, _: LogicalPosition, _: LogicalSize, _: i_slint_core::InternalToken) {
+        self.keyboard_clears.set(self.keyboard_clears.get() + 1);
+    }
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextSpan { start: usize, end: usize }
 #[derive(Clone, Debug, PartialEq)]
@@ -44,6 +56,7 @@ impl RecordingApp {
 #[derive(Default)]
 struct AndroidWindowAdapter {
     app: RecordingApp,
+    window: Window,
     ime_client: RefCell<Option<usize>>,
     ime_owner: Cell<u64>,
     deferred_ime_update: RefCell<Option<()>>,
@@ -106,6 +119,7 @@ fn picker_cancel_selection_and_pause_do_not_publish_a_draft_erase() {
             assert!(adapter.ime_client.borrow().is_none(), "released field still owns inbound IME events");
             assert!(adapter.deferred_ime_update.borrow().is_none());
             assert_eq!(adapter.app.hidden.get(), 1);
+            assert_eq!(adapter.window.keyboard_clears.get(), 1);
             adapter.update(); // delayed core notification after FocusOut
             assert_eq!(adapter.updates.get(), 0);
             // GameTextInput may still deliver an empty/old report while the
