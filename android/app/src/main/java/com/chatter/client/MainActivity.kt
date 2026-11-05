@@ -490,11 +490,42 @@ class MainActivity : GameActivity() {
                 }
                 else -> {
                     if (intent.getBooleanExtra("auto_accept", false)) return
+                    // A full-screen-intent launch happens while the device is
+                    // locked/dozing (the server call wake). The notification posts
+                    // with sound, but without these the Activity never turns the
+                    // screen on or shows over the keyguard, so the callee "sees
+                    // nothing" on a locked phone (owner 2026-11-06).
+                    if (action == "com.chatter.client.CALL_FULL_SCREEN") {
+                        wakeScreenForIncomingCall()
+                    }
                     nativeShowIncomingCall(callId, action, capability)
                 }
             }
         } catch (_: RuntimeException) {
             // Malformed public extras are neither consent nor a reason to crash.
+        }
+    }
+
+    // Wake the screen and show the incoming-call UI over the keyguard. Pairs
+    // with the call notification's full-screen intent; the ring UI itself owns
+    // dismissal, so these are not cleared here (a declined/ended call closes it).
+    private fun wakeScreenForIncomingCall() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(true)
+                setTurnScreenOn(true)
+                getSystemService(KeyguardManager::class.java)
+                    ?.requestDismissKeyguard(this, null)
+            } else {
+                @Suppress("DEPRECATION")
+                window.addFlags(
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                        or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                        or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                )
+            }
+        } catch (_: RuntimeException) {
+            // A window/keyguard call failing is never a reason to drop the call.
         }
     }
 
