@@ -7,10 +7,10 @@
 #![cfg_attr(slint_nightly_test, feature(non_exhaustive_omitted_patterns_lint))]
 #![cfg_attr(slint_nightly_test, warn(non_exhaustive_omitted_patterns))]
 
-#[cfg(any(target_vendor = "apple", skia_backend_vulkan))]
-use std::cell::OnceCell;
+#[cfg(all(target_os = "android", feature = "experimental-native-pacing", feature = "experimental-swappy"))]
+compile_error!("native pacing and Swappy experiments must not own the same EGL swap policy");
+
 use std::cell::{Cell, RefCell};
-use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
@@ -25,9 +25,7 @@ use i_slint_core::graphics::rendering_metrics_collector::RenderingMetricsCollect
 use i_slint_core::graphics::{BorderRadius, SharedPixelBuffer};
 use i_slint_core::item_rendering::{ItemCache, ItemRenderer};
 use i_slint_core::item_tree::ItemTreeWeak;
-use i_slint_core::lengths::{
-    LogicalLength, LogicalPoint, LogicalRect, LogicalSize, PhysicalPx, ScaleFactor,
-};
+use i_slint_core::lengths::{LogicalPoint, LogicalRect, PhysicalPx, ScaleFactor};
 use i_slint_core::partial_renderer::{DirtyRegion, PartialRenderingState};
 use i_slint_core::platform::PlatformError;
 use i_slint_core::renderer::DrawOutcome;
@@ -40,49 +38,226 @@ type PhysicalSize = euclid::Size2D<f32, PhysicalPx>;
 type PhysicalPoint = euclid::Point2D<f32, PhysicalPx>;
 type PhysicalBorderRadius = BorderRadius<f32, PhysicalPx>;
 
+#[cfg(any(target_os = "android", test))]
+mod analytic_clip;
 mod backdrop;
 mod cached_image;
 mod font_cache;
 mod itemrenderer;
+#[cfg(test)]
+mod lifecycle_tests;
+#[cfg(target_os = "android")]
+pub(crate) mod renderer_trace;
+#[cfg(target_os = "android")]
+mod android_frame_timestamps;
+#[cfg(any(target_os = "android", test))]
+mod android_gpu_timestamps;
+#[cfg(all(target_os = "android", feature = "experimental-swappy"))]
+mod android_swappy;
+#[cfg(all(target_os = "android", feature = "experimental-prefix-flush"))]
+mod android_prefix_flush;
+#[cfg(all(target_os = "android", feature = "experimental-swappy"))]
+pub use android_swappy::AndroidSwappyActivity;
 
 #[cfg(skia_backend_software)]
 pub mod software_surface;
 
-#[cfg(target_vendor = "apple")]
-pub mod metal_surface;
-
-#[cfg(target_family = "windows")]
-pub mod d3d_surface;
-
-#[cfg(skia_backend_vulkan)]
-pub mod vulkan_surface;
-
 #[cfg(any(not(target_vendor = "apple"), target_os = "macos"))]
 pub mod opengl_surface;
 
-#[cfg(feature = "wgpu-28")]
-pub mod wgpu_28_surface;
+#[cfg(skia_wgpu_vulkan)]
+mod vulkan_handle;
 #[cfg(feature = "wgpu-29")]
 pub mod wgpu_29_surface;
-#[cfg(feature = "wgpu-29")]
+#[cfg(feature = "wgpu-30")]
+pub mod wgpu_30_surface;
+#[cfg(any(feature = "wgpu-29", feature = "wgpu-30"))]
 mod wgpu_renderer;
 #[cfg(feature = "wgpu-29")]
+pub use wgpu_renderer::SkiaWGPU29Renderer;
+#[cfg(feature = "wgpu-30")]
+pub use wgpu_renderer::SkiaWGPU30Renderer;
+#[cfg(any(feature = "wgpu-29", feature = "wgpu-30"))]
+#[allow(deprecated)]
 pub use wgpu_renderer::SkiaWGPURenderer;
+#[cfg(any(feature = "wgpu-29", feature = "wgpu-30"))]
+pub use wgpu_renderer::SkiaWGPURendererGeneric;
 
-use i_slint_core::items::{ItemRc, TextWrap};
 use itemrenderer::to_skia_rect;
 pub use skia_safe;
 
-cfg_if::cfg_if! {
-    if #[cfg(skia_backend_vulkan)] {
-        type DefaultSurface = vulkan_surface::VulkanSurface;
-    } else if #[cfg(skia_backend_opengl)] {
-        type DefaultSurface = opengl_surface::OpenGLSurface;
-    } else if #[cfg(skia_backend_metal)] {
-        type DefaultSurface = metal_surface::MetalSurface;
-    } else if #[cfg(skia_backend_softbuffer)] {
-        type DefaultSurface = software_surface::SoftwareSurface;
+/// Returns the color space for Slint colors, decoded image pixels and raster buffers.
+///
+/// The components of a `slint::Color` are gamma encoded sRGB, not linear.
+/// The same holds for the pixels of decoded images and for the 8-bit buffers Skia renders into,
+/// which have no hardware transfer function of their own.
+fn srgb_color_space() -> skia_safe::ColorSpace {
+    skia_safe::ColorSpace::new_srgb()
+}
+
+fn linear_srgb_color_space() -> skia_safe::ColorSpace {
+    skia_safe::ColorSpace::new_srgb_linear()
+}
+
+/// How a texture's format encodes the values it stores.
+// Only WGPU hands us sRGB formats, so `Srgb` is unreachable in a build without it.
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+pub(crate) enum TextureEncoding {
+    /// A UNORM format: the bytes are gamma encoded sRGB and the GPU converts nothing.
+    Unorm,
+    /// An sRGB format: the GPU decodes when sampling and encodes when storing.
+    Srgb,
+}
+
+impl TextureEncoding {
+    #[cfg(any(feature = "wgpu-29", feature = "wgpu-30"))]
+    pub(crate) fn from_format_is_srgb(is_srgb: bool) -> Self {
+        if is_srgb { Self::Srgb } else { Self::Unorm }
     }
+}
+
+/// Returns the color space to give Skia for a render target.
+///
+/// An sRGB attachment applies the transfer function when storing, so Skia has to hand it linear
+/// values. A UNORM attachment stores what it is given, so Skia keeps working in gamma encoded
+/// sRGB and no conversion happens at all.
+pub(crate) fn attachment_color_space(encoding: TextureEncoding) -> skia_safe::ColorSpace {
+    match encoding {
+        TextureEncoding::Srgb => linear_srgb_color_space(),
+        TextureEncoding::Unorm => srgb_color_space(),
+    }
+}
+
+/// Returns the color space to give Skia for a texture it samples from.
+///
+/// Sampling an sRGB texture decodes the transfer function in hardware, so the values that reach
+/// Skia are linear. A UNORM texture is handed over untouched and its bytes are gamma encoded
+/// sRGB by convention.
+// Outside of WGPU the only caller is the OpenGL texture import, which iOS doesn't compile.
+#[allow(dead_code)]
+pub(crate) fn sampled_texture_color_space(encoding: TextureEncoding) -> skia_safe::ColorSpace {
+    match encoding {
+        TextureEncoding::Srgb => linear_srgb_color_space(),
+        TextureEncoding::Unorm => srgb_color_space(),
+    }
+}
+
+/// Describes a raster buffer to Skia, tagged as sRGB.
+pub(crate) fn image_info(
+    size: impl Into<skia_safe::ISize>,
+    color_type: skia_safe::ColorType,
+    alpha_type: skia_safe::AlphaType,
+) -> skia_safe::ImageInfo {
+    skia_safe::ImageInfo::new(size, color_type, alpha_type, srgb_color_space())
+}
+
+/// Builds a paint filled with a Slint color.
+///
+/// A paint holds its color as sRGB, per the `setColor` docs in Skia's `SkPaint.h`, which is the
+/// space a `slint::Color` is already in. Skia converts from there to the target when drawing.
+pub(crate) fn solid_paint(color: &i_slint_core::Color) -> skia_safe::Paint {
+    let mut paint = skia_safe::Paint::default();
+    paint.set_color(itemrenderer::to_skia_color(color));
+    paint
+}
+
+/// Builds a shader of a single Slint color, see [`solid_paint`] for the color space.
+pub(crate) fn color_shader(color: &i_slint_core::Color) -> skia_safe::Shader {
+    skia_safe::shaders::color(itemrenderer::to_skia_color(color))
+}
+
+/// Builds the stops of a gradient, tagged as sRGB.
+pub(crate) fn gradient_colors<'a>(
+    colors: &'a [skia_safe::Color4f],
+    pos: &'a [f32],
+) -> skia_safe::gradient::Colors<'a> {
+    skia_safe::gradient::Colors::new(
+        colors,
+        Some(pos),
+        skia_safe::TileMode::Clamp,
+        srgb_color_space(),
+    )
+}
+
+#[cfg(skia_backend_wgpu)]
+fn default_wgpu_surface_factory(
+    context: &SkiaSharedContext,
+    window_handle: Arc<dyn raw_window_handle::HasWindowHandle + Sync + Send>,
+    display_handle: Arc<dyn raw_window_handle::HasDisplayHandle + Sync + Send>,
+    size: PhysicalWindowSize,
+    requested_graphics_api: Option<RequestedGraphicsAPI>,
+) -> Result<Box<dyn Surface>, PlatformError> {
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "wgpu-30")] {
+            surface_factory::<wgpu_30_surface::WGPUSurface>(
+                context,
+                window_handle,
+                display_handle,
+                size,
+                requested_graphics_api,
+            )
+        } else {
+            surface_factory::<wgpu_29_surface::WGPUSurface>(
+                context,
+                window_handle,
+                display_handle,
+                size,
+                requested_graphics_api,
+            )
+        }
+    }
+}
+
+#[cfg(all(target_vendor = "apple", skia_backend_wgpu))]
+fn metal_wgpu_surface_factory(
+    context: &SkiaSharedContext,
+    window_handle: Arc<dyn raw_window_handle::HasWindowHandle + Sync + Send>,
+    display_handle: Arc<dyn raw_window_handle::HasDisplayHandle + Sync + Send>,
+    size: PhysicalWindowSize,
+    requested_graphics_api: Option<RequestedGraphicsAPI>,
+) -> Result<Box<dyn Surface>, PlatformError> {
+    default_wgpu_surface_factory(
+        context,
+        window_handle,
+        display_handle,
+        size,
+        Some(requested_graphics_api.unwrap_or(RequestedGraphicsAPI::Metal)),
+    )
+}
+
+#[cfg(skia_wgpu_vulkan)]
+fn vulkan_wgpu_surface_factory(
+    context: &SkiaSharedContext,
+    window_handle: Arc<dyn raw_window_handle::HasWindowHandle + Sync + Send>,
+    display_handle: Arc<dyn raw_window_handle::HasDisplayHandle + Sync + Send>,
+    size: PhysicalWindowSize,
+    requested_graphics_api: Option<RequestedGraphicsAPI>,
+) -> Result<Box<dyn Surface>, PlatformError> {
+    default_wgpu_surface_factory(
+        context,
+        window_handle,
+        display_handle,
+        size,
+        Some(requested_graphics_api.unwrap_or(RequestedGraphicsAPI::Vulkan)),
+    )
+}
+
+#[cfg(all(target_family = "windows", skia_backend_wgpu))]
+fn direct3d_wgpu_surface_factory(
+    context: &SkiaSharedContext,
+    window_handle: Arc<dyn raw_window_handle::HasWindowHandle + Sync + Send>,
+    display_handle: Arc<dyn raw_window_handle::HasDisplayHandle + Sync + Send>,
+    size: PhysicalWindowSize,
+    requested_graphics_api: Option<RequestedGraphicsAPI>,
+) -> Result<Box<dyn Surface>, PlatformError> {
+    default_wgpu_surface_factory(
+        context,
+        window_handle,
+        display_handle,
+        size,
+        Some(requested_graphics_api.unwrap_or(RequestedGraphicsAPI::Direct3D)),
+    )
 }
 
 #[cfg(skia_windowed)]
@@ -93,32 +268,91 @@ fn create_default_surface(
     size: PhysicalWindowSize,
     requested_graphics_api: Option<RequestedGraphicsAPI>,
 ) -> Result<Box<dyn Surface>, PlatformError> {
-    match DefaultSurface::new(
-        context,
-        window_handle.clone(),
-        display_handle.clone(),
-        size,
+    #[cfg(feature = "unstable-wgpu-29")]
+    if matches!(
         requested_graphics_api,
+        Some(RequestedGraphicsAPI::WGPU29(..))
     ) {
-        Ok(gpu_surface) => Ok(Box::new(gpu_surface) as Box<dyn Surface>),
-        #[cfg(skia_backend_softbuffer)]
-        Err(err) => {
-            i_slint_core::debug_log!(
-                "Failed to initialize Skia GPU renderer: {} . Falling back to software rendering",
-                err
-            );
-            software_surface::SoftwareSurface::new(
-                context,
-                window_handle,
-                display_handle,
-                size,
-                None,
-            )
-            .map(|r| Box::new(r) as Box<dyn Surface>)
-        }
-        #[cfg(not(skia_backend_softbuffer))]
-        Err(err) => Err(err),
+        // user explicitly asked for wgpu29 even if 30 is enabled
+        return surface_factory::<wgpu_29_surface::WGPUSurface>(
+            context,
+            window_handle,
+            display_handle,
+            size,
+            requested_graphics_api,
+        );
     }
+    #[cfg(feature = "unstable-wgpu-30")]
+    if matches!(
+        requested_graphics_api,
+        Some(RequestedGraphicsAPI::WGPU30(..))
+    ) {
+        // this is also what would happen if we got the default wgpu surface since 30 is newest
+        return surface_factory::<wgpu_30_surface::WGPUSurface>(
+            context,
+            window_handle,
+            display_handle,
+            size,
+            requested_graphics_api,
+        );
+    }
+
+    let candidates: [(&str, SurfaceFactoryFn); _] = [
+        // vulkan feature enables but also prioritizes vulkan
+        #[cfg(all(feature = "vulkan", skia_wgpu_vulkan))]
+        ("wgpu", vulkan_wgpu_surface_factory),
+        // opengl feature enables but also prioritizes opengl
+        #[cfg(all(
+            feature = "opengl",
+            any(not(target_vendor = "apple"), target_os = "macos")
+        ))]
+        ("opengl", surface_factory::<opengl_surface::OpenGLSurface>),
+        #[cfg(skia_backend_wgpu)]
+        ("wgpu", default_wgpu_surface_factory),
+        #[cfg(all(not(feature = "opengl"), skia_backend_opengl))]
+        ("opengl", surface_factory::<opengl_surface::OpenGLSurface>),
+        #[cfg(skia_backend_softbuffer)]
+        (
+            "software",
+            surface_factory::<software_surface::SoftwareSurface>,
+        ),
+    ];
+
+    let mut errors = Vec::new();
+    for (index, (name, factory)) in candidates.iter().enumerate() {
+        match factory(
+            context,
+            window_handle.clone(),
+            display_handle.clone(),
+            size,
+            requested_graphics_api.clone(),
+        ) {
+            Ok(surface) => return Ok(surface),
+            Err(err) => {
+                i_slint_core::debug_log!(
+                    "Failed to initialize Skia {} surface: {} .{}",
+                    name,
+                    err,
+                    if index != candidates.len().saturating_sub(1) {
+                        " Falling back to the next surface candidate"
+                    } else {
+                        ""
+                    }
+                );
+                errors.push(format!("{name}: {err}"));
+            }
+        }
+    }
+
+    Err(if errors.is_empty() {
+        "No Skia surface implementation was enabled at compile time".into()
+    } else {
+        format!(
+            "Could not initialize any Skia surface. Tried {}",
+            errors.join(", ")
+        )
+        .into()
+    })
 }
 
 enum DirtyRegionDebugMode {
@@ -142,7 +376,11 @@ fn create_partial_renderer_state(
 ) -> Option<PartialRenderingState> {
     maybe_surface
         .map_or_else(
-            || std::env::var("SLINT_SKIA_PARTIAL_RENDERING").as_deref().is_ok(),
+            || {
+                std::env::var("SLINT_SKIA_PARTIAL_RENDERING")
+                    .as_deref()
+                    .is_ok()
+            },
             |surface| surface.use_partial_rendering(),
         )
         .then(PartialRenderingState::default)
@@ -150,10 +388,11 @@ fn create_partial_renderer_state(
 
 #[derive(Default)]
 struct SkiaSharedContextInner {
-    #[cfg(target_vendor = "apple")]
-    metal_context: OnceCell<metal_surface::SharedMetalContext>,
-    #[cfg(skia_backend_vulkan)]
-    vulkan_context: OnceCell<vulkan_surface::SharedVulkanContext>,
+    // Weak: the surfaces own these, see `SharedWgpuState`.
+    #[cfg(feature = "wgpu-29")]
+    wgpu_29_state: RefCell<Weak<wgpu_29_surface::SharedWgpuState>>,
+    #[cfg(feature = "wgpu-30")]
+    wgpu_30_state: RefCell<Weak<wgpu_30_surface::SharedWgpuState>>,
 }
 
 /// This data structure contains data that's intended to be shared across several instances of SkiaRenderer.
@@ -172,302 +411,177 @@ pub struct SkiaRenderer {
     image_cache: ItemCache<Option<skia_safe::Image>>,
     layer_cache: ItemCache<Option<(PhysicalPoint, skia_safe::Image)>>,
     path_cache: ItemCache<Option<(Vector2D<f32, PhysicalPx>, skia_safe::Path)>>,
+    box_shadow_cache: itemrenderer::SkiaBoxShadowCache,
     text_layout_cache: sharedparley::TextLayoutCache,
     rendering_metrics_collector: RefCell<Option<Rc<RenderingMetricsCollector>>>,
     rendering_first_time: Cell<bool>,
     surface: RefCell<Option<Box<dyn Surface>>>,
-    surface_factory: fn(
-        &SkiaSharedContext,
-        window_handle: Arc<dyn raw_window_handle::HasWindowHandle + Send + Sync>,
-        display_handle: Arc<dyn raw_window_handle::HasDisplayHandle + Send + Sync>,
-        size: PhysicalWindowSize,
-        requested_graphics_api: Option<RequestedGraphicsAPI>,
-    ) -> Result<Box<dyn Surface>, PlatformError>,
+    surface_factory: SurfaceFactoryFn,
     pre_present_callback: RefCell<Option<Box<dyn FnMut()>>>,
     partial_rendering_state: Option<PartialRenderingState>,
     dirty_region_debug_mode: DirtyRegionDebugMode,
     /// Tracking dirty regions indexed by buffer age - 1. More than 3 back buffers aren't supported, but also unlikely to happen.
     dirty_region_history: RefCell<[DirtyRegion; 3]>,
+    #[cfg(all(target_os = "android", feature = "experimental-prefix-flush"))]
+    prefix_flush_debuggable: Cell<bool>,
     gpu_cleanup_pending: Cell<bool>,
     shared_context: SkiaSharedContext,
 }
 
+/// Function pointer for creating the surface to render on, when needed.
+type SurfaceFactoryFn = fn(
+    &SkiaSharedContext,
+    window_handle: Arc<dyn raw_window_handle::HasWindowHandle + Send + Sync>,
+    display_handle: Arc<dyn raw_window_handle::HasDisplayHandle + Send + Sync>,
+    size: PhysicalWindowSize,
+    requested_graphics_api: Option<RequestedGraphicsAPI>,
+) -> Result<Box<dyn Surface>, PlatformError>;
+
+/// Creates a boxed surface of the concrete type `S`, in the shape of [`SurfaceFactoryFn`].
+fn surface_factory<S: Surface + 'static>(
+    context: &SkiaSharedContext,
+    window_handle: Arc<dyn raw_window_handle::HasWindowHandle + Send + Sync>,
+    display_handle: Arc<dyn raw_window_handle::HasDisplayHandle + Send + Sync>,
+    size: PhysicalWindowSize,
+    requested_graphics_api: Option<RequestedGraphicsAPI>,
+) -> Result<Box<dyn Surface>, PlatformError> {
+    S::new(
+        context,
+        window_handle,
+        display_handle,
+        size,
+        requested_graphics_api,
+    )
+    .map(|r| Box::new(r) as Box<dyn Surface>)
+}
+
 impl SkiaRenderer {
-    #[cfg(skia_windowed)]
-    pub fn default(context: &SkiaSharedContext) -> Self {
+    /// Debug comparison control for all Android EGL surfaces in this process.
+    /// The backend checks actual FLAG_DEBUGGABLE/API29 before reading the
+    /// override once per event-loop startup. Stores only a boolean, no content.
+    /// Existing collection is disabled on its next natural render or teardown;
+    /// this setter performs no EGL calls or context changes.
+    #[cfg(all(target_os = "android", feature = "experimental-native-pacing"))]
+    pub fn set_android_egl_observer_enabled(&self, enabled: bool) {
+        android_frame_timestamps::set_observer_enabled(enabled);
+    }
+
+    /// Diagnostic registration: backend checked the actual ApplicationInfo flags
+    /// through its safe JNI helper. Failure/unregistered renderers remain off.
+    #[cfg(all(target_os = "android", feature = "experimental-prefix-flush"))]
+    pub fn set_prefix_flush_application_debuggable(&self, debuggable: bool) {
+        self.prefix_flush_debuggable.set(debuggable);
+    }
+
+    fn new_with_surface_factory(
+        context: &SkiaSharedContext,
+        surface_factory: SurfaceFactoryFn,
+        partial_rendering_state: Option<PartialRenderingState>,
+    ) -> Self {
         Self {
             maybe_window_adapter: Default::default(),
             rendering_notifier: Default::default(),
             image_cache: Default::default(),
             layer_cache: Default::default(),
             path_cache: Default::default(),
+            box_shadow_cache: Default::default(),
             text_layout_cache: Default::default(),
             rendering_metrics_collector: Default::default(),
             rendering_first_time: Default::default(),
             surface: Default::default(),
-            surface_factory: create_default_surface,
+            surface_factory,
             pre_present_callback: Default::default(),
-            partial_rendering_state: create_partial_renderer_state(None),
+            partial_rendering_state,
             dirty_region_debug_mode: Default::default(),
             dirty_region_history: Default::default(),
+            #[cfg(all(target_os = "android", feature = "experimental-prefix-flush"))]
+            prefix_flush_debuggable: Cell::new(false),
             gpu_cleanup_pending: Cell::new(false),
             shared_context: context.clone(),
         }
+    }
+
+    #[cfg(skia_windowed)]
+    pub fn default(context: &SkiaSharedContext) -> Self {
+        Self::new_with_surface_factory(
+            context,
+            create_default_surface,
+            create_partial_renderer_state(None),
+        )
     }
 
     #[cfg(skia_backend_software)]
     /// Creates a new SkiaRenderer that will always use Skia's software renderer.
     pub fn default_software(context: &SkiaSharedContext) -> Self {
-        Self {
-            maybe_window_adapter: Default::default(),
-            rendering_notifier: Default::default(),
-            image_cache: Default::default(),
-            layer_cache: Default::default(),
-            path_cache: Default::default(),
-            text_layout_cache: Default::default(),
-            rendering_metrics_collector: Default::default(),
-            rendering_first_time: Default::default(),
-            surface: Default::default(),
-            surface_factory: |context,
-                              window_handle,
-                              display_handle,
-                              size,
-                              requested_graphics_api| {
-                software_surface::SoftwareSurface::new(
-                    context,
-                    window_handle,
-                    display_handle,
-                    size,
-                    requested_graphics_api,
-                )
-                .map(|r| Box::new(r) as Box<dyn Surface>)
-            },
-            pre_present_callback: Default::default(),
-            partial_rendering_state: PartialRenderingState::default().into(),
-            dirty_region_debug_mode: Default::default(),
-            dirty_region_history: Default::default(),
-            gpu_cleanup_pending: Cell::new(false),
-            shared_context: context.clone(),
-        }
+        Self::new_with_surface_factory(
+            context,
+            surface_factory::<software_surface::SoftwareSurface>,
+            PartialRenderingState::default().into(),
+        )
     }
 
     #[cfg(any(not(target_vendor = "apple"), target_os = "macos"))]
     /// Creates a new SkiaRenderer that will always use Skia's OpenGL renderer.
     pub fn default_opengl(context: &SkiaSharedContext) -> Self {
-        Self {
-            maybe_window_adapter: Default::default(),
-            rendering_notifier: Default::default(),
-            image_cache: Default::default(),
-            layer_cache: Default::default(),
-            path_cache: Default::default(),
-            text_layout_cache: Default::default(),
-            rendering_metrics_collector: Default::default(),
-            rendering_first_time: Default::default(),
-            surface: Default::default(),
-            surface_factory: |context,
-                              window_handle,
-                              display_handle,
-                              size,
-                              requested_graphics_api| {
-                opengl_surface::OpenGLSurface::new(
-                    context,
-                    window_handle,
-                    display_handle,
-                    size,
-                    requested_graphics_api,
-                )
-                .map(|r| Box::new(r) as Box<dyn Surface>)
-            },
-            pre_present_callback: Default::default(),
-            partial_rendering_state: create_partial_renderer_state(None),
-            dirty_region_debug_mode: Default::default(),
-            dirty_region_history: Default::default(),
-            gpu_cleanup_pending: Cell::new(false),
-            shared_context: context.clone(),
-        }
+        Self::new_with_surface_factory(
+            context,
+            surface_factory::<opengl_surface::OpenGLSurface>,
+            create_partial_renderer_state(None),
+        )
     }
 
-    #[cfg(target_vendor = "apple")]
-    /// Creates a new SkiaRenderer that will always use Skia's Metal renderer.
+    #[cfg(all(target_vendor = "apple", skia_backend_wgpu))]
+    /// Creates a new SkiaRenderer that will always render using Metal, through WGPU.
     pub fn default_metal(context: &SkiaSharedContext) -> Self {
-        Self {
-            maybe_window_adapter: Default::default(),
-            rendering_notifier: Default::default(),
-            image_cache: Default::default(),
-            layer_cache: Default::default(),
-            path_cache: Default::default(),
-            text_layout_cache: Default::default(),
-            rendering_metrics_collector: Default::default(),
-            rendering_first_time: Default::default(),
-            surface: Default::default(),
-            surface_factory: |context,
-                              window_handle,
-                              display_handle,
-                              size,
-                              requested_graphics_api| {
-                metal_surface::MetalSurface::new(
-                    context,
-                    window_handle,
-                    display_handle,
-                    size,
-                    requested_graphics_api,
-                )
-                .map(|r| Box::new(r) as Box<dyn Surface>)
-            },
-            pre_present_callback: Default::default(),
-            partial_rendering_state: create_partial_renderer_state(None),
-            dirty_region_debug_mode: Default::default(),
-            dirty_region_history: Default::default(),
-            gpu_cleanup_pending: Cell::new(false),
-            shared_context: context.clone(),
-        }
+        Self::new_with_surface_factory(
+            context,
+            metal_wgpu_surface_factory,
+            create_partial_renderer_state(None),
+        )
     }
 
-    #[cfg(skia_backend_vulkan)]
-    /// Creates a new SkiaRenderer that will always use Skia's Vulkan renderer.
+    #[cfg(skia_wgpu_vulkan)]
+    /// Creates a new SkiaRenderer that will always render using Vulkan, through WGPU.
     pub fn default_vulkan(context: &SkiaSharedContext) -> Self {
-        Self {
-            maybe_window_adapter: Default::default(),
-            rendering_notifier: Default::default(),
-            image_cache: Default::default(),
-            layer_cache: Default::default(),
-            path_cache: Default::default(),
-            text_layout_cache: Default::default(),
-            rendering_metrics_collector: Default::default(),
-            rendering_first_time: Default::default(),
-            surface: Default::default(),
-            surface_factory: |context,
-                              window_handle,
-                              display_handle,
-                              size,
-                              requested_graphics_api| {
-                vulkan_surface::VulkanSurface::new(
-                    context,
-                    window_handle,
-                    display_handle,
-                    size,
-                    requested_graphics_api,
-                )
-                .map(|r| Box::new(r) as Box<dyn Surface>)
-            },
-            pre_present_callback: Default::default(),
-            partial_rendering_state: create_partial_renderer_state(None),
-            dirty_region_debug_mode: Default::default(),
-            dirty_region_history: Default::default(),
-            gpu_cleanup_pending: Cell::new(false),
-            shared_context: context.clone(),
-        }
+        Self::new_with_surface_factory(
+            context,
+            vulkan_wgpu_surface_factory,
+            create_partial_renderer_state(None),
+        )
     }
 
-    #[cfg(target_family = "windows")]
-    /// Creates a new SkiaRenderer that will always use Skia's Direct3D renderer.
+    #[cfg(all(target_family = "windows", skia_backend_wgpu))]
+    /// Creates a new SkiaRenderer that will always render using Direct3D 12, through WGPU.
     pub fn default_direct3d(context: &SkiaSharedContext) -> Self {
-        Self {
-            maybe_window_adapter: Default::default(),
-            rendering_notifier: Default::default(),
-            image_cache: Default::default(),
-            layer_cache: Default::default(),
-            path_cache: Default::default(),
-            text_layout_cache: Default::default(),
-            rendering_metrics_collector: Default::default(),
-            rendering_first_time: Default::default(),
-            surface: Default::default(),
-            surface_factory: |context,
-                              window_handle,
-                              display_handle,
-                              size,
-                              requested_graphics_api| {
-                d3d_surface::D3DSurface::new(
-                    context,
-                    window_handle,
-                    display_handle,
-                    size,
-                    requested_graphics_api,
-                )
-                .map(|r| Box::new(r) as Box<dyn Surface>)
-            },
-            pre_present_callback: Default::default(),
-            partial_rendering_state: create_partial_renderer_state(None),
-            dirty_region_debug_mode: Default::default(),
-            dirty_region_history: Default::default(),
-            gpu_cleanup_pending: Cell::new(false),
-            shared_context: context.clone(),
-        }
+        Self::new_with_surface_factory(
+            context,
+            direct3d_wgpu_surface_factory,
+            create_partial_renderer_state(None),
+        )
     }
 
-    #[cfg(feature = "unstable-wgpu-28")]
-    /// Creates a new SkiaRenderer that will always use Skia's WGPU 28.x renderer.
-    pub fn default_wgpu_28(context: &SkiaSharedContext) -> Self {
-        Self {
-            maybe_window_adapter: Default::default(),
-            rendering_notifier: Default::default(),
-            image_cache: Default::default(),
-            layer_cache: Default::default(),
-            path_cache: Default::default(),
-            text_layout_cache: Default::default(),
-            rendering_metrics_collector: Default::default(),
-            rendering_first_time: Default::default(),
-            surface: Default::default(),
-            surface_factory: |context,
-                              window_handle,
-                              display_handle,
-                              size,
-                              requested_graphics_api| {
-                wgpu_28_surface::WGPUSurface::new(
-                    context,
-                    window_handle,
-                    display_handle,
-                    size,
-                    requested_graphics_api,
-                )
-                .map(|r| Box::new(r) as Box<dyn Surface>)
-            },
-            pre_present_callback: Default::default(),
-            partial_rendering_state: create_partial_renderer_state(None),
-            dirty_region_debug_mode: Default::default(),
-            dirty_region_history: Default::default(),
-            gpu_cleanup_pending: Cell::new(false),
-            shared_context: context.clone(),
-        }
+    #[cfg(feature = "wgpu-30")]
+    /// Creates a new SkiaRenderer that will always use Skia's WGPU 30.x renderer.
+    pub fn default_wgpu_30(context: &SkiaSharedContext) -> Self {
+        Self::new_with_surface_factory(
+            context,
+            surface_factory::<wgpu_30_surface::WGPUSurface>,
+            create_partial_renderer_state(None),
+        )
     }
 
-    #[cfg(feature = "unstable-wgpu-29")]
+    #[cfg(feature = "wgpu-29")]
     /// Creates a new SkiaRenderer that will always use Skia's WGPU 29.x renderer.
     pub fn default_wgpu_29(context: &SkiaSharedContext) -> Self {
-        Self {
-            maybe_window_adapter: Default::default(),
-            rendering_notifier: Default::default(),
-            image_cache: Default::default(),
-            layer_cache: Default::default(),
-            path_cache: Default::default(),
-            text_layout_cache: Default::default(),
-            rendering_metrics_collector: Default::default(),
-            rendering_first_time: Default::default(),
-            surface: Default::default(),
-            surface_factory: |context,
-                              window_handle,
-                              display_handle,
-                              size,
-                              requested_graphics_api| {
-                wgpu_29_surface::WGPUSurface::new(
-                    context,
-                    window_handle,
-                    display_handle,
-                    size,
-                    requested_graphics_api,
-                )
-                .map(|r| Box::new(r) as Box<dyn Surface>)
-            },
-            pre_present_callback: Default::default(),
-            partial_rendering_state: create_partial_renderer_state(None),
-            dirty_region_debug_mode: Default::default(),
-            dirty_region_history: Default::default(),
-            gpu_cleanup_pending: Cell::new(false),
-            shared_context: context.clone(),
-        }
+        Self::new_with_surface_factory(
+            context,
+            surface_factory::<wgpu_29_surface::WGPUSurface>,
+            create_partial_renderer_state(None),
+        )
     }
 
     /// Creates a new renderer is associated with the provided window adapter.
+    #[cfg(skia_windowed)]
     pub fn new(
         context: &SkiaSharedContext,
         window_handle: Arc<dyn raw_window_handle::HasWindowHandle + Send + Sync>,
@@ -485,42 +599,43 @@ impl SkiaRenderer {
         context: &SkiaSharedContext,
         surface: Box<dyn Surface + 'static>,
     ) -> Self {
-        let partial_rendering_state = create_partial_renderer_state(Some(surface.as_ref()));
-        Self {
-            maybe_window_adapter: Default::default(),
-            rendering_notifier: Default::default(),
-            image_cache: Default::default(),
-            layer_cache: Default::default(),
-            path_cache: Default::default(),
-            text_layout_cache: Default::default(),
-            rendering_metrics_collector: Default::default(),
-            rendering_first_time: Cell::new(true),
-            surface: RefCell::new(Some(surface)),
-            surface_factory: |_, _, _, _, _| {
+        let renderer = Self::new_with_surface_factory(
+            context,
+            |_, _, _, _, _| {
                 Err("Skia renderer constructed with surface does not support dynamic surface re-creation".into())
             },
-            pre_present_callback: Default::default(),
-            partial_rendering_state,
-            dirty_region_debug_mode: Default::default(),
-            dirty_region_history: Default::default(),
-            gpu_cleanup_pending: Cell::new(false),
-            shared_context: context.clone(),
-        }
+            create_partial_renderer_state(Some(surface.as_ref())),
+        );
+        renderer.rendering_first_time.set(true);
+        *renderer.surface.borrow_mut() = Some(surface);
+        renderer
+    }
+
+    /// Releases every cache that holds a GPU-backed resource.
+    fn clear_graphics_caches(&self) {
+        self.image_cache.clear_all();
+        self.layer_cache.clear_all();
+        self.path_cache.clear_all();
+        self.box_shadow_cache.clear();
+        self.text_layout_cache.clear_all();
     }
 
     /// Reset the surface to a new surface. (destroy the previously set surface if any)
     pub fn set_surface(&self, surface: Box<dyn Surface + 'static>) {
-        self.image_cache.clear_all();
-        self.path_cache.clear_all();
-        self.text_layout_cache.clear_all();
+        self.clear_graphics_caches();
         self.rendering_first_time.set(true);
         *self.surface.borrow_mut() = Some(surface);
     }
 
+    /// Releases the graphics caches and destroys the surface.
     fn clear_surface(&self) {
+        self.clear_graphics_caches();
+
         let Some(surface) = self.surface.borrow_mut().take() else {
             return;
         };
+        #[cfg(feature = "painted-scroll-probe")]
+        i_slint_core::painted_scroll_probe::cancel();
 
         // If we've rendered a frame before, then we need to invoke the RenderingTearDown notifier.
         if !self.rendering_first_time.get()
@@ -542,9 +657,6 @@ impl SkiaRenderer {
     /// rendering surface. Call [`Self::set_window_handle()`] to re-associate the renderer with a new
     /// window surface for subsequent rendering.
     pub fn suspend(&self) -> Result<(), PlatformError> {
-        self.image_cache.clear_all();
-        self.path_cache.clear_all();
-        self.text_layout_cache.clear_all();
         // Destroy the old surface before allocating the new one, to work around
         // the vivante drivers using zwp_linux_explicit_synchronization_v1 and
         // trying to create a second synchronization object and that's not allowed.
@@ -559,6 +671,7 @@ impl SkiaRenderer {
         display_handle: Arc<dyn raw_window_handle::HasDisplayHandle + Send + Sync>,
         size: PhysicalWindowSize,
         requested_graphics_api: Option<RequestedGraphicsAPI>,
+        transparent: bool,
     ) -> Result<(), PlatformError> {
         // just in case
         self.suspend()?;
@@ -569,11 +682,58 @@ impl SkiaRenderer {
             size,
             requested_graphics_api,
         )?;
+        surface.set_transparent(transparent)?;
         self.set_surface(surface);
         Ok(())
     }
 
+    /// Adjusts the surface for a window that became transparent or opaque after it was created,
+    /// so that the scene's alpha is kept or discarded to match.
+    pub fn set_transparent(&self, transparent: bool) -> Result<(), PlatformError> {
+        match self.surface.borrow().as_ref() {
+            Some(surface) => surface.set_transparent(transparent),
+            None => Ok(()),
+        }
+    }
+
+    /// Android frame pacing: switch the live surface's EGL swap interval between
+    /// DontWait (while the vsync permit gate drives one frame per Choreographer
+    /// vsync during a drag) and Wait(1) (the fence-paced fallback when not driving).
+    /// Call between event processing and rendering, with no outstanding canvas borrow.
+    /// False means that the surface is absent or the requested interval was rejected.
+    #[cfg(target_os = "android")]
+    pub fn set_android_swap_interval_zero(&self, zero: bool) -> Result<bool, PlatformError> {
+        match self.surface.borrow().as_ref() {
+            Some(surface) => surface.set_android_swap_interval_zero(zero),
+            None => Ok(false),
+        }
+    }
+
+    /// Front-buffer (single-buffer) rendering toggle for the low-latency drag
+    /// experiment. False means no surface or the driver declined the switch.
+    #[cfg(target_os = "android")]
+    pub fn set_front_buffer(&self, single: bool) -> bool {
+        match self.surface.borrow().as_ref() {
+            Some(surface) => surface.set_front_buffer(single),
+            None => false,
+        }
+    }
+
     /// Render the scene in the previously associated window.
+    #[cfg(all(target_os = "android", feature = "painted-scroll-probe"))]
+    pub fn configure_painted_scroll_probe(&self, debug_api29: bool) {
+        static OPT_IN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let exact = *OPT_IN.get_or_init(|| {
+            unsafe extern "C" {
+                fn __system_property_get(name: *const std::ffi::c_char, value: *mut std::ffi::c_char) -> i32;
+            }
+            let mut value = [0u8; 92];
+            let length = unsafe { __system_property_get(c"debug.chatter.painted_scroll_probe".as_ptr(), value.as_mut_ptr().cast()) };
+            length == 1 && value[0] == b'1' && value[1] == 0
+        });
+        i_slint_core::painted_scroll_probe::configure(debug_api29 && exact);
+    }
+
     pub fn render(&self) -> Result<DrawOutcome, i_slint_core::platform::PlatformError> {
         let window_adapter = self.window_adapter()?;
         let size = window_adapter.window().size();
@@ -608,13 +768,21 @@ impl SkiaRenderer {
         surface_size: PhysicalWindowSize,
         post_render_cb: Option<&dyn Fn(&mut dyn ItemRenderer)>,
     ) -> Result<DrawOutcome, i_slint_core::platform::PlatformError> {
+        #[cfg(target_os = "android")]
+        let _frame_trace = renderer_trace::Section::new(c"Chatter Skia render");
+        #[cfg(target_os = "android")]
+        let setup_trace = renderer_trace::Section::new(c"Chatter Skia frame setup");
         let surface = self.surface.borrow();
-        let Some(surface) = surface.as_ref() else { return Ok(DrawOutcome::Success) };
+        let Some(surface) = surface.as_ref() else {
+            return Ok(DrawOutcome::Success);
+        };
         self.invoke_rendering_notifier_setup(surface.as_ref())?;
 
         let window_adapter = self.window_adapter()?;
         let window = window_adapter.window();
 
+        #[cfg(target_os = "android")]
+        drop(setup_trace);
         surface.render(
             window,
             surface_size,
@@ -645,13 +813,21 @@ impl SkiaRenderer {
         window: &i_slint_core::api::Window,
         post_render_cb: Option<&dyn Fn(&mut dyn ItemRenderer)>,
     ) -> Option<DirtyRegion> {
+        #[cfg(target_os = "android")]
+        let _canvas_trace = renderer_trace::Section::new(c"Chatter Skia canvas");
         skia_canvas.rotate(rotation_angle_degrees, None);
         skia_canvas.translate(translation);
 
         let window_inner = WindowInner::from_pub(window);
 
+        #[cfg(target_os = "android")]
+        let contents_trace = renderer_trace::Section::new(c"Chatter Skia window draw contents");
+        #[cfg(target_os = "android")]
+        let pre_scene_trace = renderer_trace::Section::new(c"Chatter Skia window pre scene");
         let dirty_region = window_inner
             .draw_contents(|components, post_render| {
+                #[cfg(target_os = "android")]
+                drop(pre_scene_trace);
                 self.render_components_to_canvas(
                     skia_canvas,
                     gr_context,
@@ -664,6 +840,8 @@ impl SkiaRenderer {
                 )
             })
             .unwrap_or_default();
+        #[cfg(target_os = "android")]
+        drop(contents_trace);
 
         if let Some(callback) = self.rendering_notifier.borrow_mut().as_mut()
             && let Some(surface) = surface
@@ -686,14 +864,17 @@ impl SkiaRenderer {
         components: &[(ItemTreeWeak, LogicalPoint)],
         post_render: &dyn Fn(&mut dyn ItemRenderer),
     ) -> Option<DirtyRegion> {
+        #[cfg(target_os = "android")]
+        let _components_trace = renderer_trace::Section::new(c"Chatter Skia components");
+        #[cfg(target_os = "android")]
+        let prepare_trace = renderer_trace::Section::new(c"Chatter Skia scene prepare");
         let window_inner = WindowInner::from_pub(window);
         let window_adapter = window_inner.window_adapter();
 
-        let mut box_shadow_cache = Default::default();
-
         self.image_cache.clear_cache_if_scale_factor_changed(window);
         self.path_cache.clear_cache_if_scale_factor_changed(window);
-        self.text_layout_cache.clear_cache_if_scale_factor_changed(window);
+        self.box_shadow_cache
+            .clear_cache_if_scale_factor_changed(window);
 
         let mut skia_item_renderer = itemrenderer::SkiaItemRenderer::new(
             skia_canvas,
@@ -703,9 +884,11 @@ impl SkiaRenderer {
             &self.layer_cache,
             &self.path_cache,
             &self.text_layout_cache,
-            &mut box_shadow_cache,
+            &self.box_shadow_cache,
         );
 
+        #[cfg(feature = "painted-scroll-probe")]
+        { skia_item_renderer.painted_main_target = surface.is_some(); }
         let scale_factor = ScaleFactor::new(window_inner.scale_factor());
         let logical_window_size = i_slint_core::lengths::logical_size_from_api(
             window.size().to_logical(window_inner.scale_factor()),
@@ -744,15 +927,6 @@ impl SkiaRenderer {
                     buffer_dirty_region,
                 );
 
-                let mut clip_path_builder = skia_safe::PathBuilder::new();
-
-                for dirty_rect in partial_renderer.dirty_region.iter() {
-                    let physical_rect = (dirty_rect * scale_factor).to_rect().round_out();
-                    clip_path_builder.add_rect(to_skia_rect(&physical_rect), None, None);
-                }
-
-                let clip_path = clip_path_builder.detach();
-
                 if matches!(self.dirty_region_debug_mode, DirtyRegionDebugMode::Log) {
                     let area_to_repaint: f32 =
                         partial_renderer.dirty_region.iter().map(|b| b.area()).sum();
@@ -767,18 +941,40 @@ impl SkiaRenderer {
                 dirty_region_history.rotate_right(1);
                 dirty_region_history[0] = dirty_region_for_this_frame;
 
-                skia_canvas.clip_path(&clip_path, None, false);
-
-                if matches!(self.dirty_region_debug_mode, DirtyRegionDebugMode::Visualize) {
-                    dirty_region_to_visualize = Some(clip_path);
+                let visualize = matches!(
+                    self.dirty_region_debug_mode,
+                    DirtyRegionDebugMode::Visualize
+                );
+                if !visualize && partial_renderer.dirty_region.iter().count() == 1 {
+                    let dirty_rect = partial_renderer.dirty_region.iter().next().unwrap();
+                    let physical_rect = (dirty_rect * scale_factor).to_rect().round_out();
+                    skia_canvas.clip_rect(to_skia_rect(&physical_rect), None, false);
+                } else {
+                    let mut clip_path_builder = skia_safe::PathBuilder::new();
+                    for dirty_rect in partial_renderer.dirty_region.iter() {
+                        let physical_rect = (dirty_rect * scale_factor).to_rect().round_out();
+                        clip_path_builder.add_rect(to_skia_rect(&physical_rect), None, None);
+                    }
+                    let clip_path = clip_path_builder.detach();
+                    skia_canvas.clip_path(&clip_path, None, false);
+                    if visualize {
+                        dirty_region_to_visualize = Some(clip_path);
+                    }
                 }
 
                 item_renderer = &mut partial_renderer;
             }
 
+            #[cfg(all(target_os = "android", feature = "experimental-prefix-flush"))]
+            let mut prefix_background_recorded = false;
             if let Some(window_item_rc) = window_inner.window_item_rc() {
-                let window_item =
-                    window_item_rc.downcast::<i_slint_core::items::WindowItem>().unwrap();
+                #[cfg(all(target_os = "android", feature = "experimental-prefix-flush"))]
+                {
+                    prefix_background_recorded = true;
+                }
+                let window_item = window_item_rc
+                    .downcast::<i_slint_core::items::WindowItem>()
+                    .unwrap();
                 if let Brush::SolidColor(clear_color) = window_item.as_pin_ref().background() {
                     skia_canvas.clear(itemrenderer::to_skia_color(&clear_color));
                 } else {
@@ -794,11 +990,23 @@ impl SkiaRenderer {
                 }
             }
 
+            // Only issue existing clipped background work; no new draw or clear.
+            // An installed notifier already owns this prefix flush.
+            #[cfg(all(target_os = "android", feature = "experimental-prefix-flush"))]
+            android_prefix_flush::flush_existing_background(
+                self.prefix_flush_debuggable.get(),
+                self.rendering_notifier.borrow().is_some(),
+                prefix_background_recorded,
+                gr_context.as_deref_mut(),
+            );
+
             if let Some(callback) = self.rendering_notifier.borrow_mut().as_mut() {
                 // For the BeforeRendering rendering notifier callback it's important that this happens *after* clearing
                 // the back buffer, in order to allow the callback to provide its own rendering of the background.
                 // Skia's clear() will merely schedule a clear call, so flush right away to make it immediate.
                 if let Some(ctx) = gr_context.as_mut() {
+                    #[cfg(target_os = "android")]
+                    let _flush_trace = renderer_trace::Section::new(c"Chatter Skia notifier flush");
                     ctx.flush(None);
                 }
 
@@ -809,6 +1017,10 @@ impl SkiaRenderer {
                 }
             }
 
+            #[cfg(target_os = "android")]
+            drop(prepare_trace);
+            #[cfg(target_os = "android")]
+            let traverse_trace = renderer_trace::Section::new(c"Chatter Skia scene traverse");
             for (component, origin) in components {
                 if let Some(component) = ItemTreeWeak::upgrade(component) {
                     i_slint_core::item_rendering::render_component_items(
@@ -819,12 +1031,21 @@ impl SkiaRenderer {
                     );
                 }
             }
+            #[cfg(target_os = "android")]
+            drop(traverse_trace);
 
+            #[cfg(target_os = "android")]
+            let post_trace = renderer_trace::Section::new(c"Chatter Skia scene post render");
             post_render(item_renderer);
 
             if let Some(path) = dirty_region_to_visualize {
                 let mut paint = skia_safe::Paint::new(
-                    skia_safe::Color4f { a: 0.5, r: 1.0, g: 0., b: 0. },
+                    skia_safe::Color4f {
+                        a: 0.5,
+                        r: 1.0,
+                        g: 0.,
+                        b: 0.,
+                    },
                     None,
                 );
                 paint.set_style(skia_safe::PaintStyle::Stroke);
@@ -844,19 +1065,29 @@ impl SkiaRenderer {
             if let Some(cb) = post_render_cb.as_ref() {
                 cb(item_renderer)
             }
+            #[cfg(target_os = "android")]
+            drop(post_trace);
         }
 
         if let Some(ctx) = gr_context.as_mut() {
+            #[cfg(target_os = "android")]
+            let flush_trace = renderer_trace::Section::new(c"Chatter Skia ctx flush");
             ctx.flush(None);
             #[cfg(target_os = "android")]
+            drop(flush_trace);
+            #[cfg(target_os = "android")]
             if self.gpu_cleanup_pending.replace(false) {
+                let _cleanup_trace =
+                    renderer_trace::Section::new(c"Chatter Skia GPU cache cleanup");
                 // A dismissed full-screen component can leave its offscreen layers
                 // in Skia's scratch cache after its item resources are released.
                 let screen_bytes = (window.size().width as usize)
                     .saturating_mul(window.size().height as usize)
                     .saturating_mul(4);
                 if ctx.resource_cache_purgeable_bytes() >= screen_bytes {
-                    ctx.purge_unlocked_resources(skia_safe::gpu::PurgeResourceOptions::AllResources);
+                    ctx.purge_unlocked_resources(
+                        skia_safe::gpu::PurgeResourceOptions::AllResources,
+                    );
                 }
             }
         }
@@ -865,9 +1096,15 @@ impl SkiaRenderer {
     }
 
     fn window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
-        self.maybe_window_adapter.borrow().as_ref().and_then(|w| w.upgrade()).ok_or_else(|| {
-            "Renderer must be associated with component before use".to_string().into()
-        })
+        self.maybe_window_adapter
+            .borrow()
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .ok_or_else(|| {
+                "Renderer must be associated with component before use"
+                    .to_string()
+                    .into()
+            })
     }
 
     /// Sets the specified callback, that's invoked before presenting the rendered buffer to the windowing system.
@@ -887,95 +1124,26 @@ impl SkiaRenderer {
 }
 
 impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
-    fn text_size(
-        &self,
-        text_item: Pin<&dyn i_slint_core::item_rendering::RenderString>,
-        item_rc: &ItemRc,
-        max_width: Option<LogicalLength>,
-        text_wrap: TextWrap,
-    ) -> LogicalSize {
-        sharedparley::text_size(
-            self,
-            text_item,
-            item_rc,
-            max_width,
-            text_wrap,
-            Some(&self.text_layout_cache),
-        )
-        .unwrap_or_default()
-    }
-
-    fn char_size(
-        &self,
-        text_item: Pin<&dyn i_slint_core::item_rendering::HasFont>,
-        item_rc: &i_slint_core::item_tree::ItemRc,
-        ch: char,
-    ) -> LogicalSize {
-        self.slint_context()
-            .and_then(|ctx| {
-                let mut font_ctx = ctx.font_context().borrow_mut();
-                sharedparley::char_size(&mut font_ctx, text_item, item_rc, ch)
-            })
-            .unwrap_or_default()
-    }
-
-    fn font_metrics(
-        &self,
-        font_request: i_slint_core::graphics::FontRequest,
-    ) -> i_slint_core::items::FontMetrics {
-        self.slint_context()
-            .map(|ctx| {
-                let mut font_ctx = ctx.font_context().borrow_mut();
-                sharedparley::font_metrics(&mut font_ctx, font_request)
-            })
-            .unwrap_or_default()
-    }
-
-    fn text_input_byte_offset_for_position(
-        &self,
-        text_input: std::pin::Pin<&i_slint_core::items::TextInput>,
-        item_rc: &i_slint_core::item_tree::ItemRc,
-        pos: LogicalPoint,
-    ) -> usize {
-        sharedparley::text_input_byte_offset_for_position(self, text_input, item_rc, pos)
-    }
-
-    fn text_input_cursor_rect_for_byte_offset(
-        &self,
-        text_input: std::pin::Pin<&i_slint_core::items::TextInput>,
-        item_rc: &i_slint_core::item_tree::ItemRc,
-        byte_offset: usize,
-    ) -> LogicalRect {
-        sharedparley::text_input_cursor_rect_for_byte_offset(self, text_input, item_rc, byte_offset)
-    }
-
+    // Parley already shapes the full preedit composition and maps password offsets.
+    // Query it directly rather than using the generic committed-text snapshot.
     fn text_input_visual_cursor_rect_for_byte_offset(
         &self,
         text_input: std::pin::Pin<&i_slint_core::items::TextInput>,
         item_rc: &i_slint_core::item_tree::ItemRc,
         byte_offset: usize,
     ) -> LogicalRect {
-        sharedparley::text_input_cursor_rect_for_byte_offset(self, text_input, item_rc, byte_offset)
+        sharedparley::text_input_cursor_rect_for_byte_offset(
+            self,
+            text_input,
+            item_rc,
+            byte_offset,
+            text_input.cursor_position_affinity(),
+            Some(&self.text_layout_cache),
+        )
     }
 
-    fn register_font_from_memory(
-        &self,
-        data: &'static [u8],
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let ctx = self.slint_context().ok_or("slint platform not initialized")?;
-        ctx.font_context().borrow_mut().register_static_font(data);
-        Ok(())
-    }
-
-    fn register_font_from_path(
-        &self,
-        path: &std::path::Path,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let requested_path = path.canonicalize().unwrap_or_else(|_| path.into());
-        let contents = std::fs::read(requested_path)?;
-        let ctx = self.slint_context().ok_or("slint platform not initialized")?;
-        ctx.font_context().borrow_mut().collection.register_fonts(contents.into(), None);
-        Ok(())
+    fn text_layout_cache(&self) -> Option<&sharedparley::TextLayoutCache> {
+        Some(&self.text_layout_cache)
     }
 
     fn set_rendering_notifier(
@@ -995,6 +1163,9 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
         component: i_slint_core::item_tree::ItemTreeRef,
         items: &mut dyn Iterator<Item = std::pin::Pin<i_slint_core::items::ItemRef<'_>>>,
     ) -> Result<(), i_slint_core::platform::PlatformError> {
+        #[cfg(target_os = "android")]
+        let _release_trace =
+            renderer_trace::Section::new(c"Chatter Skia component resource release");
         self.image_cache.component_destroyed(component);
         self.layer_cache.component_destroyed(component);
         self.path_cache.component_destroyed(component);
@@ -1004,7 +1175,7 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
         self.gpu_cleanup_pending.set(true);
 
         if let Some(partial_rendering_state) = self.partial_rendering_state() {
-            partial_rendering_state.free_graphics_resources(items);
+            partial_rendering_state.free_graphics_resources(component, items);
         }
 
         Ok(())
@@ -1012,9 +1183,7 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
 
     fn set_window_adapter(&self, window_adapter: &Rc<dyn WindowAdapter>) {
         *self.maybe_window_adapter.borrow_mut() = Some(Rc::downgrade(window_adapter));
-        self.image_cache.clear_all();
-        self.path_cache.clear_all();
-        self.text_layout_cache.clear_all();
+        self.clear_graphics_caches();
 
         if let Some(partial_rendering_state) = self.partial_rendering_state() {
             partial_rendering_state.clear_cache();
@@ -1040,7 +1209,7 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
         }
     }
 
-    /// Returns an image buffer of what was rendered last by reading the previous front buffer (using glReadPixels).
+    /// Returns an image buffer with the contents of the window, obtained by re-rendering the scene into a CPU-side surface.
     fn take_snapshot(
         &self,
     ) -> Result<SharedPixelBuffer<i_slint_core::graphics::Rgba8Pixel>, PlatformError> {
@@ -1052,11 +1221,10 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
             SharedPixelBuffer::<i_slint_core::graphics::Rgba8Pixel>::new(width, height);
 
         let mut surface_borrow = skia_safe::surfaces::wrap_pixels(
-            &skia_safe::ImageInfo::new(
+            &image_info(
                 (width as i32, height as i32),
                 skia_safe::ColorType::RGBA8888,
                 skia_safe::AlphaType::Opaque,
-                None,
             ),
             target_buffer.make_mut_bytes(),
             None,
@@ -1064,7 +1232,16 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
         )
         .ok_or_else(|| "Error wrapping target buffer for rendering into with Skia".to_string())?;
 
-        self.render_to_canvas(surface_borrow.canvas(), 0., (0.0, 0.0), None, 0, None, window, None);
+        self.render_to_canvas(
+            surface_borrow.canvas(),
+            0.,
+            (0.0, 0.0),
+            None,
+            0,
+            None,
+            window,
+            None,
+        );
 
         Ok(target_buffer)
     }
@@ -1082,6 +1259,8 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
 
 impl Drop for SkiaRenderer {
     fn drop(&mut self) {
+        #[cfg(feature = "painted-scroll-probe")]
+        i_slint_core::painted_scroll_probe::cancel();
         self.clear_surface()
     }
 }
@@ -1101,6 +1280,18 @@ pub trait Surface {
         Self: Sized;
     /// Returns the name of the surface, for diagnostic purposes.
     fn name(&self) -> &'static str;
+
+    /// Android frame-pacing swap-interval toggle; non-GL surfaces decline.
+    #[cfg(target_os = "android")]
+    fn set_android_swap_interval_zero(&self, _zero: bool) -> Result<bool, PlatformError> {
+        Ok(false)
+    }
+
+    /// Front-buffer (single-buffer) rendering toggle; non-GL surfaces decline.
+    #[cfg(target_os = "android")]
+    fn set_front_buffer(&self, _single: bool) -> bool {
+        false
+    }
 
     /// If supported, this invokes the specified callback with access to the platform graphics API.
     fn with_graphics_api(&self, _callback: &mut dyn FnMut(GraphicsAPI<'_>)) {}
@@ -1146,7 +1337,7 @@ pub trait Surface {
         None
     }
 
-    #[cfg(any(feature = "unstable-wgpu-28", feature = "unstable-wgpu-29"))]
+    #[cfg(any(feature = "unstable-wgpu-29", feature = "unstable-wgpu-30"))]
     fn import_wgpu_texture(
         &self,
         _canvas: &skia_safe::Canvas,
@@ -1158,6 +1349,10 @@ pub trait Surface {
     /// Implementations should return self to allow upcasting.
     fn as_any(&self) -> &dyn core::any::Any {
         &()
+    }
+
+    fn set_transparent(&self, _: bool) -> Result<(), PlatformError> {
+        Ok(())
     }
 }
 
