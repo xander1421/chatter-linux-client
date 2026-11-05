@@ -226,13 +226,17 @@ export component RegisterPage inherits Rectangle {
                                 // Carousel: ‹ preset › with the live preview in
                                 // the middle. The arrows cycle the photo presets
                                 // (indices [0, preset-count), wrap-around);
-                                // tapping the avatar or "Upload own" uploads a
-                                // custom photo.
+                                // tapping the avatar (pen badge) uploads a custom
+                                // photo. The arrows are wrapped in a centering
+                                // VerticalLayout so they sit at the avatar's
+                                // vertical mid-line, not the top of the taller row.
                                 HorizontalLayout {
                                     alignment: center;
                                     spacing: Spacing.sm;
 
-                                    Rectangle {
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
                                         width: 44px;
                                         height: 44px;
                                         border-radius: self.width / 2;
@@ -256,6 +260,7 @@ export component RegisterPage inherits Rectangle {
                                             clicked => {
                                                 root.select-default-avatar(Math.mod(root.selected-default-idx - 1 + root.preset-count, root.preset-count));
                                             }
+                                        }
                                         }
                                     }
 
@@ -304,7 +309,9 @@ export component RegisterPage inherits Rectangle {
                                         }
                                     }
 
-                                    Rectangle {
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
                                         width: 44px;
                                         height: 44px;
                                         border-radius: self.width / 2;
@@ -329,19 +336,16 @@ export component RegisterPage inherits Rectangle {
                                                 root.select-default-avatar(Math.mod(root.selected-default-idx + 1, root.preset-count));
                                             }
                                         }
+                                        }
                                     }
                                 }
 
-                                HorizontalLayout {
+                                // Upload is the avatar's pen badge (tap the avatar).
+                                // Only the destructive "Remove photo" lives here,
+                                // and only once a custom photo has been chosen.
+                                if root.has-avatar: HorizontalLayout {
                                     alignment: center;
-                                    spacing: Spacing.md;
                                     Button {
-                                        text: "Upload own";
-                                        variant: "secondary";
-                                        disabled: root.loading;
-                                        clicked => { root.select-avatar(); }
-                                    }
-                                    if root.has-avatar: Button {
                                         text: "Remove photo";
                                         variant: "secondary";
                                         disabled: root.loading;
@@ -570,23 +574,13 @@ export component RegisterPage inherits Rectangle {
                                 edited(text) => { root.clear-error(); }
                             }
 
-                            if !AnonMode.enabled: HorizontalLayout {
-                                spacing: Spacing.sm;
-                                Button {
-                                    text: "Localhost";
-                                    variant: "secondary";
-                                    horizontal-stretch: 1;
-                                    disabled: root.loading;
-                                    clicked => { root.server-url = "http://localhost:50051"; root.clear-error(); }
-                                }
-                                Button {
-                                    text: "Official";
-                                    variant: "secondary";
-                                    horizontal-stretch: 1;
-                                    disabled: root.loading;
-                                    clicked => { root.server-url = "https://api.chatter.example.com"; root.clear-error(); }
-                                }
-                            }
+                            // The field is pre-seeded with the build-time baked
+                            // endpoint (lib.rs seeds AuthFlow.register-server-url
+                            // from ui_ctx.endpoint()), so no presets are needed.
+                            // The old "Localhost"/"Official" dev buttons were
+                            // removed — "Official" froze a placeholder
+                            // (api.chatter.example.com) that overwrote the correct
+                            // baked URL. A dev targeting localhost edits the field.
 
                             if AnonMode.enabled: Text {
                                 text: "Shield is on: registration goes over Tor to the configured onion service.";
