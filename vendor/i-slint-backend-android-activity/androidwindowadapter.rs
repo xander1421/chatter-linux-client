@@ -1652,6 +1652,11 @@ impl AndroidWindowAdapter {
                 .unwrap_or_default(),
         );
         self.offset.set(Default::default());
+        // Chatter patch: a resize (notably an Android rotation) relayouts but
+        // does not otherwise schedule a frame. Without this a static screen
+        // keeps the pre-rotation frame, since the event loop only renders when
+        // pending_redraw or an animation is set.
+        self.pending_redraw.set(true);
         Ok(())
     }
 

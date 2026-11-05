@@ -238,6 +238,20 @@ impl super::Surface for OpenGLSurface {
         let width = size.width.try_into().ok();
         let height = size.height.try_into().ok();
 
+        // Chatter patch (Android rotation): the ANativeWindow buffer geometry
+        // lags the reported window size by one swap. On a rotation the Resized
+        // event recreates the skia target at the new size and pushes the new
+        // geometry (ANativeWindow_setBuffersGeometry), but the EGL back buffer
+        // is still the old orientation for this frame, so the scene lands in a
+        // stale-sized buffer (squished into one corner, the rest black). Report
+        // such a frame as not presented so the event loop re-arms one more
+        // redraw; the follow-up frame draws into the now-correct buffer.
+        // Without this a static screen keeps the stale frame until the next
+        // unrelated event (the owner's "rotate twice to fix"). See PATCHES.md.
+        #[cfg(target_os = "android")]
+        let egl_settled = self.glutin_surface.width() == Some(size.width)
+            && self.glutin_surface.height() == Some(size.height);
+
         if let Some((width, height)) = width.zip(height)
             && (width != surface.width() || height != surface.height())
         {
@@ -328,7 +342,16 @@ impl super::Surface for OpenGLSurface {
         }
         #[cfg(feature = "painted-scroll-probe")]
         if result.is_err() { i_slint_core::painted_scroll_probe::cancel(); }
-        result.map(|_| DrawOutcome::Success).map_err(|glutin_error| {
+        result.map(|_| {
+            // This swap cycled the EGL buffer toward the requested geometry. If
+            // it was still a frame behind, report Skipped so the loop renders
+            // once more into the now-correct buffer (Chatter Android rotation).
+            #[cfg(target_os = "android")]
+            if !egl_settled {
+                return DrawOutcome::Skipped;
+            }
+            DrawOutcome::Success
+        }).map_err(|glutin_error| {
             format!("Skia OpenGL Renderer: Error swapping buffers: {glutin_error}").into()
         })
     }

@@ -396,3 +396,45 @@ TerminateWindow synchronously suspends the renderer while the native window
 is still valid. Three real-renderer host tests and three S9 Home/return cycles
 passed before this cleanup; final Android integration validates the combined
 change. No graphics quality, resolution or content-cache policy is changed.
+
+## Rotation relayout: one rotation must fully relayout and repaint (2026-11-05)
+
+Landscape->portrait (or back) left the UI squished into one corner with the
+rest black until a SECOND rotation; the first config change did not take. The
+app handles `configChanges` (manifest) so the activity is not recreated: a
+rotation arrives as `ConfigChanged` then `WindowResized`/`ContentRectChanged`,
+with no `InitWindow`, so the EGL surface is never recreated. Traced on an S9
+(logcat tag rotate_dbg), the real sequence landscape(2960x1440)->portrait was:
+
+  ConfigChanged native_window=2960x1440   # STILL the old size here; density
+                                          # unchanged, so the scale-gated branch
+                                          # is a no-op and dispatches no Resized.
+  WindowResized native_window=1440x2960   # the new size finally arrives
+  resize() -> dispatch WindowEvent::Resized(1440x2960)
+  do_render requested=1440x2960 skia_target=2960x1440 egl_surface=2960x1440  # BUG
+  ... next frame: egl_surface=1440x2960 (correct)
+
+Two root causes, both confirmed by the trace:
+
+1. `WindowEvent::Resized` (i-slint-core api.rs) relayouts AND calls
+   `renderer().resize()` (which on Android is `ANativeWindow_setBuffersGeometry`
+   via glutin), but the ANativeWindow back buffer only takes the new geometry on
+   the NEXT swap. The immediate frame draws the new-size scene into the still-old
+   EGL buffer -> squished-into-a-corner, rest black. On a screen that keeps
+   animating, continuous redraws self-heal within one frame; on a STATIC screen
+   that stale frame is the last one drawn and persists until the next event (the
+   second rotation). Fix: `i-slint-renderer-skia/opengl_surface.rs::render`
+   reports `DrawOutcome::Skipped` (Android only) when the live EGL surface size
+   (eglQuerySurface) does not yet equal the requested size, so the event loop's
+   existing not-presented path re-arms one more redraw. The follow-up frame draws
+   into the now-correct buffer. Steady state (sizes equal) is unaffected.
+
+2. `AndroidWindowAdapter::resize` dispatched `Resized` but never set
+   `pending_redraw`, so on a static screen no frame was scheduled after the
+   rotation at all. Fix: `resize()` sets `pending_redraw = true`.
+
+`ConfigChanged` is deliberately left gated on scale_factor: at ConfigChanged
+time `native_window` still reports the OLD geometry (see trace), so dispatching
+Resized there would carry the stale size. `WindowResized` carries the real new
+size and drives `resize()`; that is the correct trigger. The native-pacing loop,
+vsync gate and swap-interval handling are untouched.
