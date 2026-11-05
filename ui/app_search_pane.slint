@@ -23,6 +23,7 @@ export global SearchPane {
     // ========== Unified search (top bar) ==========
     in property <[QuickSwitcherItem]> unified-search-conversations: [];
     in property <[SearchResult]> unified-search-messages: [];
+    in property <[SearchResultChannel]> unified-search-discover-channels: [];
     in property <bool> unified-search-searching: false;
     in-out property <string> unified-search-query: "";
     in-out property <int> unified-search-caret-end-seq: 0;
@@ -59,6 +60,7 @@ export global SearchPane {
     callback unified-search-show-more(string);
     callback unified-search-conversation-selected(string, string);
     callback unified-search-message-selected(string);
+    callback unified-search-channel-selected(string);
     // People (exact-handle resolve-on-Enter)
     in property <bool> unified-search-query-is-handle: false;
     in property <string> unified-search-person-status: "";

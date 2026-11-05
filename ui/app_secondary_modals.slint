@@ -115,6 +115,7 @@ export component AppSecondaryModals inherits Rectangle {
         source-width: root.compact-layout ? root.width - 2 * Spacing.sm : root.sidebar-is-rail ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width;
         conversations: SearchPane.unified-search-conversations;
         messages: SearchPane.unified-search-messages;
+        discover-channels: SearchPane.unified-search-discover-channels;
         searching: SearchPane.unified-search-searching;
         query <=> SearchPane.unified-search-query;
         caret-end-seq: SearchPane.unified-search-caret-end-seq;
@@ -161,6 +162,10 @@ export component AppSecondaryModals inherits Rectangle {
         }
         message-selected(id) => {
             SearchPane.unified-search-message-selected(id);
+            SearchPane.unified-search-open = false;
+        }
+        channel-selected(id) => {
+            SearchPane.unified-search-channel-selected(id);
             SearchPane.unified-search-open = false;
         }
         close => {

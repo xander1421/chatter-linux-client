@@ -9,9 +9,10 @@ use std::sync::{Arc, Mutex};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
+use chatter_core::domain::channel::ChannelType;
 use chatter_core::services::search::{SearchQuery, preview_fragments};
 
-use crate::{CalendarDay, MainWindow, QuickSwitcherItem, SearchResult};
+use crate::{CalendarDay, MainWindow, QuickSwitcherItem, SearchResult, SearchResultChannel};
 
 /// Wire all unified-search callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -23,6 +24,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_changed(window, ui_ctx, requests.clone());
     wire_conversation_selected(window, ui_ctx, requests.clone());
     wire_message_selected(window, ui_ctx, requests.clone());
+    wire_channel_selected(window, ui_ctx);
     wire_resolve(window, ui_ctx, requests.clone());
     wire_person_selected(window, ui_ctx, requests);
     wire_filters(window);
@@ -437,6 +439,8 @@ fn clear_search_rows(w: &MainWindow) {
     w.global::<crate::SearchPane>()
         .set_unified_search_messages(ModelRc::new(VecModel::default()));
     w.global::<crate::SearchPane>()
+        .set_unified_search_discover_channels(ModelRc::new(VecModel::default()));
+    w.global::<crate::SearchPane>()
         .set_unified_search_counts(ModelRc::new(VecModel::from(vec![0; 7])));
     w.global::<crate::SearchPane>()
         .set_unified_search_thumbnails(ModelRc::new(VecModel::default()));
@@ -549,6 +553,87 @@ fn wire_changed(
                     }
                 });
             });
+
+            // Public channels (discover): server search, shown as its own
+            // section so a public channel can be found and joined from search.
+            // Only for the conversation-bearing categories; member channels are
+            // dropped here because they already list under "Jump to".
+            if !query_str.trim().is_empty()
+                && weak.upgrade().is_some_and(|w| {
+                    matches!(
+                        w.global::<crate::SearchPane>()
+                            .get_unified_search_category()
+                            .as_str(),
+                        "all" | "chats"
+                    )
+                })
+            {
+                let channels_ctx = ui_ctx.clone();
+                let channels_requests = requests.clone();
+                let channels_weak = weak.clone();
+                let channels_query = query_str.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    if !channels_requests
+                        .lock()
+                        .unwrap()
+                        .pending(ticket, channels_ctx.auth_snapshot().session_revision)
+                    {
+                        return;
+                    }
+                    let Ok(found) = channels_ctx
+                        .search_channels_filtered(&channels_query, 20, 0, vec![ChannelType::Public])
+                        .await
+                    else {
+                        return;
+                    };
+                    // slint::Image is !Send: ship raw bytes, build rows on the loop.
+                    let raw: Vec<(String, String, String, Option<Vec<u8>>)> = found
+                        .into_iter()
+                        .filter(|ch| !channels_ctx.is_channel_member(&ch.id))
+                        .map(|ch| {
+                            (
+                                ch.id.to_string(),
+                                ch.name,
+                                ch.description.unwrap_or_default(),
+                                ch.icon,
+                            )
+                        })
+                        .collect();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        let Some(w) = channels_weak.upgrade() else {
+                            return;
+                        };
+                        if !w.global::<crate::SearchPane>().get_unified_search_open()
+                            || !channels_requests
+                                .lock()
+                                .unwrap()
+                                .pending(ticket, channels_ctx.auth_snapshot().session_revision)
+                        {
+                            return;
+                        }
+                        let rows = raw
+                            .into_iter()
+                            .map(|(id, name, description, icon)| {
+                                let icon_img = icon
+                                    .as_deref()
+                                    .and_then(crate::bin_ui::converters::avatar_bytes_to_image);
+                                SearchResultChannel {
+                                    id: id.into(),
+                                    name: name.into(),
+                                    description: description.into(),
+                                    member_count: 0,
+                                    joined: false,
+                                    has_icon: icon_img.is_some(),
+                                    icon: icon_img.unwrap_or_default(),
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        w.global::<crate::SearchPane>()
+                            .set_unified_search_discover_channels(ModelRc::new(VecModel::from(rows)));
+                    });
+                });
+            }
 
             // Messages: empty query clears; otherwise search in background.
             if weak.upgrade().is_some_and(|w| {
@@ -904,6 +989,59 @@ fn open_conversation(w: &MainWindow, id: SharedString, conv_type: &str) {
         // outcome — any view left open would be the wrong conversation.
         _ => w.global::<crate::ChatPane>().set_loading_messages(false),
     }
+}
+
+/// On discover-channel pick: open it if already a member, else join from its
+/// id and open — the same open/join the Join-channel modal does, reached from
+/// search so a public channel can be found and entered in one place.
+fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_channel_selected(move |id: SharedString| {
+            let Some(w) = weak.upgrade() else { return };
+            let id_str = id.to_string();
+            let Ok(channel_id) = id_str.parse::<chatter_core::domain::ids::ChannelId>() else {
+                return;
+            };
+            w.global::<crate::ChatPane>().set_loading_messages(true);
+            // Already a member: open it, no second join round trip.
+            if ui_ctx.is_channel_member(&channel_id) {
+                open_conversation(&w, id, "channel");
+                return;
+            }
+            let session = ui_ctx.auth_snapshot().session_revision;
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            tokio::spawn(async move {
+                match ui_ctx.join_channel_from_input(&id_str).await {
+                    Ok(channel) => {
+                        let cid = channel.id;
+                        let cid_str = cid.to_string();
+                        // The joined channel's row comes from core, like every row.
+                        crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            let Some(w) = weak.upgrade() else { return };
+                            if ui_ctx.auth_snapshot().session_revision != session {
+                                return;
+                            }
+                            ui_ctx.prepare_channel_selection(cid);
+                            w.global::<crate::SidebarPane>()
+                                .invoke_channel_selected(cid_str.into());
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "unified search: join public channel failed");
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.global::<crate::ChatPane>().set_loading_messages(false);
+                            }
+                        });
+                    }
+                }
+            });
+        });
 }
 
 /// On message pick: navigate to the message (port of header.rs search_result_clicked).
