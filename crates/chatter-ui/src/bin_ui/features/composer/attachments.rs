@@ -347,6 +347,17 @@ pub(crate) fn wire_attach_source(
     window
         .global::<crate::ChatPane>()
         .on_composer_attach_source(move |source: i32| {
+            // Negative source = the sheet was dismissed without a choice (scrim
+            // tap). Reset the picker-open latch that prepare-attachment-picker
+            // set when the sheet opened, otherwise the guard in
+            // on_attachment_clicked (get_composer_attachment_picker_open) stays
+            // true and the Attach button never reopens the sheet.
+            if source < 0 {
+                if let Some(w) = weak_window.upgrade() {
+                    w.invoke_finish_attachment_picker(true);
+                }
+                return;
+            }
             let _ = (&weak_window, &ui_ctx_attach, &chat_state, source);
             #[cfg(target_os = "android")]
             {

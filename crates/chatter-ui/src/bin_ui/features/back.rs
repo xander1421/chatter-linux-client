@@ -331,6 +331,10 @@ pub fn handle_back(window: &MainWindow) -> bool {
         window
             .global::<crate::ChatPane>()
             .set_composer_attach_sheet_visible(false);
+        // Reset the picker-open latch prepare-attachment-picker set when the
+        // sheet opened, or the next Attach tap is swallowed by the guard in
+        // on_attachment_clicked (owner 2026-11-05).
+        window.invoke_finish_attachment_picker(true);
         return true;
     }
 
