@@ -8,9 +8,10 @@ import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Materials } from "../theme/materials.slint";
 
-// A device-route button with its own device-select caret overlaid on the top
-// edge. Tapping the body runs `clicked` (mute / speaker); tapping the caret
-// runs `select`, which opens that one category's device list.
+// A device-route button with its own device-select caret to the LEFT of the
+// circle (outside it — owner 2026-11-06: the caret overlapping the button top
+// edge read as part of the circle). Tapping the circle runs `clicked` (mute /
+// speaker); tapping the caret runs `select`, which opens that category's list.
 component DeviceButton inherits Rectangle {
     in property <image> icon;
     in property <string> label;
@@ -19,23 +20,26 @@ component DeviceButton inherits Rectangle {
     in property <bool> enabled: true;
     callback clicked();
     callback select();
-    width: 44px;
+    // caret column (18) + the circle (44).
+    width: 18px + 44px;
     height: 48px;
     IconAction {
         width: 44px;
         height: 48px;
+        // Pushed right so the caret sits clear to its left.
+        x: parent.width - self.width;
         icon: root.icon;
         label: root.label;
         active: root.active;
         enabled: root.enabled;
         clicked => { root.clicked(); }
     }
-    // Selector caret sits on top of the button's top edge, its own target.
+    // Selector caret, its own tap target, to the left of the circle.
     caret := Rectangle {
-        width: 22px;
-        height: 16px;
-        x: (parent.width - self.width) / 2;
-        y: 1px;
+        width: 16px;
+        height: 26px;
+        x: 0;
+        y: (parent.height - self.height) / 2;
         border-radius: 8px;
         background: ctouch.pressed ? Materials.pressed : Colors.fill-secondary;
         border-width: key.has-focus ? 2px : 0px;
