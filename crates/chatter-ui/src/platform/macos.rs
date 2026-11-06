@@ -96,5 +96,9 @@ pub fn prepare_bundled_gstreamer() {
         Err(_) => plugins,
     };
     tracing::info!(path = %path.display(), "using bundled GStreamer plugins");
-    std::env::set_var("GST_PLUGIN_SYSTEM_PATH", &path);
+    // Safe: runs once at process startup, before any thread that might read the
+    // environment is spawned. set_var is unsafe as of the 2024 edition.
+    unsafe {
+        std::env::set_var("GST_PLUGIN_SYSTEM_PATH", &path);
+    }
 }
