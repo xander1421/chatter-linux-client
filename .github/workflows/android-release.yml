@@ -131,6 +131,13 @@ jobs:
           # above; this is kept as headroom, not the fix.) Build-env override only —
           # the committed profile is untouched, so local release builds keep fat LTO.
           CARGO_PROFILE_RELEASE_LTO: "thin"
+          # Surface the real linker error: rustc's "= note:" block (the lld stderr)
+          # is one giant line that GitHub's log drops, so prior runs showed only
+          # "linking with cargo-ndk failed" with an empty note. -v makes clang emit
+          # the invocation + lld errors as SHORT lines that survive. --threads=1
+          # also bounds lld's peak memory on the 16 GB runner. build-android.sh
+          # appends its own flags to ${RUSTFLAGS:-}, so these carry through.
+          RUSTFLAGS: "-C link-arg=-v -C link-arg=-Wl,--threads=1"
           ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/28.2.13676358
           CHATTER_ANDROID_VERSION_CODE: ${{ github.event.inputs.version_code }}
           CHATTER_ANDROID_VERSION_NAME: ${{ github.event.inputs.version_name }}
@@ -155,7 +162,15 @@ jobs:
             export CHATTER_ANDROID_VERSION_CODE="$code"
             export CHATTER_ANDROID_VERSION_NAME="0.1.$((code-1))"
           fi
-          ./build-android.sh
+          set -o pipefail
+          ./build-android.sh 2>&1 | tee "$RUNNER_TEMP/build.log"; rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            echo "::group::failure diagnostics (short lines survive GitHub log truncation)"
+            grep -inE 'ld\.lld|lld:|rust-lld|undefined|out of memory|cannot (find|allocate)|killed|no space|bad_alloc|collect2|fatal|signal:|error:' "$RUNNER_TEMP/build.log" | tail -80
+            echo "--- raw tail ---"; tail -40 "$RUNNER_TEMP/build.log"
+            echo "::endgroup::"
+            exit "$rc"
+          fi
 
       - name: Verify signer certificate
         working-directory: android
