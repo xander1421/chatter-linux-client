@@ -115,10 +115,38 @@ jobs:
           echo "keystore decoded: ${sz} bytes" >> "$GITHUB_STEP_SUMMARY"
           test "$sz" -gt 1000
 
+      # build-android.sh links the GLib/GStreamer helper libs (pcre2-8,
+      # gmodule-2.0, ffi, orc-0.4, iconv, z) into the mobile .so and resolves
+      # them through GSTREAMER_ROOT_ANDROID (default $HOME/gst-android). Without
+      # this prebuilt the Android link fails with "ld.lld: error: unable to find
+      # library -lpcre2-8" (etc.) — the real cause of every prior red run. The
+      # laptop that builds the shipping APKs has this exact prebuilt; CI never did.
+      - name: Cache GStreamer Android prebuilt (arm64)
+        id: gst
+        uses: actions/cache@v4
+        with:
+          path: ~/gst-android
+          key: gst-android-arm64-1.28.1
+      - name: Install GStreamer Android prebuilt (arm64)
+        if: steps.gst.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          url=https://gstreamer.freedesktop.org/data/pkg/android/1.28.1/gstreamer-1.0-android-universal-1.28.1.tar.xz
+          curl -fL --retry 3 -o "$RUNNER_TEMP/gst.tar.xz" "$url"
+          mkdir -p "$HOME/gst-android"
+          # Only arm64-v8a is built (cargo ndk -t arm64-v8a); skip the other three
+          # arches in the universal tarball (~4.5 GB). The tarball is flat
+          # (arm64/ armv7/ x86/ x86_64/ at the root).
+          tar -xf "$RUNNER_TEMP/gst.tar.xz" -C "$HOME/gst-android" arm64
+          rm -f "$RUNNER_TEMP/gst.tar.xz"
+          test -f "$HOME/gst-android/arm64/lib/libgmodule-2.0.a"
+
       - name: Build signed release APK
         working-directory: android
         env:
           RELEASE: "1"
+          # build-android.sh defaults GSTREAMER_ROOT_ANDROID to $HOME/gst-android,
+          # which is where the step above installs it ($HOME=/home/runner here).
           DEV_TRUST_ROOT: "0"
           DEV_AUTO_REGISTER: "0"
           # Serialize rustc: the runner has only ~7.7 GB RAM and chatter_ui_slint
@@ -127,12 +155,14 @@ jobs:
           CARGO_BUILD_JOBS: "1"
           # The repo's .cargo config sets RUSTC_WRAPPER=sccache; CI has no sccache.
           RUSTC_WRAPPER: ""
-          # Link-memory insurance on the 16 GB runner: the committed
-          # [profile.release] uses fat LTO (lto=true, codegen-units=1), which links
-          # the whole graph + libwebrtc.a in one LLVM process. Thin LTO partitions
-          # that and bounds peak memory. (The build FAILURE was cargo-ndk 3.x, fixed
-          # above; this is kept as headroom, not the fix.) Build-env override only —
-          # the committed profile is untouched, so local release builds keep fat LTO.
+          # Link-memory insurance: the runner has ~7.7 GB RAM and only ~1 GB stays
+          # free even with CARGO_BUILD_JOBS=1. The committed [profile.release] uses
+          # fat LTO (lto=true, codegen-units=1), which links the whole graph +
+          # libwebrtc.a in one LLVM process; thin LTO partitions that and bounds
+          # peak link memory on this tight runner. (NOT the fix for the red runs —
+          # that was the missing GStreamer-Android prebuilt, installed above; this
+          # is headroom only.) Build-env override only — the committed profile is
+          # untouched, so local release builds keep fat LTO.
           CARGO_PROFILE_RELEASE_LTO: "thin"
           # Surface the real linker error: rustc's "= note:" block (the lld stderr)
           # is one giant line that GitHub's log drops, so prior runs showed only
