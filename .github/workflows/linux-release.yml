@@ -1,0 +1,165 @@
+name: Linux Release
+
+# Builds the production x86_64 Linux system-runtime archive
+# (packaging/build-linux-release.sh) and attaches the .tar.gz + .sha256 to the
+# GitHub Release on a `vNN` tag. The archive is NOT an AppImage/Flatpak/.deb: it
+# ships the freshly built binary against the host's system GStreamer runtime
+# (see packaging/README.md). The build is "audited": packaging/check-release-inputs.sh
+# refuses dev/placeholder anchors, requires all five production pins + a public
+# HTTPS server URL, and rejects the committed development CA.
+#
+# Run from the Actions tab (Run workflow) with a versionCode/name, or push a tag
+# `vNN` (CODE=NN, NAME=0.1.(NN-1)) to attach the archive to that Release.
+#
+# Requires, in repo Settings → Variables (public pins, from
+# ~/.chatter-release/offai-anchors.env):
+#   CHATTER_SERVER_URL, CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX,
+#   CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX, CHATTER_KT_VRF_PUBLIC_KEY_HEX,
+#   CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX, CHATTER_TLS_ROOT_CA_PEM,
+#   CHATTER_NTFY_URL, CHATTER_ONION_ADDR
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_code:
+        description: "versionCode (integer, e.g. 32)"
+        required: true
+      version_name:
+        description: "versionName (e.g. 0.1.31)"
+        required: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # create the Release + attach the archive on a tag
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # The chatter_ui_slint rustc pass peaks ~13-15 GB; the runner has only
+      # ~7.7 GB RAM. Reclaim unused toolchains and add a large swap so a serial
+      # build (CARGO_BUILD_JOBS=1 below) fits. Mirrors android-release.yml.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/powershell /usr/share/swift || true
+          sudo docker image prune -a -f >/dev/null 2>&1 || true
+          df -h /
+      - name: Add swap
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /swapfile /mnt/swapfile
+          sudo fallocate -l 28G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
+      # Build: mold (the .cargo linker arg), clang (the configured linker +
+      # bindgen), GStreamer + GLib dev headers, dbus (mesh/BLE feature), GL/X11/
+      # Wayland + fontconfig (Slint/winit -sys crates), protoc.
+      # Runtime check (packaging/check-linux-runtime.sh runs inside the build
+      # script): GStreamer tools + base/good/bad/libav/gl plugins + an audio sink.
+      - name: Install build + runtime dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            mold clang libclang-dev pkg-config protobuf-compiler \
+            libglib2.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libdbus-1-dev libssl-dev \
+            libxkbcommon-dev libwayland-dev libxcb1-dev libxcb-render0-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev libfontconfig1-dev \
+            libgl1-mesa-dev libegl1-mesa-dev \
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-libav gstreamer1.0-gl \
+            gstreamer1.0-pulseaudio
+
+      - name: Rust toolchain (pinned by rust-toolchain.toml)
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+
+      - name: Build production Linux archive
+        env:
+          # Serialize rustc to fit the ~7.7 GB runner (+ 28 GB swap). Do NOT set
+          # RUSTFLAGS here: build-linux-release.sh refuses a custom RUSTFLAGS so
+          # it can pin the baseline x86-64 ISA + mold itself.
+          CARGO_BUILD_JOBS: "1"
+          RUSTC_WRAPPER: ""
+          # Public pinned anchors (audited by packaging/check-release-inputs.sh).
+          CHATTER_SERVER_URL: ${{ vars.CHATTER_SERVER_URL }}
+          CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX: ${{ vars.CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX }}
+          CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX: ${{ vars.CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX }}
+          CHATTER_KT_VRF_PUBLIC_KEY_HEX: ${{ vars.CHATTER_KT_VRF_PUBLIC_KEY_HEX }}
+          CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX: ${{ vars.CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX }}
+          CHATTER_TLS_ROOT_CA_PEM: ${{ vars.CHATTER_TLS_ROOT_CA_PEM }}
+          CHATTER_NTFY_URL: ${{ vars.CHATTER_NTFY_URL }}
+          CHATTER_ONION_ADDR: ${{ vars.CHATTER_ONION_ADDR }}
+          DEV_TRUST_ROOT: "0"
+          DEV_AUTO_REGISTER: "0"
+        run: |
+          set -euo pipefail
+          # Version from the dispatch inputs, or derived from a vNN tag.
+          code="${{ github.event.inputs.version_code }}"
+          name="${{ github.event.inputs.version_name }}"
+          if [ -z "$code" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            code="${GITHUB_REF_NAME#v}"
+            name="0.1.$((code-1))"
+          fi
+          export CHATTER_LINUX_VERSION_CODE="$code"
+          export CHATTER_LINUX_VERSION="$name"
+          echo "Building Linux archive: version=$name code=$code"
+          ( while true; do printf '%s ' "$(date +%H:%M:%S)"; \
+              free -m | awk '/Mem:/{printf "memUsed=%sMB memFree=%sMB ",$3,$4} /Swap:/{printf "swapUsed=%sMB\n",$3}'; \
+              sleep 10; done ) > "$RUNNER_TEMP/mem.log" 2>&1 &
+          MONPID=$!
+          set +e -o pipefail
+          ./packaging/build-linux-release.sh 2>&1 | tee "$RUNNER_TEMP/build.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          kill "$MONPID" 2>/dev/null || true
+          if [ "$rc" -ne 0 ]; then
+            echo "::group::failure diagnostics"
+            grep -inE 'error|undefined|cannot find|not found|FATAL|killed|no space|bad_alloc|collect2|ld\.lld|mold:' "$RUNNER_TEMP/build.log" | tail -80
+            echo "--- raw tail ---"; tail -40 "$RUNNER_TEMP/build.log"
+            echo "::endgroup::"
+            exit "$rc"
+          fi
+          # Expose the package paths for the upload steps.
+          pkg=$(ls target/linux-packages/*.tar.gz | head -1)
+          echo "LINUX_PKG=$pkg" >> "$GITHUB_ENV"
+          echo "LINUX_SHA=$pkg.sha256" >> "$GITHUB_ENV"
+          ls -lh target/linux-packages/
+
+      - name: Upload build + memory logs (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build-diagnostics
+          path: |
+            ${{ runner.temp }}/build.log
+            ${{ runner.temp }}/mem.log
+          if-no-files-found: warn
+
+      - name: Upload Linux archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatter-linux-x86_64
+          path: |
+            ${{ env.LINUX_PKG }}
+            ${{ env.LINUX_SHA }}
+          retention-days: 30
+
+      - name: Attach to GitHub Release (tag push only)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            ${{ env.LINUX_PKG }}
+            ${{ env.LINUX_SHA }}
