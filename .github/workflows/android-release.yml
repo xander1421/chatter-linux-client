@@ -57,7 +57,7 @@ jobs:
         run: |
           sudo swapoff -a || true
           sudo rm -f /swapfile /mnt/swapfile
-          sudo fallocate -l 14G /mnt/swapfile
+          sudo fallocate -l 28G /mnt/swapfile
           sudo chmod 600 /mnt/swapfile
           sudo mkswap /mnt/swapfile
           sudo swapon /mnt/swapfile
@@ -120,6 +120,13 @@ jobs:
           CARGO_BUILD_JOBS: "2"
           # The repo's .cargo config sets RUSTC_WRAPPER=sccache; CI has no sccache.
           RUSTC_WRAPPER: ""
+          # The committed [profile.release] uses fat LTO (lto=true) + codegen-units=1,
+          # which links the whole graph + libwebrtc.a in ONE LLVM process and peaks
+          # well past a 16 GB runner's RAM+swap (prior run OOM-died at the link step
+          # with LLVM's "out of memory" exit(1)). Thin LTO partitions the link and
+          # cuts peak memory several-fold. Build-env override only — the committed
+          # profile is untouched, so local release builds keep fat LTO.
+          CARGO_PROFILE_RELEASE_LTO: "thin"
           ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/28.2.13676358
           CHATTER_ANDROID_VERSION_CODE: ${{ github.event.inputs.version_code }}
           CHATTER_ANDROID_VERSION_NAME: ${{ github.event.inputs.version_name }}
