@@ -99,10 +99,14 @@ jobs:
             && test -d "$ANDROID_SDK_ROOT/platforms/android-34"
 
       - name: Decode signing keystore
+        env:
+          KS_B64: ${{ secrets.CHATTER_KEYSTORE_BASE64 }}
         run: |
           install -d "$RUNNER_TEMP/signing"
-          printf '%s' "${{ secrets.CHATTER_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/signing/chatter.keystore"
-          test -s "$RUNNER_TEMP/signing/chatter.keystore"
+          printf '%s' "$KS_B64" | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/signing/chatter.keystore"
+          sz=$(wc -c < "$RUNNER_TEMP/signing/chatter.keystore")
+          echo "keystore decoded: ${sz} bytes" >> "$GITHUB_STEP_SUMMARY"
+          test "$sz" -gt 1000
 
       - name: Build signed release APK
         working-directory: android
