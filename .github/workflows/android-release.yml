@@ -121,7 +121,10 @@ jobs:
           RELEASE: "1"
           DEV_TRUST_ROOT: "0"
           DEV_AUTO_REGISTER: "0"
-          CARGO_BUILD_JOBS: "2"
+          # Serialize rustc: the runner has only ~7.7 GB RAM and chatter_ui_slint
+          # alone peaks ~13-15 GB; two concurrent heavy passes OOM-kill the runner.
+          # One at a time fits (slowly) in RAM + 27 GB swap.
+          CARGO_BUILD_JOBS: "1"
           # The repo's .cargo config sets RUSTC_WRAPPER=sccache; CI has no sccache.
           RUSTC_WRAPPER: ""
           # Link-memory insurance on the 16 GB runner: the committed
@@ -169,12 +172,21 @@ jobs:
             export CHATTER_ANDROID_VERSION_CODE="$code"
             export CHATTER_ANDROID_VERSION_NAME="0.1.$((code-1))"
           fi
+          # Memory monitor: the runner has only ~7.7 GB RAM; the build is
+          # suspected to OOM at a high-memory rustc/link pass (which kills the
+          # runner and takes the in-step diagnostics with it). Sample memory to a
+          # file that the always()-upload step below preserves.
+          ( while true; do printf '%s ' "$(date +%H:%M:%S)"; \
+              free -m | awk '/Mem:/{printf "memUsed=%sMB memFree=%sMB ",$3,$4} /Swap:/{printf "swapUsed=%sMB\n",$3}'; \
+              sleep 10; done ) > "$RUNNER_TEMP/mem.log" 2>&1 &
+          MONPID=$!
           # NB: step shell is `bash -e`; a failing `| tee` pipeline would abort
           # here before the diagnostics run, so drop errexit around the capture.
           set +e -o pipefail
           ./build-android.sh 2>&1 | tee "$RUNNER_TEMP/build.log"
           rc=${PIPESTATUS[0]}
           set -e
+          kill "$MONPID" 2>/dev/null || true
           if [ "$rc" -ne 0 ]; then
             echo "::group::failure diagnostics (short lines survive GitHub log truncation)"
             grep -inE 'ld\.lld|lld:|rust-lld|undefined|out of memory|cannot (find|allocate)|killed|no space|bad_alloc|collect2|fatal|signal:|error:' "$RUNNER_TEMP/build.log" | tail -80
@@ -182,6 +194,16 @@ jobs:
             echo "::endgroup::"
             exit "$rc"
           fi
+
+      - name: Upload build + memory logs (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics
+          path: |
+            ${{ runner.temp }}/build.log
+            ${{ runner.temp }}/mem.log
+          if-no-files-found: warn
 
       - name: Verify signer certificate
         working-directory: android
