@@ -3,7 +3,11 @@ name: Windows Build
 on:
   workflow_dispatch:
   push:
-    branches: [master, main, refactor/dry-cleanup]
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # attach the Windows bundle to the Release on a tag
 
 env:
   CARGO_TERM_COLOR: always
@@ -40,22 +44,38 @@ jobs:
             throw "The Windows runner must provide LLVM/libclang for bindgen"
           }
 
-      # These are PUBLIC pins, but must match the target deployment. Never
-      # replace them with testing/dev features in an uploaded release artifact.
-      - name: Validate deployment trust anchors
+      # PUBLIC pins (repo Variables, same set as android/linux). Audited: reject
+      # the committed development keys and a non-HTTPS/empty server URL so a
+      # forgeable or misconfigured build can never be uploaded as a release.
+      - name: Validate deployment trust anchors (audited)
         shell: pwsh
         env:
-          CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX: ${{ secrets.CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX }}
-          CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX: ${{ secrets.CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX }}
-          CHATTER_KT_VRF_PUBLIC_KEY_HEX: ${{ secrets.CHATTER_KT_VRF_PUBLIC_KEY_HEX }}
-          CHATTER_TLS_ROOT_CA_PEM: ${{ secrets.CHATTER_TLS_ROOT_CA_PEM }}
+          CHATTER_SERVER_URL: ${{ vars.CHATTER_SERVER_URL }}
+          CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX: ${{ vars.CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX }}
+          CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX: ${{ vars.CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX }}
+          CHATTER_KT_VRF_PUBLIC_KEY_HEX: ${{ vars.CHATTER_KT_VRF_PUBLIC_KEY_HEX }}
+          CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX: ${{ vars.CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX }}
+          CHATTER_TLS_ROOT_CA_PEM: ${{ vars.CHATTER_TLS_ROOT_CA_PEM }}
         run: |
-          foreach ($name in @('CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX', 'CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX', 'CHATTER_KT_VRF_PUBLIC_KEY_HEX')) {
+          # Committed development public keys (scripts/anchors.sh DEV_*_HEX) —
+          # forgeable by anyone with the repo; must never ship. Mirrors
+          # packaging/check-release-inputs.sh.
+          $dev = @(
+            'ca49d96aa6417d724b4531dfc6cbdc8e291b5231caac088a3092de5120be6833',
+            '88ad412806054a7534e1b9deb42ef249bd7c92709f5bebf1d6be7b0e40926f72',
+            '48af975feaba33ea110d4ab0c8f7a38c5c7122db185ff9499b81e5e74da6ec47',
+            'ca2efc2c4186cdcdf29fabe4f33975dd4672bc2e09469a42595a864fca39795a'
+          )
+          foreach ($name in @('CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX','CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX','CHATTER_KT_VRF_PUBLIC_KEY_HEX','CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX')) {
             $value = [Environment]::GetEnvironmentVariable($name)
-            if ($value -cnotmatch '^[0-9a-fA-F]{64}$') { throw "Configure repository secret $name with the provisioned public key" }
+            if ($value -cnotmatch '^[0-9a-fA-F]{64}$') { throw "Set repository Variable $name to the provisioned 32-byte public pin" }
+            if ($dev -contains $value.ToLower()) { throw "$name is a committed development key — refusing to build a forgeable release" }
           }
           if ($env:CHATTER_TLS_ROOT_CA_PEM -notmatch '-----BEGIN CERTIFICATE-----') {
-            throw "Configure CHATTER_TLS_ROOT_CA_PEM with the provisioned CA PEM"
+            throw "Set repository Variable CHATTER_TLS_ROOT_CA_PEM to the provisioned CA PEM"
+          }
+          if ($env:CHATTER_SERVER_URL -notmatch '^https://[a-z0-9.-]+') {
+            throw "Set repository Variable CHATTER_SERVER_URL to the public HTTPS server origin"
           }
 
       - name: Rust cache
@@ -164,10 +184,14 @@ jobs:
       - name: Build release client (desktop and jarvis)
         env:
           RUSTC_WRAPPER: ""
-          CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX: ${{ secrets.CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX }}
-          CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX: ${{ secrets.CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX }}
-          CHATTER_KT_VRF_PUBLIC_KEY_HEX: ${{ secrets.CHATTER_KT_VRF_PUBLIC_KEY_HEX }}
-          CHATTER_TLS_ROOT_CA_PEM: ${{ secrets.CHATTER_TLS_ROOT_CA_PEM }}
+          CHATTER_SERVER_URL: ${{ vars.CHATTER_SERVER_URL }}
+          CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX: ${{ vars.CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX }}
+          CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX: ${{ vars.CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX }}
+          CHATTER_KT_VRF_PUBLIC_KEY_HEX: ${{ vars.CHATTER_KT_VRF_PUBLIC_KEY_HEX }}
+          CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX: ${{ vars.CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX }}
+          CHATTER_TLS_ROOT_CA_PEM: ${{ vars.CHATTER_TLS_ROOT_CA_PEM }}
+          CHATTER_NTFY_URL: ${{ vars.CHATTER_NTFY_URL }}
+          CHATTER_ONION_ADDR: ${{ vars.CHATTER_ONION_ADDR }}
           # Keep target CRT/linker settings from .cargo/config.toml.
         run: cargo build --locked --release -p chatter-ui --no-default-features --features desktop,jarvis
 
@@ -234,3 +258,18 @@ jobs:
           name: chatter-windows-x64
           path: artifact/
           retention-days: 30
+
+      - name: Zip bundle for the Release (tag push only)
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $zip = "chatter-windows-x64-$env:GITHUB_REF_NAME.zip"
+          Compress-Archive -Path artifact/* -DestinationPath $zip -Force
+          echo "WIN_ZIP=$zip" >> $env:GITHUB_ENV
+
+      - name: Attach to GitHub Release (tag push only)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: ${{ env.WIN_ZIP }}
