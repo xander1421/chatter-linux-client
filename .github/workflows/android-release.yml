@@ -73,11 +73,14 @@ jobs:
           packages: "platform-tools"
       - name: SDK packages (platforms 34 + 36, build-tools, NDK)
         run: |
-          sdkmanager \
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          yes | sdkmanager \
             "platforms;android-34" \
             "platforms;android-36" \
             "build-tools;34.0.0" \
             "ndk;28.2.13676358"
+          echo "--- installed SDK components ---"
+          ls -1 "$ANDROID_SDK_ROOT/platforms" "$ANDROID_SDK_ROOT/build-tools" "$ANDROID_SDK_ROOT/ndk"
 
       - name: Decode signing keystore
         run: |
