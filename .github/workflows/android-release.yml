@@ -139,6 +139,13 @@ jobs:
           # appends its own flags to ${RUSTFLAGS:-}, so these carry through.
           RUSTFLAGS: "-C link-arg=-v -C link-arg=-Wl,--threads=1"
           ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/28.2.13676358
+          # The runner image exports ANDROID_NDK_ROOT=.../ndk/27.3.x, but the
+          # "Free disk space" step rm's /usr/local/lib/android/sdk/ndk and we
+          # reinstall only 28.2 — leaving ANDROID_NDK_ROOT a dead path. cargo-ndk's
+          # final-link shim resolves the linker through ANDROID_NDK_ROOT, so a
+          # stale value means it execs a clang that no longer exists (exit 1, no
+          # stderr). Point both at the installed NDK.
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/28.2.13676358
           CHATTER_ANDROID_VERSION_CODE: ${{ github.event.inputs.version_code }}
           CHATTER_ANDROID_VERSION_NAME: ${{ github.event.inputs.version_name }}
           # Public pinned anchors.
@@ -162,8 +169,12 @@ jobs:
             export CHATTER_ANDROID_VERSION_CODE="$code"
             export CHATTER_ANDROID_VERSION_NAME="0.1.$((code-1))"
           fi
-          set -o pipefail
-          ./build-android.sh 2>&1 | tee "$RUNNER_TEMP/build.log"; rc=${PIPESTATUS[0]}
+          # NB: step shell is `bash -e`; a failing `| tee` pipeline would abort
+          # here before the diagnostics run, so drop errexit around the capture.
+          set +e -o pipefail
+          ./build-android.sh 2>&1 | tee "$RUNNER_TEMP/build.log"
+          rc=${PIPESTATUS[0]}
+          set -e
           if [ "$rc" -ne 0 ]; then
             echo "::group::failure diagnostics (short lines survive GitHub log truncation)"
             grep -inE 'ld\.lld|lld:|rust-lld|undefined|out of memory|cannot (find|allocate)|killed|no space|bad_alloc|collect2|fatal|signal:|error:' "$RUNNER_TEMP/build.log" | tail -80
