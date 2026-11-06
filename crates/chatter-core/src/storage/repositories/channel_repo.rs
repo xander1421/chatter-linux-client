@@ -39,6 +39,9 @@ const LISTED_CHANNEL_SELECT: &str = "SELECT c.id, c.channel_type, c.name, c.desc
         (SELECT COUNT(*) FROM memberships WHERE channel_id = c.id) as member_count
      FROM channels c";
 
+/// Type-only lookup; keep this SQL shared with its query-plan regression test.
+const CHANNEL_TYPE_SELECT: &str = "SELECT channel_type FROM channels WHERE id = ?1";
+
 impl ChannelRepository {
     /// Create a new ChannelRepository with the given database.
     pub fn new(db: Arc<Database>) -> Self {
@@ -113,6 +116,16 @@ impl ChannelRepository {
             ],
         )?;
         Ok(rows > 0)
+    }
+
+    /// Get only the stored kind without loading channel metadata or aggregates.
+    pub fn get_channel_type(&self, id: &ChannelId) -> Result<Option<ChannelType>, StorageError> {
+        let conn = self.db.connection()?;
+        Ok(conn
+            .query_row(CHANNEL_TYPE_SELECT, params![id.to_string()], |row| {
+                Ok(channel_type_from_i32(row.get(0)?))
+            })
+            .optional()?)
     }
 
     /// Get a channel by ID.
@@ -847,6 +860,182 @@ mod tests {
     use super::*;
     use crate::storage::Database;
     use tempfile::tempdir;
+
+    // Use the real schema and repository: the older hand-written fixture below
+    // intentionally omits columns needed by the full channel projection.
+    fn create_channel_type_repo() -> (ChannelRepository, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("types.db"), "test-passphrase").unwrap());
+        db.run_migrations().unwrap();
+        (ChannelRepository::new(db), dir)
+    }
+
+    #[test]
+    fn channel_type_lookup_matches_full_mapping_and_observes_updates() {
+        use crate::domain::message::ConversationType;
+        use crate::services::message::conversion::conversation_type_for_channel;
+
+        let (repo, _dir) = create_channel_type_repo();
+        let id = ChannelId::new();
+        assert_eq!(repo.get_channel_type(&id).unwrap(), None);
+        assert_eq!(
+            conversation_type_for_channel(&repo, &id),
+            ConversationType::Channel
+        );
+        let mut channel = make_channel(id);
+        repo.insert(&channel).unwrap();
+        for kind in [
+            ChannelType::Public,
+            ChannelType::Private,
+            ChannelType::SavedMessages,
+        ] {
+            for encrypted in [false, true] {
+                channel.channel_type = kind;
+                channel.config.require_encryption = encrypted;
+                repo.update(&channel).unwrap();
+                let full = repo.get(&id).unwrap().unwrap();
+                let narrow = repo.get_channel_type(&id).unwrap().unwrap();
+                let expected = match kind {
+                    ChannelType::SavedMessages => ConversationType::SavedMessages,
+                    _ => ConversationType::Channel,
+                };
+                assert_eq!(narrow, full.channel_type);
+                assert_eq!(full.conversation_type(), expected);
+                assert_eq!(narrow.conversation_type(), expected);
+                assert_eq!(conversation_type_for_channel(&repo, &id), expected);
+            }
+        }
+        // This includes the obsolete/unknown integer 2: retain the full-row
+        // decoder's Public fallback rather than inventing an AnonGroup kind.
+        for stored in [2, -1, 99] {
+            repo.db
+                .connection()
+                .unwrap()
+                .execute(
+                    "UPDATE channels SET channel_type = ?1 WHERE id = ?2",
+                    params![stored, id.to_string()],
+                )
+                .unwrap();
+            assert_eq!(
+                repo.get_channel_type(&id).unwrap(),
+                Some(ChannelType::Public)
+            );
+            assert_eq!(
+                repo.get(&id).unwrap().unwrap().channel_type,
+                ChannelType::Public
+            );
+            assert_eq!(
+                conversation_type_for_channel(&repo, &id),
+                ConversationType::Channel
+            );
+        }
+        repo.db
+            .connection()
+            .unwrap()
+            .execute(
+                "DELETE FROM channels WHERE id = ?1",
+                params![id.to_string()],
+            )
+            .unwrap();
+        assert_eq!(repo.get_channel_type(&id).unwrap(), None);
+        assert_eq!(
+            conversation_type_for_channel(&repo, &id),
+            ConversationType::Channel
+        );
+    }
+
+    #[test]
+    fn channel_type_lookup_errors_still_fall_back_in_message_conversion() {
+        use crate::domain::message::ConversationType;
+        use crate::services::message::conversion::conversation_type_for_channel;
+
+        let (repo, _dir) = create_channel_type_repo();
+        let channel = make_channel(ChannelId::new());
+        repo.insert(&channel).unwrap();
+        // SQLite permits a nonnumeric value in this INTEGER-affinity column.
+        repo.db
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE channels SET channel_type = 'invalid' WHERE id = ?1",
+                params![channel.id.to_string()],
+            )
+            .unwrap();
+        assert!(repo.get(&channel.id).is_err());
+        assert!(repo.get_channel_type(&channel.id).is_err());
+        assert_eq!(
+            conversation_type_for_channel(&repo, &channel.id),
+            ConversationType::Channel
+        );
+        repo.db
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TABLE channels")
+            .unwrap();
+        assert!(repo.get_channel_type(&channel.id).is_err());
+        assert_eq!(
+            conversation_type_for_channel(&repo, &channel.id),
+            ConversationType::Channel
+        );
+    }
+
+    #[test]
+    fn channel_type_lookup_does_not_parse_irrelevant_metadata() {
+        use crate::domain::message::ConversationType;
+        use crate::services::message::conversion::conversation_type_for_channel;
+
+        let (repo, _dir) = create_channel_type_repo();
+        let mut channel = make_channel(ChannelId::new());
+        channel.channel_type = ChannelType::SavedMessages;
+        repo.insert(&channel).unwrap();
+        repo.db
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE channels SET owner_id = 'invalid-uuid' WHERE id = ?1",
+                params![channel.id.to_string()],
+            )
+            .unwrap();
+        assert!(repo.get(&channel.id).is_err());
+        assert_eq!(
+            repo.get_channel_type(&channel.id).unwrap(),
+            Some(ChannelType::SavedMessages)
+        );
+        assert_eq!(
+            conversation_type_for_channel(&repo, &channel.id),
+            ConversationType::SavedMessages
+        );
+    }
+
+    #[test]
+    fn channel_type_lookup_query_plan_is_an_indexed_channel_search_only() {
+        let (repo, _dir) = create_channel_type_repo();
+        let channel = make_channel(ChannelId::new());
+        repo.insert(&channel).unwrap();
+        let conn = repo.db.connection().unwrap();
+        let mut stmt = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {CHANNEL_TYPE_SELECT}"))
+            .unwrap();
+        let details: Vec<String> = stmt
+            .query_map(params![channel.id.to_string()], |row| row.get(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(details.len(), 1, "{details:?}");
+        let detail = details[0].to_ascii_uppercase();
+        assert!(
+            detail.contains("SEARCH CHANNELS")
+                && detail.contains("USING INDEX")
+                && detail.contains("ID=?"),
+            "{details:?}"
+        );
+        assert!(
+            !detail.contains("SCAN")
+                && !detail.contains("MESSAGES")
+                && !detail.contains("MEMBERSHIPS"),
+            "{details:?}"
+        );
+    }
 
     fn create_test_repo() -> (ChannelRepository, tempfile::TempDir) {
         let temp_dir = tempdir().expect("Failed to create temp directory");

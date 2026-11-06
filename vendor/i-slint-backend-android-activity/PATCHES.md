@@ -1,6 +1,7 @@
-# Chatter patches to i-slint-backend-android-activity 1.17.1
+# Chatter patches to i-slint-backend-android-activity 1.18.1
 
-Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
+Based on the exact public 1.18.1 crate, upgraded by three-way merging the
+1.17.1 fork. Keep upstream licensing files.
 
 - `accessibility.rs`, `androidwindowadapter.rs`, `javahelper.rs`, and
   `java/SlintAndroidJavaHelper.java`: a first Android virtual-view bridge for
@@ -103,23 +104,27 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
   unowned; after re-Enable it cannot identify an old report. A backend-local
   generation cannot label that inbound report, so delayed post-refocus reports
   are still unproven and no cross-field/password isolation claim is made.
-- `lib.rs` `run_event_loop`: frame pacing. Upstream capped the poll timeout at a
-  hardcoded 10 ms while animations run (its own FIXME), so a fling ticked at
-  ~100 fps whatever the panel's rate. Now, while animating with a native window,
-  the timeout is 0 and a redraw is forced every iteration; the vsync'd
-  `eglSwapBuffers` (`opengl_surface.rs`, `SwapInterval::Wait(1)`) blocks and
-  paces the loop at the display's refresh rate. Without a native window there
-  is no swap to block on, so the timeout falls back to 16 ms. Under that pacing
-  sits a frame floor: an iteration that renders takes at least half a vsync of
-  the panel's top rate (4 ms until known), twice that if `do_render` presented
-  nothing (it now returns whether the `DrawOutcome` was `Success`), so a swap
-  that does not block can never tight-spin.
+- `lib.rs` `set_frame_presented_callback` / `androidwindowadapter.rs`
+  `do_render`: an observational callback runs only after successful rendering
+  and surface submission, without registering a raw-GL Skia rendering notifier.
+  Chatter uses it for first-frame launch-cover removal and recurring conversation
+  frame timing/tasks. The launch-cover JNI call remains one-shot; missing surfaces,
+  skipped frames and render failures leave it pending, and surface recreation
+  retains the observer. Re-registering replaces the observer (for example when
+  moving from a startup error window into the app). The callback observes
+  submission, not display scanout; Kotlin's launch-cover timeout remains intact.
+  This avoids the notifier's extra pre-render flush and its unconditional
+  disabling of partial rendering, without changing real raw-GL notifier behavior.
+- `lib.rs` `run_event_loop` / `vsync.rs`: backport of Slint 1.18.1's
+  dedicated native Choreographer wakeup driver (upstream PR #12702, commit
+  `1cd1059c6b8a54fb66e33bc3166420b7e247eb6c`). It replaces normal frame-floor
+  scheduling; see the native review and device validation entry below.
 - `lib.rs` `with_refresh_rate_vote` / `androidwindowadapter.rs` `last_motion`:
   the app votes the panel's top rate only while the UI moves. The loop calls
   the vote with `true` when an animation runs or a touch moves, and `false`
   after 400 ms of neither (it wakes itself for that), on transitions only.
   chatter-ui wires it to `MainActivity.setUiMoving`, which sets/clears
-  `Surface.setFrameRate` and returns the panel's top rate for the floor.
+  `Surface.setFrameRate`; native callbacks follow the actual display rate.
 
 On upgrade, re-apply all of these and recheck a fling's frame times on a 120 Hz device
 (`adb shell dumpsys SurfaceFlinger --latency '<SurfaceView layer>'`; the frames
@@ -284,3 +289,152 @@ are GL on a SurfaceView, so `dumpsys gfxinfo` does not see them).
   included directly by the host UI wiring tests. The existing consume, push,
   acknowledgement, restore and field-retirement transitions are unchanged;
   failure/retry recovery can be injected on the host without an Android window.
+
+
+- Earlier S9 wakeable frame-floor baseline (2026-11-03), superseded by the
+  native vsync backport below, `lib.rs` `run_event_loop`:
+  replace post-render `thread::sleep` with a monotonic next-render deadline in
+  the Android poll timeout. Input/lifecycle wakes dispatch immediately while
+  rendering alone waits; pending redraw is consumed only when rendering.
+  Keep the existing render-start floor (4 ms until the refresh vote supplies
+  half a vsync, doubled for skipped frames); elapsed render/swap time counts
+  toward it. Animation polling honors the same deadline instead of forcing a
+  zero timeout, and positive render waits round up to Android's millisecond
+  poll resolution to avoid a sub-millisecond busy loop. The initial frame has
+  no deadline, InitWindow clears a predecessor surface's deadline, and
+  synchronous RedrawNeeded still renders immediately. Existing observer and
+  refresh-rate voting behavior remain intact; this does not remove blocking
+  inside rendering/swap or establish a buffer queue depth limit.
+  Static-name, allocation-free libandroid ATrace RAII scopes cover poll
+  (including its wait and callbacks), InputAvailable dispatch, ordinary
+  render/submission, and synchronous redraw dispatch. They check
+  ATrace_isEnabled and require Android API 23+ (Chatter minSdk is 26); no
+  new dependency or required API 29 symbol is used. Optional motion-age
+  counters resolve API 29 `ATrace_setCounter` dynamically; API 26–28 retain
+  timing scopes. Native Down/Move/Up dispatch age uses source event timestamps
+  and CLOCK_MONOTONIC, without changing the input or animation clocks or
+  recording coordinates or message data. Frame observers are
+  included in render scopes, so these durations are not GPU completion or
+  physical scanout timestamps.
+
+- Native vsync backport (2026-11-03): `vsync.rs` retains upstream licensing and
+  the released 1.18.1 helper implementation, adding only fixed-name ATrace
+  wait/wake scopes. Slint UI/rendering stays on android_main; the helper owns
+  its own looper and only wakes that thread. No frame-permit gate is added.
+  The loop retains Chatter's first-terminal-outcome handling, final animation
+  invalidation, synchronous redraw, surface guards and successful-submission
+  observer. Failed submission alone retains a 16 ms retry backoff. Normal
+  pending redraws are immediate; native vsync drives animations with upstream's
+  10 ms startup/unavailable fallback. `tests/native-vsync` exercises the real
+  S9 native helper with a recording waker; full client timing remains a separate
+  check. Review: `docs/audit/reports/slint-android-native-review-2026-11-03.md` in
+  the superproject. No content/pixel cache or Swappy dependency is introduced.
+
+
+## 1.18.1 upgrade (2026-11-04)
+
+- Resolved 20 three-way conflict blocks across `lib.rs`,
+  `androidwindowadapter.rs`, `javahelper.rs`, and the Java helper. The local
+  accessibility/modal fence, clipboard coercion and fixed-message failure log,
+  IME ownership/generations/consume/restore/publication retry, UTF-16 boundaries,
+  selection menu, inset lifecycle and queued-inset fence remain in place.
+- `AndroidPlatform` now retains upstream's weak `SlintContext` binding and
+  upgrades that owning context for the event loop's timer queries and updates.
+  Chatter's first-terminal-outcome rule still notifies the lifecycle listener
+  for every poll event, including Pause (the app's image-cache purge and draft
+  checkpoint live in that listener).
+- Upstream made `WindowInner::process_key_input` and `process_touch_input`
+  crate-private. All native, synthetic-modifier and composition input now uses
+  `WindowEvent` dispatch; native key acceptance uses
+  `Result<WindowEventDispatchResult, PlatformError>`. One-shot modifier
+  bracketing/restoration, held-key cleanup on LostFocus, and IME action Return
+  pairs remain. Inset resize dispatch uses the same new result API.
+- Visual hit testing now returns `(byte_offset, affinity)`. The local long-press
+  word-selection path preserves that affinity with
+  `set_cursor_position_with_affinity`, as upstream does for dragged handles.
+  Programmatic restore-to-end still uses the ordinary cursor setter.
+- Native vsync and immediate pending-redraw wakeup are now upstream features.
+  `vsync.rs` is identical to the pre-upgrade backport, with only Chatter's
+  fixed-name ATrace wait/wake scopes relative to public 1.18.1. Local surface
+  guards, final-animation invalidation, synchronous redraw, retry-only 16 ms
+  backoff, millisecond ceiling, 400 ms refresh vote, and successful-submission
+  observer remain. No frame permit, raw-GL notifier, or content cache was added.
+- Kept upstream's native IME hint flags, incremental Editable/selection updates,
+  clip-edge handle correction, API 34+ Back callback/fallback, and unconsumed
+  system-bar/display-cutout safe-area handling. These coexist with the local
+  InsetsRecovery lifecycle/sequence fence and native preedit selection fix.
+- Renderer construction follows upstream's extra `set_window_handle(..., false)`
+  argument and `unstable-wgpu-29` / `unstable-wgpu-30` features (28 was removed).
+  Existing Chatter Android platform/bridge/observer entry points are unchanged.
+- Host seams were adapted to routed key results, virtual-keyboard clearing on
+  Disable, and the app connection's existing privacy/IME-hide state. Verified:
+  offset tests (8), native key tests (5) plus Java clipboard checks, picker
+  lifecycle tests (2), InsetsRecovery, SAF copy retention and selection restart.
+  The complete Java helper compiles against Android API 36 with Java 8 source
+  and target. Rust modules parse with rustfmt. Integration Rust/Android builds,
+  real IME/accessibility/Back behavior and display timing remain coordinator
+  checks; host seams do not certify OEM behavior.
+
+1.18.1 integration: the native accessibility adapter uses Flickable content_*
+geometry accessors (the old viewport aliases no longer exist in Rust), retaining
+the same negative scroll-offset convention. Its direct vtable dependency matches
+core at 0.5 to keep ItemTree pointer identities type-compatible.
+
+## Rejected UI frame-gate cleanup (2026-11-04)
+
+Repeated S9 controls did not establish a latency/cadence benefit from the UI
+Choreographer permit experiment. Its callback/token machinery and default-off
+per-frame gate checks are removed. The native VsyncDriver, idle behavior,
+10ms unavailable-helper fallback,16ms failed-render retry, rounded timer tails,
+first terminal outcome, synchronous RedrawNeeded, final animation invalidation,
+refresh voting and callback redraw ownership remain. Native input event-time
+and compact tracing diagnostics are retained. The actual package debug/API
+predicate reused by the separate prefix diagnostic is neutrally named
+`debug_trace_supported`; its eligibility semantics are unchanged.
+
+TerminateWindow synchronously suspends the renderer while the native window
+is still valid. Three real-renderer host tests and three S9 Home/return cycles
+passed before this cleanup; final Android integration validates the combined
+change. No graphics quality, resolution or content-cache policy is changed.
+
+## Rotation relayout: one rotation must fully relayout and repaint (2026-11-05)
+
+Landscape->portrait (or back) left the UI squished into one corner with the
+rest black until a SECOND rotation; the first config change did not take. The
+app handles `configChanges` (manifest) so the activity is not recreated: a
+rotation arrives as `ConfigChanged` then `WindowResized`/`ContentRectChanged`,
+with no `InitWindow`, so the EGL surface is never recreated. Traced on an S9
+(logcat tag rotate_dbg), the real sequence landscape(2960x1440)->portrait was:
+
+  ConfigChanged native_window=2960x1440   # STILL the old size here; density
+                                          # unchanged, so the scale-gated branch
+                                          # is a no-op and dispatches no Resized.
+  WindowResized native_window=1440x2960   # the new size finally arrives
+  resize() -> dispatch WindowEvent::Resized(1440x2960)
+  do_render requested=1440x2960 skia_target=2960x1440 egl_surface=2960x1440  # BUG
+  ... next frame: egl_surface=1440x2960 (correct)
+
+Two root causes, both confirmed by the trace:
+
+1. `WindowEvent::Resized` (i-slint-core api.rs) relayouts AND calls
+   `renderer().resize()` (which on Android is `ANativeWindow_setBuffersGeometry`
+   via glutin), but the ANativeWindow back buffer only takes the new geometry on
+   the NEXT swap. The immediate frame draws the new-size scene into the still-old
+   EGL buffer -> squished-into-a-corner, rest black. On a screen that keeps
+   animating, continuous redraws self-heal within one frame; on a STATIC screen
+   that stale frame is the last one drawn and persists until the next event (the
+   second rotation). Fix: `i-slint-renderer-skia/opengl_surface.rs::render`
+   reports `DrawOutcome::Skipped` (Android only) when the live EGL surface size
+   (eglQuerySurface) does not yet equal the requested size, so the event loop's
+   existing not-presented path re-arms one more redraw. The follow-up frame draws
+   into the now-correct buffer. Steady state (sizes equal) is unaffected.
+
+2. `AndroidWindowAdapter::resize` dispatched `Resized` but never set
+   `pending_redraw`, so on a static screen no frame was scheduled after the
+   rotation at all. Fix: `resize()` sets `pending_redraw = true`.
+
+`ConfigChanged` is deliberately left gated on scale_factor: at ConfigChanged
+time `native_window` still reports the OLD geometry (see trace), so dispatching
+Resized there would carry the stale size. `WindowResized` carries the real new
+size and drives `resize()`; that is the correct trigger. The native-pacing loop,
+vsync gate and swap-interval handling are untouched.

@@ -14,6 +14,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
+import android.os.Trace
 import android.media.projection.MediaProjectionManager
 import android.provider.OpenableColumns
 import android.provider.Settings
@@ -22,6 +24,7 @@ import android.util.Log
 import android.widget.Toast
 import android.view.ActionMode
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.View
@@ -156,6 +159,22 @@ class MainActivity : GameActivity() {
     }
 
 
+    // Friend-code "Share my code": hand the code to the OS share sheet so it
+    // can go into any app. Plain text only; the code is not a secret.
+    fun shareText(value: String) {
+        runOnUiThread {
+            try {
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, value)
+                }
+                startActivity(Intent.createChooser(send, null))
+            } catch (_: Exception) {
+                android.widget.Toast.makeText(this, "Nothing to share to", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     // Called only after an explicit tap; duplicate validation at the native edge.
     fun openWebLink(value: String) {
         runOnUiThread {
@@ -191,7 +210,13 @@ class MainActivity : GameActivity() {
     }
     private external fun nativeReleasePendingVideo(token: Long)
 
+    // Explicit debug-launch experiment; never enabled by a production Intent.
+    private var diagnosticUnbufferedTouch = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        diagnosticUnbufferedTouch =
+            (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0 &&
+            intent.getBooleanExtra("chatter_unbuffered_touch", false)
         // Samsung may prelaunch this Activity before BOOT_COMPLETED without
         // creating a usable window. Preserve the durable account marker until
         // Rust restores the session; the default Kotlin false is not sign-out.
@@ -264,6 +289,9 @@ class MainActivity : GameActivity() {
             if (cancelledPick != 0L) nativeOnFilesPicked(cancelledPick, emptyArray())
         }
         pickerCopies.shutdown()
+        // A capture abandoned by Activity teardown leaves only a purgeable cache
+        // temp; drop it eagerly rather than wait for the OS to clear the cache.
+        clearPendingCapture()
         torNetworkCallback?.let { callback ->
             val connectivity = getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
                 as ConnectivityManager
@@ -462,11 +490,42 @@ class MainActivity : GameActivity() {
                 }
                 else -> {
                     if (intent.getBooleanExtra("auto_accept", false)) return
+                    // A full-screen-intent launch happens while the device is
+                    // locked/dozing (the server call wake). The notification posts
+                    // with sound, but without these the Activity never turns the
+                    // screen on or shows over the keyguard, so the callee "sees
+                    // nothing" on a locked phone (owner 2026-11-06).
+                    if (action == "com.chatter.client.CALL_FULL_SCREEN") {
+                        wakeScreenForIncomingCall()
+                    }
                     nativeShowIncomingCall(callId, action, capability)
                 }
             }
         } catch (_: RuntimeException) {
             // Malformed public extras are neither consent nor a reason to crash.
+        }
+    }
+
+    // Wake the screen and show the incoming-call UI over the keyguard. Pairs
+    // with the call notification's full-screen intent; the ring UI itself owns
+    // dismissal, so these are not cleared here (a declined/ended call closes it).
+    private fun wakeScreenForIncomingCall() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(true)
+                setTurnScreenOn(true)
+                getSystemService(KeyguardManager::class.java)
+                    ?.requestDismissKeyguard(this, null)
+            } else {
+                @Suppress("DEPRECATION")
+                window.addFlags(
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                        or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                        or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                )
+            }
+        } catch (_: RuntimeException) {
+            // A window/keyguard call failing is never a reason to drop the call.
         }
     }
 
@@ -569,6 +628,37 @@ class MainActivity : GameActivity() {
 
     /** Route Back through the window's navigation callback, independent of Slint focus. */
     private external fun nativeBackPressed()
+
+    override fun processMotionEvent(event: MotionEvent): Boolean {
+        val requestUnbuffered = diagnosticUnbufferedTouch && event.actionMasked == MotionEvent.ACTION_DOWN &&
+            event.isFromSource(android.view.InputDevice.SOURCE_TOUCHSCREEN)
+        if (requestUnbuffered) {
+            mSurfaceView.requestUnbufferedDispatch(event)
+        }
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            Trace.isEnabled() && (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            Trace.setCounter("Chatter Java unbuffered issued", if (requestUnbuffered) 1L else 0L)
+        }
+        return super.processMotionEvent(event)
+    }
+
+    // Numeric, debuggable-only input-boundary diagnostics. Keep normal event
+    // delivery unchanged; do not log positions, pointer data or content.
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        val tracing = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && Trace.isEnabled() &&
+            (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (!tracing) return super.dispatchTouchEvent(event)
+        Trace.beginSection("Chatter Java touch dispatch")
+        try {
+            Trace.setCounter("Chatter Java unbuffered requested", if (diagnosticUnbufferedTouch) 1L else 0L)
+            Trace.setCounter("Chatter Java touch action", event.actionMasked.toLong())
+            Trace.setCounter("Chatter Java touch event ms", event.eventTime)
+            Trace.setCounter("Chatter Java touch age ms", SystemClock.uptimeMillis() - event.eventTime)
+            return super.dispatchTouchEvent(event)
+        } finally {
+            Trace.endSection()
+        }
+    }
 
     // GameActivity normally forwards key events to Slint. A focused item can
     // disappear or clear focus before the next Back, leaving no FocusScope to
@@ -821,37 +911,45 @@ class MainActivity : GameActivity() {
     @Volatile private var pickerDestroyed = false
     private val openDocuments =
         registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-            val request = filePickerRequest.get()
-            if (request == 0L || pickerDestroyed) return@registerForActivityResult
-            // Preserve selection order and one-copy-at-a-time IO off the main
-            // loop. No bitmap/full-file byte arrays are allocated here.
-            pickerCopies.execute {
-                val paths = uris.mapNotNull { uri ->
-                    if (pickerDestroyed || filePickerRequest.get() != request) null else copyToCache(uri)
-                }
-                val delivered = synchronized(filePickerRequest) {
-                    if (pickerDestroyed || filePickerRequest.get() != request) false else {
-                        filePickerRequest.set(0)
-                        nativeOnFilesPicked(request, paths.toTypedArray())
-                    }
-                }
-                if (!delivered) {
-                    // Receiver cancelled/replaced or Activity was destroyed.
-                    paths.forEach { path ->
-                        val file = File(path)
-                        file.delete()
-                        file.parentFile?.delete()
-                    }
-                } else if (paths.size < uris.size) {
-                    val failed = uris.size - paths.size
-                    runOnUiThread {
-                        if (!pickerDestroyed) Toast.makeText(
-                            this,
-                            if (failed == 1) "Couldn't read that file" else "Couldn't read $failed files",
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                    }
-                }
+            deliverPickedUris(uris)
+        }
+
+    // Android Photo Picker (androidx): images + videos, multi-select, needs NO
+    // storage permission. On devices without the system picker androidx falls
+    // back to the document picker automatically. Results go through the same
+    // request-tagged nativeOnFilesPicked path as SAF.
+    private val pickVisualMedia =
+        registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
+            deliverPickedUris(uris)
+        }
+
+    // In-app camera capture. The system camera writes into an app-private temp
+    // file we expose per-URI through the existing FileProvider; CAMERA is
+    // requested at use. TakePicture/CaptureVideo only return success, so the
+    // output file is the result. The grant flags are added because the base
+    // contracts do not set them and some camera apps need write access.
+    @Volatile private var pendingCaptureFile: File? = null
+    private var pendingCaptureVideo = false
+    private val takePhoto =
+        registerForActivityResult(object : ActivityResultContracts.TakePicture() {
+            override fun createIntent(context: android.content.Context, input: Uri): Intent =
+                super.createIntent(context, input)
+                    .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }) { ok -> deliverCapture(ok) }
+    private val captureVideo =
+        registerForActivityResult(object : ActivityResultContracts.CaptureVideo() {
+            override fun createIntent(context: android.content.Context, input: Uri): Intent =
+                super.createIntent(context, input)
+                    .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }) { ok -> deliverCapture(ok) }
+    private val cameraCapturePermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                launchPendingCapture()
+            } else {
+                clearPendingCapture()
+                failPendingPick()
+                Toast.makeText(this, "Camera permission is needed to capture", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -925,6 +1023,153 @@ class MainActivity : GameActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Called from Rust (JNI) to open the Telegram-style attachment source
+     * chooser. Each source (gallery photo picker, document picker, in-app
+     * camera photo/video) resolves back through [nativeOnFilesPicked], so Rust
+     * stages whatever is returned exactly as it does a plain file pick. Cancel —
+     * of the chooser or of the chosen source — delivers an empty array so the
+     * waiting Rust future completes.
+     */
+    @Suppress("unused")
+    // The source was already chosen in the app's own themed sheet
+    // (ui/chat/attach_sheet.slint), so this launches it directly — no Android
+    // dialog. source: 0 gallery (photo/video), 1 file (SAF), 2 camera photo,
+    // 3 camera video. Results arrive through the same deliver* callbacks, which
+    // release the request slot acquired here.
+    fun launchAttachmentSource(request: Long, source: Int) {
+        runOnUiThread {
+            if (pickerDestroyed || !filePickerRequest.compareAndSet(0, request)) {
+                nativeOnFilesPicked(request, emptyArray())
+                return@runOnUiThread
+            }
+            try {
+                when (source) {
+                    0 -> pickVisualMedia.launch(
+                        androidx.activity.result.PickVisualMediaRequest(
+                            ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                    1 -> openDocuments.launch(arrayOf("*/*"))
+                    2 -> beginCapture(video = false)
+                    else -> beginCapture(video = true)
+                }
+            } catch (_: Exception) {
+                Log.e(TAG, "Attachment source launch failed")
+                failPendingPick()
+            }
+        }
+    }
+
+    /** Release the in-flight request and tell Rust nothing was picked. */
+    private fun failPendingPick() {
+        val request = filePickerRequest.getAndSet(0)
+        if (request != 0L) nativeOnFilesPicked(request, emptyArray())
+    }
+
+    /**
+     * Copy picked content:// URIs (SAF or Photo Picker) into the cache dir and
+     * hand the resulting filesystem paths to Rust, threading the in-flight
+     * request id so a replaced/cancelled pick can't deliver to the wrong one.
+     * Mirrors the SAF OpenMultipleDocuments handler.
+     */
+    private fun deliverPickedUris(uris: List<Uri>) {
+        val request = filePickerRequest.get()
+        if (request == 0L || pickerDestroyed) return
+        // Preserve selection order and one-copy-at-a-time IO off the main loop.
+        pickerCopies.execute {
+            val paths = uris.mapNotNull { uri ->
+                if (pickerDestroyed || filePickerRequest.get() != request) null else copyToCache(uri)
+            }
+            val delivered = synchronized(filePickerRequest) {
+                if (pickerDestroyed || filePickerRequest.get() != request) false else {
+                    filePickerRequest.set(0)
+                    nativeOnFilesPicked(request, paths.toTypedArray())
+                }
+            }
+            if (!delivered) {
+                // Receiver cancelled/replaced or Activity was destroyed.
+                paths.forEach { path ->
+                    val file = File(path)
+                    file.delete()
+                    file.parentFile?.delete()
+                }
+            } else if (paths.size < uris.size) {
+                val failed = uris.size - paths.size
+                runOnUiThread {
+                    if (!pickerDestroyed) Toast.makeText(
+                        this,
+                        if (failed == 1) "Couldn't read that file" else "Couldn't read $failed files",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        }
+    }
+
+    private fun beginCapture(video: Boolean) {
+        pendingCaptureVideo = video
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA)
+            == PackageManager.PERMISSION_GRANTED) {
+            launchPendingCapture()
+        } else {
+            cameraCapturePermission.launch(android.Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun launchPendingCapture() {
+        try {
+            // Lay the capture file out exactly like copyToCache (a per-selection
+            // dir under cacheDir/picked), so Rust's staging and its cleanup
+            // (remove file + parent dir) apply unchanged whether the bytes came
+            // from SAF, the Photo Picker or the camera.
+            val dir = File(cacheDir, "picked").apply { mkdirs() }
+            val selectionDir = Files.createTempDirectory(dir.toPath(), "capture_").toFile()
+            val name = (if (pendingCaptureVideo) "video_" else "photo_") +
+                System.currentTimeMillis() + (if (pendingCaptureVideo) ".mp4" else ".jpg")
+            val file = File(selectionDir, name)
+            file.createNewFile()
+            pendingCaptureFile = file
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this, "$packageName.viewer-media", file)
+            if (pendingCaptureVideo) captureVideo.launch(uri) else takePhoto.launch(uri)
+        } catch (_: Exception) {
+            Log.e(TAG, "Camera capture launch failed")
+            clearPendingCapture()
+            failPendingPick()
+        }
+    }
+
+    private fun deliverCapture(success: Boolean) {
+        val file = pendingCaptureFile
+        pendingCaptureFile = null
+        val request = filePickerRequest.get()
+        if (request == 0L || pickerDestroyed) {
+            file?.let { it.delete(); it.parentFile?.delete() }
+            return
+        }
+        val paths = if (success && file != null && file.exists() && file.length() > 0L) {
+            arrayOf(file.absolutePath)
+        } else {
+            file?.let { it.delete(); it.parentFile?.delete() }
+            emptyArray()
+        }
+        val delivered = synchronized(filePickerRequest) {
+            if (pickerDestroyed || filePickerRequest.get() != request) false else {
+                filePickerRequest.set(0)
+                nativeOnFilesPicked(request, paths)
+            }
+        }
+        if (!delivered && paths.isNotEmpty()) {
+            val f = File(paths[0])
+            f.delete()
+            f.parentFile?.delete()
+        }
+    }
+
+    private fun clearPendingCapture() {
+        pendingCaptureFile?.let { it.delete(); it.parentFile?.delete() }
+        pendingCaptureFile = null
     }
 
     private fun copyToCache(uri: Uri): String? {

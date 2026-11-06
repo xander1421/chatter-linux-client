@@ -14,8 +14,8 @@ import { FriendsTab } from "friends_friends_tab.slint";
 import { FindTab } from "friends_find_tab.slint";
 import { RequestsTab } from "friends_requests_tab.slint";
 import { BlockedTab } from "friends_blocked_tab.slint";
-import { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } from "friends_data.slint";
-export { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } from "friends_data.slint";
+import { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData, UserSearchData } from "friends_data.slint";
+export { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData, UserSearchData } from "friends_data.slint";
 
 export component FriendsModal inherits Rectangle {
     // A tab chosen by click or by a screen reader. Requests opens on the
@@ -48,7 +48,10 @@ export component FriendsModal inherits Rectangle {
     property <length> row-avatar: root.mobile-mode ? Spacing.row-avatar-touch : 40px;
     property <length> row-name-size: root.mobile-mode ? Typography.base : Typography.sm;
     property <length> row-sub-size: root.mobile-mode ? Typography.sm : Typography.xs;
-    in-out property <string> active-tab: "find";  // "find", "friends", "requests", "blocked"
+    in-out property <string> active-tab: "friends";  // "friends", "requests", "blocked"
+    // Add-friend (QR/code) is a sheet over the tabs, opened by the + FAB —
+    // not a top-level tab.
+    in-out property <bool> showing-add: false;
 
     // Friends tab data
     in property <[FriendData]> friends: [];
@@ -81,6 +84,11 @@ export component FriendsModal inherits Rectangle {
     in-out property <string> request-note: "";  // Optional intro note sent with a friend request
     in-out property <image> qr-code-image;
     in-out property <bool> show-qr: false;
+    // Username-first add (exact @handle). Owned here, searched/shaped in core.
+    in-out property <string> search-query: "";
+    in property <bool> search-active: false;
+    in property <bool> search-performed: false;
+    in property <UserSearchData> search-result;
     // Shield decides which code this account generates. Redeeming a code is
     // routed by its format in core; private codes work with Shield off too.
     property <bool> effective-private-mode: AnonMode.enabled;
@@ -93,9 +101,12 @@ export component FriendsModal inherits Rectangle {
     callback generate-code(bool);  // bool = private mode
     callback generate-qr(bool);    // bool = private mode
     callback copy-code();
+    callback share-code();
     callback paste-code();                   // System clipboard → code-input
     callback scan-code();                    // Camera QR → code-input
     callback connect-via-code(string);       // Core routes private and server-managed codes
+    callback search-changed(string);         // query → core search_users
+    callback add-searched-friend(string);    // user_id → send request / secret chat
     callback switch-tab(string);
 
     // Friends actions
@@ -132,19 +143,22 @@ export component FriendsModal inherits Rectangle {
     Modal {
         floating-content: root.mobile-mode;
         show: root.show-modal;
-        title: "Contacts";
+        title: root.showing-add ? "Add a friend" : "Contacts";
         modal-width: 680px;
         max-modal-height: max(240px, root.height - 96px);
         // On a phone this is the Contacts screen, not a dialog over the chat
         // list — the bottom tab bar navigates to it the same way Telegram's
         // does, so it gets the whole viewport.
         full-screen: root.mobile-mode;
-        root-screen: root.root-screen;
+        // In the Add sheet the modal shows its back chevron (not a root screen)
+        // so Back / swipe returns to the Friends list instead of exiting.
+        root-screen: root.root-screen && !root.showing-add;
         bottom-inset: root.bottom-inset;
         fill-height: root.mobile-mode;
 
         close => {
-            root.close();
+            if (root.showing-add) { root.showing-add = false; }
+            else { root.close(); }
         }
 
         VerticalLayout {
@@ -154,7 +168,9 @@ export component FriendsModal inherits Rectangle {
             // Main tab bar — Neo. Same box height as the dismissal control in
             // the header row above it, so the two rows share one baseline
             // instead of the tabs sitting 4px short of the touch floor.
-            GlassSurface {
+            // Hidden inside the Add sheet: there it is its own screen (own
+            // title + back chevron), not a tab of Contacts.
+            if !root.showing-add: GlassSurface {
                 material-enabled: root.mobile-mode;
                 elevation: 0;
                 z: 1;
@@ -169,7 +185,6 @@ export component FriendsModal inherits Rectangle {
                     padding: Spacing.chrome-inset;
 
                     for tab in [
-                        { id: "find", label: "Add friend" },
                         { id: "friends", label: "Friends" },
                         { id: "requests", label: "Requests" },
                         { id: "blocked", label: "Blocked" }
@@ -215,7 +230,7 @@ export component FriendsModal inherits Rectangle {
                 }
             }
 
-            Rectangle {
+            if !root.showing-add: Rectangle {
                 height: 1px;
                 background: Colors.divider;
             }
@@ -225,7 +240,7 @@ export component FriendsModal inherits Rectangle {
                 // On a floating card, let Add Friend's full content determine
                 // the card height. The shared Modal caps it at the viewport and
                 // scrolls its body when that content is taller than the cap.
-                min-height: !root.mobile-mode && root.active-tab == "find"
+                min-height: !root.mobile-mode && root.showing-add
                     ? max(400px, find-content.preferred-height)
                     : 400px;
                 vertical-stretch: 1;
@@ -244,12 +259,12 @@ export component FriendsModal inherits Rectangle {
                     start-dm(value) => { root.start-dm(value); }
                 }
 
-                // ===== Find Users Tab =====
-                // The full-screen Contacts page shrinks when the IME opens.
-                // Keep the lower note field reachable when the form exceeds
-                // that viewport (especially with the QR card expanded).
+                // ===== Add-friend sheet (opened by the contacts + FAB) =====
+                // Opaque backdrop so it covers the tab content underneath.
+                if root.showing-add: Rectangle { background: Materials.ambient; z: 4; TouchArea {} }
                 find-scroll := Flickable {
-                    visible: root.active-tab == "find";
+                    visible: root.showing-add;
+                    z: 5;
                     width: parent.width;
                     height: parent.height;
                     viewport-width: self.width;
@@ -271,13 +286,21 @@ export component FriendsModal inherits Rectangle {
                         qr-code-image: root.qr-code-image;
                         show-qr <=> root.show-qr;
                         effective-private-mode: root.effective-private-mode;
+                        search-query <=> root.search-query;
+                        search-active: root.search-active;
+                        search-performed: root.search-performed;
+                        search-result: root.search-result;
+                        search-changed(q) => { root.search-changed(q); }
+                        add-searched-friend(uid) => { root.add-searched-friend(uid); }
                         generate-code(value) => { root.generate-code(value); }
                         generate-qr(value) => { root.generate-qr(value); }
                         copy-code => { root.copy-code(); }
+                        share-code => { root.share-code(); }
                         paste-code => { root.paste-code(); }
                         scan-code => { root.scan-code(); }
                         connect-via-code(value) => { root.connect-via-code(value); }
                         code-edited => { root.code-status = ""; }
+                        close-add => { root.showing-add = false; }
                     }
                 }
 

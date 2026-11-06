@@ -8,10 +8,52 @@ use slint::{ComponentHandle, Model, ModelRc};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::MessageId;
+use chatter_core::media::performance_trace as viewport_trace;
 use chatter_core::state::ActiveConversation;
 
 use crate::MainWindow;
 use crate::bin_ui::converters::messages_to_display_batch_deferred;
+
+// Slint invokes both phases synchronously around settle-inner, on the same UI
+// thread. A fixed stack supports reentrant callbacks without heap allocation,
+// including while tracing is disabled. It retains no UI/model/message data.
+struct SettleTrace {
+    depth: usize,
+    sections: [Option<viewport_trace::Section>; 32],
+}
+
+thread_local! {
+    static SETTLE_TRACE: std::cell::RefCell<SettleTrace> = const {
+        std::cell::RefCell::new(SettleTrace { depth: 0, sections: [const { None }; 32] })
+    };
+}
+
+fn trace_viewport_settle(begin: bool) {
+    SETTLE_TRACE.with(|state| {
+        let mut state = state.borrow_mut();
+        if begin {
+            let index = state.depth;
+            state.depth = state.depth.saturating_add(1);
+            if viewport_trace::enabled() {
+                if let Some(slot) = state.sections.get_mut(index) {
+                    *slot = Some(viewport_trace::section(c"Chatter viewport settle"));
+                } else {
+                    // Never change UI behavior if the diagnostic stack fills.
+                    viewport_trace::counter(
+                        c"Chatter viewport settle overflow depth",
+                        state.depth as i64,
+                    );
+                }
+            }
+        } else if state.depth > 0 {
+            state.depth -= 1;
+            let index = state.depth;
+            if let Some(slot) = state.sections.get_mut(index) {
+                drop(slot.take());
+            }
+        }
+    });
+}
 
 thread_local! {
     static PENDING_VISIBLE_THUMBNAILS: std::cell::RefCell<std::collections::HashMap<String, super::history_owner::HistoryOwner>> =
@@ -107,6 +149,9 @@ pub(crate) fn cancel_pending_jump_for(conversation: ActiveConversation) {
 
 /// Wire header callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    window
+        .global::<crate::VirtualizerTrace>()
+        .on_settle_phase(trace_viewport_settle);
     wire_pinned_navigation(window, ui_ctx);
     wire_chat_settings_clicked(window, ui_ctx);
     wire_invite_member(window, ui_ctx);
@@ -120,6 +165,11 @@ fn wire_visible_media(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window
         .global::<crate::ChatPane>()
         .on_visible_media_rows(move |first, last| {
+            // Emitted by MessageList::settle only when its estimated row range
+            // changes. This measures the callback, not every Slint settle pass.
+            let _trace = viewport_trace::section(c"Chatter viewport range callback");
+            viewport_trace::counter(c"Chatter viewport first row", i64::from(first));
+            viewport_trace::counter(c"Chatter viewport last row", i64::from(last));
             if let Some(w) = weak.upgrade() {
                 if maintain_history_window(&w, &client, first, last) { return; }
                 refresh_visible_media(&w, &client, first, last);
@@ -134,6 +184,7 @@ fn maintain_history_window(
     first: i32,
     last: i32,
 ) -> bool {
+    let _trace = viewport_trace::section(c"Chatter maintain_history_window");
     let pane = w.global::<crate::ChatPane>();
     if pane.get_loading_messages() || last < first || last < 0 {
         return false;
@@ -182,16 +233,35 @@ fn maintain_history_window(
     if let Some(index) = model.row_of(pane.get_thread_root_message_id().as_str()) {
         protected.push(index);
     }
+    // At the bottom — including the transient top layout while a conversation
+    // is still opening on its newest message — the retained window must stay
+    // anchored to the tail. Feeding the live (top) visible rows here would
+    // evict the newest messages, set has_newer, drop is-at-bottom, and open the
+    // chat scrolled up with a visible jump down to the tail. Only a reader who
+    // has actually scrolled up (is-at-bottom false) trims the tail to free
+    // memory; protected rows are still honored either way.
+    let count = model.row_count();
+    let (first_eff, last_eff) = if pane.get_is_at_bottom() {
+        let tail = count.saturating_sub(1);
+        (tail, tail)
+    } else {
+        (first.max(0) as usize, last as usize)
+    };
     let range = chatter_core::services::message::retained_history_range(
-        model.row_count(),
-        first.max(0) as usize,
-        last as usize,
+        count,
+        first_eff,
+        last_eff,
         &protected,
     );
+    viewport_trace::counter(c"Chatter history rows before", count as i64);
+    viewport_trace::counter(c"Chatter history retain begin", range.start as i64);
+    viewport_trace::counter(c"Chatter history retain end", range.end as i64);
     if range.start == 0 && range.end == model.row_count() {
         return false;
     }
-    let (front, _) = model.retain_range(range);
+    let (front, back) = model.retain_range(range);
+    viewport_trace::counter(c"Chatter history removed front", front as i64);
+    viewport_trace::counter(c"Chatter history removed back", back as i64);
     if front > 0 {
         if pane.get_unread_index() >= 0 {
             pane.set_unread_index(pane.get_unread_index() - front as i32);
@@ -258,6 +328,9 @@ pub(crate) fn refresh_visible_media(
     first: i32,
     last: i32,
 ) {
+    // Synchronous selection/eviction/scheduling only; no guard enters the
+    // spawned future or its eventual event-loop publication callback.
+    let _trace = viewport_trace::section(c"Chatter refresh_visible_media");
     crate::bin_ui::gif_state::auto_register_gifs_from_messages(window.as_weak(), ui_ctx.clone());
     if window.global::<crate::ChatPane>().get_loading_messages() || last < first || last < 0 {
         return;
@@ -277,12 +350,23 @@ pub(crate) fn refresh_visible_media(
     let Some(window_rows) = media_window(first, last, row_count) else {
         return;
     };
+    let tracing = viewport_trace::enabled();
+    viewport_trace::counter(c"Chatter viewport media model rows", row_count as i64);
+    viewport_trace::counter(
+        c"Chatter viewport media window begin",
+        *window_rows.start() as i64,
+    );
+    viewport_trace::counter(
+        c"Chatter viewport media window end",
+        *window_rows.end() as i64,
+    );
     // Slint rows own the decoded pixel buffer. Drop it as soon as a row is
     // outside the cushion; the bounded decode cache can then evict it. Only the
     // rows that left the window since the last pass are visited (O(delta)) — the
     // old loop rescanned the whole model on every scroll frame, which is what
     // made a long conversation scroll janky.
     let prev = LAST_MEDIA_WINDOW.with(|w| w.get());
+    let mut cleared = 0usize;
     for index in media_evict_rows(prev, *window_rows.start(), *window_rows.end(), row_count) {
         let Some(row) = model.row_data(index) else {
             continue;
@@ -297,14 +381,67 @@ pub(crate) fn refresh_visible_media(
                     continue;
                 };
                 if attachment.has_thumbnail {
+                    let _clear = viewport_trace::section(c"Chatter viewport thumbnail clear");
+                    viewport_trace::counter(c"Chatter viewport media row", index as i64);
+                    viewport_trace::counter(
+                        c"Chatter viewport media attachment index",
+                        attachment_index as i64,
+                    );
                     attachment.thumbnail = slint::Image::default();
                     attachment.has_thumbnail = false;
                     attachments.set_row_data(attachment_index, attachment);
+                    if tracing {
+                        cleared += 1;
+                    }
                 }
             }
         }
     }
+    viewport_trace::counter(c"Chatter viewport thumbnails cleared", cleared as i64);
     LAST_MEDIA_WINDOW.with(|w| w.set(Some((*window_rows.start(), *window_rows.end(), row_count))));
+
+    // Scroll-back restore: a static-image row whose thumbnail was evicted paints
+    // from the warm RAM cache THIS frame, instead of waiting for the 80ms
+    // static-image poll to re-decode it (the re-entry "pop-in"). Synchronous
+    // RAM lookup only, no IO/decode; a miss falls through to that loader as
+    // before. GIFs/video are handled by the hydrate loop below.
+    let mut restored = 0usize;
+    for index in window_rows.clone() {
+        let Some(row) = model.row_data(index) else {
+            continue;
+        };
+        let Some(attachments) = row
+            .attachments
+            .as_any()
+            .downcast_ref::<slint::VecModel<crate::MessageAttachmentData>>()
+        else {
+            continue;
+        };
+        for attachment_index in 0..attachments.row_count() {
+            let Some(mut attachment) = attachments.row_data(attachment_index) else {
+                continue;
+            };
+            if attachment.has_thumbnail
+                || !attachment.is_image
+                || attachment.mime_type == "image/gif"
+                || attachment.filename.to_lowercase().ends_with(".gif")
+            {
+                continue;
+            }
+            if let Some(pixels) =
+                crate::bin_ui::decode_cache::cached_thumbnail(&attachment.id.to_string(), 0)
+            {
+                attachment.thumbnail = slint::Image::from_rgba8(pixels);
+                attachment.has_thumbnail = true;
+                attachments.set_row_data(attachment_index, attachment);
+                if tracing {
+                    restored += 1;
+                }
+            }
+        }
+    }
+    viewport_trace::counter(c"Chatter viewport thumbnails restored", restored as i64);
+
     let mut ids = Vec::new();
     for index in window_rows {
         let Some(row) = model.row_data(index) else {
@@ -337,30 +474,51 @@ pub(crate) fn refresh_visible_media(
         }
     }
 
+    viewport_trace::counter(c"Chatter viewport hydrate demands", ids.len() as i64);
     for id in ids {
         let weak = window.as_weak();
         let client = ui_ctx.clone();
         let owner = owner.clone();
         let session = ui_ctx.session_guard();
         let generation = crate::bin_ui::decode_cache::thumbnail_generation();
-        crate::rt_handle().spawn(async move {
+        let job = viewport_trace::Job::new();
+        let lifetime = job.span(c"Chatter viewport hydrate lifetime");
+        let queue = job.span(c"Chatter viewport hydrate queue");
+        crate::rt_handle().spawn(viewport_trace::scope(job, async move {
+            drop(queue);
+            // AsyncSection is safe across awaits; scope installs CurrentJob
+            // only for each synchronous poll and restores it on Pending.
+            let prepare = job.span(c"Chatter viewport hydrate prepare");
             let (pixels, dimensions) =
                 match hydrate_visible_media(&client, &id, session, &owner, generation).await {
                     Some((pixels, dimensions)) => (Some(pixels), dimensions),
                     None => (None, None),
                 };
-            let _ = slint::invoke_from_event_loop(move || {
+            drop(prepare);
+            let publication_queue = job.span(c"Chatter viewport hydrate UI queue");
+            let scheduled = slint::invoke_from_event_loop(move || {
+                let _lifetime = lifetime;
+                drop(publication_queue);
+                let _current = job.enter();
+                let _publish = viewport_trace::section(c"Chatter viewport hydrate publish");
                 PENDING_VISIBLE_THUMBNAILS.with(|pending| {
                     let mut pending = pending.borrow_mut();
                     if owner.is_current() {
                         pending.remove(&id);
                     }
                 });
-                let Some(w) = weak.upgrade() else { return };
+                let Some(w) = weak.upgrade() else {
+                    job.event(c"Chatter viewport hydrate no window");
+                    return;
+                };
                 if !owner.is_current() {
+                    job.event(c"Chatter viewport hydrate stale");
                     return;
                 }
-                let Some(pixels) = pixels else { return };
+                let Some(pixels) = pixels else {
+                    job.event(c"Chatter viewport hydrate no pixels");
+                    return;
+                };
                 let model = w.global::<crate::ChatPane>().get_messages();
                 let Some(window_rows) = media_window(
                     w.global::<crate::ChatPane>()
@@ -368,8 +526,11 @@ pub(crate) fn refresh_visible_media(
                     w.global::<crate::ChatPane>().get_message_last_visible_row(),
                     model.row_count(),
                 ) else {
+                    job.event(c"Chatter viewport hydrate no range");
                     return;
                 };
+                let tracing = viewport_trace::enabled();
+                let mut assigned = 0usize;
                 for row_index in window_rows {
                     let Some(row) = model.row_data(row_index) else {
                         continue;
@@ -380,6 +541,12 @@ pub(crate) fn refresh_visible_media(
                             continue;
                         };
                         if attachment.id.as_str() == id && !attachment.has_thumbnail {
+                            let _assign = viewport_trace::section(c"Chatter viewport thumbnail assign");
+                            viewport_trace::counter(c"Chatter viewport media row", row_index as i64);
+                            viewport_trace::counter(
+                                c"Chatter viewport media attachment index",
+                                attachment_index as i64,
+                            );
                             if let Some((width, height)) = dimensions {
                                 attachment.width = width as i32;
                                 attachment.height = height as i32;
@@ -392,12 +559,26 @@ pub(crate) fn refresh_visible_media(
                                 .downcast_ref::<slint::VecModel<crate::MessageAttachmentData>>()
                             {
                                 attachments.set_row_data(attachment_index, attachment);
+                                if tracing {
+                                    assigned += 1;
+                                }
                             }
                         }
                     }
                 }
+                viewport_trace::counter(c"Chatter viewport hydrate assignments", assigned as i64);
+                if tracing {
+                    job.event(if assigned > 0 {
+                        c"Chatter viewport hydrate published"
+                    } else {
+                        c"Chatter viewport hydrate offscreen"
+                    });
+                }
             });
-        });
+            if scheduled.is_err() {
+                job.event(c"Chatter viewport hydrate UI unavailable");
+            }
+        }));
     }
 }
 
@@ -1061,9 +1242,6 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
     let Some(channel_id) = conversation.channel_id() else {
         return;
     };
-    let Some(conversation_type) = ui_ctx.active_conversation_type() else {
-        return;
-    };
     let jump = matches!(load, HistoryLoad::Reaching(_));
     let Some(owner) = super::history_owner::HistoryOwner::admit_older(ui_ctx, conversation) else {
         if matches!(load, HistoryLoad::Newest) {
@@ -1091,6 +1269,17 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
     let ui_ctx = ui_ctx.clone();
 
     std::thread::spawn(move || {
+        if !owner.is_current() {
+            ui_ctx.set_message_loading(channel_id, false);
+            return;
+        }
+        // Channel classification can read storage; resolve off the UI thread
+        // using the same captured conversation as admission and ownership.
+        let Some(conversation_type) = ui_ctx.conversation_type_of(&conversation) else {
+            ui_ctx.set_message_loading(channel_id, false);
+            return;
+        };
+        // A switch, reload, or session change may have happened during lookup.
         if !owner.is_current() {
             ui_ctx.set_message_loading(channel_id, false);
             return;

@@ -71,6 +71,10 @@ pub(crate) fn wire_generate_friend_code(window: &MainWindow, ui_ctx: &Arc<Chatte
     // Wire copy to clipboard
     wire_copy_friend_code(window, ui_ctx);
 
+    // Wire share-to-OS: Android opens the system share sheet; desktop has no
+    // such sheet, so it copies instead.
+    wire_share_friend_code(window, ui_ctx);
+
     // Wire paste-from-clipboard (Slint's Ctrl+V is unreliable on Wayland
     // because it reads via a different selection protocol than what
     // wl-copy and arboard-with-wayland-data-control write to).
@@ -280,6 +284,68 @@ fn show_code_status(weak: slint::Weak<MainWindow>, message: &'static str) {
                 .set_friends_code_status(message.into());
         }
     });
+}
+
+/// Wire callback to share the friend code through the OS share sheet.
+///
+/// On Android this opens ACTION_SEND so the code can go straight into another
+/// app. On desktop there is no system share sheet, so it copies to the
+/// clipboard — the same effect as Copy, with a share-flavoured status.
+fn wire_share_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+
+    window
+        .global::<crate::ModalHostState>()
+        .on_friends_share_code(move || {
+            let Some(w) = weak_window.upgrade() else {
+                return;
+            };
+            let code = w
+                .global::<crate::ModalHostState>()
+                .get_friends_my_code()
+                .to_string();
+            if code.is_empty() {
+                tracing::warn!("No friend code to share");
+                return;
+            }
+
+            #[cfg(target_os = "android")]
+            {
+                match crate::platform::android::share::share_text(&code) {
+                    Ok(()) => {
+                        tracing::info!("Opened share sheet for friend code");
+                    }
+                    Err(e) => {
+                        tracing::error!("Share sheet failed, copying instead: {}", e);
+                        match crate::platform::clipboard::set_text("Friend code", &code, false) {
+                            Ok(()) => w
+                                .global::<crate::ModalHostState>()
+                                .set_friends_code_status("Copied to clipboard!".into()),
+                            Err(_) => w
+                                .global::<crate::ModalHostState>()
+                                .set_friends_code_status("Couldn't share — use Copy".into()),
+                        }
+                    }
+                }
+            }
+
+            #[cfg(not(target_os = "android"))]
+            {
+                let code_clone = code.clone();
+                let weak_copy = weak_window.clone();
+                std::thread::spawn(move || {
+                    match crate::platform::clipboard::set_text("Friend code", &code_clone, false) {
+                        Ok(()) => {
+                            show_code_status(weak_copy, "Copied — paste anywhere to share");
+                        }
+                        Err(e) => {
+                            tracing::error!("Share-copy failed: {}", e);
+                            show_code_status(weak_copy, "Couldn't copy — use Show QR");
+                        }
+                    }
+                });
+            }
+        });
 }
 
 /// Wire callback to copy friend code to clipboard.

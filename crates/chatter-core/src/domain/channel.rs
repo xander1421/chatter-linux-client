@@ -15,6 +15,18 @@ pub enum ChannelType {
     SavedMessages,
 }
 
+impl ChannelType {
+    /// Server-channel message bucket, independent of wire encryption policy.
+    #[must_use]
+    pub fn conversation_type(self) -> crate::domain::message::ConversationType {
+        use crate::domain::message::ConversationType;
+        match self {
+            Self::SavedMessages => ConversationType::SavedMessages,
+            Self::Public | Self::Private => ConversationType::Channel,
+        }
+    }
+}
+
 /// Message persistence policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum MessagePersistence {
@@ -111,11 +123,7 @@ impl Channel {
     /// never a `Channel`, so `AnonGroup` is not reachable from here.
     #[must_use]
     pub fn conversation_type(&self) -> crate::domain::message::ConversationType {
-        use crate::domain::message::ConversationType;
-        match self.channel_type {
-            ChannelType::SavedMessages => ConversationType::SavedMessages,
-            _ => ConversationType::Channel,
-        }
+        self.channel_type.conversation_type()
     }
 
     /// Whether `user_id` owns this channel.

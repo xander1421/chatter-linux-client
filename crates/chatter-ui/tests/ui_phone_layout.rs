@@ -668,11 +668,11 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     let start_rect =
         window
             .renderer()
-            .text_input_cursor_rect_for_byte_offset(input, &item, unchanged.len() - 3);
+            .text_input_cursor_rect_for_byte_offset(input, &item, unchanged.len() - 3, i_slint_core::items::TextCursorAffinity::default());
     let end_rect =
         window
             .renderer()
-            .text_input_cursor_rect_for_byte_offset(input, &item, unchanged.len() - 1);
+            .text_input_cursor_rect_for_byte_offset(input, &item, unchanged.len() - 1, i_slint_core::items::TextCursorAffinity::default());
     let origin = item.map_to_window(Default::default());
     let start = slint::LogicalPosition::new(
         origin.x + start_rect.origin.x + 0.2,
@@ -905,7 +905,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         let prefix_rect =
             window
                 .renderer()
-                .text_input_cursor_rect_for_byte_offset(probe, &item, prefix.len());
+                .text_input_cursor_rect_for_byte_offset(probe, &item, prefix.len(), i_slint_core::items::TextCursorAffinity::default());
         let full_rect = input.visual_cursor_rect(&window, &item);
         if full_rect.origin.y > prefix_rect.origin.y + full_rect.size.height * 0.5 {
             // Equal caret metrics and a leftward move prove an actual line
@@ -1719,7 +1719,7 @@ fn composition(w: &MainWindow, text: &str, commit: bool) {
         event.event_type = KeyEventType::UpdateComposition;
         event.preedit_text = text.into();
     }
-    i_slint_core::window::WindowInner::from_pub(w.window()).process_key_input(event);
+    w.window().dispatch_event(i_slint_core::platform::WindowEvent::internal(event));
 }
 
 fn composition_selection(w: &MainWindow, text: &str, selection: Option<std::ops::Range<i32>>) {
@@ -1728,7 +1728,7 @@ fn composition_selection(w: &MainWindow, text: &str, selection: Option<std::ops:
     event.event_type = KeyEventType::UpdateComposition;
     event.preedit_text = text.into();
     event.preedit_selection = selection;
-    i_slint_core::window::WindowInner::from_pub(w.window()).process_key_input(event);
+    w.window().dispatch_event(i_slint_core::platform::WindowEvent::internal(event));
 }
 
 #[track_caller]
@@ -1789,7 +1789,7 @@ fn assert_native_caret_visible(w: &MainWindow) {
             .window_adapter()
             .unwrap()
             .renderer()
-            .text_input_cursor_rect_for_byte_offset(input, &item, drawn_offset);
+            .text_input_cursor_rect_for_byte_offset(input, &item, drawn_offset, i_slint_core::items::TextCursorAffinity::default());
         assert_eq!(
             caret, drawn,
             "scroll geometry differs from native rendered caret"

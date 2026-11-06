@@ -1,4 +1,4 @@
-# Local parley 0.10.0 patch
+# Local parley 0.11.1 patch
 
 On Android, the Skia renderer can paint the space glyph that HarfRust substitutes
 for default-ignorable characters, even though HarfRust gives it zero advance.

@@ -12,6 +12,7 @@ mod friend_code;
 mod friends_list;
 mod private_requests;
 mod requests;
+mod search;
 
 pub(crate) use private_requests::{BlockedUserRow, blocked_user_rows, refresh_blocked_users, refresh_private_requests};
 
@@ -54,6 +55,9 @@ pub fn wire_friends_modal(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Privacy-first friend discovery
     friend_code::wire_generate_friend_code(window, ui_ctx);
     friend_code::wire_connect_via_friend_code(window, ui_ctx);
+
+    // Username-first add (exact @handle search → send request)
+    search::wire_search(window, ui_ctx);
 
     // Anonymous DM (private) request actions
     private_requests::wire_accept_private_request(window, ui_ctx);

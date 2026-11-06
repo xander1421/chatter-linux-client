@@ -21,6 +21,34 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
 [[ "$TARGET_DIR" = /* ]] || TARGET_DIR="$PROJECT_ROOT/$TARGET_DIR"
 export CARGO_TARGET_DIR="$TARGET_DIR"
 
+PREFIX_FLUSH_FEATURE=""
+if [ "${CHATTER_ANDROID_PREFIX_FLUSH_EXPERIMENT:-0}" = "1" ]; then
+    [ "${RELEASE:-0}" != "1" ] || { echo "FATAL: prefix flush experiment is debug-only" >&2; exit 1; }
+    PREFIX_FLUSH_FEATURE=",experimental-prefix-flush"
+fi
+
+SWAPPY_FEATURE=""
+if [ "${CHATTER_ANDROID_SWAPPY_EXPERIMENT:-0}" = "1" ]; then
+    [ "${RELEASE:-0}" != "1" ] || { echo "FATAL: Swappy experiment is debug-only" >&2; exit 1; }
+    SWAPPY_FEATURE=",experimental-swappy"
+fi
+
+NATIVE_PACING_FEATURE=""
+if [ "${CHATTER_ANDROID_NATIVE_PACING_EXPERIMENT:-0}" = "1" ]; then
+    [ "${RELEASE:-0}" != "1" ] || { echo "FATAL: native pacing experiment is debug-only" >&2; exit 1; }
+    [ -z "$SWAPPY_FEATURE" ] || { echo "FATAL: native pacing and Swappy experiments are mutually exclusive" >&2; exit 1; }
+    NATIVE_PACING_FEATURE=",experimental-native-pacing"
+fi
+
+# TRACE=1 compiles the Android ATrace probe harness (media::performance_trace)
+# back in for a profiling pass. Off by default: the probes are no-op stubs and a
+# normal build ships nothing.
+TRACE_FEATURE=""
+if [ "${TRACE:-0}" = "1" ]; then
+    TRACE_FEATURE=",perf-trace"
+    echo ">> perf-trace enabled (Android ATrace probes compiled in)"
+fi
+
 # Explicit Android metadata; debug retains the historical defaults.
 # Validate before bootstrap/download/build work. Android caps codes at 2100000000.
 # RELEASE=1 also checks every production input here, before any download or
@@ -237,11 +265,12 @@ if [ "${RELEASE:-0}" = "1" ]; then
 fi
 
 ( cd "$PROJECT_ROOT" && cargo ndk -t arm64-v8a build --locked -p chatter-ui $CARGO_PROFILE_FLAG \
-    --no-default-features --features "mobile${MESH_FEATURE}${TRUST_ROOT_FEATURE}${QUIC_FEATURE}${ONION_FEATURE}${DEV_AUTO_REGISTER_FEATURE}" --lib )
+    --no-default-features --features "mobile${MESH_FEATURE}${TRUST_ROOT_FEATURE}${QUIC_FEATURE}${ONION_FEATURE}${DEV_AUTO_REGISTER_FEATURE}${SWAPPY_FEATURE}${PREFIX_FLUSH_FEATURE}${NATIVE_PACING_FEATURE}${TRACE_FEATURE}" --lib )
 
 # ── 2. Stage the .so into the Gradle module ─────────────────────────────────
 JNI_DIR="app/src/main/jniLibs/arm64-v8a"
 mkdir -p "$JNI_DIR"
+python3 "$PROJECT_ROOT/android/prepare-swappy.py" --output-dir "$JNI_DIR" --ndk "$ANDROID_NDK_HOME"
 cp "$TARGET_DIR/aarch64-linux-android/$RUST_PROFILE/libchatter_ui.so" "$JNI_DIR/"
 # Strip only the staged copy; target/ retains symbols for native diagnostics.
 # --strip-debug leaves the enormous .symtab/.strtab in place. --strip-unneeded

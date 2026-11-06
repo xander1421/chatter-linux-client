@@ -1,4 +1,5 @@
 //! Shared GIF-only workers. Pending attachment ids coalesce duplicate requests.
+use crate::media::performance_trace as trace;
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
 
@@ -19,14 +20,15 @@ static POOL: LazyLock<Arc<(Mutex<Queue>, Condvar)>> = LazyLock::new(|| {
                 while queue.jobs.is_empty() {
                     queue = wake.wait(queue).unwrap_or_else(|p| p.into_inner());
                 }
-                queue.jobs.pop_front().unwrap()
+                let job = queue.jobs.pop_front().unwrap();
+                trace::counter(c"chatter.media.gif.queue_waiting", queue.jobs.len() as i64);
+                job
             };
             // A malformed GIF must not permanently kill a pool worker.
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
-            lock.lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .pending
-                .remove(&id);
+            let mut queue = lock.lock().unwrap_or_else(|p| p.into_inner());
+            queue.pending.remove(&id);
+            trace::counter(c"chatter.media.gif.queue_pending", queue.pending.len() as i64);
         });
     }
     pool
@@ -35,9 +37,12 @@ static POOL: LazyLock<Arc<(Mutex<Queue>, Condvar)>> = LazyLock::new(|| {
 /// Submit background work, promoting visible attachments ahead of pending work.
 /// There are at most two running decodes and 128 waiting jobs.
 pub fn submit(id: String, visible: bool, job: impl FnOnce() + Send + 'static) {
+    let _submit = trace::section(c"chatter.media.gif.queue_submit");
+    let trace_job = trace::current_job();
     let (lock, wake) = &**POOL;
     let mut queue = lock.lock().unwrap_or_else(|p| p.into_inner());
     if queue.pending.contains(&id) {
+        trace_job.event(c"chatter.media.gif.queue_coalesced");
         if visible {
             if let Some(index) = queue.jobs.iter().position(|(key, _)| key == &id) {
                 let job = queue.jobs.remove(index).unwrap();
@@ -48,11 +53,14 @@ pub fn submit(id: String, visible: bool, job: impl FnOnce() + Send + 'static) {
     }
     if queue.jobs.len() >= 128 {
         if !visible {
+            trace_job.event(c"chatter.media.gif.queue_rejected");
             return;
         }
+        let eviction = trace::section(c"chatter.media.gif.queue_evict");
         if let Some((evicted, _)) = queue.jobs.pop_back() {
             queue.pending.remove(&evicted);
         }
+        drop(eviction);
     }
     queue.pending.insert(id.clone());
     if visible {
@@ -60,5 +68,10 @@ pub fn submit(id: String, visible: bool, job: impl FnOnce() + Send + 'static) {
     } else {
         queue.jobs.push_back((id, Box::new(job)));
     }
+    trace::counter(c"chatter.media.gif.queue_waiting", queue.jobs.len() as i64);
+    trace::counter(
+        c"chatter.media.gif.queue_pending",
+        queue.pending.len() as i64,
+    );
     wake.notify_one();
 }

@@ -77,7 +77,13 @@ export component AppSidebarHost inherits Rectangle {
         chat-rows: SidebarPane.chat-rows;
         archived-rows: SidebarPane.archived-rows;
         archive-open: SidebarPane.archive-open;
-        saved-open: ChatPane.conversation-kind == ConversationKind.saved-messages;
+        // Only lit while its chat is actually on screen. On a phone the list is
+        // a separate screen, so returning to it (mobile-show-chat false) must
+        // drop the highlight — otherwise the Saved row stays selected after Back
+        // while DM rows (keyed on the active conversation) do not. A tablet keeps
+        // both panes, so the highlight persists there as for any row.
+        saved-open: ChatPane.conversation-kind == ConversationKind.saved-messages
+            && (!root.compact-layout || SidebarPane.mobile-show-chat);
         chat-rows-loading: AuthFlow.is-signed-in && SidebarPane.chat-rows-loading;
         custom-sections: SidebarPane.custom-sections;
         flat-rows: SidebarPane.flat-rows;

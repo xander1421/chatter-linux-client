@@ -237,6 +237,36 @@ fn held_left_right_altgr_and_extracted_focus_cleanup() {
     }
 }
 '''
+if not args.baseline:
+    harness = harness.replace('KeyEventResult::EventAccepted);', 'Ok(WindowEventDispatchResult::Accepted));')
+    harness = harness.replace('enum WindowEvent {', 'enum WindowEvent { Internal(InternalKeyEvent),')
+    harness = harness.replace('struct WindowInner;', r"""
+#[derive(Debug, PartialEq)]
+enum WindowEventDispatchResult { Accepted, Rejected }
+type PlatformError = ();
+impl WindowEvent {
+    fn internal(event: InternalKeyEvent) -> Self { Self::Internal(event) }
+}
+impl Window {
+    fn dispatch_event(&self, event: WindowEvent) { self.dispatch_event_with_result(event).unwrap(); }
+    fn dispatch_event_with_result(&self, event: WindowEvent) -> Result<WindowEventDispatchResult, PlatformError> {
+        let (text, event_type, repeat) = match event {
+            WindowEvent::Internal(event) => return Ok(match self.process_key_input(event) {
+                KeyEventResult::EventAccepted => WindowEventDispatchResult::Accepted,
+                KeyEventResult::EventIgnored => WindowEventDispatchResult::Rejected,
+            }),
+            WindowEvent::KeyPressed { text } => (text, KeyEventType::KeyPressed, false),
+            WindowEvent::KeyPressRepeated { text } => (text, KeyEventType::KeyPressed, true),
+            WindowEvent::KeyReleased { text } => (text, KeyEventType::KeyReleased, false),
+            other => { self.try_dispatch_event(other)?; return Ok(WindowEventDispatchResult::Accepted); }
+        };
+        self.dispatch_event_with_result(WindowEvent::internal(InternalKeyEvent {
+            event_type, key_event: KeyEvent { text, repeat, ..Default::default() }
+        }))
+    }
+}
+struct WindowInner;
+""")
 if args.baseline:
     harness = harness.replace(function(harness, "fn actions_repeat_modifier_snapshot_and_ordinary_typing("), "fn actions_repeat_modifier_snapshot_and_ordinary_typing() {}")
 meta_bits = {'ctrl_on':0x1000,'ctrl_left_on':0x2000,'ctrl_right_on':0x4000,'shift_on':1,'shift_left_on':0x40,'shift_right_on':0x80,'alt_on':2,'alt_left_on':0x10,'alt_right_on':0x20,'meta_on':0x10000,'meta_left_on':0x20000,'meta_right_on':0x40000}

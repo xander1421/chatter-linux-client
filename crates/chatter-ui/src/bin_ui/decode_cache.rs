@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock, Mutex};
 
+use chatter_core::media::performance_trace as trace;
 use slint::{Rgba8Pixel, SharedPixelBuffer};
 
 pub type Pixels = SharedPixelBuffer<Rgba8Pixel>;
@@ -61,21 +62,30 @@ impl<K: Eq + Hash + Clone, V: Clone> ByteLru<K, V> {
     }
 
     pub fn get(&mut self, key: &K) -> Option<V> {
+        let _lookup = trace::section(c"chatter.media.ram.lookup");
         self.tick += 1;
         let tick = self.tick;
-        self.entries.get_mut(key).map(|entry| {
+        let result = self.entries.get_mut(key).map(|entry| {
             entry.2 = tick;
             entry.0.clone()
-        })
+        });
+        trace::current_job().event(if result.is_some() {
+            c"chatter.media.ram.hit"
+        } else {
+            c"chatter.media.ram.miss"
+        });
+        result
     }
 
     /// Insert, evicting the least recently used entries to stay within the
     /// budget. A value larger than the whole budget is not kept.
     pub fn insert(&mut self, key: K, value: V, bytes: usize) {
+        let _insert = trace::section(c"chatter.media.ram.insert");
         if let Some((_, old, _)) = self.entries.remove(&key) {
             self.used -= old;
         }
         if bytes > self.budget {
+            trace::current_job().event(c"chatter.media.ram.oversize");
             return;
         }
         while self.used + bytes > self.budget {
@@ -87,9 +97,11 @@ impl<K: Eq + Hash + Clone, V: Clone> ByteLru<K, V> {
             else {
                 break;
             };
+            let eviction = trace::section(c"chatter.media.ram.evict");
             if let Some((_, size, _)) = self.entries.remove(&oldest) {
                 self.used -= size;
             }
+            drop(eviction);
         }
         self.tick += 1;
         self.used += bytes;
@@ -97,11 +109,13 @@ impl<K: Eq + Hash + Clone, V: Clone> ByteLru<K, V> {
     }
 
     pub fn clear(&mut self) {
+        let _clear = trace::section(c"chatter.media.ram.clear");
         self.entries.clear();
         self.used = 0;
     }
 
     pub fn retain(&mut self, mut keep: impl FnMut(&K) -> bool) {
+        let _retain = trace::section(c"chatter.media.ram.retain");
         self.entries.retain(|key, (_, bytes, _)| {
             if keep(key) {
                 true
@@ -144,10 +158,13 @@ impl Caches {
     }
 
     fn wipe(&mut self) {
+        let _wipe = trace::section(c"chatter.media.ram.generation_wipe");
         self.generation = self.generation.wrapping_add(1);
         self.avatars.clear();
         self.thumbnails.clear();
         self.gifs.clear();
+        trace::counter(c"chatter.media.ram.gif_bytes", 0);
+        trace::counter(c"chatter.media.ram.gif_entries", 0);
     }
 
     #[cfg(test)]
@@ -181,7 +198,9 @@ pub fn avatar(bytes: &[u8]) -> Option<Pixels> {
 }
 
 pub fn avatar_guarded(bytes: &[u8], generation: u64) -> Option<Pixels> {
+    let _avatar = trace::section(c"chatter.media.ram.avatar");
     if generation != thumbnail_generation() {
+        trace::current_job().event(c"chatter.media.ram.generation_invalid");
         return None;
     }
     if bytes.is_empty() {
@@ -193,6 +212,7 @@ pub fn avatar_guarded(bytes: &[u8], generation: u64) -> Option<Pixels> {
     {
         let mut cache = caches();
         if cache.generation != generation {
+            trace::current_job().event(c"chatter.media.ram.generation_invalid");
             return None;
         }
         if let Some(hit) = cache.avatars.get(&key) {
@@ -201,12 +221,16 @@ pub fn avatar_guarded(bytes: &[u8], generation: u64) -> Option<Pixels> {
     }
     // Decoded outside the lock: two threads racing on one avatar both decode,
     // which is the old cost, not a correctness problem.
-    let pixels = chatter_core::media::ImageProcessor::inline_pixels_from_memory(bytes)
-        .ok()
-        .map(image::DynamicImage::ImageRgba8)
-        .map(|img| to_pixels(img.thumbnail(AVATAR_PX, AVATAR_PX)))?;
+    let pixels = {
+        let _decode = trace::section(c"chatter.media.ram.avatar_decode_resize_copy");
+        chatter_core::media::ImageProcessor::inline_pixels_from_memory(bytes)
+            .ok()
+            .map(image::DynamicImage::ImageRgba8)
+            .map(|img| to_pixels(img.thumbnail(AVATAR_PX, AVATAR_PX)))?
+    };
     let mut cache = caches();
     if cache.generation != generation {
+        trace::current_job().event(c"chatter.media.ram.generation_invalid");
         return None;
     }
     cache
@@ -232,21 +256,27 @@ pub fn thumbnail_guarded(
     generation: u64,
     decode: impl FnOnce() -> Option<image::DynamicImage>,
 ) -> Option<Pixels> {
+    let _thumbnail = trace::section(c"chatter.media.ram.thumbnail");
     let key = (id.to_string(), source_len);
     {
         let mut cache = caches();
         if cache.generation != generation {
+            trace::current_job().event(c"chatter.media.ram.generation_invalid");
             return None;
         }
         if let Some(hit) = cache.thumbnails.get(&key) {
             return Some(hit);
         }
     }
-    let pixels = decode().map(to_pixels)?;
+    let pixels = {
+        let _decode = trace::section(c"chatter.media.ram.thumbnail_decode_copy");
+        decode().map(to_pixels)?
+    };
     let mut cache = caches();
     // Logout/Android pause may wipe while the decoder is running. Never
     // repopulate that cleared cache or publish old pixels after the wipe.
     if cache.generation != generation {
+        trace::current_job().event(c"chatter.media.ram.generation_invalid");
         return None;
     }
     cache
@@ -262,9 +292,11 @@ pub fn thumbnail_generation() -> u64 {
 
 /// Cache already prepared pixels only if the initiating cache lifetime remains.
 pub fn prepared_thumbnail(id: &str, generation: u64, image: image::DynamicImage) -> Option<Pixels> {
+    let _prepared = trace::section(c"chatter.media.ram.prepared_thumbnail");
     let pixels = to_pixels(image);
     let mut cache = caches();
     if cache.generation != generation {
+        trace::current_job().event(c"chatter.media.ram.generation_invalid");
         return None;
     }
     cache
@@ -273,12 +305,30 @@ pub fn prepared_thumbnail(id: &str, generation: u64, image: image::DynamicImage)
     Some(pixels)
 }
 
+/// Stash an already-decoded preview buffer (the same `Pixels` the row will
+/// display, so the two share storage) under the static-preview key `(id, 0)`.
+/// Lets a row scrolled back into view restore synchronously via
+/// [`cached_thumbnail`] instead of re-decoding through the async loader.
+pub fn put_thumbnail_pixels(id: &str, generation: u64, pixels: &Pixels) {
+    let _insert = trace::section(c"chatter.media.ram.put_thumbnail_pixels");
+    let mut cache = caches();
+    if cache.generation != generation {
+        trace::current_job().event(c"chatter.media.ram.generation_invalid");
+        return;
+    }
+    cache
+        .thumbnails
+        .insert((id.to_string(), 0), pixels.clone(), pixel_bytes(pixels));
+}
+
 /// Read already prepared tray pixels without any file IO or decoding.
 pub fn cached_thumbnail(id: &str, source_len: usize) -> Option<Pixels> {
+    let _lookup = trace::section(c"chatter.media.ram.thumbnail_lookup");
     caches().thumbnails.get(&(id.to_string(), source_len))
 }
 
 pub fn gif(id: &str) -> Option<GifFrames> {
+    let _lookup = trace::section(c"chatter.media.ram.gif_lookup");
     caches().gifs.get(&id.to_string())
 }
 
@@ -287,9 +337,11 @@ pub fn put_gif(id: &str, frames: Vec<Pixels>, delays: Vec<u64>) {
 }
 
 pub fn put_gif_guarded(id: &str, generation: u64, frames: Vec<Pixels>, delays: Vec<u64>) {
+    let _insert = trace::section(c"chatter.media.ram.gif_insert");
     let bytes = frames.iter().map(pixel_bytes).sum();
     let mut cache = caches();
     if cache.generation != generation {
+        trace::current_job().event(c"chatter.media.ram.generation_invalid");
         return;
     }
     cache.gifs.insert(
@@ -300,10 +352,13 @@ pub fn put_gif_guarded(id: &str, generation: u64, frames: Vec<Pixels>, delays: V
         },
         bytes,
     );
+    trace::counter(c"chatter.media.ram.gif_bytes", cache.gifs.used() as i64);
+    trace::counter(c"chatter.media.ram.gif_entries", cache.gifs.len() as i64);
 }
 
 /// Drop decoded media whose attachment rows were removed by expiry.
 pub fn evict_attachments(ids: &std::collections::HashSet<String>) {
+    let _expire = trace::section(c"chatter.media.ram.expiry_evict");
     let mut cache = caches();
     cache.thumbnails.retain(|(id, _)| !ids.contains(id));
     cache.gifs.retain(|id| !ids.contains(id));
@@ -311,17 +366,20 @@ pub fn evict_attachments(ids: &std::collections::HashSet<String>) {
 
 /// Drop every decoded image.
 pub fn wipe() {
+    let _wipe = trace::section(c"chatter.media.ram.wipe");
     chatter_core::media::static_preview::wipe();
     caches().wipe();
 }
 
 /// The app was hidden (Android Activity pause: screen locked, backgrounded).
 pub fn on_lock() {
+    let _lock = trace::section(c"chatter.media.ram.lock");
     wipe();
 }
 
 /// The account signed out.
 pub fn on_logout() {
+    let _logout = trace::section(c"chatter.media.ram.logout");
     wipe();
 }
 

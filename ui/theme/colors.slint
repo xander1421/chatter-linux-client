@@ -2,12 +2,10 @@
 
 import { Appearance } from "appearance.slint";
 
-// Every token has a dark value (left) and a light value (right). Dark is a
-// blue-slate ink (#080d13), not pure black: elevation reads as lighter steps of
-// one hue. Contrast ratios for every pair are in the 2026-10-04 colour pass
-// (~/.cache/chatter-colors/contrast.py); keep body text >= 4.5:1.
-// `Appearance.dark` picks; nothing outside this file should need a
-// literal colour.
+// Every token has a dark value (left) and a light value (right). Surfaces
+// follow a restrained graphite ramp; teal marks actions and correspondence.
+// Keep body and metadata text >= 4.5:1 on their intended opaque surfaces.
+// `Appearance.dark` picks; callers use semantic tokens rather than literals.
 export global Colors {
     // Filled actions have a stable readable foreground in both themes.
     out property <color> action-fill: Appearance.dark ? #117d73 : #0f766e;
@@ -31,17 +29,17 @@ export global Colors {
     out property <color> accent: Appearance.dark ? #f97316 : #ea580c;
 
     // Neutral elevation: page < surface (cards) < surface-hover < fill-secondary.
-    out property <color> background: Appearance.dark ? #080d13 : #edf1f5;
-    out property <color> surface: Appearance.dark ? #141e29 : #ffffff;
-    out property <color> surface-hover: Appearance.dark ? #1c2734 : #e6ecf2;
+    out property <color> background: Appearance.dark ? #000000 : #f4f5f5;
+    out property <color> surface: Appearance.dark ? #1b1f20 : #ffffff;
+    out property <color> surface-hover: Appearance.dark ? #24292a : #e8ebeb;
     // Shared levels for page sections and inset controls. Keep the older
     // names below as aliases for existing call sites.
     out property <color> surface-page: background;
     out property <color> surface-card: surface;
     // A grouped Settings card is visibly raised from the dark modal/page.
-    out property <color> surface-section: Appearance.dark ? #1d2b39 : #ffffff;
-    out property <color> surface-control: Appearance.dark ? #263444 : #dfe6ed;
-    out property <color> surface-control-hover: Appearance.dark ? #304050 : #d3dce6;
+    out property <color> surface-section: Appearance.dark ? #252b2c : #ffffff;
+    out property <color> surface-control: Appearance.dark ? #303637 : #e1e5e5;
+    out property <color> surface-control-hover: Appearance.dark ? #383f40 : #d5dada;
     // Secondary-button fill. Its own step, not `surface`: a secondary button
     // sits on the page AND on cards (which are `surface`), and with no stroke
     // a surface-filled button on a card was a bare label (RC24 D2).
@@ -51,9 +49,9 @@ export global Colors {
     out property <color> control-off: Appearance.dark ? #5f7085 : #8795a5;
 
     // Text: muted is >= 4.5:1 on page, card, hovered row and both bubbles.
-    out property <color> text-primary: Appearance.dark ? #eef3f8 : #101a25;
-    out property <color> text-secondary: Appearance.dark ? #b6c4d2 : #3e4d5f;
-    out property <color> text-muted: Appearance.dark ? #97a8ba : #556677;
+    out property <color> text-primary: Appearance.dark ? #eff2f2 : #181d1e;
+    out property <color> text-secondary: Appearance.dark ? #bcc5c5 : #465253;
+    out property <color> text-muted: Appearance.dark ? #a0adad : #536061;
 
     // Status colors are both text and fills (end-call, badges), so dark stays
     // near the 500 step: error is >= 4.6:1 on a card AND holds a white glyph
@@ -89,12 +87,12 @@ export global Colors {
     out property <color> offline: Appearance.dark ? #6b7280 : #748393;
 
     // Borders and dividers
-    out property <color> border: Appearance.dark ? #243242 : #d2dae3;
+    out property <color> border: Appearance.dark ? #343b3c : #d4dada;
     // The ring is drawn inside Button. Use the opposite ink tone so it is
     // visible over every fill, including the teal primary and red danger.
     out property <color> focus-ring: Appearance.keyboard-focus-visible
-        ? (Appearance.dark ? #eef3f8 : #101a25) : transparent;
-    // Text/icon danger step on the raised section (5.04:1 in dark mode).
+        ? (Appearance.dark ? #eff2f2 : #181d1e) : transparent;
+    // Text/icon danger step on the raised section; keep readable on neutral fills.
     // Filled destructive controls continue to use `error`/`error-hover`.
     out property <color> danger: Appearance.dark ? #ff6666 : error;
 
@@ -107,44 +105,37 @@ export global Colors {
     out property <color> error-hover: Appearance.dark ? #dc2626 : #b91c1c;
 
     // Code block styling
-    out property <color> code-bg: Appearance.dark ? #0b1118 : #e9edf2;
+    out property <color> code-bg: Appearance.dark ? #141819 : #eceeee;
     out property <color> code-text: Appearance.dark ? #d4d4d4 : #1f2328;
 
     // Group accent (purple for private groups)
     out property <color> group-accent: Appearance.dark ? #9333ea : #7e22ce;
 
-    // Message bubbles — one matched pair on elevation level 2
-    // (theme/elevation.slint): same radii, rim, shadow and text treatment;
-    // only the tint differs. Peer is the neutral slate one step above the
-    // page; own is the brand teal pulled toward the slate hue (OKLCH h 212,
-    // C ~0.045 dark / ~0.024 light) and a little lighter than peer, so it
-    // reads as "you" without a second accent colour. Both fills are a 2-3%
-    // lightness fall from top to bottom (light from above). Contrast for
-    // body, timestamp and tick on the bottom (worst) stop is in
-    // ~/.cache/chatter-colors-2/contrast.py.
+    // Message bubbles share geometry and a small neutral tone shift. Own
+    // messages carry a restrained teal tint; peer messages stay graphite.
+    // Both gradient endpoints must keep body and metadata text readable.
     out property <brush> bubble-own: Appearance.dark
-        ? @linear-gradient(180deg, #133c43 0%, #11353b 100%)
-        : @linear-gradient(180deg, #dff3f8 0%, #d6eef3 100%);
+        ? @linear-gradient(180deg, #263b3c 0%, #223536 100%)
+        : @linear-gradient(180deg, #e6f1ef 0%, #dfedeb 100%);
     out property <brush> bubble-other: Appearance.dark
-        ? @linear-gradient(180deg, #202832 0%, #1c242e 100%)
-        : @linear-gradient(180deg, #ffffff 0%, #fbfcfd 100%);
+        ? @linear-gradient(180deg, #262c2d 0%, #222829 100%)
+        : @linear-gradient(180deg, #ffffff 0%, #fcfdfd 100%);
     out property <brush> bubble-own-hover: Appearance.dark
-        ? @linear-gradient(180deg, #174149 0%, #143a41 100%)
-        : @linear-gradient(180deg, #d8eef3 0%, #d0e9ef 100%);
+        ? @linear-gradient(180deg, #2b4142 0%, #273b3c 100%)
+        : @linear-gradient(180deg, #dfecea 0%, #d8e7e4 100%);
     out property <brush> bubble-other-hover: Appearance.dark
-        ? @linear-gradient(180deg, #252d37 0%, #212933 100%)
-        : @linear-gradient(180deg, #f6f8fb 0%, #f2f5f9 100%);
+        ? @linear-gradient(180deg, #2c3233 0%, #282e2f 100%)
+        : @linear-gradient(180deg, #f5f7f7 0%, #eff2f2 100%);
     // Solid stand-ins for things drawn ON or BESIDE a bubble that must match
     // it (reaction chips, the hover toolbar, call rows' icon well).
-    out property <color> surface-raised: Appearance.dark ? #232c36 : #ffffff;
+    out property <color> surface-raised: Appearance.dark ? #2b3132 : #ffffff;
     // A well inside either bubble (quote, code, file/media placeholder):
     // the same darkening on own and peer, so insets match across the pair.
     out property <color> bubble-inset: Appearance.dark ? #0000003d : #1a2c3e0a;
     // Read receipts / play glyphs inside a bubble: >= 3:1 on both fills.
     out property <color> bubble-accent: Appearance.dark ? #64ddcc : #0f766e;
-    // A sender's name on a peer bubble (14px text, so 4.5:1): dark primary
-    // #0d9488 was 4.0:1 on the bubble top; the glass accent is 9:1. Light
-    // primary already passes (5.3:1).
+    // Sender names are small text: use the brighter teal in dark mode to
+    // keep at least 4.5:1 against the peer bubble, including hover.
     out property <color> sender-name: Appearance.dark ? #64ddcc : #0f766e;
 
     // File category colors
@@ -157,25 +148,20 @@ export global Colors {
 
     // A well pressed into whatever it sits on: text fields, QR plates,
     // selected list rows and options (one step BELOW the page).
-    out property <color> inset: Appearance.dark ? #060a0f : #e6ebf0;
-    // THE selected-row fill, and the two tints for a selected or active
-    // control drawn on chrome (tabs, categories, swatches): one weak step and
-    // one strong step of the brand colour, instead of per-file alphas. Light
-    // `selected` is a shade below `inset` so a selected row is not the same
-    // colour as a hovered one (hover #e6ecf2 ≈ inset #e6ebf0); text-muted
-    // stays 4.6:1 on it.
-    out property <color> selected: Appearance.dark ? #060a0f : #dde4ec;
-    // Selection has a brand edge so it remains distinct from hover in both
-    // themes and in Shield mode, which tints the surrounding panel.
-    out property <color> row-selected: Appearance.dark ? #17363b : #d7eeeb;
+    out property <color> inset: Appearance.dark ? #0c1011 : #e6e9e9;
+    // Selected controls sit below the page; selected conversation rows use
+    // a restrained teal fill and the shared indicator to distinguish hover.
+    out property <color> selected: Appearance.dark ? #0c1011 : #dfe4e4;
+    // The teal indicator keeps selection distinct from hover in both themes.
+    out property <color> row-selected: Appearance.dark ? #233a39 : #e0eeeb;
     out property <color> row-hover: surface-hover;
     out property <color> selected-indicator: Appearance.dark ? #64ddcc : #0f766e;
     out property <color> tint-weak: primary.with-alpha(0.10);
     out property <color> tint-strong: primary.with-alpha(0.20);
     // Text drawn straight on Materials.scrim-media (a media viewer's
     // backdrop, dark in both themes).
-    out property <color> on-media: #eef3f8;
-    out property <color> on-media-muted: #b6c4d2;
+    out property <color> on-media: #eff2f2;
+    out property <color> on-media-muted: #bcc5c5;
     // Every 1px rule between rows, sections and header groups.
-    out property <color> divider: Appearance.dark ? #97a8ba2b : #5566772b;
+    out property <color> divider: Appearance.dark ? #a0adad2b : #5360612b;
 }

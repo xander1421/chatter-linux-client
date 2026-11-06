@@ -15,10 +15,14 @@ bench = false
 doctest = false
 
 [dependencies]
-slint = { version = "=1.17.1", default-features = false, features = ["std", "compat-1-2"] }
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2"] }
+
+# Embedded SVG/PNG resources need decoding even when this generated crate is
+# checked without an application renderer to supply the runtime features.
+i-slint-core = { version = "=1.18.1", default-features = false, features = ["image-decoders", "svg"] }
 
 [build-dependencies]
-slint-build = "1.17.1"
+slint-build = "=1.18.1"
 
 [features]
 ui-test-debug = []

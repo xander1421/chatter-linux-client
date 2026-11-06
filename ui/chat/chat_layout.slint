@@ -1,5 +1,6 @@
 import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
 import { GifPicker, GifData } from "../components/gif_picker.slint";
+import { AttachSheet } from "attach_sheet.slint";
 import { Icons } from "../theme/icons.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Button } from "../components/button.slint";
@@ -99,6 +100,8 @@ export component ChatLayout inherits Rectangle {
     // Picker properties
     in-out property <bool> emoji-picker-visible: false;
     in-out property <bool> gif-picker-visible: false;
+    // The attachment-source bottom sheet (Gallery / Camera / Video / File).
+    in-out property <bool> attach-sheet-visible: false;
 
     in property <[EmojiData]> emoji-list;
     in-out property <int> emoji-category;
@@ -290,6 +293,7 @@ export component ChatLayout inherits Rectangle {
     in property <bool> history-has-newer;
     in property <int> history-head-offset;
     callback request-latest();
+    callback cancel-upload(string);  // attachment ID — abort one in-flight upload
     callback load-more();
     callback list-geometry(float, float, bool);
     callback visible-media-rows(int, int);
@@ -301,6 +305,9 @@ export component ChatLayout inherits Rectangle {
     callback cancel-edit();
     callback cancel-reply();
     callback attachment-clicked();
+    // Android attachment source chosen in the sheet (0 gallery, 1 file, 2 camera
+    // photo, 3 camera video); the glue launches that source and closes the sheet.
+    callback composer-attach-source(int);
     callback paste-image();
     callback emoji-clicked();
     callback gif-clicked();
@@ -311,8 +318,9 @@ export component ChatLayout inherits Rectangle {
     // Tablet two-pane canvas: match the rounded header silhouette behind it.
     in property <bool> rounded-page-top: false;
 
-    // Layout — Neo 2.0 surface continuity: deepest background as base plane
-    background: Materials.ambient;
+    // Layout — pure OLED-black base plane (owner: pure black bg, not the grey
+    // ambient wash). Glass chrome over it reads as clean transparent glass.
+    background: Colors.background;
 
     message-list := MessageList {
         page-active: root.page-active;
@@ -429,6 +437,9 @@ export component ChatLayout inherits Rectangle {
         }
         audio-seek(id, pos) => {
             root.audio-seek(id, pos);
+        }
+        cancel-upload(id) => {
+            root.cancel-upload(id);
         }
         list-geometry(visible, content, seeking) => {
             root.list-geometry(visible, content, seeking);
@@ -982,6 +993,29 @@ export component ChatLayout inherits Rectangle {
                 }
             }
 
+        }
+    }
+
+    // Attachment-source bottom sheet. A dimmed backdrop (tap to dismiss) with
+    // the sheet docked to the bottom on a phone, or centred low on desktop.
+    if root.attach-sheet-visible: Rectangle {
+        z: 60;
+        width: 100%;
+        height: 100%;
+        background: #000000.with-alpha(0.45);
+        // Dismiss WITHOUT a choice: also fire the cancel sentinel (-1) so Rust
+        // resets composer-attachment-picker-open; otherwise a second Attach tap
+        // is swallowed by the picker-open guard (owner 2026-11-05).
+        TouchArea { clicked => { root.attach-sheet-visible = false; root.composer-attach-source(-1); } }
+        AttachSheet {
+            touch: root.mobile;
+            x: root.mobile ? 0px : (parent.width - self.width) / 2;
+            width: root.mobile ? parent.width : min(parent.width, 460px);
+            y: parent.height - self.height - (root.mobile ? 0px : Spacing.lg);
+            source(s) => {
+                root.attach-sheet-visible = false;
+                root.composer-attach-source(s);
+            }
         }
     }
 }

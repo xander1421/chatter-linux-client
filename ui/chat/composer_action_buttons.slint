@@ -1,4 +1,3 @@
-import { GlassSurface } from "../components/glass_surface.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
@@ -20,7 +19,10 @@ export component ComposerEmojiButton inherits Rectangle {
     callback emoji-clicked();
     width: Spacing.touch-target-min;
     height: Spacing.touch-target-min;
-    background: transparent;
+    // Above the shell, an opaque neutral plate keeps media out of the glyph.
+    // Inline controls share the shell; interaction feedback stays on top.
+    background: root.lift-layout > 0 ? Colors.surface : transparent;
+    border-radius: Spacing.radius-md;
     opacity: root.disabled ? 0.5 : 1.0;
     accessible-role: button;
     accessible-action-default => {
@@ -49,31 +51,22 @@ export component ComposerEmojiButton inherits Rectangle {
     }
     Rectangle {
         z: 1;
-        border-radius: self.width / 2;
+        border-radius: Spacing.radius-md;
         border-width: emoji-keys.has-focus ? 2px : 0px;
         border-color: Colors.focus-ring;
     }
 
-    GlassSurface {
-        width: parent.width - (emoji-touch.pressed ? 4px : 0px);
-        height: parent.height - (emoji-touch.pressed ? 4px : 0px);
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        material-enabled: root.lift-layout > 0.6;
-        material-level: root.surface-material-level;
-        material-tint: Materials.chat-chrome;
-        darkening: Materials.chat-darkening;
-        elevation: root.lift-layout > 0.6 ? 3 : 0;
-        backdrop-paused: root.surface-backdrop-paused;
         background: root.picker-open && !root.mobile ? Colors.tint-strong
             : emoji-touch.pressed ? Materials.pressed
             : emoji-touch.has-hover ? Materials.hover
             : transparent;
-        border-radius: self.width / 2;
-        opacity: emoji-touch.pressed || emoji-touch.has-hover || (root.picker-open && !root.mobile)
-            ? 1 : min(1, max(0, (root.lift-layout - 0.6) * 2.5));
-        animate width { duration: Materials.feedback-duration; easing: Materials.spring; }
-        animate height { duration: Materials.feedback-duration; easing: Materials.spring; }
+        border-radius: Spacing.radius-md;
+        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
     }
 
     Image {
@@ -119,7 +112,10 @@ export component ComposerAttachButton inherits Rectangle {
     callback attachment-clicked();
     width: Spacing.touch-target-min;
     height: Spacing.touch-target-min;
-    background: transparent;
+    // Above the shell, an opaque neutral plate keeps media out of the glyph.
+    // Inline controls share the shell; interaction feedback stays on top.
+    background: root.lift-layout > 0 ? Colors.surface : transparent;
+    border-radius: Spacing.radius-md;
     opacity: root.disabled ? 0.5 : 1.0;
     accessible-role: button;
     accessible-label: "Attach file";
@@ -140,30 +136,21 @@ export component ComposerAttachButton inherits Rectangle {
     }
     Rectangle {
         z: 1;
-        border-radius: self.width / 2;
+        border-radius: Spacing.radius-md;
         border-width: attach-keys.has-focus ? 2px : 0px;
         border-color: Colors.focus-ring;
     }
 
-    GlassSurface {
-        width: parent.width - (attachment-touch.pressed ? 4px : 0px);
-        height: parent.height - (attachment-touch.pressed ? 4px : 0px);
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        material-enabled: root.lift-layout > 0.6;
-        material-level: root.surface-material-level;
-        material-tint: Materials.chat-chrome;
-        darkening: Materials.chat-darkening;
-        elevation: root.lift-layout > 0.6 ? 3 : 0;
-        backdrop-paused: root.surface-backdrop-paused;
         background: attachment-touch.pressed ? Materials.pressed
             : attachment-touch.has-hover ? Materials.hover
             : transparent;
-        border-radius: self.width / 2;
-        opacity: attachment-touch.pressed || attachment-touch.has-hover
-            ? 1 : min(1, max(0, (root.lift-layout - 0.6) * 2.5));
-        animate width { duration: Materials.feedback-duration; easing: Materials.spring; }
-        animate height { duration: Materials.feedback-duration; easing: Materials.spring; }
+        border-radius: Spacing.radius-md;
+        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
     }
 
     Image {

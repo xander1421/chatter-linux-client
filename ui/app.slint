@@ -211,8 +211,10 @@ export component MainWindow inherits Window {
         && !ModalHostState.settings-open;
     // The Chats tab's floating create button: only on the list itself, never
     // over a pushed screen, a dialog, the search palette or selection mode.
-    property <bool> fab-visible: root.bottom-nav-visible && SidebarPane.active-tab == "chats"
-        && root.active-modal == "none" && !SearchPane.unified-search-open && !ChatPane.selection-mode;
+    property <bool> fab-visible: root.bottom-nav-visible
+        && (SidebarPane.active-tab == "chats" || SidebarPane.active-tab == "contacts")
+        && root.active-modal == "none" && !SearchPane.unified-search-open && !ChatPane.selection-mode
+        && !ModalHostState.friends-show-add;
     // Its top edge: above the dock and, during a call, the return-to-call
     // bar stacked on it — the same strip the main column reserves for them.
     // In the main content layer's coordinates (it and the dock both live
@@ -368,10 +370,12 @@ export component MainWindow inherits Window {
     callback toggle-anon-mode();              // sidebar button → Rust handler
     callback submit-anon-mode-pin(string);    // PIN modal submit → Rust verify
 
-    // Tablet panes share one page canvas behind their rounded chrome.
-    // A tinted window behind the sidebar and an opaque chat beside it expose
-    // a rectangular patch in the search/footer corner cutouts.
-    background: root.is-mobile-platform && !root.compact-layout
+    // Mobile (phone + tablet) paints the opaque OLED-black page canvas; the
+    // tablet's rounded panes sit on it and the phone is full-bleed single-pane.
+    // Desktop keeps the subtly tinted ambient gradient behind its glass chrome.
+    // (Was gated on !compact-layout, which left the phone on the grey ambient
+    // gradient — the owner wants true #000000 black on the phone.)
+    background: root.is-mobile-platform
         ? Colors.background : Materials.ambient;
 
     // ========== Responsive sidebar auto-collapse ==========
@@ -890,7 +894,13 @@ export component MainWindow inherits Window {
             return-to-call-height: root.return-to-call-height;
             safe-area-bottom: root.safe-area-bottom;
             sidebar-user-collapsed <=> root.sidebar-user-collapsed;
-            create-clicked => { ModalHostState.nav-push("create-menu"); }
+            create-clicked => {
+                if (SidebarPane.active-tab == "contacts") {
+                    ModalHostState.friends-show-add = true;
+                } else {
+                    ModalHostState.nav-push("create-menu");
+                }
+            }
         }
 
         // ========== Toast notification overlay (top-right) ==========

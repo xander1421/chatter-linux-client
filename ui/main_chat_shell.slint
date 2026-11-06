@@ -83,6 +83,15 @@ export component MainChatShell inherits Rectangle {
         : Spacing.sidebar-width;
     property <bool> call-hides-sidebar: !root.compact-layout && CallView.active-call-visible
         && root.width - root.normal-sidebar-offset < 308px;
+    // Only the settled, unobstructed compact chat has an opaque ChatLayout
+    // filling the whole panel. Keep the base paint through every transition,
+    // including the first edge-gesture frame before progress leaves 1.
+    private property <bool> chat-layout-covers-panel: root.compact-layout
+        && root.chat-push-progress == 1
+        && SidebarPane.mobile-show-chat && !SidebarPane.chat-edge-swiping
+        && ChatPane.channel-name != "" && !ChatPane.loading-messages
+        && !CallView.active-call-visible && !CallView.active-call-fullscreen
+        && !ChatPane.selection-mode && !ChatPane.thread-panel-visible;
     background: transparent;
 
         VerticalLayout {
@@ -123,7 +132,10 @@ export component MainChatShell inherits Rectangle {
         // The list recedes under the travelling conversation. It is
         // retained through the whole push and can receive the reverse
         // motion even after the logical chat route has closed.
-        if root.compact-layout && root.chat-push-progress > 0: Rectangle {
+        // At progress 1 the opaque, full-size chat pane covers this scrim.
+        // Unmount it then; otherwise its TouchArea child forces an opacity
+        // layer behind every scrolling frame. Restore it during either push.
+        if root.compact-layout && root.chat-push-progress > 0 && root.chat-push-progress < 1: Rectangle {
             width: parent.width;
             height: parent.height;
             background: Materials.scrim;
@@ -138,7 +150,9 @@ export component MainChatShell inherits Rectangle {
         if !root.compact-layout || SidebarPane.mobile-show-chat || root.chat-push-progress > 0: chat-panel-area := Rectangle {
             // The dock and floating header are translucent. Paint the chat
             // canvas across their whole page so list rows cannot show through.
-            background: Materials.ambient;
+            // With full opaque child coverage the base is never sampled, even
+            // if the two ambient gradients have different local coordinates.
+            background: root.chat-layout-covers-panel ? transparent : Materials.ambient;
             // Reserve the complete control bar and unmount the covered sidebar.
             x: root.compact-layout ? parent.width * (1 - root.chat-push-progress)
                 : root.call-hides-sidebar ? 0px : root.normal-sidebar-offset;
@@ -279,6 +293,7 @@ export component MainChatShell inherits Rectangle {
                     composer-gif-picker-results: ChatPane.composer-gif-picker-results;
                     composer-gif-picker-search <=> ChatPane.composer-gif-picker-search;
                     composer-gif-picker-visible <=> ChatPane.composer-gif-picker-visible;
+                    composer-attach-sheet-visible <=> ChatPane.composer-attach-sheet-visible;
                     composer-gifs-available: ChatPane.composer-gifs-available;
                     composer-is-editing <=> ChatPane.composer-is-editing;
                     composer-is-replying: ChatPane.composer-is-replying;
@@ -374,7 +389,9 @@ export component MainChatShell inherits Rectangle {
                     viewer-origin-y <=> root.viewer-origin-y;
                     window-width: root.width;
                     attachment-clicked() => { ChatPane.attachment-clicked(); }
+                    composer-attach-source(s) => { ChatPane.composer-attach-source(s); }
                     audio-seek(arg0, arg1) => { ChatPane.audio-seek(arg0, arg1); }
+                    cancel-upload(arg0) => { ChatPane.cancel-upload(arg0); }
                     cancel-edit() => { ChatPane.cancel-edit(); }
                     cancel-reply() => { ChatPane.cancel-reply(); }
                     chat-menu-can-start-secret-chat() => { return ModalHostState.chat-menu-can-start-secret-chat(); }

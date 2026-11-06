@@ -1,0 +1,137 @@
+name: Android Release APK
+
+# Builds the signed production Android APK (build-android.sh RELEASE=1) and
+# publishes it as a downloadable artifact — a beta build users can sideload to
+# try the app, with the full build log kept in the Actions run for traceability.
+#
+# Run it from the Actions tab (Run workflow) with a versionCode/name, or push a
+# tag like `v31` to cut a GitHub Release with the APK attached.
+#
+# Requires, in repo Settings:
+#   Variables (public pins, from ~/.chatter-release/offai-anchors.env):
+#     CHATTER_SERVER_URL, CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX,
+#     CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX, CHATTER_KT_VRF_PUBLIC_KEY_HEX,
+#     CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX, CHATTER_TLS_ROOT_CA_PEM,
+#     CHATTER_NTFY_URL, CHATTER_ONION_ADDR
+#   Secrets (operator signing material — a custody decision, see PRIV-02):
+#     CHATTER_KEYSTORE_BASE64, CHATTER_KEYSTORE_PASSWORD,
+#     CHATTER_KEY_ALIAS, CHATTER_KEY_PASSWORD
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_code:
+        description: "versionCode (integer, must exceed the last published build)"
+        required: true
+      version_name:
+        description: "versionName (e.g. 0.1.30)"
+        required: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # create the Release + attach the APK on a tag
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # The chatter_ui_slint rustc pass peaks ~13-15 GB; a 16 GB runner OOMs
+      # without headroom, so back it with swap.
+      - name: Add swap
+        run: |
+          sudo fallocate -l 14G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "27"
+
+      - name: Rust toolchain + Android target
+        run: |
+          rustup target add aarch64-linux-android
+          cargo install cargo-ndk --locked --version ^3
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Android SDK packages (platform 34 + 36, build-tools, NDK)
+        uses: android-actions/setup-android@v3
+      - run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platforms;android-34" \
+            "platforms;android-36" \
+            "build-tools;34.0.0" \
+            "ndk;28.2.13676358"
+
+      - name: Decode signing keystore
+        run: |
+          install -d "$RUNNER_TEMP/signing"
+          printf '%s' "${{ secrets.CHATTER_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/signing/chatter.keystore"
+          test -s "$RUNNER_TEMP/signing/chatter.keystore"
+
+      - name: Build signed release APK
+        working-directory: android
+        env:
+          RELEASE: "1"
+          DEV_TRUST_ROOT: "0"
+          DEV_AUTO_REGISTER: "0"
+          CARGO_BUILD_JOBS: "2"
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/28.2.13676358
+          CHATTER_ANDROID_VERSION_CODE: ${{ github.event.inputs.version_code }}
+          CHATTER_ANDROID_VERSION_NAME: ${{ github.event.inputs.version_name }}
+          # Public pinned anchors.
+          CHATTER_SERVER_URL: ${{ vars.CHATTER_SERVER_URL }}
+          CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX: ${{ vars.CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX }}
+          CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX: ${{ vars.CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX }}
+          CHATTER_KT_VRF_PUBLIC_KEY_HEX: ${{ vars.CHATTER_KT_VRF_PUBLIC_KEY_HEX }}
+          CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX: ${{ vars.CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX }}
+          CHATTER_TLS_ROOT_CA_PEM: ${{ vars.CHATTER_TLS_ROOT_CA_PEM }}
+          CHATTER_NTFY_URL: ${{ vars.CHATTER_NTFY_URL }}
+          CHATTER_ONION_ADDR: ${{ vars.CHATTER_ONION_ADDR }}
+          # Signing material (kept outside the repo, as build-android.sh requires).
+          CHATTER_KEYSTORE: ${{ runner.temp }}/signing/chatter.keystore
+          CHATTER_KEYSTORE_PASSWORD: ${{ secrets.CHATTER_KEYSTORE_PASSWORD }}
+          CHATTER_KEY_ALIAS: ${{ secrets.CHATTER_KEY_ALIAS }}
+          CHATTER_KEY_PASSWORD: ${{ secrets.CHATTER_KEY_PASSWORD }}
+        run: |
+          # A tag vNN sets the version from the tag when inputs are absent.
+          if [ -z "${CHATTER_ANDROID_VERSION_CODE}" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            code="${GITHUB_REF_NAME#v}"
+            export CHATTER_ANDROID_VERSION_CODE="$code"
+            export CHATTER_ANDROID_VERSION_NAME="0.1.$((code-1))"
+          fi
+          ./build-android.sh
+
+      - name: Verify signer certificate
+        working-directory: android
+        run: |
+          APKSIGNER="$(ls -d "$ANDROID_SDK_ROOT"/build-tools/*/apksigner | sort -V | tail -1)"
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatter-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release (tag push only)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/app/build/outputs/apk/release/app-release.apk
+          name: ${{ github.ref_name }}
+          body: |
+            Chatter closed-alpha Android build ${{ github.ref_name }}.
+            Sideload the attached APK (unknown-sources) to try the app.
+            Server: chat.offai.app. This is a beta — expect rough edges.

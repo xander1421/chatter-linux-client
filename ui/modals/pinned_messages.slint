@@ -60,6 +60,7 @@ export component PinnedMessagesModal inherits Rectangle {
                 }
             }
             if root.items.length > 0: pin-list := Flickable {
+                width: 100%;
                 min-height: 180px;
                 max-height: 480px;
                 viewport-height: rows.preferred-height;

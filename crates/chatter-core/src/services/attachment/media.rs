@@ -2,6 +2,7 @@
 //!
 //! Decryption + decoding for GIFs and images. Keeps crypto/media work in service layer.
 
+use crate::media::performance_trace as trace;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 #[cfg(target_os = "android")]
@@ -110,11 +111,13 @@ impl AttachmentService {
         &self,
         attachment_id: &AttachmentId,
     ) -> Result<Option<GifDecodeResult>, AttachmentError> {
+        let _first = trace::section(c"chatter.media.gif.first_frame_prepare");
         // Decrypt attachment
         let secure_buffer = self.decrypt_auto(attachment_id)?;
         let data = secure_buffer.as_slice().to_vec();
 
         // Decode first frame only (fast, ~10-20ms)
+        let _decode = trace::section(c"chatter.media.gif.first_frame_decode");
         match decode_first_frame_only(&data) {
             Ok(Some(first_frame)) => {
                 tracing::debug!(
@@ -152,6 +155,7 @@ impl AttachmentService {
         &self,
         attachment_id: &AttachmentId,
     ) -> Result<ImageDecodeResult, AttachmentError> {
+        let _info = trace::section(c"chatter.media.image.info_prepare");
         // Decrypt attachment
         let secure_buffer = self.decrypt_auto(attachment_id)?;
         let image_bytes = secure_buffer.as_slice().to_vec();
@@ -196,6 +200,7 @@ impl AttachmentService {
 
     /// Decode an authenticated stored sidecar within the inline pixel budget.
     pub fn decode_image_sidecar(bytes: &[u8]) -> Result<image::RgbaImage, AttachmentError> {
+        let _decode = trace::section(c"chatter.media.sidecar.validate_decode_resize");
         if bytes.len() > 4 * 1024 * 1024 {
             return Err(AttachmentError::InvalidAttachment(
                 "thumbnail exceeds preview budget".into(),
@@ -223,7 +228,9 @@ impl AttachmentService {
         decode: impl FnOnce(&[u8]) -> Result<(image::DynamicImage, u32, u32), crate::error::MediaError>,
     ) -> Result<ImagePreview, AttachmentError> {
         let stale = || AttachmentError::InvalidAttachment("image preview owner changed".into());
+        let _prepare = trace::section(c"chatter.media.image.prepare");
         if !owner() {
+            trace::current_job().event(c"chatter.media.image.owner_invalid");
             return Err(stale());
         }
         let attachment = self
@@ -231,6 +238,7 @@ impl AttachmentService {
             .ok_or_else(|| AttachmentError::InvalidAttachment("image attachment missing".into()))?;
         if let Some(bytes) = attachment.metadata.thumbnail.as_deref() {
             if let Ok(pixels) = Self::decode_image_sidecar(bytes) {
+                trace::current_job().event(c"chatter.media.image.sidecar_hit");
                 if !owner() {
                     return Err(stale());
                 }
@@ -263,26 +271,39 @@ impl AttachmentService {
         }
         // SecureBuffer owns and zeroizes the ONE decrypted original. Authenticate
         // it before the decoder; no whole-file clone or original bytes in result.
+        trace::current_job().event(c"chatter.media.image.original_fallback");
         let plaintext = self.decrypt_auto(id)?;
-        super::validate_media(plaintext.as_slice())?;
+        {
+            let _validate = trace::section(c"chatter.media.media_validate");
+            super::validate_media(plaintext.as_slice())?;
+        }
         if !owner() {
             return Err(stale());
         }
-        let (thumbnail, width, height) = decode(plaintext.as_slice())
-            .map_err(|_| AttachmentError::InvalidAttachment("invalid image preview".into()))?;
+        let (thumbnail, width, height) = {
+            let _decode = trace::section(c"chatter.media.image.decode_resize");
+            decode(plaintext.as_slice())
+                .map_err(|_| AttachmentError::InvalidAttachment("invalid image preview".into()))?
+        };
         if !owner() {
             return Err(stale());
         }
         let mut encoded = std::io::Cursor::new(Vec::new());
+        let encode = trace::section(c"chatter.media.image.encode_sidecar");
         thumbnail
             .write_to(&mut encoded, image::ImageFormat::WebP)
             .map_err(|_| {
                 AttachmentError::InvalidAttachment("image preview encoding failed".into())
             })?;
-        let pixels = thumbnail.thumbnail(320, 320).into_rgba8();
+        drop(encode);
+        let pixels = {
+            let _resize = trace::section(c"chatter.media.image.model_resize");
+            thumbnail.thumbnail(320, 320).into_rgba8()
+        };
         if !owner() {
             return Err(stale());
         }
+        let persist = trace::section(c"chatter.media.image.sidecar_persist");
         if !self
             .attachment_repo
             .cache_image_preview(
@@ -297,6 +318,7 @@ impl AttachmentService {
                 "image preview source replaced".into(),
             ));
         }
+        drop(persist);
         if !owner() {
             return Err(stale());
         }
@@ -404,6 +426,7 @@ impl AttachmentService {
         attachment_id: &AttachmentId,
         extractor: impl FnOnce(Arc<super::CbcRangeDecryptor>) -> Result<ImageDecodeResult, String>,
     ) -> Result<ImageDecodeResult, AttachmentError> {
+        let _prepare = trace::section(c"chatter.media.video.preview_prepare");
         let attachment = self
             .get_metadata(attachment_id)?
             .ok_or_else(|| AttachmentError::InvalidAttachment("video attachment missing".into()))?;
@@ -423,7 +446,9 @@ impl AttachmentService {
             ));
         }
         let source = Arc::new(self.open_range_decryptor(attachment_id)?);
+        let extract = trace::section(c"chatter.media.video.platform_extract");
         let result = extractor(source).map_err(AttachmentError::DecryptionError)?;
+        drop(extract);
         validate_video_thumbnail(&result)?;
         // Update only this item's thumbnail, fenced by encryption identity: don't overwrite
         // concurrent transfer/status changes or resurrect a deleted/replaced attachment.
@@ -450,6 +475,7 @@ impl AttachmentService {
     /// avoids the flaky GL pipeline that produced black frames. Falls back to
     /// the `image` crate if GStreamer is unavailable or fails.
     pub fn decode_gif_all_frames(gif_bytes: &[u8]) -> Result<GifFullDecodeResult, AttachmentError> {
+        let _decode = trace::section(c"chatter.media.gif.all_frames_decode");
         #[cfg(feature = "desktop-gstreamer")]
         {
             match crate::media::gif::decode_all_frames_cpu(gif_bytes) {

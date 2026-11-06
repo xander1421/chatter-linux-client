@@ -1,0 +1,23 @@
+[package]
+name = "chatter-analytic-clip-check"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+skia-safe = { version = "=0.153.3", features = ["gl", "textlayout"] }
+
+[lib]
+path = "lib.rs"
+
+[[bin]]
+name = "chatter-clip-gpu-check"
+path = "gpu.rs"
+
+[profile.dev]
+debug = 0
+
+[profile.dev.package."*"]
+opt-level = 2

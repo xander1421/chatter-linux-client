@@ -14,6 +14,7 @@ use slint::{Image, Model, Timer, TimerMode, Weak};
 
 use super::{INLINE_ANIMATION_BYTES, INLINE_FRAME_PX, MAX_INLINE_GIF_BYTES, MAX_INLINE_GIFS};
 use crate::MainWindow;
+use chatter_core::media::performance_trace as trace;
 
 // Workers consult this membership before decode and on every composited frame.
 static ADMITTED: LazyLock<RwLock<HashSet<String>>> = LazyLock::new(|| RwLock::new(HashSet::new()));
@@ -34,12 +35,9 @@ thread_local! {
     pub(super) static INLINE_WINDOW: RefCell<Option<Weak<MainWindow>>> = const { RefCell::new(None) };
     static INLINE_CLIENT: RefCell<Option<std::sync::Weak<chatter_core::client::ChatterClient>>> = const { RefCell::new(None) };
     static INLINE_REQUESTED: RefCell<HashMap<String, Instant>> = RefCell::new(HashMap::new());
-    /// Last message-list offset seen by the GIF timer. A changed offset means
-    /// the user is dragging or a fling is moving rows this frame.
-    static INLINE_LAST_SCROLL_POSITION: Cell<Option<f32>> = const { Cell::new(None) };
 }
 
-// At most seven constant messages per conversation open, never per-frame
+// At most six constant messages per conversation open, never per-frame
 // values or attachment identifiers. These distinguish admission, decoding and
 // model publication on release devices where verbose logging stays disabled.
 fn trace_playback_phase(phase: u8) {
@@ -53,7 +51,6 @@ fn trace_playback_phase(phase: u8) {
             2 => tracing::info!(target: "gif_playback::index_ready", "index_ready"),
             4 => tracing::info!(target: "gif_playback::decode_requested", "decode_requested"),
             8 => tracing::info!(target: "gif_playback::animation_registered", "animation_registered"),
-            16 => tracing::info!(target: "gif_playback::scroll_held", "scroll_held"),
             32 => tracing::info!(target: "gif_playback::frame_written", "frame_written"),
             64 => tracing::info!(target: "gif_playback::preview_written", "preview_written"),
             _ => {}
@@ -148,6 +145,7 @@ impl InlineGifState {
 
 /// Insert an inline GIF with LRU eviction (used by viewer module).
 pub(super) fn insert_inline_gif(att_id: String, state: InlineGifState) {
+    let _insert = trace::section(c"chatter.media.gif.inline_insert");
     let new_bytes = state.bytes();
     if new_bytes > MAX_INLINE_GIF_BYTES {
         return;
@@ -168,6 +166,7 @@ pub(super) fn insert_inline_gif(att_id: String, state: InlineGifState) {
             })
         {
             if let Some(oldest) = lru.pop_front() {
+                let _evict = trace::section(c"chatter.media.gif.inline_evict");
                 INLINE_GIFS.with(|gifs| {
                     gifs.borrow_mut().remove(&oldest);
                 });
@@ -180,6 +179,9 @@ pub(super) fn insert_inline_gif(att_id: String, state: InlineGifState) {
 
     INLINE_GIFS.with(|gifs| {
         gifs.borrow_mut().insert(att_id, state);
+        if trace::enabled() {
+            trace::counter(c"chatter.media.gif.inline_entries", gifs.borrow().len() as i64);
+        }
     });
 }
 
@@ -270,8 +272,12 @@ pub fn register_inline_gif_from_images(
 
 /// Unregister an inline GIF (when message is removed from view).
 pub fn unregister_inline_gif(attachment_id: &str) {
+    let _unload = trace::section(c"chatter.media.gif.inline_unload");
     INLINE_GIFS.with(|gifs| {
         gifs.borrow_mut().remove(attachment_id);
+        if trace::enabled() {
+            trace::counter(c"chatter.media.gif.inline_entries", gifs.borrow().len() as i64);
+        }
     });
     INLINE_LRU.with(|lru| {
         lru.borrow_mut().retain(|id| id != attachment_id);
@@ -322,11 +328,12 @@ fn stop_inline_timer() {
 /// Advance the inline GIFs on the rows the message list has on screen, and
 /// write the frames that changed into their attachment rows.
 ///
-/// Off-screen GIFs keep their frame: advancing them would only rewrite model
-/// rows nobody draws (each a whole MessageItemData copy) 30 times a second.
+/// Off-screen GIFs keep their frame: advancing them would only rewrite
+/// attachment models nobody draws 30 times a second.
 /// The range is the list's own estimate (`message-*-visible-row`, each within
 /// a row), widened by one row either side.
 fn tick_inline_gifs(elapsed_ms: u64) {
+    let _tick = trace::section(c"chatter.media.gif.inline_tick");
     let Some(w) = INLINE_WINDOW.with(|cell| cell.borrow().as_ref().and_then(|weak| weak.upgrade()))
     else {
         return;
@@ -335,19 +342,8 @@ fn tick_inline_gifs(elapsed_ms: u64) {
         stop_inline_timer();
         return;
     }
-    // Replacing a GIF's attachment row schedules another full render while
-    // the message list is already re-laying out under the finger. Hold the
-    // current frame whenever its offset moves; playback resumes at rest.
-    let position = w.global::<crate::ChatPane>().get_message_scroll_position() as f32;
-    let moved = INLINE_LAST_SCROLL_POSITION.with(|last| {
-        let moved = last.get().is_some_and(|previous| previous != position);
-        last.set(Some(position));
-        moved
-    });
-    if moved {
-        trace_playback_phase(16);
-        return;
-    }
+    // Scrolling does not suspend visible playback. Only the indexed visible
+    // attachment models are updated, and only when their frame changes.
     // The viewport observer indexes GIF attachment slots once per range
     // change. A clock tick never clones message rows or scans text/photo rows.
     let targets = ANIMATED.with(|targets| targets.borrow().clone());
@@ -379,6 +375,9 @@ fn tick_inline_gifs(elapsed_ms: u64) {
             }
         }
     }
+    if trace::enabled() {
+        trace::counter(c"chatter.media.gif.inline_visible_targets", shown.len() as i64);
+    }
     if shown.is_empty() {
         let has_targets = ANIMATED.with(|targets| !targets.borrow().is_empty());
         if !has_targets && !super::picker::has_picker_gifs() {
@@ -402,6 +401,7 @@ fn tick_inline_gifs(elapsed_ms: u64) {
         }
     });
 
+    let mut publications = 0;
     for (attachments, att_idx, mut att) in shown {
         let Some(Some(frame)) = changed.get(att.id.as_str()) else {
             continue;
@@ -415,7 +415,11 @@ fn tick_inline_gifs(elapsed_ms: u64) {
         att.thumbnail = frame.clone();
         att.has_thumbnail = true;
         model.set_row_data(att_idx, att);
+        publications += 1;
         trace_playback_phase(32);
+    }
+    if trace::enabled() {
+        trace::counter(c"chatter.media.gif.inline_frame_publications", publications);
     }
 }
 
@@ -450,6 +454,7 @@ fn rows_to_admit(first: i32, last: i32, count: usize) -> Option<std::ops::RangeI
 /// animation itself goes through `tick_inline_gifs`, which looks only at the
 /// visible rows.
 fn set_attachment_thumbnail(window: &MainWindow, attachment_id: &str, image: Image) {
+    let _publish = trace::section(c"chatter.media.gif.thumbnail_publish");
     let _ = window;
     TARGETS.with(|targets| {
         let targets = targets.borrow();
@@ -480,10 +485,10 @@ fn set_attachment_thumbnail(window: &MainWindow, attachment_id: &str, image: Ima
 
 /// Clear all inline GIF animations.
 pub fn clear_inline_gifs() {
+    let _wipe = trace::section(c"chatter.media.gif.inline_wipe");
     BINDING_EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
     PLAYBACK_PHASES.with(|phases| phases.set(0));
     MODEL_WATCH.with(|watch| watch.borrow_mut().take());
-    INLINE_LAST_SCROLL_POSITION.with(|last| last.set(None));
     TARGETS.with(|targets| targets.borrow_mut().clear());
     ANIMATED.with(|targets| targets.borrow_mut().clear());
     if let Ok(mut admitted) = ADMITTED.write() {
@@ -494,6 +499,8 @@ pub fn clear_inline_gifs() {
     INLINE_GIFS.with(|gifs| {
         gifs.borrow_mut().clear();
     });
+    trace::counter(c"chatter.media.gif.inline_entries", 0);
+    trace::counter(c"chatter.media.gif.admitted", 0);
     INLINE_LRU.with(|lru| {
         lru.borrow_mut().clear();
     });
@@ -594,6 +601,18 @@ pub fn auto_register_gifs_from_messages(
         }
     }
     let ids: Vec<_> = targets.keys().cloned().collect();
+    trace::counter(c"chatter.media.gif.admitted", ids.len() as i64);
+    if trace::enabled() {
+        // Cardinalities only: never emit set members or derive IDs from them.
+        let previous = ADMITTED.read();
+        if let Ok(previous) = previous {
+            let departed = previous
+                .iter()
+                .filter(|id| !targets.contains_key(*id))
+                .count();
+            trace::counter(c"chatter.media.gif.departed", departed as i64);
+        }
+    }
     trace_playback_phase(if animated.is_empty() { 1 } else { 2 });
     if let Ok(mut admitted) = ADMITTED.write() {
         *admitted = ids.iter().cloned().collect();
@@ -665,45 +684,65 @@ pub(crate) fn register_gif_attachment_guarded(
     window_weak: slint::Weak<crate::MainWindow>,
     owner: crate::bin_ui::features::history_owner::HistoryOwner,
 ) {
+    let job = trace::Job::new();
+    let _context = job.enter();
+    job.event(c"chatter.media.gif.demand");
+    let demand = job.span(c"chatter.media.gif.demand_to_publish");
     INLINE_CLIENT.with(|c| *c.borrow_mut() = Some(std::sync::Arc::downgrade(&ui_ctx)));
     start_inline_timer_if_needed();
     // Optimization: Check if already registered (O(1) in UI thread)
     let already_registered = INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(&attachment_id));
     if already_registered {
+        job.event(c"chatter.media.gif.inline_hit");
         return;
     }
+    job.event(c"chatter.media.gif.inline_miss");
 
     let generation = crate::bin_ui::decode_cache::thumbnail_generation();
     let visible = ADMITTED
         .read()
         .is_ok_and(|ids| ids.contains(&attachment_id));
     if !visible {
+        job.event(c"chatter.media.gif.not_admitted");
         return;
     }
     trace_playback_phase(4);
+    let queued = job.span(c"chatter.media.gif.worker_queue");
     chatter_core::media::gif::workers::submit(
         format!("inline:{attachment_id}:{generation}"),
         visible,
         move || {
+            drop(queued);
+            let _context = job.enter();
+            let _worker = job.span(c"chatter.media.gif.worker");
+            let _work = trace::section(c"chatter.media.gif.work");
             if !owner.is_current()
                 || !ADMITTED
                     .read()
                     .is_ok_and(|ids| ids.contains(&attachment_id))
                 || generation != crate::bin_ui::decode_cache::thumbnail_generation()
             {
+                job.event(c"chatter.media.gif.worker_invalid");
                 return;
             }
             use chatter_core::domain::attachment::ContentLocation;
 
             // Decoded on an earlier open: no decrypt, no decode.
             if let Some(cached) = crate::bin_ui::decode_cache::gif(&attachment_id) {
+                job.event(c"chatter.media.gif.decoded_hit");
+                let publication = job.span(c"chatter.media.gif.cached_ui_queue");
                 let _ = slint::invoke_from_event_loop(move || {
+                    drop(publication);
+                    let _demand = demand;
+                    let _context = job.enter();
+                    let _publish = trace::section(c"chatter.media.gif.cached_ui_publish");
                     if !owner.is_current()
                         || !ADMITTED
                             .read()
                             .is_ok_and(|ids| ids.contains(&attachment_id))
                         || generation != crate::bin_ui::decode_cache::thumbnail_generation()
                     {
+                        job.event(c"chatter.media.gif.ui_invalid");
                         return;
                     }
                     let first = register_inline_gif_from_buffers(
@@ -713,10 +752,12 @@ pub(crate) fn register_gif_attachment_guarded(
                     );
                     if let (Some(first), Some(w)) = (first, window_weak.upgrade()) {
                         set_attachment_thumbnail(&w, &attachment_id, first);
+                        job.event(c"chatter.media.gif.published");
                     }
                 });
                 return;
             }
+            job.event(c"chatter.media.gif.decoded_miss");
 
             // Parse attachment ID
             let att_id: chatter_core::domain::ids::AttachmentId = match attachment_id.parse() {
@@ -751,29 +792,40 @@ pub(crate) fn register_gif_attachment_guarded(
                 Err(_) => return,
             };
             if !owner.is_current() {
+                job.event(c"chatter.media.gif.owner_invalid");
                 return;
             }
             use image::AnimationDecoder;
             let reader = std::io::BufReader::new(
                 chatter_core::services::attachment::CbcRangeReader::new(range),
             );
+            let setup = trace::section(c"chatter.media.gif.decoder_setup");
             let decoder = match chatter_core::media::gif::bounded_gif_decoder(reader) {
                 Ok(decoder) => decoder,
                 Err(_) => return,
             };
-            let frames_iter = decoder.into_frames();
+            drop(setup);
+            let mut frames_iter = decoder.into_frames().enumerate();
             // Keep decoding bounded in memory until the retained set is final.
             // Uploaded batches cannot be thinned after a later frame raises the stride.
             let mut selected = chatter_core::media::gif::DecimatedGif::default();
             const MAX_FRAMES: usize = 100;
 
-            for (_idx, frame_result) in frames_iter.enumerate() {
+            loop {
+                let next = {
+                    let _decode = trace::section(c"chatter.media.gif.frame_decode");
+                    frames_iter.next()
+                };
+                let Some((_idx, frame_result)) = next else {
+                    break;
+                };
                 if !owner.is_current()
                     || !ADMITTED
                         .read()
                         .is_ok_and(|ids| ids.contains(&attachment_id))
                     || generation != crate::bin_ui::decode_cache::thumbnail_generation()
                 {
+                    job.event(c"chatter.media.gif.decode_invalid");
                     return;
                 }
                 let frame = match frame_result {
@@ -795,6 +847,7 @@ pub(crate) fn register_gif_attachment_guarded(
 
                 let buffer = frame.into_buffer();
                 let (width, height) = buffer.dimensions();
+                let resize = trace::section(c"chatter.media.gif.frame_resize");
                 let (raw_data, width, height) = super::fit_frame(
                     buffer.into_raw(),
                     width,
@@ -802,31 +855,40 @@ pub(crate) fn register_gif_attachment_guarded(
                     INLINE_FRAME_PX,
                     INLINE_FRAME_PX,
                 );
+                drop(resize);
 
                 if raw_data.is_empty() {
                     continue;
                 }
                 let bytes = raw_data.len();
+                let copy = trace::section(c"chatter.media.gif.pixel_copy");
                 let pixel_buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
                     &raw_data, width, height,
                 );
+                drop(copy);
                 if _idx == 0 {
                     let first = pixel_buffer.clone();
                     let weak = window_weak.clone();
                     let id = attachment_id.clone();
                     let first_owner = owner.clone();
+                    let publication = job.span(c"chatter.media.gif.first_ui_queue");
                     let _ = slint::invoke_from_event_loop(move || {
+                        drop(publication);
+                        let _context = job.enter();
                         if !first_owner.is_current()
                             || !ADMITTED.read().is_ok_and(|ids| ids.contains(&id))
                             || generation != crate::bin_ui::decode_cache::thumbnail_generation()
                         {
+                            job.event(c"chatter.media.gif.ui_invalid");
                             return;
                         }
                         if let Some(w) = weak.upgrade() {
                             set_attachment_thumbnail(&w, &id, Image::from_rgba8(first));
+                            job.event(c"chatter.media.gif.first_published");
                         }
                     });
                 }
+                let _decimate = trace::section(c"chatter.media.gif.frame_decimate");
                 selected = chatter_core::media::gif::decimate_gif_frame(
                     selected,
                     pixel_buffer,
@@ -844,6 +906,7 @@ pub(crate) fn register_gif_attachment_guarded(
                     .map(|sample| (sample.frame, sample.delay_ms))
                     .unzip();
                 if !owner.is_current() {
+                    job.event(c"chatter.media.gif.owner_invalid");
                     return;
                 }
                 crate::bin_ui::decode_cache::put_gif_guarded(
@@ -854,13 +917,19 @@ pub(crate) fn register_gif_attachment_guarded(
                 );
                 let att_id_full = attachment_id.clone();
                 let weak = window_weak.clone();
+                let publication = job.span(c"chatter.media.gif.full_ui_queue");
                 let _ = slint::invoke_from_event_loop(move || {
+                    drop(publication);
+                    let _demand = demand;
+                    let _context = job.enter();
+                    let _publish = trace::section(c"chatter.media.gif.full_ui_publish");
                     if !owner.is_current()
                         || !ADMITTED
                             .read()
                             .is_ok_and(|ids| ids.contains(&attachment_id))
                         || generation != crate::bin_ui::decode_cache::thumbnail_generation()
                     {
+                        job.event(c"chatter.media.gif.ui_invalid");
                         return;
                     }
                     if let Some(first_image) =
@@ -868,6 +937,7 @@ pub(crate) fn register_gif_attachment_guarded(
                     {
                         if let Some(w) = weak.upgrade() {
                             set_attachment_thumbnail(&w, &att_id_full, first_image);
+                            job.event(c"chatter.media.gif.published");
                         }
                     }
                 });
@@ -957,6 +1027,15 @@ mod tests {
         tick_inline_gifs(80);
         assert_eq!(installed.row_data(0).unwrap().thumbnail, second);
         assert_eq!(detached.row_data(0).unwrap().thumbnail, second);
+        // Visible GIFs keep advancing while a drag or fling moves the list.
+        pane.set_message_scroll_position(32.0);
+        assert_eq!(pane.get_message_scroll_position(), 32.0);
+        tick_inline_gifs(80);
+        assert_eq!(installed.row_data(0).unwrap().thumbnail, first);
+        pane.set_message_scroll_position(96.0);
+        assert_eq!(pane.get_message_scroll_position(), 96.0);
+        tick_inline_gifs(80);
+        assert_eq!(installed.row_data(0).unwrap().thumbnail, second);
         // Empty visible model stops the clock; publication wakes it again.
         messages.set_vec(Vec::new());
         slint::platform::update_timers_and_animations();

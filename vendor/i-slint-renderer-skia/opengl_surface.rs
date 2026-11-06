@@ -20,6 +20,49 @@ use i_slint_core::renderer::DrawOutcome;
 
 use crate::SkiaSharedContext;
 
+// Front-buffer (single-buffer) rendering experiment helpers. `setprop
+// debug.chatter.front_buffer 1` before launch makes config selection prefer a
+// config that supports single-buffer rendering so the runtime switch can engage.
+#[cfg(target_os = "android")]
+fn front_buffer_requested() -> bool {
+    unsafe extern "C" {
+        fn __system_property_get(name: *const std::ffi::c_char, value: *mut std::ffi::c_char) -> i32;
+    }
+    let mut value = [0u8; 92];
+    // SAFETY: fixed property name and full-size writable buffer.
+    let length = unsafe {
+        __system_property_get(c"debug.chatter.front_buffer".as_ptr(), value.as_mut_ptr().cast())
+    };
+    length == 1 && value[0] == b'1'
+}
+
+#[cfg(target_os = "android")]
+fn egl_config_is_mutable(config: &glutin::config::Config) -> bool {
+    use glutin::config::{AsRawConfig, RawConfig};
+    use glutin::display::{AsRawDisplay, GetGlDisplay, RawDisplay};
+    use std::ffi::c_void;
+    let display = config.display();
+    let (d, c): (*mut c_void, *mut c_void) = match (display.raw_display(), config.raw_config()) {
+        (RawDisplay::Egl(d), RawConfig::Egl(c)) => (d.cast_mut(), c.cast_mut()),
+        _ => return false,
+    };
+    // SAFETY: EGL ABI; live display/config owned by glutin; null-checked symbol.
+    unsafe {
+        let p = display.get_proc_address(c"eglGetConfigAttrib");
+        if p.is_null() {
+            return false;
+        }
+        type Get = unsafe extern "C" fn(*mut c_void, *mut c_void, i32, *mut i32) -> u32;
+        let get: Get = core::mem::transmute(p);
+        let mut val: i32 = 0;
+        // EGL_SURFACE_TYPE 0x3033, EGL_MUTABLE_RENDER_BUFFER_BIT_KHR 0x1000.
+        if get(d, c, 0x3033, &mut val) == 0 {
+            return false;
+        }
+        (val & 0x1000) != 0
+    }
+}
+
 /// Wraps a [`glutin::context::PossiblyCurrentContext`] and makes it not-current on drop,
 /// so that no stale thread-local state remains after the context is destroyed.
 struct GlutinContext(Option<glutin::context::PossiblyCurrentContext>);
@@ -51,6 +94,12 @@ impl Drop for GlutinContext {
 
 /// This surface type renders into the given window with OpenGL, using glutin and glow libraries.
 pub struct OpenGLSurface {
+    #[cfg(all(target_os = "android", feature = "experimental-swappy"))]
+    swappy: Option<crate::android_swappy::Swappy>,
+    #[cfg(target_os = "android")]
+    frame_timestamps: RefCell<crate::android_frame_timestamps::Timestamps>,
+    #[cfg(target_os = "android")]
+    gpu_timestamps: Option<RefCell<crate::android_gpu_timestamps::Timestamps>>,
     fb_info: skia_safe::gpu::gl::FramebufferInfo,
     surface: RefCell<skia_safe::Surface>,
     gr_context: RefCell<skia_safe::gpu::DirectContext>,
@@ -80,6 +129,49 @@ impl super::Surface for OpenGLSurface {
         "opengl"
     }
 
+    #[cfg(target_os = "android")]
+    fn set_android_swap_interval_zero(&self, zero: bool) -> Result<bool, PlatformError> {
+        self.ensure_context_current()?;
+        let interval = if zero {
+            glutin::surface::SwapInterval::DontWait
+        } else {
+            glutin::surface::SwapInterval::Wait(NonZeroU32::new(1).unwrap())
+        };
+        Ok(self.glutin_surface.set_swap_interval(&self.glutin_context, interval).is_ok())
+    }
+
+    // Front-buffer (single-buffer) rendering experiment. EGL_KHR_mutable_render_buffer
+    // lets draws go straight to the scanned-out buffer, collapsing the ~2-frame
+    // compositor queue latency to near zero during a drag — at the cost of tearing.
+    // Returns whether the driver accepted it; a config without the mutable bit declines.
+    #[cfg(target_os = "android")]
+    fn set_front_buffer(&self, single: bool) -> bool {
+        use glutin::display::{AsRawDisplay, RawDisplay};
+        use glutin::surface::{AsRawSurface, RawSurface};
+        use std::ffi::c_void;
+        if self.ensure_context_current().is_err() {
+            return false;
+        }
+        let display = self.glutin_context.display();
+        let (d, s): (*mut c_void, *mut c_void) =
+            match (display.raw_display(), self.glutin_surface.raw_surface()) {
+                (RawDisplay::Egl(d), RawSurface::Egl(s)) => (d.cast_mut(), s.cast_mut()),
+                _ => return false,
+            };
+        // EGL_RENDER_BUFFER 0x3086, EGL_SINGLE_BUFFER 0x3085, EGL_BACK_BUFFER 0x3084.
+        let value = if single { 0x3085 } else { 0x3084 };
+        // SAFETY: EGL ABI; live owning display/surface from glutin; null-checked symbol.
+        unsafe {
+            let p = display.get_proc_address(c"eglSurfaceAttrib");
+            if p.is_null() {
+                return false;
+            }
+            type Attrib = unsafe extern "C" fn(*mut c_void, *mut c_void, i32, i32) -> u32;
+            let attrib: Attrib = core::mem::transmute(p);
+            attrib(d, s, 0x3086, value) != 0
+        }
+    }
+
     fn with_graphics_api(&self, callback: &mut dyn FnMut(GraphicsAPI<'_>)) {
         let api = GraphicsAPI::NativeOpenGL {
             get_proc_address: &|name| {
@@ -106,7 +198,36 @@ impl super::Surface for OpenGLSurface {
         ) -> Option<DirtyRegion>,
         pre_present_callback: &RefCell<Option<Box<dyn FnMut()>>>,
     ) -> Result<DrawOutcome, PlatformError> {
-        self.ensure_context_current()?;
+        #[cfg(all(target_os = "android", feature = "painted-scroll-probe"))]
+        let painted_frame = {
+            #[cfg(feature = "experimental-swappy")]
+            let ordinary = self.swappy.is_none();
+            #[cfg(not(feature = "experimental-swappy"))]
+            let ordinary = true;
+            let enabled = i_slint_core::painted_scroll_probe::enabled();
+            i_slint_core::painted_scroll_probe::FrameGuard::begin_observed(ordinary,
+                enabled && crate::renderer_trace::observation_enabled(), crate::renderer_trace::counter)
+        };
+        #[cfg(all(target_os = "android", feature = "experimental-swappy"))]
+        crate::renderer_trace::counter(
+            c"Chatter Swappy enabled",
+            i64::from(self.swappy.is_some()),
+        );
+        #[cfg(target_os = "android")]
+        let _frame_trace = crate::renderer_trace::Section::new(c"Chatter Skia EGL render");
+        #[cfg(target_os = "android")]
+        let acquire_trace = crate::renderer_trace::Section::new(c"Chatter Skia EGL acquire");
+        if let Err(error) = self.ensure_context_current() {
+            #[cfg(feature = "painted-scroll-probe")]
+            i_slint_core::painted_scroll_probe::cancel();
+            return Err(error);
+        }
+        #[cfg(all(target_os = "android", feature = "experimental-swappy"))]
+        if let Some(swappy) = &self.swappy {
+            swappy.record_frame_start();
+        } else {
+            crate::renderer_trace::counter(c"Chatter Swappy mode", 0);
+        }
 
         let current_context = &self.glutin_context;
 
@@ -116,6 +237,20 @@ impl super::Surface for OpenGLSurface {
 
         let width = size.width.try_into().ok();
         let height = size.height.try_into().ok();
+
+        // Chatter patch (Android rotation): the ANativeWindow buffer geometry
+        // lags the reported window size by one swap. On a rotation the Resized
+        // event recreates the skia target at the new size and pushes the new
+        // geometry (ANativeWindow_setBuffersGeometry), but the EGL back buffer
+        // is still the old orientation for this frame, so the scene lands in a
+        // stale-sized buffer (squished into one corner, the rest black). Report
+        // such a frame as not presented so the event loop re-arms one more
+        // redraw; the follow-up frame draws into the now-correct buffer.
+        // Without this a static screen keeps the stale frame until the next
+        // unrelated event (the owner's "rotate twice to fix"). See PATCHES.md.
+        #[cfg(target_os = "android")]
+        let egl_settled = self.glutin_surface.width() == Some(size.width)
+            && self.glutin_surface.height() == Some(size.height);
 
         if let Some((width, height)) = width.zip(height)
             && (width != surface.width() || height != surface.height())
@@ -129,25 +264,96 @@ impl super::Surface for OpenGLSurface {
             )?;
         }
 
+        #[cfg(target_os = "android")]
+        drop(acquire_trace);
         let skia_canvas = surface.canvas();
 
+        #[cfg(target_os = "android")]
+        if let Some(timestamps) = &self.gpu_timestamps {
+            timestamps.borrow_mut().begin(&current_context.display());
+        }
         skia_canvas.save();
+        #[cfg(target_os = "android")]
+        let callback_trace = crate::renderer_trace::Section::new(c"Chatter Skia surface callback");
         callback(
             skia_canvas,
             Some(gr_context),
             u8::try_from(self.glutin_surface.buffer_age()).unwrap_or_default(),
         );
+        #[cfg(target_os = "android")]
+        drop(callback_trace);
         skia_canvas.restore();
+        #[cfg(target_os = "android")]
+        if let Some(timestamps) = &self.gpu_timestamps {
+            timestamps.borrow_mut().end();
+        }
 
         if let Some(pre_present_callback) = pre_present_callback.borrow_mut().as_mut() {
+            #[cfg(target_os = "android")]
+            let _present_trace = crate::renderer_trace::Section::new(c"Chatter Skia pre present");
             pre_present_callback();
         }
 
-        self.glutin_surface.swap_buffers(current_context).map(|_| DrawOutcome::Success).map_err(
-            |glutin_error| {
-                format!("Skia OpenGL Renderer: Error swapping buffers: {glutin_error}").into()
-            },
-        )
+        #[cfg(target_os = "android")]
+        let _swap_trace = crate::renderer_trace::Section::new(c"Chatter Skia EGL swap");
+        #[cfg(all(target_os = "android", feature = "experimental-swappy"))]
+        crate::renderer_trace::counter(c"Chatter Swappy app observer suppressed", i64::from(self.swappy.is_some()));
+        #[cfg(all(target_os = "android", feature = "experimental-swappy"))]
+        let frame_id = if self.swappy.is_none() {
+            self.frame_timestamps.borrow_mut().before_swap(&current_context.display(), &self.glutin_surface)
+        } else { None };
+        #[cfg(all(target_os = "android", not(feature = "experimental-swappy")))]
+        let frame_id = self
+            .frame_timestamps
+            .borrow_mut()
+            .before_swap(&current_context.display(), &self.glutin_surface);
+        let result: Result<(), String> = {
+            #[cfg(all(target_os = "android", feature = "experimental-swappy"))]
+            if let Some(swappy) = &self.swappy {
+                swappy
+                    .swap(&current_context.display(), &self.glutin_surface)
+                    .map_err(str::to_owned)
+            } else {
+                self.glutin_surface
+                    .swap_buffers(current_context)
+                    .map_err(|e| e.to_string())
+            }
+            #[cfg(not(all(
+                target_os = "android",
+                feature = "experimental-swappy"
+            )))]
+            self.glutin_surface
+                .swap_buffers(current_context)
+                .map_err(|e| e.to_string())
+        };
+        #[cfg(target_os = "android")]
+        if result.is_ok() {
+            #[cfg(feature = "experimental-swappy")]
+            if self.swappy.is_none() {
+                self.frame_timestamps.borrow_mut().swapped(frame_id);
+            }
+            #[cfg(not(feature = "experimental-swappy"))]
+            self.frame_timestamps.borrow_mut().swapped(frame_id);
+        }
+        #[cfg(all(target_os = "android", feature = "painted-scroll-probe"))]
+        if i_slint_core::painted_scroll_probe::active() {
+            painted_frame.commit(self.frame_timestamps.borrow().painted_generation(), frame_id,
+                result.is_ok(), crate::renderer_trace::counter);
+        }
+        #[cfg(feature = "painted-scroll-probe")]
+        if result.is_err() { i_slint_core::painted_scroll_probe::cancel(); }
+        result.map(|_| {
+            // This swap cycled the EGL buffer toward the requested geometry. If
+            // it was still a frame behind, report Skipped so the loop renders
+            // once more into the now-correct buffer (Chatter Android rotation).
+            #[cfg(target_os = "android")]
+            if !egl_settled {
+                return DrawOutcome::Skipped;
+            }
+            DrawOutcome::Success
+        }).map_err(|glutin_error| {
+            format!("Skia OpenGL Renderer: Error swapping buffers: {glutin_error}").into()
+        })
     }
 
     fn resize_event(&self, size: PhysicalWindowSize) -> Result<(), PlatformError> {
@@ -209,7 +415,7 @@ impl super::Surface for OpenGLSurface {
                 },
                 skia_safe::ColorType::RGBA8888,
                 skia_safe::AlphaType::Unpremul,
-                None,
+                crate::sampled_texture_color_space(crate::TextureEncoding::Unorm),
             )
         }
     }
@@ -301,6 +507,14 @@ impl OpenGLSurface {
         .into();
 
         Ok(Self {
+            #[cfg(all(target_os = "android", feature = "experimental-swappy"))]
+            swappy: crate::android_swappy::Swappy::new(
+                window_handle.as_raw(), &current_glutin_context.display(), &glutin_surface,
+            ),
+            #[cfg(target_os = "android")]
+            frame_timestamps: RefCell::default(),
+            #[cfg(target_os = "android")]
+            gpu_timestamps: crate::android_gpu_timestamps::Timestamps::from_property().map(RefCell::new),
             fb_info,
             surface,
             gr_context: RefCell::new(gr_context),
@@ -362,23 +576,40 @@ impl OpenGLSurface {
 
         let config_template = config_template_builder.build();
 
-        let config = unsafe {
+        let configs: Vec<glutin::config::Config> = unsafe {
             gl_display
                 .find_configs(config_template)
                 .map_err(|e| format!("Could not find valid OpenGL display configurations: {e}"))?
-                .filter(|config| config_filter.as_ref().is_none_or(|filter_fn| filter_fn(config)))
-                .reduce(|accum, config| {
-                    let transparency_check = config.supports_transparency().unwrap_or(false)
-                        & !accum.supports_transparency().unwrap_or(false);
+        }
+        .filter(|config| config_filter.as_ref().is_none_or(|filter_fn| filter_fn(config)))
+        .collect();
 
-                    if transparency_check || config.num_samples() < accum.num_samples() {
-                        config
-                    } else {
-                        accum
-                    }
-                })
-                .ok_or("Unable to find suitable GL config")?
-        };
+        // Front-buffer (single-buffer) experiment: when requested at launch, prefer
+        // a config advertising EGL_MUTABLE_RENDER_BUFFER_BIT_KHR so the surface can
+        // be switched to EGL_SINGLE_BUFFER at runtime (glutin's ConfigTemplateBuilder
+        // cannot request it). Falls back to the normal set if the device exposes no
+        // such config; default builds (prop unset) are unaffected.
+        #[cfg(target_os = "android")]
+        let configs: Vec<glutin::config::Config> =
+            if front_buffer_requested() && configs.iter().any(|c| egl_config_is_mutable(c)) {
+                configs.into_iter().filter(|c| egl_config_is_mutable(c)).collect()
+            } else {
+                configs
+            };
+
+        let config = configs
+            .into_iter()
+            .reduce(|accum, config| {
+                let transparency_check = config.supports_transparency().unwrap_or(false)
+                    & !accum.supports_transparency().unwrap_or(false);
+
+                if transparency_check || config.num_samples() < accum.num_samples() {
+                    config
+                } else {
+                    accum
+                }
+            })
+            .ok_or("Unable to find suitable GL config")?;
 
         let requested_opengl_version =
             requested_opengl_version.unwrap_or(RequestedOpenGLVersion::OpenGLES(Some((3, 0))));
@@ -433,7 +664,7 @@ impl OpenGLSurface {
 
         let context = not_current_gl_context.make_current(&surface)
             .map_err(|glutin_error: glutin::error::Error| -> PlatformError {
-                format!("FemtoVG Renderer: Failed to make newly created OpenGL context current: {glutin_error}")
+                format!("Skia Renderer: Failed to make newly created OpenGL context current: {glutin_error}")
                 .into()
         })?;
 
@@ -493,7 +724,7 @@ impl OpenGLSurface {
             &backend_render_target,
             skia_safe::gpu::SurfaceOrigin::BottomLeft,
             skia_safe::ColorType::RGBA8888,
-            None,
+            crate::attachment_color_space(crate::TextureEncoding::Unorm),
             None,
         ) {
             Some(surface) => Ok(surface),
@@ -505,7 +736,12 @@ impl OpenGLSurface {
     }
 
     fn ensure_context_current(&self) -> Result<(), PlatformError> {
+        #[cfg(target_os = "android")]
+        let _trace = crate::renderer_trace::Section::new(c"Chatter Skia EGL context check");
         if !self.glutin_context.is_current() {
+            #[cfg(target_os = "android")]
+            let _current_trace =
+                crate::renderer_trace::Section::new(c"Chatter Skia EGL make current");
             self.glutin_context.make_current(&self.glutin_surface).map_err(
                 |glutin_error| -> PlatformError {
                     format!("Skia Renderer: Error making context current: {glutin_error}").into()
@@ -518,10 +754,23 @@ impl OpenGLSurface {
 
 impl Drop for OpenGLSurface {
     fn drop(&mut self) {
+        #[cfg(feature = "painted-scroll-probe")]
+        i_slint_core::painted_scroll_probe::cancel();
+        #[cfg(all(target_os = "android", feature = "experimental-swappy"))]
+        drop(self.swappy.take());
+        #[cfg(target_os = "android")]
+        self.frame_timestamps
+            .get_mut()
+            .disable(&self.glutin_context.display(), &self.glutin_surface);
         // Make sure that the context is current before Skia calls glDelete***
         // In the event that this fails for some reason (lost GL context), convey that to Skia so that it doesn't try to call
         // glDelete***
-        if self.ensure_context_current().is_err() {
+        let context_current = self.ensure_context_current().is_ok();
+        #[cfg(target_os = "android")]
+        if let Some(timestamps) = &mut self.gpu_timestamps {
+            timestamps.get_mut().teardown(context_current);
+        }
+        if !context_current {
             i_slint_core::debug_log!(
                 "Skia OpenGL Renderer warning: Failed to make context current for destruction - considering context abandoned."
             );

@@ -1,13 +1,25 @@
 //! Shared admission for attachment CPU/file work. Acquire before spawning so a
 //! batch queues small futures, never one decoder/allocation per selected photo.
+use crate::media::performance_trace as trace;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::Semaphore;
 
 static WORK: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(1)));
 
+// The placeholder/metadata step (stat + mime guess + staging size) is
+// microseconds of work, but sharing WORK's single permit with the slow
+// per-image decode/resize made each new file's tile wait behind the previous
+// file's thumbnail decode, so the tray trickled in. A separate, wider gate
+// lets every selection's placeholder tile appear at once while thumbnails
+// still fill in one at a time under WORK.
+static META: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(4)));
+
 /// Run attachment preparation away from the caller's executor (including a UI
 /// executor). A running job owns admission even if its awaiting future is
 /// cancelled: spawn_blocking cannot interrupt a decoder or filesystem call.
+///
+/// Use this for the heavy, memory-hungry steps — decode, resize, encrypt,
+/// media probe — which stay serialized behind a single permit.
 pub async fn run_attachment_work<F, T>(work: F) -> Result<T, tokio::task::JoinError>
 where
     F: FnOnce() -> T + Send + 'static,
@@ -16,16 +28,38 @@ where
     run_with_gate(WORK.clone(), work).await
 }
 
+/// Run the lightweight placeholder/metadata step under a wider gate than
+/// [`run_attachment_work`], so a batch of selections all materialize their
+/// tray tiles immediately instead of queuing behind each other's decode.
+/// Never use this for decode/encrypt/resize work.
+pub async fn run_attachment_metadata<F, T>(work: F) -> Result<T, tokio::task::JoinError>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    run_with_gate(META.clone(), work).await
+}
+
 async fn run_with_gate<F, T>(gate: Arc<Semaphore>, work: F) -> Result<T, tokio::task::JoinError>
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
+    let job = trace::current_job();
+    let wait = job.span(c"chatter.media.attachment.semaphore_wait");
     let permit = gate
         .acquire_owned()
         .await
         .expect("attachment gate stays open");
+    drop(wait);
+    let held = job.span(c"chatter.media.attachment.permit_held");
+    let queued = job.span(c"chatter.media.attachment.blocking_queue");
     tokio::task::spawn_blocking(move || {
+        drop(queued);
+        let _context = job.enter();
+        let _held = held;
+        let _worker = job.span(c"chatter.media.attachment.worker");
+        let _sync = trace::section(c"chatter.media.attachment.work");
         let _permit = permit;
         work()
     })

@@ -170,7 +170,7 @@ impl ChatterClient {
     /// `ActiveConversation::conversation_type(...)` directly so they
     /// don't need channel_repo access.
     pub fn active_conversation_type(&self) -> Option<crate::domain::message::ConversationType> {
-        self.conversation_type_of(&self.services.chat_state.get().active_conversation)
+        self.conversation_type_of(&self.services.chat_state.active_conversation())
     }
 
     /// Whether the currently displayed screen must be hidden from OS capture.

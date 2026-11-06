@@ -172,6 +172,18 @@ async fn android_core(
         {
             match client.start().await {
                 Ok(()) => ANDROID_SERVICES_READY.store(true, std::sync::atomic::Ordering::Release),
+                // The Activity/login already started services in this process —
+                // exactly the state the background service wants. Services are
+                // started by login WITHOUT going back through android_core, so
+                // ANDROID_SERVICES_READY was never set and the service's reuse
+                // call reaches here. Treat "already started" as success instead
+                // of a fatal error: returning Err makes nativeStartHeadless
+                // return false, so MessagingService.onStartCommand stopSelf()s
+                // and kills the one ntfy SSE wake listener a backgrounded or
+                // locked device has (no incoming-call ring, no background msgs).
+                Err(chatter_core::client::ClientError::AlreadyStarted) => {
+                    ANDROID_SERVICES_READY.store(true, std::sync::atomic::Ordering::Release)
+                }
                 Err(error) if !allow_signed_out => return Err(error.into()),
                 Err(error) => tracing::warn!("Could not start services: {error}"),
             }

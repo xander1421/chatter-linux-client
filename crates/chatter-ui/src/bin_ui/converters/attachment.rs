@@ -88,6 +88,9 @@ pub struct AttachmentDisplayData {
     pub is_downloading: bool,
     pub is_download_failed: bool,
     pub progress: f32,
+    /// Per-file outgoing send state ("" / "queued" / "uploading" / "failed" /
+    /// "cancelled"), rendered on the composer's in-flight bubble.
+    pub upload_state: String,
     /// Thumbnail JPEG bytes from sender (for instant preview without download).
     pub thumbnail_bytes: Arc<[u8]>,
     /// Decoded thumbnail, from `decode_cache` — decode before the UI thread.
@@ -158,18 +161,12 @@ impl AttachmentDisplayData {
                 return;
             }
         }
-        if self.is_image {
-            if let Some(path) = self.local_path.as_deref() {
-                self.thumbnail_pixels =
-                    crate::bin_ui::decode_cache::thumbnail_guarded(&self.id, 0, generation, || {
-                        chatter_core::media::ImageProcessor::inline_pixels_from_path(
-                            std::path::Path::new(path),
-                        )
-                        .ok()
-                        .map(image::DynamicImage::ImageRgba8)
-                    });
-            }
-        }
+        // No decode from `local_path`: a stored attachment file is ciphertext, and
+        // `image` guessing a format from encrypted bytes "succeeds" into garbage —
+        // the grey/noise album tiles. The only valid inline preview is the sender's
+        // decrypted `thumbnail_bytes` above; without it the attachment shows its
+        // placeholder and decrypts on open. (Populating album thumbnails from the
+        // encrypted sidecar is a separate download step — see OPEN-ITEMS.)
     }
 
     /// Convert to Slint MessageAttachmentData (must be called on UI thread).
@@ -222,6 +219,7 @@ impl AttachmentDisplayData {
             is_downloading: self.is_downloading,
             is_download_failed: self.is_download_failed,
             progress: self.progress,
+            upload_state: self.upload_state.clone().into(),
         }
     }
 }
@@ -315,6 +313,8 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
         is_downloading,
         is_download_failed,
         progress: 0.0, // Will be updated by progress callback
+        // A stored/received attachment is never mid-outgoing-upload.
+        upload_state: String::new(),
         // Use stored thumbnail from sender (for instant preview)
         thumbnail_bytes: {
             let bytes: Arc<[u8]> = meta.thumbnail.as_deref().unwrap_or_default().into();

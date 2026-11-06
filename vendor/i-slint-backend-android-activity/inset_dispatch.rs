@@ -60,7 +60,7 @@ pub fn publish_window_insets(
     use i_slint_core::api::{LogicalPosition, LogicalSize};
     let scale = window.scale_factor();
     if authoritative_geometry {
-        let _ = window.try_dispatch_event(i_slint_core::platform::WindowEvent::Resized {
+        let _ = window.dispatch_event_with_result(i_slint_core::platform::WindowEvent::Resized {
             size: size.to_logical(scale),
         });
     }

@@ -12,6 +12,7 @@ import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { SearchResultChannel } from "../modals/join_channel.slint";
 
 export struct QuickSwitcherItem {
     id: string,
@@ -311,6 +312,10 @@ export component UnifiedSearch inherits Rectangle {
     in property <bool> show: false;
     in property <[QuickSwitcherItem]> conversations: [];
     in property <[SearchResult]> messages: [];
+    // Public channels you can discover and join (server search). Member
+    // channels already appear under "Jump to", so the glue drops them here.
+    in property <[SearchResultChannel]> discover-channels: [];
+    callback channel-selected(string);
     in property <bool> searching: false;
     in property <length> source-x: 12px;
     in property <length> source-y: 12px;
@@ -392,8 +397,23 @@ export component UnifiedSearch inherits Rectangle {
     changed show => {
         // Whatever the query is on open/close, the next edit compares to it.
         root.last-edited-query = root.query;
-        if root.show { search-input.focus(); }
-        else { root.date-sheet-open = false; root.picker-mode = ""; }
+        if root.show { search-input.focus(); root.focus-armed = true; }
+        else { root.date-sheet-open = false; root.picker-mode = ""; root.focus-armed = false; }
+    }
+    // Android raises the soft keyboard only when focus lands on a realized
+    // TextInput. Focusing in the same frame `show` flips (above) is too early
+    // on Android — the window IME isn't ready — so the first open came up with
+    // no keyboard and the field only focused on a second tap. Defer one short
+    // beat and focus then, which raises the IME on the first open.
+    property <bool> focus-armed: false;
+    Timer {
+        interval: 50ms;
+        running: root.show && root.focus-armed;
+        triggered => {
+            root.focus-armed = false;
+            search-input.focus();
+            search-input.set-selection-offsets(2147483647, 2147483647);
+        }
     }
 
     visible: root.show || root.open-progress > 0 || root.shape-progress > 0;
@@ -508,7 +528,13 @@ export component UnifiedSearch inherits Rectangle {
                                     if (root.selected-index < root.total-count - 1) { root.selected-index += 1; }
                                     return accept;
                                 }
-                                if (event.text == Key.Escape) {
+                                // Android Back arrives as a Key.Back event to the
+                                // focused field. On Android 14+ the vendored backend
+                                // calls Activity.finish() when Slint reports Back
+                                // unhandled, so a Back that only bubbled past this
+                                // field closed the whole app instead of the palette.
+                                // Consume it here, same as Escape.
+                                if (event.text == Key.Escape || event.text == Key.Back) {
                                     if (root.date-sheet-open) { root.date-sheet-open = false; }
                                     else if (root.picker-mode != "") { root.picker-mode = ""; }
                                     else { root.close(); }
@@ -848,6 +874,7 @@ export component UnifiedSearch inherits Rectangle {
             }
 
             Flickable {
+                width: 100%;
                 vertical-stretch: 1;
                 min-height: 40px;
                 // Press a result immediately; the Flickable still takes over
@@ -884,6 +911,48 @@ export component UnifiedSearch inherits Rectangle {
                             unread-count: c.unread-count;
                             selected: i == root.selected-index;
                             clicked(id, t) => { root.conversation-selected(id, t); }
+                        }
+                    }
+
+                    // Public channels — discover and join. Server results; tap
+                    // to join (or open, if already a member).
+                    if (root.category == "all" || root.category == "chats") && root.discover-channels.length > 0: Text {
+                        text: "Public channels";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+                    if root.category == "all" || root.category == "chats": VerticalLayout {
+                        spacing: Spacing.xxs;
+                        for ch in root.discover-channels: Rectangle {
+                            height: Spacing.touch-target-min * Appearance.text-grow;
+                            border-radius: Spacing.radius-sm;
+                            background: ch-touch.pressed ? Materials.pressed : ch-touch.has-hover ? Colors.surface-hover : transparent;
+                            accessible-role: button;
+                            accessible-label: (ch.joined ? "Open " : "Join ") + ch.name;
+                            accessible-action-default => { root.channel-selected(ch.id); }
+                            ch-touch := TouchArea { enabled: root.show; mouse-cursor: pointer; clicked => { root.channel-selected(ch.id); } }
+                            HorizontalLayout {
+                                x: Spacing.md; width: parent.width - 2 * Spacing.md; height: 100%;
+                                spacing: Spacing.sm;
+                                Rectangle {
+                                    width: 32px; height: 32px; border-radius: self.width / 2; clip: true;
+                                    background: Colors.inset;
+                                    if ch.has-icon: Image { width: 100%; height: 100%; source: ch.icon; image-fit: cover; }
+                                    if !ch.has-icon: Text { text: "#"; color: Colors.text-muted; font-size: Typography.base; width: 100%; height: 100%; horizontal-alignment: center; vertical-alignment: center; }
+                                }
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    Text { text: ch.name; color: Colors.text-primary; font-size: Typography.sm; wrap: no-wrap; overflow: elide; }
+                                    if ch.description != "": Text { text: ch.description; color: Colors.text-muted; font-size: Typography.xs; wrap: no-wrap; overflow: elide; }
+                                }
+                                Text {
+                                    text: ch.joined ? "Open" : "Join";
+                                    color: Colors.primary;
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                }
+                            }
                         }
                     }
 
@@ -993,7 +1062,7 @@ export component UnifiedSearch inherits Rectangle {
                         horizontal-alignment: center;
                     }
 
-                    if root.total-count == 0 && root.query != "" && !root.searching && !root.query-is-handle: Text {
+                    if root.total-count == 0 && root.discover-channels.length == 0 && root.query != "" && !root.searching && !root.query-is-handle: Text {
                         text: "No matches on this device";
                         color: Colors.text-muted;
                         font-size: Typography.sm;

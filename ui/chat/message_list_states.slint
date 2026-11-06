@@ -59,52 +59,69 @@ export component MessageListEmpty inherits Rectangle {
     in property <bool> saved-messages;
     VerticalLayout {
         alignment: center;
-        spacing: Spacing.md;
-        Text {
-            text: "\u{1F4AC}\u{FE0F}"; // Speech bubbles emoji (with emoji variant selector)
-            font-family: Typography.font-family-emoji;
-            font-size: Typography.huge;
-            horizontal-alignment: center;
-        }
-        Text {
-            text: root.saved-messages ? "Your saved messages" : "No messages yet";
-            color: Colors.text-secondary;
-            font-size: Typography.lg;
-            horizontal-alignment: center;
-        }
-        Text {
-            text: root.saved-messages ? "Forward messages here or write notes to yourself."
-                : "Be the first to say something!";
-            color: Colors.text-muted;
-            font-size: Typography.sm;
-            horizontal-alignment: center;
-        }
-        // Encryption indicator in empty state
-        Rectangle {
-            height: Spacing.lg;
-        }
-        // What is true about this conversation's privacy, which is not the
-        // same sentence everywhere. A mesh room and a geohash cell are
-        // plaintext broadcasts with no recipient to be encrypted *to*;
-        // saying otherwise here, in green, under a lock, is the one error on
-        // this screen that could get somebody hurt.
+        padding: Spacing.xl;
         HorizontalLayout {
             alignment: center;
-            spacing: Spacing.sm;
             VerticalLayout {
-                alignment: center;
-                Image {
-                    source: root.public-broadcast ? Icons.globe : Icons.lock;
-                    width: 14px;
-                    height: 14px;
-                    colorize: root.public-broadcast ? Colors.warning : Colors.success;
+                max-width: 440px;
+                horizontal-stretch: 1;
+                spacing: Spacing.xl;
+                VerticalLayout {
+                    spacing: Spacing.lg;
+                    HorizontalLayout {
+                        alignment: center;
+                        Image {
+                            source: root.saved-messages ? Icons.bookmark : Icons.message-circle;
+                            width: 18px;
+                            height: 18px;
+                            colorize: Colors.text-secondary;
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: Spacing.sm;
+                        Text {
+                            text: root.saved-messages ? "Your saved messages" : "No messages yet";
+                            color: Colors.text-primary;
+                            font-size: Typography.lg;
+                            font-weight: Typography.medium;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                            min-width: 0px;
+                        }
+                        Text {
+                            text: root.saved-messages ? "Forward messages here or write notes to yourself"
+                                : "Write a message to start the conversation";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                            min-width: 0px;
+                        }
+                    }
                 }
-            }
-            Text {
-                text: root.privacy-line;
-                color: root.public-broadcast ? Colors.warning : Colors.success;
-                font-size: Typography.sm;
-                vertical-alignment: center;
+                // Keep the caller's privacy statement: public broadcasts must
+                // retain their globe and warning color, never an encryption claim.
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: Spacing.sm;
+                    VerticalLayout {
+                        alignment: center;
+                        Image {
+                            source: root.public-broadcast ? Icons.globe : Icons.lock;
+                            width: 18px;
+                            height: 18px;
+                            colorize: root.public-broadcast ? Colors.warning : Colors.text-secondary;
+                        }
+                    }
+                    Text {
+                        text: root.privacy-line;
+                        color: root.public-broadcast ? Colors.warning : Colors.text-secondary;
+                        font-size: Typography.sm;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                        min-width: 0px;
+                    }
+                }
             }
         }
     }

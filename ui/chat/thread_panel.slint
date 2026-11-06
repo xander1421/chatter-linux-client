@@ -145,6 +145,7 @@ export component ThreadPanel inherits Rectangle {
     // Media, exactly as the main list forwards it (message_list.slint).
     callback view-attachment(string);
     callback audio-seek(string, float);
+    callback cancel-upload(string);
     in property <string> current-playing-attachment-id: "";
     in property <bool> is-media-playing: false;
     in property <float> audio-progress: 0.0;
@@ -654,6 +655,7 @@ export component ThreadPanel inherits Rectangle {
                         audio-elapsed: root.audio-elapsed;
                         attachment-clicked(id) => { root.view-attachment(id); }
                         audio-seek(id, pos) => { root.audio-seek(id, pos); }
+                        cancel-upload(id) => { root.cancel-upload(id); }
                         reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
                         more-clicked(sender-id, timestamp-ns, x, y) => {
                             root.menu-preview-message = item;

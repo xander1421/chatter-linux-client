@@ -2,5 +2,8 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <cache-path name="viewer-pdf" path="viewer-pdf/" />
     <cache-path name="viewer-clipboard" path="viewer-clipboard/" />
+    <!-- In-app camera capture hands the system camera an app-private temp file
+         under cacheDir/picked via this provider; the grant is per-URI. -->
+    <cache-path name="camera-capture" path="picked/" />
     <external-files-path name="viewer-downloads" path="Download/Chatter/" />
 </paths>

@@ -6371,7 +6371,7 @@ fn ime_unpumped(w: &MainWindow, text: &str, commit: bool) {
         event.event_type = KeyEventType::UpdateComposition;
         event.preedit_text = text.into();
     }
-    i_slint_core::window::WindowInner::from_pub(w.window()).process_key_input(event);
+    w.window().dispatch_event(i_slint_core::platform::WindowEvent::internal(event));
 }
 
 /// Switching conversation mid-composition parked the draft WITHOUT the word
@@ -6888,7 +6888,7 @@ fn a_composition_replacing_text_lands_at_the_right_bytes() {
     event.event_type = KeyEventType::UpdateComposition;
     event.preedit_text = "ß".into();
     event.replacement_range = Some(0..2);
-    i_slint_core::window::WindowInner::from_pub(w.window()).process_key_input(event);
+    w.window().dispatch_event(i_slint_core::platform::WindowEvent::internal(event));
     assert_eq!(
         w.global::<chatter_ui::ChatPane>()
             .get_composer_text()

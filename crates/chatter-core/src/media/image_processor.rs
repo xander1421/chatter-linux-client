@@ -312,16 +312,23 @@ impl ImageProcessor {
     /// Small composer pixels, with a separate decoder budget from full-size
     /// media. Invalid/oversized images keep their attachment and generic icon.
     pub fn tray_preview_from_memory(data: &[u8]) -> Result<image::RgbaImage, MediaError> {
-        Ok(Self::load_preview_image(data)?
-            .thumbnail(160, 160)
-            .into_rgba8())
+        Ok(Self::fit_preview(Self::load_preview_image(data)?, 160))
     }
 
     /// Decode stored sidecars to the inline model's pixel budget.
     pub fn inline_pixels_from_memory(data: &[u8]) -> Result<image::RgbaImage, MediaError> {
-        Ok(Self::load_preview_image(data)?
-            .thumbnail(320, 320)
-            .into_rgba8())
+        Ok(Self::fit_preview(Self::load_preview_image(data)?, 320))
+    }
+
+    // These are upper bounds, not target sizes. Enlarging a small sidecar adds
+    // no detail and multiplies CPU copies and texture uploads. The renderer
+    // samples the original pixels at the tile's display size.
+    fn fit_preview(image: DynamicImage, edge: u32) -> image::RgbaImage {
+        if image.width() > edge || image.height() > edge {
+            image.thumbnail(edge, edge).into_rgba8()
+        } else {
+            image.into_rgba8()
+        }
     }
 
     /// Decode an original once for a durable preview; return its true aspect
@@ -349,7 +356,7 @@ impl ImageProcessor {
             ));
         }
         Self::decode_preview(std::io::BufReader::new(file))
-            .map(|image| image.thumbnail(320, 320).into_rgba8())
+            .map(|image| Self::fit_preview(image, 320))
     }
 
     fn load_preview_image(data: &[u8]) -> Result<DynamicImage, MediaError> {
@@ -628,8 +635,115 @@ mod tests {
 }
 
 #[cfg(test)]
+mod webp_roundtrip_tests {
+    use super::*;
+
+    // The inline thumbnail is encoded lossless-WebP by generate_thumbnail_from_memory
+    // and decoded back by inline_pixels_from_memory for display. If that round-trip
+    // does not preserve pixels, stored thumbnails render as garbage (the grey/noise
+    // album tiles). This pins the round-trip.
+    #[test]
+    fn inline_thumbnail_webp_roundtrip_preserves_pixels() {
+        // A deterministic, non-flat gradient so a garbled decode is obvious.
+        let mut src = image::RgbaImage::new(200, 120);
+        for (x, y, px) in src.enumerate_pixels_mut() {
+            *px = image::Rgba([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8, 255]);
+        }
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(src)
+            .write_to(&mut png, ImageFormat::Png)
+            .unwrap();
+
+        let (webp_bytes, w, h) =
+            ImageProcessor::generate_thumbnail_from_memory(png.get_ref()).unwrap();
+        assert!(w > 0 && h > 0);
+
+        let decoded = ImageProcessor::inline_pixels_from_memory(&webp_bytes).unwrap();
+        // The thumbnail is downscaled; sample the center to avoid edge filtering.
+        let (dw, dh) = decoded.dimensions();
+        let px = decoded.get_pixel(dw / 2, dh / 2);
+        // A correct decode of this gradient is never near-black or near-white noise.
+        let [r, g, b, a] = px.0;
+        assert_eq!(a, 255, "alpha corrupted");
+        assert!(
+            !(r < 8 && g < 8 && b < 8),
+            "center pixel decoded to black — webp round-trip is broken: {:?}",
+            px.0
+        );
+        // Decoded dims must match the reported thumbnail dims (after the 320 bound).
+        assert!(dw <= 320 && dh <= 320, "unexpected thumbnail size {dw}x{dh}");
+    }
+
+    // Reproduces the cached-preview path exactly: media.rs encodes the derived
+    // thumbnail with `DynamicImage::write_to(.., ImageFormat::WebP)` and later
+    // decodes it with `inline_pixels_from_memory`. The album tiles decode to a
+    // near-uniform grey (mean ~160, tiny structure) — this asserts the real
+    // encode/decode pair keeps the image's structure.
+    #[test]
+    fn cached_preview_webp_write_to_roundtrip_keeps_structure() {
+        // Photo-like: strong diagonal gradient + per-pixel detail.
+        let mut src = image::RgbaImage::new(320, 240);
+        for (x, y, px) in src.enumerate_pixels_mut() {
+            let r = ((x * 255) / 320) as u8;
+            let g = ((y * 255) / 240) as u8;
+            let b = (((x ^ y) * 3) % 256) as u8;
+            *px = image::Rgba([r, g, b, 255]);
+        }
+        let src_dyn = image::DynamicImage::ImageRgba8(src.clone());
+
+        // EXACT media.rs cache encode.
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        src_dyn.write_to(&mut encoded, ImageFormat::WebP).unwrap();
+
+        // EXACT display decode.
+        let decoded = ImageProcessor::inline_pixels_from_memory(encoded.get_ref()).unwrap();
+        let (dw, dh) = decoded.dimensions();
+
+        // Compare a downscaled copy of the source at the decoded size: a correct
+        // decode is close; a collapsed/garbled decode diverges hugely.
+        let ref_small = image::DynamicImage::ImageRgba8(src)
+            .thumbnail(dw, dh)
+            .into_rgba8();
+        let mut max_err = 0i32;
+        let mut sum_err = 0i64;
+        let mut count = 0i64;
+        for (p, q) in decoded.pixels().zip(ref_small.pixels()) {
+            for c in 0..3 {
+                let e = (p.0[c] as i32 - q.0[c] as i32).abs();
+                max_err = max_err.max(e);
+                sum_err += e as i64;
+                count += 1;
+            }
+        }
+        let mean_err = sum_err as f64 / count as f64;
+        assert!(
+            mean_err < 12.0 && max_err < 80,
+            "webp write_to/decode diverged from source: mean_err={mean_err:.1} max_err={max_err} size={dw}x{dh} (grey-garbage decode)"
+        );
+    }
+}
+
+#[cfg(test)]
 mod preview_budget_tests {
     use super::*;
+
+    #[test]
+    fn small_sidecars_keep_native_dimensions_and_pixels() {
+        let source = image::RgbaImage::from_fn(80, 40, |x, y| {
+            image::Rgba([x as u8, y as u8, 210, 127])
+        });
+        for format in [ImageFormat::Png, ImageFormat::WebP] {
+            let mut encoded = Cursor::new(Vec::new());
+            DynamicImage::ImageRgba8(source.clone()).write_to(&mut encoded, format).unwrap();
+            let inline = ImageProcessor::inline_pixels_from_memory(encoded.get_ref()).unwrap();
+            let tray = ImageProcessor::tray_preview_from_memory(encoded.get_ref()).unwrap();
+            assert_eq!(inline, source);
+            assert_eq!(tray, source);
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), encoded.get_ref()).unwrap();
+            assert_eq!(ImageProcessor::inline_pixels_from_path(file.path()).unwrap(), source);
+        }
+    }
 
     #[test]
     fn disk_and_memory_previews_have_same_bounded_pixels_and_reject_bad_sources() {

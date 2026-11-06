@@ -10,7 +10,7 @@ mod sanitize;
 mod upload;
 mod work;
 
-pub use work::run_attachment_work;
+pub use work::{run_attachment_metadata, run_attachment_work};
 
 pub(crate) use media::image_preview_ciphertext_limit;
 pub use media::{
@@ -710,6 +710,8 @@ impl AttachmentService {
         attachment_id: &AttachmentId,
         owner: ThumbnailOwner,
     ) -> Option<Vec<u8>> {
+        let _ensure =
+            crate::media::performance_trace::current_job().span(c"chatter.media.sidecar.ensure");
         if !owner() {
             return None;
         }
@@ -724,6 +726,9 @@ impl AttachmentService {
         attachment_id: &AttachmentId,
         owner: ThumbnailOwner,
     ) -> Option<Vec<u8>> {
+        use crate::media::performance_trace as trace;
+        let job = trace::current_job();
+        let _routed = job.span(c"chatter.media.sidecar.routed");
         if !owner() {
             return None;
         }
@@ -733,10 +738,12 @@ impl AttachmentService {
         // previous fetch) — no network.
         if let Some(t) = &attachment.metadata.thumbnail {
             if !t.is_empty() {
+                job.event(c"chatter.media.sidecar.stored_hit");
                 return Some(t.clone());
             }
         }
 
+        job.event(c"chatter.media.sidecar.stored_miss");
         let cdn_key = attachment.metadata.thumbnail_cdn_key.clone()?;
         let key_vec = attachment.metadata.thumbnail_key.clone()?;
         let digest_vec = attachment.metadata.thumbnail_digest.clone()?;
@@ -751,11 +758,14 @@ impl AttachmentService {
 
         // Download the small encrypted thumbnail blob.
         let mut file_client = self.file_client().ok()?;
+        let url_wait = job.span(c"chatter.media.sidecar.url_wait");
         let dl = file_client
             .get_attachment_download_url(&cdn_key)
             .await
             .ok()?;
+        drop(url_wait);
         // Over Tor in anon mode; cdn_http_get already fails on non-2xx.
+        let fetch = job.span(c"chatter.media.sidecar.fetch");
         let ciphertext = match self.cdn_http_get(&dl.download_url).await {
             Ok(bytes) => bytes,
             Err(_) => {
@@ -763,10 +773,12 @@ impl AttachmentService {
                 return None;
             }
         };
+        drop(fetch);
 
         let repo = self.attachment_repo.clone();
         run_attachment_work(move || {
             if !owner() {
+                job.event(c"chatter.media.sidecar.owner_invalid");
                 return None;
             }
             // Decrypt — verifies whole-ciphertext digest + trailing HMAC.
@@ -774,6 +786,7 @@ impl AttachmentService {
             key.copy_from_slice(&key_vec);
             let mut digest = [0u8; 32];
             digest.copy_from_slice(&digest_vec);
+            let decrypt = trace::section(c"chatter.media.sidecar.auth_decrypt");
             let plaintext = match crate::crypto::attachment_crypto::AttachmentCrypto::decrypt(
                 &ciphertext,
                 &key,
@@ -786,18 +799,21 @@ impl AttachmentService {
                     return None;
                 }
             };
+            drop(decrypt);
 
             // Do not overwrite concurrent transfer state, resurrect a replaced
             // encrypted source, or persist after account/session revocation.
             if !owner() {
                 return None;
             }
+            let persist = trace::section(c"chatter.media.sidecar.persist");
             if !repo
                 .cache_authenticated_thumbnail(&attachment, &plaintext)
                 .ok()?
             {
                 return None;
             }
+            drop(persist);
             tracing::debug!(bytes = plaintext.len(), "Fetched thumbnail sidecar");
             if !owner() {
                 return None;

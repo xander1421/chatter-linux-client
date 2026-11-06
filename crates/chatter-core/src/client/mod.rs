@@ -261,6 +261,7 @@ impl ClientBuilder {
             tasks: Mutex::new(Vec::new()),
             pending_receipts: Mutex::new(Vec::new()),
             sent_receipts: Mutex::new(Vec::new()),
+            upload_cancels: Mutex::new(std::collections::HashMap::new()),
             started: AtomicBool::new(false),
             channel_delivery_shutdown: AtomicBool::new(false),
             last_activity_ms: AtomicU64::new(0),
@@ -535,6 +536,16 @@ pub struct ChatterClient {
     /// Failed ephemeral receipts for this process and auth session only.
     pub(crate) pending_receipts: Mutex<Vec<crate::services::conversation::PendingReceipt>>,
     pub(crate) sent_receipts: Mutex<Vec<crate::services::conversation::PendingReceipt>>,
+    /// Cancellation tokens for in-flight outgoing attachment uploads, keyed by
+    /// the tray (pending) attachment id. The composer's per-file cancel X
+    /// aborts just that file via [`Self::cancel_attachment_upload`]; the upload
+    /// loop registers and clears entries as it processes each file.
+    pub(crate) upload_cancels: Mutex<
+        std::collections::HashMap<
+            crate::domain::ids::AttachmentId,
+            tokio_util::sync::CancellationToken,
+        >,
+    >,
     started: AtomicBool,
     channel_delivery_shutdown: AtomicBool,
     /// Epoch millis of last user activity (for idle detection).
@@ -706,6 +717,7 @@ async fn upload_attachments(
     attachment_service: &AttachmentService,
     client: Option<&ChatterClient>,
 ) -> Result<UploadedAttachments, AttachmentError> {
+    use crate::events::AttachmentUploadState;
     let mut pointers = Vec::with_capacity(pending.len());
     let mut attachments = Vec::with_capacity(pending.len());
     for att in pending {
@@ -713,6 +725,11 @@ async fn upload_attachments(
             pointers.push(pointer.clone());
             if let Ok(Some(full_att)) = attachment_service.get(&att.id) {
                 attachments.push(full_att);
+            }
+            // Already uploaded (e.g. a GIF from the picker): its tray tile is
+            // done the moment the send starts.
+            if let Some(client) = client {
+                client.emit_upload_state(att.id, AttachmentUploadState::Sent);
             }
             continue;
         }
@@ -724,22 +741,59 @@ async fn upload_attachments(
             .as_ref()
             .map(|(_, path)| path.as_path())
             .unwrap_or(&att.path);
-        match attachment_service
-            .upload_to_cdn_encrypted(upload_path)
-            .await
-        {
-            Ok(res) => {
+
+        // Per-file streaming + cancel: mark this tile Uploading, register a
+        // cancel token, then race the upload against it. The files before it
+        // are already Sent and the ones after are still Queued, so a multi-file
+        // send fills in one tile at a time instead of landing as one block.
+        // Cancelling drops the upload future (aborting the in-flight PUT),
+        // skips this file, and leaves the rest of the message intact.
+        let cancel = client.map(|client| {
+            let token = client.register_upload_cancel(att.id);
+            client.emit_upload_state(att.id, AttachmentUploadState::Uploading);
+            token
+        });
+        let upload = attachment_service.upload_to_cdn_encrypted(upload_path);
+        let result = match &cancel {
+            Some(token) => {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => None,
+                    r = upload => Some(r),
+                }
+            }
+            None => Some(upload.await),
+        };
+        if let Some(client) = client {
+            client.clear_upload_cancel(&att.id);
+        }
+        match result {
+            // User cancelled this file. Skip it; the send continues with the
+            // remaining files and the text.
+            None => {
+                if let Some(client) = client {
+                    client.emit_upload_state(att.id, AttachmentUploadState::Cancelled);
+                }
+                continue;
+            }
+            Some(Ok(res)) => {
                 pointers.push(res.to_attachment_pointer());
                 if let Ok(Some(full_att)) = attachment_service.get(&res.attachment_id) {
                     attachments.push(full_att);
                 }
+                if let Some(client) = client {
+                    client.emit_upload_state(att.id, AttachmentUploadState::Sent);
+                }
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 // Propagate rather than silently dropping the attachment: if this
                 // was the only content in the message, swallowing the error here
                 // would leave `pointers` empty and the send would instead fail
                 // with the misleading "message must have text or attachments".
                 tracing::error!(error = %e, "Failed to upload attachment");
+                if let Some(client) = client {
+                    client.emit_upload_state(att.id, AttachmentUploadState::Failed);
+                }
                 return Err(e);
             }
         }
@@ -748,6 +802,47 @@ async fn upload_attachments(
         pointers,
         attachments,
     })
+}
+
+impl ChatterClient {
+    /// Register a cancellation token for the in-flight upload of tray
+    /// attachment `id`, returning it for the upload loop to race against.
+    pub(crate) fn register_upload_cancel(
+        &self,
+        id: crate::domain::ids::AttachmentId,
+    ) -> tokio_util::sync::CancellationToken {
+        let token = tokio_util::sync::CancellationToken::new();
+        self.upload_cancels.lock().insert(id, token.clone());
+        token
+    }
+
+    /// Drop the cancel token once an upload finishes (sent, failed or cancelled).
+    pub(crate) fn clear_upload_cancel(&self, id: &crate::domain::ids::AttachmentId) {
+        self.upload_cancels.lock().remove(id);
+    }
+
+    /// Abort the in-flight upload of one tray attachment — the composer's
+    /// per-file cancel X. The rest of the message's files and its text are
+    /// untouched. No-op if the file already finished or was never uploading.
+    pub fn cancel_attachment_upload(&self, id: crate::domain::ids::AttachmentId) {
+        let token = self.upload_cancels.lock().get(&id).cloned();
+        if let Some(token) = token {
+            token.cancel();
+        }
+    }
+
+    /// Publish a per-file upload state change for the in-flight bubble.
+    pub(crate) fn emit_upload_state(
+        &self,
+        attachment_id: crate::domain::ids::AttachmentId,
+        state: crate::events::AttachmentUploadState,
+    ) {
+        self.event_bus()
+            .emit_domain(DomainEvent::AttachmentUploadProgress {
+                attachment_id,
+                state,
+            });
+    }
 }
 
 /// Received group-call keys handled at once by the call-policy listener;

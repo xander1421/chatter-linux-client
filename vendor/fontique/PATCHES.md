@@ -1,4 +1,4 @@
-# Local fontique 0.10.0 patches
+# Local fontique 0.11.1 patches
 
 Android `fonts.xml` often omits `postScriptName`. The upstream Android backend only
 uses that attribute to connect a fallback font to the family found by the font

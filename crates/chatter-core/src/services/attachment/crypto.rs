@@ -1,5 +1,6 @@
 //! Cryptographic operations for attachments.
 
+use crate::media::performance_trace as trace;
 use memmap2::Mmap;
 
 use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
@@ -23,6 +24,7 @@ impl AttachmentService {
         &self,
         attachment_id: &AttachmentId,
     ) -> Result<SecureBuffer, AttachmentError> {
+        let _decrypt = trace::section(c"chatter.media.crypto.memory");
         // Get attachment metadata
         let attachment = self
             .attachment_repo
@@ -66,6 +68,7 @@ impl AttachmentService {
             "Reading ciphertext from filesystem via mmap"
         );
 
+        let open = trace::section(c"chatter.media.io.open");
         let file = std::fs::File::open(&file_path).map_err(|e| {
             AttachmentError::FileError(format!(
                 "Failed to open attachment file {}: {}",
@@ -73,8 +76,10 @@ impl AttachmentService {
                 e
             ))
         })?;
+        drop(open);
 
         // SAFETY: File is read-only and not modified while mapped
+        let mapping = trace::section(c"chatter.media.io.mmap");
         let mmap = unsafe { Mmap::map(&file) }.map_err(|e| {
             AttachmentError::FileError(format!(
                 "Failed to mmap attachment file {}: {}",
@@ -82,6 +87,7 @@ impl AttachmentService {
                 e
             ))
         })?;
+        drop(mapping);
 
         // Convert keys to fixed-size arrays
         let mut key = [0u8; KEY_SET_LENGTH];
@@ -100,9 +106,12 @@ impl AttachmentService {
         );
 
         // Convert to owned Vec for decrypt_zero_copy (which decrypts in-place)
+        let read = trace::section(c"chatter.media.io.mmap_copy");
         let ciphertext = mmap.to_vec();
         drop(mmap);
+        drop(read);
 
+        let crypto = trace::section(c"chatter.media.crypto.auth_decrypt");
         let plaintext = decrypt_zero_copy(
             ciphertext,
             &key,
@@ -110,6 +119,7 @@ impl AttachmentService {
             attachment.metadata.size as usize,
         )
         .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
+        drop(crypto);
 
         tracing::info!(
             plaintext_len = plaintext.len(),
@@ -119,6 +129,7 @@ impl AttachmentService {
         // Validate incoming media (MP4/WebP structure) before renderers parse it.
         // Buffer is wrapped first so the plaintext is zeroized on the error path.
         let buffer = SecureBuffer::new(plaintext);
+        let _validate = trace::section(c"chatter.media.media_validate");
         super::sanitize::validate_media(buffer.as_slice())?;
 
         Ok(buffer)
@@ -140,6 +151,7 @@ impl AttachmentService {
         &self,
         attachment_id: &AttachmentId,
     ) -> Result<SecureBuffer, AttachmentError> {
+        let _decrypt = trace::section(c"chatter.media.crypto.streaming");
         let start = std::time::Instant::now();
         tracing::info!("Starting streaming decryption");
 
@@ -191,9 +203,11 @@ impl AttachmentService {
 
         // Open file for streaming (BufReader for efficient I/O)
         let file_path = attachment_file_path(attachment_id);
+        let stat = trace::section(c"chatter.media.io.stat");
         let file_size = std::fs::metadata(&file_path)
             .map_err(|e| AttachmentError::FileError(format!("Failed to stat file: {}", e)))?
             .len() as usize;
+        drop(stat);
 
         tracing::debug!(
             file_path = %file_path.display(),
@@ -202,6 +216,7 @@ impl AttachmentService {
             "Opening file for streaming decryption"
         );
 
+        let open = trace::section(c"chatter.media.io.open");
         let file = std::fs::File::open(&file_path).map_err(|e| {
             AttachmentError::FileError(format!(
                 "Failed to open attachment file {}: {}",
@@ -209,6 +224,7 @@ impl AttachmentService {
                 e
             ))
         })?;
+        drop(open);
         let reader = std::io::BufReader::with_capacity(512 * 1024, file);
 
         // Use StreamingDecryptor — verify pass, then decrypt pass, 512KB chunks
@@ -220,9 +236,11 @@ impl AttachmentService {
             file_size,
         );
 
+        let crypto = trace::section(c"chatter.media.crypto.streaming_read_auth_decrypt");
         let plaintext = decryptor
             .decrypt_all()
             .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
+        drop(crypto);
 
         let total_elapsed = start.elapsed();
         let size_mb = plaintext.len() as f64 / (1024.0 * 1024.0);
@@ -235,6 +253,7 @@ impl AttachmentService {
 
         // Validate incoming media (MP4/WebP structure) before renderers parse it.
         let buffer = SecureBuffer::new(plaintext);
+        let _validate = trace::section(c"chatter.media.media_validate");
         super::sanitize::validate_media(buffer.as_slice())?;
 
         Ok(buffer)
@@ -252,6 +271,7 @@ impl AttachmentService {
         &self,
         attachment_id: &AttachmentId,
     ) -> Result<super::CbcRangeDecryptor, AttachmentError> {
+        let _range = trace::section(c"chatter.media.crypto.range_open");
         let attachment = self
             .attachment_repo
             .get(attachment_id)
@@ -295,13 +315,16 @@ impl AttachmentService {
 
         let plaintext_size = attachment.metadata.size as usize;
         let file_path = attachment_file_path(attachment_id);
+        let stat = trace::section(c"chatter.media.io.stat");
         let file_size = std::fs::metadata(&file_path)
             .map_err(|e| AttachmentError::FileError(format!("Failed to stat file: {}", e)))?
             .len() as usize;
+        drop(stat);
 
         // Auth pass (A1): HMAC + digest over the whole ciphertext. Streaming,
         // no AES, no plaintext buffer — cheap relative to a full decrypt.
         {
+            let open = trace::section(c"chatter.media.io.open");
             let file = std::fs::File::open(&file_path).map_err(|e| {
                 AttachmentError::FileError(format!(
                     "Failed to open attachment file {}: {}",
@@ -309,15 +332,18 @@ impl AttachmentService {
                     e
                 ))
             })?;
+            drop(open);
             let reader = std::io::BufReader::with_capacity(512 * 1024, file);
             let mut verifier =
                 StreamingDecryptor::new(reader, &key, &digest_arr, plaintext_size, file_size);
+            let _auth = trace::section(c"chatter.media.crypto.range_read_auth");
             verifier
                 .verify()
                 .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
         }
 
         // mmap the (now authenticated) ciphertext for on-demand range reads.
+        let open = trace::section(c"chatter.media.io.open");
         let file = std::fs::File::open(&file_path).map_err(|e| {
             AttachmentError::FileError(format!(
                 "Failed to open attachment file {}: {}",
@@ -325,8 +351,11 @@ impl AttachmentService {
                 e
             ))
         })?;
+        drop(open);
+        let mapping = trace::section(c"chatter.media.io.mmap");
         let mmap = unsafe { Mmap::map(&file) }
             .map_err(|e| AttachmentError::FileError(format!("Failed to mmap attachment: {}", e)))?;
+        drop(mapping);
 
         let mut aes_key = [0u8; 32];
         aes_key.copy_from_slice(&key[..32]);
@@ -344,6 +373,7 @@ impl AttachmentService {
         &self,
         attachment_id: &AttachmentId,
     ) -> Result<SecureBuffer, AttachmentError> {
+        let _auto = trace::section(c"chatter.media.crypto.auto");
         // Check file size to pick strategy
         let file_path = attachment_file_path(attachment_id);
         let file_size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);

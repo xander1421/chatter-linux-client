@@ -17,6 +17,8 @@ pub mod file_picker;
 pub mod gif;
 pub mod image_processor;
 pub mod static_preview;
+#[doc(hidden)]
+pub mod performance_trace;
 pub mod video_playback;
 #[cfg(feature = "desktop-gstreamer")]
 pub mod video_processor;

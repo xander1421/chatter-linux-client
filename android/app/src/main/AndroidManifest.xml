@@ -51,6 +51,18 @@
     <!-- The mesh radio's foreground service (MeshService). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
+    <!-- Package visibility (Android 11+): the in-app camera launches the system
+         camera app via ACTION_IMAGE_CAPTURE / ACTION_VIDEO_CAPTURE, so the
+         chooser must be able to resolve those handlers. -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.VIDEO_CAPTURE" />
+        </intent>
+    </queries>
+
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- Not required: without BLE the app still installs and the Nostr transport
          works fine; only the mesh is unavailable. -->

@@ -6,6 +6,7 @@
 // divider, auto-follow of new messages, older history on reaching the top.
 
 import { Materials } from "../theme/materials.slint";
+import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { MessageItem } from "message_item.slint";
 import { MessageScrollPill, MessageHistoryError } from "message_list_overlays.slint";
@@ -15,6 +16,12 @@ import { MessageAttachmentData, MessageItemData, ReactionEntry } from "types.sli
 
 // Re-export types for parent components
 export { MessageAttachmentData, MessageItemData, ReactionEntry }
+
+// Internal diagnostics only. The Rust binding keeps synchronous, thread-bound
+// ATrace guards; no message data crosses this callback.
+export global VirtualizerTrace {
+    callback settle-phase(bool);
+}
 
 // The bare Flickable with Slint's lazy row runtime enabled. The compiler turns
 // a `for` into a virtualized one when its parent element is named `ListView`
@@ -108,6 +115,8 @@ export component MessageList inherits Rectangle {
     in property <bool> saved-messages: false;
     in property <bool> is-anonymous: false;
     in property <bool> is-dm: false;  // When true, messages show minimal UI (no avatars/names in DMs)
+    // Experiment stays off pending decrypted-texture lifecycle and device review.
+    in property <bool> experimental-content-cache: false;
     in property <bool> can-thread: true;
     // How far the list is scrolled from its top, as of the last layout pass
     // (the runtime's estimate, see below). Written here, read by tests; never
@@ -170,7 +179,8 @@ export component MessageList inherits Rectangle {
             root.unread-count = 0;
             root.end-pending = false;
             root.following-tail = false;
-            root.jump-row = -1;
+            root.stop-row-seek();
+            root.pending-jump-row = -1;
             // Root state, so it outlives the list: left true from a previous
             // conversation, it would drag the next one to its end on the
             // first layout pass, over its unread divider.
@@ -184,6 +194,11 @@ export component MessageList inherits Rectangle {
             root.first-visible-row = 0;
             root.last-visible-row = -1;
         } else {
+            if (root.pending-jump-row >= 0) {
+                let pending = root.pending-jump-row;
+                root.pending-jump-row = -1;
+                root.go-to-row(pending);
+            }
             arrival-ready.running = true;
             root.visible-media-rows(root.first-visible-row, root.last-visible-row);
         }
@@ -203,6 +218,9 @@ export component MessageList inherits Rectangle {
     // seek goes by the average row height, the next ones walk the rows that
     // seek made live and close on the exact row.
     private property <int> jump-row: -1;
+    // Search commands can precede installation of the requested page. Keep
+    // only the intent while loading; no measurement or deadline runs yet.
+    private property <int> pending-jump-row: -1;
     private property <bool> jump-measured: false;
     private property <int> jump-stable-passes: 0;
     private property <length> jump-bubble-y: 0px;
@@ -213,9 +231,60 @@ export component MessageList inherits Rectangle {
     private property <length> jump-sample-y: 0px;
     private property <length> jump-height-sum: 0px;
     private property <int> jump-sample-count: 0;
+    // A row command owns at most five seconds of deferred measurement work.
+    // Restart explicitly for each command, rather than polling animation time.
+    private property <string> jump-message-id: "";
+    private property <int> jump-measurement-generation: -1;
+    private property <int> jump-deadline-generation: -1;
+    private property <string> current-jump-message-id:
+        root.jump-row >= 0 && root.jump-row < root.messages.length
+            ? root.messages[root.jump-row].message-id : "";
+    changed current-jump-message-id => {
+        if (root.jump-row >= 0 && root.current-jump-message-id != root.jump-message-id) {
+            root.stop-row-seek();
+        }
+    }
+    // A replacement model invalidates geometry even if it reuses message IDs.
+    // Initial page installation and its unread/search command may share one
+    // UI turn. Once arrivals are armed, every model reset cancels even a
+    // command still waiting for the first geometry pass.
+    changed messages => {
+        if (root.jump-row >= 0 && (root.jump-bootstrapped || root.ready-for-arrivals)) {
+            root.stop-row-seek();
+        }
+    }
+    changed page-active => {
+        if (!root.page-active) {
+            root.stop-row-seek();
+            root.pending-jump-row = -1;
+        }
+    }
+    pure function row-seek-active() -> bool {
+        return root.page-active && !root.loading && root.jump-row >= 0
+            && root.jump-row < root.messages.length
+            && root.current-jump-message-id == root.jump-message-id;
+    }
+    function stop-row-seek() {
+        root.jump-row = -1;
+        row-seek-deadline.running = false;
+        root.jump-measurement-generation = -1;
+        root.jump-sample-index = -1;
+        root.jump-height-sum = 0px;
+        root.jump-sample-count = 0;
+    }
+    row-seek-deadline := Timer {
+        interval: 5s;
+        running: false;
+        triggered => {
+            self.running = false;
+            if (root.jump-deadline-generation == root.nav-serial) {
+                root.stop-row-seek();
+            }
+        }
+    }
     callback measured-navigation-row(int, length, length);
     measured-navigation-row(index, y, height) => {
-        if (root.jump-row >= 0 && !root.jump-measured) {
+        if (root.row-seek-active() && !root.jump-measured) {
             root.jump-height-sum += height;
             root.jump-sample-count += 1;
             if (root.jump-sample-index < 0
@@ -224,11 +293,12 @@ export component MessageList inherits Rectangle {
                 root.jump-sample-y = y;
             }
         }
-        if (index == root.jump-row) { root.measured-jump-row(index, y); }
+        if (root.row-seek-active() && index == root.jump-row) { root.measured-jump-row(index, y); }
     }
     callback measured-jump-row(int, length);
     measured-jump-row(index, y) => {
-        if (index == root.jump-row) {
+        if (root.row-seek-active() && index == root.jump-row) {
+            root.jump-measurement-generation = root.nav-serial;
             root.jump-bubble-y = y;
             root.jump-measured = true;
             root.jump-measurement-serial += 1;
@@ -326,7 +396,8 @@ export component MessageList inherits Rectangle {
 
     // Newest message flush with the bottom edge, and stay there.
     function go-to-end() {
-        root.jump-row = -1;
+        root.pending-jump-row = -1;
+        root.stop-row-seek();
         root.following-tail = true;
         root.end-pending = true;
         root.end-passes = 0;
@@ -335,6 +406,9 @@ export component MessageList inherits Rectangle {
 
     // Row `i` at the top edge. Leaves the end, so nothing may pull back to it.
     function go-to-row(i: int) {
+        root.stop-row-seek();
+        if (root.loading) { root.pending-jump-row = i; return; }
+        if (!root.page-active || i < 0 || i >= root.messages.length) { return; }
         if (i == root.unread-index) { root.unread-above = false; }
         root.end-pending = false;
         root.following-tail = false;
@@ -346,8 +420,12 @@ export component MessageList inherits Rectangle {
         root.jump-height-sum = 0px;
         root.jump-sample-count = 0;
         root.jump-stable-passes = 0;
+        root.jump-message-id = root.messages[i].message-id;
         root.jump-row = i;
         root.nav-serial += 1;
+        root.jump-deadline-generation = root.nav-serial;
+        row-seek-deadline.start();
+        row-seek-deadline.restart();
     }
 
     // Callbacks - Signal-style identification (sender_id, timestamp_ns)
@@ -380,12 +458,13 @@ export component MessageList inherits Rectangle {
             root.seen-top = max(0, root.seen-top - shift);
             root.seen-rows = root.messages.length;
             root.seen-first = root.messages.length > 0 ? root.messages[0].message-id : "";
-            if root.jump-row >= 0 { root.jump-row = max(0, root.jump-row - shift); }
+            if root.jump-row >= 0 { root.stop-row-seek(); }
         }
     }
     callback load-more();
     callback attachment-clicked(string);  // attachment ID
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
+    callback cancel-upload(string);  // attachment ID — abort one in-flight upload
     callback list-geometry(float, float, bool); // visible height, content height, tail seek
     callback visible-media-rows(int, int);
 
@@ -405,9 +484,10 @@ export component MessageList inherits Rectangle {
         if (root.keeps-tail()) { root.go-to-end(); }
     }
 
-    // The same ambient page as the chat list, so a conversation is not a
-    // flat slab; the wash is static, it does not scroll with the rows.
-    background: Materials.ambient;
+    // Pure OLED-black conversation page (owner: islands = transparent glass
+    // over pure black, not a grey ambient wash). The glass chrome then blurs
+    // black where there is no content, reading as clean transparent glass.
+    background: Colors.background;
 
     // Loading state: skeleton placeholders
     if root.loading: MessageListLoading {
@@ -458,8 +538,8 @@ export component MessageList inherits Rectangle {
         // Only the first seek may bootstrap from the global height estimate.
         Timer {
             interval: 16ms;
-            running: root.page-active && root.jump-row >= 0 && !root.jump-measured;
-            triggered => { list.seek-row(root.jump-row); }
+            running: root.row-seek-active() && !root.jump-measured;
+            triggered => { if (root.row-seek-active()) { list.seek-row(root.jump-row); } }
         }
 
         // Android can restore the surface after the opening seek. Reapply the
@@ -574,7 +654,7 @@ export component MessageList inherits Rectangle {
                 root.scrolling = true;
                 root.load-more-armed = true;
                 root.end-pending = false;
-                root.jump-row = -1;
+                root.stop-row-seek();
                 self.read-position();
                 at-rest.start(); at-rest.restart();
             }
@@ -601,7 +681,8 @@ export component MessageList inherits Rectangle {
             property <length> row-y;
             property <int> target-measurement: root.jump-measurement-serial;
             changed target-measurement => {
-                if (root.jump-row >= 0 && root.jump-measured) {
+                if (root.row-seek-active() && root.jump-measured
+                        && root.jump-measurement-generation == root.nav-serial) {
                     // The delegate reports window geometry relative to this
                     // list. Its public y is NOT its rendered y: Slint's
                     // flickable pass exposes actual-y - viewport-y there.
@@ -614,7 +695,7 @@ export component MessageList inherits Rectangle {
                         // row can still change height as its layout settles.
                         root.jump-stable-passes += 1;
                         if (root.jump-stable-passes >= 3) {
-                            root.jump-row = -1;
+                            root.stop-row-seek();
                             self.read-position();
                         }
                     } else {
@@ -628,7 +709,7 @@ export component MessageList inherits Rectangle {
                 }
             }
             function seek-row(i: int) {
-                if (root.messages.length > 0 && self.measured && !root.jump-measured) {
+                if (root.row-seek-active() && i == root.jump-row && self.measured && !root.jump-measured) {
                     if (root.jump-sample-count > 0) {
                         // Anchor to a real bubble, then walk at most one screen
                         // per pass so intervening rows supply fresh heights.
@@ -663,6 +744,11 @@ export component MessageList inherits Rectangle {
             property <int> grown;
             property <bool> prepended;
             function settle() {
+                VirtualizerTrace.settle-phase(true);
+                self.settle-inner();
+                VirtualizerTrace.settle-phase(false);
+            }
+            function settle-inner() {
                 // Runtime viewport callbacks may arrive before changed height.
                 // Preserve the pre-resize anchor before either callback can
                 // classify the new geometry as a user scroll away from bottom.
@@ -689,7 +775,7 @@ export component MessageList inherits Rectangle {
                 if (self.grown != 0) {
                     // Rows moved under a jump still being refined: its index
                     // is no longer that row.
-                    root.jump-row = -1;
+                    root.stop-row-seek();
                 }
                 if (self.prepended && root.unread-index >= 0) {
                     root.unread-index-shifted = true;
@@ -829,9 +915,9 @@ export component MessageList inherits Rectangle {
                 // Defer a frame so new delegates have rendered positions.
                 Timer {
                     interval: 16ms;
-                    running: root.page-active && root.jump-row >= 0 && (!root.jump-measured || idx == root.jump-row);
+                    running: root.row-seek-active() && (!root.jump-measured || idx == root.jump-row);
                     triggered => {
-                        if (message-bubble.height > 0px) {
+                        if (root.row-seek-active() && message-bubble.height > 0px) {
                             root.measured-navigation-row(idx, message-row.bubble-position, message-row.height);
                         }
                     }
@@ -875,6 +961,8 @@ export component MessageList inherits Rectangle {
 
                 message-bubble := MessageItem {
                     width: 100%;
+                    cache-viewport-width: root.experimental-content-cache ? list.width : 0px;
+                    cache-viewport-height: root.experimental-content-cache ? list.height : 0px;
                     chrome-bottom: root.absolute-position.y + root.top-inset;
                     swipe-engaged(on) => { root.bubble-swiping = on; }
                     animate-arrival: idx >= root.arrival-start-index && idx < root.arrival-end-index;
@@ -993,6 +1081,9 @@ export component MessageList inherits Rectangle {
 
                     audio-seek(id, pos) => {
                         root.audio-seek(id, pos);
+                    }
+                    cancel-upload(id) => {
+                        root.cancel-upload(id);
                     }
                 }
             }

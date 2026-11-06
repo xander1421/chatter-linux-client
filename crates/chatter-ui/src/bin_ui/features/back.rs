@@ -323,6 +323,21 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
+    // The attachment-source sheet is an overlay over the composer.
+    if window
+        .global::<crate::ChatPane>()
+        .get_composer_attach_sheet_visible()
+    {
+        window
+            .global::<crate::ChatPane>()
+            .set_composer_attach_sheet_visible(false);
+        // Reset the picker-open latch prepare-attachment-picker set when the
+        // sheet opened, or the next Attach tap is swallowed by the guard in
+        // on_attachment_clicked (owner 2026-11-05).
+        window.invoke_finish_attachment_picker(true);
+        return true;
+    }
+
     // The composer's emoji and GIF pickers are overlays too, and since the
     // emoji picker now stays open across insertions (§112u) Back is the
     // natural way to dismiss it.
@@ -364,6 +379,18 @@ pub fn handle_back(window: &MainWindow) -> bool {
         window
             .global::<crate::SearchPane>()
             .set_unified_search_open(false);
+        return true;
+    }
+
+    // The Contacts "Add a friend" sheet is an overlay over the Friends list,
+    // not a stacked screen. Back returns to the list instead of leaving the tab.
+    if window
+        .global::<crate::ModalHostState>()
+        .get_friends_show_add()
+    {
+        window
+            .global::<crate::ModalHostState>()
+            .set_friends_show_add(false);
         return true;
     }
 

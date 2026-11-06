@@ -112,7 +112,10 @@ export component AppTabScreens inherits Rectangle {
     // Friends Modal
     if SidebarPane.active-tab == "contacts": FriendsModal {
         init => {
-            if (ModalHostState.friends-modal-tab == "find") { ModalHostState.friends-modal-switch-tab("find"); }
+            // "find" is no longer a tab; recover any stale value.
+            if (ModalHostState.friends-modal-tab == "find") { ModalHostState.friends-modal-tab = "friends"; }
+            // Always land on the Friends list; the + opens the Add sheet.
+            ModalHostState.friends-show-add = false;
         }
         z: -1;
         mobile-mode: root.compact-layout;
@@ -146,6 +149,13 @@ export component AppTabScreens inherits Rectangle {
         request-note <=> ModalHostState.friends-request-note;
         qr-code-image <=> ModalHostState.friends-qr-code-image;
         show-qr <=> ModalHostState.friends-show-qr;
+        search-query <=> ModalHostState.friends-search-query;
+        search-active: ModalHostState.friends-search-active;
+        search-performed: ModalHostState.friends-search-performed;
+        search-result: ModalHostState.friends-search-result;
+        showing-add <=> ModalHostState.friends-show-add;
+        search-changed(q) => { ModalHostState.friends-search-changed(q); }
+        add-searched-friend(uid) => { ModalHostState.friends-add-searched-friend(uid); }
 
         close => {
             SidebarPane.active-tab = "chats";
@@ -183,6 +193,9 @@ export component AppTabScreens inherits Rectangle {
         }
         copy-code => {
             ModalHostState.friends-copy-code();
+        }
+        share-code => {
+            ModalHostState.friends-share-code();
         }
         can-scan: root.is-mobile-platform;
         paste-code => {

@@ -7,7 +7,22 @@ impl ChatterClient {
     /// startup keeps SDK construction and offline tests free of network work.
     pub fn prewarm_tor(&self) {
         #[cfg(feature = "onion")]
-        crate::network::grpc::onion_transport::prewarm(self.services.grpc_pool.onion_tor());
+        {
+            // Bootstrapping arti downloads the consensus and weights thousands
+            // of relays — tens of seconds pegging a core (profiled as the top
+            // CPU cost during UI interaction: tor_netdir relay selection). Only
+            // pay it when onion is actually the active transport (Shield/anon).
+            // Direct-HTTPS users never touch Tor, and entering Shield warms it
+            // then (client/shield.rs calls refresh_directory, which bootstraps).
+            if self.anon_mode_enabled()
+                || self.services.grpc_pool.transport_mode()
+                    == crate::network::grpc::client_pool::TransportMode::Onion
+            {
+                crate::network::grpc::onion_transport::prewarm(
+                    self.services.grpc_pool.onion_tor(),
+                );
+            }
+        }
     }
 
     // ── Lifecycle ───────────────────────────────────────────────────────

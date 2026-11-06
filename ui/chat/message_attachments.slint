@@ -46,6 +46,8 @@ export component MessageAttachments inherits VerticalLayout {
     callback request-menu(length, length, length, length, length, length);
     callback audio-seek(string, float);
     callback message-clicked(string);
+    // Cancel one in-flight outgoing file upload (the tray/pending id).
+    callback cancel-upload(string);
 
     property <int> album-count: root.attachments.length > 0 ? root.attachments[0].album-count : 0;
     pure function album-rect(index: int, count: int, width: length, gap: length) -> AlbumRect {
@@ -88,25 +90,36 @@ export component MessageAttachments inherits VerticalLayout {
             background: Colors.surface-hover;
             clip: true;
 
-            if attachment.has-thumbnail: Image {
-                width: 100%; height: 100%; source: attachment.thumbnail; image-fit: cover;
-            }
+            // Placeholder under the thumbnail; the thumbnail fades in over it as
+            // the loader decodes it, instead of snapping in (the "pop").
             if !attachment.has-thumbnail: Image {
                 width: 32px; height: 32px;
                 x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                 source: attachment.is-video ? Icons.play : Icons.image;
                 colorize: Colors.text-muted;
             }
+            Image {
+                width: 100%; height: 100%; source: attachment.thumbnail; image-fit: cover;
+                opacity: attachment.has-thumbnail ? 1.0 : 0.0;
+                animate opacity { duration: 240ms; easing: ease-in-out; }
+            }
             if attachment.is-video: Image {
                 width: 28px; height: 28px;
                 x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                 source: Icons.play; colorize: Colors.text-primary;
             }
-            if attachment.is-uploading || attachment.is-downloading || attachment.is-download-failed: Rectangle {
+            if attachment.upload-state == "queued" || attachment.upload-state == "uploading"
+                    || attachment.upload-state == "failed" || attachment.upload-state == "cancelled"
+                    || attachment.is-downloading || attachment.is-download-failed: Rectangle {
                 width: 100%; height: 100%; background: Colors.overlay;
                 Text {
                     width: 100%; height: 100%;
-                    text: attachment.is-download-failed ? "Download failed" : Math.round(attachment.progress * 100) + "%";
+                    text: attachment.upload-state == "queued" ? "Queued"
+                        : attachment.upload-state == "uploading" ? "Uploading…"
+                        : attachment.upload-state == "failed" ? "Upload failed"
+                        : attachment.upload-state == "cancelled" ? "Cancelled"
+                        : attachment.is-download-failed ? "Download failed"
+                        : Math.round(attachment.progress * 100) + "%";
                     color: Colors.text-primary; font-size: Typography.sm;
                     horizontal-alignment: center; vertical-alignment: center;
                 }
@@ -144,6 +157,28 @@ export component MessageAttachments inherits VerticalLayout {
                     root.request-menu(self.anchor-x, self.anchor-y,
                         root.bubble-y, root.bubble-y + root.bubble-height,
                         root.bubble-x, root.bubble-x + root.bubble-width);
+                }
+            }
+            // Cancel X — declared AFTER the HoldArea so it sits above it and
+            // receives the tap instead of opening the (not-yet-sent) image.
+            if attachment.upload-state == "queued" || attachment.upload-state == "uploading": Rectangle {
+                x: parent.width - self.width - 2px;
+                y: 2px;
+                width: 22px;
+                height: 22px;
+                border-radius: 11px;
+                background: #00000099;
+                Image {
+                    source: Icons.x;
+                    width: 12px;
+                    height: 12px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.text-primary;
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.cancel-upload(attachment.id); }
                 }
             }
         }
@@ -196,11 +231,14 @@ export component MessageAttachments inherits VerticalLayout {
             border-radius: root.edge-to-edge ? 0px : Spacing.radius-sm;
             clip: true;
 
-            if attachment.has-thumbnail: Image {
+            Image {
                 width: 100%;
                 height: 100%;
                 source: attachment.thumbnail;
                 image-fit: root.edge-to-edge ? cover : contain;
+                // Fade in as the loader decodes it, instead of snapping in.
+                opacity: attachment.has-thumbnail ? 1.0 : 0.0;
+                animate opacity { duration: 240ms; easing: ease-in-out; }
             }
 
             if !attachment.has-thumbnail: Rectangle {
@@ -230,12 +268,15 @@ export component MessageAttachments inherits VerticalLayout {
             }
 
             // Progress overlay
-            if attachment.is-uploading || attachment.is-downloading: Rectangle {
+            if attachment.upload-state == "queued" || attachment.upload-state == "uploading"
+                    || attachment.upload-state == "failed" || attachment.upload-state == "cancelled"
+                    || attachment.is-downloading: Rectangle {
                 width: 100%;
                 height: 100%;
                 background: Colors.overlay;
                 accessible-role: progress-indicator;
-                accessible-label: attachment.is-uploading ? "Uploading " + attachment.filename : "Downloading " + attachment.filename;
+                accessible-label: attachment.upload-state == "uploading" || attachment.upload-state == "queued"
+                    ? "Uploading " + attachment.filename : "Downloading " + attachment.filename;
                 accessible-value: Math.round(attachment.progress * 100) + " percent";
 
                 VerticalLayout {
@@ -243,13 +284,19 @@ export component MessageAttachments inherits VerticalLayout {
                     spacing: Spacing.sm;
 
                     Text {
-                        text: attachment.is-uploading ? "Uploading..." : "Downloading...";
+                        text: attachment.upload-state == "queued" ? "Queued"
+                            : attachment.upload-state == "uploading" ? "Uploading…"
+                            : attachment.upload-state == "failed" ? "Upload failed"
+                            : attachment.upload-state == "cancelled" ? "Cancelled"
+                            : "Downloading...";
                         color: Colors.text-primary;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
                     }
 
-                    Rectangle {
+                    // Downloads have a real percentage; an outgoing upload is
+                    // indeterminate (the label is the whole signal).
+                    if attachment.is-downloading: Rectangle {
                         width: 80%;
                         height: 4px;
                         background: Colors.surface-hover;
@@ -306,6 +353,28 @@ export component MessageAttachments inherits VerticalLayout {
                     root.request-menu(self.anchor-x, self.anchor-y,
                         root.bubble-y, root.bubble-y + root.bubble-height,
                         root.bubble-x, root.bubble-x + root.bubble-width);
+                }
+            }
+
+            // Cancel X — after img-touch so it is on top and takes the tap.
+            if attachment.upload-state == "queued" || attachment.upload-state == "uploading": Rectangle {
+                x: parent.width - self.width - Spacing.xs;
+                y: Spacing.xs;
+                width: 28px;
+                height: 28px;
+                border-radius: 14px;
+                background: #00000099;
+                Image {
+                    source: Icons.x;
+                    width: 14px;
+                    height: 14px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.text-primary;
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.cancel-upload(attachment.id); }
                 }
             }
 
@@ -377,11 +446,14 @@ export component MessageAttachments inherits VerticalLayout {
             border-radius: Spacing.radius-sm;
             clip: true;
 
-            if attachment.has-thumbnail: Image {
+            Image {
                 width: 100%;
                 height: 100%;
                 source: attachment.thumbnail;
                 image-fit: contain;
+                // Fade in as the loader decodes it, instead of snapping in.
+                opacity: attachment.has-thumbnail ? 1.0 : 0.0;
+                animate opacity { duration: 240ms; easing: ease-in-out; }
             }
 
             // No thumbnail: the play button IS the icon, stacked
@@ -552,19 +624,20 @@ export component MessageAttachments inherits VerticalLayout {
                 }
             }
 
-            // Progress bar
-            if attachment.is-uploading || attachment.is-downloading: Rectangle {
+            // Progress bar (determinate download / indeterminate upload)
+            if attachment.upload-state == "queued" || attachment.upload-state == "uploading" || attachment.is-downloading: Rectangle {
                 y: parent.height - 3px;
                 width: parent.width;
                 height: 3px;
                 background: Colors.surface-hover;
                 border-radius: 1.5px;
                 accessible-role: progress-indicator;
-                accessible-label: attachment.is-uploading ? "Upload progress" : "Download progress";
+                accessible-label: (attachment.upload-state == "uploading" || attachment.upload-state == "queued") ? "Upload progress" : "Download progress";
                 accessible-value: Math.round(attachment.progress * 100) + " percent";
 
                 Rectangle {
-                    width: parent.width * attachment.progress;
+                    // Uploads carry no byte percentage: show a filled bar.
+                    width: attachment.is-downloading ? parent.width * attachment.progress : parent.width;
                     height: 100%;
                     background: Colors.primary;
                     border-radius: 1.5px;
@@ -588,6 +661,28 @@ export component MessageAttachments inherits VerticalLayout {
                     root.request-menu(self.anchor-x, self.anchor-y,
                         root.bubble-y, root.bubble-y + root.bubble-height,
                         root.bubble-x, root.bubble-x + root.bubble-width);
+                }
+            }
+
+            // Cancel X — after file-touch so it is on top and takes the tap.
+            if attachment.upload-state == "queued" || attachment.upload-state == "uploading": Rectangle {
+                x: parent.width - self.width - Spacing.xs;
+                y: Spacing.xs;
+                width: 24px;
+                height: 24px;
+                border-radius: 12px;
+                background: #00000099;
+                Image {
+                    source: Icons.x;
+                    width: 12px;
+                    height: 12px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.text-primary;
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.cancel-upload(attachment.id); }
                 }
             }
         }
