@@ -40,6 +40,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The SDK/NDK + the Rust target tree need lots of disk; the runner ships
+      # ~20 GB of unused toolchains. Reclaim it so sdkmanager and the build fit.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/lib/android/sdk/ndk \
+            /usr/local/share/powershell /usr/share/swift || true
+          sudo docker image prune -a -f >/dev/null 2>&1 || true
+          df -h / /mnt
+
       # The chatter_ui_slint rustc pass peaks ~13-15 GB; a 16 GB runner OOMs
       # without headroom. The runner already ships a small /swapfile (busy), so
       # replace it with a large one on /mnt (the ~70 GB ephemeral disk).
@@ -73,14 +83,20 @@ jobs:
           packages: "platform-tools"
       - name: SDK packages (platforms 34 + 36, build-tools, NDK)
         run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          yes | sdkmanager \
-            "platforms;android-34" \
-            "platforms;android-36" \
-            "build-tools;34.0.0" \
-            "ndk;28.2.13676358"
-          echo "--- installed SDK components ---"
-          ls -1 "$ANDROID_SDK_ROOT/platforms" "$ANDROID_SDK_ROOT/build-tools" "$ANDROID_SDK_ROOT/ndk"
+          set +e
+          yes | sdkmanager --licenses >/dev/null 2>&1
+          for pkg in "platforms;android-34" "platforms;android-36" "build-tools;34.0.0" "ndk;28.2.13676358"; do
+            echo "::group::install $pkg"
+            yes | sdkmanager "$pkg"; rc=$?
+            echo "install $pkg -> rc=$rc" >> "$GITHUB_STEP_SUMMARY"
+            echo "::endgroup::"
+            [ $rc -ne 0 ] && { echo "FAILED to install $pkg (rc=$rc)" >> "$GITHUB_STEP_SUMMARY"; }
+          done
+          { echo "### disk after SDK install"; df -h / /mnt; echo "### installed"; ls -1 "$ANDROID_SDK_ROOT/platforms" "$ANDROID_SDK_ROOT/build-tools" "$ANDROID_SDK_ROOT/ndk" 2>&1; } >> "$GITHUB_STEP_SUMMARY"
+          # Fail only if a required component is missing.
+          test -d "$ANDROID_SDK_ROOT/ndk/28.2.13676358" \
+            && test -d "$ANDROID_SDK_ROOT/platforms/android-36" \
+            && test -d "$ANDROID_SDK_ROOT/platforms/android-34"
 
       - name: Decode signing keystore
         run: |
