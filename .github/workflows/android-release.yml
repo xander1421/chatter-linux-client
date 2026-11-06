@@ -132,7 +132,16 @@ jobs:
         run: |
           set -euo pipefail
           url=https://gstreamer.freedesktop.org/data/pkg/android/1.28.1/gstreamer-1.0-android-universal-1.28.1.tar.xz
-          curl -fL --retry 3 -o "$RUNNER_TEMP/gst.tar.xz" "$url"
+          # The freedesktop CDN is slow (~750 KB/s) and drops the HTTP/2 stream
+          # mid-transfer (curl 92 PROTOCOL_ERROR). Force HTTP/1.1 and resume the
+          # partial file (-C -) across up to 6 attempts. Cached after it lands.
+          ok=
+          for i in 1 2 3 4 5 6; do
+            if curl -fL --http1.1 -C - --connect-timeout 30 --speed-time 60 --speed-limit 1024 \
+                 -o "$RUNNER_TEMP/gst.tar.xz" "$url"; then ok=1; break; fi
+            echo "download attempt $i failed (rc=$?); retry in 10s"; sleep 10
+          done
+          test -n "$ok"
           mkdir -p "$HOME/gst-android"
           # Only arm64-v8a is built (cargo ndk -t arm64-v8a); skip the other three
           # arches in the universal tarball (~4.5 GB). The tarball is flat
