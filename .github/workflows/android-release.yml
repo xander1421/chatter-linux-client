@@ -68,6 +68,9 @@ jobs:
           distribution: temurin
           java-version: "27"
 
+      - name: Install protoc (spqr build dep)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
+
       - name: Rust toolchain + Android target
         run: |
           rustup target add aarch64-linux-android
