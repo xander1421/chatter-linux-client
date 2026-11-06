@@ -115,6 +115,8 @@ jobs:
           DEV_TRUST_ROOT: "0"
           DEV_AUTO_REGISTER: "0"
           CARGO_BUILD_JOBS: "2"
+          # The repo's .cargo config sets RUSTC_WRAPPER=sccache; CI has no sccache.
+          RUSTC_WRAPPER: ""
           ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/28.2.13676358
           CHATTER_ANDROID_VERSION_CODE: ${{ github.event.inputs.version_code }}
           CHATTER_ANDROID_VERSION_NAME: ${{ github.event.inputs.version_name }}
