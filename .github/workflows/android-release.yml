@@ -74,7 +74,11 @@ jobs:
       - name: Rust toolchain + Android target
         run: |
           rustup target add aarch64-linux-android
-          cargo install cargo-ndk --locked --version ^3
+          # Pin the same cargo-ndk that builds the shipping APKs locally (4.1.2).
+          # cargo-ndk 3.x uses a different linker shim that exits 1 with its
+          # stderr swallowed — the prior runs' "linking with cargo-ndk failed"
+          # with an empty error note. 4.x links identically to the local build.
+          cargo install cargo-ndk --locked --version 4.1.2
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -120,12 +124,12 @@ jobs:
           CARGO_BUILD_JOBS: "2"
           # The repo's .cargo config sets RUSTC_WRAPPER=sccache; CI has no sccache.
           RUSTC_WRAPPER: ""
-          # The committed [profile.release] uses fat LTO (lto=true) + codegen-units=1,
-          # which links the whole graph + libwebrtc.a in ONE LLVM process and peaks
-          # well past a 16 GB runner's RAM+swap (prior run OOM-died at the link step
-          # with LLVM's "out of memory" exit(1)). Thin LTO partitions the link and
-          # cuts peak memory several-fold. Build-env override only — the committed
-          # profile is untouched, so local release builds keep fat LTO.
+          # Link-memory insurance on the 16 GB runner: the committed
+          # [profile.release] uses fat LTO (lto=true, codegen-units=1), which links
+          # the whole graph + libwebrtc.a in one LLVM process. Thin LTO partitions
+          # that and bounds peak memory. (The build FAILURE was cargo-ndk 3.x, fixed
+          # above; this is kept as headroom, not the fix.) Build-env override only —
+          # the committed profile is untouched, so local release builds keep fat LTO.
           CARGO_PROFILE_RELEASE_LTO: "thin"
           ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/28.2.13676358
           CHATTER_ANDROID_VERSION_CODE: ${{ github.event.inputs.version_code }}
