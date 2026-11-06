@@ -40,53 +40,154 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The SDK/NDK + the Rust target tree need lots of disk; the runner ships
+      # ~20 GB of unused toolchains. Reclaim it so sdkmanager and the build fit.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/lib/android/sdk/ndk \
+            /usr/local/share/powershell /usr/share/swift || true
+          sudo docker image prune -a -f >/dev/null 2>&1 || true
+          df -h / /mnt
+
       # The chatter_ui_slint rustc pass peaks ~13-15 GB; a 16 GB runner OOMs
-      # without headroom, so back it with swap.
+      # without headroom. The runner already ships a small /swapfile (busy), so
+      # replace it with a large one on /mnt (the ~70 GB ephemeral disk).
       - name: Add swap
         run: |
-          sudo fallocate -l 14G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          sudo swapoff -a || true
+          sudo rm -f /swapfile /mnt/swapfile
+          sudo fallocate -l 28G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "27"
 
+      - name: Install protoc (spqr build dep)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
+
       - name: Rust toolchain + Android target
         run: |
           rustup target add aarch64-linux-android
-          cargo install cargo-ndk --locked --version ^3
+          # Pin the same cargo-ndk that builds the shipping APKs locally (4.1.2).
+          # cargo-ndk 3.x uses a different linker shim that exits 1 with its
+          # stderr swallowed — the prior runs' "linking with cargo-ndk failed"
+          # with an empty error note. 4.x links identically to the local build.
+          cargo install cargo-ndk --locked --version 4.1.2
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
 
-      - name: Android SDK packages (platform 34 + 36, build-tools, NDK)
+      - name: Android SDK (skip obsolete 'tools' default)
         uses: android-actions/setup-android@v3
-      - run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager \
-            "platforms;android-34" \
-            "platforms;android-36" \
-            "build-tools;34.0.0" \
-            "ndk;28.2.13676358"
+        with:
+          packages: "platform-tools"
+      - name: SDK packages (platforms 34 + 36, build-tools, NDK)
+        run: |
+          set +e
+          yes | sdkmanager --licenses >/dev/null 2>&1
+          for pkg in "platforms;android-34" "platforms;android-36" "build-tools;34.0.0" "ndk;28.2.13676358"; do
+            echo "::group::install $pkg"
+            yes | sdkmanager "$pkg"; rc=$?
+            echo "install $pkg -> rc=$rc" >> "$GITHUB_STEP_SUMMARY"
+            echo "::endgroup::"
+            [ $rc -ne 0 ] && { echo "FAILED to install $pkg (rc=$rc)" >> "$GITHUB_STEP_SUMMARY"; }
+          done
+          { echo "### disk after SDK install"; df -h / /mnt; echo "### installed"; ls -1 "$ANDROID_SDK_ROOT/platforms" "$ANDROID_SDK_ROOT/build-tools" "$ANDROID_SDK_ROOT/ndk" 2>&1; } >> "$GITHUB_STEP_SUMMARY"
+          # Fail only if a required component is missing.
+          test -d "$ANDROID_SDK_ROOT/ndk/28.2.13676358" \
+            && test -d "$ANDROID_SDK_ROOT/platforms/android-36" \
+            && test -d "$ANDROID_SDK_ROOT/platforms/android-34"
 
       - name: Decode signing keystore
+        env:
+          KS_B64: ${{ secrets.CHATTER_KEYSTORE_BASE64 }}
         run: |
           install -d "$RUNNER_TEMP/signing"
-          printf '%s' "${{ secrets.CHATTER_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/signing/chatter.keystore"
-          test -s "$RUNNER_TEMP/signing/chatter.keystore"
+          printf '%s' "$KS_B64" | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/signing/chatter.keystore"
+          sz=$(wc -c < "$RUNNER_TEMP/signing/chatter.keystore")
+          echo "keystore decoded: ${sz} bytes" >> "$GITHUB_STEP_SUMMARY"
+          test "$sz" -gt 1000
+
+      # build-android.sh links the GLib/GStreamer helper libs (pcre2-8,
+      # gmodule-2.0, ffi, orc-0.4, iconv, z) into the mobile .so and resolves
+      # them through GSTREAMER_ROOT_ANDROID (default $HOME/gst-android). Without
+      # this prebuilt the Android link fails with "ld.lld: error: unable to find
+      # library -lpcre2-8" (etc.) — the real cause of every prior red run. The
+      # laptop that builds the shipping APKs has this exact prebuilt; CI never did.
+      - name: Cache GStreamer Android prebuilt (arm64)
+        id: gst
+        uses: actions/cache@v4
+        with:
+          path: ~/gst-android
+          key: gst-android-arm64-1.28.1
+      - name: Install GStreamer Android prebuilt (arm64)
+        if: steps.gst.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          url=https://gstreamer.freedesktop.org/data/pkg/android/1.28.1/gstreamer-1.0-android-universal-1.28.1.tar.xz
+          # The freedesktop CDN is slow (~750 KB/s) and drops the HTTP/2 stream
+          # mid-transfer (curl 92 PROTOCOL_ERROR). Force HTTP/1.1 and resume the
+          # partial file (-C -) across up to 6 attempts. Cached after it lands.
+          ok=
+          for i in 1 2 3 4 5 6; do
+            if curl -fL --http1.1 -C - --connect-timeout 30 --speed-time 60 --speed-limit 1024 \
+                 -o "$RUNNER_TEMP/gst.tar.xz" "$url"; then ok=1; break; fi
+            echo "download attempt $i failed (rc=$?); retry in 10s"; sleep 10
+          done
+          test -n "$ok"
+          mkdir -p "$HOME/gst-android"
+          # Only arm64-v8a is built (cargo ndk -t arm64-v8a); skip the other three
+          # arches in the universal tarball (~4.5 GB). The tarball is flat
+          # (arm64/ armv7/ x86/ x86_64/ at the root).
+          tar -xf "$RUNNER_TEMP/gst.tar.xz" -C "$HOME/gst-android" arm64
+          rm -f "$RUNNER_TEMP/gst.tar.xz"
+          test -f "$HOME/gst-android/arm64/lib/libgmodule-2.0.a"
 
       - name: Build signed release APK
         working-directory: android
         env:
           RELEASE: "1"
+          # build-android.sh defaults GSTREAMER_ROOT_ANDROID to $HOME/gst-android,
+          # which is where the step above installs it ($HOME=/home/runner here).
           DEV_TRUST_ROOT: "0"
           DEV_AUTO_REGISTER: "0"
-          CARGO_BUILD_JOBS: "2"
+          # Serialize rustc: the runner has only ~7.7 GB RAM and chatter_ui_slint
+          # alone peaks ~13-15 GB; two concurrent heavy passes OOM-kill the runner.
+          # One at a time fits (slowly) in RAM + 27 GB swap.
+          CARGO_BUILD_JOBS: "1"
+          # The repo's .cargo config sets RUSTC_WRAPPER=sccache; CI has no sccache.
+          RUSTC_WRAPPER: ""
+          # Link-memory insurance: the runner has ~7.7 GB RAM and only ~1 GB stays
+          # free even with CARGO_BUILD_JOBS=1. The committed [profile.release] uses
+          # fat LTO (lto=true, codegen-units=1), which links the whole graph +
+          # libwebrtc.a in one LLVM process; thin LTO partitions that and bounds
+          # peak link memory on this tight runner. (NOT the fix for the red runs —
+          # that was the missing GStreamer-Android prebuilt, installed above; this
+          # is headroom only.) Build-env override only — the committed profile is
+          # untouched, so local release builds keep fat LTO.
+          CARGO_PROFILE_RELEASE_LTO: "thin"
+          # Surface the real linker error: rustc's "= note:" block (the lld stderr)
+          # is one giant line that GitHub's log drops, so prior runs showed only
+          # "linking with cargo-ndk failed" with an empty note. -v makes clang emit
+          # the invocation + lld errors as SHORT lines that survive. --threads=1
+          # also bounds lld's peak memory on the 16 GB runner. build-android.sh
+          # appends its own flags to ${RUSTFLAGS:-}, so these carry through.
+          RUSTFLAGS: "-C link-arg=-v -C link-arg=-Wl,--threads=1"
           ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/28.2.13676358
+          # The runner image exports ANDROID_NDK_ROOT=.../ndk/27.3.x, but the
+          # "Free disk space" step rm's /usr/local/lib/android/sdk/ndk and we
+          # reinstall only 28.2 — leaving ANDROID_NDK_ROOT a dead path. cargo-ndk's
+          # final-link shim resolves the linker through ANDROID_NDK_ROOT, so a
+          # stale value means it execs a clang that no longer exists (exit 1, no
+          # stderr). Point both at the installed NDK.
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/28.2.13676358
           CHATTER_ANDROID_VERSION_CODE: ${{ github.event.inputs.version_code }}
           CHATTER_ANDROID_VERSION_NAME: ${{ github.event.inputs.version_name }}
           # Public pinned anchors.
@@ -110,7 +211,38 @@ jobs:
             export CHATTER_ANDROID_VERSION_CODE="$code"
             export CHATTER_ANDROID_VERSION_NAME="0.1.$((code-1))"
           fi
-          ./build-android.sh
+          # Memory monitor: the runner has only ~7.7 GB RAM; the build is
+          # suspected to OOM at a high-memory rustc/link pass (which kills the
+          # runner and takes the in-step diagnostics with it). Sample memory to a
+          # file that the always()-upload step below preserves.
+          ( while true; do printf '%s ' "$(date +%H:%M:%S)"; \
+              free -m | awk '/Mem:/{printf "memUsed=%sMB memFree=%sMB ",$3,$4} /Swap:/{printf "swapUsed=%sMB\n",$3}'; \
+              sleep 10; done ) > "$RUNNER_TEMP/mem.log" 2>&1 &
+          MONPID=$!
+          # NB: step shell is `bash -e`; a failing `| tee` pipeline would abort
+          # here before the diagnostics run, so drop errexit around the capture.
+          set +e -o pipefail
+          ./build-android.sh 2>&1 | tee "$RUNNER_TEMP/build.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          kill "$MONPID" 2>/dev/null || true
+          if [ "$rc" -ne 0 ]; then
+            echo "::group::failure diagnostics (short lines survive GitHub log truncation)"
+            grep -inE 'ld\.lld|lld:|rust-lld|undefined|out of memory|cannot (find|allocate)|killed|no space|bad_alloc|collect2|fatal|signal:|error:' "$RUNNER_TEMP/build.log" | tail -80
+            echo "--- raw tail ---"; tail -40 "$RUNNER_TEMP/build.log"
+            echo "::endgroup::"
+            exit "$rc"
+          fi
+
+      - name: Upload build + memory logs (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics
+          path: |
+            ${{ runner.temp }}/build.log
+            ${{ runner.temp }}/mem.log
+          if-no-files-found: warn
 
       - name: Verify signer certificate
         working-directory: android
