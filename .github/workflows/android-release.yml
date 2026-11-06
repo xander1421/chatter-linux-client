@@ -67,10 +67,12 @@ jobs:
         with:
           workspaces: ". -> target"
 
-      - name: Android SDK packages (platform 34 + 36, build-tools, NDK)
+      - name: Android SDK (skip obsolete 'tools' default)
         uses: android-actions/setup-android@v3
-      - run: |
-          yes | sdkmanager --licenses >/dev/null || true
+        with:
+          packages: "platform-tools"
+      - name: SDK packages (platforms 34 + 36, build-tools, NDK)
+        run: |
           sdkmanager \
             "platforms;android-34" \
             "platforms;android-36" \
