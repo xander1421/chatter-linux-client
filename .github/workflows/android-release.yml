@@ -129,25 +129,37 @@ jobs:
           key: gst-android-arm64-1.28.1
       - name: Install GStreamer Android prebuilt (arm64)
         if: steps.gst.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          url=https://gstreamer.freedesktop.org/data/pkg/android/1.28.1/gstreamer-1.0-android-universal-1.28.1.tar.xz
-          # The freedesktop CDN is slow (~750 KB/s) and drops the HTTP/2 stream
-          # mid-transfer (curl 92 PROTOCOL_ERROR). Force HTTP/1.1 and resume the
-          # partial file (-C -) across up to 6 attempts. Cached after it lands.
-          ok=
-          for i in 1 2 3 4 5 6; do
-            if curl -fL --http1.1 -C - --connect-timeout 30 --speed-time 60 --speed-limit 1024 \
-                 -o "$RUNNER_TEMP/gst.tar.xz" "$url"; then ok=1; break; fi
-            echo "download attempt $i failed (rc=$?); retry in 10s"; sleep 10
-          done
-          test -n "$ok"
           mkdir -p "$HOME/gst-android"
-          # Only arm64-v8a is built (cargo ndk -t arm64-v8a); skip the other three
-          # arches in the universal tarball (~4.5 GB). The tarball is flat
-          # (arm64/ armv7/ x86/ x86_64/ at the root).
-          tar -xf "$RUNNER_TEMP/gst.tar.xz" -C "$HOME/gst-android" arm64
-          rm -f "$RUNNER_TEMP/gst.tar.xz"
+          ok=
+          # Primary: our own arm64-only mirror on a GitHub release (~285 MB, the
+          # reliable GitHub CDN). freedesktop's universal tarball is ~892 MB, slow
+          # (~150-750 KB/s) and routinely drops the transfer mid-stream to Azure
+          # runners (curl 18 "transfer closed" / 92 PROTOCOL_ERROR), which failed
+          # every tag build during the 2026-11-07 outage. Mirror asset is a flat
+          # arm64/ tree, same 1.28.1 ABI.
+          mirror_tag=vendor-gstreamer-android-1.28.1
+          mirror_asset=gstreamer-1.0-android-arm64-1.28.1.tar.xz
+          if gh release download "$mirror_tag" --repo "$GITHUB_REPOSITORY" \
+               --pattern "$mirror_asset" --dir "$RUNNER_TEMP" 2>/dev/null; then
+            tar -xf "$RUNNER_TEMP/$mirror_asset" -C "$HOME/gst-android" arm64 && ok=1
+          fi
+          # Fallback: freedesktop universal tarball, arm64 member only.
+          if [ -z "$ok" ]; then
+            url=https://gstreamer.freedesktop.org/data/pkg/android/1.28.1/gstreamer-1.0-android-universal-1.28.1.tar.xz
+            for i in 1 2 3 4 5 6; do
+              if curl -fL --http1.1 -C - --connect-timeout 30 --speed-time 60 --speed-limit 1024 \
+                   -o "$RUNNER_TEMP/gst.tar.xz" "$url"; then
+                tar -xf "$RUNNER_TEMP/gst.tar.xz" -C "$HOME/gst-android" arm64 && ok=1; break
+              fi
+              echo "freedesktop attempt $i failed (rc=$?); retry in 10s"; sleep 10
+            done
+          fi
+          test -n "$ok"
+          rm -f "$RUNNER_TEMP/$mirror_asset" "$RUNNER_TEMP/gst.tar.xz"
           test -f "$HOME/gst-android/arm64/lib/libgmodule-2.0.a"
 
       - name: Build signed release APK
