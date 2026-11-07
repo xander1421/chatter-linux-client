@@ -14,7 +14,6 @@ export component AppCallDock inherits ActiveCallView {
     in property <[image]> call-remote-video-frames;
     in property <bool> call-speaker-on;
     in property <bool> call-speaker-toggle;
-    in property <bool> is-mobile-platform;
     in property <length> window-height;
     callback call-end();
     callback call-swap-camera();
@@ -44,7 +43,6 @@ export component AppCallDock inherits ActiveCallView {
         is-screen-sharing: root.call-is-screen-sharing;
         speaker-toggle: root.call-speaker-toggle;
         speaker-on: root.call-speaker-on;
-        is-mobile-platform: root.is-mobile-platform;
         toggle-speaker => { root.call-toggle-speaker(); }
         local-video-frame: root.call-local-video-frame;
         remote-video-frames: root.call-remote-video-frames;
