@@ -191,6 +191,8 @@ export component ActiveCallView inherits Rectangle {
     // See CallControls: phone route toggle vs desktop output picker.
     in property <bool> speaker-toggle: false;
     in property <bool> speaker-on: false;
+    // Drives the mobile-only camera-swap button in the controls.
+    in property <bool> is-mobile-platform: false;
     callback video-size(string, length, length, bool);
     in property <int> video-layout-revision;
     in property <image> local-video-frame;
@@ -239,6 +241,7 @@ export component ActiveCallView inherits Rectangle {
 
     callback toggle-mute();
     callback toggle-video();
+    callback swap-camera();
     callback toggle-screen-share();
     callback end-call();
     callback show-audio-input();
@@ -607,12 +610,15 @@ export component ActiveCallView inherits Rectangle {
                 is-video-enabled: is-video-enabled;
                 is-screen-sharing: is-screen-sharing;
                 is-video-call: call-data.is-video-call;
+                // Mobile + camera on: offer the front/back lens swap.
+                show-camera-swap: root.is-mobile-platform && is-video-enabled;
                 speaker-toggle: root.speaker-toggle;
                 speaker-on: root.speaker-on;
                 toggle-speaker => { root.toggle-speaker(); }
 
                 toggle-mute => { root.toggle-mute(); }
                 toggle-video => { root.toggle-video(); }
+                swap-camera => { root.swap-camera(); }
                 toggle-screen-share => { root.toggle-screen-share(); }
                 end-call => { root.end-call(); }
                 show-audio-input => { root.show-audio-input(); }

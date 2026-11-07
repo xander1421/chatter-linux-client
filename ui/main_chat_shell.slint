@@ -207,8 +207,10 @@ export component MainChatShell inherits Rectangle {
                         call-remote-video-frames: CallView.call-remote-video-frames;
                         call-speaker-on: CallView.call-speaker-on;
                         call-speaker-toggle: CallView.call-speaker-toggle;
+                        is-mobile-platform: root.is-mobile-platform;
                         window-height: root.window-height;
                         call-end() => { CallView.call-end(); }
+                        call-swap-camera() => { CallView.call-swap-camera(); }
                         call-peer-audio-mute-toggle(arg0) => { CallView.call-peer-audio-mute-toggle(arg0); }
                         call-peer-video-pause-toggle(arg0) => { CallView.call-peer-video-pause-toggle(arg0); }
                         call-toggle-mute() => { CallView.call-toggle-mute(); }

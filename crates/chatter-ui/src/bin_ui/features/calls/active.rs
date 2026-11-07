@@ -173,6 +173,25 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
     });
 
+    // Swap camera lens (mobile). The button is only shown while the local
+    // camera is on, so there is a live track to republish; core owns which
+    // lens is active and flips to the opposite one.
+    window.global::<crate::CallView>().on_call_swap_camera({
+        let ui_ctx = ui_ctx.clone();
+        let weak = window.as_weak();
+        move || {
+            let ui_ctx = ui_ctx.clone();
+            let weak = weak.clone();
+            slint::spawn_local(async move {
+                if let Err(e) = ui_ctx.call_swap_camera().await {
+                    tracing::error!("Failed to swap camera: {}", e);
+                    camera_error(&weak, "Could not switch camera");
+                }
+            })
+            .unwrap();
+        }
+    });
+
     // Toggle screen share.
     window
         .global::<crate::CallView>()

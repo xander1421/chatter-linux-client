@@ -650,6 +650,10 @@ enum CallCommand {
         config: Option<VideoCaptureConfig>,
         response: oneshot::Sender<Result<(), CallError>>,
     },
+    /// Flip the active camera between front and back lens (mobile).
+    SwapCamera {
+        response: oneshot::Sender<Result<(), CallError>>,
+    },
     /// Stop microphone.
     StopMicrophone,
     /// Stop camera.

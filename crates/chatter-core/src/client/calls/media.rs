@@ -68,6 +68,17 @@ impl ChatterClient {
         }
     }
 
+    /// Flip the active camera between the front and back lens (mobile only —
+    /// desktop has a single camera). Core owns the facing state; this just
+    /// asks the worker to republish the live track with the opposite lens.
+    #[cfg(feature = "media")]
+    pub async fn call_swap_camera(&self) -> Result<(), crate::error::CallError> {
+        match self.call_service().get().cloned() {
+            Some(worker) => worker.swap_camera().await,
+            None => Err(crate::error::CallError::WorkerShutdown),
+        }
+    }
+
     #[cfg(feature = "media")]
     pub fn call_set_microphone_muted(&self, muted: bool) {
         if let Some(worker) = self.call_service().get() {

@@ -796,6 +796,15 @@ impl CallWorkerHandle {
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
 
+    /// Flip the active camera between front and back lens (mobile).
+    pub async fn swap_camera(&self) -> Result<(), CallError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .try_send(CallCommand::SwapCamera { response: tx })
+            .map_err(|_| CallError::WorkerShutdown)?;
+        rx.await.map_err(|_| CallError::WorkerShutdown)?
+    }
+
     /// Stop microphone capture.
     pub fn stop_microphone(&self) {
         let _ = self.cmd_tx.try_send(CallCommand::StopMicrophone);

@@ -274,6 +274,24 @@ impl RoomManager {
         Ok(())
     }
 
+    /// Flip the active camera between the front and back lens mid-call.
+    ///
+    /// The facing lives in the running `VideoCapture`'s device path
+    /// ("front"/"back" on Android, see `video_capture::list_devices`), so this
+    /// reads it, picks the opposite, and reuses `switch_camera` to republish
+    /// the LiveKit track with the new lens. No-op error if the camera isn't
+    /// published yet — there is nothing live to flip.
+    pub async fn swap_camera_facing(&self) -> Result<(), CallError> {
+        use std::sync::atomic::Ordering;
+        if !self.camera_published.load(Ordering::SeqCst) {
+            return Err(CallError::NotInCall);
+        }
+        let current = self.video_capture.read().device_path().to_string();
+        let next = if current == "back" { "front" } else { "back" };
+        tracing::info!("Swapping camera lens {} -> {}", current, next);
+        self.switch_camera(Some(next), None).await
+    }
+
     /// Publish screen share to the room.
     ///
     /// # Arguments
