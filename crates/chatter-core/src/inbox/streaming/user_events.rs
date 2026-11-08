@@ -42,6 +42,7 @@ pub async fn spawn_user_events_stream(
     settings_repo: Arc<SettingsRepository>,
     domain_tx: Option<broadcast::Sender<DomainEvent>>,
     mut shutdown_rx: watch::Receiver<bool>,
+    mut visible_rx: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
     // Parsed once for the friend-key lookup that decrypts inbound profile names.
     let current_user_id = user_id.parse::<UserId>().ok();
@@ -58,6 +59,23 @@ pub async fn spawn_user_events_stream(
             if *shutdown_rx.borrow() {
                 tracing::debug!("User events stream shutting down");
                 break;
+            }
+
+            // Signal-mobile model: hold no persistent stream while backgrounded.
+            // The ntfy push listener is the sole background connection; a push
+            // wake refetches friend requests (ChatterClient::refresh_friend_requests),
+            // and resuming here refetches again on subscribe. Park until visible.
+            if !*visible_rx.borrow() {
+                tracing::debug!("User events stream parked: app backgrounded");
+                tokio::select! {
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() { return; }
+                    }
+                    changed = visible_rx.changed() => {
+                        if changed.is_err() { return; } // provider dropped
+                    }
+                }
+                continue;
             }
 
             // Subscribe to user events stream
@@ -100,6 +118,12 @@ pub async fn spawn_user_events_stream(
                                 if *shutdown_rx.borrow() {
                                     tracing::debug!("User events stream received shutdown signal");
                                     return;
+                                }
+                            }
+                            _ = visible_rx.changed() => {
+                                if !*visible_rx.borrow() {
+                                    tracing::debug!("User events stream closing: app backgrounded");
+                                    break; // Drop the stream; outer loop parks until visible.
                                 }
                             }
                             event = heartbeat::next_or_silent(&mut stream, heartbeat::STREAM_SILENCE_LIMIT) => {
