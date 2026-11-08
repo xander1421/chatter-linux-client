@@ -106,6 +106,57 @@ pub fn push_is_connected() -> bool {
     PUSH_STREAMS.load(std::sync::atomic::Ordering::Acquire) > 0
 }
 
+/// Process-global app foreground/background state (true = visible/foreground).
+///
+/// The single source of truth for the Signal-mobile background model: driven by
+/// `ChatterClient::set_app_visible`, read and awaited by every background loop
+/// (inbox poll pacing, user-events stream, channel stream, recovery tickers) so
+/// they go quiet when backgrounded and resume on foreground — without threading
+/// a receiver through each service's constructor. Defaults visible so desktop,
+/// tests, and headless startup behave as before until Android reports otherwise.
+static APP_VISIBLE: std::sync::LazyLock<tokio::sync::watch::Sender<bool>> =
+    std::sync::LazyLock::new(|| tokio::sync::watch::channel(true).0);
+
+/// Set the process-global app visibility (foreground = true). Only an actual
+/// edge marks the watch changed, so parked subscribers wake once per transition.
+pub fn set_app_visible(visible: bool) {
+    APP_VISIBLE.send_if_modified(|current| {
+        if *current != visible {
+            *current = visible;
+            true
+        } else {
+            false
+        }
+    });
+}
+
+/// A receiver that tracks app foreground/background transitions.
+pub fn subscribe_app_visible() -> tokio::sync::watch::Receiver<bool> {
+    APP_VISIBLE.subscribe()
+}
+
+/// Whether the app is currently in the foreground.
+pub fn app_is_visible() -> bool {
+    *APP_VISIBLE.borrow()
+}
+
+/// Park the caller while the app is backgrounded; return once it is foreground.
+///
+/// For background recovery/retry loops (DM outbox replay, receipt recovery,
+/// saved-message sync, DM-bootstrap recovery) that should go quiet when
+/// backgrounded and resume on foreground. Returns `false` if the visibility
+/// channel closed (the client was dropped) so the caller can exit its loop.
+pub async fn await_foreground(rx: &mut tokio::sync::watch::Receiver<bool>) -> bool {
+    loop {
+        if *rx.borrow_and_update() {
+            return true;
+        }
+        if rx.changed().await.is_err() {
+            return false;
+        }
+    }
+}
+
 /// Whether the chatter server can be reached right now.
 ///
 /// This exists because none of the three things that look like they answer that

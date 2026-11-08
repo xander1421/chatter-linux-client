@@ -71,6 +71,10 @@ impl ChatterClient {
             if let Some(provider) = self.services.device_inbox_provider.get() {
                 provider.wake();
             }
+            // A content-free wake may be for a channel message. Backgrounded, the
+            // channel stream is parked (Signal-mobile model), so nudge it to run
+            // a one-shot catch-up now instead of waiting for foreground.
+            self.services.channel_stream_service.request_resubscribe();
         }
         true
     }

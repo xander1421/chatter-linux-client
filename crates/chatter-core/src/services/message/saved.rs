@@ -1154,7 +1154,13 @@ pub(crate) fn spawn_saved_sync_recovery(
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut previous = None;
+        let mut visible_rx = crate::network::connection::subscribe_app_visible();
         loop {
+            // Retry/sync of saved messages; park while backgrounded (Signal-mobile
+            // model), resume + flush on foreground.
+            if !crate::network::connection::await_foreground(&mut visible_rx).await {
+                break;
+            }
             interval.tick().await;
             let Some(client) = weak.upgrade() else {
                 break;

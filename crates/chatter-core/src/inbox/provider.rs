@@ -46,9 +46,6 @@ struct PollHints {
     anon_wake: std::sync::atomic::AtomicBool,
     foreground_wake: tokio::sync::Notify,
     visible: std::sync::atomic::AtomicBool,
-    /// Watch mirror of `visible` so background tasks (the user-events stream)
-    /// can await foreground/background transitions instead of busy-polling.
-    app_visible: watch::Sender<bool>,
     leases: parking_lot::Mutex<Vec<(u64, std::time::Instant)>>,
     next_id: std::sync::atomic::AtomicU64,
 }
@@ -60,7 +57,6 @@ impl Default for PollHints {
             anon_wake: std::sync::atomic::AtomicBool::new(false),
             foreground_wake: tokio::sync::Notify::new(),
             visible: std::sync::atomic::AtomicBool::new(true),
-            app_visible: watch::channel(true).0,
             leases: parking_lot::Mutex::new(Vec::new()),
             next_id: std::sync::atomic::AtomicU64::new(0),
         }
@@ -83,20 +79,11 @@ impl PollHints {
         let was_visible = self
             .visible
             .swap(visible, std::sync::atomic::Ordering::AcqRel);
-        // Mirror to the watch only on an actual edge so subscribers wake once.
-        if visible != was_visible {
-            let _ = self.app_visible.send(visible);
-        }
         if visible && !was_visible {
             self.anon_wake
                 .store(true, std::sync::atomic::Ordering::Release);
             self.foreground_wake.notify_one();
         }
-    }
-
-    /// A receiver that tracks app foreground/background state (true = visible).
-    fn subscribe_visible(&self) -> watch::Receiver<bool> {
-        self.app_visible.subscribe()
     }
 
     fn cycle_interval(&self, foreground: std::time::Duration) -> std::time::Duration {
@@ -687,7 +674,7 @@ impl DeviceInboxProvider {
                     settings_repo.clone(),
                     event_bus.as_ref().map(|bus| bus.domain_sender()),
                     shutdown_rx.clone(),
-                    poll_hints.subscribe_visible(),
+                    crate::network::connection::subscribe_app_visible(),
                 )
                 .await;
                 // Track the handle and abort any prior-generation stream so its
