@@ -629,6 +629,10 @@ impl PushListener {
             + Unpin,
     {
         use futures::StreamExt;
+        // We only reach here after a successful SSE response on either transport,
+        // so the stream is live. Mark push present for the poller's background
+        // cadence; the guard drops (counting us out) the instant this returns.
+        let _present = crate::network::connection::push_stream_connected();
         let mut lines = String::new();
         while let Some(chunk) = tokio::time::timeout(Duration::from_secs(60), stream.next())
             .await

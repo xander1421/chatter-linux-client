@@ -89,9 +89,15 @@ impl PollHints {
     fn cycle_interval(&self, foreground: std::time::Duration) -> std::time::Duration {
         if self.visible.load(std::sync::atomic::Ordering::Acquire) {
             foreground
+        } else if crate::network::connection::push_is_connected() {
+            // Backgrounded with a live ntfy push SSE: a real wake arrives in
+            // ~250ms via provider.wake(), so this timer is only a safety net for
+            // a silently-dropped wake. Relax it to 5 minutes to let the radio
+            // sleep instead of polling every 30s all day (the battery drain).
+            std::time::Duration::from_secs(300)
         } else {
-            // Push normally wakes a sleeping phone. Keep a bounded fallback
-            // when its SSE connection is down or the wake never arrives.
+            // Push SSE is down (or never connected): it is no longer waking us,
+            // so fall back to the tight 30s poll until the stream reconnects.
             std::time::Duration::from_secs(30)
         }
     }

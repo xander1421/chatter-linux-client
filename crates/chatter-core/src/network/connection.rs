@@ -76,6 +76,36 @@ pub fn tor_status() -> TorStatus {
     TorStatus::from_u8(TOR_STATUS.load(std::sync::atomic::Ordering::Acquire))
 }
 
+/// Count of ntfy push SSE streams currently connected and consuming events.
+///
+/// The background inbox poller reads this to decide its fallback cadence: while
+/// at least one push stream is live, a real wake arrives in ~250ms via
+/// `provider.wake()`, so the blind safety poll can relax from 30s to minutes.
+/// If every stream drops, this returns to 0 and the poller tightens back to 30s
+/// on its own — no trust in push beyond what is actually connected right now.
+static PUSH_STREAMS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// RAII presence for one connected push SSE stream. Increments on creation and
+/// decrements on drop, so a stream that ends, errors, or panics is counted out.
+#[must_use = "hold the guard for the lifetime of the connected SSE stream"]
+pub struct PushStreamPresence(());
+
+pub fn push_stream_connected() -> PushStreamPresence {
+    PUSH_STREAMS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    PushStreamPresence(())
+}
+
+impl Drop for PushStreamPresence {
+    fn drop(&mut self) {
+        PUSH_STREAMS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+/// Whether any ntfy push SSE stream is currently connected.
+pub fn push_is_connected() -> bool {
+    PUSH_STREAMS.load(std::sync::atomic::Ordering::Acquire) > 0
+}
+
 /// Whether the chatter server can be reached right now.
 ///
 /// This exists because none of the three things that look like they answer that
