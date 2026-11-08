@@ -96,6 +96,9 @@ export component ChatLayout inherits Rectangle {
     in-out property <int> unread-index: -1;
     in-out property <int> unread-count: 0;
     in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll on new messages
+    // True while a thread panel covers this list (its column is hidden); passed
+    // to MessageList so it saves/restores scroll offset across the cover.
+    in property <bool> covered: false;
 
     // Picker properties
     in-out property <bool> emoji-picker-visible: false;
@@ -352,6 +355,7 @@ export component ChatLayout inherits Rectangle {
             : bottom-chrome.height + composer.list-clearance-extra
                 - (root.drawer-occupied-height > 0px ? Spacing.sm : 0px);
         messages: root.messages;
+        covered: root.covered;
         loading: root.loading-messages;
         selection-mode: root.selection-mode;
         menu-open: root.menu-open;
