@@ -385,13 +385,19 @@ struct RawGifFrames {
     frames: Vec<(slint::SharedPixelBuffer<slint::Rgba8Pixel>, u64)>,
 }
 
-async fn fetch_full_gif_frames(
+async fn fetch_full_gif_frames<F>(
     id: String,
     url: &str,
     ui_ctx: &std::sync::Arc<ChatterClient>,
     generation: u64,
     session: chatter_core::client::SessionGuard,
-) -> Option<RawGifFrames> {
+    // Called once, the instant the first frame is decoded, so the tile can
+    // show immediately instead of waiting for the whole animation to decode.
+    on_first_frame: F,
+) -> Option<RawGifFrames>
+where
+    F: FnOnce(slint::SharedPixelBuffer<slint::Rgba8Pixel>) + Send + 'static,
+{
     // Bound fetched originals waiting for shared decode admission. Several at
     // once: each preview is a gRPC round-trip proxied to the GIF provider, so a
     // single permit serialized all ~20 trending fetches end to end (fetch then
@@ -434,6 +440,7 @@ async fn fetch_full_gif_frames(
     chatter_core::media::gif::workers::submit(format!("picker:{request}"), true, move || {
         let decoded = (move || {
             let _fetch = fetch;
+            let mut on_first_frame = Some(on_first_frame);
             if !current() {
                 return None;
             }
@@ -464,6 +471,11 @@ async fn fetch_full_gif_frames(
                 let size = raw.len();
                 let pixels =
                     slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&raw, w, h);
+                // Show the tile the moment its first frame exists; the rest of
+                // the animation keeps decoding below.
+                if let Some(publish) = on_first_frame.take() {
+                    publish(pixels.clone());
+                }
                 selected = chatter_core::media::gif::decimate_gif_frame(
                     selected,
                     pixels,
@@ -558,12 +570,32 @@ fn spawn_previews(
         let picker_generation = crate::bin_ui::gif_state::picker_generation();
         let preview_session = ui_ctx.session_guard();
         tokio::spawn(async move {
+            // Publish the first frame to the tile the instant it decodes, so the
+            // grid fills in progressively instead of each tile waiting for its
+            // whole animation to finish decoding.
+            let weak_first = weak.clone();
+            let gif_id_first = gif_id.clone();
+            let ctx_first = ui_ctx_fetch.clone();
+            let publish_first = move |pixels: slint::SharedPixelBuffer<slint::Rgba8Pixel>| {
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak_first.upgrade() else { return };
+                    if !request_is_current(&w, &ctx_first, generation, session) {
+                        return;
+                    }
+                    let img = slint::Image::from_rgba8(pixels);
+                    update_gif_rows(&w, &gif_id_first, |gif| {
+                        gif.preview = img.clone();
+                        gif.failed = false;
+                    });
+                });
+            };
             let decoded = fetch_full_gif_frames(
                 gif_id.clone(),
                 &preview_url,
                 &ui_ctx_fetch,
                 picker_generation,
                 preview_session,
+                publish_first,
             )
             .await;
             let _ = slint::invoke_from_event_loop(move || {

@@ -331,6 +331,8 @@ pub fn wire_close_image_viewer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
 
             // Stop any GIF animation when closing the viewer
             crate::bin_ui::gif_state::stop_gif_animation();
+            // Drop cached decrypted viewer pixels when the viewer closes.
+            super::viewer_image_cache::clear();
             tracing::debug!("Image viewer closed");
         });
 }

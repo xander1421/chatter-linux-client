@@ -153,7 +153,10 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                 drop(queued);
                 let result = loader
                     .clone()
-                    .load_traced(client.clone(), attachment_id, 640, token.clone(), job)
+                    // 768 = INLINE_THUMBNAIL_MAX_SIZE: match the sidecar's native
+                // resolution so inline images are crisp on a HiDPI phone (640
+                // downscaled them below the bubble's physical pixels).
+                .load_traced(client.clone(), attachment_id, 768, token.clone(), job)
                     .await;
                 // Mark completion even on failure; the next tick can retry sidecars
                 // that arrived after the row was first displayed.

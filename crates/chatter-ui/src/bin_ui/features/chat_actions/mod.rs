@@ -28,6 +28,7 @@ mod timers;
 mod transfer_status;
 pub(crate) use transfer_status::update_attachment_upload_state;
 mod video_player;
+mod viewer_image_cache;
 
 /// Wire message action callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {

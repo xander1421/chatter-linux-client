@@ -79,6 +79,14 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return;
             };
             let request = super::media_viewer::select(&w, attachment_id.as_str());
+            // Revisiting an already-decoded static image: restore it in this
+            // same tick (select() just blanked the source) and skip the whole
+            // decrypt/decode, so navigating back and forth no longer flashes
+            // blank -> thumbnail -> full. GIFs are never cached, so they still
+            // fall through here and re-run their animation flow.
+            if super::viewer_image_cache::try_restore(&w, attachment_id.as_str()) {
+                return;
+            }
             let attachment_id_str = attachment_id.to_string();
             let ui_ctx = ui_ctx.clone();
             let weak = weak_window.clone();
@@ -887,12 +895,18 @@ fn display_image_from_buffer(
                             &rgba_data, width, height,
                         );
                         let clone_ms = clone_start.elapsed();
-                        w.global::<crate::ChatPane>().set_image_viewer_source(img);
+                        let filename: slint::SharedString = filename_for_ui.into();
+                        let size: slint::SharedString = size_display.into();
                         w.global::<crate::ChatPane>()
-                            .set_image_viewer_filename(filename_for_ui.into());
+                            .set_image_viewer_source(img.clone());
                         w.global::<crate::ChatPane>()
-                            .set_image_viewer_size(size_display.into());
+                            .set_image_viewer_filename(filename.clone());
+                        w.global::<crate::ChatPane>()
+                            .set_image_viewer_size(size.clone());
                         w.global::<crate::ChatPane>().set_image_viewer_visible(true);
+                        // Cache the decoded full image so paging back to it skips
+                        // the decrypt/decode and never flashes (see viewer_image_cache).
+                        super::viewer_image_cache::put(&att_id_for_inline, img, filename, size);
                         tracing::info!(
                             "IMG TIMING invoke_latency={:?} clone+setsource={:?} total={:?} — Opened image in viewer",
                             invoke_latency,
