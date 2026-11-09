@@ -3,7 +3,7 @@
 //! Local embedding generation using the configured backend (default: nomic-embed-text via Ollama).
 //! Embeddings are used for semantic search over messages and memory retrieval.
 
-use super::backend::{BackendError, LocalAIBackend};
+use crate::ai_protocol::{BackendError, LocalAIBackend};
 use super::settings::LocalAISettings;
 
 /// Embedding generator using a local AI backend.

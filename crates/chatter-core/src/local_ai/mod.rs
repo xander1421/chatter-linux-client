@@ -4,7 +4,6 @@
 //! OpenAI-compatible API), provider detection, hardware profiling, model
 //! catalog, embeddings and semantic-search plumbing.
 
-pub mod backend;
 #[cfg(feature = "local-ai")]
 pub mod catalog;
 #[cfg(feature = "local-ai")]

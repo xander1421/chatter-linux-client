@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::backend::{
+use crate::ai_protocol::{
     AvailableModel, BackendError, ChatMessage, ChatResponse, GenerateParams, LocalAIBackend,
 };
 use super::ollama::OllamaBackend;
