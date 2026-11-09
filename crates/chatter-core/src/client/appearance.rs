@@ -12,12 +12,12 @@ impl ChatterClient {
             .get::<f32>("app.animation_speed")
             .ok()
             .flatten()
-            .unwrap_or(4.0);
-        if matches!(speed, 0.5 | 1.0 | 2.0 | 4.0 | 8.0) { speed } else { 4.0 }
+            .unwrap_or(1.0);
+        if matches!(speed, 0.5 | 1.0 | 2.0 | 4.0 | 8.0) { speed } else { 1.0 }
     }
 
     pub fn set_animation_speed(&self, speed: f32) -> Result<(), crate::error::StorageError> {
-        let speed = if matches!(speed, 0.5 | 1.0 | 2.0 | 4.0 | 8.0) { speed } else { 4.0 };
+        let speed = if matches!(speed, 0.5 | 1.0 | 2.0 | 4.0 | 8.0) { speed } else { 1.0 };
         SettingsRepository::new(self.services.database.clone()).set("app.animation_speed", &speed)
     }
 

@@ -763,7 +763,8 @@ export component MessageComposer inherits GlassSurface {
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
                 background: send-touch.has-hover ? Colors.action-hover : Colors.action-fill;
-                border-radius: Spacing.radius-chrome-inner;
+                // Circular, like the emoji/attach/mic buttons it shares the row with.
+                border-radius: self.height / 2;
                 // The two glyphs share a landing slot. Leave a small blank beat
                 // between them instead of painting both at half alpha.
                 opacity: min(1, max(0, (root.lift-layout - 0.45) / 0.55))

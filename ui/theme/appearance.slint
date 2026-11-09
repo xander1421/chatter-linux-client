@@ -16,7 +16,7 @@ export global Appearance {
     in-out property <bool> reduce-motion: false;
     callback reduce-motion-changed(bool);
     // Device-local multiplier for all visual motion; four times faster by default.
-    in-out property <float> animation-speed: 4.0;
+    in-out property <float> animation-speed: 1.0;
     callback animation-speed-changed(float);
     // Disable expensive material optics on slow devices.
     in-out property <bool> glass-effects: true;

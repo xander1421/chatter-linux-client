@@ -36,7 +36,7 @@ export component MessageFooter inherits HorizontalLayout {
             // Grows with the text size; on touch the row is
             // tall enough to tell neighbouring chips apart
             // under a thumb (22px was the whole hit box).
-            height: (root.mobile ? Spacing.touch-target-min : 22px) * Appearance.text-grow;
+            height: (root.mobile ? 28px : 22px) * Appearance.text-grow;
             width: reactions-row.preferred-width + 8px;
             background: transparent;
             border-width: 0px;
@@ -52,7 +52,9 @@ export component MessageFooter inherits HorizontalLayout {
                 alignment: center;
 
                 for reaction in root.reactions: Rectangle {
-                    width: max(root.mobile ? Spacing.touch-target-min : 0px, entry.preferred-width + (root.mobile ? Spacing.sm : 4px));
+                    // Hug the emoji: only a small horizontal pad, no forced
+                    // 48px touch floor (it wasted space around a ~16px glyph).
+                    width: entry.preferred-width + (root.mobile ? Spacing.sm : 4px);
                     border-radius: self.height / 2;
                     // Own reactions: a neutral 8% tint, no ring and no
                     // brand-colour pill around a lone emoji (owner's
