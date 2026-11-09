@@ -59,6 +59,12 @@ impl ChatterClient {
         // session before publishing logout, just as normal sign-out does.
         let teardown_revision = self.services.auth_state.get().session_revision;
         self.shutdown_session(teardown_revision, false).await;
+        // The account no longer exists server-side, so its local data (channels,
+        // messages, profiles, configs, keys) must not survive on this device —
+        // for privacy and so a later registration starts clean. Signal's
+        // removeAllData; runs after shutdown so no session task writes back.
+        crate::services::auth_service::wipe_unlinked_install(&self.services.database)
+            .map_err(crate::services::account_service::AccountError::Storage)?;
         self.services.auth_state.set_logged_out_if_current(teardown_revision);
         #[cfg(feature = "mesh")]
         if let Some(result) = mesh_result {

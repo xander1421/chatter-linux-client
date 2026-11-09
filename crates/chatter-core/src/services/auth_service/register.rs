@@ -29,14 +29,22 @@ impl AuthService {
             return Err(AuthError::AlreadyLoggedIn);
         }
 
-        // Recover from a prior aborted register: identity + prekeys may be
-        // persisted locally without a user session (server call failed
-        // after the crypto step). `generate_identity` refuses to overwrite,
-        // so wipe the stale crypto state now. Safe because `is_logged_in`
-        // is false — no real sessions to break.
-        if self.identity_manager.has_identity()? {
-            self.identity_manager.reset_for_new_registration()?;
-        }
+        // A fresh registration must never inherit any earlier account's local
+        // data. Whatever is on disk belongs either to the account this device
+        // just signed out of, or to a prior aborted register — a brand-new
+        // account is about to be created, so every local row goes: channels,
+        // messages, profiles, configs AND the stale crypto state (Signal's
+        // removeAllData). Without this the new account sees the old account's
+        // channels and hits a local UNIQUE collision on re-register.
+        //
+        // Unconditional on purpose: a failed register clears crypto state, so a
+        // `has_identity()` guard would read false and skip the wipe, leaving the
+        // aborted attempt's PIN fingerprint / avatar / username to survive into
+        // the next account. On a first-ever install the tables are already empty
+        // and this is a cheap no-op. Safe because `is_logged_in` is false (no
+        // live session), and clearing `local_identity` lets `generate_identity`
+        // below mint a fresh key instead of refusing to overwrite.
+        super::wipe_unlinked_install(self.settings_repo.database())?;
 
         // SECURITY: Profile key stays client-side only - never sent to server.
         // Signal-aligned: profile_key is 32 random bytes from CSPRNG, NOT
@@ -543,30 +551,15 @@ impl AuthService {
     pub async fn cleanup_failed_registration(&self) -> Result<(), AuthError> {
         tracing::debug!("Cleaning up after failed registration");
 
-        // Clear all crypto state (identity keys, prekeys, sessions)
-        // This is the most important cleanup - prevents "UNIQUE constraint failed"
-        if let Err(e) = self.key_store.clear_all_crypto_state() {
-            tracing::warn!("Failed to clear crypto state: {}", e);
-        }
-
-        // Remove profile key if it was stored
-        let _ = self.settings_repo.delete(keys::PROFILE_KEY);
-
-        // Remove any partial auth state
-        let _ = self.settings_repo.delete(keys::CURRENT_USER_ID);
-        let _ = self.settings_repo.delete(keys::CURRENT_DEVICE_ID);
-        let _ = self.settings_repo.delete(keys::DEVICE_AUTH_TOKEN);
-        let _ = self.settings_repo.delete(keys::PUSH_TOPIC);
-        let _ = self.settings_repo.delete(keys::DEVICE_WAKE_TOPIC);
-
-        // Remove sender certificate if any
-        let _ = self.settings_repo.delete(keys::SENDER_CERTIFICATE);
-        let _ = self
-            .settings_repo
-            .delete(keys::SENDER_CERTIFICATE_REFRESH_AFTER);
-        let _ = self
-            .settings_repo
-            .delete(keys::SENDER_CERTIFICATE_SERVER_KEY_ID);
+        // No account was created server-side, so nothing registration wrote to
+        // this device may linger — not the profile key or auth state, and not
+        // the PIN-derived fingerprint, SVR salt, username, display name, avatar,
+        // identity key or unacknowledged recovery codes that the piecemeal
+        // cleanup used to leave behind (encrypted at rest, but still artifacts
+        // of a never-created account, and able to survive into a later
+        // registration). Full local wipe (Signal removeAllData); `is_logged_in`
+        // is false here, so there is no live session to break.
+        super::wipe_unlinked_install(self.settings_repo.database())?;
 
         // Clear auth interceptor
         self.auth_interceptor.clear();
