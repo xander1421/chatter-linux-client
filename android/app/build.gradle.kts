@@ -157,6 +157,10 @@ dependencies {
     // decode — Apache-2.0, pure Java, no Google Play services.
     implementation("androidx.camera:camera-view:1.6.2")
     implementation("com.google.zxing:core:3.5.4")
+    // UnifiedPush connector (Apache-2.0, no Google Play services): lets a
+    // distributor app (e.g. ntfy) hold the push socket and wake Chatter, so the
+    // device can drop its own ntfy SSE socket. Opt-in: inert with no distributor.
+    implementation("org.unifiedpush.android:connector:2.5.0")
     // LiveKit webrtc Java classes (livekit.org.webrtc / jni_zero). Sourced
     // in-place from the webrtc-sys download under target/ (version-locked to the
     // native side compiled into libchatter_ui.so), so the jar always matches the

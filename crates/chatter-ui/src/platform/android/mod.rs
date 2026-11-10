@@ -23,6 +23,7 @@ pub mod screen;
 pub mod share;
 pub mod system_settings;
 pub mod text_input;
+pub mod unifiedpush;
 
 pub use notifications::AndroidNotifications;
 

@@ -407,6 +407,13 @@ pub fn rt_handle() -> &'static tokio::runtime::Handle {
     RT_HANDLE.get().expect("tokio runtime not initialized")
 }
 
+/// The headless Android core client, if startup has created it. Used by JNI
+/// bridges that run outside the Activity (e.g. the UnifiedPush receiver).
+#[cfg(target_os = "android")]
+pub(crate) fn android_client() -> Option<std::sync::Arc<chatter_core::client::ChatterClient>> {
+    ANDROID_CLIENT.get().cloned()
+}
+
 /// Set the runtime handle explicitly. First call wins; later calls are no-ops.
 /// Used by the ui_wiring test harness, which has no `app_init` phase.
 pub fn init_rt_handle(handle: tokio::runtime::Handle) {

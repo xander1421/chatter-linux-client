@@ -143,6 +143,19 @@
              PendingIntent, so it needs no intent-filter and stays unexported. -->
         <receiver android:name=".MessagingKeepAliveReceiver" android:exported="false" />
 
+        <!-- UnifiedPush: a distributor app (e.g. ntfy) delivers wakes here, so
+             the device can drop its own ntfy SSE socket. Exported because the
+             broadcasts come from the separate distributor app. Inert when no
+             distributor is installed. -->
+        <receiver android:name=".UnifiedPushReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.MESSAGE" />
+                <action android:name="org.unifiedpush.android.connector.UNREGISTERED" />
+                <action android:name="org.unifiedpush.android.connector.NEW_ENDPOINT" />
+                <action android:name="org.unifiedpush.android.connector.REGISTRATION_FAILED" />
+            </intent-filter>
+        </receiver>
+
         <!-- Keeps the BLE mesh radio running while the app is backgrounded.
              Started and stopped by MeshBleBridge; nothing binds to it. The
              runtime type passed to startForeground must match this one. -->

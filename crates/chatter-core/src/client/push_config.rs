@@ -78,6 +78,49 @@ impl ChatterClient {
         }
         true
     }
+
+    /// Enable UnifiedPush: persist the distributor endpoint, register it with the
+    /// server (which then POSTs content-free wakes there), and let the push
+    /// supervisor drop this device's own ntfy SSE socket on its next 2 s scan.
+    pub async fn set_unified_push_endpoint(&self, endpoint: String) -> Result<(), crate::error::NetworkError> {
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        let settings = SettingsRepository::new(self.services.database.clone());
+        let _ = settings.set_string(keys::UNIFIED_PUSH_ENDPOINT, &endpoint);
+        let _ = settings.set_string(keys::UNIFIED_PUSH_ENABLED, "true");
+        let mut auth = self.services.grpc_pool.auth_client();
+        auth.register_push_endpoint(endpoint).await
+    }
+
+    /// Disable UnifiedPush: clear the server registration and the stored flag, so
+    /// the supervisor restores this device's own ntfy SSE socket.
+    pub async fn disable_unified_push(&self) -> Result<(), crate::error::NetworkError> {
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        let settings = SettingsRepository::new(self.services.database.clone());
+        let _ = settings.set_string(keys::UNIFIED_PUSH_ENABLED, "false");
+        let _ = settings.set_string(keys::UNIFIED_PUSH_ENDPOINT, "");
+        let mut auth = self.services.grpc_pool.auth_client();
+        auth.register_push_endpoint(String::new()).await
+    }
+
+    /// Whether UnifiedPush delivery is currently enabled on this device.
+    pub fn unified_push_active(&self) -> bool {
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        SettingsRepository::new(self.services.database.clone())
+            .get_string(keys::UNIFIED_PUSH_ENABLED)
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("true")
+    }
+
+    /// Handle a wake delivered by a UnifiedPush distributor: run the same
+    /// content-free catch-up as an in-process SSE wake.
+    pub async fn on_unified_push_message(self: &std::sync::Arc<Self>) {
+        let revision = self.auth_state().get().session_revision;
+        let _ = self
+            .route_push_wakeup(revision, "unifiedpush", crate::inbox::handlers::PushKind::ContentFree)
+            .await;
+    }
 }
 
 #[cfg(test)]
@@ -320,11 +363,37 @@ impl ChatterClient {
                             }
                         }
                     }
-                    if !device_topic.is_empty() {
-                        active.push((device_topic.clone(), false, PushSubscription::Device));
+                    // Carry both non-secret wake topics on ONE ntfy SSE socket
+                    // (comma-joined multi-topic) rather than a socket each: the
+                    // persistent connection is the cellular-radio cost, and
+                    // route_push_wakeup runs the same content-free catch-up for
+                    // either topic, so one socket loses nothing but a log label.
+                    // Secret/mailbox topics keep their own Tor sockets below.
+                    // Battery saver: when UnifiedPush is on, a distributor holds
+                    // the socket and the server POSTs wakes to its registered
+                    // endpoint, so this device keeps NO own ntfy SSE socket for
+                    // its account/device topic. Read each 2 s scan, so toggling
+                    // UnifiedPush drops or restores these listeners within one
+                    // cycle; mailbox/secret Tor subscriptions are unaffected.
+                    let unified_push = crate::storage::repositories::settings_repo::SettingsRepository::new(
+                        owner.services.database.clone(),
+                    )
+                    .get_string(crate::storage::repositories::settings_repo::keys::UNIFIED_PUSH_ENABLED)
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                        == Some("true");
+                    let mut shared: Vec<&str> = Vec::new();
+                    if !unified_push {
+                        if !device_topic.is_empty() {
+                            shared.push(&device_topic);
+                        }
+                        if owner.push_shutdown.lock().is_none() && !push_topic.is_empty() {
+                            shared.push(&push_topic);
+                        }
                     }
-                    if owner.push_shutdown.lock().is_none() && !push_topic.is_empty() {
-                        active.push((push_topic.clone(), false, PushSubscription::Account));
+                    if !shared.is_empty() {
+                        active.push((shared.join(","), false, PushSubscription::Account));
                     }
                 }
                 drop(owner);
