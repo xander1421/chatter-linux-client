@@ -22,7 +22,9 @@ export component ComposerEmojiButton inherits Rectangle {
     // Above the shell, an opaque neutral plate keeps media out of the glyph.
     // Inline controls share the shell; interaction feedback stays on top.
     background: root.lift-layout > 0 ? Colors.surface : transparent;
-    border-radius: Spacing.radius-md;
+    // Circular plate (48px touch target → radius 24). radius-md read as a
+    // rounded square when the button lifts over the shell on compose.
+    border-radius: self.height / 2;
     opacity: root.disabled ? 0.5 : 1.0;
     accessible-role: button;
     accessible-action-default => {
@@ -51,7 +53,7 @@ export component ComposerEmojiButton inherits Rectangle {
     }
     Rectangle {
         z: 1;
-        border-radius: Spacing.radius-md;
+        border-radius: self.height / 2;
         border-width: emoji-keys.has-focus ? 2px : 0px;
         border-color: Colors.focus-ring;
     }
@@ -65,7 +67,7 @@ export component ComposerEmojiButton inherits Rectangle {
             : emoji-touch.pressed ? Materials.pressed
             : emoji-touch.has-hover ? Materials.hover
             : transparent;
-        border-radius: Spacing.radius-md;
+        border-radius: self.height / 2;
         animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
     }
 
@@ -115,7 +117,7 @@ export component ComposerAttachButton inherits Rectangle {
     // Above the shell, an opaque neutral plate keeps media out of the glyph.
     // Inline controls share the shell; interaction feedback stays on top.
     background: root.lift-layout > 0 ? Colors.surface : transparent;
-    border-radius: Spacing.radius-md;
+    border-radius: self.height / 2;
     opacity: root.disabled ? 0.5 : 1.0;
     accessible-role: button;
     accessible-label: "Attach file";
@@ -136,7 +138,7 @@ export component ComposerAttachButton inherits Rectangle {
     }
     Rectangle {
         z: 1;
-        border-radius: Spacing.radius-md;
+        border-radius: self.height / 2;
         border-width: attach-keys.has-focus ? 2px : 0px;
         border-color: Colors.focus-ring;
     }
@@ -149,7 +151,7 @@ export component ComposerAttachButton inherits Rectangle {
         background: attachment-touch.pressed ? Materials.pressed
             : attachment-touch.has-hover ? Materials.hover
             : transparent;
-        border-radius: Spacing.radius-md;
+        border-radius: self.height / 2;
         animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
     }
 

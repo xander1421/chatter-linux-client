@@ -554,6 +554,15 @@ pub(super) fn run_call_worker(
                     });
                 }
 
+                CallCommand::SwapCamera { response } => {
+                    // Flipping a live track — never await a capture publish
+                    // inside the command loop (see PublishCamera above).
+                    let rm = room_manager.clone();
+                    tokio::task::spawn_local(async move {
+                        let _ = response.send(rm.swap_camera_facing().await);
+                    });
+                }
+
                 CallCommand::StopMicrophone => {
                     gate_defers(&active_call, |g| { g.drop_mic(); false });
                     room_manager.stop_microphone().await;

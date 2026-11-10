@@ -308,7 +308,20 @@ impl ChannelStreamService {
             // Set when a resubscribe nudge woke us, cleared once a stream has
             // actually run. See the `is_no_channels` arm for why it matters.
             let mut nudged = false;
+            let mut visible_rx = crate::network::connection::subscribe_app_visible();
             loop {
+                // Signal-mobile model: hold no persistent channel stream while
+                // backgrounded. Run one forced catch-up (covers whatever a ntfy
+                // push wake just signalled via request_resubscribe), then park
+                // until foreground or the next nudge — no stream, no keepalive.
+                if !*visible_rx.borrow() {
+                    self.catch_up_now().await;
+                    tokio::select! {
+                        _ = visible_rx.changed() => {}
+                        _ = self.resubscribe.notified() => { nudged = true; }
+                    }
+                    continue;
+                }
                 let mut connected_at = None;
                 let outcome = self.run_once(&mut connected_at).await;
                 // A stream that had been up for a while and then dropped (the
@@ -449,8 +462,15 @@ impl ChannelStreamService {
         let mut retry = tokio::time::interval(RECOVERY_INTERVAL);
         retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut last_stream_item = tokio::time::Instant::now();
+        let mut visible_rx = crate::network::connection::subscribe_app_visible();
         loop {
             tokio::select! {
+                _ = visible_rx.changed() => {
+                    if !*visible_rx.borrow() {
+                        tracing::debug!("Channel stream closing: app backgrounded");
+                        return Ok(()); // Outer loop parks until foreground / nudge.
+                    }
+                }
                 item = heartbeat::next_or_silent(&mut stream, heartbeat::STREAM_SILENCE_LIMIT.saturating_sub(last_stream_item.elapsed())) => match item {
                     Next::Item(result) => {
                         last_stream_item = tokio::time::Instant::now();

@@ -61,9 +61,42 @@ struct LatestFrame {
     rotation_degrees: u32,
 }
 
+/// Force the shared WebRTC runtime to use zero playout delay for native video
+/// receivers.
+///
+/// Remote audio and video are consumed here as *raw* LiveKit sink streams
+/// (`NativeAudioStream` / `NativeVideoStream`), which bypasses libwebrtc's
+/// built-in audio/video synchroniser — that only runs when WebRTC drives its
+/// own audio device and video renderer, not raw sinks. With no synchroniser,
+/// each receiver applies its own jitter buffer independently, and the video
+/// receiver's default playout delay is markedly deeper than audio's. The result
+/// is that remote video renders later than the remote audio it should match:
+/// the A/V desync where video trails audio.
+///
+/// Zeroing the video playout delay removes that extra buffering stage so video
+/// tracks audio. Audio is left untouched (this flag targets native *video*
+/// receivers), matching the observation that audio is already on time. Our own
+/// video stages are already minimal latency (the native sink keeps only the
+/// latest frame and every downstream stage overwrites), so this receiver-side
+/// buffer was the sole remaining source of the lag.
+///
+/// Must run before the first `Room::connect` builds the runtime; these playback
+/// managers are constructed at `RoomManager` creation, which is before any
+/// connect. The call is idempotent (repeated calls are fine); the only error is
+/// "runtime already built without it", which we log rather than treat as fatal.
+fn enable_low_latency_video_playout() {
+    if let Err(e) = livekit::webrtc::enable_zero_playout_delay() {
+        tracing::warn!(
+            error = %e,
+            "Could not enable zero video playout delay; remote video may lag remote audio for this call"
+        );
+    }
+}
+
 impl VideoPlayback {
     /// Create a new video playback manager.
     pub fn new() -> Self {
+        enable_low_latency_video_playout();
         tracing::info!("Video playback manager created");
         Self {
             streams: Arc::new(RwLock::new(HashMap::new())),
@@ -76,6 +109,7 @@ impl VideoPlayback {
 
     /// Create a new video playback manager with shared frame store.
     pub fn with_shared_frames(shared_frames: SharedVideoFrames) -> Self {
+        enable_low_latency_video_playout();
         tracing::info!("Video playback manager created with shared frames");
         Self {
             streams: Arc::new(RwLock::new(HashMap::new())),

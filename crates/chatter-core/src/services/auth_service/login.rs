@@ -178,16 +178,25 @@ impl AuthService {
             .map_err(|_| AuthError::LoginFailed("invalid user_id format".to_string()))?;
         let device_id = session.device_id;
 
-        // Signing in on an install another device unlinked. The same account
-        // keeps this install's history, as Signal relinking to the same
-        // account deletes configuration only; a different account must not
-        // inherit it, so everything goes first (Signal-Desktop
+        // Signing in on an install that already holds an account's local data.
+        // The SAME account keeps this install's history; a DIFFERENT account
+        // must not inherit it, so everything local goes first (Signal-Desktop
         // AccountManager.preload.ts createAccount: isRelinkingToSameAccount ->
-        // removeAllConfiguration, else removeAllData). Only this answer from
-        // the server can say which account it is.
-        let stored_profile_key = match self.unlinked_account() {
-            Some(former) if former == user_id => {
-                self.settings_repo.delete(keys::UNLINKED_ACCOUNT_ID)?;
+        // removeAllConfiguration, else removeAllData).
+        //
+        // Which account owns the data is learned WITHOUT persisting any
+        // former-account id: a server "device unlinked" answer records it in
+        // `unlinked_account()`, and failing that it is read straight from the
+        // self-owned SavedMessages channel still on disk (`local_account_owner`)
+        // — a value the wipe itself removes. This covers a plain sign-out (which
+        // deliberately keeps no marker) followed by signing into another account.
+        let local_owner = match self.unlinked_account() {
+            Some(former) => Some(former),
+            None => crate::storage::unlink::local_account_owner(self.settings_repo.database())?,
+        };
+        let stored_profile_key = match local_owner {
+            Some(owner) if owner == user_id => {
+                let _ = self.settings_repo.delete(keys::UNLINKED_ACCOUNT_ID);
                 stored_profile_key
             }
             Some(_) => {

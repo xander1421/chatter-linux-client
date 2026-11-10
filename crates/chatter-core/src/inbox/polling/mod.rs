@@ -5,7 +5,6 @@
 //! - DM mailboxes (two-way anonymous messaging)
 //! - Group mailboxes (per-group ephemeral mailboxes for privacy)
 //! - Anonymous DM mailboxes (stranger messaging)
-//! - Friend requests (periodic polling for new requests)
 
 #[cfg(test)]
 mod ack_tests;
@@ -13,11 +12,9 @@ mod ack_tests;
 pub mod anon_dm;
 pub mod device;
 pub mod dm;
-pub mod friends;
 pub mod group;
 
 pub use anon_dm::{ProcessedAnonDmMessages, process_anon_dm_results};
 pub use device::{dispatch_control_content, process_device_message};
 pub use dm::poll_dm_mailboxes;
-pub use friends::{FriendRequestPoller, poll_friend_requests};
 pub use group::poll_group_mailboxes;

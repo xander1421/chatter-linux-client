@@ -11,7 +11,7 @@
 //! `NativeVideoSource::capture_frame` and the local Slint preview store. CameraX uses the modern Camera2 stack
 //! (not the deprecated `android.hardware.Camera`).
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -29,8 +29,16 @@ pub trait PlatformCamera: Send + Sync {
 
 static PLATFORM_CAMERA: OnceLock<Box<dyn PlatformCamera>> = OnceLock::new();
 static ACTIVE_SINK: Mutex<Option<ActiveCapture>> = Mutex::new(None);
+// Monotonic owner token for the single shared CameraX session. Each run_capture
+// stamps the ActiveCapture it installs; on exit a capture only tears the session
+// down if ACTIVE_SINK still carries its own stamp. This lets a mid-call lens swap
+// start the replacement before the old capture's thread winds down without the
+// stale thread killing the newer session.
+static CAPTURE_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 struct ActiveCapture {
+    /// Owner token for the shared CameraX session (see CAPTURE_EPOCH).
+    epoch: u64,
     sink: NativeVideoSource,
     preview: Option<LocalPreview>,
     front: bool,
@@ -79,7 +87,9 @@ pub fn run_capture(
     };
     // device_id comes from list_devices() ("front"/"back"); default to front.
     let front = device_id != "back";
+    let epoch = CAPTURE_EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
     *ACTIVE_SINK.lock().unwrap() = Some(ActiveCapture {
+        epoch,
         sink,
         preview: local_preview,
         front,
@@ -114,13 +124,32 @@ pub fn run_capture(
         }
     }
 
-    cam.stop();
-    if let Some(capture) = ACTIVE_SINK.lock().unwrap().take() {
+    // Retire the shared CameraX session only if THIS capture still owns it.
+    // A mid-call lens swap (room_manager::switch_camera) starts the replacement
+    // capture — which overwrites ACTIVE_SINK with a newer epoch and rebinds the
+    // single CameraX session — before this thread's `running` flag clears. Without
+    // this guard our cam.stop() would stop that newer session and take() would drop
+    // its sink, leaving the camera dead after a "successful" swap. A superseded
+    // capture exits quietly; the newer run_capture now owns teardown.
+    let owned = {
+        let mut guard = ACTIVE_SINK.lock().unwrap();
+        if guard.as_ref().map(|c| c.epoch) == Some(epoch) {
+            guard.take()
+        } else {
+            None
+        }
+    };
+    if let Some(capture) = owned {
+        cam.stop();
         if let Some(preview) = capture.preview {
             preview.shared.remove_frame(&preview.local_id);
         }
+        tracing::info!("Android camera: capture stopped");
+    } else {
+        tracing::info!(
+            "Android camera: capture superseded by a newer session; exiting without stopping it"
+        );
     }
-    tracing::info!("Android camera: capture stopped");
     true
 }
 

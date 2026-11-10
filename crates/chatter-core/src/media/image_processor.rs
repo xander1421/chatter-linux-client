@@ -317,7 +317,14 @@ impl ImageProcessor {
 
     /// Decode stored sidecars to the inline model's pixel budget.
     pub fn inline_pixels_from_memory(data: &[u8]) -> Result<image::RgbaImage, MediaError> {
-        Ok(Self::fit_preview(Self::load_preview_image(data)?, 320))
+        // Decode the sidecar at its native inline resolution. The sender
+        // generates it at INLINE_THUMBNAIL_MAX_SIZE; decoding to 320 here threw
+        // most of that away, so inline images rendered soft on a HiDPI phone
+        // (bubble ~760px physical) until the full image was fetched on tap.
+        Ok(Self::fit_preview(
+            Self::load_preview_image(data)?,
+            INLINE_THUMBNAIL_MAX_SIZE,
+        ))
     }
 
     // These are upper bounds, not target sizes. Enlarging a small sidecar adds

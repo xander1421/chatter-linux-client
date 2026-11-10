@@ -88,6 +88,9 @@ export component CallControls inherits GlassSurface {
     in property <bool> is-video-enabled: true;
     in property <bool> is-screen-sharing: false;
     in property <bool> is-video-call: true;
+    // Camera-lens swap (front/back). Only mobile has a second facing, so the
+    // parent gates this on the platform + the camera being on.
+    in property <bool> show-camera-swap: false;
     // Phones show linked microphone/output routes; desktop shows independent devices.
     // `speaker-on` reflects the communication route acknowledged by Android.
     in property <bool> speaker-toggle: false;
@@ -97,6 +100,7 @@ export component CallControls inherits GlassSurface {
 
     callback toggle-mute();
     callback toggle-video();
+    callback swap-camera();
     callback toggle-screen-share();
     callback end-call();
     callback show-audio-input();
@@ -143,6 +147,18 @@ export component CallControls inherits GlassSurface {
             label: root.is-video-enabled ? "Turn camera off" : "Turn camera on";
             active: is-video-enabled;
             clicked => { toggle-video(); }
+        }
+
+        // Swap front/back camera. Mobile-only (desktop has one camera); shown
+        // via `if` so it reserves no row space on desktop.
+        if root.show-camera-swap: IconAction {
+            size: button-size;
+            width: 44px;
+            height: 48px;
+            enabled: root.is-connected;
+            icon: Icons.rotate-ccw;
+            label: "Switch camera";
+            clicked => { swap-camera(); }
         }
 
         // Screen share toggle (system consent is requested on Android).

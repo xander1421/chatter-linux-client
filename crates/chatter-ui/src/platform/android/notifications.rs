@@ -550,17 +550,12 @@ impl AndroidNotifications {
             )
             .map_err(|e| SystemError::NotificationSend(format!("setContentText: {}", e)))?;
 
-            // Keep distinct conversations together in the Android shade while
-            // retaining each conversation's own notification and tap target.
-            let group = env.new_string("chatter.messages").map_err(nerr)?;
-            env.call_method(
-                &builder,
-                jni::jni_str!("setGroup"),
-                jni::jni_sig!("(Ljava/lang/String;)Landroid/app/Notification$Builder;"),
-                &[JValue::Object(&group)],
-            )
-            .map_err(nerr)?;
-
+            // No setGroup: a grouped child with no posted group summary is not
+            // heads-up alerted and gets folded under the app's auto-bundle (on
+            // Samsung, collapsed under the ongoing "Chatter is connected" FGS
+            // notification), so the message never surfaces. Each conversation
+            // already has its own (tag, id); independent notifications heads-up
+            // and the shade still auto-bundles them under one app row.
             env.call_method(
                 &builder,
                 jni::jni_str!("setAutoCancel"),

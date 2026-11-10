@@ -445,10 +445,22 @@ class MainActivity : GameActivity() {
     private val callAudio by lazy { CallAudioRouter(this) }
 
     @Suppress("unused")
-    fun startCallAudio() = callAudio.start()
+    fun startCallAudio() {
+        // A call is active: keep the screen lit so the display never times out
+        // as if idle mid-call (the whole call for video; for audio the earpiece
+        // proximity lock in CallAudioRouter still blanks the screen at the ear
+        // and FLAG_KEEP_SCREEN_ON is ignored while it is held). Window flags must be
+        // set on the UI thread; callAudio.start() hops to the main looper itself.
+        runOnUiThread { window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+        callAudio.start()
+    }
 
     @Suppress("unused")
-    fun stopCallAudio() = callAudio.stop()
+    fun stopCallAudio() {
+        // The call ended: let the display resume its normal idle timeout.
+        runOnUiThread { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+        callAudio.stop()
+    }
 
     @Suppress("unused")
     fun applyCommunicationDevice(key: String) = callAudio.applyDevice(key)

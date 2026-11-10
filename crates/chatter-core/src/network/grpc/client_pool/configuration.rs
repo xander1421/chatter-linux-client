@@ -116,7 +116,14 @@ impl GrpcClientPool {
             .tcp_keepalive(Some(Duration::from_secs(300)))
             .http2_keep_alive_interval(Duration::from_secs(30))
             .keep_alive_timeout(Duration::from_secs(10))
-            .keep_alive_while_idle(true)
+            // Signal-mobile model: ping only while a stream/request is active, and
+            // go silent when the channel is idle. Backgrounded (user-events stream
+            // parked, inbox poll every 30m) the channel is idle, so this stops the
+            // 30s PINGs that kept the radio awake — the ntfy SSE is the sole live
+            // background connection. A stale idle channel is detected on the next
+            // RPC (fast reconnect); app-level liveness (poll timeouts, stream
+            // heartbeats, SSE) covers detection while active.
+            .keep_alive_while_idle(false)
             .concurrency_limit(256)
             .initial_stream_window_size(2 * 1024 * 1024)
             .initial_connection_window_size(8 * 1024 * 1024);

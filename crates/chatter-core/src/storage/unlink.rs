@@ -143,6 +143,80 @@ pub fn wipe_account_data(db: &Database) -> Result<(), StorageError> {
     ))
 }
 
+/// The account this install's local data belongs to, read from the self-owned
+/// SavedMessages channel (`channel_type = 3`, whose `owner_id` is the account's
+/// own user id — every account auto-creates exactly one). `None` when there is
+/// no local account data to attribute (a genuinely fresh device).
+///
+/// Nothing is persisted to answer this: the owner lives in the very rows a wipe
+/// removes, so a different account signing in both learns the mismatch and
+/// erases the evidence in the same step — no retained former-account marker.
+pub(crate) fn local_account_owner(db: &Database) -> Result<Option<UserId>, StorageError> {
+    let conn = db.connection()?;
+    let owner: Option<String> = match conn.query_row(
+        "SELECT owner_id FROM channels WHERE channel_type = 3 LIMIT 1",
+        [],
+        |row| row.get(0),
+    ) {
+        Ok(v) => Some(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(StorageError::Database(e)),
+    };
+    Ok(owner.and_then(|s| s.parse().ok()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::channel::{Channel, ChannelType};
+    use crate::domain::ids::{ChannelId, UserId};
+    use crate::storage::repositories::channel_repo::ChannelRepository;
+    use std::sync::Arc;
+
+    fn test_db() -> (Arc<Database>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("owner.db"), "testpass").unwrap();
+        db.run_migrations().unwrap();
+        (Arc::new(db), dir)
+    }
+
+    #[test]
+    fn local_account_owner_reads_only_the_saved_messages_channel() {
+        let (db, _dir) = test_db();
+        let repo = ChannelRepository::new(db.clone());
+
+        // A fresh install attributes to no account.
+        assert_eq!(local_account_owner(&db).unwrap(), None);
+
+        // A joined public channel is NOT the install owner — only the
+        // self-owned SavedMessages channel is.
+        repo.insert(&Channel::new(
+            ChannelId::new(),
+            "general".into(),
+            ChannelType::Public,
+            UserId::new(),
+        ))
+        .unwrap();
+        assert_eq!(local_account_owner(&db).unwrap(), None);
+
+        // The SavedMessages channel's owner is the account this install holds.
+        let owner = UserId::new();
+        repo.insert(&Channel::new(
+            ChannelId::new(),
+            "saved".into(),
+            ChannelType::SavedMessages,
+            owner,
+        ))
+        .unwrap();
+        assert_eq!(local_account_owner(&db).unwrap(), Some(owner));
+
+        // A full wipe erases the owner signal with the rest of the account data,
+        // so nothing is retained to leak across accounts.
+        wipe_account_data(&db).unwrap();
+        assert_eq!(local_account_owner(&db).unwrap(), None);
+    }
+}
+
 fn any_rows(tx: &Transaction<'_>, tables: &[String]) -> Result<bool, StorageError> {
     for table in tables {
         let present: bool = tx.query_row(

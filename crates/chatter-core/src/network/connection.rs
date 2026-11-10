@@ -76,6 +76,87 @@ pub fn tor_status() -> TorStatus {
     TorStatus::from_u8(TOR_STATUS.load(std::sync::atomic::Ordering::Acquire))
 }
 
+/// Count of ntfy push SSE streams currently connected and consuming events.
+///
+/// The background inbox poller reads this to decide its fallback cadence: while
+/// at least one push stream is live, a real wake arrives in ~250ms via
+/// `provider.wake()`, so the blind safety poll can relax from 30s to minutes.
+/// If every stream drops, this returns to 0 and the poller tightens back to 30s
+/// on its own — no trust in push beyond what is actually connected right now.
+static PUSH_STREAMS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// RAII presence for one connected push SSE stream. Increments on creation and
+/// decrements on drop, so a stream that ends, errors, or panics is counted out.
+#[must_use = "hold the guard for the lifetime of the connected SSE stream"]
+pub struct PushStreamPresence(());
+
+pub fn push_stream_connected() -> PushStreamPresence {
+    PUSH_STREAMS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    PushStreamPresence(())
+}
+
+impl Drop for PushStreamPresence {
+    fn drop(&mut self) {
+        PUSH_STREAMS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+/// Whether any ntfy push SSE stream is currently connected.
+pub fn push_is_connected() -> bool {
+    PUSH_STREAMS.load(std::sync::atomic::Ordering::Acquire) > 0
+}
+
+/// Process-global app foreground/background state (true = visible/foreground).
+///
+/// The single source of truth for the Signal-mobile background model: driven by
+/// `ChatterClient::set_app_visible`, read and awaited by every background loop
+/// (inbox poll pacing, user-events stream, channel stream, recovery tickers) so
+/// they go quiet when backgrounded and resume on foreground — without threading
+/// a receiver through each service's constructor. Defaults visible so desktop,
+/// tests, and headless startup behave as before until Android reports otherwise.
+static APP_VISIBLE: std::sync::LazyLock<tokio::sync::watch::Sender<bool>> =
+    std::sync::LazyLock::new(|| tokio::sync::watch::channel(true).0);
+
+/// Set the process-global app visibility (foreground = true). Only an actual
+/// edge marks the watch changed, so parked subscribers wake once per transition.
+pub fn set_app_visible(visible: bool) {
+    APP_VISIBLE.send_if_modified(|current| {
+        if *current != visible {
+            *current = visible;
+            true
+        } else {
+            false
+        }
+    });
+}
+
+/// A receiver that tracks app foreground/background transitions.
+pub fn subscribe_app_visible() -> tokio::sync::watch::Receiver<bool> {
+    APP_VISIBLE.subscribe()
+}
+
+/// Whether the app is currently in the foreground.
+pub fn app_is_visible() -> bool {
+    *APP_VISIBLE.borrow()
+}
+
+/// Park the caller while the app is backgrounded; return once it is foreground.
+///
+/// For background recovery/retry loops (DM outbox replay, receipt recovery,
+/// saved-message sync, DM-bootstrap recovery) that should go quiet when
+/// backgrounded and resume on foreground. Returns `false` if the visibility
+/// channel closed (the client was dropped) so the caller can exit its loop.
+pub async fn await_foreground(rx: &mut tokio::sync::watch::Receiver<bool>) -> bool {
+    loop {
+        if *rx.borrow_and_update() {
+            return true;
+        }
+        if rx.changed().await.is_err() {
+            return false;
+        }
+    }
+}
+
 /// Whether the chatter server can be reached right now.
 ///
 /// This exists because none of the three things that look like they answer that

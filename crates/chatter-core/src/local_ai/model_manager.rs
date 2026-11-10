@@ -4,7 +4,7 @@
 //! Handles model lifecycle: checking availability, pulling if needed,
 //! listing installed models, and cleanup.
 
-use super::backend::{AvailableModel, BackendError, LocalAIBackend};
+use crate::ai_protocol::{AvailableModel, BackendError, LocalAIBackend};
 
 /// Model manager for local AI backends.
 pub struct ModelManager<B: LocalAIBackend> {

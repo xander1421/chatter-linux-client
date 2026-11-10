@@ -111,6 +111,12 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
         loop {
             tokio::select! {
                 _ = recovery_tick.tick() => {
+                    // Reissue of stuck OUTGOING bootstraps is retry work: skip it
+                    // while backgrounded (Signal-mobile model). Incoming bootstrap
+                    // events (event_rx arm below) stay live for push-driven delivery.
+                    if !crate::network::connection::app_is_visible() {
+                        continue;
+                    }
                     match pending_dms.active_peers() {
                         Ok(peers) => {
                             recovery.retain(|peer, _| peers.contains(peer));

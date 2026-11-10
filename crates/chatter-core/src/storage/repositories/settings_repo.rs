@@ -30,6 +30,12 @@ pub mod keys {
     /// (which leaked the user_id and didn't match the server's publish topic).
     pub const DEVICE_WAKE_TOPIC: &str = "push.device_wake_topic";
     pub const PUSH_TOPIC: &str = "push.topic";
+    /// When "true", the device receives wakes through a UnifiedPush distributor
+    /// instead of holding its own ntfy SSE socket (battery saver, opt-in). The
+    /// distributor's endpoint URL, registered with the server, is stored under
+    /// UNIFIED_PUSH_ENDPOINT. Both empty/absent by default = own-SSE (Signal model).
+    pub const UNIFIED_PUSH_ENABLED: &str = "push.unified_push_enabled";
+    pub const UNIFIED_PUSH_ENDPOINT: &str = "push.unified_push_endpoint";
 
     // Privacy settings
     pub const SEND_READ_RECEIPTS: &str = "privacy.send_read_receipts";

@@ -89,9 +89,15 @@ impl PollHints {
     fn cycle_interval(&self, foreground: std::time::Duration) -> std::time::Duration {
         if self.visible.load(std::sync::atomic::Ordering::Acquire) {
             foreground
+        } else if crate::network::connection::push_is_connected() {
+            // Signal-mobile model: backgrounded with a live ntfy push SSE, a real
+            // wake arrives in ~250ms via provider.wake(), so delivery is
+            // push-driven. This timer is only a rare safety net for a silently
+            // dropped wake — 30 minutes, so the radio sleeps instead of polling.
+            std::time::Duration::from_secs(1800)
         } else {
-            // Push normally wakes a sleeping phone. Keep a bounded fallback
-            // when its SSE connection is down or the wake never arrives.
+            // Push SSE is down (or never connected): it is no longer waking us,
+            // so fall back to the tight 30s poll until the stream reconnects.
             std::time::Duration::from_secs(30)
         }
     }
@@ -668,6 +674,7 @@ impl DeviceInboxProvider {
                     settings_repo.clone(),
                     event_bus.as_ref().map(|bus| bus.domain_sender()),
                     shutdown_rx.clone(),
+                    crate::network::connection::subscribe_app_visible(),
                 )
                 .await;
                 // Track the handle and abort any prior-generation stream so its

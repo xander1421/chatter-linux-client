@@ -9,6 +9,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -89,6 +91,9 @@ class MessagingService : Service() {
         // Keep a Doze-tolerant heartbeat armed so a backgrounded or killed
         // process (whose in-process ntfy SSE listener died with it) is revived.
         if (!stopRequested && wasSignedIn(this)) scheduleKeepAlive(this)
+        // Opt in to UnifiedPush if a distributor app is installed, so the core
+        // can drop its own SSE socket. No distributor → no-op (own-SSE path).
+        if (!stopRequested && wasSignedIn(this)) UnifiedPushReceiver.enableIfDistributorPresent(this)
         // START_STICKY: let the OS recreate the service (with a null intent,
         // handled above) after a low-memory kill, so push delivery resumes.
         return START_STICKY
@@ -147,7 +152,13 @@ class MessagingService : Service() {
         }
 
         private const val KEEPALIVE_REQUEST = 0x4349
-        private const val KEEPALIVE_INTERVAL_MS = 15L * 60L * 1000L
+        // Heartbeat cadence by network cost. The steady background drain is
+        // cellular radio wakes (wifi is cheap), so on a metered link we wake
+        // less often — 28 min also outlives cellular-carrier NAT timeouts, the
+        // same reason FCM lengthens its heartbeat on mobile data. Unmetered
+        // (wifi) keeps the former 15 min for faster socket revival.
+        private const val KEEPALIVE_WIFI_MS = 15L * 60L * 1000L
+        private const val KEEPALIVE_CELL_MS = 28L * 60L * 1000L
 
         private fun keepAlivePending(context: Context): PendingIntent =
             PendingIntent.getBroadcast(
@@ -160,7 +171,24 @@ class MessagingService : Service() {
         /** (Re)arm one Doze-tolerant heartbeat. Each firing re-arms the next via
          * MessagingKeepAliveReceiver, so the chain self-sustains while signed in. */
         fun scheduleKeepAlive(context: Context) {
-            armAlarm(context, KEEPALIVE_INTERVAL_MS)
+            armAlarm(context, keepAliveIntervalMs(context))
+        }
+
+        /** Pick the heartbeat interval from the active link's metered flag.
+         * Unknown network (no active link / no caps) falls back to the shorter
+         * wifi interval, i.e. today's behaviour — never a longer gap than we'd
+         * choose deliberately. A metered wifi hotspot counts as cellular here,
+         * which is the battery-correct side to err on. */
+        private fun keepAliveIntervalMs(context: Context): Long {
+            val cm = context.getSystemService(ConnectivityManager::class.java)
+                ?: return KEEPALIVE_WIFI_MS
+            val caps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+                ?: return KEEPALIVE_WIFI_MS
+            return if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) {
+                KEEPALIVE_WIFI_MS
+            } else {
+                KEEPALIVE_CELL_MS
+            }
         }
 
         private fun scheduleRestartSoon(context: Context) {

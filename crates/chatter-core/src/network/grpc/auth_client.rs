@@ -25,7 +25,8 @@ use crate::proto::chat_v1::{
     InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginFinishRequest,
     LoginStartRequest, LoginStartResponse, LogoutRequest, PasswordProof, PasswordProofStartRequest,
     PasswordProofStartResponse, RefreshPreKeysRequest, RegenerateRecoveryCodesRequest,
-    RegisterRequest, RegistrationResult, RenameDeviceRequest, RepublishIdentityKeyRequest,
+    RegisterPushEndpointRequest, RegisterRequest, RegistrationResult, RenameDeviceRequest,
+    RepublishIdentityKeyRequest,
     RepublishIdentityKeyResponse, RequestSenderCertificateRequest,
     RequestSenderCertificateResponse, RevokeDeviceRequest, SetSealedSenderPolicyRequest,
     SetSealedSenderPolicyResponse, SetUnidentifiedAccessKeyRequest, SignalPreKeyBundle,
@@ -601,6 +602,18 @@ impl AuthClient {
 
         self.inner
             .revoke_device(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Register (endpoint non-empty) or clear (empty) this device's UnifiedPush
+    /// distributor endpoint. When set, the server POSTs content-free wakes to it
+    /// instead of to this device's ntfy topic.
+    pub async fn register_push_endpoint(&mut self, endpoint: String) -> Result<(), NetworkError> {
+        let request = RegisterPushEndpointRequest { endpoint };
+        self.inner
+            .register_push_endpoint(request)
             .await
             .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))

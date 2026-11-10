@@ -204,6 +204,8 @@ export component AppConversationLayout inherits Rectangle {
     chat-layout := ChatLayout {
         width: 100%;
         height: 100%;
+    // Save/restore the message-list scroll offset while a thread panel covers it.
+    covered: root.thread-panel-visible;
     page-active: !root.compact-layout || root.mobile-show-chat;
     hide-header: root.selection-mode;
     // No back button: the conversation list is always on

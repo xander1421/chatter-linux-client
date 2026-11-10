@@ -602,7 +602,14 @@ pub(crate) fn spawn_dm_send_recovery(
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut visible_rx = crate::network::connection::subscribe_app_visible();
         loop {
+            // Signal-mobile model: this is retry/replay of FAILED sends, not the
+            // primary send path, so park it while backgrounded and resume on
+            // foreground rather than waking every 5s.
+            if !crate::network::connection::await_foreground(&mut visible_rx).await {
+                break;
+            }
             ticker.tick().await;
             let Some(client) = weak.upgrade() else {
                 break;

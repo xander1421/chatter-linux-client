@@ -16,6 +16,7 @@ export component AppCallDock inherits ActiveCallView {
     in property <bool> call-speaker-toggle;
     in property <length> window-height;
     callback call-end();
+    callback call-swap-camera();
     callback call-peer-audio-mute-toggle(string);
     callback call-peer-video-pause-toggle(string);
     callback call-toggle-mute();
@@ -48,6 +49,7 @@ export component AppCallDock inherits ActiveCallView {
 
         toggle-mute => { root.call-toggle-mute(); }
         toggle-video => { root.call-toggle-video(); }
+        swap-camera => { root.call-swap-camera(); }
         toggle-screen-share => {
             if root.call-is-screen-sharing {
                 root.call-toggle-screen-share();

@@ -26,8 +26,9 @@ use crate::network::ReconnectConfig;
 /// Coarse subscription purpose; capabilities never enter transport diagnostics.
 #[derive(Clone, Copy, Debug)]
 pub enum PushSubscription {
+    /// One socket now carries both non-secret wake topics (device + account),
+    /// labelled `account`; `Mailbox` is the per-mailbox Tor subscription.
     Account,
-    Device,
     Mailbox,
 }
 
@@ -35,7 +36,6 @@ impl PushSubscription {
     fn label(self) -> &'static str {
         match self {
             Self::Account => "account",
-            Self::Device => "device",
             Self::Mailbox => "mailbox",
         }
     }
@@ -138,11 +138,18 @@ fn endpoint(config: &PushListenerConfig) -> Result<(url::Url, PushTransport), Pu
         || url.query().is_some()
         || url.fragment().is_some()
         || config.topic.is_empty()
-        || config.topic.len() > 128
-        || !config
-            .topic
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+        // ntfy multiplexes several topics on one SSE socket as a comma-joined
+        // path segment (`/a,b/sse`). Comma is the ONLY separator allowed, and
+        // only between non-empty segments that are each still the opaque
+        // `[A-Za-z0-9_-]` capability token — so no empty segment, no `/`, `?`,
+        // `#`, `.`, `@`, `%` or credential can be smuggled through the join.
+        || config.topic.split(',').any(|segment| {
+            segment.is_empty()
+                || segment.len() > 128
+                || segment
+                    .bytes()
+                    .any(|c| !(c.is_ascii_alphanumeric() || c == b'_' || c == b'-'))
+        })
     {
         return Err(PushError::Endpoint);
     }
@@ -629,6 +636,10 @@ impl PushListener {
             + Unpin,
     {
         use futures::StreamExt;
+        // We only reach here after a successful SSE response on either transport,
+        // so the stream is live. Mark push present for the poller's background
+        // cadence; the guard drops (counting us out) the instant this returns.
+        let _present = crate::network::connection::push_stream_connected();
         let mut lines = String::new();
         while let Some(chunk) = tokio::time::timeout(Duration::from_secs(60), stream.next())
             .await
@@ -981,6 +992,20 @@ mod transport_policy_tests {
             cfg.topic = topic.into();
             assert!(endpoint(&cfg).is_err());
         }
+        // Comma joins multiple topics on one socket, but only between valid
+        // non-empty segments: an empty segment or a bad char in any segment is
+        // still rejected.
+        for bad in ["a,", ",a", "a,,b", "a,b/c", "a, b", "a,b?x"] {
+            let mut cfg = config("https://ntfy.example");
+            cfg.topic = bad.into();
+            assert!(endpoint(&cfg).is_err(), "{bad} should be rejected");
+        }
+        // A well-formed multi-topic join is accepted and stays literal in the
+        // path (comma not percent-encoded), so ntfy sees both topics.
+        let mut cfg = config("https://ntfy.example/base/");
+        cfg.topic = "device_wake-1,account-2".into();
+        let (url, _) = endpoint(&cfg).unwrap();
+        assert_eq!(url.path(), "/base/device_wake-1,account-2/sse");
     }
 
     #[test]

@@ -15,8 +15,14 @@ pub(crate) fn spawn_receipt_recovery(client: &Arc<ChatterClient>) -> tokio::task
         let mut retry_after = tokio::time::Instant::now();
         let mut was_connected = initially_connected;
         let mut last_revision = initial_revision;
+        let mut visible_rx = crate::network::connection::subscribe_app_visible();
         // The first tick has no pending receipts; later sends use the next tick.
         loop {
+            // Retry of FAILED receipts only; park while backgrounded (Signal-mobile
+            // model), resume + flush on foreground.
+            if !crate::network::connection::await_foreground(&mut visible_rx).await {
+                break;
+            }
             tokio::select! {
                 _ = ticker.tick() => {},
                 _ = connectivity.recv() => {},
@@ -145,7 +151,13 @@ pub(crate) fn spawn_delete_batch_recovery(
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut visible_rx = crate::network::connection::subscribe_app_visible();
         loop {
+            // Retry of FAILED delete batches; park while backgrounded (Signal-mobile
+            // model), resume on foreground.
+            if !crate::network::connection::await_foreground(&mut visible_rx).await {
+                break;
+            }
             interval.tick().await;
             let Some(client) = weak.upgrade() else {
                 break;
