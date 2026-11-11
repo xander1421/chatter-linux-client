@@ -280,6 +280,15 @@ export component MainWindow inherits Window {
         easing: Materials.glide;
     }
 
+    // Let a newly mounted conversation lay out offscreen before its push.
+    chat-enter-frame := Timer {
+        interval: 16ms;
+        triggered => {
+            self.stop();
+            if SidebarPane.mobile-show-chat { root.chat-push-progress = 1; }
+        }
+    }
+
     private property <int> reply-focus-serial: 0;
 
     private property <length> viewer-origin-x: 0px;
@@ -324,7 +333,13 @@ export component MainWindow inherits Window {
     private property <bool> observed-mobile-show-chat: SidebarPane.mobile-show-chat;
     changed observed-mobile-show-chat => {
         root.refresh-screen-protection();
-        root.chat-push-progress = SidebarPane.mobile-show-chat ? 1 : 0;
+        chat-enter-frame.stop();
+        if SidebarPane.mobile-show-chat && root.compact-layout
+            && !Appearance.reduce-motion && root.chat-push-progress == 0 {
+            chat-enter-frame.start();
+        } else {
+            root.chat-push-progress = SidebarPane.mobile-show-chat ? 1 : 0;
+        }
         if !SidebarPane.mobile-show-chat && root.chat-return-tab != "chats" {
             if root.compact-layout && SidebarPane.active-tab == "chats" {
                 SidebarPane.active-tab = root.chat-return-tab;

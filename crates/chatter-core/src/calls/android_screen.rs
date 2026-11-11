@@ -95,8 +95,8 @@ pub fn started(token: u64, width: u32, height: u32, metered: bool) {
         || height == 0
         || width > 1920
         || height > 1920
-        || width % 2 != 0
-        || height % 2 != 0
+        || width % 8 != 0
+        || height % 8 != 0
     {
         if let Some(tx) = capture.ready.take() {
             let _ = tx.send(Err("Invalid Android screen dimensions".into()));

@@ -406,6 +406,7 @@ export component AppSecondaryModals inherits Rectangle {
     }
 
     if root.is-presented("create-section"): CreateSectionModal {
+        touch: root.is-mobile-platform;
         show-modal: root.active-modal == "create-section";
         rename-mode: ModalHostState.create-section-rename-mode;
         section-name <=> ModalHostState.create-section-name;

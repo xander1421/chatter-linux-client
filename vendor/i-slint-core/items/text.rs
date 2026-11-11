@@ -1228,48 +1228,13 @@ impl Item for TextInput {
                     return KeyEventResult::EventIgnored;
                 }
 
-                // save real anchor/cursor for undo/redo
-                let (real_cursor, real_anchor) = {
-                    let text = self.text();
-                    (self.cursor_position(&text), self.anchor_position(&text))
-                };
-
                 if !self.accept_text_input(event.key_event.text.as_str()) {
                     return KeyEventResult::EventIgnored;
                 }
 
-                self.delete_selection(window_adapter, self_rc, TextChangeNotify::SkipCallbacks);
-
-                let mut text: String = self.text().into();
-
-                // FIXME: respect grapheme boundaries
-                let insert_pos = self.selection_anchor_and_cursor().1;
-                text.insert_str(insert_pos, &event.key_event.text);
-
-                self.add_undo_item(UndoItem {
-                    pos: insert_pos,
-                    text: event.key_event.text.clone(),
-                    cursor: real_cursor,
-                    anchor: real_anchor,
-                    kind: UndoItemKind::TextInsert,
-                });
-
-                self.as_ref().set_text_internal(text.into());
-                let new_cursor_pos = (insert_pos + event.key_event.text.len()) as i32;
-                self.as_ref().anchor_position_byte_offset.set(new_cursor_pos);
-                self.set_cursor_position(
-                    new_cursor_pos,
-                    true,
-                    TextChangeNotify::TriggerCallbacks,
-                    window_adapter,
-                    self_rc,
-                );
-
-                // Keep the cursor visible when inserting text. Blinking should only occur when
-                // nothing is entered or the cursor isn't moved.
+                // Use the same atomic selection replacement as IME and paste.
+                self.insert(&event.key_event.text, window_adapter, self_rc);
                 self.as_ref().show_cursor(window_adapter);
-
-                Self::FIELD_OFFSETS.edited().apply_pin(self).call(&());
 
                 KeyEventResult::EventAccepted
             }
@@ -1292,11 +1257,13 @@ impl Item for TextInput {
                 self.preedit_text.set(event.preedit_text.clone());
                 self.preedit_selection.set(event.preedit_selection.clone().into());
 
+                let mut cleared_text = false;
                 if let Some(r) = &event.replacement_range {
                     // Set the selection so the call to insert erases it
                     self.anchor_position_byte_offset.set(cursor.saturating_add(r.start));
                     self.cursor_position_byte_offset.set(cursor.saturating_add(r.end));
                     if event.key_event.text.is_empty() {
+                        cleared_text = self.has_selection() && event.cursor_position.is_some();
                         self.delete_selection(
                             window_adapter,
                             self_rc,
@@ -1319,6 +1286,9 @@ impl Item for TextInput {
                         window_adapter,
                         self_rc,
                     );
+                }
+                if cleared_text {
+                    Self::FIELD_OFFSETS.edited().apply_pin(self).call(&());
                 }
                 KeyEventResult::EventAccepted
             }
@@ -2065,16 +2035,27 @@ impl TextInput {
             (self.cursor_position(&text), self.anchor_position(&text))
         };
 
-        self.delete_selection(window_adapter, self_rc, TextChangeNotify::SkipCallbacks);
+        // Replace the selection atomically. Publishing the deletion first can
+        // re-evaluate an application's text binding before the subsequent read:
+        // Android's whole-field snapshot then gets appended to the old name.
+        // It also exposes a transient empty value to linked form properties.
         let mut text: String = self.text().into();
-        let cursor_pos = self.selection_anchor_and_cursor().1;
-        let mut inserted_text: SharedString = text_to_insert.into();
-        if text_to_insert.contains('\n') && self.single_line() {
-            inserted_text = text_to_insert.replace('\n', " ").into();
-            text.insert_str(cursor_pos, &inserted_text);
-        } else {
-            text.insert_str(cursor_pos, text_to_insert);
+        let (cursor_pos, selection_end) = self.selection_anchor_and_cursor();
+        if cursor_pos != selection_end {
+            self.add_undo_item(UndoItem {
+                pos: cursor_pos,
+                text: text[cursor_pos..selection_end].into(),
+                cursor: real_cursor,
+                anchor: real_anchor,
+                kind: UndoItemKind::TextRemove,
+            });
         }
+        let inserted_text: SharedString = if self.single_line() && text_to_insert.contains('\n') {
+            text_to_insert.replace('\n', " ").into()
+        } else {
+            text_to_insert.into()
+        };
+        text.replace_range(cursor_pos..selection_end, inserted_text.as_str());
 
         self.add_undo_item(UndoItem {
             pos: cursor_pos,

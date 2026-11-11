@@ -1,3 +1,4 @@
+import { Appearance } from "../theme/appearance.slint";
 import { Materials } from "../theme/materials.slint";
 import { GlassSurface } from "glass_surface.slint";
 // ModalContainer — shared floating glass shell and plain full-screen pages.
@@ -43,6 +44,7 @@ export component ModalContainer inherits Rectangle {
     property <bool> phone-sheet: !root.full-screen && root.width < 520px;
     property <bool> phone-page: root.full-screen && root.width < 520px;
     property <length> drag-offset: 0px;
+    animate drag-offset { duration: root.dragging ? 0ms : Materials.sheet-duration; easing: Materials.glide; }
     property <length> drag-start-y: 0px;
     property <length> last-drag-y: 0px;
     property <length> drag-step: 0px;
@@ -50,11 +52,27 @@ export component ModalContainer inherits Rectangle {
     property <float> page-progress: 0;
     property <bool> page-swiping: false;
     property <length> page-swipe-start: 0px;
-    init => { root.page-progress = root.show ? 1 : 0; }
-    changed show => { root.page-progress = root.show ? 1 : 0; }
+    // Mount at the offscreen position before starting the animation. Assigning
+    // the final value in init skips the first frame on newly created sheets.
+    init => {
+        if root.show {
+            if root.phone-sheet { root.release-focus(); }
+            if root.allow-back-swipe && !Appearance.reduce-motion { enter-frame.start(); }
+            else { root.page-progress = 1; }
+        }
+    }
+    enter-frame := Timer {
+        interval: 16ms;
+        triggered => { self.stop(); root.page-progress = root.show ? 1 : 0; }
+    }
+    changed show => {
+        enter-frame.stop();
+        if root.show && root.phone-sheet { root.release-focus(); }
+        root.page-progress = root.show ? 1 : 0;
+    }
     // A root tab screen (no back swipe) replaces the previous tab at once: a
     // slide would show the Chats screen underneath for its first frames.
-    animate page-progress { duration: root.page-swiping || !root.allow-back-swipe ? 0ms : Materials.motion-standard; easing: Materials.glide; }
+    animate page-progress { duration: root.page-swiping || !root.allow-back-swipe ? 0ms : Materials.sheet-duration; easing: Materials.glide; }
 
     // Forward focus into the modal's keyboard scope for tab trapping
     forward-focus: modal-keys;
@@ -68,16 +86,21 @@ export component ModalContainer inherits Rectangle {
 
     // Logical close is immediate (nothing below accepts input); the fade and
     // the card's settle run to the end before the surface goes.
-    opacity: root.show ? 1 : 0;
-    animate opacity { duration: Materials.motion-standard; easing: Materials.glide; }
-    visible: root.show || self.opacity > 0;
+    opacity: root.phone-page || root.phone-sheet ? 1 : root.page-progress;
+    visible: root.show || root.page-progress > 0;
     accessible-role: groupbox;
     accessible-id: root.show && root.accessibility-modal ? "modal-overlay" : "";
 
     // Backdrop - full parent coverage. Full-screen has no "outside" to dim:
     // the card covers everything except the strip deliberately left for the tab
     // bar, and dimming THAT is just greying out the navigation.
-    background: root.full-screen ? transparent : Materials.scrim;
+    background: transparent;
+    if !root.full-screen: Rectangle {
+        width: root.width;
+        height: root.height;
+        background: Materials.scrim;
+        opacity: root.phone-sheet ? root.page-progress : 1;
+    }
 
     // The previous page darkens while the new page travels over it.
     if root.phone-page: Rectangle {
@@ -127,7 +150,7 @@ export component ModalContainer inherits Rectangle {
             material-level: 3;
             elevation: 5;
             shown: root.show;
-            enter-distance: root.full-screen ? 0px : root.phone-sheet ? 72px : 24px;
+            enter-distance: 0px;
             enter-duration: Materials.motion-standard;
 
             accessible-role: groupbox;
@@ -150,13 +173,11 @@ export component ModalContainer inherits Rectangle {
                 : root.full-screen ? 0
                 : Math.round((root.width - self.width) / 2 / 1px) * 1px;
             y: (root.full-screen ? 0px : root.phone-sheet ? root.height - self.height : Math.round((root.height - self.height) / 2 / 1px) * 1px)
-                + self.entrance-offset + root.drag-offset;
-            animate y { duration: root.dragging ? 0ms : Materials.motion-standard; easing: Materials.glide; }
-            transform-scale-x: root.phone-sheet || root.phone-page || root.show ? 100% : 94%;
-            transform-scale-y: root.phone-sheet || root.phone-page || root.show ? 100% : 94%;
+                + (root.full-screen ? 0px : root.phone-sheet ? self.height * (1 - root.page-progress) : 24px * (1 - root.page-progress))
+                + root.drag-offset;
+            transform-scale-x: root.phone-sheet || root.phone-page ? 100% : (94 + 6 * root.page-progress) * 1%;
+            transform-scale-y: root.phone-sheet || root.phone-page ? 100% : (94 + 6 * root.page-progress) * 1%;
             transform-origin: { x: self.width / 2, y: self.height / 2 };
-            animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
-            animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
 
             // Full-screen content stays plain; its header owns the glass.
             background: root.full-screen ? Materials.ambient : transparent;
@@ -267,9 +288,8 @@ export component ModalContainer inherits Rectangle {
                         : max(self.preferred-height, body.height);
                     // Keep the surface populated through its exit; the outer
                     // close shield blocks input while this content settles.
-                    opacity: root.show ? 1 : 0;
-                    animate opacity { duration: Materials.motion-standard; easing: Materials.glide; }
-                    visible: root.show || self.opacity > 0;
+                    opacity: root.phone-page || root.phone-sheet ? 1 : root.page-progress;
+                    visible: root.show || root.page-progress > 0;
 
                     // The actual content provided by users of ModalContainer
                     @children
