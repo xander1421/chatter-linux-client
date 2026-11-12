@@ -13,22 +13,46 @@ impl SessionGuard {
     }
 }
 
-/// A read-only handle for checking the selected conversation and thread.
+/// Where a result belongs: the session it was made in and, for a result
+/// that writes into the open view, the conversation and the load of it.
+/// A result whose scope is no longer current is dropped, not applied.
 #[derive(Clone)]
-pub struct ConversationGuard {
+pub struct ResultScope {
+    session: SessionGuard,
     chat: ChatState,
-    conversation: crate::state::ActiveConversation,
+    /// The conversation on screen and its load generation
+    /// ([`ChatState::begin_load`]); `None` for a session-wide result.
+    view: Option<(crate::state::ActiveConversation, u64)>,
 }
 
-impl ConversationGuard {
+impl ResultScope {
     pub fn is_current(&self) -> bool {
-        self.chat.active_conversation() == self.conversation
+        self.session.is_current()
+            && self.view.is_none_or(|(conversation, generation)| {
+                self.chat.active_conversation() == conversation
+                    && self.chat.load_generation() == generation
+            })
     }
 
     pub fn shows_thread(&self, root: crate::domain::ids::MessageId) -> bool {
         self.chat
             .active_thread()
             .is_some_and(|thread| thread.root_message_id == root)
+    }
+
+    /// Start a new load of this scope's view: results scoped to any earlier
+    /// load of the open conversation stop being current. No-op for a
+    /// session-wide scope.
+    pub fn begin_load(&mut self) {
+        if let Some((_, generation)) = &mut self.view {
+            *generation = self.chat.begin_load();
+        }
+    }
+}
+
+impl std::fmt::Debug for ResultScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResultScope").field("view", &self.view).finish_non_exhaustive()
     }
 }
 
@@ -365,13 +389,22 @@ impl ChatterClient {
         }
     }
 
-    pub fn conversation_guard(
-        &self,
-        conversation: crate::state::ActiveConversation,
-    ) -> ConversationGuard {
-        ConversationGuard {
+    /// A session-wide [`ResultScope`]: current until the session changes.
+    pub fn session_scope(&self) -> ResultScope {
+        ResultScope {
+            session: self.session_guard(),
             chat: self.services.chat_state.clone(),
-            conversation,
+            view: None,
+        }
+    }
+
+    /// A [`ResultScope`] for the view of `conversation` as currently loaded.
+    pub fn view_scope(&self, conversation: crate::state::ActiveConversation) -> ResultScope {
+        let chat = self.services.chat_state.clone();
+        ResultScope {
+            session: self.session_guard(),
+            view: Some((conversation, chat.load_generation())),
+            chat,
         }
     }
 

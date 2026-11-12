@@ -371,7 +371,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 // Load the page (receipts and timer marks are core's)
                 let generation = crate::bin_ui::decode_cache::thumbnail_generation();
-                let page = match ui_ctx.open_conversation(active, PageAnchor::Opening(anchor), || owner.is_current()) {
+                let mut page = match ui_ctx.open_conversation(active, PageAnchor::Opening(anchor), owner.scope()) {
                     Ok(page) => page,
                     Err(e) => {
                         tracing::error!("Failed to list anon DM messages: {}", e);
@@ -382,18 +382,14 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 if !owner.is_current() { return; }
                 tracing::info!(kind = "secret_dm", stage = "page_loaded", rows = page.rows.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
 
-                let display_messages = crate::bin_ui::converters::prepare_rows(page.rows, false, generation).await;
+                let display_messages = crate::bin_ui::converters::prepare_rows(std::mem::take(&mut page.rows), false, generation).await;
 
                 let initial_count = display_messages.len();
                 tracing::info!(kind = "secret_dm", stage = "display_built", rows = initial_count, elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
                 tracing::info!(dm_id = %anon_dm_id, count = initial_count, "[UI_OPEN_DM] anon DM spawn run_ui firing");
-                let (unread_index, unread_count) = (page.unread_index, page.unread_count);
-                crate::run_history_ui!(weak, owner, |w| {
+                crate::bin_ui::features::history_owner::apply_if_current(&weak, page, move |w, page| {
                     use slint::Model;
-                    let pane = w.global::<crate::ChatPane>();
-                    pane.set_unread_index(unread_index.map_or(-1, |i| i as i32));
-                    pane.set_unread_count(unread_count as i32);
-                    pane.set_is_at_bottom(unread_index.is_none());
+                    super::apply_unread_anchor(&w, &page);
                     let before = w.global::<crate::ChatPane>().get_messages().row_count();
                     let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                     let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_preview_with_user(&current_user_id)).collect();
@@ -462,7 +458,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             // Load the page (receipts and timer marks are core's)
             let generation = crate::bin_ui::decode_cache::thumbnail_generation();
-            let page = match ui_ctx.open_conversation(active, PageAnchor::Opening(anchor), || owner.is_current()) {
+            let mut page = match ui_ctx.open_conversation(active, PageAnchor::Opening(anchor), owner.scope()) {
                 Ok(page) => page,
                 Err(e) => {
                     tracing::error!("Failed to list DM messages: {}", e);
@@ -487,7 +483,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .map(|(presence, at)| chatter_core::ui::format::last_seen_label(presence, at))
                 .unwrap_or_default();
 
-            let display_messages = crate::bin_ui::converters::prepare_rows(page.rows, false, generation).await;
+            let display_messages = crate::bin_ui::converters::prepare_rows(std::mem::take(&mut page.rows), false, generation).await;
             tracing::info!(kind = "dm", stage = "display_built", rows = display_messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
 
             if !owner.is_current() { return; }
@@ -505,12 +501,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 });
 
             let refresh_ctx = ui_ctx.clone();
-            let (unread_index, unread_count) = (page.unread_index, page.unread_count);
-            crate::run_history_ui!(weak, owner, |w| {
-                let pane = w.global::<crate::ChatPane>();
-                pane.set_unread_index(unread_index.map_or(-1, |i| i as i32));
-                pane.set_unread_count(unread_count as i32);
-                pane.set_is_at_bottom(unread_index.is_none());
+            crate::bin_ui::features::history_owner::apply_if_current(&weak, page, move |w, page| {
+                super::apply_unread_anchor(&w, &page);
                 let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                 let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_preview_with_user(&current_user_id)).collect();
                 w.global::<crate::ChatPane>().set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::from(slint_messages)));

@@ -4121,14 +4121,14 @@ fn conversation_open_anchors_on_the_unread_boundary() {
     }
 
     // Core owns which row the boundary is; the UI only forwards the number.
-    let sidebar = include_str!("../src/bin_ui/features/chat/open/mod.rs");
+    let open = include_str!("../src/bin_ui/features/chat/open/mod.rs");
     assert!(
-        sidebar.contains("anchor.divider_index(page)"),
-        "the index must come from chatter-core's UnreadAnchor, not be recomputed \
-         in the presentation layer"
+        open.contains("page.unread_index") && !open.contains("divider_index"),
+        "the index must come from chatter-core's ConversationPage, not be \
+         recomputed in the presentation layer"
     );
     assert!(
-        sidebar.contains("set_is_at_bottom(index.is_none())"),
+        open.contains("set_is_at_bottom(page.unread_index.is_none())"),
         "is_at_bottom is sticky across conversations; the open has to reset it or \
          a chat left scrolled up decides where the next one opens"
     );

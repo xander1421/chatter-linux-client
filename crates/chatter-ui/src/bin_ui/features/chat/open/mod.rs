@@ -28,29 +28,21 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 /// Tell the message list where to open.
 ///
-/// The anchor comes from `ConversationHandle::mark_as_read`, which captured it
-/// on its way past — by the time the page below is loaded, every row is read
-/// and the boundary no longer exists in the data. Core decides *which* row
-/// (`UnreadAnchor::divider_index`); this only hands the number to the list.
+/// Core picked the row (`ChatterClient::open_conversation`, from the anchor
+/// `mark_as_read` captured before the mark destroyed it); this only hands the
+/// number to the list.
 ///
 /// `is_at_bottom` is reset here on purpose: it is sticky across conversations,
 /// so without this an open lands wherever the previous conversation's scroll
 /// left it.
 pub(crate) fn apply_unread_anchor(
     window: &MainWindow,
-    anchor: chatter_core::domain::message::UnreadAnchor,
-    page: &[chatter_core::domain::message::Message],
+    page: &chatter_core::client::ConversationPage,
 ) {
-    let index = anchor.divider_index(page);
-    window
-        .global::<crate::ChatPane>()
-        .set_unread_index(index.map_or(-1, |i| i as i32));
-    window
-        .global::<crate::ChatPane>()
-        .set_unread_count(anchor.unread_count as i32);
-    window
-        .global::<crate::ChatPane>()
-        .set_is_at_bottom(index.is_none());
+    let pane = window.global::<crate::ChatPane>();
+    pane.set_unread_index(page.unread_index.map_or(-1, |i| i as i32));
+    pane.set_unread_count(page.unread_count as i32);
+    pane.set_is_at_bottom(page.unread_index.is_none());
 }
 
 /// Fire the sidebar-open callback for `conv` — the same entry point a row tap

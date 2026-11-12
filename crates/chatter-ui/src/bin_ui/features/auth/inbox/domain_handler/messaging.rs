@@ -21,20 +21,23 @@ pub(super) async fn handle_message_received(
     ui_ctx: &Arc<ChatterClient>,
     message: Message,
 ) {
-    let session = ui_ctx.session_guard();
+    let scope = ui_ctx.session_scope();
     let generation = crate::bin_ui::decode_cache::thumbnail_generation();
     let Some((message, row)) = ui_ctx.incoming_message_row(message) else {
         return;
     };
     let mut prepared = crate::bin_ui::converters::prepare_rows(vec![row], true, generation).await;
-    if !session.is_current() {
+    // Not only staleness of the result: `incoming_message` marks the
+    // conversation read and records the typing end, which must not happen
+    // in a session that has since ended.
+    if !scope.is_current() {
         return;
     }
     let Some(display_data) = prepared.pop() else {
         return;
     };
 
-    let update = ui_ctx.incoming_message(&message);
+    let update = ui_ctx.incoming_message(&message, scope);
     let conversation_id = message.conversation_id;
     let timestamp_str = update
         .preview_at
@@ -66,28 +69,22 @@ pub(super) async fn handle_message_received(
         });
     }
 
-    let weak = window.clone();
     let ui_ctx_ui = ui_ctx.clone();
-    let is_active = update.is_active;
-    let current_user_id = update.current_user_id;
-    let sidebar_conversation = update.sidebar_conversation;
-    let badges = update.badges;
-    let mention_count = update.mention_count;
-    let preview = update.preview;
-    // A thread reply belongs to the thread panel, not the main message list.
-    // Route it there (and bump the root bubble's reply pill) instead of
-    // inserting it inline, which used to render every reply twice.
-    let thread_root = update.thread_root;
-    let panel_shows_this_thread = update.panel_shows_thread;
-    let replaces_existing = update.replaces_existing;
-    let marks_delivered = update.marks_delivered;
-    let groups_continuations = update.groups_continuations;
-
-    let _ = slint::invoke_from_event_loop(move || {
-        if !session.is_current() {
-            return;
-        }
-        let Some(w) = weak.upgrade() else { return };
+    crate::bin_ui::features::history_owner::apply_if_current(window, update, move |w, update| {
+        let is_active = update.is_active;
+        let current_user_id = update.current_user_id;
+        let sidebar_conversation = update.sidebar_conversation;
+        let badges = update.badges;
+        let mention_count = update.mention_count;
+        let preview = update.preview;
+        // A thread reply belongs to the thread panel, not the main message list.
+        // Route it there (and bump the root bubble's reply pill) instead of
+        // inserting it inline, which used to render every reply twice.
+        let thread_root = update.thread_root;
+        let panel_shows_this_thread = update.panel_shows_thread;
+        let replaces_existing = update.replaces_existing;
+        let marks_delivered = update.marks_delivered;
+        let groups_continuations = update.groups_continuations;
 
         // A message ends its sender's typing. Keyed by conversation, like the
         // typing state itself: the sender's id matched only for DMs, so in a

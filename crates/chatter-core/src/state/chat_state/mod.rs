@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 use parking_lot::Mutex;
@@ -96,6 +96,10 @@ pub struct ChatState {
     /// Whether the app is on screen (platform lifecycle). Outside `store` for
     /// the same reason: a focus change is not a navigation change.
     app_visible: Arc<AtomicBool>,
+    /// Bumped each time the open conversation's view starts loading (a
+    /// selection or a reload), so results of an earlier load of the same
+    /// conversation are stale. Outside `store`: it is not navigation state.
+    load_generation: Arc<AtomicU64>,
 }
 
 impl ChatState {
@@ -107,6 +111,7 @@ impl ChatState {
             typing_ended_at: Arc::default(),
             typing_started_at: Arc::default(),
             app_visible: Arc::new(AtomicBool::new(true)),
+            load_generation: Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -118,6 +123,16 @@ impl ChatState {
     /// Whether the app is on screen. Starts `true`: a fresh launch is in view.
     pub fn is_app_visible(&self) -> bool {
         self.app_visible.load(Ordering::Acquire)
+    }
+
+    /// The open view's load generation (see `begin_load`).
+    pub fn load_generation(&self) -> u64 {
+        self.load_generation.load(Ordering::SeqCst)
+    }
+
+    /// Start a new load of the open view; returns its generation.
+    pub fn begin_load(&self) -> u64 {
+        self.load_generation.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     /// Get the current chat state.

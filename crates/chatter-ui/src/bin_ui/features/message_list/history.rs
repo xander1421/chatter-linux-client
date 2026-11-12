@@ -207,7 +207,7 @@ pub(super) fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: Hi
             HistoryLoad::Reaching(target) => PageAnchor::Reaching(*target),
         };
         let generation = crate::bin_ui::decode_cache::thumbnail_generation();
-        let page = ui_ctx.open_conversation(conversation, anchor, || owner.is_current());
+        let page = ui_ctx.open_conversation(conversation, anchor, owner.scope());
         ui_ctx.set_message_loading(channel_id, false);
         let page = match page {
             Ok(page) => page,
