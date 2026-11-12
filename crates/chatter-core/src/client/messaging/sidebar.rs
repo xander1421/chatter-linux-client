@@ -296,7 +296,8 @@ impl ChatterClient {
                 CT::Channel => channel_id.is_some_and(|id| self.can_leave_channel(&id)),
                 _ => false,
             },
-            can_delete: (is_channel && channel_id.is_some_and(|id| self.is_former_channel(&id)))
+            can_delete: conv.conversation_type.can_delete_from_list()
+                || (is_channel && channel_id.is_some_and(|id| self.is_former_channel(&id)))
                 || (conv.conversation_type == CT::AnonGroup
                     && conv
                         .conversation_id

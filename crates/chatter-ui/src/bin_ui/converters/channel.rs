@@ -71,6 +71,8 @@ impl ChatRowExt for ChatRowSendData {
             is_muted: self.is_muted,
             can_leave: self.can_leave,
             can_delete: self.can_delete,
+            can_mute: self.can_mute,
+            can_mute_timed: self.can_mute_timed,
             is_selected: false,
             arrival_serial: 0,
         }

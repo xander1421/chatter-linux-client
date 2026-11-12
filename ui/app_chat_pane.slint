@@ -82,6 +82,12 @@ export global ChatPane {
     in-out property <bool> header-can-invite: false;
     in-out property <bool> header-can-open-settings: false;
     in-out property <bool> header-can-open-pinned-list: false;
+    // Core's kind rules (`ConversationType::can_thread` /
+    // `can_set_disappearing_from_menu`), set with the kind by
+    // `converters::set_conversation_kind`. Defaults match the default kind
+    // (a channel).
+    in property <bool> can-thread: true;
+    in property <bool> can-set-disappearing-from-menu: false;
     in property <bool> secret-request-actions: false;
     in-out property <string> private-request-decision: "";
     callback secret-request-accept-clicked();
