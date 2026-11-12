@@ -6,7 +6,7 @@ use crate::{common, skip_if_no_server};
 
 use base64::Engine;
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
-use chatter_core::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };
 use tokio_stream::StreamExt;
@@ -17,7 +17,7 @@ use common::*;
 async fn consume_create_stream_get_id(
     stream: impl futures::Stream<
         Item = Result<
-            chatter_core::proto::chat_v1::ChannelEvent,
+            chatter_proto::chat_v1::ChannelEvent,
             chatter_core::error::NetworkError,
         >,
     >,
@@ -27,7 +27,7 @@ async fn consume_create_stream_get_id(
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
+            use chatter_proto::chat_v1::channel_event::Event;
             match payload {
                 Event::ChannelCreated(ch) => {
                     channel_id = ch.id;
@@ -415,7 +415,7 @@ async fn test_update_group_settings() {
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
+            use chatter_proto::chat_v1::channel_event::Event;
             match payload {
                 Event::ChannelUpdated(ch) => {
                     assert_eq!(ch.name, new_name);
@@ -492,7 +492,7 @@ async fn test_update_group_settings_rejects_empty_update_mask() {
                     Err(_) => rejected = true,
                     Ok(event) => {
                         if let Some(payload) = event.event {
-                            use chatter_core::proto::chat_v1::channel_event::Event;
+                            use chatter_proto::chat_v1::channel_event::Event;
                             match payload {
                                 Event::OperationFailed(_) => rejected = true,
                                 Event::ChannelUpdated(_) => panic!(

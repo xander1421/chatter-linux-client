@@ -82,12 +82,12 @@ pub fn timer_short_label(seconds: u32) -> String {
 }
 
 const TIMER_UPDATE_FLAG: u32 =
-    crate::proto::content_v1::data_message::Flags::ExpirationTimerUpdate as u32;
+    chatter_proto::content_v1::data_message::Flags::ExpirationTimerUpdate as u32;
 
 /// Whether `dm` is a timer-update announcement (Signal's
 /// `EXPIRATION_TIMER_UPDATE`) rather than a message to show.
 #[must_use]
-pub fn is_timer_update(dm: &crate::proto::content_v1::DataMessage) -> bool {
+pub fn is_timer_update(dm: &chatter_proto::content_v1::DataMessage) -> bool {
     dm.flags & TIMER_UPDATE_FLAG != 0
 }
 
@@ -95,7 +95,7 @@ pub fn is_timer_update(dm: &crate::proto::content_v1::DataMessage) -> bool {
 /// message's copies live. Not a statement about the conversation's timer —
 /// see [`stated_timer`].
 #[must_use]
-pub fn message_ttl(dm: &crate::proto::content_v1::DataMessage) -> u32 {
+pub fn message_ttl(dm: &chatter_proto::content_v1::DataMessage) -> u32 {
     if dm.ephemeral {
         dm.ephemeral_ttl_seconds
     } else {
@@ -159,7 +159,7 @@ pub const INITIAL_TIMER_VERSION: u32 = 1;
 /// message). Every visible friend-DM message and every timer update carries
 /// one.
 #[must_use]
-pub fn stated_timer(dm: &crate::proto::content_v1::DataMessage) -> Option<DmTimer> {
+pub fn stated_timer(dm: &chatter_proto::content_v1::DataMessage) -> Option<DmTimer> {
     (dm.expire_timer_version > 0).then(|| DmTimer {
         seconds: dm.ephemeral_ttl_seconds,
         version: dm.expire_timer_version,
@@ -170,7 +170,7 @@ pub fn stated_timer(dm: &crate::proto::content_v1::DataMessage) -> Option<DmTime
 
 /// Stamp `dm` with the conversation's timer: the ttl this message is sent
 /// under and the version a receiver orders it by.
-pub fn stamp_timer(dm: &mut crate::proto::content_v1::DataMessage, timer: DmTimer) {
+pub fn stamp_timer(dm: &mut chatter_proto::content_v1::DataMessage, timer: DmTimer) {
     dm.ephemeral = timer.effective_seconds(dm.timestamp) > 0;
     dm.ephemeral_ttl_seconds = timer.seconds;
     dm.expire_timer_version = timer.version;
@@ -180,8 +180,8 @@ pub fn stamp_timer(dm: &mut crate::proto::content_v1::DataMessage, timer: DmTime
 
 /// The empty-bodied announcement of a new timer for a friend DM.
 #[must_use]
-pub fn timer_update_content(timer: DmTimer, sent_at: u64) -> crate::proto::content_v1::Content {
-    use crate::proto::content_v1::{Content, DataMessage, content};
+pub fn timer_update_content(timer: DmTimer, sent_at: u64) -> chatter_proto::content_v1::Content {
+    use chatter_proto::content_v1::{Content, DataMessage, content};
     let mut dm = DataMessage {
         timestamp: sent_at,
         flags: TIMER_UPDATE_FLAG,
@@ -749,7 +749,7 @@ mod tests {
 
         // What goes on the wire states that version, and reads back as it.
         let content = timer_update_content(announced, 3_000);
-        let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) = content.content
+        let Some(chatter_proto::content_v1::content::Content::DataMessage(dm)) = content.content
         else {
             panic!("a DataMessage");
         };
@@ -767,7 +767,7 @@ mod tests {
             .expect("new activation");
         assert_eq!(timer.enabled_until, 301_000_000_000);
         assert_eq!(server_dm_state(&settings, &peer), timer);
-        let mut message = crate::proto::content_v1::DataMessage {
+        let mut message = chatter_proto::content_v1::DataMessage {
             timestamp: start,
             ..Default::default()
         };

@@ -229,7 +229,7 @@ pub struct SendDmContentParams<'a> {
     /// The peer's user ID.
     pub peer_id: &'a UserId,
     /// The Content proto to send.
-    pub content: crate::proto::content_v1::Content,
+    pub content: chatter_proto::content_v1::Content,
     /// For sending to the peer's mailbox.
     pub mailbox_manager: &'a MailboxManager,
     /// Optional gRPC pool for bootstrap (needed for first DM).
@@ -356,7 +356,7 @@ pub struct MessageService {
                     crate::domain::ids::UserId,
                     u32,
                 ),
-                Vec<(std::time::Instant, crate::proto::chat_v1::Message)>,
+                Vec<(std::time::Instant, chatter_proto::chat_v1::Message)>,
             >,
         >,
     >,

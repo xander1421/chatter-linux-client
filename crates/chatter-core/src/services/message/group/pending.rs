@@ -32,7 +32,7 @@ impl MessageService {
         channel_id: ChannelId,
         sender_id: UserId,
         device_id: u32,
-        proto_msg: crate::proto::chat_v1::Message,
+        proto_msg: chatter_proto::chat_v1::Message,
     ) {
         // Bound the buffer so an SKDM that never arrives (kicked sender, lost
         // device, malicious peer) can't leak memory. Each message waits
@@ -152,10 +152,10 @@ impl MessageService {
         channel_id: ChannelId,
         sender_id: UserId,
         device_id: u32,
-        proto_msg: crate::proto::chat_v1::Message,
+        proto_msg: chatter_proto::chat_v1::Message,
     ) {
-        use crate::proto::chat_v1::message::content::Type;
-        use crate::proto::content_v1::GroupEncrypted;
+        use chatter_proto::chat_v1::message::content::Type;
+        use chatter_proto::content_v1::GroupEncrypted;
         use prost::Message as _;
 
         let Some(Type::Encrypted(enc)) = proto_msg.content.as_ref().and_then(|c| c.r#type.as_ref())
@@ -185,8 +185,8 @@ impl MessageService {
         device_id: u32,
     ) {
         use crate::events::DomainEvent;
-        use crate::proto::chat_v1;
-        use crate::proto::content_v1::GroupEncrypted;
+        use chatter_proto::chat_v1;
+        use chatter_proto::content_v1::GroupEncrypted;
         use crate::services::message::conversion::proto_to_domain_message_with_sender;
 
         let Ok(session) = self.receive_session() else { return; };
@@ -277,14 +277,14 @@ impl MessageService {
                     // Content silently yielded r#type=None and dropped every
                     // healed message; mirror the stream path exactly instead.
                     let dm =
-                        match crate::network::validation::protovalidate::decode_inbound_content(
+                        match chatter_proto::protovalidate::decode_inbound_content(
                             plaintext.as_slice(),
                             "channel_retry",
                         )
                         .ok()
                         .and_then(|c| c.content)
                         {
-                            Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => dm,
+                            Some(chatter_proto::content_v1::content::Content::DataMessage(dm)) => dm,
                             _ => {
                                 tracing::warn!(
                                     sender_id = %sender_id,
@@ -426,7 +426,7 @@ impl MessageService {
         channel_id: &ChannelId,
         target_user_id: &UserId,
     ) -> Result<(), MessageError> {
-        use crate::proto::content_v1::{self, SenderKeyRequest, content};
+        use chatter_proto::content_v1::{self, SenderKeyRequest, content};
         use prost::Message;
 
         let mut auth_client = self.auth_client();

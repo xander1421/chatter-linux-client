@@ -165,7 +165,7 @@ use crate::error::NetworkError;
 use crate::events::{DomainEvent, EventBus};
 use crate::inbox::DeviceInboxProvider;
 use crate::mailbox::group::GroupFanout;
-use crate::proto::content_v1::AttachmentPointer;
+use chatter_proto::content_v1::AttachmentPointer;
 use crate::services::ai_service::AIService;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;

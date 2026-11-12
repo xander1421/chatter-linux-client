@@ -10,8 +10,8 @@ use crate::mailbox::group::GroupFanout;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::message_client::MessageClient;
-use crate::proto::chat_v1;
-use crate::proto::content_v1::AttachmentPointer;
+use chatter_proto::chat_v1;
+use chatter_proto::content_v1::AttachmentPointer;
 use crate::services::attachment::AttachmentService;
 
 use super::{MessageError, MessageService};
@@ -177,7 +177,7 @@ impl MessageService {
 
         let plaintext_bytes = {
             use prost::Message as _;
-            let mut dm = crate::proto::content_v1::DataMessage {
+            let mut dm = chatter_proto::content_v1::DataMessage {
                 body: trimmed_text.to_string(),
                 attachments: attachment_pointers.clone(),
                 channel_id: channel_id.to_string(),
@@ -207,9 +207,9 @@ impl MessageService {
                 super::group::stamp_group_data_message(&mut dm, state);
                 dm.profile_key = self.group_profile_key(state);
             }
-            let wrap = crate::proto::content_v1::Content {
+            let wrap = chatter_proto::content_v1::Content {
                 timestamp: dm.timestamp,
-                content: Some(crate::proto::content_v1::content::Content::DataMessage(dm)),
+                content: Some(chatter_proto::content_v1::content::Content::DataMessage(dm)),
                 ..Default::default()
             };
             wrap.encode_to_vec()
@@ -598,7 +598,7 @@ impl MessageService {
     pub(crate) fn pointers_for_resend(
         &self,
         attachment_ids: &[AttachmentId],
-    ) -> Result<Vec<crate::proto::content_v1::AttachmentPointer>, MessageError> {
+    ) -> Result<Vec<chatter_proto::content_v1::AttachmentPointer>, MessageError> {
         attachment_ids
             .iter()
             .map(|id| {
@@ -733,7 +733,7 @@ impl MessageService {
         auth_client: &mut AuthClient,
         _channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
-        content: crate::proto::content_v1::Content,
+        content: chatter_proto::content_v1::Content,
         _group_fanout: Option<&GroupFanout>,
     ) -> Result<(), MessageError> {
         let _ = self.settings_repo.current_user_id()?;
@@ -746,7 +746,7 @@ impl MessageService {
     pub async fn send_control(
         &self,
         channel_id: &ChannelId,
-        content: crate::proto::content_v1::Content,
+        content: chatter_proto::content_v1::Content,
         group_fanout: Option<&GroupFanout>,
     ) -> Result<(), MessageError> {
         let mut message_client = self.message_client();
@@ -779,7 +779,7 @@ impl MessageService {
         &self,
         auth_client: &mut AuthClient,
         channel_id: &ChannelId,
-        content: &crate::proto::content_v1::Content,
+        content: &chatter_proto::content_v1::Content,
     ) -> Result<(), MessageError> {
         use crate::storage::repositories::settings_repo::keys;
         use prost::Message as _;
@@ -989,7 +989,7 @@ impl MessageService {
     pub(super) fn build_wire_quote(
         &self,
         quote: Option<&crate::services::gateway::QuoteIntent>,
-    ) -> Option<crate::proto::content_v1::Quote> {
+    ) -> Option<chatter_proto::content_v1::Quote> {
         let quote = quote?;
         let original = self
             .message_repo
@@ -1119,7 +1119,7 @@ impl MessageService {
     ) -> Result<
         (
             chat_v1::message::Content,
-            Option<crate::proto::content_v1::SenderKeyDistribution>,
+            Option<chatter_proto::content_v1::SenderKeyDistribution>,
         ),
         MessageError,
     > {

@@ -391,10 +391,10 @@ pub fn group_mailbox_rotation_plaintext(
 ) -> Vec<u8> {
     use prost::Message;
     let now = crate::util::time::TimestampNanos::now().as_u64();
-    let mut content = crate::proto::content_v1::Content {
+    let mut content = chatter_proto::content_v1::Content {
         content: Some(
-            crate::proto::content_v1::content::Content::GroupMailboxAddress(
-                crate::proto::content_v1::GroupMailboxAddress {
+            chatter_proto::content_v1::content::Content::GroupMailboxAddress(
+                chatter_proto::content_v1::GroupMailboxAddress {
                     channel_id: group_id.to_string(),
                     mailbox_pk: new_mailbox_pk.to_vec(),
                     timestamp: now,
@@ -574,9 +574,9 @@ mod tests {
             "plaintext length {}, not a sealed-sender bucket",
             bytes.len()
         );
-        let content = crate::proto::content_v1::Content::decode(bytes.as_slice()).unwrap();
+        let content = chatter_proto::content_v1::Content::decode(bytes.as_slice()).unwrap();
         match content.content {
-            Some(crate::proto::content_v1::content::Content::GroupMailboxAddress(ann)) => {
+            Some(chatter_proto::content_v1::content::Content::GroupMailboxAddress(ann)) => {
                 assert_eq!(ann.channel_id, group.to_string());
                 assert_eq!(ann.mailbox_pk, pk);
             }

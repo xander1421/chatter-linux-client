@@ -34,11 +34,11 @@ use prost_reflect::{
 };
 use thiserror::Error;
 
-use crate::proto::content_v1;
+use crate::content_v1;
 
 /// The `buf.validate` schema (validate.proto and the well-known types it
 /// imports), built from the protovalidate module pinned in `buf.lock`.
-const BUF_VALIDATE_DESCRIPTOR_SET: &[u8] = include_bytes!("../../proto/buf.validate.binpb");
+const BUF_VALIDATE_DESCRIPTOR_SET: &[u8] = include_bytes!("proto/buf.validate.binpb");
 
 /// Package whose messages carry the declared E2E rules.
 const CONTENT_PACKAGE: &str = "chat.v1.content";
@@ -274,11 +274,11 @@ fn compile_rpc() -> Result<CompiledRules, String> {
     pool.decode_file_descriptor_set(BUF_VALIDATE_DESCRIPTOR_SET)
         .map_err(|e| e.to_string())?;
     for bytes in [
-        crate::proto::content_v1::FILE_DESCRIPTOR_SET,
-        crate::proto::signal_v1::FILE_DESCRIPTOR_SET,
-        crate::proto::chat_v1::FILE_DESCRIPTOR_SET,
-        crate::proto::mailbox_v1::FILE_DESCRIPTOR_SET,
-        crate::proto::provisioning_v1::FILE_DESCRIPTOR_SET,
+        crate::content_v1::FILE_DESCRIPTOR_SET,
+        crate::signal_v1::FILE_DESCRIPTOR_SET,
+        crate::chat_v1::FILE_DESCRIPTOR_SET,
+        crate::mailbox_v1::FILE_DESCRIPTOR_SET,
+        crate::provisioning_v1::FILE_DESCRIPTOR_SET,
     ] {
         pool.decode_file_descriptor_set(bytes)
             .map_err(|e| e.to_string())?;
@@ -1229,7 +1229,7 @@ mod tests {
     }
     #[test]
     fn invite_response_optional_request_id() {
-        use crate::proto::chat_v1::{ChannelEvent, ChannelInviteResponse, channel_event};
+        use crate::chat_v1::{ChannelEvent, ChannelInviteResponse, channel_event};
         let path = "/chat.v1.ChannelService/RespondToInvite";
         for (request_id, valid) in [
             ("", true),

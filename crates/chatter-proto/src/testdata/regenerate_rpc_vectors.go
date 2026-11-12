@@ -3,7 +3,7 @@
 // Re-evaluate synthetic wire fixtures with the server's official validator.
 // Run from the server repository root, write to a temporary file, then replace
 // rpc_validation_vectors.tsv after inspecting any changed verdicts:
-// GOEXPERIMENT=runtimesecret go run linux-client/crates/chatter-core/src/network/validation/testdata/regenerate_rpc_vectors.go < linux-client/crates/chatter-core/src/network/validation/testdata/rpc_validation_vectors.tsv
+// GOEXPERIMENT=runtimesecret go run linux-client/crates/chatter-proto/src/testdata/regenerate_rpc_vectors.go < linux-client/crates/chatter-proto/src/testdata/rpc_validation_vectors.tsv
 package main
 
 import (

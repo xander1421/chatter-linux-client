@@ -56,8 +56,8 @@ impl ProfileVisibility {
         settings.set_string(keys::PROFILE_VISIBILITY, self.as_str())
     }
 
-    pub fn to_proto(self) -> crate::proto::content_v1::ProfileVisibility {
-        use crate::proto::content_v1::ProfileVisibility as P;
+    pub fn to_proto(self) -> chatter_proto::content_v1::ProfileVisibility {
+        use chatter_proto::content_v1::ProfileVisibility as P;
         match self {
             Self::Everyone => P::Everyone,
             Self::Contacts => P::Contacts,
@@ -65,8 +65,8 @@ impl ProfileVisibility {
         }
     }
 
-    pub fn from_proto(p: crate::proto::content_v1::ProfileVisibility) -> Option<Self> {
-        use crate::proto::content_v1::ProfileVisibility as P;
+    pub fn from_proto(p: chatter_proto::content_v1::ProfileVisibility) -> Option<Self> {
+        use chatter_proto::content_v1::ProfileVisibility as P;
         match p {
             P::Everyone => Some(Self::Everyone),
             P::Contacts => Some(Self::Contacts),
@@ -189,7 +189,7 @@ pub fn clear_rotation_pending(settings: &SettingsRepository) -> Result<(), Stora
 /// checked it came from our own user). Returns whether our key changed.
 pub fn apply_sync(
     settings: &SettingsRepository,
-    sync: &crate::proto::content_v1::ProfileKeySync,
+    sync: &chatter_proto::content_v1::ProfileKeySync,
 ) -> Result<bool, StorageError> {
     let Ok(key) = <[u8; 32]>::try_from(sync.profile_key.as_slice()) else {
         tracing::warn!(
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn own_device_sync_adopts_key_and_setting() {
-        use crate::proto::content_v1::ProfileKeySync;
+        use chatter_proto::content_v1::ProfileKeySync;
         let t = setup();
         let mut sync = ProfileKeySync {
             profile_key: vec![8; 32],

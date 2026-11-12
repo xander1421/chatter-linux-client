@@ -2,7 +2,7 @@
 
 use crate::domain::ids::UserId;
 use crate::domain::user::{FriendshipStatus, PresenceStatus, Profile, StatusMessage};
-use crate::proto::chat_v1::UserProfile;
+use chatter_proto::chat_v1::UserProfile;
 
 use super::UserError;
 

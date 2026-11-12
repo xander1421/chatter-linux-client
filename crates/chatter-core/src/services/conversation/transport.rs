@@ -50,7 +50,7 @@ impl ConversationHandle {
     /// sealed-sender streaming) is `send_friend_dm_content`'s decision.
     pub(super) async fn send_friend_dm_content(
         &self,
-        content: crate::proto::content_v1::Content,
+        content: chatter_proto::content_v1::Content,
         peer_id: &UserId,
     ) -> ConversationResult {
         self.client
@@ -63,7 +63,7 @@ impl ConversationHandle {
     /// Send control content via channel (sender keys).
     pub(super) async fn send_channel_content(
         &self,
-        content: crate::proto::content_v1::Content,
+        content: chatter_proto::content_v1::Content,
         channel_id: &ChannelId,
     ) -> ConversationResult {
         self.client
@@ -98,7 +98,7 @@ impl ConversationHandle {
     /// anon and None return `NoConversation`.
     pub(super) async fn dispatch_content(
         &self,
-        content: crate::proto::content_v1::Content,
+        content: chatter_proto::content_v1::Content,
     ) -> ConversationResult {
         match &self.conversation {
             ActiveConversation::ServerDm { peer_id } => {

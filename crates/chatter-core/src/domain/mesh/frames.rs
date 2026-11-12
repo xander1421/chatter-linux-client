@@ -3,7 +3,7 @@
 
 use prost::Message;
 
-use crate::proto::chat_v1::SignalPreKeyBundle;
+use chatter_proto::chat_v1::SignalPreKeyBundle;
 
 const MAGIC: &[u8; 8] = b"CHTRSB01";
 pub(crate) const BUNDLE_COUNT: usize = 3;

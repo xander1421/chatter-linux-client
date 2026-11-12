@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 
 use chatter_attachment_crypto::{AttachmentCrypto, KEY_SET_LENGTH};
 use crate::domain::anon_dm_init::MAX_AVATAR_SIZE;
-use crate::proto::content_v1::AttachmentPointer;
+use chatter_proto::content_v1::AttachmentPointer;
 use crate::services::attachment::{
     AttachmentError, AttachmentService, attachments_dir, ensure_attachments_dir,
 };
@@ -311,7 +311,7 @@ fn open(pointer: &AttachmentPointer, ciphertext: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::content_v1::{
+    use chatter_proto::content_v1::{
         AnonDmAccept, AnonDmProfileUpdate, AnonDmRequest, AnonGroupInvite, AnonGroupJoinAck,
         AnonGroupMemberInfo, AnonGroupMemberList, AnonGroupProfileShare, Content, content,
     };

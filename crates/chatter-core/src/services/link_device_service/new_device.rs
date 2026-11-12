@@ -214,8 +214,8 @@ impl LinkDeviceService {
         let credentials = DeviceCredentials::generate(/* placeholder */ 1, &profile_key);
         let device_auth_token = credentials.auth_token().as_bytes();
 
-        use crate::proto::chat_v1::SignalPreKeyBundle;
-        use crate::proto::chat_v1::signal_pre_key_bundle::{
+        use chatter_proto::chat_v1::SignalPreKeyBundle;
+        use chatter_proto::chat_v1::signal_pre_key_bundle::{
             KyberPreKeyRecord as ProtoKyberPreKey, PreKeyRecord as ProtoPreKey,
             SignedPreKeyRecord as ProtoSignedPreKey,
         };
@@ -644,7 +644,7 @@ pub(super) fn adopt_provisioned_settings(
     crate::services::configuration_sync::apply(
         settings,
         user_id,
-        &crate::proto::content_v1::ConfigurationSync {
+        &chatter_proto::content_v1::ConfigurationSync {
             read_receipts: provision.read_receipts,
             typing_indicators: provision.typing_indicators,
         },

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
 
-use crate::proto::chat_v1::ReactionUpdate;
+use chatter_proto::chat_v1::ReactionUpdate;
 
 /// Capacity for reaction event channel.
 const CHANNEL_CAPACITY: usize = 128;

@@ -121,7 +121,8 @@ impl MeshTimeline {
         bytes: &[u8],
     ) -> Result<AttachmentId, MeshError> {
         let id = AttachmentId::new();
-        let encrypted = AttachmentCrypto::encrypt(bytes)?;
+        let encrypted =
+            AttachmentCrypto::encrypt(bytes).map_err(crate::error::CryptoError::from)?;
 
         ensure_attachments_dir().map_err(|source| MeshError::FileIo {
             path: attachments_dir().display().to_string(),
@@ -202,7 +203,7 @@ impl MeshTimeline {
                 // failure leaves a partial ciphertext with no row and no key: an
                 // orphan nothing can open or name.
                 let _ = std::fs::remove_file(&path);
-                error
+                crate::error::CryptoError::from(error)
             })?;
 
         let mut metadata = FileMetadata::new(

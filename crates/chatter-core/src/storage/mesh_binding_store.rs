@@ -875,7 +875,7 @@ impl MeshBindingStore {
         owner: &str,
         peer: &PeerId,
         now: u64,
-    ) -> Result<Option<crate::proto::chat_v1::SignalPreKeyBundle>, StorageError> {
+    ) -> Result<Option<chatter_proto::chat_v1::SignalPreKeyBundle>, StorageError> {
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
         let row: Option<(i64, Vec<u8>)> = tx.query_row(
@@ -891,7 +891,7 @@ impl MeshBindingStore {
             params![owner, peer.as_str(), slot],
         )?;
         tx.commit()?;
-        crate::proto::chat_v1::SignalPreKeyBundle::decode(bytes.as_slice())
+        chatter_proto::chat_v1::SignalPreKeyBundle::decode(bytes.as_slice())
             .map(Some)
             .map_err(|_| StorageError::InvalidData("corrupt remote mesh bundle".into()))
     }

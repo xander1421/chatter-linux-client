@@ -1,5 +1,5 @@
 //! Shared decode boundary for every generated unary and streaming RPC client.
-use crate::network::validation::protovalidate::{self, ContentValidationError};
+use crate::protovalidate::{self, ContentValidationError};
 use prost::Message;
 use std::{marker::PhantomData, sync::Arc};
 use tonic::{
@@ -86,7 +86,7 @@ fn refusal(error: ContentValidationError, path: &str) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::chat_v1::{self, user_service_client::UserServiceClient};
+    use crate::chat_v1::{self, user_service_client::UserServiceClient};
     use http_body::Frame;
     use std::{
         collections::VecDeque,
@@ -153,12 +153,8 @@ mod tests {
                 .is_some()
         );
         assert!(!error.to_string().contains("invalid-private-value"));
-        let network = crate::error::NetworkError::from_status(error);
-        assert!(matches!(network, crate::error::NetworkError::DataLoss(_)));
-        assert!(!network.is_retryable());
-        assert!(!network.is_transport_error());
-        // The server may already have accepted a mutating request.
-        assert!(!network.is_definite_rejection());
+        // chatter-core's NetworkError mapping of this status is tested there
+        // (error/network_error.rs `response_validation_refusal_is_data_loss`).
     }
     struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
     impl std::io::Write for Capture {

@@ -661,7 +661,7 @@ async fn queued_profile_key_and_pointer_writes_refuse_expired_receive_session() 
                     service.attachment_repo.clone(),
                 )
                 .create_from_pointers_admitted(
-                    &[crate::proto::content_v1::AttachmentPointer {
+                    &[chatter_proto::content_v1::AttachmentPointer {
                         cdn_key: "fixture-receive-pointer".into(),
                         ..Default::default()
                     }],

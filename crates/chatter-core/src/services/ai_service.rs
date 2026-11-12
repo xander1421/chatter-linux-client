@@ -11,7 +11,7 @@ use tokio_stream::StreamExt;
 use crate::error::NetworkError;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::integration_client::IntegrationClient;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     AvailableModel, Integration, IntegrationConfig, IntegrationEvent, IntegrationType, ModelLimits,
 };
 use crate::services::current_user::CurrentUserError;
@@ -435,9 +435,9 @@ impl AIService {
 /// One integration stream item: an event, nothing for the server's keepalive
 /// (it is also the first item, once subscribed), or an error.
 fn integration_event_of(
-    result: Result<crate::proto::chat_v1::StreamIntegrationEventsResponse, NetworkError>,
+    result: Result<chatter_proto::chat_v1::StreamIntegrationEventsResponse, NetworkError>,
 ) -> Option<Result<IntegrationEvent, AIError>> {
-    use crate::proto::chat_v1::stream_integration_events_response::Item;
+    use chatter_proto::chat_v1::stream_integration_events_response::Item;
     match result {
         Err(e) => Some(Err(AIError::Network(e))),
         Ok(response) => match response.item {
@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn a_heartbeat_is_not_an_integration_event() {
-        use crate::proto::chat_v1::{
+        use chatter_proto::chat_v1::{
             StreamHeartbeat, StreamIntegrationEventsResponse,
             stream_integration_events_response::Item,
         };

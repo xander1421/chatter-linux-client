@@ -371,7 +371,7 @@ pub enum DomainEvent {
 
     AnonGroupMemberListReceived {
         group_id: AnonGroupId,
-        members: Vec<crate::proto::content_v1::AnonGroupMemberInfo>,
+        members: Vec<chatter_proto::content_v1::AnonGroupMemberInfo>,
     },
 
     // ========================================================================
@@ -496,7 +496,7 @@ pub enum DomainEvent {
     /// Anonymous group metadata updated (name, description, roles).
     AnonGroupUpdated {
         group_id: AnonGroupId,
-        update: crate::proto::content_v1::AnonGroupUpdate,
+        update: chatter_proto::content_v1::AnonGroupUpdate,
         updated_by: UserId,
     },
 

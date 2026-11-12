@@ -48,7 +48,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use crate::error::NetworkError;
-use crate::proto::chat_v1::{GetConsistencyProofResponse, SignedTreeHead};
+use chatter_proto::chat_v1::{GetConsistencyProofResponse, SignedTreeHead};
 use crate::storage::repositories::SettingsRepository;
 
 /// Settings key holding [`PinnedTreeHead`].

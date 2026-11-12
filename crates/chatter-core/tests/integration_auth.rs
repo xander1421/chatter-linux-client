@@ -9,7 +9,7 @@ use tokio_stream::StreamExt;
 
 use chatter_core::error::NetworkError;
 use chatter_core::network::grpc::AuthClient;
-use chatter_core::proto::chat_v1::auth_event;
+use chatter_proto::chat_v1::auth_event;
 
 use common::*;
 
@@ -17,7 +17,7 @@ fn signed_kyber_prekey(
     identity: &libsignal_protocol::IdentityKeyPair,
     id: u32,
     timestamp: u64,
-) -> chatter_core::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
+) -> chatter_proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
     use libsignal_protocol::{GenericSignedPreKey, KyberPreKeyId, KyberPreKeyRecord, kem};
     let key = KyberPreKeyRecord::generate(
         kem::KeyType::Kyber1024,
@@ -25,7 +25,7 @@ fn signed_kyber_prekey(
         identity.private_key(),
     )
     .expect("Kyber prekey generation should succeed");
-    chatter_core::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
+    chatter_proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
         id,
         public_key: key
             .public_key()
@@ -58,8 +58,8 @@ async fn test_register_user_stream() {
     let uak = chatter_core::crypto::derive_uak(&profile_key);
 
     // Generate real Signal Protocol keys
-    use chatter_core::proto::chat_v1::SignalPreKeyBundle;
-    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
+    use chatter_proto::chat_v1::SignalPreKeyBundle;
+    use chatter_proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
     use libsignal_protocol::{IdentityKeyPair, KeyPair};
 
     let identity_key_pair = IdentityKeyPair::generate(&mut rand::rng());
@@ -214,8 +214,8 @@ async fn test_register_duplicate_username() {
     let user = assert_ok(register_test_user(&pool).await);
 
     // Generate real Signal Protocol keys for the duplicate attempt
-    use chatter_core::proto::chat_v1::SignalPreKeyBundle;
-    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
+    use chatter_proto::chat_v1::SignalPreKeyBundle;
+    use chatter_proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
     use libsignal_protocol::{IdentityKeyPair, KeyPair};
 
     let identity_key_pair = IdentityKeyPair::generate(&mut rand::rng());
@@ -583,7 +583,7 @@ async fn test_login_guess_ceiling_and_its_bypasses() {
             let done = opaque::login_finish_async(start, &pw, opened.ke2)
                 .await
                 .unwrap();
-            Ok::<_, NetworkError>(chatter_core::proto::chat_v1::PasswordProof {
+            Ok::<_, NetworkError>(chatter_proto::chat_v1::PasswordProof {
                 proof_id: opened.proof_id,
                 ke3: done.ke3,
             })
@@ -1054,8 +1054,8 @@ async fn test_upload_and_get_prekey_bundle() {
     let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create a prekey bundle with real Signal keys
-    use chatter_core::proto::chat_v1::SignalPreKeyBundle;
-    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
+    use chatter_proto::chat_v1::SignalPreKeyBundle;
+    use chatter_proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
     use libsignal_protocol::{IdentityKeyPair, KeyPair};
 
     // Reuse the identity key pair from registration. The server enforces

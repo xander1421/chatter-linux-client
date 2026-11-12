@@ -6,7 +6,7 @@ use crate::domain::channel::{
     Channel, ChannelType, MemberRole, Membership, NotificationPreference,
 };
 use crate::domain::ids::ChannelId;
-use crate::proto::chat_v1;
+use chatter_proto::chat_v1;
 
 use crate::services::channel::converters::{
     domain_channel_type_to_proto, proto_to_domain_channel, proto_to_domain_membership,

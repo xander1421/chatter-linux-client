@@ -178,7 +178,7 @@ mod tests {
         let service = AttachmentService::new_local(Arc::new(
             crate::storage::repositories::AttachmentRepository::new(db),
         ));
-        let ids = service.create_from_pointers(&[crate::proto::content_v1::AttachmentPointer {
+        let ids = service.create_from_pointers(&[chatter_proto::content_v1::AttachmentPointer {
             cdn_key: "missing-waveform".into(),
             content_type: "audio/wav".into(),
             ..Default::default()

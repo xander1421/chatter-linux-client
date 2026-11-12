@@ -388,7 +388,7 @@ impl ConversationHandle {
         &self,
         target_author: &UserId,
         target_sent_timestamp: u64,
-    ) -> ConversationResult<(crate::domain::Message, crate::proto::content_v1::Content)> {
+    ) -> ConversationResult<(crate::domain::Message, chatter_proto::content_v1::Content)> {
         let target = self.stored_message(target_author, target_sent_timestamp)?;
         if !self.can_delete_for_everyone(target_author, target_sent_timestamp)? {
             return Err(ConversationError::Other(
@@ -746,7 +746,7 @@ impl ConversationHandle {
             if target.control_sent || target.local_completed {
                 continue;
             }
-            let content = crate::proto::content_v1::Content::decode(target.control.as_slice())
+            let content = chatter_proto::content_v1::Content::decode(target.control.as_slice())
                 .map_err(|e| {
                     ConversationError::Other(format!("invalid prepared deletion control: {e}"))
                 })?;

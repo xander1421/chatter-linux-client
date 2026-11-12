@@ -42,7 +42,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::crypto::{auth_crypto, opaque};
 use chatter_core::network::grpc::client_pool::TransportMode;
 use chatter_core::network::grpc::{AuthClient, GrpcClientPool};
-use chatter_core::proto::chat_v1::{RegisterRequest, auth_service_client::AuthServiceClient};
+use chatter_proto::chat_v1::{RegisterRequest, auth_service_client::AuthServiceClient};
 use rand::RngCore;
 
 const SERVER_URL: &str = "https://localhost:50051";
@@ -154,7 +154,7 @@ async fn onion_challenge(
     AuthClient,
     String,
     Vec<u8>,
-    chatter_core::proto::chat_v1::RequestRegistrationChallengeResponse,
+    chatter_proto::chat_v1::RequestRegistrationChallengeResponse,
 ) {
     let mut auth = AuthClient::new(pool.channel(), pool.auth_clone());
     let nick = unique_nickname();

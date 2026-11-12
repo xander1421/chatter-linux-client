@@ -43,7 +43,7 @@ impl SignalActorHandle {
     /// actor. Returns `(actions_bytes, signature)`.
     pub async fn sign_channel_change(
         &self,
-        actions: crate::proto::chat_v1::channel_change::Actions,
+        actions: chatter_proto::chat_v1::channel_change::Actions,
     ) -> Result<(Vec<u8>, Vec<u8>), ServiceError> {
         self.send(|tx| SignalCommand::SignChannelChange {
             actions,
@@ -69,7 +69,7 @@ impl SignalActorHandle {
     pub async fn refresh_prekeys(
         &self,
         count: u32,
-    ) -> Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>, ServiceError> {
+    ) -> Result<Vec<chatter_proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>, ServiceError> {
         self.send(|tx| SignalCommand::RefreshPrekeys {
             count,
             response: tx,
@@ -81,7 +81,7 @@ impl SignalActorHandle {
     pub async fn refresh_kyber_prekeys(
         &self,
         count: u32,
-    ) -> Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord>, ServiceError>
+    ) -> Result<Vec<chatter_proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord>, ServiceError>
     {
         self.send(|tx| SignalCommand::RefreshKyberPrekeys {
             count,
@@ -390,8 +390,8 @@ impl SignalActorHandle {
         &self,
     ) -> Result<
         (
-            crate::proto::chat_v1::signal_pre_key_bundle::SignedPreKeyRecord,
-            crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord,
+            chatter_proto::chat_v1::signal_pre_key_bundle::SignedPreKeyRecord,
+            chatter_proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord,
         ),
         ServiceError,
     > {

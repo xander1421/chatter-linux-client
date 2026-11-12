@@ -49,7 +49,7 @@ pub mod wire;
 // ── Internal modules ────────────────────────────────────────────────────────
 
 // Temporary external-access allowlist while the client façade is expanded:
-// - mailbox, proto, and util: core integration fixtures construct or inspect
+// - mailbox and util: core integration fixtures construct or inspect
 //   these implementation objects directly.
 // - app: exposed only to integration fixtures under `testing`.
 // - network, services, and storage: current client signatures and platform/UI
@@ -80,8 +80,6 @@ pub mod local_ai;
 pub mod mailbox;
 #[doc(hidden)]
 pub mod network;
-#[doc(hidden)]
-pub mod proto;
 #[doc(hidden)]
 pub mod services;
 #[doc(hidden)]

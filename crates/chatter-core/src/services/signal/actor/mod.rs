@@ -50,9 +50,9 @@ impl From<crate::error::StorageError> for DurableReceiveError {
 /// dropping the message. DecryptionErrorMessage reports are not Content and go
 /// through `encrypt_decryption_error_sealed`, which this does not gate.
 fn admit_outgoing_content(plaintext: &[u8]) -> Result<(), ServiceError> {
-    use crate::network::validation::protovalidate::{ValidatedContent, validate_encoded};
+    use chatter_proto::protovalidate::{ValidatedContent, validate_encoded};
     validate_encoded(
-        <crate::proto::content_v1::Content as ValidatedContent>::FULL_NAME,
+        <chatter_proto::content_v1::Content as ValidatedContent>::FULL_NAME,
         plaintext,
     )
     .map_err(|e| ServiceError::Validation(format!("outgoing content refused: {e}")))

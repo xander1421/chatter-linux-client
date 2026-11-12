@@ -12,7 +12,7 @@ use crate::mailbox::dm::{DmBootstrap, release_bootstrap_lock, try_acquire_bootst
 use crate::network::grpc::AnonymousMailboxClient;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::proto::chat_v1::{SealedDelivery, SealedDeviceMessage, SealedSenderMessage};
+use chatter_proto::chat_v1::{SealedDelivery, SealedDeviceMessage, SealedSenderMessage};
 use crate::util::time::TimestampNanos;
 
 use super::{MessageError, MessageService};

@@ -436,7 +436,7 @@ impl ChatterClient {
                             .get("pointer")
                             .and_then(|p| serde_json::from_value::<Vec<u8>>(p.clone()).ok())
                             .and_then(|bytes| {
-                                crate::proto::content_v1::AttachmentPointer::decode(
+                                chatter_proto::content_v1::AttachmentPointer::decode(
                                     bytes.as_slice(),
                                 )
                                 .ok()

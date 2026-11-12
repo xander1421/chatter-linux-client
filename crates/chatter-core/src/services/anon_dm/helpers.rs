@@ -42,7 +42,7 @@ impl AnonDmService {
     /// shared profile key (see [`crate::services::secret_avatar`]).
     pub(crate) async fn my_avatar_pointer(
         &self,
-    ) -> Option<crate::proto::content_v1::AttachmentPointer> {
+    ) -> Option<chatter_proto::content_v1::AttachmentPointer> {
         let avatar = self.get_user_avatar()?;
         crate::services::secret_avatar::pointer_for(
             &self.settings_repo,
@@ -60,7 +60,7 @@ impl AnonDmService {
     /// (`send_profile_update`) finds it cached.
     pub(crate) fn my_avatar_pointer_without_upload(
         &self,
-    ) -> Option<crate::proto::content_v1::AttachmentPointer> {
+    ) -> Option<chatter_proto::content_v1::AttachmentPointer> {
         let avatar = self.get_user_avatar()?;
         let cached = crate::services::secret_avatar::cached_pointer(&self.settings_repo, &avatar);
         if cached.is_none() && tokio::runtime::Handle::try_current().is_ok() {
@@ -78,7 +78,7 @@ impl AnonDmService {
     /// after acceptance must carry it (RC108 O3, responder side).
     pub(crate) fn my_uploaded_avatar_pointer(
         &self,
-    ) -> (Option<crate::proto::content_v1::AttachmentPointer>, bool) {
+    ) -> (Option<chatter_proto::content_v1::AttachmentPointer>, bool) {
         let Some(avatar) = self.get_user_avatar() else {
             return (None, false);
         };
@@ -92,7 +92,7 @@ impl AnonDmService {
     /// [`Self::refresh_peer_avatar`]).
     pub(crate) async fn resolve_peer_avatar(
         &self,
-        pointer: Option<&crate::proto::content_v1::AttachmentPointer>,
+        pointer: Option<&chatter_proto::content_v1::AttachmentPointer>,
         current: Option<Vec<u8>>,
     ) -> Result<Option<Vec<u8>>, crate::services::attachment::AttachmentError> {
         crate::services::secret_avatar::resolve(&self.secret_attachments(), pointer, current).await
@@ -108,7 +108,7 @@ impl AnonDmService {
         &self,
         conversation_id: &crate::domain::anon_dm::AnonDmId,
         peer_id: &crate::domain::UserId,
-        pointer: &crate::proto::content_v1::AttachmentPointer,
+        pointer: &chatter_proto::content_v1::AttachmentPointer,
         delays: &[std::time::Duration],
     ) -> Result<Option<Vec<u8>>, AnonDmError> {
         let held = match self.anon_dm_repo.get_conversation(conversation_id)? {

@@ -128,7 +128,7 @@ impl ChatterClient {
 
     pub(crate) async fn refresh_and_emit_friend_requests(&self) -> Result<(), crate::error::NetworkError> {
         use crate::inbox::events::FriendRequestInfo;
-        use crate::proto::chat_v1::friend_requests_filter;
+        use chatter_proto::chat_v1::friend_requests_filter;
 
         let mut user_client = self.services.grpc_pool.user_client();
         let received = match user_client

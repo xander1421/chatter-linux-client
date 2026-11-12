@@ -50,7 +50,7 @@ impl SignalService {
         recipient_id: &str,
         need_access_policy: bool,
     ) -> Result<(Vec<u32>, bool), ServiceError> {
-        use crate::proto::chat_v1::get_pre_key_bundle_response;
+        use chatter_proto::chat_v1::get_pre_key_bundle_response;
 
         // Same refusal as `ensure_session`, and it matters MORE here: this is
         // the path `encrypt_message_all_devices` takes, so it is the one a real
@@ -352,9 +352,9 @@ impl SignalService {
 /// The fan-out targets minus `skip` (self-sync skips the sending device), so a
 /// skipped device never gets a session built or a ratchet step taken for it.
 fn without_device(
-    mut bundles: Vec<crate::proto::chat_v1::SignalPreKeyBundle>,
+    mut bundles: Vec<chatter_proto::chat_v1::SignalPreKeyBundle>,
     skip: Option<u32>,
-) -> Vec<crate::proto::chat_v1::SignalPreKeyBundle> {
+) -> Vec<chatter_proto::chat_v1::SignalPreKeyBundle> {
     bundles.retain(|b| Some(b.device_id) != skip);
     bundles
 }
@@ -362,7 +362,7 @@ fn without_device(
 #[cfg(test)]
 mod tests {
     use super::without_device;
-    use crate::proto::chat_v1::SignalPreKeyBundle;
+    use chatter_proto::chat_v1::SignalPreKeyBundle;
 
     fn bundles(ids: &[u32]) -> Vec<SignalPreKeyBundle> {
         ids.iter()

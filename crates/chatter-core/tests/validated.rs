@@ -7378,11 +7378,11 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
         signer: &IdentityKeyPair,
         device_id: u32,
         rng: &mut StdRng,
-    ) -> chatter_core::proto::chat_v1::GetPreKeyBundleResponse {
-        use chatter_core::proto::chat_v1::signal_pre_key_bundle::{
+    ) -> chatter_proto::chat_v1::GetPreKeyBundleResponse {
+        use chatter_proto::chat_v1::signal_pre_key_bundle::{
             KyberPreKeyRecord, SignedPreKeyRecord,
         };
-        use chatter_core::proto::chat_v1::{
+        use chatter_proto::chat_v1::{
             GetPreKeyBundleResponse, SignalPreKeyBundle, get_pre_key_bundle_response,
         };
 
@@ -13876,7 +13876,7 @@ async fn try_group_decrypt(
     content: &[u8],
 ) -> Result<Vec<u8>, String> {
     use prost::Message as _;
-    let ge = chatter_core::proto::content_v1::GroupEncrypted::decode(content)
+    let ge = chatter_proto::content_v1::GroupEncrypted::decode(content)
         .map_err(|e| format!("not a GroupEncrypted: {e}"))?;
     client
         .signal()
@@ -14548,7 +14548,7 @@ async fn v61_invite_link_join_and_revocation() {
 async fn v62_unverifiable_change_send_blocks_until_a_genuine_one() {
     use base64::Engine as _;
     use chatter_core::domain::channel::ChannelType;
-    use chatter_core::proto::chat_v1::{self as pb, channel_action::Action};
+    use chatter_proto::chat_v1::{self as pb, channel_action::Action};
     use chatter_core::domain::verified_state::rules;
     use tokio_stream::StreamExt as _;
     skip_if_no_server!();

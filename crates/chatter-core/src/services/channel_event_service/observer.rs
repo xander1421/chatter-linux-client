@@ -6,7 +6,7 @@ use super::*;
 impl LogObserver for ChannelEventService {
     fn applied(&self, a: &Applied) {
         use crate::domain::channel::NotificationPreference;
-        use crate::proto::chat_v1::{channel_action::Action, remove_member::Reason};
+        use chatter_proto::chat_v1::{channel_action::Action, remove_member::Reason};
         use crate::services::channel::converters::proto_role_to_domain;
         use crate::domain::verified_state::MemberStatus;
 

@@ -10,7 +10,7 @@ use crate::domain::ids::UserId;
 use crate::mailbox::dm::{DmConversation, DmConversationManager, PeerMailbox};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::proto::mailbox_v1::EnvelopeType;
+use chatter_proto::mailbox_v1::EnvelopeType;
 use crate::services::mailbox_manager::MailboxManager;
 
 use crate::storage::repositories::pending_dm_repo::queued_bubble_timestamp;
@@ -165,7 +165,7 @@ impl MessageService {
         &self,
         auth_client: &mut AuthClient,
         peer_id: &UserId,
-        content: &crate::proto::content_v1::Content,
+        content: &chatter_proto::content_v1::Content,
     ) -> usize {
         match own_device_copy(peer_id, content, self.current_device_id_or_zero()) {
             Some(copy) => self.sync_to_own_devices(auth_client, copy).await,
@@ -195,7 +195,7 @@ impl MessageService {
     pub(crate) async fn sync_to_own_devices(
         &self,
         auth_client: &mut AuthClient,
-        sync: crate::proto::content_v1::Content,
+        sync: chatter_proto::content_v1::Content,
     ) -> usize {
         self.sync_to_own_devices_result(auth_client, sync, false)
             .await
@@ -206,7 +206,7 @@ impl MessageService {
     pub(crate) async fn sync_to_own_devices_acknowledged(
         &self,
         auth_client: &mut AuthClient,
-        sync: crate::proto::content_v1::Content,
+        sync: chatter_proto::content_v1::Content,
     ) -> (usize, bool) {
         if crate::state::send_session::check_send_session().is_err() {
             return (0, false);
@@ -218,7 +218,7 @@ impl MessageService {
     async fn sync_to_own_devices_result(
         &self,
         auth_client: &mut AuthClient,
-        mut sync: crate::proto::content_v1::Content,
+        mut sync: chatter_proto::content_v1::Content,
         strict: bool,
     ) -> (usize, bool) {
         use crate::storage::repositories::settings_repo::keys;
@@ -470,7 +470,7 @@ impl MessageService {
     pub(super) async fn send_shield_dm_to_devices(
         &self,
         peer_id: &UserId,
-        content: crate::proto::content_v1::Content,
+        content: chatter_proto::content_v1::Content,
         devices: &[u32],
     ) -> Result<(), MessageError> {
         if devices.is_empty() {
@@ -539,7 +539,7 @@ impl MessageService {
     pub async fn send_dm(
         &self,
         peer_id: &UserId,
-        content: crate::proto::content_v1::Content,
+        content: chatter_proto::content_v1::Content,
         mailbox_manager: &MailboxManager,
     ) -> Result<(), MessageError> {
         let mut auth_client = self.auth_client();
@@ -581,7 +581,7 @@ impl MessageService {
         tracing::info!(peer_id = %peer_id, count = pending_count, "PENDING_MESSAGES: draining pending-DM queue");
 
         for msg in pending {
-            let content = match crate::proto::content_v1::Content::decode(msg.content.as_slice()) {
+            let content = match chatter_proto::content_v1::Content::decode(msg.content.as_slice()) {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!(peer_id = %peer_id, error = %e, "Failed to deserialize pending message content");
@@ -635,13 +635,13 @@ impl MessageService {
     /// still take effect before its queued receipt goes on the wire.
     pub(crate) fn queued_read_receipt_allowed(
         &self,
-        content: &crate::proto::content_v1::Content,
+        content: &chatter_proto::content_v1::Content,
     ) -> bool {
-        let Some(crate::proto::content_v1::content::Content::Receipt(receipt)) = &content.content
+        let Some(chatter_proto::content_v1::content::Content::Receipt(receipt)) = &content.content
         else {
             return true;
         };
-        if receipt.r#type != crate::proto::content_v1::receipt_message::Type::Read as i32 {
+        if receipt.r#type != chatter_proto::content_v1::receipt_message::Type::Read as i32 {
             return true;
         }
         self.settings_repo
@@ -860,9 +860,9 @@ impl MessageService {
     pub(crate) fn inject_profile_key_if_sharing(
         &self,
         peer_id: &UserId,
-        mut content: crate::proto::content_v1::Content,
-    ) -> Result<crate::proto::content_v1::Content, MessageError> {
-        use crate::proto::content_v1::content;
+        mut content: chatter_proto::content_v1::Content,
+    ) -> Result<chatter_proto::content_v1::Content, MessageError> {
+        use chatter_proto::content_v1::content;
 
         let our_user_id = self.settings_repo.current_user_id()?;
         // Sharing is enabled automatically for accepted friends. Update the
@@ -940,8 +940,8 @@ impl MessageService {
 /// The `Content` a session reset sends each rebuilt peer device: a
 /// `NullMessage` and nothing else, padded to a bucket like every DM so its
 /// size does not single it out.
-pub(crate) fn null_message_content() -> crate::proto::content_v1::Content {
-    use crate::proto::content_v1::{Content, NullMessage, content};
+pub(crate) fn null_message_content() -> chatter_proto::content_v1::Content {
+    use chatter_proto::content_v1::{Content, NullMessage, content};
 
     let mut null = Content {
         content: Some(content::Content::NullMessage(NullMessage::default())),
@@ -959,9 +959,9 @@ pub(crate) fn null_message_content() -> crate::proto::content_v1::Content {
 /// the bare copy of a message-anchored control ([`bare_self_copy`]).
 pub(super) fn own_device_copy(
     peer_id: &UserId,
-    content: &crate::proto::content_v1::Content,
+    content: &chatter_proto::content_v1::Content,
     our_device_id: u32,
-) -> Option<crate::proto::content_v1::Content> {
+) -> Option<chatter_proto::content_v1::Content> {
     sync_sent_copy(peer_id, content)
         .or_else(|| crate::services::gateway::build_call_self_sync(content, our_device_id))
         .or_else(|| bare_self_copy(peer_id, content))
@@ -979,9 +979,9 @@ pub(super) fn own_device_copy(
 /// (Signal does not); `ReadSync`/`SyncSent` already are own-device content.
 fn bare_self_copy(
     peer_id: &UserId,
-    content: &crate::proto::content_v1::Content,
-) -> Option<crate::proto::content_v1::Content> {
-    use crate::proto::content_v1::{Content, content};
+    content: &chatter_proto::content_v1::Content,
+) -> Option<chatter_proto::content_v1::Content> {
+    use chatter_proto::content_v1::{Content, content};
 
     let inner = match &content.content {
         Some(
@@ -1010,9 +1010,9 @@ fn bare_self_copy(
 /// text/attachment `DataMessage` or a timer update, never a delete carrier.
 pub(super) fn sync_sent_copy(
     peer_id: &UserId,
-    content: &crate::proto::content_v1::Content,
-) -> Option<crate::proto::content_v1::Content> {
-    use crate::proto::content_v1::{Content, SyncSent, content, sync_sent::Destination};
+    content: &chatter_proto::content_v1::Content,
+) -> Option<chatter_proto::content_v1::Content> {
+    use chatter_proto::content_v1::{Content, SyncSent, content, sync_sent::Destination};
 
     let Some(content::Content::DataMessage(dm)) = &content.content else {
         return None;
@@ -1034,10 +1034,10 @@ pub(super) fn sync_sent_copy(
 
 /// Typing indicators are stale after a bootstrap; receipts still describe the
 /// peer's message and must survive until the private mailbox is ready.
-pub(super) fn is_ephemeral_content(content: &crate::proto::content_v1::Content) -> bool {
+pub(super) fn is_ephemeral_content(content: &chatter_proto::content_v1::Content) -> bool {
     matches!(
         &content.content,
-        Some(crate::proto::content_v1::content::Content::Typing(_))
+        Some(chatter_proto::content_v1::content::Content::Typing(_))
     )
 }
 
@@ -1045,7 +1045,7 @@ pub(super) fn is_ephemeral_content(content: &crate::proto::content_v1::Content) 
 /// wire `Quote` and the local echo's stored reply fields. Shared across DM
 /// transports so reply assembly lives in one place.
 pub(crate) struct OutboundReplyParts {
-    pub quote_attachments: Vec<crate::proto::content_v1::QuotedAttachment>,
+    pub quote_attachments: Vec<chatter_proto::content_v1::QuotedAttachment>,
     pub reply_to: crate::domain::ids::MessageId,
     pub reply_to_text: Option<String>,
     pub reply_to_thumbnail: Option<Vec<u8>>,
@@ -1114,7 +1114,7 @@ impl MessageService {
 #[cfg(test)]
 mod null_message_tests {
     use crate::domain::ids::UserId;
-    use crate::proto::content_v1::content;
+    use chatter_proto::content_v1::content;
     use prost::Message as _;
 
     /// The post-reset content is a bucket-padded `NullMessage` alone, and is
@@ -1135,7 +1135,7 @@ mod null_message_tests {
 #[cfg(test)]
 mod sync_sent_copy_tests {
     use crate::domain::ids::UserId;
-    use crate::proto::content_v1::{Content, DataMessage, content};
+    use chatter_proto::content_v1::{Content, DataMessage, content};
 
     #[test]
     fn wraps_messages_only_and_names_the_peer() {
@@ -1148,7 +1148,7 @@ mod sync_sent_copy_tests {
         assert_eq!(
             sync.destination,
             Some(
-                crate::proto::content_v1::sync_sent::Destination::DestinationUserId(
+                chatter_proto::content_v1::sync_sent::Destination::DestinationUserId(
                     peer.to_string()
                 )
             )
@@ -1167,7 +1167,7 @@ mod sync_sent_copy_tests {
     /// devices bare; nothing mailbox-internal, anon or ephemeral does.
     #[test]
     fn bare_copies_only_the_allow_list() {
-        use crate::proto::content_v1::*;
+        use chatter_proto::content_v1::*;
         let peer = UserId::new();
         let wrap = |c| Content {
             timestamp: 9,

@@ -7,7 +7,7 @@ use crate::{common, skip_if_no_server};
 
 use chatter_core::error::NetworkError;
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
-use chatter_core::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };
 use tokio_stream::StreamExt;
@@ -40,7 +40,7 @@ async fn create_test_channel(
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
+            use chatter_proto::chat_v1::channel_event::Event;
             match payload {
                 Event::ChannelCreated(channel) => {
                     // ChannelCreated directly contains the Channel proto

@@ -4,7 +4,7 @@ use crate::domain::anon_dm::{AnonDm, AnonDmStatus};
 use crate::domain::call::{CallDirection, CallHistoryEntry, CallResult};
 use crate::domain::ids::MessageId;
 use crate::events::DomainEvent;
-use crate::proto::content_v1::{self, Content};
+use chatter_proto::content_v1::{self, Content};
 use crate::services::call_history_recorder::{dm_call_bubble, file_dm_bubble};
 use crate::services::gateway::builders::build_stored_dm_delete_content;
 use crate::storage::repositories::CallHistoryRepository;

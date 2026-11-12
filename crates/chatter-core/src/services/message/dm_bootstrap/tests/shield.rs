@@ -130,7 +130,7 @@ async fn shield_flush_seals_to_the_session_device_without_a_prekey_fetch() {
         &mut auth,
         &friend,
         6,
-        &crate::network::validation::protovalidate::test_plaintext("queued"),
+        &chatter_proto::protovalidate::test_plaintext("queued"),
         &[7u8; 32],
     )
     .await

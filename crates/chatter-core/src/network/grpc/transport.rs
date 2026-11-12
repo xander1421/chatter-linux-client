@@ -353,7 +353,7 @@ mod quic_enabled {
 pub(crate) mod outcome_tests {
     use super::*;
     use crate::network::grpc::interceptors::AuthInterceptor;
-    use crate::proto::chat_v1::{
+    use chatter_proto::chat_v1::{
         GetDeviceMessagesRequest, message_service_client::MessageServiceClient,
     };
     use http_body::Frame;
@@ -421,7 +421,7 @@ pub(crate) mod outcome_tests {
     async fn inbox(
         reply: Reply,
     ) -> (
-        Result<tonic::Response<crate::proto::chat_v1::GetDeviceMessagesResponse>, tonic::Status>,
+        Result<tonic::Response<chatter_proto::chat_v1::GetDeviceMessagesResponse>, tonic::Status>,
         Vec<ServerStatus>,
     ) {
         let evidence = Arc::new(Mutex::new(vec![ServerStatus::Unreachable]));

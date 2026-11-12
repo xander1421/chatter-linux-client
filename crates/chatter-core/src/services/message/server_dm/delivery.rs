@@ -16,7 +16,7 @@ impl MessageService {
     pub async fn send_friend_dm_content(
         &self,
         peer_id: &UserId,
-        content: crate::proto::content_v1::Content,
+        content: chatter_proto::content_v1::Content,
     ) -> Result<(), MessageError> {
         if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
             self.send_dm(peer_id, content, &self.mailbox_manager).await
@@ -66,7 +66,7 @@ impl MessageService {
     async fn send_sealed_dm_content(
         &self,
         peer_id: &UserId,
-        content: crate::proto::content_v1::Content,
+        content: chatter_proto::content_v1::Content,
     ) -> Result<(), MessageError> {
         // Backstop for `send_friend_dm_content`: this transport names the
         // recipient to the server, which Shield mode must never do.

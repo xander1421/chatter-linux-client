@@ -16,7 +16,7 @@ use crate::mailbox::dm::ReceivedMessage;
 use crate::mailbox::group::{GroupMailboxManager, MemberMailbox};
 use crate::network::grpc::AnonymousMailboxClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::proto::mailbox_v1::EnvelopeType;
+use chatter_proto::mailbox_v1::EnvelopeType;
 
 /// Maximum messages to fetch per poll.
 const DEFAULT_POLL_LIMIT: i32 = 50;
@@ -613,7 +613,7 @@ mod tests {
 
     #[test]
     fn test_group_poll_result_with_messages() {
-        use crate::proto::mailbox_v1::EnvelopeType;
+        use chatter_proto::mailbox_v1::EnvelopeType;
 
         let group_id = ChannelId::new();
         let result = GroupPollResult {

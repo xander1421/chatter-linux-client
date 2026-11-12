@@ -57,7 +57,7 @@ pub(crate) fn group_failure_decision(
 }
 use crate::mailbox::group::{GroupCoordinator, GroupFanout};
 use crate::mailbox::group::fanout::GroupPollOutcome;
-use crate::proto::chat_v1::SealedSenderMessage;
+use chatter_proto::chat_v1::SealedSenderMessage;
 use crate::services::attachment::AttachmentService;
 use crate::services::gateway::{MessageGateway, SealedSenderResult};
 use crate::storage::{AttachmentRepository, ChannelRepository};

@@ -17,7 +17,7 @@ use super::{
     ChannelRole, Invite, JoinMode, KeyBytes, Member, MemberStatus, MembershipState, Policy,
     VerifyError, is_canonical_uuid, malformed,
 };
-use crate::proto::chat_v1 as pb;
+use chatter_proto::chat_v1 as pb;
 use pb::channel_action::Action;
 use pb::remove_member::Reason;
 

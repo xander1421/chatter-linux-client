@@ -9,7 +9,7 @@ use chrono::{Duration, Utc};
 use crate::domain::{ChannelId, UserId};
 use crate::error::MailboxError;
 use crate::mailbox::group::{GroupMailboxManager, MemberMailbox};
-use crate::proto::content_v1::GroupMailboxAddress;
+use chatter_proto::content_v1::GroupMailboxAddress;
 
 /// Default group mailbox TTL: 48 hours in seconds. Matches the DM TTL so the
 /// shared rotation threshold (12h) gives the same ~36h epoch / 12h overlap.

@@ -15,7 +15,7 @@ use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     AccountDeletionEvent, AuthEvent, AuthResponse, ChangePasswordFinishRequest,
     ChangePasswordStartRequest, ChangePasswordStartResponse, DeleteAccountRequest,
     GetActiveSessionsRequest, GetActiveSessionsResponse, GetConsistencyProofRequest,
@@ -210,8 +210,8 @@ impl AuthClient {
     /// Get current identity from the server.
     pub async fn get_my_identity(
         &mut self,
-    ) -> Result<crate::proto::chat_v1::GetMyIdentityResponse, NetworkError> {
-        let request = crate::proto::chat_v1::GetMyIdentityRequest {};
+    ) -> Result<chatter_proto::chat_v1::GetMyIdentityResponse, NetworkError> {
+        let request = chatter_proto::chat_v1::GetMyIdentityRequest {};
 
         self.inner
             .get_my_identity(request)
@@ -281,8 +281,8 @@ impl AuthClient {
         username: &str,
         identity_public_key: &[u8],
         opaque_registration_request: &[u8],
-    ) -> Result<crate::proto::chat_v1::RequestRegistrationChallengeResponse, NetworkError> {
-        use crate::proto::chat_v1::RequestRegistrationChallengeRequest;
+    ) -> Result<chatter_proto::chat_v1::RequestRegistrationChallengeResponse, NetworkError> {
+        use chatter_proto::chat_v1::RequestRegistrationChallengeRequest;
 
         tracing::debug!(
             "Requesting registration challenge - username: {}, identity_key_len: {}",
@@ -339,8 +339,8 @@ impl AuthClient {
         device_info: &str,
         device_auth_token: &[u8],
         unidentified_access_key: &[u8; 16],
-        prekey_bundle: Option<crate::proto::chat_v1::SignalPreKeyBundle>,
-        initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
+        prekey_bundle: Option<chatter_proto::chat_v1::SignalPreKeyBundle>,
+        initial_one_time_prekeys: Vec<chatter_proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
         challenge_token: &[u8],
         challenge_response: &[u8],
         pow_solution: u64,
@@ -416,8 +416,8 @@ impl AuthClient {
         device_info: &str,
         device_auth_token: &[u8],
         unidentified_access_key: &[u8; 16],
-        prekey_bundle: Option<crate::proto::chat_v1::SignalPreKeyBundle>,
-        initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
+        prekey_bundle: Option<chatter_proto::chat_v1::SignalPreKeyBundle>,
+        initial_one_time_prekeys: Vec<chatter_proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
         challenge_token: &[u8],
         challenge_response: &[u8],
         pow_solution: u64,
@@ -977,7 +977,7 @@ mod tests {
     #[test]
     fn test_prekey_types_available() {
         // Verify Signal Protocol prekey types are accessible and constructible
-        use crate::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
+        use chatter_proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
 
         let signed = SignedPreKeyRecord {
             id: 1,
@@ -1000,7 +1000,7 @@ mod tests {
     #[test]
     fn test_signal_prekey_bundle_construction() {
         // Verify full SignalPreKeyBundle can be constructed
-        use crate::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
+        use chatter_proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
 
         let bundle = SignalPreKeyBundle {
             identity_key: vec![0u8; 32],

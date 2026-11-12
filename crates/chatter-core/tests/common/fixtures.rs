@@ -11,10 +11,10 @@ use rand::RngCore;
 
 use chatter_core::error::NetworkError;
 use chatter_core::network::grpc::{AuthClient, GrpcClientPool};
-use chatter_core::proto::chat_v1::signal_pre_key_bundle::{
+use chatter_proto::chat_v1::signal_pre_key_bundle::{
     KyberPreKeyRecord as ProtoKyberPreKey, PreKeyRecord, SignedPreKeyRecord,
 };
-use chatter_core::proto::chat_v1::{AuthResponse, SignalPreKeyBundle};
+use chatter_proto::chat_v1::{AuthResponse, SignalPreKeyBundle};
 use libsignal_protocol::{
     GenericSignedPreKey, IdentityKeyPair, KeyPair, KyberPreKeyId, KyberPreKeyRecord, kem,
 };
@@ -458,7 +458,7 @@ pub fn generate_prekey_bundle() -> (SignalPreKeyBundle, Vec<u8>) {
 /// Pays a registration challenge's proof of work (whatever the transport's
 /// difficulty; 0 on clearnet).
 pub fn solve_registration_pow(
-    challenge: &chatter_core::proto::chat_v1::RequestRegistrationChallengeResponse,
+    challenge: &chatter_proto::chat_v1::RequestRegistrationChallengeResponse,
 ) -> u64 {
     let c = challenge.challenge.as_ref().expect("challenge token");
     chatter_core::crypto::pow::solve(

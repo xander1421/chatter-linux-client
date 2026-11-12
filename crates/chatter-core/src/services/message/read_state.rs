@@ -36,7 +36,7 @@ impl MessageService {
         conversation_type: &ConversationType,
         read: Vec<(UserId, u64)>,
     ) {
-        use crate::proto::content_v1::{Content, ReadSync, ReadSyncEntry, content};
+        use chatter_proto::content_v1::{Content, ReadSync, ReadSyncEntry, content};
 
         if !matches!(
             conversation_type,
@@ -82,7 +82,7 @@ impl MessageService {
     /// only a local read (`mark_conversation_read`) syncs.
     pub fn apply_read_sync(
         &self,
-        sync: &crate::proto::content_v1::ReadSync,
+        sync: &chatter_proto::content_v1::ReadSync,
     ) -> Result<Vec<ChannelId>, MessageError> {
         let me = self.current_user_id()?;
         let reads: Vec<(ChannelId, UserId, u64)> = sync

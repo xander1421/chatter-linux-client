@@ -577,8 +577,8 @@ impl AttachmentService {
             async move {
                 let part_number = (i as u32) + 1;
                 let etag = self.upload_one_part(&url, &temp_path, offset, len).await?;
-                Ok::<crate::proto::chat_v1::CompletedPart, AttachmentError>(
-                    crate::proto::chat_v1::CompletedPart {
+                Ok::<chatter_proto::chat_v1::CompletedPart, AttachmentError>(
+                    chatter_proto::chat_v1::CompletedPart {
                         number: part_number,
                         etag,
                     },
@@ -586,7 +586,7 @@ impl AttachmentService {
             }
         });
 
-        let results: Vec<Result<crate::proto::chat_v1::CompletedPart, AttachmentError>> =
+        let results: Vec<Result<chatter_proto::chat_v1::CompletedPart, AttachmentError>> =
             futures::stream::iter(uploads)
                 .buffer_unordered(4)
                 .collect()

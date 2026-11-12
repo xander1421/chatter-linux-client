@@ -9,7 +9,7 @@
 
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::Message;
-use crate::proto::content_v1::{AttachmentPointer, GroupMailboxAddress, Quote, content};
+use chatter_proto::content_v1::{AttachmentPointer, GroupMailboxAddress, Quote, content};
 use crate::storage::repositories::UnifiedMessageRepository;
 
 use super::CallHangupReason;
@@ -221,7 +221,7 @@ pub enum DmContent {
     // ========================================================================
     AnonGroupMemberList {
         group_id: Vec<u8>,
-        members: Vec<crate::proto::content_v1::AnonGroupMemberInfo>,
+        members: Vec<chatter_proto::content_v1::AnonGroupMemberInfo>,
         timestamp: u64,
     },
     AnonGroupLeave {
@@ -236,12 +236,12 @@ pub enum DmContent {
     },
     AnonGroupUpdate {
         group_id: Vec<u8>,
-        update: crate::proto::content_v1::AnonGroupUpdate,
+        update: chatter_proto::content_v1::AnonGroupUpdate,
         timestamp: u64,
     },
     AnonGroupMessage {
         group_id: Vec<u8>,
-        inner_content: Box<crate::proto::content_v1::Content>,
+        inner_content: Box<chatter_proto::content_v1::Content>,
     },
     /// Secret-chat content that arrived in an account DM mailbox. A secret
     /// chat speaks only through its own anonymous mailbox, from the one peer
@@ -373,7 +373,7 @@ pub enum SealedSenderResult {
     AnonGroupMessageReceived {
         sender_id: UserId,
         group_id: Vec<u8>,
-        inner_content: Box<crate::proto::content_v1::Content>,
+        inner_content: Box<chatter_proto::content_v1::Content>,
     },
     /// Anonymous group join acknowledgment received.
     AnonGroupJoinAckReceived {
@@ -385,14 +385,14 @@ pub enum SealedSenderResult {
         timestamp: u64,
         profile_key: Option<Vec<u8>>,
         encrypted_display_name: Option<Vec<u8>>,
-        avatar: Option<crate::proto::content_v1::AttachmentPointer>,
+        avatar: Option<chatter_proto::content_v1::AttachmentPointer>,
     },
     /// Channel control content (reaction, pin, edit, typing, delete) received
     /// via per-device sealed sender — caller dispatches to the right event.
     ControlContent {
         sender_id: UserId,
         sender_device_id: u32,
-        content: Box<crate::proto::content_v1::Content>,
+        content: Box<chatter_proto::content_v1::Content>,
     },
     /// A secret-chat bootstrap (anon DM request or anon-group invite) sealed
     /// to this device's inbox. `sender_device_id` is the device the chat binds
@@ -400,7 +400,7 @@ pub enum SealedSenderResult {
     SecretChatBootstrap {
         sender_id: UserId,
         sender_device_id: u32,
-        content: Box<crate::proto::content_v1::Content>,
+        content: Box<chatter_proto::content_v1::Content>,
     },
     /// RECEIVER half of the 1:1 session self-heal: an inner Whisper/PreKey
     /// message from an authenticated sender failed to decrypt (desynced

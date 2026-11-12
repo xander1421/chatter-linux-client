@@ -9,7 +9,7 @@ use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     BlockUserRequest, DeleteUsernameLinkRequest, FriendRequest, FriendRequestsFilter,
     FriendResponse, FriendStatus, GetUserProfileRequest, GetUsernameDiscoverabilityRequest,
     GetUsernameDiscoverabilityResponse, GetUsernameLinkRequest, GetUsernameLinkResponse,

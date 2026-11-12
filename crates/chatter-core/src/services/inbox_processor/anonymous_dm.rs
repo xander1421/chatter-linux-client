@@ -73,7 +73,7 @@ impl InboxEventProcessor {
         intro_message: &Option<String>,
         profile_key: &Option<Vec<u8>>,
         encrypted_display_name: &Option<Vec<u8>>,
-        avatar: &Option<crate::proto::content_v1::AttachmentPointer>,
+        avatar: &Option<chatter_proto::content_v1::AttachmentPointer>,
     ) {
         tracing::info!(
             has_intro = intro_message.is_some(),
@@ -177,7 +177,7 @@ impl InboxEventProcessor {
         responder_mailbox_pk: &[u8],
         profile_key: &Option<Vec<u8>>,
         encrypted_display_name: &Option<Vec<u8>>,
-        avatar: &Option<crate::proto::content_v1::AttachmentPointer>,
+        avatar: &Option<chatter_proto::content_v1::AttachmentPointer>,
     ) {
         tracing::info!(
             has_encrypted_display_name = encrypted_display_name.is_some(),
@@ -296,7 +296,7 @@ impl InboxEventProcessor {
         &self,
         peer_id: UserId,
         conversation_id: &[u8],
-        inner_content: &crate::proto::content_v1::Content,
+        inner_content: &chatter_proto::content_v1::Content,
     ) {
         let anon_dm_id = match crate::domain::anon_dm::AnonDmId::try_from_slice(conversation_id) {
             Some(id) => id,
@@ -310,7 +310,7 @@ impl InboxEventProcessor {
         // and mailbox go. Only the chat's
         // own peer can (checked in `handle_peer_end`), and only for the chat
         // whose mailbox this arrived in.
-        if let Some(crate::proto::content_v1::content::Content::AnonDmEnd(end)) =
+        if let Some(chatter_proto::content_v1::content::Content::AnonDmEnd(end)) =
             &inner_content.content
         {
             if end.conversation_id != conversation_id {
@@ -341,7 +341,7 @@ impl InboxEventProcessor {
             return;
         }
 
-        if let Some(crate::proto::content_v1::content::Content::AnonDmProfileUpdate(update)) =
+        if let Some(chatter_proto::content_v1::content::Content::AnonDmProfileUpdate(update)) =
             &inner_content.content
             && let Some(pointer) = update.avatar.clone()
         {
@@ -361,7 +361,7 @@ impl InboxEventProcessor {
         let inner_content_ref = inner_content.clone();
         let is_data_message = matches!(
             inner_content.content.as_ref(),
-            Some(crate::proto::content_v1::content::Content::DataMessage(_))
+            Some(chatter_proto::content_v1::content::Content::DataMessage(_))
         );
 
         let _ = tokio::task::spawn_blocking(move || {
@@ -409,7 +409,7 @@ async fn refresh_peer_avatar(
     event_bus: EventBus,
     conversation_id: crate::domain::anon_dm::AnonDmId,
     peer_id: UserId,
-    pointer: crate::proto::content_v1::AttachmentPointer,
+    pointer: chatter_proto::content_v1::AttachmentPointer,
     delays: &'static [std::time::Duration],
 ) {
     match service

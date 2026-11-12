@@ -188,7 +188,7 @@ impl AuthService {
     /// Get current identity from the server.
     pub async fn get_my_identity(
         &self,
-    ) -> Result<crate::proto::chat_v1::GetMyIdentityResponse, AuthError> {
+    ) -> Result<chatter_proto::chat_v1::GetMyIdentityResponse, AuthError> {
         let mut client = self.try_auth_client().ok_or(AuthError::NotLoggedIn)?;
         client.get_my_identity().await.map_err(AuthError::Network)
     }

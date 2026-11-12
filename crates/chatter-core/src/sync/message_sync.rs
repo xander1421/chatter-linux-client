@@ -8,7 +8,7 @@ use futures::stream::{self, StreamExt};
 
 use crate::domain::ids::ChannelId;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::proto::chat_v1::MessageSortDirection;
+use chatter_proto::chat_v1::MessageSortDirection;
 use crate::services::message::channel_inbound::{ChannelInbound, Ingested, PresenceHint};
 use crate::storage::repositories::settings_repo::SettingsRepository;
 

@@ -366,7 +366,7 @@ fn test_content_type_padding_profiles() {
     let text_size = text.encode_to_vec().len();
 
     // Message with attachment
-    let attachment = chatter_core::proto::content_v1::AttachmentPointer {
+    let attachment = chatter_proto::content_v1::AttachmentPointer {
         cdn_key: "cdn-key-long-uuid-value".to_string(),
         content_type: "image/jpeg".to_string(),
         plaintext_size: 1024 * 1024,

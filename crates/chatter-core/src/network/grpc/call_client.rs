@@ -9,7 +9,7 @@ use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     CallEvent, CallInfo, CallSettings, CallStatus, CallType, CreateCallRequest, CreateCallResponse,
     EndCallRequest, GetActiveCallInChannelRequest, GetActiveCallInChannelResponse,
     GetCallInfoRequest, JoinCallRequest, JoinCallResponse, LeaveCallRequest,
@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_call_participant_construction() {
-        use crate::proto::chat_v1::CallParticipant;
+        use chatter_proto::chat_v1::CallParticipant;
 
         let participant = CallParticipant {
             user_id: "user-123".to_string(),
@@ -350,8 +350,8 @@ mod tests {
 
     #[test]
     fn test_call_event_construction() {
-        use crate::proto::chat_v1::CallCreatedEvent;
-        use crate::proto::chat_v1::call_event::Data;
+        use chatter_proto::chat_v1::CallCreatedEvent;
+        use chatter_proto::chat_v1::call_event::Data;
 
         let call_info = CallInfo {
             id: "call-123".to_string(),
@@ -374,7 +374,7 @@ mod tests {
             timestamp: 1234567890000,
             call_id: "call-123".to_string(),
             channel_id: "channel-456".to_string(),
-            r#type: crate::proto::chat_v1::CallEventType::Created.into(),
+            r#type: chatter_proto::chat_v1::CallEventType::Created.into(),
             data: Some(Data::CallCreated(CallCreatedEvent {
                 call_info: Some(call_info),
                 created_by_display_name: "Alice".to_string(),

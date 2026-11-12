@@ -6,7 +6,7 @@ use crate::inbox::handlers::DomainEvent;
 use crate::inbox::handlers::base_anon::{
     AnonInboxBackend, CommonDispatchOutcome, QuoteContext, dispatch_common_content,
 };
-use crate::proto::content_v1::{AttachmentPointer, Content};
+use chatter_proto::content_v1::{AttachmentPointer, Content};
 use crate::services::AttachmentService;
 
 use super::{AnonDmError, AnonDmService};
@@ -173,7 +173,7 @@ impl AnonDmService {
         sender_id: &UserId,
         inner_content: &Content,
     ) -> Result<Vec<DomainEvent>, AnonDmError> {
-        use crate::proto::content_v1::content::Content as ContentType;
+        use chatter_proto::content_v1::content::Content as ContentType;
 
         // Verify conversation exists and sender matches peer (DM-specific gate).
         // Block lists are checked inside dispatch_common_content via the backend.
@@ -293,7 +293,7 @@ impl AnonDmService {
         let mut events = Vec::new();
         match &inner_content.content {
             Some(ContentType::AnonDmPresence(presence)) => {
-                use crate::proto::content_v1::anon_dm_presence;
+                use chatter_proto::content_v1::anon_dm_presence;
 
                 let domain_presence = match anon_dm_presence::Status::try_from(presence.status).ok()
                 {

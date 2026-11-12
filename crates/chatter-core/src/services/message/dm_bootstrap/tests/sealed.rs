@@ -24,7 +24,7 @@ async fn actual_sealed_batch_checks_fresh_kyber_and_established_devices_before_c
         .signal_service
         .actor
         .encrypt_sealed_bounded_batch(
-            crate::network::validation::protovalidate::test_plaintext("handshake"),
+            chatter_proto::protovalidate::test_plaintext("handshake"),
             cert.clone(),
             vec![bob.clone()],
             None,
@@ -34,7 +34,7 @@ async fn actual_sealed_batch_checks_fresh_kyber_and_established_devices_before_c
     let (plain, kind) = open_fixture_sealed(&mut remote, &alice, &bob, &first[0].1).await;
     assert_eq!(
         plain,
-        crate::network::validation::protovalidate::test_plaintext("handshake")
+        chatter_proto::protovalidate::test_plaintext("handshake")
     );
     assert_eq!(kind, CiphertextMessageType::PreKey);
     let reply = libsignal_protocol::message_encrypt(
@@ -148,7 +148,7 @@ async fn actual_sealed_envelope_exact_cap_is_admitted_and_cap_plus_one_is_not() 
     cache_device(ms, &friend, 1, &mut StdRng::seed_from_u64(0x8192)).await;
     let address = ProtocolAddress::new(friend.to_string(), DeviceId::new(1).unwrap());
     let base = SignalStore::new(ms.signal_service.key_store.clone());
-    let small = crate::network::validation::protovalidate::test_plaintext("small");
+    let small = chatter_proto::protovalidate::test_plaintext("small");
     for target in [8192, 8193] {
         let before = ms
             .signal_service

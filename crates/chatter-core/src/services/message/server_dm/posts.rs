@@ -175,7 +175,7 @@ impl MessageService {
         quote: Option<&'q crate::services::gateway::outgoing::QuoteIntent>,
     ) -> Result<
         (
-            crate::proto::content_v1::Content,
+            chatter_proto::content_v1::Content,
             Option<(
                 &'q crate::services::gateway::outgoing::QuoteIntent,
                 super::super::dm::OutboundReplyParts,
@@ -235,7 +235,7 @@ impl MessageService {
         let disappearing_ttl_secs: Option<u32> =
             Some(timer.effective_seconds(sent_at)).filter(|s| *s > 0);
         let mut content = content;
-        if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) =
+        if let Some(chatter_proto::content_v1::content::Content::DataMessage(dm)) =
             content.content.as_mut()
         {
             crate::services::disappearing::stamp_timer(dm, timer);
@@ -320,7 +320,7 @@ impl MessageService {
                 .map_err(crate::error::StorageError::from)?
         }
         .filter(|s| *s > 0);
-        if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) =
+        if let Some(chatter_proto::content_v1::content::Content::DataMessage(dm)) =
             content.content.as_mut()
         {
             dm.ephemeral = ttl.is_some();

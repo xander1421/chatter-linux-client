@@ -234,7 +234,7 @@ impl ChannelInbound {
             {
                 Ok(plaintext) => {
                     let dm =
-                        match crate::network::validation::protovalidate::decode_inbound_content(
+                        match chatter_proto::protovalidate::decode_inbound_content(
                             plaintext.as_slice(),
                             "channel",
                         )

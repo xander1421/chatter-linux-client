@@ -70,8 +70,8 @@ async fn half_open_conversation_recovers_by_re_announce() {
     assert_eq!(announced.our_mailbox.public_key, lo_mailbox);
     assert_eq!(announced.our_ephemeral_public, lo_key.our_ephemeral_public);
     let content =
-        crate::proto::content_v1::Content::decode(announced.bootstrap_message.as_slice()).unwrap();
-    let Some(crate::proto::content_v1::content::Content::KeyExchange(kx)) = content.content else {
+        chatter_proto::content_v1::Content::decode(announced.bootstrap_message.as_slice()).unwrap();
+    let Some(chatter_proto::content_v1::content::Content::KeyExchange(kx)) = content.content else {
         panic!("bootstrap MESSAGE is a KeyExchange");
     };
 

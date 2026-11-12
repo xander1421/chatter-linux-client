@@ -8,7 +8,7 @@ use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId};
 use crate::domain::message::{
     ConversationType, Message, MessageContent, MixedContent, ReactionCount,
 };
-use crate::proto::chat_v1;
+use chatter_proto::chat_v1;
 use crate::util::time::TimestampNanos;
 
 use super::MessageError;

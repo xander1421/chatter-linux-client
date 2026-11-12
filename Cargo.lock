@@ -1917,7 +1917,7 @@ dependencies = [
 
 [[package]]
 name = "chatter-attachment-crypto"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "aes",
  "cbc",
@@ -1959,6 +1959,7 @@ dependencies = [
  "chatter-mesh-noise",
  "chatter-mesh-nostr",
  "chatter-mesh-store",
+ "chatter-proto",
  "chrono",
  "cpal 0.18.2",
  "criterion",
@@ -2004,7 +2005,6 @@ dependencies = [
  "paste",
  "proptest",
  "prost 0.14.4",
- "prost-reflect",
  "prost-types 0.14.4",
  "qrcode",
  "quinn",
@@ -2035,7 +2035,6 @@ dependencies = [
  "tokio-util",
  "tonic",
  "tonic-h3",
- "tonic-prost",
  "tor-netdir",
  "tor-rtcompat",
  "tower",
@@ -2156,6 +2155,26 @@ dependencies = [
  "chatter-mesh",
  "chatter-mesh-noise",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "chatter-proto"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "hex",
+ "http",
+ "http-body",
+ "prost 0.14.4",
+ "prost-reflect",
+ "prost-types 0.14.4",
+ "thiserror 2.0.21",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

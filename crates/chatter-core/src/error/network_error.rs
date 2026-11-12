@@ -248,6 +248,23 @@ impl NetworkError {
 mod tests {
     use super::*;
 
+    /// The refusal `chatter_proto::codec` returns for a response that fails
+    /// declared validation (see its tests) is terminal and possibly applied.
+    #[test]
+    fn response_validation_refusal_is_data_loss() {
+        use chatter_proto::{codec::ResponseValidationError, protovalidate::ContentValidationError};
+        let mut status = Status::data_loss("RPC response failed declared validation");
+        status.set_source(std::sync::Arc::new(ResponseValidationError(
+            ContentValidationError::Decode("invalid protobuf".into()),
+        )));
+        let network = NetworkError::from_status(&status);
+        assert!(matches!(network, NetworkError::DataLoss(_)));
+        assert!(!network.is_retryable());
+        assert!(!network.is_transport_error());
+        // The server may already have accepted a mutating request.
+        assert!(!network.is_definite_rejection());
+    }
+
     /// A channel the server refuses us (left, removed, deleted, or never
     /// authorized) is skipped by the syncs instead of failing every cycle.
     #[test]

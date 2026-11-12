@@ -393,7 +393,7 @@ impl MessageService {
     /// independent sealed peer-control ledger or resolving historical ambiguity.
     pub fn reconcile_channel_reactions(
         &self,
-        message: &crate::proto::chat_v1::Message,
+        message: &chatter_proto::chat_v1::Message,
         channel_id: ChannelId,
     ) -> Result<(), MessageError> {
         let id = message
@@ -415,7 +415,7 @@ impl MessageService {
                 .content
                 .as_ref()
                 .and_then(|content| content.r#type.as_ref()),
-            Some(crate::proto::chat_v1::message::content::Type::Encrypted(_))
+            Some(chatter_proto::chat_v1::message::content::Type::Encrypted(_))
         );
         let target_timestamp = local
             .as_ref()

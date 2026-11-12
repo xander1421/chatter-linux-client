@@ -10,7 +10,7 @@
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{CallMessage, CallMessageType, Message, MessageContent};
 use crate::events::DomainEvent;
-use crate::proto::content_v1::{CallEvent, Content, call_event, content};
+use chatter_proto::content_v1::{CallEvent, Content, call_event, content};
 
 use super::{MessageError, MessageService};
 

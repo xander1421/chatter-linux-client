@@ -46,8 +46,8 @@ pub(crate) enum Admission {
     Unconfirmed,
 }
 
-pub(crate) fn user_post(content: &crate::proto::content_v1::Content) -> bool {
-    use crate::proto::content_v1::content::Content;
+pub(crate) fn user_post(content: &chatter_proto::content_v1::Content) -> bool {
+    use chatter_proto::content_v1::content::Content;
     let inner = match content.content.as_ref() {
         Some(Content::AnonDmMessage(message)) => message.inner_content.as_deref(),
         Some(Content::AnonGroupMessage(message)) => message.inner_content.as_deref(),
@@ -98,9 +98,9 @@ pub(crate) fn retain_deposit(
     key: &str,
     ciphertext_bytes: &[u8],
     mailbox: &[u8; 32],
-    content: &crate::proto::content_v1::Content,
+    content: &chatter_proto::content_v1::Content,
 ) -> Result<(), StorageError> {
-    use crate::proto::content_v1::content::Content;
+    use chatter_proto::content_v1::content::Content;
     let (conversation, kind, inner) = match content.content.as_ref() {
         Some(Content::AnonDmMessage(m)) => (
             uuid::Uuid::from_slice(&m.conversation_id),
@@ -258,7 +258,7 @@ pub(crate) async fn retry_pending(
             .send_to_secret_mailbox(
                 &mailbox,
                 record.ciphertext,
-                crate::proto::mailbox_v1::EnvelopeType::SealedSender,
+                chatter_proto::mailbox_v1::EnvelopeType::SealedSender,
             )
             .await
             .is_err()
@@ -348,9 +348,9 @@ mod tests {
         let peer = crate::domain::UserId::new();
         let conversation = crate::domain::anon_dm::AnonDmId::new();
         let inner = crate::services::gateway::builders::build_text_content("post", 7);
-        let content = crate::proto::content_v1::Content {
-            content: Some(crate::proto::content_v1::content::Content::AnonDmMessage(
-                Box::new(crate::proto::content_v1::AnonDmMessage {
+        let content = chatter_proto::content_v1::Content {
+            content: Some(chatter_proto::content_v1::content::Content::AnonDmMessage(
+                Box::new(chatter_proto::content_v1::AnonDmMessage {
                     conversation_id: conversation.to_vec(),
                     inner_content: Some(Box::new(inner)),
                 }),
@@ -361,10 +361,10 @@ mod tests {
         };
         assert!(user_post(&content));
         let mut control = content.clone();
-        if let Some(crate::proto::content_v1::content::Content::AnonDmMessage(message)) =
+        if let Some(chatter_proto::content_v1::content::Content::AnonDmMessage(message)) =
             control.content.as_mut()
         {
-            if let Some(crate::proto::content_v1::content::Content::DataMessage(data)) =
+            if let Some(chatter_proto::content_v1::content::Content::DataMessage(data)) =
                 message.inner_content.as_mut().unwrap().content.as_mut()
             {
                 data.delete = Some(Default::default());

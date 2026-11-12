@@ -167,9 +167,9 @@ impl ChannelEventService {
     pub async fn record_departure(
         &self,
         own: &Membership,
-        departure: &crate::proto::chat_v1::Departure,
+        departure: &chatter_proto::chat_v1::Departure,
     ) -> Result<(), crate::services::channel::membership_log::LogError> {
-        use crate::proto::chat_v1::departure::Reason;
+        use chatter_proto::chat_v1::departure::Reason;
         match Reason::try_from(departure.reason) {
             // The listing moved under our paging; nothing was lost.
             Ok(Reason::Member) => {}
@@ -203,7 +203,7 @@ impl ChannelEventService {
         own: &Membership,
         removal: Option<crate::services::channel::membership_log::OwnRemoval>,
     ) {
-        use crate::proto::chat_v1::remove_member::Reason;
+        use chatter_proto::chat_v1::remove_member::Reason;
         let author = removal
             .as_ref()
             .and_then(|r| r.author.parse::<uuid::Uuid>().ok())

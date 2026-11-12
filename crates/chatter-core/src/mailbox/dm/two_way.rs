@@ -448,7 +448,7 @@ impl TwoWayAnonymity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::mailbox_v1::EnvelopeType;
+    use chatter_proto::mailbox_v1::EnvelopeType;
 
     #[test]
     fn mailbox_schedule_resumes_after_budget_and_prunes_expired_state() {

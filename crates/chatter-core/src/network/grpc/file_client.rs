@@ -8,7 +8,7 @@ use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     AbortAttachmentMultipartUploadRequest, CompleteAttachmentMultipartUploadRequest,
     ConfirmAttachmentUploadRequest, ConfirmAttachmentUploadResponse,
     CreateAttachmentMultipartUploadRequest, CreateAttachmentMultipartUploadResponse,
@@ -115,7 +115,7 @@ impl FileClient {
         &mut self,
         cdn_key: &str,
         upload_id: &str,
-        parts: Vec<crate::proto::chat_v1::CompletedPart>,
+        parts: Vec<chatter_proto::chat_v1::CompletedPart>,
     ) -> Result<(), NetworkError> {
         let request = CompleteAttachmentMultipartUploadRequest {
             cdn_key: cdn_key.to_string(),

@@ -5,7 +5,7 @@
 use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashMap};
 
-use crate::proto::chat_v1::Message;
+use chatter_proto::chat_v1::Message;
 
 /// Maximum number of out-of-order messages to buffer per channel.
 const DEFAULT_MAX_BUFFER_SIZE: usize = 100;

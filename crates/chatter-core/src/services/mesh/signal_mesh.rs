@@ -12,7 +12,7 @@ use rand::TryRngCore;
 use rand::rngs::OsRng;
 use std::sync::Arc;
 
-use crate::proto::chat_v1::{SignalPreKeyBundle, signal_pre_key_bundle};
+use chatter_proto::chat_v1::{SignalPreKeyBundle, signal_pre_key_bundle};
 use crate::storage::{KeyStore, mesh_binding_store::MeshBindingStore};
 
 use super::MeshError;

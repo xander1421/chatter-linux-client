@@ -283,10 +283,10 @@ impl KyberPreKeyStore for ReceiveStore {
 }
 
 fn reaction_content(
-    content: &crate::proto::content_v1::Content,
+    content: &chatter_proto::content_v1::Content,
     depth: usize,
 ) -> std::result::Result<bool, crate::error::ServiceError> {
-    use crate::proto::content_v1::content::Content;
+    use chatter_proto::content_v1::content::Content;
     if depth > 4 {
         return Err(crate::error::ServiceError::Validation(
             "anonymous receive wrapper depth exceeds bound".into(),
@@ -307,10 +307,10 @@ fn reaction_content(
 }
 
 fn control_kind(
-    content: &crate::proto::content_v1::Content,
+    content: &chatter_proto::content_v1::Content,
     depth: usize,
 ) -> Option<crate::storage::receive_artifact::ReceiveKind> {
-    use crate::proto::content_v1::content::Content as Body;
+    use chatter_proto::content_v1::content::Content as Body;
     use crate::storage::receive_artifact::ReceiveKind as Kind;
     if depth > 4 {
         return None;
@@ -431,8 +431,8 @@ async fn decrypt_durable_inner(
         ));
     }
     // Durable controls share the ratchet-atomic journal with reactions and posts.
-    let decoded = crate::network::validation::protovalidate::decode_validated::<
-        crate::proto::content_v1::Content,
+    let decoded = chatter_proto::protovalidate::decode_validated::<
+        chatter_proto::content_v1::Content,
     >(result.message.as_slice())
     .ok();
     let is_reaction = match decoded.as_ref() {
@@ -440,7 +440,7 @@ async fn decrypt_durable_inner(
         None => false,
     };
     let is_data_post = decoded.as_ref().is_some_and(|content| {
-        use crate::proto::content_v1::content::Content as Body;
+        use chatter_proto::content_v1::content::Content as Body;
         let inner = match content.content.as_ref() {
             Some(Body::AnonDmMessage(message)) => message.inner_content.as_deref(),
             Some(Body::AnonGroupMessage(message)) => message.inner_content.as_deref(),
@@ -608,9 +608,9 @@ mod tests {
             &mut rng,
         )
         .unwrap();
-        let content = crate::proto::content_v1::Content {
-            content: Some(crate::proto::content_v1::content::Content::Reaction(
-                crate::proto::content_v1::Reaction {
+        let content = chatter_proto::content_v1::Content {
+            content: Some(chatter_proto::content_v1::content::Content::Reaction(
+                chatter_proto::content_v1::Reaction {
                     emoji: "👍".into(),
                     remove: false,
                     target_author_aci: account.clone(),
@@ -892,10 +892,10 @@ mod tests {
     #[tokio::test]
     async fn wrapped_reaction_applied_receipt_replay_and_backup_exclusion() {
         let mut f = fixture().await;
-        let inner = crate::proto::content_v1::Content::decode(f.body.as_slice()).unwrap();
-        f.body = crate::proto::content_v1::Content {
-            content: Some(crate::proto::content_v1::content::Content::AnonDmMessage(
-                Box::new(crate::proto::content_v1::AnonDmMessage {
+        let inner = chatter_proto::content_v1::Content::decode(f.body.as_slice()).unwrap();
+        f.body = chatter_proto::content_v1::Content {
+            content: Some(chatter_proto::content_v1::content::Content::AnonDmMessage(
+                Box::new(chatter_proto::content_v1::AnonDmMessage {
                     // A valid wrapper names a 16-byte conversation.
                     conversation_id: uuid::Uuid::parse_str(&f.key.scope)
                         .unwrap()
@@ -987,7 +987,7 @@ mod tests {
                 .is_err()
         );
         assert_eq!(snapshot(&f.db), before);
-        f.body = crate::proto::content_v1::Content {
+        f.body = chatter_proto::content_v1::Content {
             timestamp: 90,
             ..Default::default()
         }
@@ -1011,14 +1011,14 @@ mod tests {
     async fn group_post_above_reaction_and_old_envelope_limits_routes_without_journaling() {
         let mut f = fixture().await;
         f.key.transport = "anon_group".into();
-        f.body = crate::proto::content_v1::Content {
+        f.body = chatter_proto::content_v1::Content {
             content: Some(
-                crate::proto::content_v1::content::Content::AnonGroupMessage(Box::new(
-                    crate::proto::content_v1::AnonGroupMessage {
+                chatter_proto::content_v1::content::Content::AnonGroupMessage(Box::new(
+                    chatter_proto::content_v1::AnonGroupMessage {
                         group_id: uuid::Uuid::new_v4().as_bytes().to_vec(),
-                        inner_content: Some(Box::new(crate::proto::content_v1::Content {
-                            content: Some(crate::proto::content_v1::content::Content::DataMessage(
-                                crate::proto::content_v1::DataMessage {
+                        inner_content: Some(Box::new(chatter_proto::content_v1::Content {
+                            content: Some(chatter_proto::content_v1::content::Content::DataMessage(
+                                chatter_proto::content_v1::DataMessage {
                                     body: "x".repeat(160 * 1024),
                                     ..Default::default()
                                 },
@@ -1053,9 +1053,9 @@ mod tests {
     async fn invalid_reaction_is_never_journaled() {
         let mut f = fixture().await;
         // Empty emoji breaks Reaction.emoji min_len: 1.
-        f.body = crate::proto::content_v1::Content {
-            content: Some(crate::proto::content_v1::content::Content::Reaction(
-                crate::proto::content_v1::Reaction {
+        f.body = chatter_proto::content_v1::Content {
+            content: Some(chatter_proto::content_v1::content::Content::Reaction(
+                chatter_proto::content_v1::Reaction {
                     emoji: String::new(),
                     target_author_aci: uuid::Uuid::new_v4().to_string(),
                     target_sent_timestamp: 1,
@@ -1082,7 +1082,7 @@ mod tests {
     #[tokio::test]
     async fn oversized_reaction_and_mailbox_envelope_leave_receive_state_unchanged() {
         let mut f = fixture().await;
-        let mut content = crate::proto::content_v1::Content::decode(f.body.as_slice()).unwrap();
+        let mut content = chatter_proto::content_v1::Content::decode(f.body.as_slice()).unwrap();
         // Padding past Content.padding's 4096-byte rule makes this an invalid
         // reaction: it routes like other content (refused there) and is never
         // journaled, however large.

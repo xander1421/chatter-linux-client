@@ -101,15 +101,15 @@ impl Fixture {
 }
 
 pub(super) fn assert_encoded_action(
-    content: &crate::proto::content_v1::Content,
+    content: &chatter_proto::content_v1::Content,
     remove: bool,
     clock: u64,
     author: &UserId,
 ) {
     let decoded =
-        crate::proto::content_v1::Content::decode(content.encode_to_vec().as_slice()).unwrap();
+        chatter_proto::content_v1::Content::decode(content.encode_to_vec().as_slice()).unwrap();
     assert_eq!(decoded.timestamp, clock);
-    let Some(crate::proto::content_v1::content::Content::Reaction(reaction)) = decoded.content
+    let Some(chatter_proto::content_v1::content::Content::Reaction(reaction)) = decoded.content
     else {
         panic!("reaction");
     };

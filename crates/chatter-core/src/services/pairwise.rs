@@ -191,9 +191,9 @@ impl PairwiseService {
             })?;
         let bundle = single_device_bundle(bundle_response.result, device_id)?;
         let bundle_device = bundle.device_id;
-        let bundle_response = crate::proto::chat_v1::GetPreKeyBundleResponse {
+        let bundle_response = chatter_proto::chat_v1::GetPreKeyBundleResponse {
             result: Some(
-                crate::proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(bundle),
+                chatter_proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(bundle),
             ),
         };
 
@@ -265,16 +265,16 @@ impl PairwiseService {
             .send_with_anonymous_credential(
                 request_id,
                 &peer_id.to_string(),
-                vec![crate::proto::chat_v1::SealedDeviceMessage {
+                vec![chatter_proto::chat_v1::SealedDeviceMessage {
                     device_id: device,
                     registration_id: 0,
-                    sealed_message: Some(crate::proto::chat_v1::SealedSenderMessage {
+                    sealed_message: Some(chatter_proto::chat_v1::SealedSenderMessage {
                         sealed_body,
                         server_key_id: self.signal_service.get_server_key_id(),
                         timestamp: crate::util::time::TimestampNanos::now_anonymized().as_u64(),
                     }),
                 }],
-                crate::proto::chat_v1::SealedDelivery::NamedDevices,
+                chatter_proto::chat_v1::SealedDelivery::NamedDevices,
                 0,
                 &send_token.public_key,
                 &send_token.signature,
@@ -299,10 +299,10 @@ fn prekey_request_device(device_id: Option<u32>) -> String {
 // chosen (as Signal's all-device fetch does); a per-device listing RPC would
 // avoid that if one-time prekey exhaustion shows up.
 fn single_device_bundle(
-    result: Option<crate::proto::chat_v1::get_pre_key_bundle_response::Result>,
+    result: Option<chatter_proto::chat_v1::get_pre_key_bundle_response::Result>,
     pinned: Option<u32>,
-) -> Result<crate::proto::chat_v1::SignalPreKeyBundle, PairwiseError> {
-    use crate::proto::chat_v1::get_pre_key_bundle_response::Result as R;
+) -> Result<chatter_proto::chat_v1::SignalPreKeyBundle, PairwiseError> {
+    use chatter_proto::chat_v1::get_pre_key_bundle_response::Result as R;
     match (result, pinned) {
         (Some(R::Bundle(bundle)), Some(device)) if bundle.device_id != device => {
             Err(PairwiseError::PeerDeviceGone)
@@ -343,8 +343,8 @@ mod tests {
 
     #[test]
     fn first_contact_binds_the_lowest_device_and_a_pin_holds() {
-        use crate::proto::chat_v1::SignalPreKeyBundle;
-        use crate::proto::chat_v1::{
+        use chatter_proto::chat_v1::SignalPreKeyBundle;
+        use chatter_proto::chat_v1::{
             PreKeyBundleDeviceList, get_pre_key_bundle_response::Result as R,
         };
         let b = |device_id| SignalPreKeyBundle {

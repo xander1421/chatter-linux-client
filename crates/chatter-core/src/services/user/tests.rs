@@ -6,7 +6,7 @@ mod tests {
 
     use crate::domain::ids::UserId;
     use crate::domain::user::{FriendshipStatus, PresenceStatus};
-    use crate::proto::chat_v1::{UserProfile, friend_requests_filter};
+    use chatter_proto::chat_v1::{UserProfile, friend_requests_filter};
     use crate::storage::repositories::settings_repo::SettingsRepository;
     use crate::storage::repositories::user_repo::UserRepository;
 
@@ -24,7 +24,7 @@ mod tests {
     #[test]
     fn friend_request_identity_key_from_any_device() {
         use super::super::friend_request_identity_key;
-        use crate::proto::chat_v1::{
+        use chatter_proto::chat_v1::{
             GetPreKeyBundleResponse, PreKeyBundleDeviceList, SignalPreKeyBundle,
             get_pre_key_bundle_response::Result as BundleResult,
         };

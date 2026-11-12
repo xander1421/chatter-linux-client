@@ -29,10 +29,10 @@ use crate::domain::ids::{AttachmentId, ChannelId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::message_client::MessageClient;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     SealedDelivery, SealedDeviceMessage, SealedSenderMessage, SendSealedMessageResponse,
 };
-use crate::proto::content_v1::AttachmentPointer;
+use chatter_proto::content_v1::AttachmentPointer;
 
 use super::{DmSendResult, MessageError, MessageService};
 
@@ -67,7 +67,7 @@ mod tests {
     /// server timestamp the server queued them with.
     #[test]
     fn a_batch_response_is_one_deposit_per_delivered_device() {
-        let response = crate::proto::chat_v1::SendSealedMessageResponse {
+        let response = chatter_proto::chat_v1::SendSealedMessageResponse {
             success: true,
             delivered_to_devices: vec![1, 3],
             server_timestamp: 42,

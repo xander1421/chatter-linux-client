@@ -428,7 +428,7 @@ pub fn dispatch_control_content(
             stats.write().messages_processed += 1;
         }
         content::Content::CallEvent(ev) => {
-            use crate::proto::content_v1::call_event::Type;
+            use chatter_proto::content_v1::call_event::Type;
             use crate::services::message::ChannelCallPhase;
             let phase = match Type::try_from(ev.r#type) {
                 Ok(Type::Started) => Some(ChannelCallPhase::Started),
@@ -610,7 +610,7 @@ mod call_control_tests {
     /// a reaction or pin with no timestamp of its own takes the server's.
     #[test]
     fn edits_reactions_and_pins_carry_their_timestamps() {
-        use crate::proto::content_v1::{EditMessage, PinMessage, Reaction};
+        use chatter_proto::content_v1::{EditMessage, PinMessage, Reaction};
         let (event_tx, mut event_rx) = broadcast::channel(8);
         let stats = Arc::new(RwLock::new(InboxStats::default()));
         let peer = UserId::new();

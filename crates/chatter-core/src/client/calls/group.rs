@@ -268,7 +268,7 @@ impl ChatterClient {
         sender_id: crate::domain::ids::UserId,
         channel_id: crate::domain::ids::ChannelId,
     ) {
-        use crate::proto::chat_v1::CallType as ProtoCallType;
+        use chatter_proto::chat_v1::CallType as ProtoCallType;
         use crate::services::call_worker::{
             CallEndReason, CallHandle, OrchestratedCallKind, incoming_ring_budget,
             offer_is_stale_now,
@@ -381,13 +381,13 @@ impl ChatterClient {
         let pool = self.services.grpc_pool.clone();
         tokio::spawn(async move {
             use crate::client::group_ring_lifecycle::{event_ends_ring, snapshot_ends_ring};
-            use crate::proto::chat_v1::{CallEventType, call_event};
+            use chatter_proto::chat_v1::{CallEventType, call_event};
             use futures::StreamExt;
 
             let mut events: Option<
                 futures::stream::BoxStream<
                     'static,
-                    Result<crate::proto::chat_v1::CallEvent, crate::error::NetworkError>,
+                    Result<chatter_proto::chat_v1::CallEvent, crate::error::NetworkError>,
                 >,
             > = None;
             let mut reconcile = tokio::time::interval(std::time::Duration::from_secs(2));

@@ -17,7 +17,7 @@ fn fixture(message: &Message) -> (tempfile::TempDir, MessageRepository) {
     (dir, repo)
 }
 
-fn wire_action(emoji: &str, clock: u64, author: &UserId) -> crate::proto::content_v1::Content {
+fn wire_action(emoji: &str, clock: u64, author: &UserId) -> chatter_proto::content_v1::Content {
     crate::services::gateway::builders::build_reaction_content_with_channel_at(
         emoji,
         false,
@@ -33,12 +33,12 @@ fn replay(
     scope: &ReactionScope,
     author: &UserId,
     actor: &UserId,
-    content: &crate::proto::content_v1::Content,
+    content: &chatter_proto::content_v1::Content,
 ) {
     // Copies/retries round-trip exactly the same Content plaintext.
     let decoded =
-        crate::proto::content_v1::Content::decode(content.encode_to_vec().as_slice()).unwrap();
-    let Some(crate::proto::content_v1::content::Content::Reaction(action)) = decoded.content else {
+        chatter_proto::content_v1::Content::decode(content.encode_to_vec().as_slice()).unwrap();
+    let Some(chatter_proto::content_v1::content::Content::Reaction(action)) = decoded.content else {
         panic!("reaction")
     };
     assert_eq!(decoded.timestamp, action.timestamp);

@@ -9,7 +9,7 @@
 use crate::domain::AttachmentId;
 use crate::domain::attachment::{Attachment, FileCategory};
 use crate::domain::message::Message;
-use crate::proto::content_v1::{AttachmentPointer, Quote, QuotedAttachment, quote};
+use chatter_proto::content_v1::{AttachmentPointer, Quote, QuotedAttachment, quote};
 
 // =============================================================================
 // Preview text

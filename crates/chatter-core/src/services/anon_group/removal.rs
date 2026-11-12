@@ -2,7 +2,7 @@
 
 use crate::domain::UserId;
 use crate::domain::anon_group::{AnonGroupId, AnonGroupRole};
-use crate::proto::content_v1::{
+use chatter_proto::content_v1::{
     self, AnonGroupKick, AnonGroupLeave, AnonGroupRoleChange, AnonGroupUpdate, Content,
     anon_group_update,
 };
@@ -398,7 +398,7 @@ mod tests {
         AnonGroup, AnonGroupId, AnonGroupMember, AnonGroupRole, AnonGroupStatus,
     };
     use crate::inbox::handlers::DomainEvent;
-    use crate::proto::content_v1::{self, AnonGroupKick, AnonGroupLeave, Content};
+    use chatter_proto::content_v1::{self, AnonGroupKick, AnonGroupLeave, Content};
     use crate::services::anon_group::AnonGroupError;
     use crate::services::conversation::ConversationError;
     use crate::state::ActiveConversation;
@@ -517,7 +517,7 @@ mod tests {
 
     /// The owner's member list naming `members` (mailbox keys are dummies).
     fn member_list(f: &Fixture, members: &[UserId]) -> Content {
-        use crate::proto::content_v1::{AnonGroupMemberInfo, AnonGroupMemberList};
+        use chatter_proto::content_v1::{AnonGroupMemberInfo, AnonGroupMemberList};
         Content {
             content: Some(content_v1::content::Content::AnonGroupMemberList(
                 AnonGroupMemberList {
@@ -628,7 +628,7 @@ mod tests {
     }
 
     fn transfer_to(f: &Fixture, to: UserId) -> Content {
-        use crate::proto::content_v1::{AnonGroupRoleChange, AnonGroupUpdate, anon_group_update};
+        use chatter_proto::content_v1::{AnonGroupRoleChange, AnonGroupUpdate, anon_group_update};
         Content {
             content: Some(content_v1::content::Content::AnonGroupUpdate(
                 AnonGroupUpdate {

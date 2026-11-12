@@ -10,10 +10,10 @@ impl MessageService {
     /// `Message.timestamp` is the server's receive time and is not a name
     /// for the message. `None` when the envelope does not carry one.
     pub(super) fn group_envelope_timestamp_ns(
-        proto_msg: &crate::proto::chat_v1::Message,
+        proto_msg: &chatter_proto::chat_v1::Message,
     ) -> Option<u64> {
-        use crate::proto::chat_v1::message::content::Type;
-        use crate::proto::content_v1::GroupEncrypted;
+        use chatter_proto::chat_v1::message::content::Type;
+        use chatter_proto::content_v1::GroupEncrypted;
         use prost::Message as _;
 
         let Some(Type::Encrypted(enc)) = proto_msg.content.as_ref().and_then(|c| c.r#type.as_ref())
@@ -39,7 +39,7 @@ impl MessageService {
         channel_id: ChannelId,
         sender_id: UserId,
         device_id: u32,
-        proto_msg: &crate::proto::chat_v1::Message,
+        proto_msg: &chatter_proto::chat_v1::Message,
         ciphertext: &[u8],
     ) {
 
@@ -382,7 +382,7 @@ impl MessageService {
         verified: &VerifiedChannel,
     ) -> Option<Vec<u8>> {
         use crate::domain::message::MessageContent;
-        use crate::proto::content_v1::{Content, DataMessage, content};
+        use chatter_proto::content_v1::{Content, DataMessage, content};
         use prost::Message as _;
 
         let body = match &message.content {
@@ -461,10 +461,10 @@ impl MessageService {
         device_id: u32,
         sealed_body: Vec<u8>,
     ) -> Result<(), MessageError> {
-        let message = crate::proto::chat_v1::SealedDeviceMessage {
+        let message = chatter_proto::chat_v1::SealedDeviceMessage {
             device_id,
             registration_id: 0,
-            sealed_message: Some(crate::proto::chat_v1::SealedSenderMessage {
+            sealed_message: Some(chatter_proto::chat_v1::SealedSenderMessage {
                 sealed_body,
                 server_key_id: self.signal_service.get_server_key_id(),
                 timestamp: TimestampNanos::now_anonymized().as_u64(),
@@ -485,7 +485,7 @@ impl MessageService {
                 &mut self.message_client(),
                 &peer,
                 vec![message],
-                crate::proto::chat_v1::SealedDelivery::NamedDevices,
+                chatter_proto::chat_v1::SealedDelivery::NamedDevices,
                 uak.as_ref(),
                 &uuid::Uuid::new_v4().to_string(),
             )
@@ -500,7 +500,7 @@ impl MessageService {
     ///
     /// The server validates that sealed sender ciphertexts match one of these plaintext bucket
     /// sizes: 256, 512, 1024, 4096 bytes. Without padding, message sizes leak event type info.
-    pub(crate) fn pad_content_to_bucket(content: &mut crate::proto::content_v1::Content) {
+    pub(crate) fn pad_content_to_bucket(content: &mut chatter_proto::content_v1::Content) {
         use prost::Message;
         const BUCKETS: [usize; 4] = [256, 512, 1024, 4096];
 

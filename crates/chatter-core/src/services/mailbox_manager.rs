@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::error::NetworkError;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::proto::mailbox_v1::EnvelopeType;
+use chatter_proto::mailbox_v1::EnvelopeType;
 
 /// Errors that can occur during mailbox operations.
 #[derive(Debug, thiserror::Error)]
