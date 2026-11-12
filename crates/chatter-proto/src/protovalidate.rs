@@ -949,6 +949,7 @@ mod tests {
         "uint64.lte",
         "int32.gte",
         "int32.lte",
+        "fixed64.gte",
         "fixed64.gt",
         "fixed64.lte",
         "enum.defined_only",

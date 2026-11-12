@@ -677,8 +677,11 @@ mod webp_roundtrip_tests {
             "center pixel decoded to black — webp round-trip is broken: {:?}",
             px.0
         );
-        // Decoded dims must match the reported thumbnail dims (after the 320 bound).
-        assert!(dw <= 320 && dh <= 320, "unexpected thumbnail size {dw}x{dh}");
+        // Decoded at the sidecar's native inline bound.
+        assert!(
+            dw <= INLINE_THUMBNAIL_MAX_SIZE && dh <= INLINE_THUMBNAIL_MAX_SIZE,
+            "unexpected thumbnail size {dw}x{dh}"
+        );
     }
 
     // Reproduces the cached-preview path exactly: media.rs encodes the derived

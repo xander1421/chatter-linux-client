@@ -146,7 +146,8 @@ mod shield_mode_tests {
     async fn fixture_keeps_database_available_to_new_readers() {
         let (dir, client) = build_test_client();
         let db = client.messages().database();
-        let readers: Vec<_> = (0..3).map(|_| db.read_connection().unwrap()).collect();
+        // One under the reader pool size (2), so the next reader is opened anew.
+        let readers: Vec<_> = (0..1).map(|_| db.read_connection().unwrap()).collect();
         assert!(dir.path().exists());
         let reader = db
             .read_connection()

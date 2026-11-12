@@ -365,30 +365,19 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    // Schema mirrors the live channels table post-v54: `icon BLOB`, no
-    // `image_url`. Guards against re-introducing a `c.image_url` reference,
-    // which errors the channel query and silently blanks names in the UI.
+    // Real migrated schema (`icon BLOB`, no `image_url`). Guards against a
+    // query naming a column the live table lacks, which errors the channel
+    // query and silently blanks names in the UI.
     fn repo_with_channel() -> (UnifiedConversationRepository, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let db = Database::open(&dir.path().join("t.db"), "pw").unwrap();
+        db.run_migrations().unwrap();
         db.connection()
             .unwrap()
-            .execute_batch(
-                r#"
-                CREATE TABLE channels (
-                    id TEXT PRIMARY KEY, channel_type INTEGER NOT NULL DEFAULT 0,
-                    name TEXT NOT NULL, description TEXT, icon BLOB, owner_id TEXT NOT NULL,
-                    archived INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-                );
-                CREATE TABLE messages (
-                    id TEXT PRIMARY KEY, conversation_type TEXT NOT NULL,
-                    conversation_id TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0,
-                    is_deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
-                );
-                INSERT INTO channels (id, channel_type, name, owner_id, created_at, updated_at)
-                VALUES ('ch1', 0, 'My Channel', 'owner', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
-                "#,
+            .execute(
+                "INSERT INTO channels (id, channel_type, name, owner_id, created_at, updated_at)
+                 VALUES ('ch1', 0, 'My Channel', 'owner', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                [],
             )
             .unwrap();
         (UnifiedConversationRepository::new(Arc::new(db)), dir)

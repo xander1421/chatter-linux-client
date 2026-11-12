@@ -266,7 +266,7 @@ fn mixed_styles_flow_in_one_wrapped_paragraph_and_keep_the_bubble_gestures() {
     let links: Rc<RefCell<Vec<String>>> = Rc::default();
     let received = links.clone();
     w.global::<chatter_ui::ChatPane>()
-        .on_open_message_link(move |url| received.borrow_mut().push(url.to_string()));
+        .on_open_message_link(move |url, _| received.borrow_mut().push(url.to_string()));
     pump(&w, 300);
     let link = styled_texts(&w)[0];
     press(&w, link, PointerEventButton::Left);

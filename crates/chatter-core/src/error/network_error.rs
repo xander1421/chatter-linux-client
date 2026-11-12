@@ -347,10 +347,11 @@ mod tests {
 
     #[test]
     fn test_from_status_unknown_transport_error_is_retryable() {
-        // "Service was not ready: transport error" from tonic .ready() check
+        // "Service was not ready: transport error" from tonic .ready() check:
+        // no request bytes left, so it is the provably-unsent variant.
         let status = Status::new(Code::Unknown, "Service was not ready: transport error");
         let err = NetworkError::from_status(&status);
-        assert!(matches!(err, NetworkError::Unavailable));
+        assert!(matches!(err, NetworkError::RequestNotSent(_)));
         assert!(err.is_retryable());
     }
 

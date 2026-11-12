@@ -615,7 +615,7 @@ async fn a_courier_envelope_sealed_to_our_prekey_opens_and_consumes_it() {
         envelope.encode().expect("encodes"),
         chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
     );
-    runtime.on_courier_envelope(&packet, &sender.peer_id());
+    runtime.on_courier_envelope(&packet, &sender.peer_id()).await;
 
     match events.try_recv() {
         Ok(MeshEvent::Message(message)) => {
