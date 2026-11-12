@@ -182,3 +182,61 @@ async fn a_new_private_group_starts_at_one_day_and_its_first_post_states_it() {
         .expect("post armed");
     assert_eq!(armed.ttl.as_secs(), u64::from(SECRET_CHAT_DEFAULT_SECONDS));
 }
+
+#[tokio::test]
+async fn a_join_ack_tells_the_joiner_the_groups_timer_once() {
+    use crate::domain::disappearing::SECRET_CHAT_DEFAULT_SECONDS;
+    use crate::services::disappearing::{
+        INITIAL_TIMER_VERSION, initialize_secret_chat_timer, is_timer_update, stated_timer,
+    };
+    let owner = fixture(AnonGroupRole::Owner);
+    let svc = owner.client.anon_groups();
+    let me = svc.current_user_id().unwrap();
+    // A group that never had a timer sends nothing: the joiner already agrees.
+    assert!(svc.join_timer_update(&owner.group_id, 0).unwrap().is_none());
+
+    initialize_secret_chat_timer(
+        &svc.settings_repo,
+        &svc.message_service.message_repo,
+        SecretChat::Group(owner.group_id),
+        &me,
+        1_000,
+    )
+    .unwrap();
+    let admitted_at = u64::MAX / 2;
+    let update = svc
+        .join_timer_update(&owner.group_id, admitted_at)
+        .unwrap()
+        .expect("a timer to tell");
+    assert!(update.timestamp >= admitted_at, "not before the joiner's admission");
+    let Some(Kind::AnonGroupMessage(wrapped)) = update.content.as_ref() else {
+        panic!("a group message, got {update:?}");
+    };
+    assert_eq!(wrapped.group_id, owner.group_id.to_vec());
+    let inner = wrapped.inner_content.as_deref().unwrap().clone();
+    let Some(Kind::DataMessage(data)) = inner.content.as_ref() else {
+        panic!("a data message");
+    };
+    assert!(is_timer_update(data));
+    let day = timer(SECRET_CHAT_DEFAULT_SECONDS, INITIAL_TIMER_VERSION);
+    assert_eq!(stated_timer(data), Some(day));
+    // The pending queue accepts it for the joiner (it rides the JoinAck drain).
+    use prost::Message as _;
+    svc.anon_group_repo
+        .enqueue_pending_message(&owner.group_id, &owner.mallory, &update.encode_to_vec())
+        .unwrap();
+
+    // On the joiner: adopted with one notice; a duplicate is a no-op.
+    let joiner = fixture(AnonGroupRole::Member);
+    let jsvc = joiner.client.anon_groups();
+    let events = jsvc
+        .process_incoming_content(&joiner.group_id, &joiner.owner, &inner)
+        .unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(secret_chat_state(&jsvc.settings_repo, SecretChat::Group(joiner.group_id)), day);
+    let again = jsvc
+        .process_incoming_content(&joiner.group_id, &joiner.owner, &inner)
+        .unwrap();
+    assert!(again.is_empty(), "same version: no second notice, got {again:?}");
+    assert_eq!(jsvc.get_messages_asc(&joiner.group_id, None, 50).unwrap().len(), 1);
+}

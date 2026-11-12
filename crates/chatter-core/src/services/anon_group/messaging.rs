@@ -704,7 +704,11 @@ impl AnonGroupService {
                     self.anon_group_repo.delete_pending_message(row_id)?;
                     tracing::info!(row_id, group_id = %group_id, recipient = %recipient_user_id,
                         outcome = "failed", reason = %e, "Pending anon group delivery resolved");
-                    if let Some(undelivered) = undelivered_post(&content) {
+                    // A timer update is no post the user wrote: the next post
+                    // states the timer again, so nothing is reported.
+                    if let Some(undelivered) =
+                        undelivered_post(&content).filter(|_| !is_queued_timer_update(&content))
+                    {
                         self.store_system_message(
                             group_id,
                             Some(*recipient_user_id),
@@ -998,6 +1002,17 @@ impl AnonGroupService {
 const MAX_PARKED_ATTEMPTS: u32 = 5;
 
 /// The `Undelivered` notice for a parked `Content`, if it was a user's post.
+fn is_queued_timer_update(content: &Content) -> bool {
+    let Some(content_v1::content::Content::AnonGroupMessage(m)) = &content.content else {
+        return false;
+    };
+    matches!(
+        m.inner_content.as_deref().and_then(|c| c.content.as_ref()),
+        Some(content_v1::content::Content::DataMessage(dm))
+            if crate::services::disappearing::is_timer_update(dm)
+    )
+}
+
 fn undelivered_post(content: &Content) -> Option<crate::domain::message::SystemMessage> {
     let Some(content_v1::content::Content::AnonGroupMessage(m)) = &content.content else {
         return None;
