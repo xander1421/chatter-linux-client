@@ -3083,7 +3083,7 @@ fn the_message_hover_action_bar_never_appears_on_touch() {
 // ============================================================================
 
 /// A pinned conversation had no route from the UI to core: `pin_conversation`
-/// (services/conversation.rs) existed with no Slint callback and no handler.
+/// (client/conversation) existed with no Slint callback and no handler.
 ///
 ///  L1 (DYNAMIC): the callback exists on MainWindow and the real handler runs.
 ///  L2 (STATIC, Rust): the handler reaches `set_conversation_pinned` on core.

@@ -439,9 +439,7 @@ pub(crate) use reactions::complete_reaction_dispatch;
 mod tests;
 
 #[cfg(test)]
-#[path = "../reaction_dispatch_tests.rs"]
 mod reaction_dispatch_tests;
 
 #[cfg(test)]
-#[path = "../saved_conversation_tests.rs"]
 mod saved_conversation_tests;

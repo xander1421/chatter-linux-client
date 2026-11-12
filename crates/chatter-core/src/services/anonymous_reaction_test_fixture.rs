@@ -2,7 +2,7 @@
 use crate::domain::message::ConversationType;
 use crate::domain::reaction::ReactionScope;
 use crate::domain::{ChannelId, Message, UserId};
-use crate::services::conversation::{ConversationError, complete_reaction_dispatch};
+use crate::client::conversation::{ConversationError, complete_reaction_dispatch};
 use crate::storage::{Database, MessageRepository};
 use prost::Message as _;
 use std::sync::Arc;

@@ -219,7 +219,7 @@ fn change_group_block(
     change: impl FnOnce(
         &Arc<ChatterClient>,
         ActiveConversation,
-    ) -> Result<(), chatter_core::services::conversation::ConversationError>
+    ) -> Result<(), chatter_core::client::conversation::ConversationError>
     + Send
     + 'static,
 ) {

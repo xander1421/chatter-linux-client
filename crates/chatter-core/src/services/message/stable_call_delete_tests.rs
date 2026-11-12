@@ -50,7 +50,6 @@ async fn normal_receive_from_mailbox(
     content: Content,
 ) {
     use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
-    use crate::services::inbox_processor::InboxEventProcessor;
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     let stats = Arc::new(parking_lot::RwLock::new(InboxStats::default()));
     let content = decoded(content);
@@ -98,7 +97,7 @@ async fn normal_receive_from_mailbox(
         );
     }
     if let Ok(event) = rx.try_recv() {
-        InboxEventProcessor::from_client(&f.client)
+        f.client.inbox_event_processor()
             .process(&event)
             .await;
     }

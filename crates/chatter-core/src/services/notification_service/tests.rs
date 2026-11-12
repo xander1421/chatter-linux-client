@@ -349,7 +349,7 @@ async fn secret_request_ingestion_notifies_once_and_keeps_catch_up_requests() {
     )
     .with_anon_dm_service(client.anon_dms().clone())
     .spawn(bus.clone());
-    let processor = crate::services::inbox_processor::InboxEventProcessor::from_client(&client);
+    let processor = client.inbox_event_processor();
     let peer = UserId::new();
     let mut arrivals = bus.subscribe_domain();
     let sealed = InboxEvent::AnonDmRequest {

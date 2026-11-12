@@ -325,7 +325,6 @@
         };
         use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
         use chatter_proto::content_v1;
-        use crate::services::inbox_processor::InboxEventProcessor;
         use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
         use prost::Message as _;
         let t = two_members();
@@ -472,12 +471,12 @@
                 &tx,
                 &stats,
             );
-            InboxEventProcessor::from_client(receiver)
+            receiver.inbox_event_processor()
                 .process(&rx.try_recv().unwrap())
                 .await;
         }
         for client in [&t.alice, &t.bob] {
-            let snapshot = crate::services::conversation::ConversationHandle::new(
+            let snapshot = crate::client::conversation::ConversationHandle::new(
                 crate::state::ActiveConversation::Channel(t.channel_id),
                 client.clone(),
             )

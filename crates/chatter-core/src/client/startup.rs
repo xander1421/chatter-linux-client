@@ -397,7 +397,7 @@ impl ChatterClient {
                 return Err(ClientError::Inbox("failed to start inbox".into()));
             }
         };
-        let processor = crate::services::InboxEventProcessor::from_client(self);
+        let processor = self.inbox_event_processor();
         let mut inbox_rx = inbox_rx;
         let h_inbox = tokio::spawn(async move {
             loop {
@@ -428,8 +428,8 @@ impl ChatterClient {
         let h_channel_send_retry = crate::services::message::spawn_channel_send_recovery(self);
         let h_dm_send_retry = crate::services::message::spawn_dm_send_recovery(self);
         let h_delete_batch_retry =
-            crate::services::conversation::recovery::spawn_delete_batch_recovery(self);
-        let h_receipt_retry = crate::services::conversation::recovery::spawn_receipt_recovery(self);
+            crate::client::conversation::recovery::spawn_delete_batch_recovery(self);
+        let h_receipt_retry = crate::client::conversation::recovery::spawn_receipt_recovery(self);
         let h_channel_stream = self.ctx.start_channel_event_stream();
         // Live channel messages. This is the ONLY subscriber of the
         // server-managed channel message path: it re-subscribes on every
@@ -477,7 +477,7 @@ impl ChatterClient {
 
         // ── Mailbox-token refill (jittered, decoupled from sends) ────
         let h_token_refill = self.services.spawn_token_refill();
-        let h_shield_retry = crate::services::message::spawn_shield_send_recovery(self);
+        let h_shield_retry = shield_recovery::spawn_shield_send_recovery(self);
 
         // ── Disappearing-messages local reaper ───────────────────────
         // Hard-deletes every message whose timer has run out, with the
@@ -596,5 +596,72 @@ impl ChatterClient {
         // all converge here after credentials/topic and inbox are ready.
         self.start_configured_push();
         Ok(())
+    }
+}
+
+impl ChatterClient {
+    /// The inbox event processor for this client: its services plus this
+    /// client as its [`InboxFacade`](crate::services::inbox_processor::InboxFacade).
+    pub(crate) fn inbox_event_processor(self: &Arc<Self>) -> crate::services::InboxEventProcessor {
+        crate::services::InboxEventProcessor::new(
+            self.messages().clone(),
+            self.dm_bootstrap().clone(),
+            self.anon_dms().clone(),
+            self.anon_groups().clone(),
+            self.signal().clone(),
+            self.users().clone(),
+            self.attachments().clone(),
+            self.event_bus().clone(),
+            self.auth_state().clone(),
+            #[cfg(feature = "media")]
+            self.call_service().clone(),
+            self.clone(),
+        )
+    }
+}
+
+impl crate::services::inbox_processor::InboxFacade for ChatterClient {
+    fn send_dm_delivery_receipt(
+        self: Arc<Self>,
+        peer_id: crate::domain::UserId,
+        timestamp: u64,
+    ) -> futures::future::BoxFuture<'static, Result<(), String>> {
+        // Same conversation as a sealed-sender DM; the receipt's transport is
+        // picked by mode in `send_friend_dm_content`.
+        let handle = super::conversation::ConversationHandle::new(
+            crate::state::ActiveConversation::ServerDm { peer_id },
+            self,
+        );
+        Box::pin(async move {
+            handle
+                .send_delivery_receipt(&[timestamp])
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
+
+    #[cfg(feature = "media")]
+    fn ensure_call_service(&self) {
+        ChatterClient::ensure_call_service(self);
+    }
+
+    #[cfg(feature = "media")]
+    fn drop_ringing_group_call_invite(&self, call_id: &str) {
+        self.call_signaling().drop_ringing_group_call_invite(call_id);
+    }
+}
+
+impl crate::services::message::SendRecoveryClient for ChatterClient {
+    fn auth_state(&self) -> &AuthState {
+        ChatterClient::auth_state(self)
+    }
+    fn offline_state(&self) -> &OfflineState {
+        ChatterClient::offline_state(self)
+    }
+    fn event_bus(&self) -> &crate::events::EventBus {
+        ChatterClient::event_bus(self)
+    }
+    fn messages(&self) -> &Arc<crate::services::MessageService> {
+        ChatterClient::messages(self)
     }
 }

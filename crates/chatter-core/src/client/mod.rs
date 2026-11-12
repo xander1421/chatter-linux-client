@@ -39,6 +39,7 @@ mod mentions;
 mod messaging;
 mod search_visible;
 mod send_attempt;
+mod shield_recovery;
 pub use search_visible::{SearchPage, VisibleSearchHit};
 pub use send_attempt::await_send_with_notice;
 mod receipts;
@@ -178,7 +179,7 @@ use crate::services::auth_service::AuthService;
 #[cfg(feature = "media")]
 use crate::services::call_worker::CallWorkerHandle;
 use crate::services::channel::ChannelService;
-use crate::services::conversation::ConversationHandle;
+use conversation::ConversationHandle;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::gateway::outgoing::{
     OutgoingIntent, OwnedOutgoingServices, QuoteIntent, SendError, SendResult, route_outgoing_owned,
@@ -273,7 +274,7 @@ impl ClientBuilder {
             call_signaling: std::sync::OnceLock::new(),
             svr_backup_service: std::sync::OnceLock::new(),
             message_backup_service: std::sync::OnceLock::new(),
-            outgoing_typing: crate::services::outgoing_typing::OutgoingTypingManager::new(),
+            outgoing_typing: outgoing_typing::OutgoingTypingManager::new(),
             link_device_service: std::sync::OnceLock::new(),
             anon_mode,
             pending_update: Mutex::new(None),
@@ -537,8 +538,8 @@ pub struct ChatterClient {
     activity_listener_started: AtomicBool,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     /// Failed ephemeral receipts for this process and auth session only.
-    pub(crate) pending_receipts: Mutex<Vec<crate::services::conversation::PendingReceipt>>,
-    pub(crate) sent_receipts: Mutex<Vec<crate::services::conversation::PendingReceipt>>,
+    pub(crate) pending_receipts: Mutex<Vec<conversation::PendingReceipt>>,
+    pub(crate) sent_receipts: Mutex<Vec<conversation::PendingReceipt>>,
     /// Cancellation tokens for in-flight outgoing attachment uploads, keyed by
     /// the tray (pending) attachment id. The composer's per-file cancel X
     /// aborts just that file via [`Self::cancel_attachment_upload`]; the upload
@@ -561,7 +562,7 @@ pub struct ChatterClient {
     /// Cached call signaling service (persistent for pending state).
     call_signaling: std::sync::OnceLock<crate::services::call_signaling::CallSignalingService>,
     /// Outgoing typing-indicator state machine (Signal refresh/pause timers).
-    outgoing_typing: crate::services::outgoing_typing::OutgoingTypingManager,
+    outgoing_typing: outgoing_typing::OutgoingTypingManager,
     /// Cached SVR backup service.
     svr_backup_service: std::sync::OnceLock<crate::services::svr_backup_service::SvrBackupService>,
     /// Cached message-history backup service (L7 message-backup).
@@ -657,6 +658,8 @@ mod mesh;
 mod sidebar;
 mod trust;
 pub use auth_state::{ConversationGuard, SessionGuard};
+pub mod conversation;
+mod outgoing_typing;
 mod conversation_listing;
 mod infrastructure;
 mod outgoing;

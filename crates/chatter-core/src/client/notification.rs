@@ -627,7 +627,7 @@ pub(crate) fn spawn_notification_listener(
                         break;
                     };
                     if let Err(error) =
-                        crate::services::conversation::ConversationHandle::mark_received_as_read(
+                        crate::client::conversation::ConversationHandle::mark_received_as_read(
                             &client, message,
                         )
                         .await

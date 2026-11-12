@@ -595,8 +595,8 @@ fn claim_due(
 /// Replays queued sealed DMs on start and whenever the connection is up:
 /// one session-scoped worker per client, a few entries per tick, each under
 /// its own lease, oldest first.
-pub(crate) fn spawn_dm_send_recovery(
-    client: &Arc<crate::client::ChatterClient>,
+pub(crate) fn spawn_dm_send_recovery<C: super::SendRecoveryClient>(
+    client: &Arc<C>,
 ) -> tokio::task::JoinHandle<()> {
     let weak = Arc::downgrade(client);
     tokio::spawn(async move {

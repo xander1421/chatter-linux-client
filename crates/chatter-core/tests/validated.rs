@@ -9907,7 +9907,7 @@ async fn v38_friend_fetches_and_decrypts_your_avatar_byte_exact() {
 // (channel-free DM), i.e. DM read receipts DO round-trip, not only channels.
 //
 // MUTATION CHECK: delete the gate in ConversationHandle::send_read_receipt
-// (services/conversation.rs) → the disabled half sends anyway → B's second
+// (client/conversation) → the disabled half sends anyway → B's second
 // message flips to "read" → this test FAILS (RED). That is what makes the
 // gate assertion non-vacuous.
 // ============================================================================
@@ -10096,7 +10096,7 @@ async fn v39_read_receipt_toggle_gates_the_send() {
 //   - typing DISABLED: A typing → B receives NO TypingStarted for A.
 //
 // MUTATION CHECK: delete the gate in ConversationHandle::send_typing
-// (services/conversation.rs) → the disabled half emits typing → B gets
+// (client/conversation) → the disabled half emits typing → B gets
 // TypingStarted → this test FAILS (RED).
 // ============================================================================
 
