@@ -386,7 +386,7 @@ fn open_conversation(
     // rejects it.
     let opened = ui_ctx
         .call_history_conversation(conversation_type, conversation_id)
-        .is_some_and(|conv| crate::bin_ui::features::sidebar::select_conversation(window, conv));
+        .is_some_and(|conv| crate::bin_ui::features::chat::open::select_conversation(window, conv));
     if !opened {
         tracing::warn!(
             conversation_type,

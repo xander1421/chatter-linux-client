@@ -136,7 +136,7 @@ fn close_hidden_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     for screen in CONVERSATION_SCREENS {
         crate::bin_ui::features::back::close(window, screen);
     }
-    crate::bin_ui::features::sidebar::close_open_conversation(window, ui_ctx);
+    crate::bin_ui::features::chat::open::close_open_conversation(window, ui_ctx);
 }
 
 /// Rebuild the chat list so the anon-mode filter takes effect: core's

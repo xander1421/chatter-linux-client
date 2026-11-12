@@ -684,7 +684,7 @@ pub(super) fn handle_message_delete(
         // re-counted from storage instead.
         crate::bin_ui::features::thread::refresh_root_reply_counts(&w, &ui_ctx);
         if ui_ctx.prune_deleted_pins() {
-            crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx);
+            crate::bin_ui::features::message_list::pinned_bar::refresh_pinned_ui(&w, &ui_ctx);
         }
     });
 }

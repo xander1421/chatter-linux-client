@@ -162,7 +162,7 @@ pub(super) fn handle_group_member_list_received(
                     "Refreshing message list for group {} after member list update",
                     group_id_str
                 );
-                crate::bin_ui::features::sidebar::private_group::load_private_group_messages(
+                crate::bin_ui::features::chat::open::private_group::load_private_group_messages(
                     &w,
                     &ui_ctx,
                     &group_id_str,
@@ -239,7 +239,7 @@ fn refresh_group_membership_notice(
         if let Some(w) = weak.upgrade() {
             crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
             if ui_ctx.active_conversation().matches_anon_group(&group_id) {
-                crate::bin_ui::features::sidebar::private_group::load_private_group_messages(
+                crate::bin_ui::features::chat::open::private_group::load_private_group_messages(
                     &w,
                     &ui_ctx,
                     &group_id.to_string(),

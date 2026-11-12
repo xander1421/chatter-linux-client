@@ -214,7 +214,7 @@ mod tests {
         display: crate::bin_ui::converters::AttachmentDisplayData,
         client: &std::sync::Arc<ChatterClient>,
     ) {
-        super::super::sidebar::apply_pinned_ui_owned(
+        super::super::chat::open::apply_pinned_ui_owned(
             &w.as_weak(),
             client,
             vec!["00000000-0000-0000-0000-000000000001".parse().unwrap()],
