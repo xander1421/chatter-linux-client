@@ -306,7 +306,7 @@ mod transport_switch_tests {
     async fn captured_state_respects_deferred_contact_then_explicit_failure() {
         use crate::network::connection::ConnectionState;
         let (client, _dir) = build_test_client();
-        client.set_server_url("http://127.0.0.1:1").unwrap();
+        client.set_server_url("https://127.0.0.1:1").unwrap();
         assert!(
             !client
                 .startup_connect(std::time::Duration::from_secs(1))

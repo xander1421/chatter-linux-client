@@ -196,8 +196,9 @@ mod tests {
                 },
             )
             .unwrap();
+            // Ramp well above the waveform noise floor (0.002 full scale).
             for sample in 0..64_i16 {
-                writer.write_sample(sample).unwrap();
+                writer.write_sample(sample * 256).unwrap();
             }
             writer.finalize().unwrap();
         }
