@@ -147,7 +147,7 @@ fn publish_friends(
             } else {
                 f.user_id.parse::<chatter_core::domain::ids::UserId>().ok()
                     .and_then(|id| ui_ctx.peer_last_seen(&id))
-                    .map(|(presence, at)| crate::bin_ui::converters::last_seen_label(presence, at))
+                    .map(|(presence, at)| chatter_core::ui::format::last_seen_label(presence, at))
                     .unwrap_or_default()
             };
             let mut row = f.to_slint();

@@ -55,7 +55,7 @@ pub fn build_own_message_item(
     reply_to_has_thumbnail: bool,
     reply_to_thumbnail_width: i32,
     reply_to_thumbnail_height: i32,
-    reply_media: &chatter_core::client::ReplyParentMedia,
+    reply_media: &chatter_core::ui::display::ReplyParentMedia,
     delivery_status: &str,
 ) -> crate::MessageItemData {
     use slint::{ModelRc, VecModel};
@@ -99,7 +99,7 @@ pub fn build_own_message_item(
                 .waveform
                 .iter()
                 .copied()
-                .map(crate::bin_ui::converters::waveform_bar)
+                .map(chatter_core::ui::format::waveform_bar)
                 .collect::<Vec<_>>(),
         )),
         reply_to_has_thumbnail,
@@ -451,7 +451,7 @@ mod own_echo_tests {
             false,
             0,
             0,
-            &chatter_core::client::ReplyParentMedia::default(),
+            &chatter_core::ui::display::ReplyParentMedia::default(),
             "sent",
         );
         assert_eq!(row.content, "bold italic strike and normal text");

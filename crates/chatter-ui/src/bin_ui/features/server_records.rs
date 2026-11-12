@@ -66,7 +66,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                                     format!(
                                         "{}\n{}",
                                         detail.body,
-                                        crate::bin_ui::converters::server_record_time(
+                                        chatter_core::ui::format::server_record_time(
                                             detail.created_at_ns
                                         )
                                     )
@@ -198,7 +198,7 @@ fn request(
                                 format!(
                                     "{} · {}",
                                     r.body,
-                                    crate::bin_ui::converters::server_record_time(r.created_at_ns)
+                                    chatter_core::ui::format::server_record_time(r.created_at_ns)
                                 )
                                 .into()
                             } else {

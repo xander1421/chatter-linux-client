@@ -278,7 +278,7 @@ fn request_shared_page(
                 .iter()
                 .map(|item| {
                     let (title, subtitle, is_video) =
-                        crate::bin_ui::converters::shared_content_lines(item);
+                        chatter_core::ui::format::shared_content_lines(item);
                     let thumbnail = image::load_from_memory(&item.thumbnail)
                         .ok()
                         .map(|image| {

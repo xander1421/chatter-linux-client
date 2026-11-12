@@ -8,12 +8,9 @@
 mod attachment;
 pub(crate) mod channel;
 mod kind;
-pub(crate) mod markdown;
 mod message;
 #[cfg(test)]
 mod open_bench;
-pub(crate) mod pin_preview;
-mod presentation;
 mod registration_avatar;
 mod utils;
 
@@ -22,6 +19,5 @@ pub use channel::*;
 pub use chatter_core::ui::sidebar_data::{ChatRowSendData, FriendDataSendData};
 pub use kind::*;
 pub use message::*;
-pub use presentation::*;
 pub use registration_avatar::*;
 pub use utils::*;

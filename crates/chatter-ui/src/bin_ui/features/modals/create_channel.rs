@@ -515,7 +515,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .into_iter()
                     .map(|c| {
                         let avatar =
-                            crate::bin_ui::converters::invite_candidate_avatar(&ui_ctx, &c);
+                            ui_ctx.invite_candidate_avatar(&c);
                         (c, avatar)
                     })
                     .collect();

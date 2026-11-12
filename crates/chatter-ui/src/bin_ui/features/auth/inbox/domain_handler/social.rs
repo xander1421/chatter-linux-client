@@ -136,7 +136,7 @@ pub(super) async fn handle_friend_requests_updated(
                         avatar_source,
                         has_avatar,
                         sent_at: if r.created_at_ns > 0 {
-                            crate::bin_ui::converters::server_record_time(r.created_at_ns).into()
+                            chatter_core::ui::format::server_record_time(r.created_at_ns).into()
                         } else {
                             "".into()
                         },
@@ -220,7 +220,7 @@ pub(super) fn handle_presence_changed(
 
     let presence_slint: slint::SharedString = presence_str.into();
     let last_seen_label: slint::SharedString = ui_ctx.peer_last_seen(&user_id)
-        .map(|(_, at)| crate::bin_ui::converters::last_seen_label(presence, at))
+        .map(|(_, at)| chatter_core::ui::format::last_seen_label(presence, at))
         .unwrap_or_default()
         .into();
 

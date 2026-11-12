@@ -11,7 +11,7 @@ use super::attachment::{
     AttachmentDisplayData, assign_album_positions, attachment_to_display_data,
     standalone_attachment_indices,
 };
-use super::markdown::{MarkdownBlock, parse_blocks, strip_markdown};
+use chatter_core::ui::markdown::{MarkdownBlock, StyledParagraph, parse_blocks, strip_markdown};
 use super::utils::reaction_counts_to_entries;
 
 /// A message body as a row renders it: `rich_content` is the blocks the
@@ -51,7 +51,9 @@ pub fn body_fields(
                         .collect::<Vec<_>>()
                         .join("\n")
                         .into(),
-                    text: slint::StyledText::from_paragraphs(paras),
+                    text: slint::StyledText::from_paragraphs(
+                        paras.into_iter().map(styled_paragraph),
+                    ),
                     ..Default::default()
                 },
                 MarkdownBlock::Code(code) => RichTextBlock {
@@ -66,6 +68,31 @@ pub fn body_fields(
         strip_markdown(trimmed).into(),
         ModelRc::new(VecModel::from(rows)),
     )
+}
+
+/// Core's paragraph as the vendored Slint `StyledTextParagraph`. The style
+/// match is exhaustive so a new core style fails to compile here.
+fn styled_paragraph(p: StyledParagraph) -> i_slint_core::styled_text::StyledTextParagraph {
+    use chatter_core::ui::markdown::Style as Core;
+    use i_slint_core::styled_text::{FormattedSpan, Style};
+    i_slint_core::styled_text::StyledTextParagraph {
+        text: p.text,
+        formatting: p
+            .formatting
+            .into_iter()
+            .map(|f| FormattedSpan {
+                range: f.range,
+                style: match f.style {
+                    Core::Strong => Style::Strong,
+                    Core::Emphasis => Style::Emphasis,
+                    Core::Strikethrough => Style::Strikethrough,
+                    Core::Code => Style::Code,
+                    Core::Link => Style::Link,
+                },
+            })
+            .collect(),
+        links: p.links,
+    }
 }
 
 /// Replace a displayed row's body with an edit. The bubble draws
@@ -174,40 +201,8 @@ impl MessageDisplayData {
         assign_album_positions(&mut slint_attachments);
         let standalone_attachment_indices = standalone_attachment_indices(&slint_attachments);
 
-        // Preserve channel event phases; DM records display direction/result.
-        let call_type = if self.row.is_call {
-            match self.row.call_message_type.as_str() {
-                "started" | "ended" if self.row.is_channel_call => self.row.call_message_type.clone(),
-                "missed" => "missed".to_string(),
-                "declined" => "declined".to_string(),
-                _ => {
-                    // If we initiated, it's outgoing; otherwise incoming
-                    if self.row.call_initiator_id == current_user_id {
-                        "outgoing".to_string()
-                    } else {
-                        "incoming".to_string()
-                    }
-                }
-            }
-        } else {
-            String::new()
-        };
-
-        // For call messages, is_own is based on who initiated
-        let is_own = if self.row.is_call {
-            self.row.call_initiator_id == current_user_id
-        } else {
-            let matches = self.row.sender_id == current_user_id;
-            if !matches && !current_user_id.is_empty() && !self.row.sender_id.is_empty() {
-                tracing::debug!(
-                    sender_id = %self.row.sender_id,
-                    current_user_id = %current_user_id,
-                    message_id = %self.row.message_id,
-                    "[IS_OWN] sender_id != current_user_id"
-                );
-            }
-            matches
-        };
+        let viewer = self.row.for_viewer(current_user_id);
+        let is_own = viewer.is_own;
 
         let (sender_avatar_source, has_avatar) = if let Some(pixels) = self
             .sender_avatar_decoded
@@ -236,14 +231,8 @@ impl MessageDisplayData {
                 (slint::Image::default(), false, 0, 0)
             };
 
-        // A notice we caused reads "You set disappearing messages…", as in
-        // Signal, not our own name.
-        let own_notice = (self.row.is_system && is_own)
-            .then(|| self.row.content.strip_prefix(self.row.sender_name.as_str()))
-            .flatten()
-            .map(|rest| format!("You{rest}"));
         let (content, rich_content) = body_fields(
-            own_notice.as_deref().unwrap_or(&self.row.content),
+            &viewer.body,
             &self.row.mention_members,
             self.row.mention_broadcast,
         );
@@ -296,7 +285,7 @@ impl MessageDisplayData {
                 self.row.reply_to_waveform
                     .iter()
                     .copied()
-                    .map(super::attachment::waveform_bar)
+                    .map(chatter_core::ui::format::waveform_bar)
                     .collect::<Vec<_>>(),
             )),
             reply_to_has_thumbnail,
@@ -304,16 +293,11 @@ impl MessageDisplayData {
             reply_to_thumbnail_width: reply_to_thumb_w,
             reply_to_thumbnail_height: reply_to_thumb_h,
             show_sender: true,
-            // For own messages with empty status, default to "sent"
             failure_reason: self.row.failure_reason.clone().into(),
-            delivery_status: if is_own && self.row.delivery_status.is_empty() {
-                "sent".into()
-            } else {
-                self.row.delivery_status.clone().into()
-            },
+            delivery_status: viewer.delivery_status.into(),
             is_pinned: self.row.is_pinned,
             is_call: self.row.is_call,
-            call_type: call_type.into(),
+            call_type: viewer.call_type.into(),
             call_duration: self.row.call_duration.clone().into(),
             date_separator_text: self.row.day_label.clone().into(),
             ..Default::default()

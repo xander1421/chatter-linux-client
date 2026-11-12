@@ -8,7 +8,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::client::{ChatterClient, ReplyParentMedia};
+use crate::client::ChatterClient;
+use crate::ui::display::ReplyParentMedia;
 use crate::domain::attachment::Attachment;
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
 use crate::domain::mention::MentionMember;
@@ -91,6 +92,81 @@ pub struct MessageRow {
     pub call_message_type: String, // "started", "ended", "missed", "declined" (raw from domain)
     pub call_initiator_id: String, // User ID of who initiated the call
     pub call_duration: String,     // "1 min 30 s" or empty
+}
+
+/// The parts of a row that depend on who is looking at it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ViewerFields {
+    pub is_own: bool,
+    /// Call row kind: channel `started`/`ended` phases, `missed`, `declined`,
+    /// else `outgoing`/`incoming` by initiator. Empty for non-call rows.
+    pub call_type: String,
+    /// Raw (markdown) body to render; a system notice we caused reads "You …".
+    pub body: String,
+    pub delivery_status: String,
+}
+
+impl MessageRow {
+    /// Resolve the viewer-dependent fields for `current_user_id`.
+    #[must_use]
+    pub fn for_viewer(&self, current_user_id: &str) -> ViewerFields {
+        // Preserve channel event phases; DM records display direction/result.
+        let call_type = if self.is_call {
+            match self.call_message_type.as_str() {
+                "started" | "ended" if self.is_channel_call => self.call_message_type.clone(),
+                "missed" => "missed".to_string(),
+                "declined" => "declined".to_string(),
+                _ => {
+                    // If we initiated, it's outgoing; otherwise incoming
+                    if self.call_initiator_id == current_user_id {
+                        "outgoing".to_string()
+                    } else {
+                        "incoming".to_string()
+                    }
+                }
+            }
+        } else {
+            String::new()
+        };
+
+        // For call messages, is_own is based on who initiated
+        let is_own = if self.is_call {
+            self.call_initiator_id == current_user_id
+        } else {
+            let matches = self.sender_id == current_user_id;
+            if !matches && !current_user_id.is_empty() && !self.sender_id.is_empty() {
+                tracing::debug!(
+                    sender_id = %self.sender_id,
+                    current_user_id = %current_user_id,
+                    message_id = %self.message_id,
+                    "[IS_OWN] sender_id != current_user_id"
+                );
+            }
+            matches
+        };
+
+        // A notice we caused reads "You set disappearing messages…", as in
+        // Signal, not our own name.
+        let body = (self.is_system && is_own)
+            .then(|| self.content.strip_prefix(self.sender_name.as_str()))
+            .flatten()
+            .map(|rest| format!("You{rest}"))
+            .unwrap_or_else(|| self.content.clone());
+
+        // For own messages with empty status, default to "sent"
+        let delivery_status = if is_own && self.delivery_status.is_empty() {
+            "sent".to_string()
+        } else {
+            self.delivery_status.clone()
+        };
+
+        ViewerFields {
+            is_own,
+            call_type,
+            body,
+            delivery_status,
+        }
+    }
 }
 
 /// Up to two initials, upper-cased: "ada lovelace" → "AL".

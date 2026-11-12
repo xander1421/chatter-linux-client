@@ -130,7 +130,7 @@ pub(crate) fn show_pending_bubble(
             &text,
             &members,
             broadcast,
-            &crate::bin_ui::converters::format_timestamp(now),
+            &chatter_core::ui::format::format_timestamp(now),
             now_ns,
             attachments.iter().map(|a| a.to_slint()).collect(),
             !reply_sender_name.is_empty(),
@@ -242,12 +242,12 @@ fn mark_pending_waiting_for_tor(w: &MainWindow, send: &ComposerSend) {
 fn pending_attachment_to_display_data(
     attachment: &chatter_core::state::PendingAttachment,
 ) -> crate::bin_ui::converters::AttachmentDisplayData {
-    use crate::bin_ui::converters::{
-        category_to_icon_and_color, format_file_size, mime_to_category,
-    };
+    use chatter_core::ui::file_data::category_icon;
+    use chatter_core::ui::format::{format_file_size, mime_to_category};
     use chatter_core::domain::attachment::FileCategory;
     let category = mime_to_category(&attachment.mime_type);
-    let (icon, icon_color) = category_to_icon_and_color(category);
+    let icon = category_icon(category);
+    let icon_color = crate::bin_ui::converters::category_color(category);
     crate::bin_ui::converters::AttachmentDisplayData {
         id: attachment.id.to_string(),
         filename: attachment.filename.clone(),

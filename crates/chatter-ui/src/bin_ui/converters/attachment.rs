@@ -3,13 +3,14 @@
 use slint::{Image, ModelRc, VecModel};
 use std::sync::Arc;
 
-use chatter_core::domain::attachment::{Attachment, AttachmentStatus};
+use chatter_core::domain::attachment::Attachment;
+use chatter_core::ui::format::{format_file_size, mime_to_category};
 use chatter_core::state::PendingAttachment;
 
 use crate::bin_ui::audio_state;
 use crate::{MessageAttachmentData, PendingAttachmentData};
 
-use super::utils::{category_to_icon_and_color, format_file_size, mime_to_category};
+use super::utils::category_color;
 
 /// Give the media subset stable positions without duplicating its thumbnail model.
 pub fn assign_album_positions(attachments: &mut [MessageAttachmentData]) {
@@ -224,110 +225,37 @@ impl AttachmentDisplayData {
     }
 }
 
-/// Convert stored/wire amplitudes to the UI's percentage bar scale.
-pub(crate) fn waveform_bar(sample: i32) -> i32 {
-    (sample.clamp(0, 255) * 100 + 127) / 255
-}
-
-/// Convert a domain Attachment to thread-safe AttachmentDisplayData.
+/// Core's attachment view plus the UI-only parts: the playing flag, the icon
+/// colour and (later) decoded pixels.
 pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayData {
-    let meta = &attachment.metadata;
-    let category = mime_to_category(&meta.mime_type);
-    let id_str = attachment.id.to_string();
-
+    let v = chatter_core::ui::file_data::attachment_view(attachment);
     // Check if this attachment is currently playing audio
-    let is_playing = meta.is_audio() && audio_state::is_attachment_playing(&id_str);
-
-    // Get icon and color for category
-    let (icon, icon_color) = category_to_icon_and_color(category);
-
-    // Normalize wire/storage bytes (0-255) to the Slint bar scale (0-100).
-    let waveform: Vec<i32> = meta
-        .waveform_samples
-        .as_ref()
-        .filter(|samples| !samples.is_empty())
-        .map(|samples| {
-            let converted: Vec<i32> = samples
-                .iter()
-                .map(|&s| waveform_bar(i32::from(s)))
-                .collect();
-            if meta.is_audio() {
-                let max = converted.iter().max().copied().unwrap_or(0);
-                tracing::debug!(
-                    "attachment_to_display_data: waveform has {} samples, max={}, first_5={:?}",
-                    converted.len(),
-                    max,
-                    &converted[..5.min(converted.len())]
-                );
-            }
-            converted
-        })
-        .unwrap_or_else(|| {
-            if meta.is_audio() {
-                tracing::warn!(
-                    "attachment_to_display_data: no waveform_samples for audio, using flat default"
-                );
-            }
-            vec![10; 32]
-        }); // Default flat waveform
-
-    // Format duration for audio
-    let duration_display = meta
-        .duration_seconds
-        .map(|secs| {
-            let total_secs = secs as u64;
-            let minutes = total_secs / 60;
-            let seconds = total_secs % 60;
-            format!("{}:{:02}", minutes, seconds)
-        })
-        .unwrap_or_default();
-
-    // Determine transfer status from attachment status
-    let is_uploading = attachment.status == AttachmentStatus::Uploading;
-    let is_downloading = attachment.status == AttachmentStatus::Downloading;
-    let is_download_failed =
-        attachment.status == AttachmentStatus::Failed && attachment.remote_url.is_some();
-
+    let is_playing = v.is_audio && audio_state::is_attachment_playing(&v.id);
     AttachmentDisplayData {
-        id: id_str,
-        filename: meta.bubble_filename().to_string(),
-        size_display: format_file_size(meta.size),
-        mime_type: meta.mime_type.clone(),
-        category: category.to_string(),
-        thumbnail_url: String::new(), // Populated by caller if available
-        download_url: attachment.remote_url.clone().unwrap_or_default(),
-        local_path: None,
-        is_image: meta.is_image(),
-        is_video: chatter_core::domain::attachment::FileCategory::from_mime_and_filename(
-            &meta.mime_type,
-            &meta.name,
-        ) == chatter_core::domain::attachment::FileCategory::Video,
-        width: meta.width.unwrap_or(0) as i32,
-        height: meta.height.unwrap_or(0) as i32,
         is_playing,
-        icon: icon.to_string(),
-        icon_color,
-        waveform,
-        duration_display,
-        is_uploading,
-        is_downloading,
-        is_download_failed,
+        icon: v.icon.to_string(),
+        icon_color: category_color(v.category),
+        id: v.id,
+        filename: v.filename,
+        size_display: v.size_display,
+        mime_type: v.mime_type,
+        category: v.category.to_string(),
+        thumbnail_url: String::new(), // Populated by caller if available
+        download_url: v.download_url,
+        local_path: None,
+        is_image: v.is_image,
+        is_video: v.is_video,
+        width: v.width,
+        height: v.height,
+        waveform: v.waveform,
+        duration_display: v.duration_display,
+        is_uploading: v.is_uploading,
+        is_downloading: v.is_downloading,
+        is_download_failed: v.is_download_failed,
         progress: 0.0, // Will be updated by progress callback
         // A stored/received attachment is never mid-outgoing-upload.
         upload_state: String::new(),
-        // Use stored thumbnail from sender (for instant preview)
-        thumbnail_bytes: {
-            let bytes: Arc<[u8]> = meta.thumbnail.as_deref().unwrap_or_default().into();
-            if meta.is_image() || meta.is_video() {
-                tracing::debug!(
-                    "attachment_to_display_data: {} thumbnail_bytes={}, waveform_samples={:?}",
-                    meta.name,
-                    bytes.len(),
-                    meta.waveform_samples.as_ref().map(|w| w.len())
-                );
-            }
-            bytes
-        },
+        thumbnail_bytes: v.thumbnail_bytes,
         thumbnail_pixels: None, // Pre-decode with decode_thumbnail() before UI thread
     }
 }

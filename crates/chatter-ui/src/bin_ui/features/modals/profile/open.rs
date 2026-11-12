@@ -310,7 +310,7 @@ pub fn open_user_profile_in_conversation(
                 w.global::<crate::ModalHostState>().set_profile_last_seen(
                     ctx.peer_last_seen(user_id)
                         .map(|(presence, at)| {
-                            crate::bin_ui::converters::last_seen_label(presence, at)
+                            chatter_core::ui::format::last_seen_label(presence, at)
                         })
                         .unwrap_or_default()
                         .into(),

@@ -151,7 +151,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             Some((
                                 id.to_string().into(),
                                 presence.as_str().into(),
-                                crate::bin_ui::converters::last_seen_label(presence, at).into(),
+                                chatter_core::ui::format::last_seen_label(presence, at).into(),
                             ))
                         })
                         .collect();
@@ -184,7 +184,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 continue;
             };
             let Some((presence, label)) = ui_ctx_tick.peer_last_seen(peer_id).map(|(presence, at)| {
-                (presence, crate::bin_ui::converters::last_seen_label(presence, at))
+                (presence, chatter_core::ui::format::last_seen_label(presence, at))
             }) else {
                 continue;
             };
@@ -233,7 +233,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let active_last_seen = match active_conversation {
                 chatter_core::state::ActiveConversation::ServerDm { peer_id } => ui_ctx_for_task
                     .peer_last_seen(&peer_id)
-                    .map(|(presence, at)| crate::bin_ui::converters::last_seen_label(presence, at)),
+                    .map(|(presence, at)| chatter_core::ui::format::last_seen_label(presence, at)),
                 _ => None,
             };
             let active_presence = ui_ctx_for_task.active_dm_presence();

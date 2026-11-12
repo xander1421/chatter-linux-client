@@ -2,14 +2,14 @@
 
 /// Convert actual message text before bounding it, so truncation cannot cut
 /// markdown delimiters in half. Pin summaries occupy a single readable line.
-pub(crate) fn text_preview(text: &str) -> String {
+pub fn text_preview(text: &str) -> String {
     let plain = super::markdown::strip_markdown(text);
     let line = plain.split_whitespace().collect::<Vec<_>>().join(" ");
-    chatter_core::services::gateway::shared::truncate_preview(&line)
+    crate::services::gateway::shared::truncate_preview(&line)
 }
 
 /// Only actual text is markdown. Attachment filenames/captions are literal.
-pub(crate) fn preview_or_caption(text: Option<&str>, caption: &str) -> String {
+pub fn preview_or_caption(text: Option<&str>, caption: &str) -> String {
     text.filter(|text| !text.trim().is_empty())
         .map(text_preview)
         .unwrap_or_else(|| caption.to_owned())
