@@ -42,7 +42,7 @@ pub use crate::domain::{
 pub use crate::events::{DomainEvent, EventBus};
 
 // Conversation operations
-pub use crate::services::conversation::{ConversationError, ConversationHandle};
+pub use crate::client::conversation::{ConversationError, ConversationHandle};
 pub use crate::services::gateway::outgoing::{QuoteIntent, SendError, SendResult};
 
 // State

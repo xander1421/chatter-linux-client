@@ -1145,8 +1145,8 @@ mod tests {
 }
 
 /// Session-owned startup/reconnect recovery with a bounded batch and durable backoff.
-pub(crate) fn spawn_saved_sync_recovery(
-    client: &std::sync::Arc<crate::client::ChatterClient>,
+pub(crate) fn spawn_saved_sync_recovery<C: super::SendRecoveryClient>(
+    client: &std::sync::Arc<C>,
 ) -> tokio::task::JoinHandle<()> {
     let weak = std::sync::Arc::downgrade(client);
     let mut connectivity = client.offline_state().subscribe();

@@ -52,7 +52,7 @@ impl ChatterClient {
     ///
     /// Not the picker's list on its own: the secret-chat rules depend on the
     /// messages being forwarded, so the picker asks
-    /// [`crate::services::conversation::ConversationHandle::forward_destinations`].
+    /// [`crate::client::conversation::ConversationHandle::forward_destinations`].
     pub(crate) fn forward_destinations(&self, query: &str) -> Vec<ForwardDestination> {
         use crate::domain::message::ConversationType as CT;
 

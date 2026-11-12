@@ -925,8 +925,8 @@ impl MessageService {
 
 /// One bounded, session-scoped worker. Leases survive restart; a new generation
 /// fences a suspended old future at the actual deposit boundary.
-pub(crate) fn spawn_channel_send_recovery(
-    client: &Arc<crate::client::ChatterClient>,
+pub(crate) fn spawn_channel_send_recovery<C: super::SendRecoveryClient>(
+    client: &Arc<C>,
 ) -> tokio::task::JoinHandle<()> {
     let weak = Arc::downgrade(client);
     let mut connectivity = client.offline_state().subscribe();

@@ -706,7 +706,7 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         muted: bool,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).mute_conversation(muted)
     }
 
@@ -715,7 +715,7 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         seconds: Option<u64>,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).mute_for(seconds)
     }
 
@@ -725,14 +725,14 @@ impl ChatterClient {
     pub fn is_conversation_muted(
         self: &Arc<Self>,
         conv: ActiveConversation,
-    ) -> Result<bool, crate::services::conversation::ConversationError> {
+    ) -> Result<bool, crate::client::conversation::ConversationError> {
         self.conversation(conv).is_muted()
     }
 
     pub fn conversation_notification_preference(
         self: &Arc<Self>,
         conv: ActiveConversation,
-    ) -> Result<crate::domain::channel::NotificationPreference, crate::services::conversation::ConversationError> {
+    ) -> Result<crate::domain::channel::NotificationPreference, crate::client::conversation::ConversationError> {
         self.conversation(conv).notification_preference()
     }
 
@@ -740,7 +740,7 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         preference: crate::domain::channel::NotificationPreference,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).set_notification_preference(preference)
     }
 
@@ -748,7 +748,7 @@ impl ChatterClient {
     pub async fn leave_conversation(
         self: &Arc<Self>,
         conv: ActiveConversation,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).leave().await
     }
 
@@ -758,7 +758,7 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         user: &crate::domain::ids::UserId,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).remove_member(user).await
     }
 
@@ -768,7 +768,7 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         new_owner: &crate::domain::ids::UserId,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).transfer_ownership(new_owner).await
     }
 
@@ -777,7 +777,7 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         blocked: bool,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).set_blocked(blocked)
     }
 
@@ -788,7 +788,7 @@ impl ChatterClient {
         conv: ActiveConversation,
         user: &crate::domain::ids::UserId,
         blocked: bool,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).set_member_blocked(user, blocked)
     }
 
@@ -797,7 +797,7 @@ impl ChatterClient {
     pub async fn delete_conversation(
         self: &Arc<Self>,
         conv: ActiveConversation,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).delete_conversation().await
     }
 
@@ -809,7 +809,7 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         seconds: u32,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv)
             .set_disappearing_timer(seconds)
             .await
@@ -821,7 +821,7 @@ impl ChatterClient {
         conv: ActiveConversation,
         seconds: u32,
         activation_seconds: u32,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv)
             .set_disappearing_window(seconds, activation_seconds)
             .await

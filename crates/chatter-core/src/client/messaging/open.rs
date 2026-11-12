@@ -5,7 +5,7 @@ use std::sync::Arc;
 use super::ChatterClient;
 use crate::domain::ids::MessageId;
 use crate::domain::message::{ConversationType, Message, UnreadAnchor};
-use crate::services::conversation::ConversationError;
+use crate::client::conversation::ConversationError;
 use crate::state::ActiveConversation;
 use crate::ui::message_row::{MessageRow, apply_reply_counts, mark_disappearing};
 

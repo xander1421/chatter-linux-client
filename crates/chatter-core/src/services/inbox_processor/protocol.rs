@@ -155,7 +155,7 @@ impl InboxEventProcessor {
                 timestamp,
             } => {
                 #[cfg(feature = "media")]
-                self.client.ensure_call_service();
+                self.facade.ensure_call_service();
                 // Bridge the inbox-layer offer to the domain event the call
                 // orchestrator + incoming-call UI consume. Without this arm the
                 // decrypted offer is emitted onto the inbox broadcast and dropped
@@ -195,7 +195,7 @@ impl InboxEventProcessor {
                 timestamp,
             } => {
                 #[cfg(feature = "media")]
-                self.client.ensure_call_service();
+                self.facade.ensure_call_service();
                 tracing::info!(
                     sender_id = %sender_id,
                     call_id = %call_id,

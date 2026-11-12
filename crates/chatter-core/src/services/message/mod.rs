@@ -37,10 +37,19 @@ mod saved;
 pub use saved::SavedSyncOutcome;
 pub(crate) use saved::persist_saved_device_snapshot;
 pub(crate) use saved::spawn_saved_sync_recovery;
+
+/// The façade handles the saved, channel and DM recovery workers read on each
+/// tick. Implemented by `ChatterClient`. Each worker holds only a `Weak<C>` and
+/// upgrades it per tick, so it never keeps the client alive.
+pub(crate) trait SendRecoveryClient: Send + Sync + 'static {
+    fn auth_state(&self) -> &crate::state::AuthState;
+    fn offline_state(&self) -> &crate::state::OfflineState;
+    fn event_bus(&self) -> &crate::events::EventBus;
+    fn messages(&self) -> &std::sync::Arc<MessageService>;
+}
 mod server_dm;
-mod shield_retry;
+pub(crate) mod shield_retry;
 pub use call_event::ChannelCallPhase;
-pub(crate) use shield_retry::spawn_shield_send_recovery;
 mod receipts;
 pub use receipts::{advance_delivery_status, display_delivery_status};
 

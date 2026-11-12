@@ -206,7 +206,7 @@ impl InboxEventProcessor {
 
         let anon_dm_service = self.anon_dm_service.clone();
         let event_bus = self.event_bus.clone();
-        let client = self.client.clone();
+        let auth_state = self.auth_state.clone();
         let profile_key = profile_key.clone();
         let encrypted_display_name = encrypted_display_name.clone();
         let avatar = avatar.clone();
@@ -268,7 +268,7 @@ impl InboxEventProcessor {
                 // first moment we can share richer identity securely.
                 // Moved here from the UI layer so the profile sync
                 // happens regardless of frontend.
-                let our_name = client.auth_state().get().display_name.clone();
+                let our_name = auth_state.get().display_name.clone();
                 let service = anon_dm_service.clone();
                 tokio::spawn(async move {
                     if let Err(e) = service

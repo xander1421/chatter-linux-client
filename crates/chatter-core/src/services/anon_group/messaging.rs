@@ -1089,7 +1089,7 @@ mod reaction_outcome_tests {
     use super::*;
     use crate::domain::UserId;
     use crate::domain::message::ConversationType;
-    use crate::services::conversation::ConversationError;
+    use crate::client::conversation::ConversationError;
     use prost::Message as _;
     use reaction_test_fixture::{Fixture, assert_encoded_action};
     use std::cell::RefCell;

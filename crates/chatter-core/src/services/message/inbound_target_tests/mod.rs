@@ -92,12 +92,11 @@
     #[tokio::test]
     async fn dm_delete_connected_processor_emits_actual_author_and_rejects_other_scope() {
         use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
-        use crate::services::inbox_processor::InboxEventProcessor;
         use parking_lot::RwLock;
         use tokio::sync::broadcast;
         let f = fixture();
         let svc = f.client.messages();
-        let processor = InboxEventProcessor::from_client(&f.client);
+        let processor = f.client.inbox_event_processor();
         for (author, ts) in [(f.me, DM_TS), (f.carol, DM_TS)] {
             let target = if author == f.me {
                 let msg = Message::new_text(
@@ -227,12 +226,11 @@
     #[tokio::test]
     async fn self_device_dm_delete_carries_destination_through_production_processor() {
         use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
-        use crate::services::inbox_processor::InboxEventProcessor;
         use parking_lot::RwLock;
         use tokio::sync::broadcast;
         let f = fixture();
         let svc = f.client.messages();
-        let processor = InboxEventProcessor::from_client(&f.client);
+        let processor = f.client.inbox_event_processor();
         let (tx, mut rx) = broadcast::channel(16);
         let stats = Arc::new(RwLock::new(InboxStats::default()));
         for (ts, author) in [(910, f.me), (911, f.carol)] {
@@ -432,13 +430,12 @@
     #[tokio::test]
     async fn channel_delete_dispatch_is_exact_and_retains_typed_late_arrival_tombstone() {
         use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
-        use crate::services::inbox_processor::InboxEventProcessor;
         use parking_lot::RwLock;
         use tokio::sync::broadcast;
 
         let f = fixture();
         let svc = f.client.messages();
-        let processor = InboxEventProcessor::from_client(&f.client);
+        let processor = f.client.inbox_event_processor();
         let (tx, mut rx) = broadcast::channel(16);
         let stats = Arc::new(RwLock::new(InboxStats::default()));
         let other_channel = ChannelId::new();
@@ -520,13 +517,12 @@
     #[tokio::test]
     async fn channel_delete_dispatch_rejects_forged_author_and_destination_without_tombstone() {
         use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
-        use crate::services::inbox_processor::InboxEventProcessor;
         use parking_lot::RwLock;
         use tokio::sync::broadcast;
 
         let f = fixture();
         let svc = f.client.messages();
-        let processor = InboxEventProcessor::from_client(&f.client);
+        let processor = f.client.inbox_event_processor();
         let (tx, mut rx) = broadcast::channel(16);
         let stats = Arc::new(RwLock::new(InboxStats::default()));
         for (index, author, destination) in [

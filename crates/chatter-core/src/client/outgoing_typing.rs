@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::services::conversation::ConversationHandle;
+use crate::client::conversation::ConversationHandle;
 use crate::state::ActiveConversation;
 
 /// Signal: resend STARTED every 10s while user is still typing.

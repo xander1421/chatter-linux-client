@@ -400,7 +400,7 @@ mod tests {
     use crate::inbox::handlers::DomainEvent;
     use chatter_proto::content_v1::{self, AnonGroupKick, AnonGroupLeave, Content};
     use crate::services::anon_group::AnonGroupError;
-    use crate::services::conversation::ConversationError;
+    use crate::client::conversation::ConversationError;
     use crate::state::ActiveConversation;
     use crate::storage::repositories::settings_repo::keys;
 
