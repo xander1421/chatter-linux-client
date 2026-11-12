@@ -156,6 +156,9 @@ mod tests {
         // chatter-core's NetworkError mapping of this status is tested there
         // (error/network_error.rs `response_validation_refusal_is_data_loss`).
     }
+    /// The three codec tests below hit the same `warn!` callsite; tracing
+    /// caches callsite interest process-wide, so they run one at a time.
+    static CODEC_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
     struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
     impl std::io::Write for Capture {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -168,6 +171,7 @@ mod tests {
     }
     #[tokio::test]
     async fn unary_valid_passes_invalid_is_typed_error() {
+        let _serial = CODEC_LOG.lock().unwrap_or_else(|e| e.into_inner());
         let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
         let writer = captured.clone();
         let subscriber = tracing_subscriber::fmt()
@@ -175,6 +179,10 @@ mod tests {
             .with_writer(move || Capture(writer.clone()))
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
+        // Another test thread may have registered the codec's log callsite
+        // while no subscriber was set, caching "never interested"; without a
+        // rebuild this thread's scoped subscriber would not see the event.
+        tracing::callsite::rebuild_interest_cache();
         for (id, valid) in [(UUID, true), ("invalid-private-value", false)] {
             let result = UserServiceClient::new(Reply(vec![profile(id).encode_to_vec()]))
                 .get_user_profile(chat_v1::GetUserProfileRequest::default())
@@ -191,6 +199,7 @@ mod tests {
     }
     #[tokio::test]
     async fn stream_checks_each_message_before_delivery_and_terminates_on_violation() {
+        let _serial = CODEC_LOG.lock().unwrap_or_else(|e| e.into_inner());
         use chat_v1::user_event::Event;
         let heartbeat = chat_v1::UserEvent {
             event: Some(Event::Heartbeat(chat_v1::StreamHeartbeat {})),
@@ -218,6 +227,7 @@ mod tests {
     }
     #[tokio::test]
     async fn malformed_wire_is_typed_error_without_parser_contents() {
+        let _serial = CODEC_LOG.lock().unwrap_or_else(|e| e.into_inner());
         let error = UserServiceClient::new(Reply(vec![vec![0xff]]))
             .get_user_profile(chat_v1::GetUserProfileRequest::default())
             .await
