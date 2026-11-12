@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
-use chatter_core::client::{ChatterClient, PageAnchor};
+use chatter_core::client::{ChatterClient, ConversationPage, PageAnchor};
 use chatter_core::domain::anon_group::AnonGroupId;
 
 use crate::MainWindow;
@@ -59,29 +59,30 @@ pub fn load_private_group_messages(
 
         // The newest page, with no unread divider (a refresh, not an open).
         let generation = crate::bin_ui::decode_cache::thumbnail_generation();
-        let rows = match ui_ctx.open_conversation(
+        let mut page = match ui_ctx.open_conversation(
             chatter_core::state::ActiveConversation::AnonGroup(group_id),
             PageAnchor::Opening(Default::default()),
-            || owner.is_current(),
+            owner.scope(),
         ) {
-            Ok(page) => page.rows,
+            Ok(page) => page,
             Err(e) => {
                 tracing::error!(
                     "Failed to load messages for private group {}: {}",
                     group_id,
                     e
                 );
-                Vec::new()
+                ConversationPage::empty(owner.scope())
             }
         };
-        let display_messages = crate::bin_ui::converters::prepare_rows(rows, false, generation).await;
+        let display_messages =
+            crate::bin_ui::converters::prepare_rows(std::mem::take(&mut page.rows), false, generation).await;
 
         // Update UI to show selected group and messages
         let group_name = group.name.clone();
         let removed = group.status == chatter_core::domain::anon_group::AnonGroupStatus::Removed;
         let ui_ctx_gifs = ui_ctx.clone();
         let ui_ctx_for_ui = ui_ctx.clone();
-        crate::run_history_ui!(weak_window, owner, |w| {
+        crate::bin_ui::features::history_owner::apply_if_current(&weak_window, page, move |w, _page| {
             // Clear unread count in sidebar
             crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(
                 &w,
@@ -267,26 +268,22 @@ async fn load_private_group_messages_internal(
 
     // An unreadable page opens empty, as before.
     let generation = crate::bin_ui::decode_cache::thumbnail_generation();
-    let page = ui_ctx
+    let mut page = ui_ctx
         .open_conversation(
             chatter_core::state::ActiveConversation::AnonGroup(group_id),
             PageAnchor::Opening(anchor),
-            || owner.is_current(),
+            owner.scope(),
         )
-        .unwrap_or_default();
+        .unwrap_or_else(|_| ConversationPage::empty(owner.scope()));
     let display_messages =
-        crate::bin_ui::converters::prepare_rows(page.rows, false, generation).await;
+        crate::bin_ui::converters::prepare_rows(std::mem::take(&mut page.rows), false, generation).await;
 
     let group_name = group.name.clone();
     let group_id_str = group_id.to_string();
     let ui_ctx_gifs = ui_ctx.clone();
     let ui_ctx_for_ui = ui_ctx.clone();
-    let (unread_index, unread_count) = (page.unread_index, page.unread_count);
-    crate::run_history_ui!(weak, owner, |w| {
-        let pane = w.global::<crate::ChatPane>();
-        pane.set_unread_index(unread_index.map_or(-1, |i| i as i32));
-        pane.set_unread_count(unread_count as i32);
-        pane.set_is_at_bottom(unread_index.is_none());
+    crate::bin_ui::features::history_owner::apply_if_current(&weak, page, move |w, page| {
+        super::apply_unread_anchor(&w, &page);
         // Clear unread count in sidebar
         crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(
             &w,

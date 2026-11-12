@@ -656,7 +656,7 @@ mod event_streams;
 mod mesh;
 mod sidebar;
 mod trust;
-pub use auth_state::{ConversationGuard, SessionGuard};
+pub use auth_state::{ResultScope, SessionGuard};
 pub mod conversation;
 mod outgoing_typing;
 mod conversation_listing;

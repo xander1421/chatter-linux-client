@@ -352,10 +352,10 @@ pub(crate) async fn load_channel_into_ui_owned(
     // 2. Load the page: receipts, timer marks, reply counts and the unread
     // divider are core's (`ChatterClient::open_conversation`).
     let generation = crate::bin_ui::decode_cache::thumbnail_generation();
-    let page = match ui_ctx.open_conversation(
+    let mut page = match ui_ctx.open_conversation(
         chatter_core::state::ActiveConversation::Channel(channel_id),
         PageAnchor::Opening(anchor),
-        || owner.is_current(),
+        owner.scope(),
     ) {
         Ok(page) => page,
         Err(e) => {
@@ -381,7 +381,7 @@ pub(crate) async fn load_channel_into_ui_owned(
 
     // 3. Prepare the rows' images (pixels stay in the UI)
     let display_messages =
-        crate::bin_ui::converters::prepare_rows(page.rows, false, generation).await;
+        crate::bin_ui::converters::prepare_rows(std::mem::take(&mut page.rows), false, generation).await;
     if let Some(started) = open_started {
         tracing::info!(
             kind = "channel",
@@ -392,9 +392,6 @@ pub(crate) async fn load_channel_into_ui_owned(
         );
     }
 
-    if !owner.is_current() {
-        return;
-    }
     // 4. Update UI
     let metadata = ChannelMetadata::from_channel(&channel);
     let conversation_type = channel.conversation_type();
@@ -406,12 +403,8 @@ pub(crate) async fn load_channel_into_ui_owned(
         .unwrap_or_default();
     let ui_ctx_gifs = ui_ctx.clone();
 
-    let (unread_index, unread_count) = (page.unread_index, page.unread_count);
-    crate::run_history_ui!(weak, owner, |w| {
-        let pane = w.global::<crate::ChatPane>();
-        pane.set_unread_index(unread_index.map_or(-1, |i| i as i32));
-        pane.set_unread_count(unread_count as i32);
-        pane.set_is_at_bottom(unread_index.is_none());
+    crate::bin_ui::features::history_owner::apply_if_current(&weak, page, move |w, page| {
+        super::apply_unread_anchor(&w, &page);
         metadata.apply(&w);
         crate::bin_ui::converters::set_conversation_kind(
             &w,

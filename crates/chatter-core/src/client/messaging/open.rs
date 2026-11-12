@@ -5,6 +5,7 @@ use std::sync::Arc;
 use super::ChatterClient;
 use crate::domain::ids::MessageId;
 use crate::domain::message::{ConversationType, Message, UnreadAnchor};
+use crate::client::ResultScope;
 use crate::client::conversation::ConversationError;
 use crate::state::ActiveConversation;
 use crate::ui::message_row::{MessageRow, apply_reply_counts, mark_disappearing};
@@ -27,8 +28,10 @@ pub enum PageAnchor {
 }
 
 /// One page of a conversation, ready for the list.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ConversationPage {
+    /// The session and load of the conversation this page was made for.
+    pub scope: ResultScope,
     /// Display rows, oldest first. Timer-change notices are not rows.
     pub rows: Vec<MessageRow>,
     /// [`PageAnchor::Opening`] only: the row the unread divider sits above;
@@ -41,20 +44,33 @@ pub struct ConversationPage {
     pub last_stored: Option<MessageId>,
 }
 
+impl ConversationPage {
+    /// A page with no rows, for `scope`.
+    pub fn empty(scope: ResultScope) -> Self {
+        Self {
+            scope,
+            rows: Vec::new(),
+            unread_index: None,
+            unread_count: 0,
+            last_stored: None,
+        }
+    }
+}
+
 impl ChatterClient {
     /// Load one page of `conversation` and shape it into rows: read
     /// receipts, disappearing marks, thread reply counts and timer-notice
     /// filtering all happen here, so every open and every history page
     /// follows the same rules.
     ///
-    /// `is_current` is the caller's staleness check; receipts go out only
-    /// while it holds, so a page loaded for a conversation the user has
-    /// already left receipts nothing.
+    /// `scope` is the load the page is for ([`Self::view_scope`]); the page
+    /// carries it. Receipts go out only while it is current, so a page
+    /// loaded for a conversation the user has already left receipts nothing.
     pub fn open_conversation(
         self: &Arc<Self>,
         conversation: ActiveConversation,
         anchor: PageAnchor,
-        is_current: impl Fn() -> bool,
+        scope: ResultScope,
     ) -> Result<ConversationPage, ConversationError> {
         let (Some(channel_id), Some(kind)) = (
             conversation.channel_id(),
@@ -98,7 +114,7 @@ impl ChatterClient {
                 kind,
                 ConversationType::SavedMessages | ConversationType::AnonGroup
             )
-            && is_current()
+            && scope.is_current()
         {
             self.conversation(conversation)
                 .send_read_receipts_for_page(&messages);
@@ -134,6 +150,7 @@ impl ChatterClient {
             _ => (None, 0),
         };
         Ok(ConversationPage {
+            scope,
             rows,
             unread_index,
             unread_count,

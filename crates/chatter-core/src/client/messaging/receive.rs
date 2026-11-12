@@ -17,6 +17,9 @@ use crate::ui::message_row::{MessageRow, mark_disappearing};
 /// [`ChatterClient::incoming_message`].
 #[derive(Clone, Debug)]
 pub struct IncomingUpdate {
+    /// The session the update was decided in (session-wide: the sidebar
+    /// part applies whichever conversation is open).
+    pub scope: crate::client::ResultScope,
     /// The message's conversation is on screen: insert the row (or route it
     /// to the thread panel). The conversation was marked read.
     pub is_active: bool,
@@ -96,7 +99,14 @@ impl ChatterClient {
     ///
     /// Sends no read receipts: those go out when a conversation is opened
     /// ([`Self::open_conversation`]).
-    pub fn incoming_message(self: &Arc<Self>, message: &Message) -> IncomingUpdate {
+    ///
+    /// `scope` is the session the message arrived in
+    /// ([`Self::session_scope`]); the update carries it.
+    pub fn incoming_message(
+        self: &Arc<Self>,
+        message: &Message,
+        scope: crate::client::ResultScope,
+    ) -> IncomingUpdate {
         let conversation_id = message.conversation_id;
         let conv_type = &message.conversation_type;
         let sender_id = message.sender_id;
@@ -150,6 +160,7 @@ impl ChatterClient {
             .is_some_and(|(root, panel)| panel.root_message_id == root);
 
         IncomingUpdate {
+            scope,
             is_active,
             replaces_existing: replaces_existing(message),
             marks_delivered: !conv_type.is_anon(),
@@ -218,7 +229,7 @@ mod tests {
             .open_conversation(
                 ActiveConversation::ServerDm { peer_id: peer },
                 PageAnchor::Newest,
-                || false,
+                client.session_scope(),
             )
             .expect("reload");
         assert_eq!(format!("{live:?}"), format!("{:?}", page.rows[0]));
