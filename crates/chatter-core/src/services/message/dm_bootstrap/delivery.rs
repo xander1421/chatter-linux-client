@@ -35,6 +35,18 @@ impl MessageService {
         let mut last_error = None;
 
         for attempt in 0..2 {
+            // Send to peer's device inbox via anonymous client (no AuthInterceptor)
+            // to avoid dual-auth rejection — GRA-436. Resolved before any
+            // session is advanced or token spent: Shield with no Tor route is
+            // refused while the send is still provably local.
+            let mut message_client = if self.shield_mode.load(std::sync::atomic::Ordering::Acquire)
+            {
+                grpc_pool
+                    .secret_message_client()
+                    .map_err(MessageError::Network)?
+            } else {
+                grpc_pool.anonymous_message_client()
+            };
             let mut messages = Vec::with_capacity(devices.len());
             for &peer_device_id in &devices {
                 crate::services::gateway::submission::mark_submission_started()?;
@@ -78,16 +90,6 @@ impl MessageService {
                 }
             };
 
-            // Send to peer's device inbox via anonymous client (no AuthInterceptor)
-            // to avoid dual-auth rejection — GRA-436
-            let mut message_client = if self.shield_mode.load(std::sync::atomic::Ordering::Acquire)
-            {
-                grpc_pool
-                    .secret_message_client()
-                    .map_err(MessageError::Network)?
-            } else {
-                grpc_pool.anonymous_message_client()
-            };
             match message_client
                 .send_with_anonymous_credential(
                     &uuid::Uuid::new_v4().to_string(),

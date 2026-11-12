@@ -187,6 +187,15 @@ impl NetworkError {
         )
     }
 
+    /// No byte of the request left the device: the connection or readiness
+    /// check failed first, or a secret-chat send found no Tor route.
+    pub fn is_provably_unsent(&self) -> bool {
+        matches!(
+            self,
+            NetworkError::RequestNotSent(_) | NetworkError::SecretChatNeedsTor(_)
+        )
+    }
+
     /// The server answered and refused the request, so nothing it carried
     /// was accepted. Transport failures, timeouts and server-side errors are
     /// not definite: the server may have processed the request anyway.

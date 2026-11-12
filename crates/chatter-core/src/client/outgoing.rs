@@ -144,13 +144,12 @@ impl ChatterClient {
         match outcome {
             Ok(mut result) => {
                 // Shield friend DMs return their stored failed row as Ok.
-                // A mailbox preconnect failure preceded every deposit byte,
-                // even though encryption already started the send journal.
+                // A mailbox preconnect failure or a missing Tor route preceded
+                // every deposit byte, even though encryption already started
+                // the send journal.
                 if matches!(
                     result.send_error.as_ref(),
-                    Some(crate::services::message::MessageError::Network(
-                        crate::error::NetworkError::RequestNotSent(_)
-                    ))
+                    Some(crate::services::message::MessageError::Network(e)) if e.is_provably_unsent()
                 ) {
                     let error = result.send_error.take().unwrap();
                     send_attempt::settle_failure(
