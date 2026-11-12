@@ -100,32 +100,6 @@ fn link_host(url: &str) -> String {
         .to_string()
 }
 
-pub fn day_label(datetime: DateTime<Utc>) -> String {
-    day_label_at(
-        datetime.with_timezone(&Local).date_naive(),
-        Local::now().date_naive(),
-    )
-}
-
-pub fn initials_from_name(name: &str) -> String {
-    name.split_whitespace()
-        .take(2)
-        .filter_map(|word| word.chars().next())
-        .collect::<String>()
-        .to_uppercase()
-}
-
-fn day_label_at(day: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
-    let days_ago = (today - day).num_days();
-    match days_ago {
-        0 => "Today".to_string(),
-        1 => "Yesterday".to_string(),
-        2..=6 => day.format("%A").to_string(),
-        _ if day.year() == today.year() => day.format("%b %-d").to_string(),
-        _ => day.format("%b %-d, %Y").to_string(),
-    }
-}
-
 /// The chat list's short local date, shared with call history.
 pub fn sidebar_time(at: DateTime<Utc>) -> String {
     chatter_core::services::server_records::sidebar_time_at(at, Local::now())

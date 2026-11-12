@@ -324,7 +324,7 @@ fn finish_save(w: &MainWindow, owner: Owner, r: Request, result: Result<Profile,
                     .into(),
             );
             w.global::<crate::SidebarPane>().set_user_initials(
-                crate::bin_ui::converters::initials_from_name(&profile.display_name).into(),
+                chatter_core::ui::message_row::initials_from_name(&profile.display_name).into(),
             );
             w.global::<crate::ModalHostState>()
                 .set_profile_initials(w.global::<crate::SidebarPane>().get_user_initials());

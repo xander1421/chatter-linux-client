@@ -70,7 +70,7 @@ pub fn build_own_message_item(
         message_id: message_id.into(),
         sender_id: sender_id.into(),
         sender_name: sender_name.into(),
-        sender_initials: crate::bin_ui::converters::initials_from_name(sender_name).into(),
+        sender_initials: chatter_core::ui::message_row::initials_from_name(sender_name).into(),
         content,
         rich_content,
         timestamp: timestamp.into(),
@@ -109,7 +109,7 @@ pub fn build_own_message_item(
         show_sender: true,
         delivery_status: delivery_status.into(),
         // Just sent, so today's chip.
-        date_separator_text: crate::bin_ui::converters::day_label(chrono::Utc::now()).into(),
+        date_separator_text: chatter_core::util::time::day_label(chrono::Utc::now()).into(),
         ..Default::default()
     }
 }

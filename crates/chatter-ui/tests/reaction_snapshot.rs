@@ -173,11 +173,8 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
             .get_message_local(&target.id)
             .unwrap()
             .unwrap();
-        let initial = chatter_ui::bin_ui::converters::message_to_display_data(
-            &persisted,
-            "Author",
-            &[],
-            None,
+        let initial = chatter_ui::bin_ui::converters::MessageDisplayData::from(
+            chatter_core::ui::message_row::message_to_row(&persisted, "Author", &[], None),
         )
         .to_slint_with_user(&own.to_string());
         assert!(
@@ -259,11 +256,8 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
             .get_message_local(&target.id)
             .unwrap()
             .unwrap();
-        let initial = chatter_ui::bin_ui::converters::message_to_display_data(
-            &persisted,
-            "Author",
-            &[],
-            None,
+        let initial = chatter_ui::bin_ui::converters::MessageDisplayData::from(
+            chatter_core::ui::message_row::message_to_row(&persisted, "Author", &[], None),
         )
         .to_slint_with_user(&own.to_string());
         assert!(

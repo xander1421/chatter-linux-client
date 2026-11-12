@@ -351,38 +351,3 @@ pub fn pending_attachment_to_slint(attachment: &PendingAttachment) -> PendingAtt
         thumbnail,
     }
 }
-
-/// Off-thread history resolver: old downloaded videos also receive previews.
-/// Four attempts per page bound decoder work independently of history size.
-pub fn attachment_display_resolver(
-    client: &chatter_core::client::ChatterClient,
-) -> impl Fn(&chatter_core::domain::ids::AttachmentId) -> Option<Attachment> + '_ {
-    #[cfg(target_os = "android")]
-    let remaining = std::cell::Cell::new(4usize);
-    let revision = client.session_revision();
-    move |id| {
-        if client.session_revision() != revision {
-            return None;
-        }
-        let attachment = client.get_attachment_metadata(id)?;
-        #[cfg(target_os = "android")]
-        let mut attachment = attachment;
-        #[cfg(target_os = "android")]
-        if attachment.metadata.is_video()
-            && attachment
-                .metadata
-                .thumbnail
-                .as_ref()
-                .is_none_or(|b| b.is_empty())
-            && !attachment.needs_download()
-            && remaining.get() > 0
-        {
-            remaining.set(remaining.get() - 1);
-            match client.decrypt_and_extract_video_thumbnail(id) {
-                Ok(result) => attachment.metadata.thumbnail = Some(result.image_bytes),
-                Err(e) => tracing::warn!(error = %e, "History video preview extraction failed"),
-            }
-        }
-        (client.session_revision() == revision).then_some(attachment)
-    }
-}

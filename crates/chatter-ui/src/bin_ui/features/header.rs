@@ -12,7 +12,7 @@ use chatter_core::media::performance_trace as viewport_trace;
 use chatter_core::state::ActiveConversation;
 
 use crate::MainWindow;
-use crate::bin_ui::converters::messages_to_display_batch_deferred;
+use chatter_core::client::PageAnchor;
 
 // Slint invokes both phases synchronously around settle-inner, on the same UI
 // thread. A fixed stack supports reentrant callbacks without heap allocation,
@@ -1273,37 +1273,19 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
             ui_ctx.set_message_loading(channel_id, false);
             return;
         }
-        // Channel classification can read storage; resolve off the UI thread
-        // using the same captured conversation as admission and ownership.
-        let Some(conversation_type) = ui_ctx.conversation_type_of(&conversation) else {
-            ui_ctx.set_message_loading(channel_id, false);
-            return;
+        // Same core method as a conversation open, a different anchor: timer
+        // marks, reply counts and timer-notice filtering come with the page.
+        let anchor = match &load {
+            HistoryLoad::Older(before) => PageAnchor::Older(*before),
+            HistoryLoad::Newer(after, _) => PageAnchor::Newer(*after),
+            HistoryLoad::Newest => PageAnchor::Newest,
+            HistoryLoad::Reaching(target) => PageAnchor::Reaching(*target),
         };
-        // A switch, reload, or session change may have happened during lookup.
-        if !owner.is_current() {
-            ui_ctx.set_message_loading(channel_id, false);
-            return;
-        }
-        let messages = match &load {
-            HistoryLoad::Older(before) => {
-                ui_ctx.get_older_messages_local_asc(&channel_id, &conversation_type, before)
-            }
-            HistoryLoad::Newer(after, _) => {
-                ui_ctx.get_newer_messages_local_asc(&channel_id, &conversation_type, after)
-            }
-            HistoryLoad::Newest => ui_ctx.get_messages_local_asc(
-                &channel_id,
-                &conversation_type,
-                None,
-                chatter_core::config::MESSAGE_PAGE_SIZE as u32,
-            ),
-            HistoryLoad::Reaching(target) => {
-                ui_ctx.get_messages_local_reaching(&channel_id, &conversation_type, target)
-            }
-        };
+        let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+        let page = ui_ctx.open_conversation(conversation, anchor, || owner.is_current());
         ui_ctx.set_message_loading(channel_id, false);
-        let messages = match messages {
-            Ok(msgs) => msgs,
+        let page = match page {
+            Ok(page) => page,
             Err(e) => {
                 tracing::error!("Failed to load more messages: {}", e);
                 if jump {
@@ -1323,7 +1305,8 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
                 return;
             }
         };
-        if messages.is_empty() {
+        // Empty means the store returned nothing, timer notices included.
+        if page.last_stored.is_none() {
             if matches!(load, HistoryLoad::Newest) {
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(w) = weak.upgrade() else { return };
@@ -1381,26 +1364,12 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
             return;
         }
 
-        let fetched_cursor = messages.last().map(|row| row.id.to_string());
-        let messages = chatter_core::services::disappearing::visible_history_messages(messages);
+        let fetched_cursor = page.last_stored.map(|id| id.to_string());
         if !owner.is_current() {
             return;
         }
-        // Convert older messages to display data
-        let mut display_messages = crate::rt_handle().block_on(messages_to_display_batch_deferred(
-            &messages,
-            |ms| ui_ctx.message_sender_display_names(ms),
-            |m| ui_ctx.message_sender_avatar(m),
-            crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
-            |m| ui_ctx.reply_author_display_name(m),
-            |m| ui_ctx.reply_parent_missing_for(m),
-            |m| ui_ctx.reply_parent_media(m),
-            |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-        ));
-        crate::bin_ui::converters::mark_disappearing(&ui_ctx, &mut display_messages);
-        crate::bin_ui::converters::apply_reply_counts(
-            &mut display_messages,
-            &ui_ctx.thread_reply_counts(&channel_id, &conversation_type),
+        let display_messages = crate::rt_handle().block_on(
+            crate::bin_ui::converters::prepare_rows(page.rows, false, generation),
         );
 
         // Get current user ID for is_own calculation

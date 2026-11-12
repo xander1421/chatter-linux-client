@@ -19,6 +19,27 @@ pub fn format_message_time(sent_at: DateTime<Utc>) -> String {
     sent_at.with_timezone(&Local).format("%H:%M").to_string()
 }
 
+/// Local day chip above a message: "Today", "Yesterday", a weekday within the
+/// week, then "Mar 4" (this year) or "Mar 4, 2025".
+pub fn day_label(datetime: DateTime<Utc>) -> String {
+    day_label_at(
+        datetime.with_timezone(&Local).date_naive(),
+        Local::now().date_naive(),
+    )
+}
+
+fn day_label_at(day: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
+    use chrono::Datelike;
+    let days_ago = (today - day).num_days();
+    match days_ago {
+        0 => "Today".to_string(),
+        1 => "Yesterday".to_string(),
+        2..=6 => day.format("%A").to_string(),
+        _ if day.year() == today.year() => day.format("%b %-d").to_string(),
+        _ => day.format("%b %-d, %Y").to_string(),
+    }
+}
+
 /// A moment for message details: "Today, 12:16:37", "Yesterday, 09:02:11",
 /// otherwise "21 Oct 2026, 18:40:05" — local time, as Signal's message info.
 pub fn format_detail_time(at: DateTime<Utc>) -> String {

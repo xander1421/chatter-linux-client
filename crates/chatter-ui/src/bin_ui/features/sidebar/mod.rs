@@ -275,7 +275,6 @@ fn settle_arrivals(
 }
 
 // Re-export public functions
-pub use channel::load_channel_into_ui;
 
 /// Wire sidebar callbacks (channel/DM selection, settings, profile).
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {

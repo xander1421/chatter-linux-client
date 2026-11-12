@@ -106,7 +106,7 @@ pub fn registration_avatar(name: &str, color: [u8; 3]) -> Option<Vec<u8>> {
         "/../../assets/fonts/Inter-SemiBold.ttf"
     )))
     .ok()?;
-    let initials = super::initials_from_name(name);
+    let initials = chatter_core::ui::message_row::initials_from_name(name);
     let text = if initials.is_empty() {
         "?"
     } else {

@@ -30,7 +30,7 @@
 //! it afterwards — `channel/service/channels.go` UpdateChannel).
 
 use crate::domain::anon_dm::AnonDmId;
-use crate::domain::disappearing::{SECRET_CHAT_DEFAULT_SECONDS, is_timer_notice, timer_label};
+use crate::domain::disappearing::{SECRET_CHAT_DEFAULT_SECONDS, timer_label};
 use crate::domain::ids::{ChannelId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
 use crate::error::StorageError;
@@ -47,15 +47,6 @@ pub fn activation_minutes(text: &str) -> Option<u32> {
 }
 
 pub const DEFAULT_ACTIVATION_SECONDS: u32 = 300;
-
-/// Keep internal timer-change rows out of the displayed message history.
-/// The caller may check whether the raw page was empty before shaping it.
-pub fn visible_history_messages(messages: Vec<Message>) -> Vec<Message> {
-    messages
-        .into_iter()
-        .filter(|message| !is_timer_notice(message))
-        .collect()
-}
 
 /// The picker's choices, in seconds. `0` = off.
 pub const TIMER_PRESETS: [u32; 8] = [0, 30, 300, 3_600, 28_800, 86_400, 604_800, 2_419_200];

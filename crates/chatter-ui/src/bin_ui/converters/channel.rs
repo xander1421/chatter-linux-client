@@ -1,6 +1,6 @@
 //! Channel and DM converters.
 
-use crate::bin_ui::converters::initials_from_name;
+use chatter_core::ui::message_row::initials_from_name;
 
 use chatter_core::ui::sidebar_data::{
     ChatRowLabel, ChatRowSendData, chat_row_accessible_label,

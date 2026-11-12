@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
-use chatter_core::client::ChatterClient;
+use chatter_core::client::{ChatterClient, PageAnchor};
 use chatter_core::domain::anon_group::AnonGroupId;
 
 use crate::MainWindow;
@@ -57,13 +57,14 @@ pub fn load_private_group_messages(
         let current_user_id = auth_state.auth_snapshot().current_user_id;
         let current_user_id_str = current_user_id.map(|id| id.to_string()).unwrap_or_default();
 
-        // Load messages for this group (reaction counts populated in core).
-        let messages = match ui_ctx.get_anon_group_messages_asc(
-            &group_id,
-            None,
-            chatter_core::config::MESSAGE_PAGE_SIZE,
+        // The newest page, with no unread divider (a refresh, not an open).
+        let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+        let rows = match ui_ctx.open_conversation(
+            chatter_core::state::ActiveConversation::AnonGroup(group_id),
+            PageAnchor::Opening(Default::default()),
+            || owner.is_current(),
         ) {
-            Ok(msgs) => msgs,
+            Ok(page) => page.rows,
             Err(e) => {
                 tracing::error!(
                     "Failed to load messages for private group {}: {}",
@@ -73,17 +74,7 @@ pub fn load_private_group_messages(
                 Vec::new()
             }
         };
-
-        let display_messages = crate::bin_ui::converters::messages_to_display_batch_deferred(
-            &messages,
-            |ms| ui_ctx.message_sender_display_names(ms),
-            |m| ui_ctx.message_sender_avatar(m),
-            crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
-            |m| ui_ctx.reply_author_display_name(m),
-            |m| ui_ctx.reply_parent_missing_for(m),
-            |m| ui_ctx.reply_parent_media(m),
-            |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-        ).await;
+        let display_messages = crate::bin_ui::converters::prepare_rows(rows, false, generation).await;
 
         // Update UI to show selected group and messages
         let group_name = group.name.clone();
@@ -274,34 +265,27 @@ async fn load_private_group_messages_internal(
         .map(|id| id.to_string())
         .unwrap_or_default();
 
-    // Reaction counts populated in core.
-    let messages = anchor
-        .opening_page(chatter_core::config::MESSAGE_PAGE_SIZE as u32, |limit| {
-            ui_ctx.get_anon_group_messages_asc(&group_id, None, limit as i32)
-        })
+    // An unreadable page opens empty, as before.
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+    let page = ui_ctx
+        .open_conversation(
+            chatter_core::state::ActiveConversation::AnonGroup(group_id),
+            PageAnchor::Opening(anchor),
+            || owner.is_current(),
+        )
         .unwrap_or_default();
-
-    let display_messages = crate::bin_ui::converters::messages_to_display_batch_deferred(
-        &messages,
-        |ms| ui_ctx.message_sender_display_names(ms),
-        |m| ui_ctx.message_sender_avatar(m),
-        crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
-        |m| ui_ctx.reply_author_display_name(m),
-        |m| ui_ctx.reply_parent_missing_for(m),
-        |m| ui_ctx.reply_parent_media(m),
-        |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-    ).await;
+    let display_messages =
+        crate::bin_ui::converters::prepare_rows(page.rows, false, generation).await;
 
     let group_name = group.name.clone();
     let group_id_str = group_id.to_string();
     let ui_ctx_gifs = ui_ctx.clone();
     let ui_ctx_for_ui = ui_ctx.clone();
-    let anchor = ui_ctx_for_ui.opening_unread_anchor(anchor);
-    let unread_index = anchor.divider_index(&messages);
+    let (unread_index, unread_count) = (page.unread_index, page.unread_count);
     crate::run_history_ui!(weak, owner, |w| {
         let pane = w.global::<crate::ChatPane>();
         pane.set_unread_index(unread_index.map_or(-1, |i| i as i32));
-        pane.set_unread_count(anchor.unread_count as i32);
+        pane.set_unread_count(unread_count as i32);
         pane.set_is_at_bottom(unread_index.is_none());
         // Clear unread count in sidebar
         crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::bin_ui::converters::avatar_bytes_to_image;
-use crate::bin_ui::converters::initials_from_name;
+use chatter_core::ui::message_row::initials_from_name;
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 use chatter_core::client::ChatterClient;
 use chatter_core::client::calls::OutgoingCallStart;
