@@ -106,6 +106,39 @@ impl ConversationType {
         !self.is_secret_chat()
     }
 
+    /// Whether messages here offer "Reply in thread". Threads are a channel
+    /// feature (none in 1:1 or groups, as in Signal).
+    #[must_use]
+    pub fn can_thread(&self) -> bool {
+        matches!(self, Self::Channel)
+    }
+
+    /// Whether the chat menu offers "Disappearing messages". Only secret 1:1
+    /// chats set their timer from there.
+    #[must_use]
+    pub fn can_set_disappearing_from_menu(&self) -> bool {
+        matches!(self, Self::AnonDm)
+    }
+
+    /// Whether a chat-list row of this kind offers "Delete chat" by kind
+    /// alone (DMs). Channels and groups need a former/removed state as well.
+    #[must_use]
+    pub fn can_delete_from_list(&self) -> bool {
+        matches!(self, Self::ServerDm | Self::AnonDm)
+    }
+
+    /// Whether a chat-list row of this kind offers Mute.
+    #[must_use]
+    pub fn can_mute(&self) -> bool {
+        matches!(self, Self::ServerDm | Self::AnonDm | Self::AnonGroup | Self::Channel)
+    }
+
+    /// Whether Mute offers durations. Anon groups mute by status, no timer.
+    #[must_use]
+    pub fn can_mute_timed(&self) -> bool {
+        self.can_mute() && *self != Self::AnonGroup
+    }
+
     /// Parse from database string representation.
     ///
     /// Returns an error for unknown conversation types instead of silently
@@ -309,5 +342,31 @@ mod window_tests {
         let page = vec![text(1), notice, text(3), text(4)];
         let anchor = UnreadAnchor { unread_count: 1, unread_sent_at: vec![4] };
         assert_eq!(anchor.divider_index(&page), Some(2));
+    }
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::ConversationType as CT;
+
+    /// The kind rules the UI used to decide in `.slint`, row by row:
+    /// (kind, thread, disappearing-in-menu, delete-from-list, mute, timed mute).
+    #[test]
+    fn kind_capabilities() {
+        for (kind, thread, disappearing, delete, mute, timed) in [
+            (CT::Channel, true, false, false, true, true),
+            (CT::ServerDm, false, false, true, true, true),
+            (CT::AnonDm, false, true, true, true, true),
+            (CT::AnonGroup, false, false, false, true, false),
+            (CT::SavedMessages, false, false, false, false, false),
+            (CT::Mesh, false, false, false, false, false),
+            (CT::MeshDm, false, false, false, false, false),
+        ] {
+            assert_eq!(kind.can_thread(), thread, "{kind:?}");
+            assert_eq!(kind.can_set_disappearing_from_menu(), disappearing, "{kind:?}");
+            assert_eq!(kind.can_delete_from_list(), delete, "{kind:?}");
+            assert_eq!(kind.can_mute(), mute, "{kind:?}");
+            assert_eq!(kind.can_mute_timed(), timed, "{kind:?}");
+        }
     }
 }

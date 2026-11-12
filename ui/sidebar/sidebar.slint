@@ -795,7 +795,7 @@ export component Sidebar inherits Rectangle {
                             SidebarPane.ctx-menu-is-pinned = entry.chat.is-pinned;
                             SidebarPane.ctx-menu-is-archived = entry.kind == "archived-chat";
                             SidebarPane.ctx-menu-can-leave = entry.chat.can-leave;
-                            SidebarPane.ctx-menu-can-delete-channel = entry.chat.can-delete;
+                            SidebarPane.ctx-menu-can-delete = entry.chat.can-delete;
                             SidebarPane.ctx-menu-x = x;
                             SidebarPane.ctx-menu-y = y;
                             SidebarPane.ctx-menu-current-section-id = "";
@@ -842,7 +842,7 @@ export component Sidebar inherits Rectangle {
                             SidebarPane.ctx-menu-row-y = section-chat-row.absolute-position.y - root.absolute-position.y;
                             SidebarPane.ctx-menu-conv-id = entry.chat.conversation-id;
                             SidebarPane.ctx-menu-can-leave = entry.chat.can-leave;
-                            SidebarPane.ctx-menu-can-delete-channel = entry.chat.can-delete;
+                            SidebarPane.ctx-menu-can-delete = entry.chat.can-delete;
                             SidebarPane.ctx-menu-conv-type = entry.chat.conversation-type;
                             SidebarPane.ctx-menu-x = x;
                             SidebarPane.ctx-menu-y = y;

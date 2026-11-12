@@ -328,7 +328,7 @@ export component AppTopOverlays inherits Rectangle {
         preview-audio-elapsed: ChatPane.audio-elapsed;
         retry-clicked(id) => { ChatPane.message-clicked(id); }
         info-clicked(id) => { MessageInfo.open(id); }
-        can-thread: ChatPane.conversation-kind == ConversationKind.channel && !root.context-menu-preview-from-thread;
+        can-thread: ChatPane.can-thread && !root.context-menu-preview-from-thread;
 
         close => {
             ChatPane.context-menu-visible = false;
@@ -460,7 +460,7 @@ export component AppTopOverlays inherits Rectangle {
         is-archived: SidebarPane.ctx-menu-is-archived;
         is-muted: SidebarPane.row-context-menu-muted;
         can-leave: SidebarPane.ctx-menu-can-leave;
-        can-delete-channel: SidebarPane.ctx-menu-can-delete-channel;
+        can-delete: SidebarPane.ctx-menu-can-delete;
         sections: SidebarPane.custom-sections;
 
         // An action that opens a dialog (new section, delete) keeps it focused.

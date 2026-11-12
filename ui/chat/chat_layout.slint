@@ -33,6 +33,7 @@ export component ChatLayout inherits Rectangle {
     in property <string> channel-id: "";
     in property <string> channel-name: "";
     in property <ConversationKind> conversation-kind;
+    in property <bool> can-thread: true;
     in property <bool> private-channel: false;
     // Core's own statement of where this conversation's messages go, for the
     // conversations whose kind cannot say it (the Jarvis channel: local or
@@ -362,7 +363,7 @@ export component ChatLayout inherits Rectangle {
         mobile: root.mobile;
         is-dm: root.is-dm;
                     is-anonymous: root.is-anonymous;
-        can-thread: root.conversation-kind == ConversationKind.channel;
+        can-thread: root.can-thread;
         is-mesh: MeshGlobal.active-id != "";
         // A mesh room and a geohash cell are plaintext broadcasts. Only a
         // mesh DM runs over Noise, so only it keeps the lock.

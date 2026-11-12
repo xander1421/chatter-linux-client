@@ -344,7 +344,7 @@ export component AppSecondaryModals inherits Rectangle {
         show-video-call: ChatPane.chat-menu-video;
         show-settings: ChatPane.chat-menu-settings;
         show-secret-chat: ChatPane.chat-menu-secret-chat;
-        show-disappearing: ChatPane.conversation-kind == ConversationKind.anon-dm;
+        show-disappearing: ChatPane.can-set-disappearing-from-menu;
         show-pinned: true;
         pinned => { ModalHostState.nav-close("chat-menu"); ChatPane.pinned-show-clicked(); }
         show-invite: ChatPane.header-can-invite;

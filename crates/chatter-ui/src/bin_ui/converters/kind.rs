@@ -44,6 +44,9 @@ pub fn set_conversation_kind(
 ) {
     w.global::<crate::ChatPane>()
         .set_conversation_kind(conversation_kind(ct));
+    w.global::<crate::ChatPane>().set_can_thread(ct.can_thread());
+    w.global::<crate::ChatPane>()
+        .set_can_set_disappearing_from_menu(ct.can_set_disappearing_from_menu());
     w.global::<crate::ChatPane>()
         .set_private_channel(private_channel);
     w.global::<crate::ChatPane>()
