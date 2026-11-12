@@ -37,7 +37,8 @@ async fn shield_bootstrap_without_cached_devices_is_not_reachable_privately() {
 /// is refused and releases admission. Once a device is cached the later
 /// send gets past device preparation, but with no pinned server `.onion` it
 /// is refused with `SecretChatNeedsTor` — and that refusal must release
-/// admission too and queue nothing for a later flush.
+/// admission too, queue nothing for a later flush, spend no token and leave
+/// a failed (not unconfirmed) row.
 #[tokio::test]
 async fn public_core_shield_refusals_release_admission_including_no_tor_route() {
     use crate::state::ActiveConversation;
@@ -78,15 +79,15 @@ async fn public_core_shield_refusals_release_admission_including_no_tor_route() 
     );
     seed_tokens(client.messages(), 2);
     let later = client.send_text(conversation, "second").await.unwrap();
-    assert!(
-        matches!(
-            later.send_error,
-            Some(MessageError::Network(crate::error::NetworkError::SecretChatNeedsTor(_)))
-        ),
-        "got {:?}",
-        later.send_error
-    );
     assert!(!later.bootstrap_initiated);
+    // Provably unsent (`SecretChatNeedsTor`, settled like `RequestNotSent`):
+    // a retryable failed bubble with its reason, never an unconfirmed
+    // `sending` row, and no token spent.
+    assert!(later.send_error.is_none(), "got {:?}", later.send_error);
+    let row = later.message.unwrap();
+    assert_eq!(row.delivery_status, "failed");
+    assert_eq!(row.failure_reason.as_deref(), Some(crate::services::message::core::NO_TOR_ROUTE));
+    assert_eq!(client.messages().token_manager.available_token_count().unwrap(), 2);
     client.ensure_send_available(conversation).unwrap();
     assert!(
         client

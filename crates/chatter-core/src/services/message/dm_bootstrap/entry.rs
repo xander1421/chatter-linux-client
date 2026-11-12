@@ -122,9 +122,11 @@ impl MessageService {
         // Before a mailbox is made or a token spent: is any device reachable?
         let devices = self.bootstrap_devices(auth_client, peer_id).await?;
 
+        // No Tor route in Shield is refused here, before the send starts:
+        // nothing was submitted, so the row fails rather than goes unconfirmed.
+        let mut anon_mailbox_client = self.bootstrap_mailbox_client(grpc_pool)?;
         crate::services::gateway::submission::mark_submission_started()?;
         let dm_bootstrap = DmBootstrap::new(self.database.clone());
-        let mut anon_mailbox_client = self.bootstrap_mailbox_client(grpc_pool)?;
 
         match dm_bootstrap
             .initiate_dm(*peer_id, &mut anon_mailbox_client)

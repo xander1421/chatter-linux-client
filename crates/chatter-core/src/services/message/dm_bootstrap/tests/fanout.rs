@@ -2,7 +2,8 @@ use super::*;
 
 /// Shield with no pinned server `.onion` refuses a multi-device REQUEST
 /// with `SecretChatNeedsTor`: the fan-out never falls back to the direct
-/// transport, and nothing is queued for a later flush.
+/// transport, nothing is queued for a later flush, and no anonymous token
+/// is spent on a send that cannot go out.
 #[tokio::test]
 async fn shield_request_without_onion_is_refused_not_sent_direct() {
     let me = UserId::from_uuid(uuid::Uuid::max());
@@ -28,6 +29,8 @@ async fn shield_request_without_onion_is_refused_not_sent_direct() {
         "got {sent:?}"
     );
     assert!(ms.pending_dms.drain(&friend).unwrap().is_empty());
+    // Refused before any credential is spent: no byte can leave the device.
+    assert_eq!(ms.token_manager.available_token_count().unwrap(), 10);
 }
 
 /// F54: with device 6 ready, a send owes its copy to devices 7 and 8
@@ -41,6 +44,9 @@ async fn unready_devices_are_owed_each_copy_and_asked_once() {
     let friend = UserId::from_uuid(uuid::Uuid::from_u128(1));
     let (client, _dir) = shield_client(me);
     let ms = client.messages();
+    // Each attempted ask spends a token. Shield with no Tor refuses an ask
+    // before spending one (see the REQUEST test above), so count in normal mode.
+    ms.shield_mode.store(false, Ordering::Release);
     cache_sender_certificate(ms, &me);
     let mut rng = StdRng::seed_from_u64(0xF55);
     for device in [6, 7, 8] {

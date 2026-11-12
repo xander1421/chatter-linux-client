@@ -21,6 +21,8 @@ use super::{MessageError, MessageService};
 pub(crate) const DELIVERY_UNCONFIRMED: &str = "Delivery unconfirmed";
 pub(crate) const SHIELD_WAITING_FOR_TOKENS: &str =
     "Shield is getting ready — will send automatically";
+/// A secret-chat send refused locally: no Tor route (`SecretChatNeedsTor`).
+pub(crate) const NO_TOR_ROUTE: &str = "No Tor route";
 pub(crate) const BOOTSTRAP_TIMED_OUT: &str = "Secure channel setup timed out. Tap Retry";
 
 impl MessageError {
@@ -34,6 +36,7 @@ impl MessageError {
         use crate::error::NetworkError;
         match self {
             Self::Network(NetworkError::RequestNotSent(_)) => Some("Message not submitted"),
+            Self::Network(NetworkError::SecretChatNeedsTor(_)) => Some(NO_TOR_ROUTE),
             Self::Network(e) if e.is_retryable() || e.is_transport_error() => None,
             Self::Network(NetworkError::MismatchedDevices { .. }) => None,
             // SpiceDB down answers PermissionDenied. That is a delivery miss,
