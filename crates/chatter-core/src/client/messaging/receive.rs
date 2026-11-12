@@ -84,9 +84,8 @@ impl ChatterClient {
         if let Err(error) = self.unarchive_on_incoming_message(&message) {
             tracing::warn!(%error, "Failed to update archived chat after message");
         }
-        // Every kind gets its disappearing mark live (reload skips it only
-        // when opening a private group); a fresh message has no thread
-        // replies to count.
+        // Every kind gets its disappearing mark live, as on reload; a fresh
+        // message has no thread replies to count.
         let mut rows = self.message_rows(std::slice::from_ref(&message));
         mark_disappearing(self, &mut rows);
         let row = rows.pop()?;

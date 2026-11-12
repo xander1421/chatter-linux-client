@@ -843,7 +843,7 @@ impl ChatterClient {
         self.conversation(conv).disappearing_timer()
     }
 
-    /// Whether the user can change `conv`'s timer (friend DMs only).
+    /// Whether the user can change `conv`'s timer (DMs and secret chats).
     pub fn can_set_disappearing_timer(self: &Arc<Self>, conv: ActiveConversation) -> bool {
         self.conversation(conv).can_set_disappearing_timer()
     }
@@ -866,17 +866,33 @@ impl ChatterClient {
             loop {
                 match src.recv().await {
                     Ok(DomainEvent::MessageReceived { message })
-                        if matches!(message.conversation_type, ConversationType::ServerDm | ConversationType::AnonDm) =>
+                        if matches!(
+                            message.conversation_type,
+                            ConversationType::ServerDm
+                                | ConversationType::AnonDm
+                                | ConversationType::AnonGroup
+                        ) =>
                     {
-                        let peer = crate::domain::ids::UserId::from_uuid(
-                            *message.conversation_id.as_uuid(),
-                        );
-                        let now = if message.conversation_type == ConversationType::AnonDm {
-                            let id = crate::domain::anon_dm::AnonDmId::from_uuid(*message.conversation_id.as_uuid());
-                            crate::services::disappearing::anon_dm_state(&settings, &id)
-                                .effective_seconds(crate::util::time::TimestampNanos::now().as_u64())
-                        } else {
-                            crate::services::disappearing::server_dm_timer(&settings, &peer)
+                        use crate::services::disappearing::{SecretChat, secret_chat_state};
+                        let uuid = *message.conversation_id.as_uuid();
+                        let now = crate::util::time::TimestampNanos::now().as_u64();
+                        let now = match message.conversation_type {
+                            ConversationType::AnonDm => secret_chat_state(
+                                &settings,
+                                SecretChat::Dm(crate::domain::anon_dm::AnonDmId::from_uuid(uuid)),
+                            )
+                            .effective_seconds(now),
+                            ConversationType::AnonGroup => secret_chat_state(
+                                &settings,
+                                SecretChat::Group(
+                                    crate::domain::anon_group::AnonGroupId::from_uuid(uuid),
+                                ),
+                            )
+                            .effective_seconds(now),
+                            _ => crate::services::disappearing::server_dm_timer(
+                                &settings,
+                                &crate::domain::ids::UserId::from_uuid(uuid),
+                            ),
                         };
                         let notice = matches!(
                             message.content,

@@ -3,15 +3,16 @@
 //! timer's human label. Timer state and its policy live in
 //! `services::disappearing`.
 
-use crate::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
+use crate::domain::message::{Message, MessageContent, SystemMessage};
 
 pub const SECRET_CHAT_DEFAULT_SECONDS: u32 = 86_400;
 
 /// Typed presentation filter for internal timer change notices. Keep storage
-/// intact: these rows still drive receive-side timer notifications.
+/// intact: these rows still drive receive-side timer notifications. Secret
+/// chats (anonymous DMs and private groups) show their notices as rows.
 #[must_use]
 pub fn is_timer_notice(message: &Message) -> bool {
-    message.conversation_type != ConversationType::AnonDm
+    !message.conversation_type.is_secret_chat()
         && matches!(
             message.content,
             MessageContent::System(SystemMessage::DisappearingTimerChanged { .. })

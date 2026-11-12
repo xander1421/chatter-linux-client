@@ -1,4 +1,5 @@
-//! Disappearing messages: per-conversation timers for 1:1 DMs.
+//! Disappearing messages: per-conversation timers for 1:1 DMs and secret
+//! chats (anonymous DMs and private groups).
 //!
 //! Signal semantics (`DataMessage.expireTimer` + `Flags.EXPIRATION_TIMER_UPDATE`):
 //!
@@ -30,6 +31,7 @@
 //! it afterwards — `channel/service/channels.go` UpdateChannel).
 
 use crate::domain::anon_dm::AnonDmId;
+use crate::domain::anon_group::AnonGroupId;
 use crate::domain::disappearing::{SECRET_CHAT_DEFAULT_SECONDS, timer_label};
 use crate::domain::ids::{ChannelId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
@@ -194,10 +196,39 @@ fn anon_dm_key(id: &AnonDmId) -> String {
     format!("conv.disappearing.anon_dm.{id}")
 }
 
-/// Persisted secret-chat timer. An existing chat with no timer remains off.
-pub fn anon_dm_state(settings: &SettingsRepository, id: &AnonDmId) -> DmTimer {
+fn anon_group_key(id: &AnonGroupId) -> String {
+    format!("conv.disappearing.anon_group.{id}")
+}
+
+/// A secret chat (anonymous DM or private group): where its timer is kept
+/// and where its notices are filed. Both kinds follow the same rules — any
+/// participant may change the timer, versions order the changes.
+#[derive(Debug, Clone, Copy)]
+pub enum SecretChat {
+    Dm(AnonDmId),
+    Group(AnonGroupId),
+}
+
+impl SecretChat {
+    fn key(self) -> String {
+        match self {
+            Self::Dm(id) => anon_dm_key(&id),
+            Self::Group(id) => anon_group_key(&id),
+        }
+    }
+
+    fn conversation(self) -> (ChannelId, ConversationType) {
+        match self {
+            Self::Dm(id) => (id.into(), ConversationType::AnonDm),
+            Self::Group(id) => (id.into(), ConversationType::AnonGroup),
+        }
+    }
+}
+
+/// Persisted secret-chat timer. A chat with no timer set is off.
+pub fn secret_chat_state(settings: &SettingsRepository, chat: SecretChat) -> DmTimer {
     settings
-        .get::<DmTimer>(&anon_dm_key(id))
+        .get::<DmTimer>(&chat.key())
         .ok()
         .flatten()
         .unwrap_or(DmTimer {
@@ -208,7 +239,7 @@ pub fn anon_dm_state(settings: &SettingsRepository, id: &AnonDmId) -> DmTimer {
         })
 }
 
-/// Install the requested one-day timer when a secret chat is first created.
+/// Install the requested one-day timer when a secret 1:1 chat is first created.
 pub fn initialize_anon_dm_timer(
     settings: &SettingsRepository,
     messages: &MessageRepository,
@@ -216,25 +247,28 @@ pub fn initialize_anon_dm_timer(
     author: &UserId,
     sent_at: u64,
 ) -> Result<(), StorageError> {
-    settings.set(&anon_dm_key(id), &DmTimer {
+    let chat = SecretChat::Dm(*id);
+    settings.set(&chat.key(), &DmTimer {
         seconds: SECRET_CHAT_DEFAULT_SECONDS,
         version: INITIAL_TIMER_VERSION,
         enabled_until: 0,
         activation_seconds: 0,
     })?;
-    file_anon_notice(messages, id, author, SECRET_CHAT_DEFAULT_SECONDS, sent_at)?;
+    file_secret_notice(messages, chat, author, SECRET_CHAT_DEFAULT_SECONDS, sent_at)?;
     Ok(())
 }
 
-pub fn change_anon_dm_timer(
+/// A local change of a secret chat's timer: bump the version, persist, file
+/// the notice. `None` when `seconds` is already the timer.
+pub fn change_secret_chat_timer(
     settings: &SettingsRepository,
     messages: &MessageRepository,
-    id: &AnonDmId,
+    chat: SecretChat,
     author: &UserId,
     seconds: u32,
     sent_at: u64,
 ) -> Result<Option<(Message, DmTimer)>, StorageError> {
-    let current = anon_dm_state(settings, id);
+    let current = secret_chat_state(settings, chat);
     if current.seconds == seconds {
         return Ok(None);
     }
@@ -244,48 +278,51 @@ pub fn change_anon_dm_timer(
         enabled_until: 0,
         activation_seconds: 0,
     };
-    settings.set(&anon_dm_key(id), &next)?;
+    settings.set(&chat.key(), &next)?;
     Ok(Some((
-        file_anon_notice(messages, id, author, seconds, sent_at)?,
+        file_secret_notice(messages, chat, author, seconds, sent_at)?,
         next,
     )))
 }
 
-pub fn adopt_anon_dm_timer(
+/// Adopt a timer `stated` by a received secret-chat message (see the module
+/// doc for the version rule) and file its notice, authored by `author`.
+pub fn adopt_secret_chat_timer(
     settings: &SettingsRepository,
     messages: &MessageRepository,
-    id: &AnonDmId,
+    chat: SecretChat,
     author: &UserId,
     stated: DmTimer,
     sent_at: u64,
 ) -> Result<Option<Message>, StorageError> {
-    let current = anon_dm_state(settings, id);
+    let current = secret_chat_state(settings, chat);
     if stated.version == 0
         || stated.version < current.version
         || (stated.version == current.version && stated.seconds <= current.seconds)
     {
         return Ok(None);
     }
-    settings.set(&anon_dm_key(id), &stated)?;
-    Ok(Some(file_anon_notice(
+    settings.set(&chat.key(), &stated)?;
+    Ok(Some(file_secret_notice(
         messages,
-        id,
+        chat,
         author,
         stated.seconds,
         sent_at,
     )?))
 }
 
-fn file_anon_notice(
+fn file_secret_notice(
     messages: &MessageRepository,
-    id: &AnonDmId,
+    chat: SecretChat,
     author: &UserId,
     seconds: u32,
     sent_at: u64,
 ) -> Result<Message, StorageError> {
+    let (conversation_id, kind) = chat.conversation();
     let mut notice = Message::new_text(
-        (*id).into(),
-        ConversationType::AnonDm,
+        conversation_id,
+        kind,
         Some(*author),
         String::new(),
         sent_at.saturating_sub(1),

@@ -435,11 +435,9 @@ impl ConversationHandle {
                     peer_id,
                 )
             }
-            ActiveConversation::AnonDm(id) => crate::services::disappearing::anon_dm_state(
-                &self.client.anon_dms().settings_repo,
-                id,
-            )
-            .effective_seconds(crate::util::time::TimestampNanos::now().as_u64()),
+            ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_) => self
+                .disappearing_state()
+                .effective_seconds(crate::util::time::TimestampNanos::now().as_u64()),
             ActiveConversation::Channel(channel_id) => self
                 .client
                 .channels()
@@ -462,9 +460,13 @@ impl ConversationHandle {
                     peer_id,
                 )
             }
-            ActiveConversation::AnonDm(id) => crate::services::disappearing::anon_dm_state(
+            ActiveConversation::AnonDm(id) => crate::services::disappearing::secret_chat_state(
                 &self.client.anon_dms().settings_repo,
-                id,
+                crate::services::disappearing::SecretChat::Dm(*id),
+            ),
+            ActiveConversation::AnonGroup(id) => crate::services::disappearing::secret_chat_state(
+                &self.client.anon_groups().settings_repo,
+                crate::services::disappearing::SecretChat::Group(*id),
             ),
             _ => crate::services::disappearing::DmTimer {
                 seconds: self.disappearing_timer(),
@@ -499,19 +501,24 @@ impl ConversationHandle {
         Ok(())
     }
 
-    /// Friend and secret DMs let either participant change the timer. A
-    /// channel's timer is fixed when it is created.
+    /// Friend and secret DMs let either participant change the timer, and a
+    /// private group lets any member change it (as Signal's default "all
+    /// members may edit group info"). A channel's timer is fixed when it is
+    /// created.
     pub fn can_set_disappearing_timer(&self) -> bool {
         matches!(
             self.conversation,
-            ActiveConversation::ServerDm { .. } | ActiveConversation::AnonDm(_)
+            ActiveConversation::ServerDm { .. }
+                | ActiveConversation::AnonDm(_)
+                | ActiveConversation::AnonGroup(_)
         )
     }
 
     /// Set this conversation's disappearing-messages timer (`0` = off).
     ///
-    /// Friend and secret DMs adopt locally and send an encrypted timer update
-    /// to the peer; secret chats also display the change as a system notice.
+    /// Friend DMs and secret chats (anonymous DMs and private groups) adopt
+    /// locally and send an encrypted timer update to the peer or every member;
+    /// secret chats also display the change as a system notice.
     ///
     /// Channel: writes the local copy of the channel's ttl only. The server
     /// holds the real value and refuses to change it after creation, so this
@@ -534,10 +541,10 @@ impl ConversationHandle {
                     .current_user_id()
                     .map_err(|e| ConversationError::Other(e.to_string()))?;
                 let sent_at = crate::util::time::TimestampNanos::now().as_u64();
-                let Some((notice, timer)) = crate::services::disappearing::change_anon_dm_timer(
+                let Some((notice, timer)) = crate::services::disappearing::change_secret_chat_timer(
                     &service.settings_repo,
                     &service.message_repo,
-                    id,
+                    crate::services::disappearing::SecretChat::Dm(*id),
                     &me,
                     seconds,
                     sent_at,
@@ -580,9 +587,48 @@ impl ConversationHandle {
                     .set_default_ttl(channel_id, ttl)
                     .map_err(|e| ConversationError::Other(e.to_string()))
             }
-            ActiveConversation::AnonGroup(_) => Err(ConversationError::Other(
-                "disappearing messages are not available in anonymous conversations".into(),
-            )),
+            ActiveConversation::AnonGroup(id) => {
+                let service = self.client.anon_groups();
+                let me = service
+                    .current_user_id()
+                    .map_err(|e| ConversationError::Other(e.to_string()))?;
+                // Any current member, in a group we can still post to.
+                service
+                    .check_group_not_blocked(id)
+                    .map_err(|e| ConversationError::Other(e.to_string()))?;
+                if !service
+                    .is_member(id, &me)
+                    .map_err(|e| ConversationError::Other(e.to_string()))?
+                {
+                    return Err(ConversationError::Other("not a member of this group".into()));
+                }
+                let sent_at = crate::util::time::TimestampNanos::now().as_u64();
+                let Some((notice, timer)) = crate::services::disappearing::change_secret_chat_timer(
+                    &service.settings_repo,
+                    &service.message_service.message_repo,
+                    crate::services::disappearing::SecretChat::Group(*id),
+                    &me,
+                    seconds,
+                    sent_at,
+                )
+                .map_err(|e| ConversationError::Other(e.to_string()))?
+                else {
+                    return Ok(());
+                };
+                self.client.event_bus().emit_domain(
+                    crate::inbox::handlers::DomainEvent::MessageReceived { message: notice },
+                );
+                // Best effort, like a DM's update: a member who misses it
+                // adopts the timer from the next post, which states it.
+                service
+                    .send_ephemeral_message(
+                        id,
+                        crate::services::disappearing::timer_update_content(timer, sent_at),
+                    )
+                    .await
+                    .map_err(|e| ConversationError::Other(e.to_string()))?;
+                Ok(())
+            }
             ActiveConversation::None => Err(ConversationError::NoConversation),
         }
     }

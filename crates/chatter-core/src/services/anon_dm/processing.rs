@@ -212,10 +212,10 @@ impl AnonDmService {
         let mut timer_events = Vec::new();
         if let Some(ContentType::DataMessage(data)) = &inner_content.content {
             if let Some(stated) = crate::services::disappearing::stated_timer(data) {
-                if let Some(notice) = crate::services::disappearing::adopt_anon_dm_timer(
+                if let Some(notice) = crate::services::disappearing::adopt_secret_chat_timer(
                     &self.settings_repo,
                     &self.message_repo,
-                    conversation_id,
+                    crate::services::disappearing::SecretChat::Dm(*conversation_id),
                     sender_id,
                     stated,
                     inner_content.timestamp,

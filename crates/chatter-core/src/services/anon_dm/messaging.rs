@@ -117,7 +117,10 @@ impl AnonDmService {
         let mut inner_content =
             build_data_message_content_with_quote(text, attachments, quote.clone(), sent_at);
         let timer =
-            crate::services::disappearing::anon_dm_state(&self.settings_repo, conversation_id);
+            crate::services::disappearing::secret_chat_state(
+                &self.settings_repo,
+                crate::services::disappearing::SecretChat::Dm(*conversation_id),
+            );
         if let Some(content_v1::content::Content::DataMessage(data)) =
             inner_content.content.as_mut()
         {
@@ -309,7 +312,10 @@ impl AnonDmService {
             .get(&message.id)?
             .map(|armed| armed.ttl.as_secs() as u32);
         let mut timer =
-            crate::services::disappearing::anon_dm_state(&self.settings_repo, &conversation_id);
+            crate::services::disappearing::secret_chat_state(
+                &self.settings_repo,
+                crate::services::disappearing::SecretChat::Dm(conversation_id),
+            );
         timer.seconds = original_ttl.unwrap_or(0);
         // The original timer version is not stored on the row. Preserve its
         // per-message TTL without announcing a possibly newer conversation timer.
