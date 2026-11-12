@@ -15,7 +15,7 @@ impl AnonGroupService {
     /// Stamp a post with the group's disappearing timer (every member adopts
     /// it from there, so a lost timer update heals on the next post) and arm
     /// its stored row when the timer is on.
-    fn apply_group_timer(
+    pub(super) fn apply_group_timer(
         &self,
         group_id: &AnonGroupId,
         inner: &mut Content,

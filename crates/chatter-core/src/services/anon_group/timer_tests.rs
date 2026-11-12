@@ -131,3 +131,54 @@ async fn opening_a_private_group_marks_its_disappearing_rows() {
         .expect("post row");
     assert!(post.disappearing, "the armed post is marked on open");
 }
+
+#[tokio::test]
+async fn a_new_private_group_starts_at_one_day_and_its_first_post_states_it() {
+    use crate::domain::disappearing::SECRET_CHAT_DEFAULT_SECONDS;
+    use crate::services::disappearing::INITIAL_TIMER_VERSION;
+    let f = fixture(AnonGroupRole::Member);
+    let svc = f.client.anon_groups();
+    let me = svc.current_user_id().unwrap();
+
+    // Headless: there is no server, so creation stops at mailbox
+    // registration — after the group row and its timer are stored.
+    let _ = svc.create_group("new".into(), Vec::new()).await;
+    let group = svc
+        .anon_group_repo
+        .list_groups()
+        .unwrap()
+        .into_iter()
+        .find(|g| g.id != f.group_id)
+        .expect("new group stored");
+    let chat = SecretChat::Group(group.id);
+    let day = timer(SECRET_CHAT_DEFAULT_SECONDS, INITIAL_TIMER_VERSION);
+    assert_eq!(secret_chat_state(&svc.settings_repo, chat), day);
+    // The creator files the same initial notice a secret 1:1 chat does.
+    let rows = svc.get_messages_asc(&group.id, None, 50).unwrap();
+    assert!(
+        rows.iter().any(|m| m.sender_id == Some(me)
+            && matches!(
+                m.content,
+                MessageContent::System(SystemMessage::DisappearingTimerChanged {
+                    seconds: SECRET_CHAT_DEFAULT_SECONDS
+                })
+            )),
+        "{rows:?}"
+    );
+
+    // The first post states the day timer and its row is armed with it.
+    let sent_at = 10_000;
+    let mut post = crate::services::gateway::builders::build_text_content("hi", sent_at);
+    let row = svc.store_text_message(&group.id, &me, "hi", sent_at).unwrap();
+    svc.apply_group_timer(&group.id, &mut post, &row, sent_at).unwrap();
+    let Some(Kind::DataMessage(data)) = post.content.as_ref() else {
+        panic!("data message");
+    };
+    assert_eq!(crate::services::disappearing::stated_timer(data), Some(day));
+    assert!(data.ephemeral);
+    let armed = EphemeralRepository::new(svc.settings_repo.database().clone())
+        .get(&row.as_str().parse().unwrap())
+        .unwrap()
+        .expect("post armed");
+    assert_eq!(armed.ttl.as_secs(), u64::from(SECRET_CHAT_DEFAULT_SECONDS));
+}

@@ -239,15 +239,15 @@ pub fn secret_chat_state(settings: &SettingsRepository, chat: SecretChat) -> DmT
         })
 }
 
-/// Install the requested one-day timer when a secret 1:1 chat is first created.
-pub fn initialize_anon_dm_timer(
+/// Install the one-day default timer when a secret chat (1:1 or private
+/// group) is first created.
+pub fn initialize_secret_chat_timer(
     settings: &SettingsRepository,
     messages: &MessageRepository,
-    id: &AnonDmId,
+    chat: SecretChat,
     author: &UserId,
     sent_at: u64,
 ) -> Result<(), StorageError> {
-    let chat = SecretChat::Dm(*id);
     settings.set(&chat.key(), &DmTimer {
         seconds: SECRET_CHAT_DEFAULT_SECONDS,
         version: INITIAL_TIMER_VERSION,
