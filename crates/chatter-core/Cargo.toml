@@ -3,12 +3,12 @@
 autotests = false
 name = "chatter-core"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 authors = ["xander1421"]
 description = "Core library for Chatter secure messaging"
 license = "GPL-3.0"
 repository = "https://github.com/xander1421/chatter"
-rust-version = "1.99"
+rust-version.workspace = true
 
 [lib]
 name = "chatter_core"
@@ -39,19 +39,19 @@ chatter-mesh-nostr = { path = "../chatter-mesh-nostr", optional = true }
 # ============================================================================
 # Async Runtime
 # ============================================================================
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "net", "fs"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "net", "fs"] }
 tokio-util = { version = "0.7", features = ["io", "codec"] }
 tokio-stream = "0.1"
-futures = "0.3"
+futures = { workspace = true }
 async-trait = "0.1"
 
 # ============================================================================
 # gRPC (Generated code dependencies)
 # ============================================================================
-tonic = { version = "0.14", features = ["tls-ring"] }
-tonic-prost = "0.14"
-prost = "0.14"
-prost-types = "0.14"
+tonic = { workspace = true, features = ["tls-ring"] }
+tonic-prost = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
 # Reflection over the generated descriptors: evaluates the buf.validate rules
 # declared on E2E content (network/validation/protovalidate.rs).
 prost-reflect = "0.16"
@@ -60,11 +60,11 @@ tower = "0.5"
 # ============================================================================
 # Crypto - Signal Protocol (Official libsignal)
 # ============================================================================
-libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
-libsignal-core = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
-signal-media = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
+libsignal-protocol = { workspace = true }
+libsignal-core = { workspace = true }
+signal-media = { workspace = true }
 # RFC 9180 HPKE (base, X25519/HKDF-SHA256/AES-256-GCM) for the mailbox envelope.
-signal-crypto = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
+signal-crypto = { workspace = true }
 # Same version signal-media pins; used directly for the sync (file-streaming)
 # sanitize path, which signal-media's async-only wrapper doesn't expose. WebP
 # goes through signal_media::sanitize::webp, so webpsan is not a direct dep.
@@ -72,10 +72,10 @@ mp4san = "0.5.3"
 # Signal usernames crate (Ristretto255 + ZK proof of ownership for the
 # discovery hash). NOTE: licensed AGPL-3.0; combining with the rest of
 # chatter (GPL-3.0) means the combined work is effectively AGPL.
-usernames = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
+usernames = { workspace = true }
 # KT query-privacy VRF verifier (ECVRF-EDWARDS25519-SHA512-TAI, RFC 9381):
 # used as-is via its public `VrfPublicKey`. Also AGPL-3.0, same as `usernames`.
-libsignal-keytrans = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
+libsignal-keytrans = { workspace = true }
 rand = { version = "0.9", features = ["os_rng"] }
 # OPAQUE 4's public RNG traits still require rand_core 0.6.
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
@@ -83,7 +83,7 @@ rand_core_10 = { package = "rand_core", version = "0.10.1" }
 getrandom = { version = "0.4.3", features = ["sys_rng"] }
 blind-rsa-signatures = "0.18.0"
 rsa = "0.9.10"
-sha2 = "0.11.0"
+sha2 = { workspace = true }
 # opaque-ke 4.0.1 exposes digest 0.10 in its TripleDh cipher-suite bound.
 sha2_10 = { package = "sha2", version = "0.10" }
 hmac = "0.13.0"
@@ -105,7 +105,7 @@ ed25519-dalek = { version = "3.0.0", features = ["rand_core", "pem"] }
 subtle = "2.5"
 base64 = "0.23.1"
 base32 = "0.5"
-hex = "0.4"
+hex = { workspace = true }
 tar = "0.4"
 flate2 = "1"
 qrcode = "0.14"
@@ -127,8 +127,8 @@ directories = "6"
 # ============================================================================
 # Serialization
 # ============================================================================
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 bincode = { version = "2.0.1", features = ["serde"] }
 
 # ============================================================================
@@ -139,11 +139,11 @@ parking_lot = "0.12"
 # ============================================================================
 # Utilities
 # ============================================================================
-thiserror = "2"
+thiserror = { workspace = true }
 anyhow = "1"
-tracing = "0.1"
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "v5", "serde"] }
+tracing = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+uuid = { workspace = true, features = ["v4", "v5", "serde"] }
 bytes = "1"
 http = "1"
 http-body = "1"
@@ -169,7 +169,7 @@ gstreamer-pbutils = { version = "0.25", optional = true }
 # ============================================================================
 # once_cell removed — migrated to std::sync::LazyLock
 moka = { version = "0.12", features = ["sync"] }
-zeroize = { version = "1.8", features = ["derive", "serde"] }
+zeroize = { workspace = true, features = ["derive", "serde"] }
 libc = "0.2"
 
 # ============================================================================
@@ -304,7 +304,7 @@ oboe = { version = "0.6", features = ["java-interface"] }
 [dev-dependencies]
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Paused-clock tests (heartbeat.rs `start_paused`).
-tokio = { version = "1", features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util"] }
 tempfile = "3"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 mockall = "0.15"
@@ -314,7 +314,7 @@ proptest = "1"
 # directly, mirroring the crate's own pinned libsignal + rand. Same source/rev
 # and version so Cargo unifies with the normal deps (no duplicate build).
 rand = { version = "0.9", features = ["os_rng"] }
-libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
+libsignal-protocol = { workspace = true }
 # Needed by tests/validated.rs V50/V51 to open the SQLCipher stores directly
 # and compare backup-restored rows byte-for-byte. Same version as the normal
 # dep so Cargo unifies the build.
@@ -462,3 +462,6 @@ required-features = ["onion"]
 name = "avatar_profile_live"
 path = "tests/avatar_profile_live.rs"
 required-features = ["testing", "dev-trust-root"]
+
+[lints]
+workspace = true
