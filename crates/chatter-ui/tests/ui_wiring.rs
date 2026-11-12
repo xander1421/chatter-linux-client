@@ -174,7 +174,7 @@ fn wired_offline() -> (
 /// construction). Default is the private "none".
 #[test]
 fn settings_notification_detail_level_persists_across_restart() {
-    use chatter_core::services::notification_service::NotificationDetailLevel;
+    use chatter_core::client::NotificationDetailLevel;
     let (rt, tmp, client, w) = wired_offline();
     assert_eq!(
         client.notification_detail_level(),
@@ -214,7 +214,7 @@ fn settings_notification_detail_level_persists_across_restart() {
 /// a restart.
 #[test]
 fn settings_theme_pick_persists_and_flips_palette() {
-    use chatter_core::services::appearance::ThemeMode;
+    use chatter_core::client::ThemeMode;
     use slint::ComponentHandle;
     let (rt, tmp, client, w) = wired_offline();
     let appearance = w.global::<chatter_ui::Appearance>();
@@ -1435,7 +1435,7 @@ fn cloud_preference_does_not_override_the_dm_policy() {
 #[test]
 fn jarvis_ask_is_gated_by_the_per_conversation_switch() {
     use chatter_core::domain::jarvis::JarvisContext;
-    use chatter_core::services::jarvis::JarvisError;
+    use chatter_core::testing::services::jarvis::JarvisError;
 
     require_element_queries();
     let (rt, _tmp, client, _w) = wired_offline();
@@ -1468,7 +1468,7 @@ fn jarvis_ask_is_gated_by_the_per_conversation_switch() {
 fn the_dedicated_ai_channel_needs_no_opt_in() {
     use chatter_core::client::jarvis_channel_id;
     use chatter_core::domain::jarvis::JarvisContext;
-    use chatter_core::services::jarvis::JarvisError;
+    use chatter_core::testing::services::jarvis::JarvisError;
 
     require_element_queries();
     let (rt, _tmp, client, _w) = wired_offline();
@@ -3817,10 +3817,10 @@ fn park_identity_change(data_dir: &std::path::Path, peer: &str, source: &str) ->
         .expect("Directories::with_base_dir")
         .database_path();
     let db = std::sync::Arc::new(
-        chatter_core::storage::Database::open(&db_path, "ui-wiring-harness-passphrase")
+        chatter_core::testing::storage::Database::open(&db_path, "ui-wiring-harness-passphrase")
             .expect("open the client's database a second time"),
     );
-    let key_store = chatter_core::storage::KeyStore::new(db);
+    let key_store = chatter_core::testing::storage::KeyStore::new(db);
 
     let mut new_identity_key = vec![0x05u8];
     new_identity_key.extend_from_slice(&[0x42u8; 32]);
@@ -4048,12 +4048,12 @@ fn the_identity_change_bar_is_wired_and_not_dismissable() {
 /// parked, so "Encryption failed — try again" is advice to loop forever.
 #[test]
 fn the_send_toast_points_at_the_identity_change_instead_of_saying_retry() {
-    use chatter_core::services::message::MessageError;
+    use chatter_core::testing::services::message::MessageError;
 
     let peer = chatter_core::domain::ids::UserId::new();
     let (_tmp, client, _w) = wired_dm_open(peer);
 
-    let err = chatter_core::services::gateway::SendError::Message(
+    let err = chatter_core::testing::services::gateway::SendError::Message(
         MessageError::RecipientIdentityChanged {
             peer_id: peer.to_string(),
         },
@@ -7560,7 +7560,7 @@ fn reaction_converter_callback_preserves_author_and_nanosecond_clock() {
         ids::ChannelId,
         message::{ConversationType, Message},
     };
-    use chatter_core::inbox::{events::InboxEvent, polling::device::dispatch_control_content};
+    use chatter_core::testing::inbox::{events::InboxEvent, polling::device::dispatch_control_content};
     use std::sync::{Arc, Mutex};
     testing::init_no_event_loop();
     let window = MainWindow::new().unwrap();
@@ -7588,7 +7588,7 @@ fn reaction_converter_callback_preserves_author_and_nanosecond_clock() {
             let parsed_author: UserId = sender.as_str().parse().unwrap();
             let parsed_clock: u64 = timestamp.as_str().parse().unwrap();
             *capture.lock().unwrap() = Some(
-                chatter_core::services::build_reaction_content_with_channel(
+                chatter_core::testing::services::build_reaction_content_with_channel(
                     emoji.as_str(),
                     false,
                     &parsed_author.to_string(),

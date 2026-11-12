@@ -77,7 +77,7 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
         .unwrap()
         .database_path();
     let db =
-        chatter_core::storage::Database::open(&db_path, "settings-affordance-fixture").unwrap();
+        chatter_core::testing::storage::Database::open(&db_path, "settings-affordance-fixture").unwrap();
     // Reproduce repository failure without mocking the setters or corrupting a DB.
     db.connection()
         .unwrap()

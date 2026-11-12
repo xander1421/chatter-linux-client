@@ -19,13 +19,13 @@ use ed25519_dalek::Signer;
 use chatter_core::domain::ids::ChannelId;
 use chatter_core::mailbox::TokenManager;
 use chatter_core::mailbox::group::{GroupMailboxManager, MemberMailbox};
-use chatter_core::network::grpc::{
+use chatter_core::testing::network::grpc::{
     AnonymousMailboxClient, ChannelClient, GrpcClientPool, MailboxClient, MessageClient,
 };
 use chatter_proto::chat_v1::{
     ChannelType, message::Content, message::content::Type as ContentType,
 };
-use chatter_core::storage::Database;
+use chatter_core::testing::storage::Database;
 use tokio::time::sleep;
 use tokio_stream::StreamExt;
 

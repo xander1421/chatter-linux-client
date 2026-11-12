@@ -9,7 +9,7 @@
 //! which turns any read failure into "nothing applied" and replays from v001
 //! over a populated database.
 
-use chatter_core::storage::migrations::{Migration, MigrationRunner, default_migrations};
+use chatter_core::testing::storage::migrations::{Migration, MigrationRunner, default_migrations};
 use rusqlite::Connection;
 
 struct Fake(u32, &'static str, &'static str);

@@ -40,8 +40,8 @@ use std::time::{Duration, Instant};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::crypto::{auth_crypto, opaque};
-use chatter_core::network::grpc::client_pool::TransportMode;
-use chatter_core::network::grpc::{AuthClient, GrpcClientPool};
+use chatter_core::testing::network::grpc::client_pool::TransportMode;
+use chatter_core::testing::network::grpc::{AuthClient, GrpcClientPool};
 use chatter_proto::chat_v1::{RegisterRequest, auth_service_client::AuthServiceClient};
 use rand::RngCore;
 
@@ -82,7 +82,7 @@ fn onion_url() -> String {
 /// call then does nothing), which is also why these tests share one directory.
 fn tor_dirs() {
     let base = std::env::temp_dir().join("chatter-test-arti");
-    chatter_core::network::grpc::onion_transport::set_tor_directories(
+    chatter_core::testing::network::grpc::onion_transport::set_tor_directories(
         base.join("state"),
         base.join("cache"),
     );
@@ -105,7 +105,7 @@ impl std::io::Write for Tee {
 fn init_logs() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            "chatter_core::services::auth_service=info,chatter_core::network::grpc=info,tor_hsclient=debug",
+            "chatter_core::testing::services::auth_service=info,chatter_core::testing::network::grpc=info,tor_hsclient=debug",
         )
         .with_ansi(false)
         .with_writer(|| Tee)
@@ -208,7 +208,7 @@ async fn onion_register_solves_the_onion_pow() {
     client.set_anon_mode_enabled(true);
     // Set from the pool's actual transport after the switch (client/mod.rs).
     assert!(
-        chatter_core::network::anon_http::ANON_HTTP_ACTIVE
+        chatter_core::testing::network::anon_http::ANON_HTTP_ACTIVE
             .load(std::sync::atomic::Ordering::Acquire),
         "client pool did not switch to onion"
     );

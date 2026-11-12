@@ -4,7 +4,7 @@
 
 use crate::{common, skip_if_no_server};
 
-use chatter_core::network::grpc::UserClient;
+use chatter_core::testing::network::grpc::UserClient;
 use chatter_proto::chat_v1::{UserPresence, friend_requests_filter};
 use tokio_stream::StreamExt;
 

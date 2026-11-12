@@ -32,7 +32,7 @@ use crate::{MainWindow, MeshGlobal, run_ui};
 /// like a bug.
 #[must_use]
 pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainWindow>) -> bool {
-    use chatter_core::services::mesh::MeshConversation;
+    use chatter_core::client::MeshConversation;
 
     let Some((Some(conversation), generation)) = super::active_session() else {
         return false;

@@ -76,7 +76,7 @@ pub(super) fn wire_preferences(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
     window
         .global::<crate::SettingsPane>()
         .on_settings_notification_detail_changed(move |value: SharedString| {
-            use chatter_core::services::notification_service::NotificationDetailLevel;
+            use chatter_core::client::NotificationDetailLevel;
             let level = NotificationDetailLevel::from_str(value.as_str());
             if let Err(e) = ui_ctx_detail.set_notification_detail_level(level) {
                 tracing::error!("Failed to save notification detail level: {}", e);
@@ -101,7 +101,7 @@ pub(super) fn wire_preferences(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
     window
         .global::<crate::SettingsPane>()
         .on_settings_search_shortcut_changed(move |value: SharedString| {
-            let shortcut = chatter_core::services::search::SearchShortcut::from_str(value.as_str());
+            let shortcut = chatter_core::client::SearchShortcut::from_str(value.as_str());
             if let Err(e) = ui_ctx_shortcut.set_search_shortcut(shortcut) {
                 tracing::error!("Failed to save search shortcut: {}", e);
                 return;
@@ -208,7 +208,7 @@ pub(super) fn wire_identity(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 }
 
 fn wire_profile_visibility(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    use chatter_core::services::profile_visibility::ProfileVisibility;
+    use chatter_core::client::ProfileVisibility;
 
     /// Run the change off the UI thread, then show the outcome.
     fn apply(

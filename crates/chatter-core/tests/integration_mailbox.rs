@@ -4,7 +4,7 @@
 
 use crate::{common, skip_if_no_server};
 
-use chatter_core::network::grpc::MailboxClient;
+use chatter_core::testing::network::grpc::MailboxClient;
 use common::*;
 
 // ============================================================================

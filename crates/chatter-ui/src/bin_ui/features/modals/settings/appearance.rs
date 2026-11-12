@@ -14,7 +14,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_theme = ui_ctx.clone();
     let weak_theme = window.as_weak();
     appearance.on_theme_changed(move |value: SharedString| {
-        let mode = chatter_core::services::appearance::ThemeMode::from_str(value.as_str());
+        let mode = chatter_core::client::ThemeMode::from_str(value.as_str());
         if let Err(e) = ui_ctx_theme.set_theme_mode(mode) {
             tracing::error!("Failed to save theme: {}", e);
         }
@@ -34,7 +34,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_text = ui_ctx.clone();
     let weak_text = window.as_weak();
     appearance.on_text_size_changed(move |value: SharedString| {
-        let size = chatter_core::services::appearance::TextSize::from_str(value.as_str());
+        let size = chatter_core::client::TextSize::from_str(value.as_str());
         if let Err(e) = ui_ctx_text.set_text_size(size) {
             tracing::error!("Failed to save text size: {}", e);
         }
@@ -50,7 +50,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_density = ui_ctx.clone();
     let weak_density = window.as_weak();
     appearance.on_density_changed(move |value: SharedString| {
-        let density = chatter_core::services::appearance::MessageDensity::from_str(value.as_str());
+        let density = chatter_core::client::MessageDensity::from_str(value.as_str());
         if let Err(e) = ui_ctx_density.set_message_density(density) {
             tracing::error!("Failed to save message spacing: {}", e);
         }

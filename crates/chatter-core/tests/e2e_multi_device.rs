@@ -7,7 +7,7 @@
 
 use crate::{common, skip_if_no_server};
 
-use chatter_core::network::grpc::{AuthClient, ChannelClient, MessageClient};
+use chatter_core::testing::network::grpc::{AuthClient, ChannelClient, MessageClient};
 use chatter_proto::chat_v1::{
     ChannelType, MessageSortDirection, get_pre_key_bundle_response,
 };

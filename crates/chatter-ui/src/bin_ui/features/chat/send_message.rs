@@ -13,7 +13,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model};
 
 use chatter_core::client::{ChatterClient, ComposerReply, ComposerSend};
-use chatter_core::services::gateway;
+use chatter_core::prelude::{QuoteIntent, SendError};
 use chatter_core::state::ActiveConversation;
 
 use super::typing::clear_outgoing_typing;
@@ -715,9 +715,9 @@ pub fn composer_reply(w: &MainWindow) -> Option<ComposerReply> {
 }
 
 /// Prepare the same quote intent for main and thread composer sends.
-pub(crate) fn quote_intent(reply: Option<&ComposerReply>) -> Option<gateway::QuoteIntent> {
+pub(crate) fn quote_intent(reply: Option<&ComposerReply>) -> Option<QuoteIntent> {
     let parsed = super::helpers::parse_reply_context(&reply?.sender_id, &reply?.timestamp)?;
-    Some(gateway::QuoteIntent {
+    Some(QuoteIntent {
         target_author_id: parsed.sender_id,
         target_timestamp: parsed.timestamp,
         target_preview: None,
@@ -1032,7 +1032,7 @@ async fn deliver_inner(
         }
         Some(Err(e)) => {
             tracing::error!(error = %e, "[UI_SEND] send_message_ui returned Err");
-            if matches!(&e, gateway::SendError::SendInProgress) {
+            if matches!(&e, SendError::SendInProgress) {
                 let weak = weak.clone();
                 let ui_ctx = ui_ctx.clone();
                 let frozen = send_for_delivery.clone();
@@ -1058,15 +1058,15 @@ async fn deliver_inner(
             }
             if matches!(
                 &e,
-                gateway::SendError::DeliveryUnconfirmed
-                    | gateway::SendError::AttemptAlreadyConfirmed
+                SendError::DeliveryUnconfirmed
+                    | SendError::AttemptAlreadyConfirmed
             ) {
                 // Taken by core, outcome unresolved: the pending row reads
                 // "not confirmed" (no retry), which is the truth. In
                 // particular GIF/voice wrappers must not restore it as a new
                 // composer send. The retained attempt never re-reads the
                 // files, so the sheltered copies are done here too.
-                if matches!(&e, gateway::SendError::DeliveryUnconfirmed) {
+                if matches!(&e, SendError::DeliveryUnconfirmed) {
                     let (weak, frozen) = (weak.clone(), send_for_delivery.clone());
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -1110,7 +1110,7 @@ async fn deliver_inner(
     let client = ui_ctx.clone();
     let reply_bytes = ui_result.reply_thumbnail_bytes;
     let (mut attachment_display, mut reply_thumbnail_rgba) =
-        chatter_core::services::attachment::run_attachment_work(move || {
+        chatter_core::media::run_attachment_work(move || {
             if generation != crate::bin_ui::decode_cache::thumbnail_generation() {
                 return (attachment_display, None);
             }
@@ -1189,7 +1189,7 @@ async fn deliver_inner(
             let delivery_status = stored
                 .as_ref()
                 .map(|message| {
-                    chatter_core::services::message::display_delivery_status(
+                    chatter_core::ui::display_delivery_status(
                         &message.delivery_status,
                         message.failure_reason.as_deref(),
                     )
@@ -1321,7 +1321,7 @@ async fn deliver_inner(
 #[cfg(feature = "jarvis")]
 async fn handle_jarvis_slash_command(
     ui_ctx: &Arc<ChatterClient>,
-    cmd: chatter_core::services::jarvis::JarvisCommand,
+    cmd: chatter_core::client::JarvisCommand,
     conversation: ActiveConversation,
     session: Option<chatter_core::client::JarvisSessionOwner>,
     owner: crate::bin_ui::features::history_owner::HistoryOwner,

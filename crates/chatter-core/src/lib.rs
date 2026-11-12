@@ -48,16 +48,17 @@ pub mod wire;
 
 // ── Internal modules ────────────────────────────────────────────────────────
 
-// Temporary external-access allowlist while the client façade is expanded:
+// Modules still reachable from outside the crate, and why:
 // - mailbox and util: core integration fixtures construct or inspect
 //   these implementation objects directly.
 // - app: exposed only to integration fixtures under `testing`.
-// - network, services, and storage: current client signatures and platform/UI
-//   adapters still expose transport, service, and persistence types.
-// - config, inbox, local_ai, cloud_ai, ai_policy, and ui: consumers still use
-//   constants, event/AI contracts, and prepared view data from these modules.
+// - config, local_ai, cloud_ai, ai_policy, and ui: consumers still use
+//   constants, AI contracts, and prepared view data from these modules.
 // - update: the desktop updater is consumed directly by chatter-ui.
-// Keep additions here explicit; `sync` has no external caller and is private.
+// `services`, `storage`, `network`, `inbox` and `sync` are crate-private;
+// the types consumers need are re-exported by name from `client`,
+// `events`, `media` and `ui`. Integration tests reach the internals through
+// `testing` below.
 
 /// Arbiter between the two AI silos — outside both by design.
 pub mod ai_policy;
@@ -72,21 +73,36 @@ pub(crate) mod app;
 pub mod cloud_ai;
 #[doc(hidden)]
 pub mod config;
-#[doc(hidden)]
-pub mod inbox;
+pub(crate) mod inbox;
 #[cfg(feature = "local-ai")]
 pub mod local_ai;
 #[doc(hidden)]
 pub mod mailbox;
-#[doc(hidden)]
-pub mod network;
-#[doc(hidden)]
-pub mod services;
-#[doc(hidden)]
-pub mod storage;
+pub(crate) mod network;
+pub(crate) mod services;
+pub(crate) mod storage;
 pub(crate) mod sync;
 #[doc(hidden)]
 pub mod ui;
 pub mod update;
 #[doc(hidden)]
 pub mod util;
+
+/// Crate internals for integration tests and fixtures (`tests/`, test code
+/// in chatter-ui). Not part of the API; only built with `testing`.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub mod testing {
+    pub mod inbox {
+        pub use crate::inbox::*;
+    }
+    pub mod network {
+        pub use crate::network::*;
+    }
+    pub mod services {
+        pub use crate::services::*;
+    }
+    pub mod storage {
+        pub use crate::storage::*;
+    }
+}

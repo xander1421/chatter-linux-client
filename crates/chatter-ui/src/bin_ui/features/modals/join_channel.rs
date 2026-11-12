@@ -275,7 +275,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                     Err(e) => {
                         use chatter_core::error::NetworkError;
-                        use chatter_core::services::channel::ChannelError;
+                        use chatter_core::client::ChannelError;
                         let error_msg = if matches!(
                             e,
                             ChannelError::ChannelNotFound(_)

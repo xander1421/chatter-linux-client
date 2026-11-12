@@ -422,6 +422,15 @@ impl Database {
     }
 }
 
+/// Platform smoke check: open (creating) an encrypted database at `path` and
+/// return the SQLite version it reports. The iOS staticlib bring-up uses it to
+/// prove SQLCipher links and runs inside the app sandbox.
+pub fn sqlite_version_at(path: &Path, passphrase: &str) -> Result<String, StorageError> {
+    let db = Database::open(path, passphrase)?;
+    let conn = db.open_reader_connection()?;
+    Ok(conn.query_row("SELECT sqlite_version()", [], |r| r.get(0))?)
+}
+
 #[cfg(test)]
 mod blocking_tests {
     use super::*;

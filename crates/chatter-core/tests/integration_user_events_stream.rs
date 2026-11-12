@@ -7,7 +7,7 @@ use crate::{common, skip_if_no_server};
 
 use std::time::Duration;
 
-use chatter_core::network::grpc::UserClient;
+use chatter_core::testing::network::grpc::UserClient;
 use chatter_proto::chat_v1::{FriendStatus, user_event::Event};
 use tokio_stream::StreamExt;
 

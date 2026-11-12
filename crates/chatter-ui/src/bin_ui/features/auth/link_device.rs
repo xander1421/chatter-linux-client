@@ -3,14 +3,14 @@
 //! Pure UI plumbing: forwards user actions to `ChatterClient::link_device_*`
 //! façade methods and renders [`LinkProgress`] events into widget state. All
 //! orchestration, session state, polling, and error formatting stays in
-//! `chatter-core`'s [`chatter_core::services::link_device_service`].
+//! `chatter-core`'s link-device service.
 
 use std::sync::Arc;
 
 use slint::ComponentHandle;
 
 use chatter_core::client::ChatterClient;
-use chatter_core::services::link_device_service::LinkProgress;
+use chatter_core::client::LinkProgress;
 
 use super::initial_data::load_initial_data;
 use crate::MainWindow;

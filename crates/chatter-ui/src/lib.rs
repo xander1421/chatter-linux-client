@@ -495,7 +495,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // wrapper must be in place before `app_init` builds the client.
     crate::platform::android::keystore::init();
     if let Some(label) = crate::platform::android::activity::device_label() {
-        chatter_core::services::link_device_service::LinkDeviceService::set_platform_device_label(
+        chatter_core::client::ChatterClient::set_platform_device_label(
             label,
         );
     }
@@ -598,7 +598,7 @@ fn init_tracing() {
         let stage_trace = tor_stage_trace::TorStageTrace::open().map(|trace| {
             trace.with_filter(tracing_subscriber::filter::filter_fn(|meta| {
                 *meta.level() <= tracing::Level::DEBUG
-                    && (meta.target() == "chatter_core::network::grpc::onion_transport"
+                    && (meta.target() == chatter_core::client::ONION_TRANSPORT_LOG_TARGET
                         || meta.target().starts_with("tor_dirmgr")
                         || (tor_stage_trace::dial_active()
                             && (meta.target().starts_with("tor_hsclient")

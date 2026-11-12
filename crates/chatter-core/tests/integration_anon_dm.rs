@@ -19,7 +19,7 @@ use crate::{common, skip_if_no_server};
 
 use chatter_core::domain::UserId;
 use chatter_core::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, AnonDmMessage, AnonDmStatus};
-use chatter_core::network::grpc::MailboxClient;
+use chatter_core::testing::network::grpc::MailboxClient;
 use chatter_proto::mailbox_v1::EnvelopeType;
 use chrono::Utc;
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};

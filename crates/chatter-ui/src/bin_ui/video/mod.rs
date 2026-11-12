@@ -102,7 +102,7 @@ pub fn start_hw_video(data: Vec<u8>) -> Option<f64> {
 /// (streaming — no full decrypt-to-memory). Returns duration, or None if the
 /// platform/backend can't stream (caller should fall back to software).
 pub fn start_hw_video_range(
-    dec: std::sync::Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    dec: std::sync::Arc<chatter_core::media::CbcRangeDecryptor>,
 ) -> Option<f64> {
     #[cfg(target_os = "linux")]
     {

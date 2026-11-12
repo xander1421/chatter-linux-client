@@ -9,7 +9,7 @@
 use crate::{common, skip_if_no_server};
 
 use chatter_core::mailbox::blind_signature::{blind_key, unblind, ServerPublicKey};
-use chatter_core::network::grpc::{AuthClient, MailboxClient, MessageClient};
+use chatter_core::testing::network::grpc::{AuthClient, MailboxClient, MessageClient};
 use chatter_proto::mailbox_v1::EnvelopeType;
 use chatter_proto::{
     signal_pre_key_bundle::PreKeyRecord, GetPreKeyBundleResponse, SealedDelivery,

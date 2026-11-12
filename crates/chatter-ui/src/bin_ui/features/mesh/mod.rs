@@ -42,7 +42,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::services::mesh::{MeshConversation, MeshEvent};
+use chatter_core::client::{MeshConversation, MeshEvent};
 
 use crate::{
     MainWindow, MeshConversationData, MeshGlobal, MeshPeerData, PrivateChannelInviteData, run_ui,
@@ -1126,7 +1126,7 @@ fn push_status(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn apply_status(
     window: &MainWindow,
     ui_ctx: &Arc<ChatterClient>,
-    status: chatter_core::services::mesh::MeshStatus,
+    status: chatter_core::client::MeshStatus,
 ) {
     let global = window.global::<MeshGlobal>();
     // Asked separately, because `MeshStatus` is only about transports — a relay
@@ -1204,7 +1204,7 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
         } => {
             let label = core_api::delivery_label(state);
             let domain_id =
-                chatter_core::services::mesh::mapping::wire_message_id(&message_id).to_string();
+                chatter_core::ui::wire_message_id(&message_id).to_string();
             run_ui!(weak, |w| conversation::apply_delivery(
                 &w, &domain_id, label
             ));

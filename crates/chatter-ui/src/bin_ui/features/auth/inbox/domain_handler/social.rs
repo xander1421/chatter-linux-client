@@ -19,8 +19,8 @@ use chatter_core::domain::ids::UserId;
 pub(super) async fn handle_friend_requests_updated(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
-    received: Vec<chatter_core::inbox::events::FriendRequestInfo>,
-    sent: Vec<chatter_core::inbox::events::FriendRequestInfo>,
+    received: Vec<chatter_core::events::FriendRequestInfo>,
+    sent: Vec<chatter_core::events::FriendRequestInfo>,
 ) {
     let weak = window.clone();
     // Requests from someone we blocked stay pending server-side, unseen here.
@@ -39,7 +39,7 @@ pub(super) async fn handle_friend_requests_updated(
     }
     // Core resolves the name — never the server display_name, which is
     // ciphertext without the peer's profile key.
-    let peer_name = |r: &chatter_core::inbox::events::FriendRequestInfo| {
+    let peer_name = |r: &chatter_core::events::FriendRequestInfo| {
         r.user_id
             .parse::<UserId>()
             .map(|u| ui_ctx.friend_request_peer_name(&u, &r.username))

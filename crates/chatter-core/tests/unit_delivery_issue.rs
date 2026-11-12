@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 use chatter_core::domain::message::{ConversationType, MessageContent, SystemMessage};
 use chatter_core::domain::{ChannelId, UserId};
-use chatter_core::inbox::polling::device::delivery_issue_message;
-use chatter_core::storage::Database;
-use chatter_core::storage::repositories::MessageRepository;
+use chatter_core::testing::inbox::polling::device::delivery_issue_message;
+use chatter_core::testing::storage::Database;
+use chatter_core::testing::storage::repositories::MessageRepository;
 use tempfile::TempDir;
 
 fn setup_test_db() -> (TempDir, Arc<Database>) {
@@ -148,7 +148,7 @@ fn replaying_the_same_undecryptable_envelope_does_not_stack_markers() {
 // under a failure it cannot fix.
 // ============================================================================
 
-use chatter_core::inbox::polling::device::identity_changed_message;
+use chatter_core::testing::inbox::polling::device::identity_changed_message;
 
 /// The marker lands in the same place with the same shape as `DeliveryIssue`,
 /// so the existing conversation plumbing renders it — but as its OWN variant.

@@ -6,7 +6,7 @@
 use crate::{common, skip_if_no_server};
 
 use chatter_core::error::NetworkError;
-use chatter_core::network::grpc::{ChannelClient, MessageClient};
+use chatter_core::testing::network::grpc::{ChannelClient, MessageClient};
 use chatter_proto::chat_v1::{
     ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };
@@ -16,7 +16,7 @@ use common::*;
 
 /// Helper to create a test channel and return its ID.
 async fn create_test_channel(
-    pool: &chatter_core::network::grpc::GrpcClientPool,
+    pool: &chatter_core::testing::network::grpc::GrpcClientPool,
     user: &TestUser,
 ) -> String {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());

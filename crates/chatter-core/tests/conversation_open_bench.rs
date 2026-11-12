@@ -18,8 +18,8 @@ use chatter_core::domain::attachment::{
 };
 use chatter_core::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
 use chatter_core::domain::message::{ConversationType, Message};
-use chatter_core::storage::repositories::{AnonDmRepository, AnonGroupRepository};
-use chatter_core::storage::{AttachmentRepository, Database, MessageRepository, UserRepository};
+use chatter_core::testing::storage::repositories::{AnonDmRepository, AnonGroupRepository};
+use chatter_core::testing::storage::{AttachmentRepository, Database, MessageRepository, UserRepository};
 use tempfile::TempDir;
 
 const PAGE: u32 = chatter_core::config::MESSAGE_PAGE_SIZE as u32;

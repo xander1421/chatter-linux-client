@@ -5,7 +5,7 @@
 use crate::{common, skip_if_no_server};
 
 use base64::Engine;
-use chatter_core::network::grpc::UserClient;
+use chatter_core::testing::network::grpc::UserClient;
 use chatter_proto::chat_v1::{FriendStatus, friend_requests_filter};
 use tokio_stream::StreamExt;
 

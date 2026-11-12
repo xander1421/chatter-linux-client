@@ -8,7 +8,7 @@ use crate::{common, skip_if_no_server};
 use tokio_stream::StreamExt;
 
 use chatter_core::error::NetworkError;
-use chatter_core::network::grpc::AuthClient;
+use chatter_core::testing::network::grpc::AuthClient;
 use chatter_proto::chat_v1::auth_event;
 
 use common::*;
@@ -447,7 +447,7 @@ async fn test_login_nonexistent_user_is_indistinguishable() {
 #[tokio::test]
 async fn test_login_priced_by_proof_of_work_not_locked() {
     use chatter_core::crypto::opaque;
-    use chatter_core::services::auth_service::login_start_paying_pow;
+    use chatter_core::testing::services::auth_service::login_start_paying_pow;
     use std::sync::atomic::{AtomicU32, Ordering};
     skip_if_no_server!();
 
@@ -568,7 +568,7 @@ async fn test_login_priced_by_proof_of_work_not_locked() {
 #[tokio::test]
 async fn test_login_guess_ceiling_and_its_bypasses() {
     use chatter_core::crypto::opaque;
-    use chatter_core::services::auth_service::{AuthError, login_start_paying_pow};
+    use chatter_core::testing::services::auth_service::{AuthError, login_start_paying_pow};
     skip_if_no_server!();
 
     // A signed-in device with fresh recovery codes.
@@ -705,7 +705,7 @@ async fn test_login_guess_ceiling_and_its_bypasses() {
 #[tokio::test]
 async fn test_trusted_device_token_outlasts_burnt_ceiling() {
     use chatter_core::crypto::opaque;
-    use chatter_core::services::auth_service::{AuthError, login_start_paying_pow};
+    use chatter_core::testing::services::auth_service::{AuthError, login_start_paying_pow};
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);

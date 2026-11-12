@@ -11,7 +11,8 @@ static POSITION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{AttachmentId, MessageId};
-use chatter_core::services::media_gallery::{GalleryAttachment, GalleryMessage, ordered_media};
+use chatter_core::client::{GalleryAttachment, GalleryMessage};
+use chatter_core::ui::ordered_media;
 use chatter_core::state::ActiveConversation;
 use slint::{ComponentHandle, Model};
 
@@ -386,7 +387,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
 static CLIPBOARD: std::sync::Mutex<Option<arboard::Clipboard>> = std::sync::Mutex::new(None);
 
 fn stream_export(
-    reader: &chatter_core::services::attachment::CbcRangeDecryptor,
+    reader: &chatter_core::media::CbcRangeDecryptor,
     output: &mut std::fs::File,
     check: impl Fn() -> Result<(), String>,
 ) -> Result<(), String> {

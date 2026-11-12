@@ -6,7 +6,7 @@
 use crate::{common, skip_if_no_server};
 
 use chatter_core::error::NetworkError;
-use chatter_core::network::grpc::ChannelClient;
+use chatter_core::testing::network::grpc::ChannelClient;
 use chatter_proto::chat_v1::ChannelType;
 use tokio_stream::StreamExt;
 

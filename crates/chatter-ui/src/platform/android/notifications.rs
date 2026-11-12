@@ -264,7 +264,7 @@ impl AndroidNotifications {
         let tokens = consent.issue(
             call_id,
             std::time::Instant::now(),
-            chatter_core::services::call_worker::RING_TIMEOUT,
+            chatter_core::client::calls::RING_TIMEOUT,
         );
 
         let id = call_identity::request_code(call_id);
@@ -350,7 +350,7 @@ impl AndroidNotifications {
                 jni::jni_str!("setTimeoutAfter"),
                 jni::jni_sig!("(J)Landroid/app/Notification$Builder;"),
                 &[JValue::Long(
-                    chatter_core::services::call_worker::RING_TIMEOUT.as_millis() as i64,
+                    chatter_core::client::calls::RING_TIMEOUT.as_millis() as i64,
                 )],
             )
             .map_err(nerr)?;
@@ -897,7 +897,7 @@ fn build_message_activity_intent<'a>(
     key: Option<&str>,
 ) -> Result<JObject<'a>, SystemError> {
     let key = key.filter(|key| {
-        chatter_core::services::notification_service::is_opaque_notification_key(key)
+        chatter_core::ui::is_opaque_notification_key(key)
     });
     let intent = new_activity_intent(env, context)?;
     let action = env

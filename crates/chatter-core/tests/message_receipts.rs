@@ -1,8 +1,8 @@
 //! Durable receipt evidence, scoped by message, recipient and authenticated device.
 use chatter_core::domain::ids::{ChannelId, DeviceId, UserId};
 use chatter_core::domain::message::{ConversationType, Message};
-use chatter_core::storage::repositories::message_receipt_repo::MessageReceiptRepository;
-use chatter_core::storage::{Database, MessageRepository};
+use chatter_core::testing::storage::repositories::message_receipt_repo::MessageReceiptRepository;
+use chatter_core::testing::storage::{Database, MessageRepository};
 use std::sync::Arc;
 
 #[test]

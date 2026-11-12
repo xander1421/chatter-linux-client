@@ -24,7 +24,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::message::ConversationType;
 use chatter_core::events::DomainEvent;
-use chatter_core::services::link_device_service::{
+use chatter_core::testing::services::link_device_service::{
     PinVerification as V, PinVerificationError as E,
 };
 use chatter_core::state::ActiveConversation;

@@ -530,13 +530,13 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                                 | FriendCodeConnectionError::UsernameInsteadOfCode
                                 | FriendCodeConnectionError::ServerCodeInShield
                                 | FriendCodeConnectionError::FriendRequest(
-                                    chatter_core::services::UserError::InvalidInput(_)
+                                    chatter_core::client::UserError::InvalidInput(_)
                                 )
                                 | FriendCodeConnectionError::FriendRequest(
-                                    chatter_core::services::UserError::UserNotFound(_)
+                                    chatter_core::client::UserError::UserNotFound(_)
                                 )
                                 | FriendCodeConnectionError::SecretChat(
-                                    chatter_core::services::anon_dm::AnonDmError::CannotMessageSelf
+                                    chatter_core::client::AnonDmError::CannotMessageSelf
                                 )
                         ) {
                             tracing::info!("Friend code input rejected: {}", error);

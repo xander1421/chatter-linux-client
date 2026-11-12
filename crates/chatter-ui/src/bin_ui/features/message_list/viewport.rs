@@ -519,8 +519,8 @@ mod visible_preview_tests {
             .attachment_repo()
             .insert(&source)
             .unwrap();
-        chatter_core::services::attachment::ensure_attachments_dir().unwrap();
-        let path = chatter_core::services::attachment::attachment_file_path(&source.id);
+        chatter_core::testing::services::attachment::ensure_attachments_dir().unwrap();
+        let path = chatter_core::testing::services::attachment::attachment_file_path(&source.id);
         std::fs::write(&path, &encrypted.ciphertext).unwrap();
         let id = source.id.to_string();
         // Construct requests before the executor gets a chance to poll them.

@@ -1,6 +1,6 @@
 //! Private, seekable video plaintext. No temporary files or external grants.
 #[cfg(any(target_os = "android", test))]
-use chatter_core::{prelude::SecureBuffer, services::attachment::CbcRangeDecryptor};
+use chatter_core::{prelude::SecureBuffer, media::CbcRangeDecryptor};
 #[cfg(any(target_os = "android", test))]
 use std::sync::Arc;
 

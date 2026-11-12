@@ -5,7 +5,7 @@ use std::sync::Arc;
 use slint::ComponentHandle;
 
 use chatter_core::client::{ChatterClient, ClientError};
-use chatter_core::services::key_recovery::KeyRecoveryNeed;
+use chatter_core::client::KeyRecoveryNeed;
 
 use super::initial_data::load_initial_data;
 use crate::MainWindow;
@@ -181,7 +181,7 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Login via SDK (handles auth + state + inbox + presence)
             let pin_opt = if pin.is_empty() { None } else { Some(pin.as_str()) };
             let verifying = forward_login_verifying(weak.clone(), &ui_ctx);
-            let outcome = ui_ctx.login(&username, &password, &chatter_core::services::link_device_service::LinkDeviceService::current_device_name(), pin_opt).await;
+            let outcome = ui_ctx.login(&username, &password, &chatter_core::client::ChatterClient::current_device_name(), pin_opt).await;
             verifying.abort();
             match outcome {
                 Ok(_result) => {

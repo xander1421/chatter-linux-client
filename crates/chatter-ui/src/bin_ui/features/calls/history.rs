@@ -808,7 +808,7 @@ mod tests {
             ids::{ChannelId, UserId},
             message::ConversationType,
         };
-        use chatter_core::storage::repositories::{
+        use chatter_core::testing::storage::repositories::{
             CallHistoryRepository, channel_repo::ChannelRepository,
         };
         use slint::Model;
@@ -835,7 +835,7 @@ mod tests {
             .unwrap()
             .database_path();
         let db =
-            Arc::new(chatter_core::storage::Database::open(&path, "calls-icon-fixture").unwrap());
+            Arc::new(chatter_core::testing::storage::Database::open(&path, "calls-icon-fixture").unwrap());
         let channels = ChannelRepository::new(db.clone());
         let calls = CallHistoryRepository::new(db);
         let id = ChannelId::new();

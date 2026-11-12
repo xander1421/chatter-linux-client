@@ -6,7 +6,7 @@
 //! 3. Include signature in registration request
 //! 4. Server verifies signature during registration
 
-use chatter_core::network::grpc::{AuthClient, GrpcClientPool};
+use chatter_core::testing::network::grpc::{AuthClient, GrpcClientPool};
 
 const SERVER_ADDRESS: &str = "https://localhost:50051";
 

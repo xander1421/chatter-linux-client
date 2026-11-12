@@ -12,8 +12,8 @@ use chatter_core::domain::jarvis::{
     Role, SubjectType,
 };
 use chatter_core::domain::{ChannelId, UserId};
-use chatter_core::storage::Database;
-use chatter_core::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
+use chatter_core::testing::storage::Database;
+use chatter_core::testing::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 
 // ============================================================================
 // Test Helpers

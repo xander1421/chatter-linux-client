@@ -12,8 +12,8 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 use chatter_core::domain::ids::{ChannelId, UserId};
-use chatter_core::services::SignalService;
-use chatter_core::storage::{Database, KeyStore, SettingsRepository, settings_keys};
+use chatter_core::testing::services::SignalService;
+use chatter_core::testing::storage::{Database, KeyStore, SettingsRepository, settings_keys};
 
 struct Party {
     svc: SignalService,

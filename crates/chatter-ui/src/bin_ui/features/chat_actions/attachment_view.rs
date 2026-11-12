@@ -726,7 +726,7 @@ fn play_audio_from_buffer(
 /// Play large audio by streaming decrypted ranges on demand (no full decrypt).
 fn play_audio_from_range(
     weak: slint::Weak<MainWindow>,
-    dec: std::sync::Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    dec: std::sync::Arc<chatter_core::media::CbcRangeDecryptor>,
     attachment_id: &str,
     mime_type: &str,
     request: u64,
@@ -948,7 +948,7 @@ fn play_video_from_buffer(
 #[cfg(target_os = "android")]
 fn play_video_from_range(
     _weak: slint::Weak<MainWindow>,
-    dec: std::sync::Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    dec: std::sync::Arc<chatter_core::media::CbcRangeDecryptor>,
     filename: &str,
     request: u64,
 ) {
@@ -1025,7 +1025,7 @@ fn play_video_from_buffer(
 #[cfg(not(target_os = "android"))]
 fn play_video_from_range(
     weak: slint::Weak<MainWindow>,
-    dec: std::sync::Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    dec: std::sync::Arc<chatter_core::media::CbcRangeDecryptor>,
     filename: &str,
     request: u64,
 ) {

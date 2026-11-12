@@ -12,7 +12,7 @@
 
 use crate::{common, skip_if_no_server};
 
-use chatter_core::network::grpc::MailboxClient;
+use chatter_core::testing::network::grpc::MailboxClient;
 use chatter_proto::mailbox_v1::EnvelopeType;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand::RngCore;

@@ -120,7 +120,7 @@ fn assert_in_shield(client: &ChatterClient, accepts: &AtomicUsize, step: &str) {
 async fn shield_onboarding_never_dials_direct() {
     skip_if_no_server!();
     let base = std::env::temp_dir().join("chatter-test-arti");
-    chatter_core::network::grpc::onion_transport::set_tor_directories(
+    chatter_core::testing::network::grpc::onion_transport::set_tor_directories(
         base.join("state"),
         base.join("cache"),
     );
