@@ -1,12 +1,12 @@
 [package]
 name = "chatter-attachment-crypto"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 authors = ["xander1421"]
 description = "Signal-compatible attachment crypto (AES-256-CBC + HMAC-SHA256) for Chatter"
 license = "GPL-3.0"
 repository = "https://github.com/xander1421/chatter"
-rust-version = "1.99"
+rust-version.workspace = true
 
 [lib]
 name = "chatter_attachment_crypto"
@@ -20,14 +20,17 @@ test-support = []
 aes = { version = "0.9.3", features = ["zeroize"] }
 # `alloc` gives cipher's decrypt_padded_vec (attachment_crypto.rs).
 cbc = { version = "0.2.1", features = ["alloc", "zeroize"] }
-sha2 = "0.11.0"
+sha2 = { workspace = true }
 hmac = "0.13.0"
 subtle = "2.5"
-zeroize = { version = "1.8", features = ["derive"] }
+zeroize = { workspace = true, features = ["derive"] }
 rand = { version = "0.9", features = ["os_rng"] }
 rayon = "1.10"
-tracing = "0.1"
-thiserror = "2"
+tracing = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints]
+workspace = true
