@@ -1196,11 +1196,13 @@ fn search_messages(
             preview_match: matched.into(),
             preview_after: after.into(),
         });
+        // The same sidecar the chat bubble shows; one inline pixel bound.
         thumbnails.push(
             hit.thumbnail
                 .as_deref()
-                .and_then(|bytes| image::load_from_memory(bytes).ok())
-                .map(|image| image.thumbnail(320, 320).to_rgba8())
+                .and_then(|bytes| {
+                    chatter_core::media::ImageProcessor::inline_pixels_from_memory(bytes).ok()
+                })
                 .map(|rgba| SearchThumbnail {
                     width: rgba.width(),
                     height: rgba.height(),
