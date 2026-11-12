@@ -104,11 +104,19 @@ impl ChannelEventService {
     /// sees it files it once.
     pub fn record_synced_departure(&self, membership: &Membership) {
         self.classify_unsigned(&membership.channel_id, &membership.user_id, false);
+        // The event time becomes the notice's `sent_at`. The join notice for
+        // this same membership already sits at `joined_at` from the same
+        // sender, so reusing it collides on idx_messages_sender_sent_at and
+        // the departure is silently dropped. One nanosecond later keeps it
+        // deterministic (a re-sync still files it once) and ordered after the
+        // join. 0 stays 0: it means "no identity, use a fresh id".
+        let joined = membership_ts(membership);
+        let event_ts = if joined == 0 { 0 } else { joined.saturating_add(1) };
         self.publish_member_removed(
             &membership.channel_id,
             &membership.user_id,
             MemberRemoval::Unexplained,
-            membership_ts(membership),
+            event_ts,
         );
     }
 
