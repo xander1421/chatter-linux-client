@@ -162,7 +162,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                                     sidebar.set_active_tab("chats".into());
                                     sidebar.set_mobile_show_chat(true);
                                     if let Some(message_id) = target.message_id {
-                                        super::header::jump_to_conversation_message(&window, &client, conversation, &message_id);
+                                        super::message_list::jump_to_conversation_message(&window, &client, conversation, &message_id);
                                     } else {
                                         super::chat::open::select_conversation(&window, conversation);
                                     }

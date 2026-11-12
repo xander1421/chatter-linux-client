@@ -208,7 +208,7 @@ pub(super) fn handle_pin_ui_update(
                 .set_pinned_current_index(1);
         }
 
-        crate::bin_ui::features::header::refresh_pinned_ui(&w, &refresh_ctx);
+        crate::bin_ui::features::message_list::refresh_pinned_ui(&w, &refresh_ctx);
 
         tracing::debug!(
             channel_id = %channel_id_str,

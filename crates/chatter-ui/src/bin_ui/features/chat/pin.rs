@@ -253,7 +253,7 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 .set_pinned_message_preview("".into());
                         }
                     }
-                    crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx);
+                    crate::bin_ui::features::message_list::refresh_pinned_ui(&w, &ui_ctx);
                 });
             });
         },

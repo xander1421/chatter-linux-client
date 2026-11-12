@@ -127,7 +127,7 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         unregister_message_gifs,
                     );
                     if ui_ctx_spawn.prune_deleted_pins() {
-                        crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx_spawn);
+                        crate::bin_ui::features::message_list::refresh_pinned_ui(&w, &ui_ctx_spawn);
                     }
                 });
             });
@@ -204,7 +204,7 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                 if ui_ctx_spawn.active_conversation() != conversation { return; }
                 super::helpers::remove_message_from_ui(&w, &sender_for_ui, &timestamp_for_ui, unregister_message_gifs);
                 if ui_ctx_spawn.prune_deleted_pins() {
-                    crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx_spawn);
+                    crate::bin_ui::features::message_list::refresh_pinned_ui(&w, &ui_ctx_spawn);
                 }
             });
         });

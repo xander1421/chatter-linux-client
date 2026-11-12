@@ -456,7 +456,7 @@ pub(super) fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                 return;
             };
             crate::bin_ui::features::back::reset_to_chats(&w);
-            crate::bin_ui::features::header::jump_to_conversation_message(
+            crate::bin_ui::features::message_list::jump_to_conversation_message(
                 &w,
                 &ui_ctx_jump,
                 conversation,

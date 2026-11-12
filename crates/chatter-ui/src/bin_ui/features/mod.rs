@@ -22,7 +22,6 @@ pub mod chat;
 pub mod chat_actions;
 pub mod composer;
 pub mod connection;
-pub mod header;
 pub(crate) mod history_owner;
 #[cfg(feature = "jarvis")]
 pub mod jarvis;
@@ -30,6 +29,7 @@ pub mod jarvis;
 /// always compiled and stays inert until `MeshGlobal.enabled` is flipped here.
 #[cfg(feature = "mesh")]
 pub mod mesh;
+pub mod message_list;
 pub mod modals;
 pub mod navigation;
 pub mod server_records;
@@ -57,7 +57,7 @@ pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     chat::wire(window, ui_ctx);
     sidebar::wire(window, ui_ctx);
     chat_actions::wire(window, ui_ctx);
-    header::wire(window, ui_ctx);
+    message_list::wire(window, ui_ctx);
     composer::wire(window, ui_ctx);
     modals::wire(window, ui_ctx);
     thread::wire(window, ui_ctx);

@@ -61,7 +61,7 @@ pub(crate) fn select_conversation(
     conv: chatter_core::state::ActiveConversation,
 ) -> bool {
     use chatter_core::state::ActiveConversation;
-    crate::bin_ui::features::header::cancel_pending_jump_for(conv);
+    crate::bin_ui::features::message_list::cancel_pending_jump_for(conv);
     match conv {
         ActiveConversation::Channel(id) => window
             .global::<crate::SidebarPane>()

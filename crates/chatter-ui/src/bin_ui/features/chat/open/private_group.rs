@@ -133,8 +133,8 @@ pub fn load_private_group_messages(
             w.global::<crate::ChatPane>()
                 .set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::from(slint_messages)));
             w.global::<crate::ChatPane>().set_loading_messages(false);
-            crate::bin_ui::features::header::finish_pending_jump(&w, &ui_ctx);
-            crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx);
+            crate::bin_ui::features::message_list::finish_pending_jump(&w, &ui_ctx);
+            crate::bin_ui::features::message_list::refresh_pinned_ui(&w, &ui_ctx);
 
             // Auto-register GIF animations
             crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);
@@ -150,7 +150,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
         .global::<crate::SidebarPane>()
         .on_private_group_selected(move |group_id: SharedString| {
             if let Ok(id) = group_id.parse::<AnonGroupId>() {
-                crate::bin_ui::features::header::cancel_pending_jump_for(
+                crate::bin_ui::features::message_list::cancel_pending_jump_for(
                     chatter_core::state::ActiveConversation::AnonGroup(id),
                 );
             }
@@ -322,8 +322,8 @@ async fn load_private_group_messages_internal(
         w.global::<crate::ChatPane>()
             .set_messages(ModelRc::new(crate::bin_ui::message_model::MessageModel::from(slint_messages)));
         w.global::<crate::ChatPane>().set_loading_messages(false);
-        crate::bin_ui::features::header::finish_pending_jump(&w, &ui_ctx);
-        crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx);
+        crate::bin_ui::features::message_list::finish_pending_jump(&w, &ui_ctx);
+        crate::bin_ui::features::message_list::refresh_pinned_ui(&w, &ui_ctx);
 
         crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);
     });

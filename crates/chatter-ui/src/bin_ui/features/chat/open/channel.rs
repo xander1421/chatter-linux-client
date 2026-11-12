@@ -44,7 +44,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 "conversation_open"
             );
             if let Ok(id) = channel_id.parse::<ChannelId>() {
-                crate::bin_ui::features::header::cancel_pending_jump_for(
+                crate::bin_ui::features::message_list::cancel_pending_jump_for(
                     chatter_core::state::ActiveConversation::Channel(id),
                 );
             }
@@ -447,8 +447,8 @@ pub(crate) async fn load_channel_into_ui_owned(
             crate::trace_chat_open_model(display_messages.len(), 0);
         }
         w.global::<crate::ChatPane>().set_loading_messages(false);
-        crate::bin_ui::features::header::finish_pending_jump(&w, &ui_ctx);
-        crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx);
+        crate::bin_ui::features::message_list::finish_pending_jump(&w, &ui_ctx);
+        crate::bin_ui::features::message_list::refresh_pinned_ui(&w, &ui_ctx);
 
         // Auto-register GIF animations for inline playback
         crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);
