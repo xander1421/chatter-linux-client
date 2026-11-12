@@ -158,6 +158,8 @@ mod channels;
 mod display;
 mod friends;
 mod history;
+mod open;
+pub use open::{ConversationPage, PageAnchor};
 mod search;
 mod sidebar;
 mod threads;

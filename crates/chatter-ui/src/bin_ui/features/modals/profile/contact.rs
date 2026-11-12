@@ -40,7 +40,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let resolved = client.display_name(&peer);
         state.set_profile_contact_name(client.contact_name(&peer).unwrap_or_default().into());
         state.set_profile_display_name(resolved.clone().into());
-        state.set_profile_initials(crate::bin_ui::converters::initials_from_name(&resolved).into());
+        state.set_profile_initials(chatter_core::ui::message_row::initials_from_name(&resolved).into());
         if client.active_conversation() == (chatter_core::state::ActiveConversation::ServerDm { peer_id: peer })
             || matches!(client.active_conversation(), chatter_core::state::ActiveConversation::AnonDm(id)
                 if client.get_anon_dm_conversation(&id).is_some_and(|dm| dm.peer_id == peer)) {
@@ -48,7 +48,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
         let messages = w.global::<crate::ChatPane>().get_messages();
         let resolved = client.display_name(&peer);
-        let initials = crate::bin_ui::converters::initials_from_name(&resolved);
+        let initials = chatter_core::ui::message_row::initials_from_name(&resolved);
         for i in 0..messages.row_count() {
             if let Some(mut row) = messages.row_data(i) {
                 if row.sender_id.as_str() == peer.to_string() && !row.is_system {

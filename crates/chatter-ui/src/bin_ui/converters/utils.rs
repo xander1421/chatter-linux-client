@@ -82,11 +82,3 @@ pub(crate) fn category_to_icon_and_color(category: &str) -> (&'static str, slint
     }
 }
 
-/// Format a count with singular/plural form.
-pub(crate) fn format_count(count: i32, singular: &str, plural: &str) -> String {
-    if count == 1 {
-        format!("1 {}", singular)
-    } else {
-        format!("{} {}", count, plural)
-    }
-}

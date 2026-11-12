@@ -475,7 +475,7 @@ pub(super) fn handle_user_profile_updated(
     let user_id_str = user_id.to_string();
     let stored_name = ui_ctx.display_name(&user_id);
     let display_name_slint: slint::SharedString = stored_name.clone().into();
-    let initials = crate::bin_ui::converters::initials_from_name(&stored_name);
+    let initials = chatter_core::ui::message_row::initials_from_name(&stored_name);
     let client = ui_ctx.clone();
 
     // Decode the avatar to raw RGBA now (Send-safe); the non-Send `slint::Image`
@@ -554,7 +554,7 @@ pub(super) fn handle_user_profile_updated(
                 continue;
             };
             row.sender_name = name.clone().into();
-            row.sender_initials = crate::bin_ui::converters::initials_from_name(&name).into();
+            row.sender_initials = chatter_core::ui::message_row::initials_from_name(&name).into();
             (row.content, row.rich_content) = crate::bin_ui::converters::body_fields(&content, &[], false);
             messages.set_row_data(i, row);
         }

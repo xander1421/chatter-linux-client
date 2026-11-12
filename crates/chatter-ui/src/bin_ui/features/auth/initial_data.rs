@@ -10,7 +10,7 @@ use slint::{Model, ModelRc, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
 
-use crate::bin_ui::converters::initials_from_name;
+use chatter_core::ui::message_row::initials_from_name;
 use crate::bin_ui::converters::{FriendDataExt, FriendRequestExt, FriendRequestSendData};
 use crate::{FriendData, FriendRequestData, MainWindow};
 

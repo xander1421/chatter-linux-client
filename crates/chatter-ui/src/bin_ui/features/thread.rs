@@ -11,7 +11,6 @@ use chatter_core::ui::chat_data::{ChannelGroupingRow, channel_message_is_continu
 
 use super::chat::recompute_channel_continuations;
 use super::history_owner::HistoryOwner;
-use crate::bin_ui::converters::messages_to_display_batch;
 use crate::{EmojiData, MainWindow, MentionSuggestion, MessageItemData};
 
 fn grouping_row(message: &MessageItemData) -> ChannelGroupingRow<'_> {
@@ -574,16 +573,9 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
                 if page.is_empty() {
                     return;
                 }
-                let display = messages_to_display_batch(
-                    &page,
-                    |ms| ui_ctx.message_sender_display_names(ms),
-                    |m| ui_ctx.message_sender_avatar(m),
-                    crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
-                    |m| ui_ctx.reply_author_display_name(m),
-                    |m| ui_ctx.reply_parent_missing_for(m),
-                    |m| ui_ctx.reply_parent_media(m),
-                    |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-                ).await;
+                let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+                let display =
+                    crate::bin_ui::converters::prepare_rows(ui_ctx.message_rows(&page), true, generation).await;
                 let current_user_id = ui_ctx
                     .session_current_user_id()
                     .map(|id| id.to_string())
@@ -763,7 +755,7 @@ fn adjust_root_reply_count(w: &MainWindow, root_id: &str, delta: i32) {
         let mut updated = msg;
         updated.reply_count = (updated.reply_count + delta).max(0);
         updated.reply_count_text =
-            crate::bin_ui::converters::format_count(updated.reply_count, "reply", "replies").into();
+            chatter_core::ui::message_row::format_count(updated.reply_count, "reply", "replies").into();
         model.set_row_data(i, updated);
         return;
     }
@@ -788,7 +780,7 @@ pub(crate) fn refresh_root_reply_counts(w: &MainWindow, ui_ctx: &ChatterClient) 
         if count != row.reply_count {
             row.reply_count = count;
             row.reply_count_text =
-                crate::bin_ui::converters::format_count(count, "reply", "replies").into();
+                chatter_core::ui::message_row::format_count(count, "reply", "replies").into();
             model.set_row_data(i, row);
         }
     }
@@ -834,16 +826,9 @@ pub async fn thread_reply_display(
     ui_ctx: &Arc<ChatterClient>,
     message: &Message,
 ) -> Option<crate::bin_ui::converters::MessageDisplayData> {
-    let display = messages_to_display_batch(
-        std::slice::from_ref(message),
-        |ms| ui_ctx.message_sender_display_names(ms),
-        |m| ui_ctx.message_sender_avatar(m),
-        crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
-        |m| ui_ctx.reply_author_display_name(m),
-        |m| ui_ctx.reply_parent_missing_for(m),
-        |m| ui_ctx.reply_parent_media(m),
-        |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-    ).await;
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+    let display =
+        crate::bin_ui::converters::prepare_rows(ui_ctx.message_rows(std::slice::from_ref(message)), true, generation).await;
     display.into_iter().next()
 }
 
@@ -887,16 +872,9 @@ pub fn load_thread_data(
             // The true total, not the page size: the panel offers "earlier
             // replies" while it shows fewer than this.
             let total_replies = ui_ctx.thread_reply_count(&root_message_id);
-            let display = messages_to_display_batch(
-                &replies,
-                |ms| ui_ctx.message_sender_display_names(ms),
-                |m| ui_ctx.message_sender_avatar(m),
-                crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
-                |m| ui_ctx.reply_author_display_name(m),
-                |m| ui_ctx.reply_parent_missing_for(m),
-                |m| ui_ctx.reply_parent_media(m),
-                |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-            ).await;
+            let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+            let display =
+                crate::bin_ui::converters::prepare_rows(ui_ctx.message_rows(&replies), true, generation).await;
             let current_user_id = ui_ctx
                 .session_current_user_id()
                 .map(|id| id.to_string())

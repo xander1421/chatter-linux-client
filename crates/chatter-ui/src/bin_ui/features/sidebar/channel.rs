@@ -8,7 +8,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
 use chatter_core::domain::ids::ChannelId;
 
-use crate::bin_ui::converters::messages_to_display_batch_deferred;
+use chatter_core::client::PageAnchor;
 use crate::{MainWindow, run_ui};
 
 use super::stop_audio_playback;
@@ -164,7 +164,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
                 // Where the user left off. This is the only moment it exists: the
                 // call that returns it is the call that clears `is_read`. The
-                // receipts go out for the page `load_channel_into_ui` loads.
+                // receipts go out for the page `load_channel_into_ui_owned` loads.
                 let anchor = handle.mark_read_local().unwrap_or_default();
                 tracing::info!(
                     kind = "channel",
@@ -184,7 +184,6 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     channel_id,
                     ui_ctx.clone(),
                     anchor,
-                    Some(handle),
                     owner,
                     Some(open_started),
                 )
@@ -297,33 +296,18 @@ impl ChannelMetadata {
 /// freshly created channel, Saved Messages — pass `UnreadAnchor::default()`,
 /// which opens at the newest message.
 ///
-/// `receipts`: the handle whose `mark_read_local` produced `anchor`; its read
-/// receipts are sent for the page loaded here rather than a second query.
-pub async fn load_channel_into_ui(
-    weak: slint::Weak<MainWindow>,
-    channel_id: ChannelId,
-    ui_ctx: Arc<ChatterClient>,
-    anchor: chatter_core::domain::message::UnreadAnchor,
-    receipts: Option<chatter_core::services::conversation::ConversationHandle>,
-) -> Vec<String> {
-    let owner = HistoryOwner::begin(
-        &ui_ctx,
-        chatter_core::state::ActiveConversation::Channel(channel_id),
-    );
-    load_channel_into_ui_owned(weak, channel_id, ui_ctx, anchor, receipts, owner, None).await
-}
-
+/// Read receipts are core's call (`ChatterClient::open_conversation`):
+/// sent for the page loaded here, never for Saved Messages.
 pub(crate) async fn load_channel_into_ui_owned(
     weak: slint::Weak<MainWindow>,
     channel_id: ChannelId,
     ui_ctx: Arc<ChatterClient>,
     anchor: chatter_core::domain::message::UnreadAnchor,
-    receipts: Option<chatter_core::services::conversation::ConversationHandle>,
     owner: HistoryOwner,
     open_started: Option<std::time::Instant>,
-) -> Vec<String> {
+) {
     if !owner.is_current() {
-        return Vec::new();
+        return;
     }
     if let Some(started) = open_started {
         tracing::info!(
@@ -341,7 +325,7 @@ pub(crate) async fn load_channel_into_ui_owned(
             crate::run_history_ui!(weak, owner, |w| w
                 .global::<crate::ChatPane>()
                 .set_loading_messages(false));
-            return Vec::new();
+            return;
         }
     };
 
@@ -361,62 +345,43 @@ pub(crate) async fn load_channel_into_ui_owned(
         _ => (vec![], String::new()),
     };
     if !owner.is_current() {
-        return Vec::new();
+        return;
     }
     super::apply_pinned_ui_owned(&weak, &ui_ctx, msg_ids, preview, &owner);
 
-    // 2. Load messages — use the channel's actual conversation type so
-    // SavedMessages (stored as ConversationType::SavedMessages) round-trip correctly.
-    let conv_type = channel.conversation_type();
-    let messages = match anchor
-        .opening_page(chatter_core::config::MESSAGE_PAGE_SIZE as u32, |limit| {
-            ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, limit)
-        }) {
-        Ok(msgs) => msgs,
+    // 2. Load the page: receipts, timer marks, reply counts and the unread
+    // divider are core's (`ChatterClient::open_conversation`).
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+    let page = match ui_ctx.open_conversation(
+        chatter_core::state::ActiveConversation::Channel(channel_id),
+        PageAnchor::Opening(anchor),
+        || owner.is_current(),
+    ) {
+        Ok(page) => page,
         Err(e) => {
             tracing::error!("Failed to list channel messages: {}", e);
             crate::run_history_ui!(weak, owner, |w| w
                 .global::<crate::ChatPane>()
                 .set_loading_messages(false));
-            return Vec::new();
+            return;
         }
     };
     if let Some(started) = open_started {
         tracing::info!(
             kind = "channel",
             stage = "page_loaded",
-            rows = messages.len(),
+            rows = page.rows.len(),
             elapsed_ms = started.elapsed().as_millis(),
             "conversation_open"
         );
     }
-
     if !owner.is_current() {
-        return Vec::new();
-    }
-    if let Some(handle) = receipts {
-        handle.send_read_receipts_for_page(&messages);
+        return;
     }
 
-    let message_timestamps: Vec<String> = messages.iter().map(|m| m.sent_at.to_string()).collect();
-
-    // 3. Convert to display format
-    let mut display_messages = messages_to_display_batch_deferred(
-        &messages,
-        |ms| ui_ctx.message_sender_display_names(ms),
-        |m| ui_ctx.message_sender_avatar(m),
-        crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
-        |m| ui_ctx.reply_author_display_name(m),
-        |m| ui_ctx.reply_parent_missing_for(m),
-        |m| ui_ctx.reply_parent_media(m),
-        |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-    )
-    .await;
-    crate::bin_ui::converters::mark_disappearing(&ui_ctx, &mut display_messages);
-    crate::bin_ui::converters::apply_reply_counts(
-        &mut display_messages,
-        &ui_ctx.thread_reply_counts(&channel_id, &conv_type),
-    );
+    // 3. Prepare the rows' images (pixels stay in the UI)
+    let display_messages =
+        crate::bin_ui::converters::prepare_rows(page.rows, false, generation).await;
     if let Some(started) = open_started {
         tracing::info!(
             kind = "channel",
@@ -428,7 +393,7 @@ pub(crate) async fn load_channel_into_ui_owned(
     }
 
     if !owner.is_current() {
-        return Vec::new();
+        return;
     }
     // 4. Update UI
     let metadata = ChannelMetadata::from_channel(&channel);
@@ -441,12 +406,11 @@ pub(crate) async fn load_channel_into_ui_owned(
         .unwrap_or_default();
     let ui_ctx_gifs = ui_ctx.clone();
 
-    let anchor = ui_ctx_gifs.opening_unread_anchor(anchor);
-    let unread_index = anchor.divider_index(&messages);
+    let (unread_index, unread_count) = (page.unread_index, page.unread_count);
     crate::run_history_ui!(weak, owner, |w| {
         let pane = w.global::<crate::ChatPane>();
         pane.set_unread_index(unread_index.map_or(-1, |i| i as i32));
-        pane.set_unread_count(anchor.unread_count as i32);
+        pane.set_unread_count(unread_count as i32);
         pane.set_is_at_bottom(unread_index.is_none());
         metadata.apply(&w);
         crate::bin_ui::converters::set_conversation_kind(
@@ -490,5 +454,4 @@ pub(crate) async fn load_channel_into_ui_owned(
         crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);
     });
 
-    message_timestamps
 }

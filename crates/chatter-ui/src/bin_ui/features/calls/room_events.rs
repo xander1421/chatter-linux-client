@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use crate::bin_ui::converters::initials_from_name;
+use chatter_core::ui::message_row::initials_from_name;
 use crate::{CallParticipantData, MainWindow};
 use chatter_core::calls::{LiveKitRoomEvent, RoomState, tiles};
 use chatter_core::client::ChatterClient;
@@ -38,7 +38,7 @@ pub(super) fn reconcile_roster(
             .unwrap_or_default();
         tile.user_id = identity.clone().into();
         tile.display_name = info.display_name.clone().into();
-        tile.initials = crate::bin_ui::converters::initials_from_name(&info.display_name).into();
+        tile.initials = chatter_core::ui::message_row::initials_from_name(&info.display_name).into();
         tile.avatar_source = info
             .avatar_bytes
             .as_deref()
@@ -177,7 +177,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 .map(|p| {
                                     (
                                         p.display_name.to_string(),
-                                        crate::bin_ui::converters::initials_from_name(
+                                        chatter_core::ui::message_row::initials_from_name(
                                             &p.display_name,
                                         ),
                                     )

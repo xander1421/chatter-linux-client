@@ -671,7 +671,7 @@ fn paint(window: &MainWindow, prepared: PreparedHistoryPage, how: Paint) -> bool
                 conversation_type: r.conversation_type.into(),
                 private_channel: r.private_channel,
                 name: name.into(),
-                initials: crate::bin_ui::converters::initials_from_name(name).into(),
+                initials: chatter_core::ui::message_row::initials_from_name(name).into(),
                 timestamp: r
                     .started_at
                     .map(crate::bin_ui::converters::sidebar_time)

@@ -7576,7 +7576,9 @@ fn reaction_converter_callback_preserves_author_and_nanosecond_clock() {
         clock,
     );
     let row =
-        chatter_ui::bin_ui::converters::message_to_display_data(&message, "synthetic", &[], None)
+        chatter_ui::bin_ui::converters::MessageDisplayData::from(
+            chatter_core::ui::message_row::message_to_row(&message, "synthetic", &[], None),
+        )
             .to_slint_with_user(&actor.to_string());
     let captured = Arc::new(Mutex::new(None));
     let capture = captured.clone();

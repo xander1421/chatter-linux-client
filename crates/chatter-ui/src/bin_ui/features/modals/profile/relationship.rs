@@ -156,7 +156,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 {
                     Ok(Ok(())) => {
                         let display_name = ui_ctx.display_name(&friend_id);
-                        let initials = crate::bin_ui::converters::initials_from_name(&display_name);
+                        let initials = chatter_core::ui::message_row::initials_from_name(&display_name);
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 w.global::<crate::ModalHostState>()

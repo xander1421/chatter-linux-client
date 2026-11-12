@@ -56,7 +56,7 @@ pub(super) async fn handle_message_received(
     let conv_type = message.conversation_type.clone();
 
     // Call end events may be sent by someone other than the caller.
-    let display_sender = crate::bin_ui::converters::call_display_sender(&message);
+    let display_sender = chatter_core::ui::message_row::call_display_sender(&message);
     // Sender name resolution (conversation-scoped) lives in core.
     let sender_name = ui_ctx.message_sender_display_name(&display_sender);
 
@@ -72,29 +72,28 @@ pub(super) async fn handle_message_received(
 
     // Build display data on this thread (before moving to UI thread)
     // Uses unified converter that handles optional avatars
-    let mut display_data = crate::bin_ui::converters::message_to_display_data(
+    let mut row = chatter_core::ui::message_row::message_to_row(
         &message,
         &sender_name,
         &resolved_attachments,
         sender_avatar.map(std::sync::Arc::<[u8]>::from),
     );
-    display_data.mention_members =
+    row.mention_members =
         ui_ctx.mention_members(&message.conversation_type, &message.conversation_id);
-    crate::bin_ui::converters::mark_disappearing(&ui_ctx, std::slice::from_mut(&mut display_data));
+    chatter_core::ui::message_row::mark_disappearing(&ui_ctx, std::slice::from_mut(&mut row));
 
     // Reply metadata — mirror the reload batch so a LIVE-received reply shows the
     // quote thumbnail/player immediately instead of a text label until reload.
     // Must run BEFORE decode so the local-thumbnail fallback gets decoded.
-    if display_data.is_reply {
-        display_data.reply_to_sender_name = ui_ctx.reply_author_display_name(&message);
-        display_data.reply_to_not_found = ui_ctx.reply_parent_missing_for(&message);
-        crate::bin_ui::converters::apply_reply_parent_media(
-            &mut display_data,
+    if row.is_reply {
+        row.reply_to_sender_name = ui_ctx.reply_author_display_name(&message);
+        row.reply_to_not_found = ui_ctx.reply_parent_missing_for(&message);
+        chatter_core::ui::message_row::apply_reply_parent_media(
+            &mut row,
             ui_ctx.reply_parent_media(&message),
         );
     }
-    let mut prepared =
-        crate::bin_ui::converters::prepare_display_media_guarded(vec![display_data], true, generation).await;
+    let mut prepared = crate::bin_ui::converters::prepare_rows(vec![row], true, generation).await;
     if !session.is_current() {
         return;
     }

@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::bin_ui::converters::initials_from_name;
+use chatter_core::ui::message_row::initials_from_name;
 use crate::{SharedContentItem, SharedTab};
 use slint::{ModelRc, VecModel};
 
