@@ -9,7 +9,7 @@ use crate::domain::channel::{
     NotificationPreference,
 };
 use crate::domain::ids::{ChannelId, UserId};
-use crate::proto::chat_v1::{self, ChannelRole};
+use chatter_proto::chat_v1::{self, ChannelRole};
 
 use super::error::ChannelError;
 

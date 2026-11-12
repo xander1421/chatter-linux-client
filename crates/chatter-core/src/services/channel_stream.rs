@@ -42,7 +42,7 @@ use crate::events::EventBus;
 use crate::inbox::DomainEvent;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::streaming::heartbeat::{self, IsHeartbeat, Next};
-use crate::proto::chat_v1::{self, message_event::Event as MsgEventType};
+use chatter_proto::chat_v1::{self, message_event::Event as MsgEventType};
 use crate::services::message::MessageService;
 use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
 use crate::services::sync_service::SyncService;
@@ -1118,7 +1118,7 @@ mod heartbeat_dispatch {
     #[test]
     fn a_heartbeat_is_never_mistaken_for_an_event() {
         use crate::network::streaming::heartbeat::IsHeartbeat;
-        use crate::proto::chat_v1::{MessageEvent, StreamHeartbeat, message_event::Event};
+        use chatter_proto::chat_v1::{MessageEvent, StreamHeartbeat, message_event::Event};
         let beat = MessageEvent {
             event: Some(Event::Heartbeat(StreamHeartbeat {})),
             ..Default::default()

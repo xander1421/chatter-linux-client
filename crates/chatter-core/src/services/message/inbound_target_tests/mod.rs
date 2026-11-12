@@ -122,7 +122,7 @@
             );
             let bytes = prost::Message::encode_to_vec(&wire);
             let decoded =
-                <crate::proto::content_v1::Content as prost::Message>::decode(bytes.as_slice())
+                <chatter_proto::content_v1::Content as prost::Message>::decode(bytes.as_slice())
                     .unwrap();
             assert!(
                 matches!(crate::services::gateway::MessageGateway::parse_content(decoded.clone()).unwrap(), crate::services::gateway::DmContent::DeleteForEveryone { target_author_aci: Some(value), .. } if value == author.to_string())
@@ -269,7 +269,7 @@
             let copy = super::dm::own_device_copy(&f.carol, &wire, 1).unwrap();
             let bytes = prost::Message::encode_to_vec(&copy);
             let decoded =
-                <crate::proto::content_v1::Content as prost::Message>::decode(bytes.as_slice())
+                <chatter_proto::content_v1::Content as prost::Message>::decode(bytes.as_slice())
                     .unwrap();
             assert!(
                 matches!(crate::services::gateway::MessageGateway::parse_content(decoded.clone()).unwrap(),
@@ -335,7 +335,7 @@
                 author.as_deref(),
                 None,
             );
-            if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) =
+            if let Some(chatter_proto::content_v1::content::Content::DataMessage(dm)) =
                 &mut content.content
             {
                 dm.delete.as_mut().unwrap().destination_user_id = destination;
@@ -559,7 +559,7 @@
                 author.as_deref(),
                 Some(&f.channel.to_string()),
             );
-            if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) =
+            if let Some(chatter_proto::content_v1::content::Content::DataMessage(dm)) =
                 &mut content.content
             {
                 dm.delete.as_mut().unwrap().destination_user_id = destination;
@@ -781,7 +781,7 @@
             );
             let bytes = prost::Message::encode_to_vec(&wire);
             let content =
-                <crate::proto::content_v1::Content as prost::Message>::decode(bytes.as_slice())
+                <chatter_proto::content_v1::Content as prost::Message>::decode(bytes.as_slice())
                     .unwrap();
             assert!(
                 anon.process_incoming_content(&dm.id, &f.bob, &content)
@@ -958,7 +958,7 @@
                 Some(&f.me.to_string()),
                 None,
             );
-        if let Some(crate::proto::content_v1::content::Content::DataMessage(data)) =
+        if let Some(chatter_proto::content_v1::content::Content::DataMessage(data)) =
             &mut destination_claim.content
         {
             data.delete.as_mut().unwrap().destination_user_id = Some(f.bob.to_string());

@@ -79,7 +79,7 @@ impl ChatterClient {
         &self,
         query: &str,
         limit: u32,
-    ) -> Result<Vec<crate::proto::chat_v1::GifResult>, NetworkError> {
+    ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, NetworkError> {
         if !self.gif_picker_available() {
             return Err(NetworkError::PermissionDenied);
         }
@@ -90,7 +90,7 @@ impl ChatterClient {
     pub async fn trending_gifs(
         &self,
         limit: u32,
-    ) -> Result<Vec<crate::proto::chat_v1::GifResult>, NetworkError> {
+    ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, NetworkError> {
         if !self.gif_picker_available() {
             return Err(NetworkError::PermissionDenied);
         }

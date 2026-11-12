@@ -10,7 +10,7 @@
 
 use crate::{common, skip_if_no_server};
 use chatter_core::network::grpc::*;
-use chatter_core::proto::chat_v1::*;
+use chatter_proto::chat_v1::*;
 use common::*;
 use tokio_stream::StreamExt;
 

@@ -109,7 +109,7 @@ impl MessageService {
         &self,
         channel_id: ChannelId,
         sender_id: UserId,
-        proto_msg: &crate::proto::chat_v1::Message,
+        proto_msg: &chatter_proto::chat_v1::Message,
     ) {
         use crate::inbox::ack_policy::{FailureMarker, MarkerTarget, record_marker_then_ack};
 

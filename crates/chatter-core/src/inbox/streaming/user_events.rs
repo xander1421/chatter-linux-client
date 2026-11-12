@@ -15,9 +15,9 @@ use crate::inbox::events::{FriendRequestInfo, InboxEvent};
 use crate::inbox::handlers::DomainEvent;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::streaming::heartbeat::{self, Next};
-use crate::proto::UserPresence;
-use crate::proto::chat_v1::FriendStatus;
-use crate::proto::chat_v1::{friend_requests_filter, user_event};
+use chatter_proto::UserPresence;
+use chatter_proto::chat_v1::FriendStatus;
+use chatter_proto::chat_v1::{friend_requests_filter, user_event};
 use crate::services::user::PROFILE_REFRESH_INTERVAL;
 use crate::services::user::conversions::proto_to_domain_profile;
 use crate::storage::repositories::{SettingsRepository, UserRepository};
@@ -217,7 +217,7 @@ fn resolve_stream_display_name(
 
 /// Handle a user event from the stream.
 async fn handle_user_event(
-    event: crate::proto::chat_v1::UserEvent,
+    event: chatter_proto::chat_v1::UserEvent,
     grpc_pool: &Arc<GrpcClientPool>,
     event_tx: &broadcast::Sender<InboxEvent>,
     user_repo: &Arc<UserRepository>,
@@ -319,7 +319,7 @@ async fn handle_user_event(
 /// Decrypt a server profile, persist it, and emit `UserProfileUpdated` — for a
 /// live push always, for a refetch only when something visible changed.
 fn apply_profile(
-    proto: &crate::proto::chat_v1::UserProfile,
+    proto: &chatter_proto::chat_v1::UserProfile,
     user_repo: &UserRepository,
     current_user_id: Option<&UserId>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
@@ -400,7 +400,7 @@ fn apply_profile(
 /// reads. The editing device receives the echo too; it decrypts to what it
 /// just saved.
 fn apply_own_profile(
-    proto: &crate::proto::chat_v1::UserProfile,
+    proto: &chatter_proto::chat_v1::UserProfile,
     user_repo: &UserRepository,
     settings_repo: &SettingsRepository,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
@@ -524,7 +524,7 @@ async fn refresh_friend_requests(
 #[cfg(test)]
 mod heartbeat_tests {
     use super::*;
-    use crate::proto::chat_v1::{StreamHeartbeat, UserEvent};
+    use chatter_proto::chat_v1::{StreamHeartbeat, UserEvent};
 
     /// The server's keepalive must not touch state: no inbox event (which
     /// would refetch friend requests every minute), no domain event.

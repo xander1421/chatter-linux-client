@@ -5,7 +5,7 @@ use super::*;
 /// device info (the server holds no name for a pending link).
 #[test]
 fn pending_links_keeps_only_open_approved_sessions() {
-    use crate::proto::provisioning_v1::provisioning_session::Status;
+    use chatter_proto::provisioning_v1::provisioning_session::Status;
     let s = |uuid: &str, status: Status, expires_at: u64| ProvisioningSession {
         provisioning_uuid: uuid.into(),
         device_info: "android".into(),

@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use super::deduplicator::{DeduplicatorStats, MessageDeduplicator};
 use super::orderer::{MessageOrderer, OrdererStats, OrderingResult};
-use crate::proto::chat_v1::Message;
+use chatter_proto::chat_v1::Message;
 
 /// Validation errors for message content.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -179,7 +179,7 @@ impl ContentValidator {
     /// Validate content size.
     fn validate_content_size(
         &self,
-        content: &crate::proto::chat_v1::message::Content,
+        content: &chatter_proto::chat_v1::message::Content,
     ) -> Result<(), ValidationError> {
         // Estimate content size based on the type
         let size = Self::estimate_content_size(content);
@@ -195,8 +195,8 @@ impl ContentValidator {
     }
 
     /// Estimate the size of message content.
-    fn estimate_content_size(content: &crate::proto::chat_v1::message::Content) -> usize {
-        use crate::proto::chat_v1::message::content::Type;
+    fn estimate_content_size(content: &chatter_proto::chat_v1::message::Content) -> usize {
+        use chatter_proto::chat_v1::message::content::Type;
 
         match &content.r#type {
             Some(Type::Text(text)) => text.len(),

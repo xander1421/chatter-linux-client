@@ -9,7 +9,7 @@ use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::proto::chat_v1::account_deletion_event::Status as DeletionStatus;
+use chatter_proto::chat_v1::account_deletion_event::Status as DeletionStatus;
 use crate::services::auth_service::{AuthError, prove_password};
 use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 

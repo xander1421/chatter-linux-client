@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
-use crate::proto::content_v1::DataMessage;
+use chatter_proto::content_v1::DataMessage;
 use crate::services::SignalService;
 use crate::storage::repositories::MessageRepository;
 
@@ -473,11 +473,11 @@ impl MessageGateway {
     /// account can legitimately place an outgoing message in our transcript.
     pub(crate) async fn store_synced_sent_message(
         &self,
-        sync: crate::proto::content_v1::SyncSent,
+        sync: chatter_proto::content_v1::SyncSent,
         sealed_sender_id: UserId,
     ) -> Result<SealedSenderResult, crate::error::ServiceError> {
         use crate::error::ServiceError;
-        use crate::proto::content_v1::sync_sent::Destination;
+        use chatter_proto::content_v1::sync_sent::Destination;
 
         // NOT `Validation`. This is a settings-DB read: a failure here is our
         // disk or a login that has not happened yet, and the inbox ack policy

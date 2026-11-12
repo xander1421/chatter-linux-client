@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 type PendingAnnouncement = (
     UserId,
     ChannelId,
-    crate::proto::content_v1::GroupMailboxAddress,
+    chatter_proto::content_v1::GroupMailboxAddress,
 );
 
 // Sealed sender decryption can advance the ratchet before the mailbox save.
@@ -468,7 +468,7 @@ pub(super) async fn process_sealed_sender_message(
             let envelope_type = EnvelopeType::SealedSender;
 
             // Create a Message for pipeline processing
-            let proto_msg = crate::proto::chat_v1::Message {
+            let proto_msg = chatter_proto::chat_v1::Message {
                 id: msg.message_guid.clone(),
                 channel_id: "pending".to_string(),
                 author_id: msg.source_user_id.clone(),

@@ -49,7 +49,7 @@ use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
 use crate::error::CryptoError;
-use crate::proto::provisioning_v1::{ProvisionEnvelope, ProvisionMessage};
+use chatter_proto::provisioning_v1::{ProvisionEnvelope, ProvisionMessage};
 
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;

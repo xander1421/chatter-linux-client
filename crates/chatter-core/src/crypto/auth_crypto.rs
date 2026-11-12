@@ -239,13 +239,13 @@ mod tests {
     fn register_request_username_proof_verifies() {
         use prost::Message;
         let (hash, proof) = username_claim("alice.42").unwrap();
-        let req = crate::proto::chat_v1::RegisterRequest {
+        let req = chatter_proto::chat_v1::RegisterRequest {
             username_lookup_hash: hash.to_vec(),
             username_proof: proof,
             ..Default::default()
         };
         let wire =
-            crate::proto::chat_v1::RegisterRequest::decode(req.encode_to_vec().as_slice()).unwrap();
+            chatter_proto::chat_v1::RegisterRequest::decode(req.encode_to_vec().as_slice()).unwrap();
         assert_eq!(wire.username_proof.len(), 128);
         let wire_hash: [u8; 32] = wire.username_lookup_hash.as_slice().try_into().unwrap();
         assert!(verify_username_proof(&wire.username_proof, wire_hash).is_ok());

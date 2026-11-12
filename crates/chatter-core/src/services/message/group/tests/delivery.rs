@@ -22,7 +22,7 @@
                 .signal()
                 .encrypt_for_group(
                     &t.channel_id,
-                    &crate::network::validation::protovalidate::test_plaintext("before"),
+                    &chatter_proto::protovalidate::test_plaintext("before"),
                 )
                 .await
                 .unwrap();
@@ -59,9 +59,9 @@
             for copy in &old {
                 held |= holds_checkpoint(inbound.ingest(copy, t.channel_id, false).await);
             }
-            let plaintext = crate::proto::content_v1::Content {
-                content: Some(crate::proto::content_v1::content::Content::DataMessage(
-                    crate::proto::content_v1::DataMessage {
+            let plaintext = chatter_proto::content_v1::Content {
+                content: Some(chatter_proto::content_v1::content::Content::DataMessage(
+                    chatter_proto::content_v1::DataMessage {
                         body: "after".into(),
                         channel_id: t.channel_id.to_string(),
                         timestamp: now + passes,
@@ -144,7 +144,7 @@
             .signal()
             .encrypt_for_group(
                 &t.channel_id,
-                &crate::network::validation::protovalidate::test_plaintext("gone"),
+                &chatter_proto::protovalidate::test_plaintext("gone"),
             )
             .await
             .unwrap();
@@ -273,7 +273,7 @@
     async fn live_message_from_our_other_device_is_stored_as_read() {
         use crate::domain::ids::MessageId;
         use crate::domain::message::{ConversationType, MessageContent};
-        use crate::proto::content_v1;
+        use chatter_proto::content_v1;
         use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
         use prost::Message as _;
 
@@ -370,7 +370,7 @@
             .signal()
             .encrypt_for_group(
                 &t.channel_id,
-                &crate::network::validation::protovalidate::test_plaintext("old install"),
+                &chatter_proto::protovalidate::test_plaintext("old install"),
             )
             .await
             .unwrap();
@@ -403,7 +403,7 @@
     #[tokio::test]
     async fn resend_keeps_its_carried_id_only_when_solicited() {
         use crate::domain::ids::MessageId;
-        use crate::proto::content_v1::DataMessage;
+        use chatter_proto::content_v1::DataMessage;
 
         let t = two_members();
         let m = t.bob.messages();
@@ -505,7 +505,7 @@
             .signal()
             .encrypt_for_group(
                 &t.channel_id,
-                &crate::network::validation::protovalidate::test_plaintext("flood"),
+                &chatter_proto::protovalidate::test_plaintext("flood"),
             )
             .await
             .unwrap();

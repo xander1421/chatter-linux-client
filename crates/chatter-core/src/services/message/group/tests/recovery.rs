@@ -6,7 +6,7 @@
     async fn pre_skdm_group_message_is_recovered_by_dem_and_resend() {
         use crate::domain::ids::MessageId;
         use crate::domain::message::{ConversationType, Message, MessageContent};
-        use crate::proto::content_v1;
+        use chatter_proto::content_v1;
         use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
         use prost::Message as _;
 
@@ -322,7 +322,7 @@
     #[tokio::test]
     async fn skdm_shares_profile_key_with_channel_members_only() {
         use crate::domain::user::{Friendship, FriendshipStatus};
-        use crate::proto::content_v1;
+        use chatter_proto::content_v1;
         use prost::Message as _;
 
         let t = two_members();
@@ -430,7 +430,7 @@
             .signal()
             .encrypt_for_group(
                 &t.channel_id,
-                &crate::network::validation::protovalidate::test_plaintext("lost key"),
+                &chatter_proto::protovalidate::test_plaintext("lost key"),
             )
             .await
             .unwrap();
@@ -480,20 +480,20 @@
             .signal()
             .encrypt_for_group(
                 &t.channel_id,
-                &crate::network::validation::protovalidate::test_plaintext("no key yet"),
+                &chatter_proto::protovalidate::test_plaintext("no key yet"),
             )
             .await
             .unwrap();
         let parked = server_copy(&t, &MessageId::new(), TimestampNanos::now().as_u64(), &ge);
         let next_id = MessageId::new();
-        let next = crate::proto::chat_v1::Message {
+        let next = chatter_proto::chat_v1::Message {
             id: next_id.to_string(),
             channel_id: t.channel_id.to_string(),
             author_id: t.alice_id.to_string(),
             author_device_id: 1,
             timestamp: TimestampNanos::now().as_u64(),
-            content: Some(crate::proto::chat_v1::message::Content {
-                r#type: Some(crate::proto::chat_v1::message::content::Type::Text(
+            content: Some(chatter_proto::chat_v1::message::Content {
+                r#type: Some(chatter_proto::chat_v1::message::content::Type::Text(
                     "after".into(),
                 )),
             }),
@@ -544,7 +544,7 @@
             .signal()
             .encrypt_for_group(
                 &t.channel_id,
-                &crate::network::validation::protovalidate::test_plaintext("from device 1"),
+                &chatter_proto::protovalidate::test_plaintext("from device 1"),
             )
             .await
             .unwrap();

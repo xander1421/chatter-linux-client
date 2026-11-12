@@ -11,7 +11,7 @@
 //!   `DomainEvent::UserPresenceChanged` using the converters below.
 
 use crate::domain::user::PresenceStatus;
-use crate::proto::chat_v1::UserPresence;
+use chatter_proto::chat_v1::UserPresence;
 
 /// Convert domain PresenceStatus to proto UserPresence.
 pub(crate) fn domain_presence_to_proto(status: PresenceStatus) -> UserPresence {

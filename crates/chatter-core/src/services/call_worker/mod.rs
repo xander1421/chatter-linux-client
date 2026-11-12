@@ -25,7 +25,7 @@ use crate::error::CallError;
 use crate::events::EventBus;
 use crate::inbox::handlers::DomainEvent;
 use crate::network::grpc::CallClient;
-use crate::proto::chat_v1::CallType as ProtoCallType;
+use chatter_proto::chat_v1::CallType as ProtoCallType;
 
 // ============================================================================
 // Orchestrator types

@@ -9,7 +9,7 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::domain::ids::ChannelId;
 use crate::error::StorageError;
-use crate::proto::chat_v1 as pb;
+use chatter_proto::chat_v1 as pb;
 use crate::services::channel::verified_state::{
     ChannelRole, Invite, JoinMode, KeyBytes, Member, MemberStatus, MembershipState, Policy,
     StateHash, VerificationStatus, VerifiedChange, VerifiedChannel,

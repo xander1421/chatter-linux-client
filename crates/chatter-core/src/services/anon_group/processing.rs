@@ -12,7 +12,7 @@ use crate::inbox::handlers::DomainEvent;
 use crate::inbox::handlers::base_anon::{
     AnonInboxBackend, CommonDispatchOutcome, QuoteContext, dispatch_common_content,
 };
-use crate::proto::content_v1::{AttachmentPointer, Content};
+use chatter_proto::content_v1::{AttachmentPointer, Content};
 
 use super::{AnonGroupError, AnonGroupService};
 
@@ -180,7 +180,7 @@ impl AnonGroupService {
         peer_id: &UserId,
         inner_content: &Content,
     ) -> Result<Vec<DomainEvent>, AnonGroupError> {
-        use crate::proto::content_v1::content::Content as ContentType;
+        use chatter_proto::content_v1::content::Content as ContentType;
 
         // Block lists, fail closed: a store error counts as blocked.
         // A blocked group is ignored entirely. A member blocked in this group

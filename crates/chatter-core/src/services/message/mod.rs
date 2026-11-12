@@ -229,7 +229,7 @@ pub struct SendDmContentParams<'a> {
     /// The peer's user ID.
     pub peer_id: &'a UserId,
     /// The Content proto to send.
-    pub content: crate::proto::content_v1::Content,
+    pub content: chatter_proto::content_v1::Content,
     /// For sending to the peer's mailbox.
     pub mailbox_manager: &'a MailboxManager,
     /// Optional gRPC pool for bootstrap (needed for first DM).
@@ -307,9 +307,9 @@ impl PendingFlush {
 }
 
 /// The bubble a queued `Content` belongs to: its `DataMessage.timestamp`.
-pub(crate) fn queued_bubble_timestamp(content: &crate::proto::content_v1::Content) -> Option<u64> {
+pub(crate) fn queued_bubble_timestamp(content: &chatter_proto::content_v1::Content) -> Option<u64> {
     match &content.content {
-        Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => Some(dm.timestamp),
+        Some(chatter_proto::content_v1::content::Content::DataMessage(dm)) => Some(dm.timestamp),
         _ => None,
     }
 }
@@ -364,7 +364,7 @@ pub struct MessageService {
                     crate::domain::ids::UserId,
                     u32,
                 ),
-                Vec<(std::time::Instant, crate::proto::chat_v1::Message)>,
+                Vec<(std::time::Instant, chatter_proto::chat_v1::Message)>,
             >,
         >,
     >,

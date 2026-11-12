@@ -5,7 +5,7 @@
 
 use crate::domain::ids::{ChannelId, UserId};
 use crate::error::ServiceError;
-use crate::proto::content_v1::content;
+use chatter_proto::content_v1::content;
 
 use super::{DecryptResult, MessageGateway, RouteResult};
 
@@ -15,7 +15,7 @@ impl MessageGateway {
     /// Recognizes two formats:
     /// - `sender_key` (direct channel messages)
     /// - `sender:{user_id}:channel:{channel_id}` (group mailbox fanout)
-    pub fn is_sender_key_message(encrypted_data: &crate::proto::chat_v1::EncryptedData) -> bool {
+    pub fn is_sender_key_message(encrypted_data: &chatter_proto::chat_v1::EncryptedData) -> bool {
         if encrypted_data.associated_data == b"sender_key" {
             return true;
         }
@@ -25,19 +25,19 @@ impl MessageGateway {
     }
 
     /// Check if an EncryptedData is a sender key control message (typing, reaction, etc.).
-    pub fn is_sender_key_control(encrypted_data: &crate::proto::chat_v1::EncryptedData) -> bool {
+    pub fn is_sender_key_control(encrypted_data: &chatter_proto::chat_v1::EncryptedData) -> bool {
         encrypted_data.associated_data == b"sender_key_control"
     }
 
     /// Check if an EncryptedData is a sender key distribution message.
     pub fn is_sender_key_distribution(
-        encrypted_data: &crate::proto::chat_v1::EncryptedData,
+        encrypted_data: &chatter_proto::chat_v1::EncryptedData,
     ) -> bool {
         encrypted_data.associated_data == b"sender_key_distribution"
     }
 
     /// Check if an EncryptedData is a sender key request.
-    pub fn is_sender_key_request(encrypted_data: &crate::proto::chat_v1::EncryptedData) -> bool {
+    pub fn is_sender_key_request(encrypted_data: &chatter_proto::chat_v1::EncryptedData) -> bool {
         encrypted_data.associated_data == b"sender_key_request"
     }
 
@@ -53,7 +53,7 @@ impl MessageGateway {
     /// - `Err(_)` - Error processing message
     pub async fn route_encrypted_message(
         &self,
-        encrypted_data: &crate::proto::chat_v1::EncryptedData,
+        encrypted_data: &chatter_proto::chat_v1::EncryptedData,
         sender_id: &UserId,
         sender_device_id: u32,
     ) -> Result<RouteResult, ServiceError> {
@@ -145,7 +145,7 @@ impl MessageGateway {
                 DecryptResult::Plaintext(plaintext) => {
                     // Check if this is a GroupMailboxAddress announcement
                     if let Ok(content) =
-                        crate::network::validation::protovalidate::decode_inbound_content(
+                        chatter_proto::protovalidate::decode_inbound_content(
                             plaintext.as_slice(),
                             "sender_key_control",
                         )

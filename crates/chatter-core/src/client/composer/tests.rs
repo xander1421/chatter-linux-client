@@ -552,7 +552,7 @@ async fn staged_files_survive_a_restart_in_their_own_conversation_only() {
             "fun.gif".into(),
             9,
             "image/gif".into(),
-            crate::proto::content_v1::AttachmentPointer {
+            chatter_proto::content_v1::AttachmentPointer {
                 cdn_key: "k".into(),
                 ..Default::default()
             },

@@ -2,7 +2,7 @@ use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmStatus};
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
-use crate::proto::content_v1::{self, AnonDmAccept, Content};
+use chatter_proto::content_v1::{self, AnonDmAccept, Content};
 use crate::util::time::TimestampNanos;
 use chrono::Utc;
 

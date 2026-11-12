@@ -279,7 +279,7 @@ impl InboxEventProcessor {
         invite_epoch: u64,
         profile_key: &Option<Vec<u8>>,
         encrypted_display_name: &Option<Vec<u8>>,
-        avatar: &Option<crate::proto::content_v1::AttachmentPointer>,
+        avatar: &Option<chatter_proto::content_v1::AttachmentPointer>,
     ) {
         // A secret group: no inviter, group or name in the log.
         tracing::info!(
@@ -403,7 +403,7 @@ impl InboxEventProcessor {
         joiner_mailbox_pk: &[u8],
         profile_key: &Option<Vec<u8>>,
         encrypted_display_name: &Option<Vec<u8>>,
-        avatar: &Option<crate::proto::content_v1::AttachmentPointer>,
+        avatar: &Option<chatter_proto::content_v1::AttachmentPointer>,
         timestamp: u64,
     ) {
         // A secret group: no joiner or group in the log.
@@ -502,7 +502,7 @@ impl InboxEventProcessor {
         &self,
         peer_id: UserId,
         group_id: &[u8],
-        inner_content: &crate::proto::content_v1::Content,
+        inner_content: &chatter_proto::content_v1::Content,
     ) {
         let anon_group_id = match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
             Some(id) => id,
@@ -512,7 +512,7 @@ impl InboxEventProcessor {
             }
         };
 
-        if let Some(crate::proto::content_v1::content::Content::AnonGroupDecline(decline)) =
+        if let Some(chatter_proto::content_v1::content::Content::AnonGroupDecline(decline)) =
             inner_content.content.as_ref()
         {
             if decline.group_id != group_id {
@@ -611,7 +611,7 @@ async fn refresh_roster_avatars(
     service: std::sync::Arc<crate::services::anon_group::AnonGroupService>,
     event_bus: EventBus,
     group_id: crate::domain::anon_group::AnonGroupId,
-    members: Vec<crate::proto::content_v1::AnonGroupMemberInfo>,
+    members: Vec<chatter_proto::content_v1::AnonGroupMemberInfo>,
 ) {
     use crate::services::secret_avatar::RETRY_DELAYS;
     let mut pending = members.clone();

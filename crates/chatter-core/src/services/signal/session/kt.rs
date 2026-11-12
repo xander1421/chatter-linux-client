@@ -42,13 +42,13 @@ impl SignalService {
         pin: &kt_anchor::PinGuard,
         fetch_consistency: F,
         recipient_id: &str,
-        proof: &crate::proto::chat_v1::GetProofResponse,
+        proof: &chatter_proto::chat_v1::GetProofResponse,
     ) -> Result<(), ServiceError>
     where
         F: FnOnce(u64, u64) -> Fut,
         Fut: std::future::Future<
                 Output = Result<
-                    crate::proto::chat_v1::GetConsistencyProofResponse,
+                    chatter_proto::chat_v1::GetConsistencyProofResponse,
                     crate::error::NetworkError,
                 >,
             >,
@@ -167,7 +167,7 @@ impl SignalService {
         recipient_id: &str,
         identity_key: &[u8],
         fetched: Result<
-            Option<crate::proto::chat_v1::GetProofResponse>,
+            Option<chatter_proto::chat_v1::GetProofResponse>,
             crate::error::NetworkError,
         >,
         fetch_consistency: F,
@@ -176,7 +176,7 @@ impl SignalService {
         F: FnOnce(u64, u64) -> Fut,
         Fut: std::future::Future<
                 Output = Result<
-                    crate::proto::chat_v1::GetConsistencyProofResponse,
+                    chatter_proto::chat_v1::GetConsistencyProofResponse,
                     crate::error::NetworkError,
                 >,
             >,
@@ -299,7 +299,7 @@ impl SignalService {
 #[cfg(test)]
 mod kt_pin_tests {
     use super::*;
-    use crate::proto::chat_v1::{GetConsistencyProofResponse, GetProofResponse, SignedTreeHead};
+    use chatter_proto::chat_v1::{GetConsistencyProofResponse, GetProofResponse, SignedTreeHead};
 
     /// The anchor both KT paths (identified and `verify_peer_key_transparency_anon`)
     /// run after the inclusion proof: a head that forks from the pin is refused

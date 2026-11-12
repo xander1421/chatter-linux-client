@@ -21,7 +21,7 @@ use crate::domain::ids::{ChannelId, UserId};
 use crate::mailbox::group::GroupCoordinator;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::proto::chat_v1::{self, self as pb, channel_event};
+use chatter_proto::chat_v1::{self, self as pb, channel_event};
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::section_repo::SectionRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;

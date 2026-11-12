@@ -9,7 +9,7 @@
 use crate::{common, skip_if_no_server};
 
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
-use chatter_core::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     self, ChannelType, EncryptedData, message::Content, message::content::Type as ContentType,
 };
 use tokio_stream::StreamExt;
@@ -242,7 +242,7 @@ async fn create_test_channel(
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
+            use chatter_proto::chat_v1::channel_event::Event;
             match payload {
                 Event::ChannelCreated(channel) => {
                     channel_id = channel.id;
@@ -303,7 +303,7 @@ async fn test_server_text_message_roundtrip() {
                 10,
                 None,
                 None,
-                chatter_core::proto::chat_v1::MessageSortDirection::SortNewestFirst,
+                chatter_proto::chat_v1::MessageSortDirection::SortNewestFirst,
                 None,
                 None,
             )

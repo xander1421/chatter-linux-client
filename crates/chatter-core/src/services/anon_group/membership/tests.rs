@@ -333,7 +333,7 @@ async fn failed_roster_avatar_fetch_is_kept_for_a_retry() {
     let f = fixture();
     let svc = f._client.anon_groups();
     let mut fetchable = info(f.victim, AnonGroupRole::Member, [9u8; 32]);
-    fetchable.avatar = Some(crate::proto::content_v1::AttachmentPointer {
+    fetchable.avatar = Some(chatter_proto::content_v1::AttachmentPointer {
         cdn_key: "k".into(),
         plaintext_size: 3,
         plaintext_hash: "00".into(),

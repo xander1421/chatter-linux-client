@@ -41,7 +41,7 @@ use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::network::grpc::provisioning_client::{
     ProvisioningClient, ProvisioningPollResult, TransferArchivePoll,
 };
-use crate::proto::provisioning_v1::{ProvisionEnvelope, ProvisionMessage, ProvisioningSession};
+use chatter_proto::provisioning_v1::{ProvisionEnvelope, ProvisionMessage, ProvisioningSession};
 use crate::services::auth_service::{AuthError, prove_password};
 use crate::services::message_backup_service::{BackupStats, MessageBackupService};
 use crate::storage::backup_data::ImportSummary;

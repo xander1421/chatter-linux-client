@@ -20,7 +20,7 @@ use prost::Message as _;
 
 use super::{MessageError, MessageService};
 use crate::domain::ids::UserId;
-use crate::proto::content_v1::{Content, DataMessage, content};
+use chatter_proto::content_v1::{Content, DataMessage, content};
 use crate::storage::repositories::send_log_repo::SendLogRepository;
 use crate::util::time::TimestampNanos;
 
@@ -246,7 +246,7 @@ impl MessageService {
 mod tests {
     use super::*;
     use crate::domain::message::{ConversationType, Message, MessageContent};
-    use crate::proto::content_v1::Reaction;
+    use chatter_proto::content_v1::Reaction;
     use crate::storage::repositories::settings_repo::keys;
 
     fn client() -> (

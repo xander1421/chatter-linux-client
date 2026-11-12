@@ -7,7 +7,7 @@
 use super::SignalService;
 use crate::domain::ids::{ChannelId, UserId};
 use crate::error::ServiceError;
-use crate::proto::content_v1::{GroupEncrypted, SenderKeyDistribution};
+use chatter_proto::content_v1::{GroupEncrypted, SenderKeyDistribution};
 use crate::util::time::TimestampNanos;
 use libsignal_protocol::{DeviceId, ProtocolAddress};
 

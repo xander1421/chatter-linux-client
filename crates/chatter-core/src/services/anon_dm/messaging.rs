@@ -2,7 +2,7 @@ use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDm, AnonDmId};
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
-use crate::proto::content_v1::{
+use chatter_proto::content_v1::{
     self, AnonDmMessage as ProtoAnonDmMessage, AnonDmPresence, AnonDmProfileUpdate, Content,
     anon_dm_presence,
 };
@@ -37,7 +37,7 @@ impl AnonDmService {
         &self,
         conversation_id: &AnonDmId,
         text: &str,
-        attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
+        attachments: Vec<chatter_proto::content_v1::AttachmentPointer>,
     ) -> Result<(MessageId, u64), AnonDmError> {
         self.send_with_attachments_and_quote(conversation_id, text, attachments, None)
             .await
@@ -50,7 +50,7 @@ impl AnonDmService {
         &self,
         conversation_id: &AnonDmId,
         text: &str,
-        attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
+        attachments: Vec<chatter_proto::content_v1::AttachmentPointer>,
         reply_to_sender: &UserId,
         reply_to_timestamp: u64,
     ) -> Result<(MessageId, u64), AnonDmError> {
@@ -92,8 +92,8 @@ impl AnonDmService {
         &self,
         conversation_id: &AnonDmId,
         text: &str,
-        attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
-        quote: Option<crate::proto::content_v1::Quote>,
+        attachments: Vec<chatter_proto::content_v1::AttachmentPointer>,
+        quote: Option<chatter_proto::content_v1::Quote>,
     ) -> Result<(MessageId, u64), AnonDmError> {
         use crate::services::gateway::shared;
 

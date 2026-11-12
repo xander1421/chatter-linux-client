@@ -236,7 +236,7 @@ fn verify_external_public_mailbox_manifest() {
     let path = std::env::var("CHATTER_PUBLIC_MANIFEST_FILE").expect("public manifest path");
     let bytes = std::fs::read(path).expect("read public manifest");
     let manifest =
-        crate::proto::mailbox_v1::GetBlindSignaturePublicKeyResponse::decode(bytes.as_slice())
+        chatter_proto::mailbox_v1::GetBlindSignaturePublicKeyResponse::decode(bytes.as_slice())
             .unwrap();
     assert!(
         crate::mailbox::blind_signature::ServerPublicKey::from_manifest(&manifest).is_ok(),

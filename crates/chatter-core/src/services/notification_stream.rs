@@ -39,7 +39,7 @@ use crate::events::bus::EventBus;
 use crate::inbox::handlers::DomainEvent;
 use crate::network::grpc::GrpcClientPool;
 use crate::network::streaming::heartbeat::{self, Next};
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     Notification, NotificationType, StreamNotificationsResponse,
     stream_notifications_response::Item,
 };
@@ -393,7 +393,7 @@ mod tests {
             &service,
             &mut recent,
             StreamNotificationsResponse {
-                item: Some(Item::Heartbeat(crate::proto::chat_v1::StreamHeartbeat {})),
+                item: Some(Item::Heartbeat(chatter_proto::chat_v1::StreamHeartbeat {})),
             },
         );
         assert!(

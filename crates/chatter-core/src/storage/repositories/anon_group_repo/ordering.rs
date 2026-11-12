@@ -245,9 +245,9 @@ impl AnonGroupRepository {
         group: &AnonGroupId,
         sender: &UserId,
         me: &UserId,
-        update: &crate::proto::content_v1::AnonGroupUpdate,
+        update: &chatter_proto::content_v1::AnonGroupUpdate,
     ) -> Result<bool, StorageError> {
-        use crate::proto::content_v1::anon_group_update::Update;
+        use chatter_proto::content_v1::anon_group_update::Update;
         use rusqlite::OptionalExtension;
         let timestamp = membership_timestamp(update.timestamp)?;
         let mut conn = self.db.connection()?;

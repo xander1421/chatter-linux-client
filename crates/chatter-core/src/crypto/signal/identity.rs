@@ -184,7 +184,7 @@ pub const CHANNEL_CHANGE_DOMAIN: &[u8] = b"chatter-channel-change-v1\0";
 /// (`0x05 || pub`, `0x08 || kyber`) or another protocol's message.
 pub fn sign_channel_change(
     identity: &libsignal_protocol::IdentityKeyPair,
-    actions: &crate::proto::chat_v1::channel_change::Actions,
+    actions: &chatter_proto::chat_v1::channel_change::Actions,
 ) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
     let bytes = prost::Message::encode_to_vec(actions);
     let mut message = Vec::with_capacity(CHANNEL_CHANGE_DOMAIN.len() + bytes.len());
@@ -211,7 +211,7 @@ mod tests {
     #[test]
     fn channel_change_signature_is_domain_separated() {
         let identity = IdentityKeyPair::generate(&mut rand::rng());
-        let actions = crate::proto::chat_v1::channel_change::Actions {
+        let actions = chatter_proto::chat_v1::channel_change::Actions {
             channel_id: "c".into(),
             revision: 1,
             ..Default::default()

@@ -14,7 +14,7 @@ use super::canonical::{
 };
 use super::rules::preview;
 use super::*;
-use crate::proto::chat_v1 as pb;
+use chatter_proto::chat_v1 as pb;
 use pb::channel_action::Action;
 use pb::remove_member::Reason;
 

@@ -42,7 +42,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::{KT_TREE_HEAD_PUBLIC_KEY_BYTES, KT_VRF_PUBLIC_KEY_BYTES};
 use crate::crypto::vrf::vrf_verify;
-use crate::proto::chat_v1::{GetConsistencyProofResponse, GetProofResponse, SignedTreeHead};
+use chatter_proto::chat_v1::{GetConsistencyProofResponse, GetProofResponse, SignedTreeHead};
 
 /// Domain separator for deriving a user's sparse-Merkle tree key.
 /// Mirrors `keytransparency.leafKeyDomain` (log.go).

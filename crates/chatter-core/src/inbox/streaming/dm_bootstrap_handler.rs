@@ -34,7 +34,7 @@ use crate::mailbox::dm::{BootstrapResponse, DmBootstrap, release_bootstrap_lock}
 use crate::network::grpc::AnonymousMailboxClient;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::proto::mailbox_v1::EnvelopeType;
+use chatter_proto::mailbox_v1::EnvelopeType;
 use crate::services::SignalService;
 use crate::services::message::{MessageService, PendingFlush, queued_bubble_timestamp};
 use crate::storage::repositories::PendingDmRepository;
@@ -139,7 +139,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                                             Ok(contents) => {
                                                 let mut flush = PendingFlush::default();
                                                 for bytes in contents {
-                                                    let bubble = crate::proto::content_v1::Content::decode(bytes.as_slice())
+                                                    let bubble = chatter_proto::content_v1::Content::decode(bytes.as_slice())
                                                         .ok().and_then(|content| queued_bubble_timestamp(&content));
                                                     flush.record(bubble, Err("Secure channel setup timed out. Tap Retry to try again".into()));
                                                 }
@@ -422,7 +422,7 @@ async fn handle_bootstrap_request_async(
     peer_device_id: u32,
 ) -> Result<(), String> {
     use crate::mailbox::TokenManager;
-    use crate::proto::chat_v1::SealedSenderMessage;
+    use chatter_proto::chat_v1::SealedSenderMessage;
 
     // No early return on state we already hold: the REQUEST means the peer
     // has no mailbox of ours it can reach — whatever we hold. `initiate_dm`
@@ -512,12 +512,12 @@ async fn handle_bootstrap_request_async(
         .send_with_anonymous_credential(
             &uuid::Uuid::new_v4().to_string(),
             &peer_id_str,
-            vec![crate::proto::chat_v1::SealedDeviceMessage {
+            vec![chatter_proto::chat_v1::SealedDeviceMessage {
                 device_id: peer_device_id,
                 registration_id: 0,
                 sealed_message: Some(sealed_msg),
             }],
-            crate::proto::chat_v1::SealedDelivery::NamedDevices,
+            chatter_proto::chat_v1::SealedDelivery::NamedDevices,
             0,
             &token.public_key,
             &token.signature,
@@ -701,7 +701,7 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
     let queued: Vec<_> = pending
         .into_iter()
         .map(|msg| {
-            let decoded = crate::proto::content_v1::Content::decode(msg.content.as_slice()).ok();
+            let decoded = chatter_proto::content_v1::Content::decode(msg.content.as_slice()).ok();
             (decoded, msg.content)
         })
         .collect();
@@ -968,7 +968,7 @@ async fn send_bootstrap_response_with_envelope(
     // The initiator can only decrypt the Signal layer against OUR device's
     // address, so it rides in the frame, inside the envelope.
     use prost::Message as _;
-    let frame = crate::proto::content_v1::BootstrapResponseFrame {
+    let frame = chatter_proto::content_v1::BootstrapResponseFrame {
         sender_device_id: our_device_id,
         signal_ciphertext,
     }

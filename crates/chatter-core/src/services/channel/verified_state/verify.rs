@@ -25,7 +25,7 @@ use super::{
     KeyBytes, MemberStatus, MembershipState, StateHash, VerifyError, is_canonical_uuid, key33,
     malformed,
 };
-use crate::proto::chat_v1 as pb;
+use chatter_proto::chat_v1 as pb;
 
 /// A change that passed every check except the KT lookup of its author.
 #[derive(Debug, Clone, PartialEq, Eq)]

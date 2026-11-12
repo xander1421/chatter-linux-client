@@ -49,12 +49,10 @@ async-trait = "0.1"
 # gRPC (Generated code dependencies)
 # ============================================================================
 tonic = { version = "0.14", features = ["tls-ring"] }
-tonic-prost = "0.14"
 prost = "0.14"
 prost-types = "0.14"
-# Reflection over the generated descriptors: evaluates the buf.validate rules
-# declared on E2E content (network/validation/protovalidate.rs).
-prost-reflect = "0.16"
+# Generated protobuf/gRPC types, response codec and declared validation.
+chatter-proto = { path = "../chatter-proto" }
 tower = "0.5"
 
 # ============================================================================
@@ -302,6 +300,8 @@ oboe = { version = "0.6", features = ["java-interface"] }
 # with a software fallback; Android needs no separate `asm` dependency.
 
 [dev-dependencies]
+# `test_plaintext` for unit tests.
+chatter-proto = { path = "../chatter-proto", features = ["testing"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Paused-clock tests (heartbeat.rs `start_paused`).
 tokio = { version = "1", features = ["test-util"] }
@@ -400,7 +400,7 @@ mesh = [
 # guards exist for. Accessor widening and anchor selection are now separate
 # features; this one has no security effect (the mesh-noise `testing` hook it
 # forwards only sets a session's sent-message count).
-testing = ["chatter-mesh-noise?/testing"]
+testing = ["chatter-mesh-noise?/testing", "chatter-proto/testing"]
 # Falls the four pinned trust anchors back to their DEVELOPMENT values when
 # nothing is provisioned, so `cargo test` runs without `make provision-keys`.
 #

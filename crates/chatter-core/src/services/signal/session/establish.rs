@@ -113,7 +113,7 @@ impl SignalService {
             .result
             .ok_or(ServiceError::Validation("Missing bundle".into()))?;
         let proto_bundle = match result {
-            crate::proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(b) => b,
+            chatter_proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(b) => b,
             _ => return Err(ServiceError::Validation("Unexpected response type".into())),
         };
 
@@ -129,7 +129,7 @@ impl SignalService {
     }
     /// Convert Protobuf PreKeyBundle to libsignal PreKeyBundle.
     pub(crate) fn convert_prekey_bundle(
-        proto: crate::proto::chat_v1::SignalPreKeyBundle,
+        proto: chatter_proto::chat_v1::SignalPreKeyBundle,
     ) -> Result<libsignal_protocol::PreKeyBundle, ServiceError> {
         let registration_id = proto.registration_id;
         let device_id = DeviceId::try_from(proto.device_id)
@@ -193,7 +193,7 @@ impl SignalService {
         anon_kt_client: &mut crate::network::grpc::AnonymousKtClient,
         recipient_id: &str,
         device_id: u32,
-        bundle_response: crate::proto::chat_v1::GetPreKeyBundleResponse,
+        bundle_response: chatter_proto::chat_v1::GetPreKeyBundleResponse,
     ) -> Result<(), ServiceError> {
         let device_id_struct = DeviceId::try_from(device_id)
             .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
@@ -213,7 +213,7 @@ impl SignalService {
             .result
             .ok_or(ServiceError::Validation("Missing bundle".into()))?;
         let proto_bundle = match result {
-            crate::proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(b) => b,
+            chatter_proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(b) => b,
             _ => return Err(ServiceError::Validation("Unexpected response type".into())),
         };
 

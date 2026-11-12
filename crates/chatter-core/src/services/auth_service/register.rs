@@ -246,8 +246,8 @@ impl AuthService {
         );
 
         // Build Signal Protocol prekey bundle for server
-        use crate::proto::chat_v1::SignalPreKeyBundle;
-        use crate::proto::chat_v1::signal_pre_key_bundle::{
+        use chatter_proto::chat_v1::SignalPreKeyBundle;
+        use chatter_proto::chat_v1::signal_pre_key_bundle::{
             KyberPreKeyRecord as ProtoKyberPreKey, PreKeyRecord as ProtoPreKey,
             SignedPreKeyRecord as ProtoSignedPreKey,
         };

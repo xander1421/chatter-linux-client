@@ -14,7 +14,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::proto::mailbox_v1::GetBlindSignaturePublicKeyResponse;
+use chatter_proto::mailbox_v1::GetBlindSignaturePublicKeyResponse;
 use chrono::Utc;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use prost::Message;

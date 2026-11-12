@@ -10,11 +10,11 @@ use crate::domain::UserId;
 use crate::domain::anon_group::{
     AnonGroup, AnonGroupId, AnonGroupMember, AnonGroupRole, PendingActionType,
 };
-use crate::proto::content_v1::{
+use chatter_proto::content_v1::{
     self, AnonDmMessage as AnonDmMessageProto, AnonGroupInvite, AnonGroupJoinAck,
     AnonGroupMemberInfo, AnonGroupMemberList, AnonGroupProfileShare, Content,
 };
-use crate::proto::mailbox_v1::EnvelopeType;
+use chatter_proto::mailbox_v1::EnvelopeType;
 use crate::util::time::TimestampNanos;
 
 use super::{AnonGroupError, AnonGroupService};

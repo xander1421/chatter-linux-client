@@ -8,6 +8,7 @@ members = [
     "crates/chatter-mesh-noise",
     "crates/chatter-mesh-nostr",
     "crates/chatter-mesh-store",
+    "crates/chatter-proto",
     "crates/chatter-ui",
     "crates/chatter-ui-slint",
     "crates/chatter-ios",

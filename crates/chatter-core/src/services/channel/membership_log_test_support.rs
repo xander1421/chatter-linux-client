@@ -12,7 +12,7 @@ use libsignal_protocol::IdentityKeyPair;
 
 use crate::domain::ids::ChannelId;
 use crate::error::NetworkError;
-use crate::proto::chat_v1 as pb;
+use chatter_proto::chat_v1 as pb;
 use crate::services::channel::membership_log::{LogBackend, LogError, MembershipLog};
 use crate::services::channel::verified_state::{
     self as vs, IdentityKeyVerifier, KeyBytes, MembershipState, VerifyError,

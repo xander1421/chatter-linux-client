@@ -9,7 +9,7 @@ use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, DeleteMessageRequest,
     DeleteMessagesRequest, GetDeviceMessagesRequest, GetDeviceMessagesResponse,
     GetMessagesRequest, GetMessagesResponse, ListPinnedMessagesResponse, Message, MessageEvent,
@@ -62,7 +62,7 @@ impl MessageClient {
     pub async fn send_message(
         &mut self,
         channel_id: &str,
-        content: crate::proto::chat_v1::message::Content,
+        content: chatter_proto::chat_v1::message::Content,
         parent_id: Option<&str>,
         ephemeral: bool,
         ephemeral_ttl: Option<prost_types::Duration>,
@@ -167,7 +167,7 @@ impl MessageClient {
         reference_message_id: Option<&str>,
         reference_time: Option<u64>,
     ) -> Result<GetMessagesResponse, NetworkError> {
-        use crate::proto::chat_v1::get_messages_request::ReferencePoint;
+        use chatter_proto::chat_v1::get_messages_request::ReferencePoint;
 
         let reference_point = match (reference_message_id, reference_time) {
             (Some(id), _) => Some(ReferencePoint::ReferenceMessageId(id.to_string())),
@@ -337,7 +337,7 @@ impl MessageClient {
         let request = MessageUpdate {
             message_id: message_id.to_string(),
             channel_id: channel_id.to_string(),
-            update: Some(crate::proto::chat_v1::message_update::Update::Pinned(true)),
+            update: Some(chatter_proto::chat_v1::message_update::Update::Pinned(true)),
             updated_at: 0, // Server will set this
         };
 
@@ -362,7 +362,7 @@ impl MessageClient {
         let request = MessageUpdate {
             message_id: message_id.to_string(),
             channel_id: channel_id.to_string(),
-            update: Some(crate::proto::chat_v1::message_update::Update::Pinned(false)),
+            update: Some(chatter_proto::chat_v1::message_update::Update::Pinned(false)),
             updated_at: 0, // Server will set this
         };
 
@@ -562,10 +562,10 @@ mod tests {
 
     #[test]
     fn test_message_content_variants() {
-        use crate::proto::chat_v1::message::content::Type;
+        use chatter_proto::chat_v1::message::content::Type;
 
         // Verify Message.Content oneof types can be constructed
-        let text_content = crate::proto::chat_v1::message::Content {
+        let text_content = chatter_proto::chat_v1::message::Content {
             r#type: Some(Type::Text("Hello, world!".to_string())),
         };
 
@@ -575,9 +575,9 @@ mod tests {
         }
 
         // Test encrypted variant
-        let encrypted_content = crate::proto::chat_v1::message::Content {
-            r#type: Some(Type::Encrypted(crate::proto::chat_v1::EncryptedData {
-                version: crate::proto::chat_v1::CryptoVersion::SignalProtocol as i32,
+        let encrypted_content = chatter_proto::chat_v1::message::Content {
+            r#type: Some(Type::Encrypted(chatter_proto::chat_v1::EncryptedData {
+                version: chatter_proto::chat_v1::CryptoVersion::SignalProtocol as i32,
                 ciphertext: vec![1, 2, 3, 4],
                 associated_data: b"sender_key".to_vec(),
             })),
@@ -587,7 +587,7 @@ mod tests {
             Some(Type::Encrypted(e)) => {
                 assert_eq!(
                     e.version,
-                    crate::proto::chat_v1::CryptoVersion::SignalProtocol as i32
+                    chatter_proto::chat_v1::CryptoVersion::SignalProtocol as i32
                 );
             }
             _ => panic!("Expected Encrypted variant"),
@@ -597,7 +597,7 @@ mod tests {
     #[test]
     fn test_reaction_construction() {
         // Verify Reaction struct can be constructed
-        use crate::proto::content_v1::Reaction;
+        use chatter_proto::content_v1::Reaction;
 
         let reaction = Reaction {
             emoji: "👍".to_string(),
@@ -615,7 +615,7 @@ mod tests {
     #[test]
     fn test_message_event_variants() {
         // Verify MessageEvent struct and its event variants
-        use crate::proto::chat_v1::message_event::Event;
+        use chatter_proto::chat_v1::message_event::Event;
 
         let msg = Message {
             id: "msg-123".to_string(),

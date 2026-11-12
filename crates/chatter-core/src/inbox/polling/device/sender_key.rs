@@ -39,7 +39,7 @@ pub(super) async fn process_sender_key_message(
     // Recovered for the marker target: a sender-key failure belongs in the
     // CHANNEL, and the gateway's error does not carry one.
     let channel_id: Option<ChannelId> =
-        crate::proto::content_v1::GroupEncrypted::decode(encrypted_data.ciphertext.as_slice())
+        chatter_proto::content_v1::GroupEncrypted::decode(encrypted_data.ciphertext.as_slice())
             .ok()
             .and_then(|ge| ge.channel_id.parse().ok());
 
@@ -86,7 +86,7 @@ pub(super) async fn process_sender_key_message(
                 "[INBOX_SK] Decrypted control content"
             );
             // Parse as Content proto (typing, reaction, edit, pin, delete)
-            match crate::network::validation::protovalidate::decode_inbound_content(
+            match chatter_proto::protovalidate::decode_inbound_content(
                 plaintext.as_slice(),
                 "device_sender_key_control",
             ) {
@@ -277,7 +277,7 @@ fn process_decrypted_data_message(
         "[INBOX_DM] Decoding DataMessage from plaintext"
     );
 
-    match crate::network::validation::protovalidate::decode_inbound::<DataMessage>(
+    match chatter_proto::protovalidate::decode_inbound::<DataMessage>(
         plaintext,
         "device_sender_key_data",
     ) {

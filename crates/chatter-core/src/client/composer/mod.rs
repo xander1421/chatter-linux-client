@@ -190,7 +190,7 @@ impl From<&PendingAttachment> for StagedAttachment {
             size: a.size,
             mime_type: a.mime_type.clone(),
             pointer: a.pointer.as_ref().map(|pointer| {
-                <crate::proto::content_v1::AttachmentPointer as prost::Message>::encode_to_vec(
+                <chatter_proto::content_v1::AttachmentPointer as prost::Message>::encode_to_vec(
                     pointer,
                 )
             }),
@@ -207,7 +207,7 @@ impl StagedAttachment {
     /// here would send the remainder as if it were everything.
     fn into_pending(self) -> PendingAttachment {
         let pointer = self.pointer.and_then(|bytes| {
-            <crate::proto::content_v1::AttachmentPointer as prost::Message>::decode(
+            <chatter_proto::content_v1::AttachmentPointer as prost::Message>::decode(
                 bytes.as_slice(),
             )
             .map_err(|e| {

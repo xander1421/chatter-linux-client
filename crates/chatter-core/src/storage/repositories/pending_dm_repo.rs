@@ -124,7 +124,7 @@ impl PendingDmRepository {
             rows.collect::<Result<Vec<_>, _>>()?
         };
         for bytes in &content {
-            if let Some(sent_at) = crate::proto::content_v1::Content::decode(bytes.as_slice()).ok()
+            if let Some(sent_at) = chatter_proto::content_v1::Content::decode(bytes.as_slice()).ok()
                 .and_then(|decoded| crate::services::message::queued_bubble_timestamp(&decoded)) {
                 tx.execute(
                     "UPDATE messages SET delivery_status='failed', failure_reason=?3
@@ -148,7 +148,7 @@ impl PendingDmRepository {
         let mut matching_id = None;
         for row in rows {
             let (id, bytes) = row?;
-            if crate::proto::content_v1::Content::decode(bytes.as_slice()).ok()
+            if chatter_proto::content_v1::Content::decode(bytes.as_slice()).ok()
                 .and_then(|content| crate::services::message::queued_bubble_timestamp(&content)) == Some(sent_at) {
                 matching_id = Some(id);
                 break;

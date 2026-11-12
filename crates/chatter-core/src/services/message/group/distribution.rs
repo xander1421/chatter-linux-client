@@ -14,7 +14,7 @@ impl MessageService {
         auth_client: &mut AuthClient,
         message_client: &mut MessageClient,
         channel_id: &ChannelId,
-        skdm: &crate::proto::content_v1::SenderKeyDistribution,
+        skdm: &chatter_proto::content_v1::SenderKeyDistribution,
     ) -> Result<(), MessageError> {
         // Our user ID (the deposit leaves this device out of our own fan-out —
         // it already holds our sender key).
@@ -109,10 +109,10 @@ impl MessageService {
         &self,
         channel_id: &ChannelId,
         verified: &VerifiedChannel,
-        skdm: &crate::proto::content_v1::SenderKeyDistribution,
+        skdm: &chatter_proto::content_v1::SenderKeyDistribution,
         recipient: &str,
     ) -> Vec<u8> {
-        use crate::proto::content_v1::{self, content};
+        use chatter_proto::content_v1::{self, content};
         use prost::Message;
 
         let mut skdm = skdm.clone();
@@ -546,7 +546,7 @@ impl MessageService {
     pub async fn distribute_skdm(
         &self,
         channel_id: &ChannelId,
-        skdm: &crate::proto::content_v1::SenderKeyDistribution,
+        skdm: &chatter_proto::content_v1::SenderKeyDistribution,
     ) -> Result<(), MessageError> {
         let mut auth_client = self.auth_client();
         let mut message_client = self.message_client();
@@ -563,7 +563,7 @@ impl MessageService {
         &self,
         channel_id: &ChannelId,
         member_id: &UserId,
-        skdm: &crate::proto::content_v1::SenderKeyDistribution,
+        skdm: &chatter_proto::content_v1::SenderKeyDistribution,
     ) -> Result<(), MessageError> {
         let verified = self.group_gate().for_distribution(channel_id)?;
         let member_id_str = member_id.to_string();
@@ -643,7 +643,7 @@ impl MessageService {
             self.create_sender_key_for_channel(channel_id).await?
         } else {
             use prost::Message as _;
-            crate::proto::content_v1::SenderKeyDistribution::decode(skdm_bytes)
+            chatter_proto::content_v1::SenderKeyDistribution::decode(skdm_bytes)
                 .map_err(|e| MessageError::InvalidContent(format!("SKDM decode: {e}")))?
         };
         self.send_skdm_to_member(channel_id, requester, &skdm)
@@ -658,7 +658,7 @@ impl MessageService {
     pub async fn create_sender_key_for_channel(
         &self,
         channel_id: &ChannelId,
-    ) -> Result<crate::proto::content_v1::SenderKeyDistribution, MessageError> {
+    ) -> Result<chatter_proto::content_v1::SenderKeyDistribution, MessageError> {
         self.signal_service
             .create_sender_key(channel_id)
             .await

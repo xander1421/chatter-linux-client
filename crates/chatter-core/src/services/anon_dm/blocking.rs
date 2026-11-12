@@ -232,8 +232,8 @@ pub enum PeerEnd {
 
 /// The end signal, wrapped like every in-chat control so the receiver's
 /// mailbox and sender checks apply to it.
-pub(super) fn end_content(conversation_id: &AnonDmId) -> crate::proto::content_v1::Content {
-    use crate::proto::content_v1::{AnonDmEnd, AnonDmMessage, Content, content};
+pub(super) fn end_content(conversation_id: &AnonDmId) -> chatter_proto::content_v1::Content {
+    use chatter_proto::content_v1::{AnonDmEnd, AnonDmMessage, Content, content};
     let now = crate::util::time::TimestampNanos::now().as_u64();
     let inner = Content {
         content: Some(content::Content::AnonDmEnd(AnonDmEnd {

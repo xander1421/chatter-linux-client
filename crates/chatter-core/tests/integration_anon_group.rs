@@ -13,7 +13,7 @@
 use crate::{common, skip_if_no_server};
 
 use chatter_core::network::grpc::MailboxClient;
-use chatter_core::proto::mailbox_v1::EnvelopeType;
+use chatter_proto::mailbox_v1::EnvelopeType;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand::RngCore;
 
@@ -261,7 +261,7 @@ async fn test_anon_group_content_serialization() {
     skip_if_no_server!();
 
     // Test the content proto serialization for anonymous group messages
-    use chatter_core::proto::content_v1::{
+    use chatter_proto::content_v1::{
         self, AnonGroupInvite, AnonGroupMessage, Content, DataMessage,
     };
     use prost::Message;
@@ -345,7 +345,7 @@ async fn test_anon_group_content_serialization() {
 async fn test_anon_group_join_ack_content() {
     skip_if_no_server!();
 
-    use chatter_core::proto::content_v1::{self, AnonGroupJoinAck, Content};
+    use chatter_proto::content_v1::{self, AnonGroupJoinAck, Content};
     use prost::Message;
 
     // Create join ack (sent when accepting an invite)
@@ -399,7 +399,7 @@ async fn test_anon_group_join_ack_content() {
 async fn test_anon_group_kick_content() {
     skip_if_no_server!();
 
-    use chatter_core::proto::content_v1::{self, AnonGroupKick, Content};
+    use chatter_proto::content_v1::{self, AnonGroupKick, Content};
     use prost::Message;
 
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
@@ -443,7 +443,7 @@ async fn test_anon_group_kick_content() {
 async fn test_anon_group_leave_content() {
     skip_if_no_server!();
 
-    use chatter_core::proto::content_v1::{self, AnonGroupLeave, Content};
+    use chatter_proto::content_v1::{self, AnonGroupLeave, Content};
     use prost::Message;
 
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
@@ -484,7 +484,7 @@ async fn test_anon_group_leave_content() {
 async fn test_anon_group_member_list_content() {
     skip_if_no_server!();
 
-    use chatter_core::proto::content_v1::{
+    use chatter_proto::content_v1::{
         self, AnonGroupMemberInfo, AnonGroupMemberList, Content,
     };
     use prost::Message;

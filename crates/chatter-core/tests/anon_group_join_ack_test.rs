@@ -49,7 +49,7 @@
 //! by the group polling handler to emit `InboxEvent::AnonGroupJoinAck`,
 //! which calls `anon_group_service.handle_join_ack()`.
 
-use chatter_core::proto::content_v1::{self, AnonGroupJoinAck, Content};
+use chatter_proto::content_v1::{self, AnonGroupJoinAck, Content};
 use chatter_core::services::gateway::SealedSenderResult;
 use prost::Message;
 

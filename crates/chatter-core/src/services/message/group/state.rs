@@ -161,7 +161,7 @@ impl GroupStateGate {
 
 /// Stamp our verified `(revision, state_hash)` into a group DataMessage.
 pub(crate) fn stamp_group_data_message(
-    dm: &mut crate::proto::content_v1::DataMessage,
+    dm: &mut chatter_proto::content_v1::DataMessage,
     state: &VerifiedChannel,
 ) {
     dm.group_state_revision = state.revision();
@@ -208,7 +208,7 @@ impl MessageService {
         Ok(())
     }
 
-    pub(crate) fn check_group_stamp_received(&self, channel_id: &ChannelId, dm: &crate::proto::content_v1::DataMessage, session: &crate::state::receive_session::ReceiveSession) -> Result<(), crate::error::StorageError> {
+    pub(crate) fn check_group_stamp_received(&self, channel_id: &ChannelId, dm: &chatter_proto::content_v1::DataMessage, session: &crate::state::receive_session::ReceiveSession) -> Result<(), crate::error::StorageError> {
         self.group_gate().cross_check_admitted(channel_id, true, dm.group_state_revision, &dm.group_state_hash, Some(session))?;
         self.sync_channel_state_if_behind_received(channel_id, session)
     }

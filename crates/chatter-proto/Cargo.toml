@@ -1,0 +1,33 @@
+[package]
+name = "chatter-proto"
+version = "0.1.0"
+edition = "2024"
+authors = ["xander1421"]
+description = "Generated protobuf/gRPC types for Chatter, with declared response validation"
+license = "GPL-3.0"
+repository = "https://github.com/xander1421/chatter"
+rust-version = "1.99"
+
+[dependencies]
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+prost-types = "0.14"
+# Reflection over the generated descriptors: evaluates the buf.validate rules
+# declared on E2E content and RPC responses (protovalidate.rs).
+prost-reflect = "0.16"
+thiserror = "2"
+tracing = "0.1"
+bytes = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tower = "0.5"
+hex = "0.4"
+http = "1"
+http-body = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[features]
+# Exposes `protovalidate::test_plaintext` to chatter-core's tests.
+testing = []

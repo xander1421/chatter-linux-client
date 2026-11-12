@@ -249,7 +249,7 @@ pub struct PendingLink {
 /// device's QR key, which the listing does not carry. Completed, cancelled
 /// and expired sessions are dropped.
 pub fn pending_links(sessions: Vec<ProvisioningSession>, now_ns: u64) -> Vec<PendingLink> {
-    use crate::proto::provisioning_v1::provisioning_session::Status;
+    use chatter_proto::provisioning_v1::provisioning_session::Status;
     sessions
         .into_iter()
         .filter(|s| s.status == Status::Provisioned as i32 && s.expires_at > now_ns)

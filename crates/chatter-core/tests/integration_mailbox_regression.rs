@@ -22,7 +22,7 @@ use chatter_core::mailbox::group::{GroupMailboxManager, MemberMailbox};
 use chatter_core::network::grpc::{
     AnonymousMailboxClient, ChannelClient, GrpcClientPool, MailboxClient, MessageClient,
 };
-use chatter_core::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     ChannelType, message::Content, message::content::Type as ContentType,
 };
 use chatter_core::storage::Database;
@@ -94,7 +94,7 @@ async fn create_test_channel(client: &mut ChannelClient, user: &TestUser, name: 
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
+            use chatter_proto::chat_v1::channel_event::Event;
             match payload {
                 Event::ChannelCreated(channel) => {
                     channel_id = channel.id;
@@ -704,7 +704,7 @@ async fn test_e2e_message_with_mailbox_exchange() {
     sleep(Duration::from_millis(200)).await;
 
     // Both users should be able to retrieve messages
-    use chatter_core::proto::chat_v1::MessageSortDirection;
+    use chatter_proto::chat_v1::MessageSortDirection;
 
     let messages1 = assert_ok(
         msg_client1

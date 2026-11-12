@@ -29,7 +29,7 @@ use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
 use crate::domain::attachment::{Attachment, ContentLocation};
 use crate::domain::ids::AttachmentId;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::proto::content_v1::AttachmentPointer;
+use chatter_proto::content_v1::AttachmentPointer;
 use crate::storage::repositories::AttachmentRepository;
 
 // Submodules add impl blocks to AttachmentService

@@ -9,7 +9,7 @@ use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     ChatTurn, CompleteRequest, CompleteResponse, GetQuotaRequest, GetQuotaResponse,
     ListServedModelsRequest, ListServedModelsResponse, ai_service_client::AiServiceClient,
 };

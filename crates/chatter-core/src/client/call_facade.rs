@@ -35,7 +35,7 @@ impl ChatterClient {
             .await?;
         Ok(call.map(|call| (
             call.id,
-            call.r#type == crate::proto::chat_v1::CallType::Video as i32,
+            call.r#type == chatter_proto::chat_v1::CallType::Video as i32,
             call.current_participant_count,
         )))
     }

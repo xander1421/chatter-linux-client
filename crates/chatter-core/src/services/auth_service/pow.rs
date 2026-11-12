@@ -33,11 +33,11 @@ fn login_start_error(e: NetworkError) -> AuthError {
 pub(crate) async fn prove_password(
     auth_client: &mut AuthClient,
     password: &str,
-) -> Result<crate::proto::chat_v1::PasswordProof, AuthError> {
+) -> Result<chatter_proto::chat_v1::PasswordProof, AuthError> {
     let start = opaque::login_start(password)?;
     let opened = auth_client.password_proof_start(&start.ke1).await?;
     let done = opaque::login_finish_async(start, password, opened.ke2).await?;
-    Ok(crate::proto::chat_v1::PasswordProof {
+    Ok(chatter_proto::chat_v1::PasswordProof {
         proof_id: opened.proof_id,
         ke3: done.ke3,
     })
@@ -84,7 +84,7 @@ pub async fn login_start_paying_pow(
     login_grant: Option<&[u8]>,
     device_token: &mut Option<Vec<u8>>,
     on_verifying: &(dyn Fn() + Send + Sync),
-) -> Result<crate::proto::chat_v1::LoginStartResponse, AuthError> {
+) -> Result<chatter_proto::chat_v1::LoginStartResponse, AuthError> {
     use crate::crypto::pow;
     if let Some(grant) = login_grant {
         match auth_client
@@ -164,7 +164,7 @@ async fn login_start_once(
     ke1: &[u8],
     pow: Option<(&[u8], u64)>,
     device_token: &mut Option<Vec<u8>>,
-) -> Result<crate::proto::chat_v1::LoginStartResponse, AuthError> {
+) -> Result<chatter_proto::chat_v1::LoginStartResponse, AuthError> {
     if let Some(tok) = device_token.as_deref() {
         match auth_client
             .login_start(identifier, ke1, pow, &[], tok)

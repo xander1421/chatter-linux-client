@@ -63,7 +63,7 @@ impl SignalService {
     /// (inside the Signal actor). Returns `(actions_bytes, signature)`.
     pub async fn sign_channel_change(
         &self,
-        actions: crate::proto::chat_v1::channel_change::Actions,
+        actions: chatter_proto::chat_v1::channel_change::Actions,
     ) -> Result<(Vec<u8>, Vec<u8>), ServiceError> {
         self.actor.sign_channel_change(actions).await
     }
@@ -168,13 +168,13 @@ impl SignalService {
         &self,
     ) -> Result<
         (
-            crate::proto::chat_v1::SignalPreKeyBundle,
-            Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
-            Vec<crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord>,
+            chatter_proto::chat_v1::SignalPreKeyBundle,
+            Vec<chatter_proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
+            Vec<chatter_proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord>,
         ),
         ServiceError,
     > {
-        use crate::proto::chat_v1::SignalPreKeyBundle;
+        use chatter_proto::chat_v1::SignalPreKeyBundle;
         use crate::storage::repositories::settings_repo::keys;
 
         let identity_key = self.actor.get_identity_public_key().await?;

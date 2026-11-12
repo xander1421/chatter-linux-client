@@ -67,9 +67,9 @@ fn verified_user_ids(verified: &VerifiedChannel) -> Vec<UserId> {
 /// Device ids in a prekey-bundle response (multi-device list or the
 /// single-bundle fallback).
 fn bundle_device_ids(
-    resp: crate::proto::chat_v1::GetPreKeyBundleResponse,
+    resp: chatter_proto::chat_v1::GetPreKeyBundleResponse,
 ) -> std::collections::HashSet<u32> {
-    use crate::proto::chat_v1::get_pre_key_bundle_response::Result;
+    use chatter_proto::chat_v1::get_pre_key_bundle_response::Result;
     match resp.result {
         Some(Result::Devices(list)) => list.bundles.iter().map(|b| b.device_id).collect(),
         Some(Result::Bundle(b)) => [b.device_id].into(),

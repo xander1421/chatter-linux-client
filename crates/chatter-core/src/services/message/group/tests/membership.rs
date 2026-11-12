@@ -283,8 +283,8 @@
     }
 
     /// Alice's SKDM exactly as it leaves for Bob: stamped with her verified state.
-    async fn stamped_skdm(t: &TwoMembers) -> crate::proto::content_v1::SenderKeyDistribution {
-        use crate::proto::content_v1;
+    async fn stamped_skdm(t: &TwoMembers) -> chatter_proto::content_v1::SenderKeyDistribution {
+        use chatter_proto::content_v1;
         use prost::Message as _;
         let alice = t.alice.messages();
         let skdm = t
@@ -429,7 +429,7 @@
     /// verified member's is.
     #[tokio::test]
     async fn skdm_from_a_non_member_is_not_stored() {
-        use crate::proto::content_v1;
+        use chatter_proto::content_v1;
         use prost::Message as _;
         let t = two_members();
         let skdm = stamped_skdm(&t).await;
@@ -579,9 +579,9 @@
             (1, alice_state.state_hash().to_vec())
         );
 
-        let mut dm = crate::proto::content_v1::DataMessage::default();
+        let mut dm = chatter_proto::content_v1::DataMessage::default();
         stamp_group_data_message(&mut dm, &alice_state);
-        let dm = <crate::proto::content_v1::DataMessage as prost::Message>::decode(
+        let dm = <chatter_proto::content_v1::DataMessage as prost::Message>::decode(
             prost::Message::encode_to_vec(&dm).as_slice(),
         )
         .unwrap();
@@ -643,7 +643,7 @@
         use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
         let t = two_members();
         let plaintext =
-            &crate::network::validation::protovalidate::test_plaintext("from the server's ghost");
+            &chatter_proto::protovalidate::test_plaintext("from the server's ghost");
         let (ge, _) = t
             .alice
             .signal()

@@ -8,7 +8,7 @@ use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::proto::mailbox_v1::{
+use chatter_proto::mailbox_v1::{
     AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, CreateEphemeralMailboxRequest,
     CreateEphemeralMailboxResponse, GetBlindSignaturePublicKeyRequest,
     GetBlindSignaturePublicKeyResponse, GetMailboxChallengeRequest, GetMailboxChallengeResponse,
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn test_send_to_ephemeral_mailbox_request_construction() {
         // Verify SendToEphemeralMailboxRequest can be constructed
-        use crate::proto::mailbox_v1::EnvelopeType;
+        use chatter_proto::mailbox_v1::EnvelopeType;
 
         let request = SendToEphemeralMailboxRequest {
             destination_public_key: vec![0u8; 32],
@@ -339,7 +339,7 @@ mod tests {
     #[test]
     fn test_envelope_type_values() {
         // Verify EnvelopeType enum values
-        use crate::proto::mailbox_v1::EnvelopeType;
+        use chatter_proto::mailbox_v1::EnvelopeType;
 
         assert_eq!(EnvelopeType::Unspecified as i32, 0);
         assert_eq!(EnvelopeType::SealedSender as i32, 1);

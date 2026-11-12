@@ -11,7 +11,7 @@
 use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     GetConsistencyProofRequest, GetConsistencyProofResponse, GetPreKeyBundleRequest,
     GetPreKeyBundleResponse, GetProofRequest, GetProofResponse, SealedDelivery,
     SealedDeviceMessage, SendSealedMessageRequest, SendSealedMessageResponse,

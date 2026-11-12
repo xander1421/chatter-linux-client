@@ -16,7 +16,7 @@ use crate::events::EventBus;
 use crate::inbox::DomainEvent;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::streaming::heartbeat::{self, Next};
-use crate::proto::chat_v1::channel_event;
+use chatter_proto::chat_v1::channel_event;
 use crate::services::channel::membership_log::{
     Applied, LogObserver, MembershipLog, MembershipNotice,
 };

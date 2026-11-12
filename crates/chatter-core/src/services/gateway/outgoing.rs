@@ -24,7 +24,7 @@ use crate::domain::attachment::Attachment;
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, UserId};
 use crate::domain::message::Message;
 use crate::mailbox::group::GroupFanout;
-use crate::proto::content_v1::AttachmentPointer;
+use chatter_proto::content_v1::AttachmentPointer;
 use crate::services::anon_dm::{AnonDmError, AnonDmService};
 use crate::services::anon_group::{AnonGroupError, AnonGroupService};
 use crate::services::attachment::{AttachmentError, AttachmentService};

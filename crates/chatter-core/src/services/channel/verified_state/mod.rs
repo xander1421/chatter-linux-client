@@ -26,7 +26,7 @@ mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::proto::chat_v1 as pb;
+use chatter_proto::chat_v1 as pb;
 
 pub use pb::ChannelRole;
 pub use pb::access_policy::JoinMode;

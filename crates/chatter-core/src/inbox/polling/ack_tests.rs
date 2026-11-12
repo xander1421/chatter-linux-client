@@ -493,7 +493,7 @@ fn anon_dm_permanent_failure_is_marked_and_then_acked_so_it_stops_redelivering()
 /// stranger-messaging surface.
 #[test]
 fn an_anon_dm_message_with_no_inner_content_cannot_be_left_to_redeliver_forever() {
-    use crate::proto::content_v1::{self, AnonDmMessage, Content};
+    use chatter_proto::content_v1::{self, AnonDmMessage, Content};
 
     let conversation = AnonDmId::new();
     let route = super::anon_dm::route_anon_dm_content(

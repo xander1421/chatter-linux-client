@@ -29,8 +29,8 @@ use crate::domain::{
     message::ConversationType,
 };
 use crate::error::{NetworkError, StorageError};
-use crate::proto::chat_v1::{SealedDelivery, SealedDeviceMessage, SendSealedMessageRequest};
-use crate::proto::content_v1::Content;
+use chatter_proto::chat_v1::{SealedDelivery, SealedDeviceMessage, SendSealedMessageRequest};
+use chatter_proto::content_v1::Content;
 use crate::storage::database::Database;
 use prost::Message as _;
 use rusqlite::{OptionalExtension, params};

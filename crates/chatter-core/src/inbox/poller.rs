@@ -9,7 +9,7 @@ use parking_lot::RwLock;
 use tokio::sync::{Mutex, broadcast, watch};
 
 use crate::network::grpc::MessageClient;
-use crate::proto::chat_v1::DeviceMessage;
+use chatter_proto::chat_v1::DeviceMessage;
 
 use super::config::InboxConfig;
 use super::error::InboxError;

@@ -176,7 +176,7 @@ impl MessageService {
         };
         if let (Ok(peer), Ok(content)) = (
             recipient_id.parse::<UserId>(),
-            crate::proto::content_v1::Content::decode(plaintext),
+            chatter_proto::content_v1::Content::decode(plaintext),
         ) {
             self.snapshot_dm_content_targets(
                 peer,

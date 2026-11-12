@@ -19,7 +19,7 @@ pub struct PendingAttachment {
     pub mime_type: String,
     /// Pre-uploaded attachment pointer (for GIFs from picker).
     /// If set, the attachment is already uploaded and this pointer should be used directly.
-    pub pointer: Option<crate::proto::content_v1::AttachmentPointer>,
+    pub pointer: Option<chatter_proto::content_v1::AttachmentPointer>,
 }
 
 impl PendingAttachment {
@@ -51,7 +51,7 @@ impl PendingAttachment {
         filename: String,
         size: u64,
         mime_type: String,
-        pointer: crate::proto::content_v1::AttachmentPointer,
+        pointer: chatter_proto::content_v1::AttachmentPointer,
     ) -> Self {
         Self {
             id,

@@ -9,7 +9,7 @@ use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     ArchiveChannelRequest, ArchiveChannelResponse, BanUserRequest, BannedUser,
     Channel as ChannelProto, ChannelChange, ChannelEvent, ChannelEventRequest, ChannelJoinRequest,
     ChannelSearchRequest, ChannelSearchResponse, ChannelType, CreateChannelRequest,
@@ -357,10 +357,10 @@ impl ChannelClient {
     /// authenticated user.
     pub async fn list_pending_invites(
         &mut self,
-    ) -> Result<crate::proto::chat_v1::ListPendingInvitesResponse, NetworkError> {
+    ) -> Result<chatter_proto::chat_v1::ListPendingInvitesResponse, NetworkError> {
         let response = self
             .inner
-            .list_pending_invites(crate::proto::chat_v1::ListPendingInvitesRequest {})
+            .list_pending_invites(chatter_proto::chat_v1::ListPendingInvitesRequest {})
             .await
             .map_err(|s| NetworkError::from_status(&s))?;
         Ok(response.into_inner())
@@ -535,8 +535,8 @@ impl ChannelClient {
     pub async fn get_departure(
         &mut self,
         channel_id: &str,
-    ) -> Result<crate::proto::chat_v1::Departure, NetworkError> {
-        let request = crate::proto::chat_v1::GetDepartureRequest {
+    ) -> Result<chatter_proto::chat_v1::Departure, NetworkError> {
+        let request = chatter_proto::chat_v1::GetDepartureRequest {
             channel_id: channel_id.to_string(),
         };
         self.inner
@@ -583,7 +583,7 @@ impl ChannelClient {
     pub async fn get_all_channel_members(
         &mut self,
         channel_id: &str,
-    ) -> Result<Vec<crate::proto::chat_v1::channel::ChannelMember>, NetworkError> {
+    ) -> Result<Vec<chatter_proto::chat_v1::channel::ChannelMember>, NetworkError> {
         const PAGE_SIZE: i32 = 100;
         let mut members = Vec::new();
         let mut offset: i32 = 0;
@@ -794,7 +794,7 @@ fn fetch_next_members_page(page_len: usize, page_size: i32, fetched: usize, tota
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::chat_v1::ChannelRole;
+    use chatter_proto::chat_v1::ChannelRole;
 
     // Note: Full integration tests require a running server.
     // These tests verify compilation and basic structure.
@@ -869,7 +869,7 @@ mod tests {
     #[test]
     fn test_channel_construction() {
         // Verify Channel struct can be constructed
-        use crate::proto::chat_v1::Channel as ChannelProto;
+        use chatter_proto::chat_v1::Channel as ChannelProto;
 
         let channel = ChannelProto {
             id: "channel-123".to_string(),
@@ -892,7 +892,7 @@ mod tests {
     #[test]
     fn test_channel_config_construction() {
         // Verify Channel.Config struct can be constructed
-        use crate::proto::chat_v1::channel::{Config, config::Persistence};
+        use chatter_proto::chat_v1::channel::{Config, config::Persistence};
 
         let config = Config {
             persistence: Persistence::Persistent as i32,
@@ -910,7 +910,7 @@ mod tests {
     #[test]
     fn test_channel_persistence_values() {
         // Verify Persistence enum values
-        use crate::proto::chat_v1::channel::config::Persistence;
+        use chatter_proto::chat_v1::channel::config::Persistence;
 
         assert_eq!(Persistence::Unspecified as i32, 0);
         assert_eq!(Persistence::Ephemeral as i32, 1);
@@ -920,7 +920,7 @@ mod tests {
     #[test]
     fn test_channel_member_construction() {
         // Verify ChannelMember struct can be constructed
-        use crate::proto::chat_v1::channel::ChannelMember;
+        use chatter_proto::chat_v1::channel::ChannelMember;
 
         let member = ChannelMember {
             user_id: "user-123".to_string(),

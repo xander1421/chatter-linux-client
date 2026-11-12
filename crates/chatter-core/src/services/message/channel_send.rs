@@ -7,7 +7,7 @@ use crate::domain::{
     message::{ConversationType, Message},
 };
 use crate::error::{NetworkError, StorageError};
-use crate::proto::chat_v1::SendMessageRequest;
+use chatter_proto::chat_v1::SendMessageRequest;
 use crate::services::gateway::QuoteIntent;
 use crate::storage::database::Database;
 use crate::storage::repositories::settings_repo::keys;
@@ -67,7 +67,7 @@ pub(crate) fn settle_cancelled_deposit(
     db: &Database,
     owner: UserId,
     channel: ChannelId,
-    post: &crate::proto::chat_v1::Message,
+    post: &chatter_proto::chat_v1::Message,
 ) -> Result<bool, StorageError> {
     settle_cancelled_deposit_admitted(db, owner, channel, post, None)
 }
@@ -76,7 +76,7 @@ pub(crate) fn settle_cancelled_deposit_admitted(
     db: &Database,
     owner: UserId,
     channel: ChannelId,
-    post: &crate::proto::chat_v1::Message,
+    post: &chatter_proto::chat_v1::Message,
     session: Option<&crate::state::receive_session::ReceiveSession>,
 ) -> Result<bool, StorageError> {
     if let Some(session) = session { session.check()?; }
@@ -226,7 +226,7 @@ pub(super) fn has_channel_queue() -> bool {
     CHANNEL_DEPOSIT.try_with(|_| ()).is_ok()
 }
 pub(super) fn retain_channel_response(
-    proto: &crate::proto::chat_v1::Message,
+    proto: &chatter_proto::chat_v1::Message,
 ) -> Result<(), StorageError> {
     CHANNEL_DEPOSIT.try_with(|deposit| {
         let raw = serde_json::to_string(&proto.encode_to_vec()).map_err(|_|invalid("Cannot retain channel response"))?;
@@ -549,7 +549,7 @@ impl MessageService {
         &self,
         entry: &Entry,
         prepared: &Prepared,
-        proto: &crate::proto::chat_v1::Message,
+        proto: &chatter_proto::chat_v1::Message,
     ) -> Result<Message, MessageError> {
         let row = &entry.row;
         let owner = row.sender_id.ok_or(MessageError::NotLoggedIn)?;
@@ -602,7 +602,7 @@ impl MessageService {
                     params![journal_key],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
                 if let Some((response,prepared)) = accepted {
                     let bytes: Vec<u8> = serde_json::from_str(&response).map_err(|_|invalid("Invalid accepted response"))?;
-                    let proto = crate::proto::chat_v1::Message::decode(bytes.as_slice()).map_err(|_|invalid("Invalid accepted response protobuf"))?;
+                    let proto = chatter_proto::chat_v1::Message::decode(bytes.as_slice()).map_err(|_|invalid("Invalid accepted response protobuf"))?;
                     let prepared: Prepared = serde_json::from_str(&prepared).map_err(|_|invalid("Invalid accepted request"))?;
                     return self.materialize_channel_response(entry,&prepared,&proto);
                 }
@@ -1128,7 +1128,7 @@ mod tests {
         let state = crate::state::AuthState::new();
         state.set_logged_in(owner, 3, "fixture".into());
         let session = crate::state::receive_session::ReceiveSession::capture(&state).unwrap();
-        let post = crate::proto::chat_v1::Message {
+        let post = chatter_proto::chat_v1::Message {
             id: MessageId::new().to_string(), channel_id: channel.to_string(), author_id: owner.to_string(),
             author_device_id: 3, send_request_key: send_request_key(owner, 3, channel, &request.to_string()).to_vec(),
             ..Default::default()
@@ -1188,7 +1188,7 @@ mod tests {
                 ],
             )
             .unwrap();
-        let post = |author: &str, device: u32, key: [u8; 32]| crate::proto::chat_v1::Message {
+        let post = |author: &str, device: u32, key: [u8; 32]| chatter_proto::chat_v1::Message {
             id: MessageId::new().to_string(),
             channel_id: channel.to_string(),
             author_id: author.into(),
@@ -1196,7 +1196,7 @@ mod tests {
             send_request_key: key.to_vec(),
             ..Default::default()
         };
-        let settles = |p: &crate::proto::chat_v1::Message| settle_cancelled_deposit(&db, me, channel, p).unwrap();
+        let settles = |p: &chatter_proto::chat_v1::Message| settle_cancelled_deposit(&db, me, channel, p).unwrap();
         let exact = send_request_key(me, 3, channel, &request.to_string());
         // Another send of ours in the same channel, at the same moment.
         assert!(!settles(&post(&me.to_string(), 3, send_request_key(me, 3, channel, &MessageId::new().to_string()))));
@@ -1245,7 +1245,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        let post = |request: MessageId| crate::proto::chat_v1::Message {
+        let post = |request: MessageId| chatter_proto::chat_v1::Message {
             id: MessageId::new().to_string(),
             channel_id: channel.to_string(),
             author_id: me.to_string(),

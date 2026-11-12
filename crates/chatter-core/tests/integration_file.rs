@@ -7,7 +7,7 @@ use crate::{common, skip_if_no_server};
 use std::sync::Arc;
 
 use chatter_core::network::grpc::FileClient;
-use chatter_core::proto::chat_v1::CompletedPart;
+use chatter_proto::chat_v1::CompletedPart;
 use chatter_core::services::AttachmentService;
 use chatter_core::services::attachment::set_attachments_base_dir;
 use chatter_core::storage::{AttachmentRepository, Database};

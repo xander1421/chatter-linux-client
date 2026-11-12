@@ -2,7 +2,7 @@
 
 use crate::domain::anon_group::{AnonGroupId, AnonGroupMessageId};
 use crate::domain::ids::ChannelId;
-use crate::proto::content_v1::{self, Content};
+use chatter_proto::content_v1::{self, Content};
 use crate::services::gateway::builders::{
     build_data_message_content, build_data_message_content_with_quote, build_text_content,
 };
@@ -119,7 +119,7 @@ impl AnonGroupService {
         &self,
         group_id: &AnonGroupId,
         text: &str,
-        attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
+        attachments: Vec<chatter_proto::content_v1::AttachmentPointer>,
     ) -> Result<(AnonGroupMessageId, u64), AnonGroupError> {
         let current_user = self.current_user_id()?;
 
@@ -181,7 +181,7 @@ impl AnonGroupService {
         &self,
         group_id: &AnonGroupId,
         text: &str,
-        attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
+        attachments: Vec<chatter_proto::content_v1::AttachmentPointer>,
         reply_to_sender: &crate::domain::UserId,
         reply_to_timestamp: u64,
     ) -> Result<(AnonGroupMessageId, u64), AnonGroupError> {
@@ -322,7 +322,7 @@ impl AnonGroupService {
         inner_content: Content,
         releasing_held: bool,
     ) -> Result<(), AnonGroupError> {
-        use crate::proto::content_v1::AnonGroupMessage;
+        use chatter_proto::content_v1::AnonGroupMessage;
         use prost::Message as ProstMessage;
 
         let current_user = self.current_user_id()?;
@@ -902,7 +902,7 @@ impl AnonGroupService {
         group_id: &AnonGroupId,
         inner_content: Content,
     ) -> Result<(), AnonGroupError> {
-        use crate::proto::content_v1::AnonGroupMessage;
+        use chatter_proto::content_v1::AnonGroupMessage;
 
         let current_user = self.current_user_id()?;
 
@@ -991,7 +991,7 @@ fn undelivered_post(content: &Content) -> Option<crate::domain::message::SystemM
 mod tests {
     use super::*;
     use crate::domain::message::SystemMessage;
-    use crate::proto::content_v1::AnonGroupMessage;
+    use chatter_proto::content_v1::AnonGroupMessage;
 
     fn wrap(inner: Content) -> Content {
         Content {

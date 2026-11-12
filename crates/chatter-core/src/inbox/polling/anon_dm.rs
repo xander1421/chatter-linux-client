@@ -27,7 +27,7 @@ use crate::inbox::events::InboxEvent;
 use crate::inbox::handlers::DomainEvent;
 use crate::mailbox::anon_dm::AnonDmPollResult;
 use crate::network::validation::MessageDeduplicator;
-use crate::proto::content_v1::{self, Content};
+use chatter_proto::content_v1::{self, Content};
 use crate::services::pairwise::PairwiseService;
 use crate::storage::MessageRepository;
 
@@ -502,7 +502,7 @@ pub async fn process_anon_dm_results(
             );
 
             // Decode Content proto
-            let content: Content = match crate::network::validation::protovalidate::decode_inbound(
+            let content: Content = match chatter_proto::protovalidate::decode_inbound(
                 plaintext.as_slice(),
                 "anon_dm",
             ) {

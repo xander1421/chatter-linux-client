@@ -26,7 +26,7 @@ impl ChatterClient {
             let channels = self.list_channels().unwrap_or_default();
             let received = if page.notifications.iter().any(|n| n.kind == "friend-request") {
                 self.services.grpc_pool.user_client()
-                    .list_friend_requests(crate::proto::chat_v1::friend_requests_filter::Filter::Received, 100, 0)
+                    .list_friend_requests(chatter_proto::chat_v1::friend_requests_filter::Filter::Received, 100, 0)
                     .await.ok()
             } else { None };
             let invites = if page.notifications.iter().any(|n| n.kind == "channel-invite") {
@@ -73,11 +73,11 @@ impl ChatterClient {
                     }
                     if row.kind == "friend-request" {
                         if let Some(ref received) = received {
-                            row.status = match request.and_then(|r| crate::proto::chat_v1::FriendStatus::try_from(r.status).ok()) {
-                                Some(crate::proto::chat_v1::FriendStatus::Pending) => "Pending",
-                                Some(crate::proto::chat_v1::FriendStatus::Accepted) => "Accepted",
-                                Some(crate::proto::chat_v1::FriendStatus::Declined) => "Declined",
-                                Some(crate::proto::chat_v1::FriendStatus::Blocked) => "Blocked",
+                            row.status = match request.and_then(|r| chatter_proto::chat_v1::FriendStatus::try_from(r.status).ok()) {
+                                Some(chatter_proto::chat_v1::FriendStatus::Pending) => "Pending",
+                                Some(chatter_proto::chat_v1::FriendStatus::Accepted) => "Accepted",
+                                Some(chatter_proto::chat_v1::FriendStatus::Declined) => "Declined",
+                                Some(chatter_proto::chat_v1::FriendStatus::Blocked) => "Blocked",
                                 _ if self.is_friend(&actor) => "Accepted",
                                 _ if received.total <= 100 => "No longer pending",
                                 _ => "Status unavailable",

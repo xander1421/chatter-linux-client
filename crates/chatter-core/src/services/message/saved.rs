@@ -20,7 +20,7 @@ use crate::domain::message::{ConversationType, Message};
 use crate::domain::message::{MessageContent, MixedContent};
 use crate::domain::reaction::ReactionScope;
 use crate::network::grpc::message_client::MessageClient;
-use crate::proto::content_v1::{
+use chatter_proto::content_v1::{
     AttachmentPointer, Quote, QuotedAttachment, SavedMessageSync, quote,
 };
 use crate::services::attachment::AttachmentService;
@@ -444,7 +444,7 @@ impl MessageService {
             &owner.to_string(),
             sent_at,
         );
-        if let Some(crate::proto::content_v1::content::Content::DeleteForMeSync(sync)) =
+        if let Some(chatter_proto::content_v1::content::Content::DeleteForMeSync(sync)) =
             content.content.as_mut()
         {
             sync.saved_message_id = id.to_string();
@@ -487,7 +487,7 @@ impl MessageService {
         limit: u32,
         before: Option<&MessageId>,
     ) -> Result<Vec<Message>, MessageError> {
-        use crate::proto::chat_v1::MessageSortDirection;
+        use chatter_proto::chat_v1::MessageSortDirection;
 
         // Check logged in
         let _ = self.settings_repo.current_user_id()?;
