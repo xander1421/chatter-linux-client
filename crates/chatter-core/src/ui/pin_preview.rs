@@ -49,8 +49,8 @@ mod tests {
     fn strip_precedes_unicode_safe_bound() {
         let body = format!("**{}**", "猫".repeat(120));
         let preview = text_preview(&body);
-        assert_eq!(preview, format!("{}...", "猫".repeat(97)));
-        assert_eq!(preview.chars().count(), 100);
+        // Bounded only; the single-line Text item draws the ellipsis.
+        assert_eq!(preview, "猫".repeat(100));
         // The closing delimiter is beyond the old core preview boundary.
         assert_eq!(
             text_preview(&format!("**{}**", "a".repeat(90))),
