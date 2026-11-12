@@ -282,7 +282,7 @@ impl ChatterClient {
         if size > crate::services::attachment::image_preview_ciphertext_limit() {
             return None;
         }
-        let mut decryptor = crate::crypto::streaming_decrypt::StreamingDecryptor::new(
+        let mut decryptor = chatter_attachment_crypto::StreamingDecryptor::new(
             std::io::BufReader::new(source),
             &key,
             &digest,
@@ -333,7 +333,7 @@ impl ChatterClient {
                 .metadata()
                 .map_err(|e| AttachmentError::FileError(e.to_string()))?
                 .len() as usize;
-            let mut decryptor = crate::crypto::streaming_decrypt::StreamingDecryptor::new(
+            let mut decryptor = chatter_attachment_crypto::StreamingDecryptor::new(
                 std::io::BufReader::new(source),
                 &key,
                 &digest,
@@ -432,7 +432,7 @@ impl ChatterClient {
             }
         };
         let encrypted =
-            match crate::crypto::attachment_crypto::AttachmentCrypto::encrypt_file_to_file(
+            match chatter_attachment_crypto::AttachmentCrypto::encrypt_file_to_file(
                 &path,
                 staging.path(),
             ) {

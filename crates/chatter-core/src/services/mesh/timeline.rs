@@ -33,7 +33,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
 
-use crate::crypto::attachment_crypto::AttachmentCrypto;
+use chatter_attachment_crypto::AttachmentCrypto;
 use crate::domain::UnifiedConversation;
 use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
 use crate::domain::ids::{AttachmentId, ChannelId, UserId};

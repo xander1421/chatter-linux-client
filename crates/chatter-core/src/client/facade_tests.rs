@@ -43,7 +43,7 @@ mod upload_attachments_tests {
     //! instead of being dropped, which previously left `pointers` empty and
     //! sent attachments-only messages into the empty-content validation path.
     use super::*;
-    use crate::crypto::attachment_crypto::override_max_attachment_size;
+    use chatter_attachment_crypto::override_max_attachment_size;
     use crate::domain::AttachmentId;
     use crate::storage::database::Database;
     use crate::storage::repositories::AttachmentRepository;

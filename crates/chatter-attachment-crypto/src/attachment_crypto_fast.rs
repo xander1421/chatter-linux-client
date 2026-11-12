@@ -17,13 +17,13 @@ use aes::cipher::block_padding::NoPadding;
 use aes::cipher::{BlockModeDecrypt, KeyIvInit};
 use subtle::ConstantTimeEq;
 
-use crate::crypto::hmac_compat::Sha256Stream;
+use crate::hmac_compat::Sha256Stream;
 
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
-use crate::error::CryptoError;
+use crate::AttachmentCryptoError;
 
-use super::attachment_crypto::KEY_SET_LENGTH;
+use crate::attachment_crypto::KEY_SET_LENGTH;
 
 const IV_LENGTH: usize = 16;
 const AES_KEY_LENGTH: usize = 32;
@@ -43,7 +43,7 @@ fn verify_sequential(
     hmac_start: usize,
 ) -> ([u8; 32], [u8; 32]) {
     let mut digest_hasher = Sha256Stream::new().expect("SHA256 init failed");
-    let mut hmac = crate::crypto::hmac_compat::hmac_init(mac_key).expect("HMAC init");
+    let mut hmac = crate::hmac_compat::hmac_init(mac_key).expect("HMAC init");
 
     // Process IV
     digest_hasher
@@ -87,7 +87,7 @@ fn verify_parallel(ciphertext: &[u8], mac_key: &[u8], hmac_start: usize) -> ([u8
             arr
         },
         || {
-            let mut signer = crate::crypto::hmac_compat::hmac_init(mac_key).expect("HMAC init");
+            let mut signer = crate::hmac_compat::hmac_init(mac_key).expect("HMAC init");
             signer.update(&ciphertext[..hmac_start]).expect("HMAC"); // IV + encrypted
             let mut arr = [0u8; 32];
             arr.copy_from_slice(&signer.finalize().expect("HMAC finalize"));
@@ -107,10 +107,10 @@ pub fn decrypt_zero_copy(
     key: &[u8; KEY_SET_LENGTH],
     expected_digest: &[u8; 32],
     plaintext_size: usize,
-) -> Result<Vec<u8>, CryptoError> {
+) -> Result<Vec<u8>, AttachmentCryptoError> {
     // Verify minimum length
     if ciphertext.len() < MIN_CIPHERTEXT_LENGTH {
-        return Err(CryptoError::AttachmentDecryptionFailed(
+        return Err(AttachmentCryptoError::AttachmentDecryptionFailed(
             "ciphertext too short".to_string(),
         ));
     }
@@ -133,16 +133,16 @@ pub fn decrypt_zero_copy(
 
     // Verify digest (constant-time)
     if actual_digest.ct_eq(expected_digest).unwrap_u8() != 1 {
-        return Err(CryptoError::AttachmentDigestMismatch);
+        return Err(AttachmentCryptoError::AttachmentDigestMismatch);
     }
 
     // Verify HMAC (constant-time)
     if computed_hmac.ct_eq(&ciphertext[hmac_start..]).unwrap_u8() != 1 {
-        return Err(CryptoError::AttachmentMacMismatch);
+        return Err(AttachmentCryptoError::AttachmentMacMismatch);
     }
 
     if plaintext_size > data_len {
-        return Err(CryptoError::AttachmentDecryptionFailed(
+        return Err(AttachmentCryptoError::AttachmentDecryptionFailed(
             "plaintext_size exceeds decrypted data".to_string(),
         ));
     }
@@ -151,9 +151,11 @@ pub fn decrypt_zero_copy(
     let mut iv = [0u8; IV_LENGTH];
     iv.copy_from_slice(&ciphertext[..IV_LENGTH]);
     Aes256CbcDec::new_from_slices(aes_key, &iv)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES init: {e}")))?
+        .map_err(|e| AttachmentCryptoError::AttachmentDecryptionFailed(format!("AES init: {e}")))?
         .decrypt_padded::<NoPadding>(&mut ciphertext[iv_end..hmac_start])
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES decrypt: {e}")))?;
+        .map_err(|e| {
+            AttachmentCryptoError::AttachmentDecryptionFailed(format!("AES decrypt: {e}"))
+        })?;
 
     // Drop the padding and HMAC from the tail, then the IV from the head.
     ciphertext.truncate(iv_end + plaintext_size);
@@ -165,7 +167,7 @@ pub fn decrypt_zero_copy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::attachment_crypto::AttachmentCrypto;
+    use crate::attachment_crypto::AttachmentCrypto;
 
     #[test]
     fn test_zero_copy_matches_original() {
@@ -217,7 +219,10 @@ mod tests {
             encrypted.plaintext_size,
         );
 
-        assert!(matches!(result, Err(CryptoError::AttachmentDigestMismatch)));
+        assert!(matches!(
+            result,
+            Err(AttachmentCryptoError::AttachmentDigestMismatch)
+        ));
     }
 
     #[test]
@@ -276,7 +281,7 @@ mod tests {
             encrypted.plaintext_size,
         );
         assert!(
-            matches!(result, Err(CryptoError::AttachmentDigestMismatch)),
+            matches!(result, Err(AttachmentCryptoError::AttachmentDigestMismatch)),
             "{result:?}"
         );
     }
@@ -295,7 +300,7 @@ mod tests {
             let result =
                 decrypt_zero_copy(tampered, &encrypted.key, &digest, encrypted.plaintext_size);
             assert!(
-                matches!(result, Err(CryptoError::AttachmentMacMismatch)),
+                matches!(result, Err(AttachmentCryptoError::AttachmentMacMismatch)),
                 "{result:?}"
             );
         }

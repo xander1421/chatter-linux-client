@@ -1616,8 +1616,7 @@ mod visible_preview_tests {
             .write_to(&mut plaintext, image::ImageFormat::Jpeg)
             .unwrap();
         let encrypted =
-            chatter_core::crypto::attachment_crypto::AttachmentCrypto::encrypt(plaintext.get_ref())
-                .unwrap();
+            chatter_attachment_crypto::AttachmentCrypto::encrypt(plaintext.get_ref()).unwrap();
         let source = chatter_core::domain::attachment::Attachment {
             id: chatter_core::domain::ids::AttachmentId::new(),
             metadata: chatter_core::domain::attachment::FileMetadata::new(

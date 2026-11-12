@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
+use chatter_attachment_crypto::KEY_SET_LENGTH;
 use crate::domain::attachment::{Attachment, ContentLocation};
 use crate::domain::ids::AttachmentId;
 use crate::network::grpc::client_pool::GrpcClientPool;
@@ -787,7 +787,7 @@ impl AttachmentService {
             let mut digest = [0u8; 32];
             digest.copy_from_slice(&digest_vec);
             let decrypt = trace::section(c"chatter.media.sidecar.auth_decrypt");
-            let plaintext = match crate::crypto::attachment_crypto::AttachmentCrypto::decrypt(
+            let plaintext = match chatter_attachment_crypto::AttachmentCrypto::decrypt(
                 &ciphertext,
                 &key,
                 &digest,

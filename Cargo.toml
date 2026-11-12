@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/chatter-attachment-crypto",
     "crates/chatter-core",
     "crates/chatter-mesh",
     "crates/chatter-mesh-android",
@@ -49,33 +50,37 @@ codegen-units = 256    # More parallelism
 [profile.dev.package.chatter-ui-slint]
 incremental = false
 
-# chatter-core is opted OUT of the workspace-member opt-level = 0 above.
+# chatter-attachment-crypto is opted OUT of the workspace-member opt-level = 0
+# above. chatter-core is not: it builds at O0 like every other member.
 #
 # Why (OPEN-ITEMS §109): attachment crypto is `cbc::Decryptor<aes::Aes256>` --
-# a generic, so the AES round function is monomorphised into chatter-core and
-# compiled at CHATTER-CORE's opt-level, not the `aes` crate's. At opt-level = 0
-# that instantiation runs at ~64 MB/s; at 2 it runs at ~217 MB/s. Nothing about
-# the `aes` crate changes -- the same type in a test crate measures ~1600 MB/s
-# either way.
+# a generic, so the AES round function is monomorphised into the crate that
+# instantiates it and compiled at THAT crate's opt-level, not the `aes`
+# crate's. At opt-level = 0 that instantiation ran at ~64 MB/s; at 2, ~217 MB/s
+# (both measured when it lived in chatter-core). Nothing about the `aes` crate
+# changes -- the same type in a test crate measures ~1600 MB/s either way.
 #
 # It only looked fine before because of a coincidence. With `-Z share-generics=y`
 # chatter-core could reuse an instantiation already compiled inside an
 # opt-level = 2 dependency, and `signal-crypto` was a second user of cbc 0.1.2
 # that provided one. libsignal v0.102.2 moves to aes 0.9 / cbc 0.2, leaving
-# chatter-core the sole user of cbc 0.1.2 -- so it emits its own, at opt-level 0,
-# and dev-build attachment crypto fell 5x.
+# chatter-core the sole user of cbc 0.1.2 -- so it emitted its own, at opt-level
+# 0, and dev-build attachment crypto fell 5x.
 #
 # Note that `-Z share-generics=y` is NOT set by this repository. It came from the
 # developer's ~/.cargo/config.toml, which means dev-build crypto speed here was a
 # property of one machine's global cargo config. This line removes that
-# dependency: chatter-core is now fast because of this file.
+# dependency.
 #
-# Core and libsignal now both use aes 0.9 / cbc 0.2 (§110); keep the explicit
-# optimization so throughput never depends on cross-crate generic sharing.
+# chatter-core used to carry this opt-level = 2 itself. The attachment AES-CBC +
+# HMAC code (and the AES block loop of the range decryptor) now lives in
+# chatter-attachment-crypto behind non-generic functions, so the instantiation
+# happens there and chatter-core can build at O0. Other AES users that remain in
+# chatter-core (backup `Aes256Gcm`, provisioning, profile/device-name crypto)
+# now run at O0 in dev; not re-measured.
 #
-# Dev profile only; release is unaffected and measured (§109). Costs ~30s on a
-# clean chatter-core build.
-[profile.dev.package.chatter-core]
+# Dev profile only; release is set separately below.
+[profile.dev.package.chatter-attachment-crypto]
 opt-level = 2
 
 # Optimize dependencies but not your code
@@ -94,9 +99,13 @@ strip = true
 opt-level = "z"
 
 # Crypto and attachment processing favour throughput; the rest retains "z".
-# Include chatter-core: generic AES-CBC / HMAC code is instantiated there.
+# Include chatter-attachment-crypto, where the generic AES-CBC / HMAC code is
+# instantiated, and chatter-core (services, Signal paths, backup Aes256Gcm).
 # Unversioned package names apply to every locked version of each crate.
 [profile.release.package.chatter-core]
+opt-level = 3
+
+[profile.release.package.chatter-attachment-crypto]
 opt-level = 3
 
 [profile.release.package.aes]

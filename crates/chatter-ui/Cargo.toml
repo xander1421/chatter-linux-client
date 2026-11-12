@@ -145,6 +145,8 @@ ndk-context = "0.1"
 
 [dev-dependencies]
 chatter-core = { path = "../chatter-core", default-features = false, features = ["testing"] }
+# header.rs visible_preview_tests encrypts a fixture attachment.
+chatter-attachment-crypto = { path = "../chatter-attachment-crypto" }
 # Headless GUI test backend for VALIDATED-UI.md (slint::testing analog).
 # Pinned to =1.18.1 to match the `slint` crate exactly — the testing backend
 # links i-slint-core, which must be the SAME version as the generated MainWindow's

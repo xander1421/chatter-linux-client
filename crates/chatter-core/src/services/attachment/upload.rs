@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::crypto::attachment_crypto::{AttachmentCrypto, max_attachment_size};
+use chatter_attachment_crypto::{AttachmentCrypto, max_attachment_size};
 use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
 use crate::domain::ids::AttachmentId;
 use crate::error::CryptoError;
@@ -1177,7 +1177,7 @@ mod size_cap_tests {
     //! asserts the returned error round-trips Signal's `AttachmentTooLarge`
     //! display string. The cap is then restored via the captured `original`.
     use super::*;
-    use crate::crypto::attachment_crypto::override_max_attachment_size;
+    use chatter_attachment_crypto::override_max_attachment_size;
     use crate::services::attachment::AttachmentService;
     use crate::storage::database::Database;
     use crate::storage::repositories::AttachmentRepository;

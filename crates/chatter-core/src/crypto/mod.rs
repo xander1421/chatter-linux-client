@@ -6,8 +6,6 @@
 //! Note: For blind signatures, use `crate::mailbox::blind_signature` which implements
 //! deterministic RSABSSA per NDSS '21 spec, compatible with the Go server.
 
-pub mod attachment_crypto;
-pub mod attachment_crypto_fast;
 pub mod auth_crypto;
 pub mod call_key_provider;
 pub mod device_credentials;
@@ -15,7 +13,6 @@ pub mod device_name;
 pub mod dm_crypto;
 pub mod ecies;
 pub mod envelope_crypto;
-pub(crate) mod hmac_compat;
 pub mod kdf;
 pub mod keytransparency;
 pub mod message_backup;
@@ -25,17 +22,11 @@ pub mod profile_crypto;
 pub mod provisioning;
 pub mod secret_key;
 pub mod secret_string;
-pub mod secure_buffer;
 pub mod signal;
-pub mod streaming_decrypt;
 pub mod svr;
 pub mod svr_backup;
 pub mod vrf;
 
-pub use attachment_crypto::{
-    AttachmentCrypto, EncryptedAttachment, KEY_SET_LENGTH, StreamingEncryptResult,
-    max_attachment_size,
-};
 pub use call_key_provider::{
     CallKeyState,
     // Ephemeral key exchange (Signal-style PFS for DM calls)
@@ -58,7 +49,6 @@ pub use provisioning::{
 };
 pub use secret_key::{SecretKey32, SecretKey64};
 pub use secret_string::SecretString;
-pub use secure_buffer::{SecureBuffer, SecureCursor};
 pub use signal::{
     IdentityKeyManager, PreKeyManager, SealedSenderManager, SenderKeyManager, SessionManager,
     SignalStore,
