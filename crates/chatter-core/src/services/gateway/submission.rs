@@ -1,6 +1,6 @@
 //! Anonymous deposits cannot be retried by re-encrypting a parked plaintext.
 //! Retain the first ciphertext in SQLCipher before attempting deposit.
-use crate::{error::StorageError, storage::database::Database};
+use crate::{error::StorageError, state::send_session::{SEND_SESSION, SendSession, check_send_session}, storage::database::Database};
 use rusqlite::params;
 use sha2::{Digest, Sha256};
 
@@ -484,40 +484,6 @@ tokio::task_local! {
     pub(crate) static SEND_BOUNDARY: std::sync::Arc<SendBoundary>;
 }
 
-#[derive(Clone)]
-pub(crate) struct SendSession {
-    state: crate::state::AuthState,
-    owner: Option<crate::domain::ids::UserId>,
-    revision: u64,
-}
-impl SendSession {
-    pub(crate) fn capture(state: &crate::state::AuthState) -> Self {
-        let snapshot = state.get();
-        Self {
-            state: state.clone(),
-            owner: snapshot.current_user_id,
-            revision: snapshot.session_revision,
-        }
-    }
-    fn check(&self) -> Result<(), StorageError> {
-        let current = self.state.get();
-        if self.owner.is_none()
-            || current.current_user_id != self.owner
-            || current.session_revision != self.revision
-        {
-            return Err(StorageError::InvalidData(
-                "Send session expired before submission".into(),
-            ));
-        }
-        Ok(())
-    }
-}
-tokio::task_local! {
-    pub(crate) static SEND_SESSION: SendSession;
-}
-pub(crate) fn check_send_session() -> Result<(), StorageError> {
-    SEND_SESSION.try_with(SendSession::check).unwrap_or(Ok(()))
-}
 /// Carries the original future's admission boundary across the Signal actor.
 /// Start only after every exact envelope fits, before the first durable write.
 #[derive(Clone)]

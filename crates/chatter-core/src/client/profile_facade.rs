@@ -283,7 +283,7 @@ impl ChatterClient {
             ActiveConversation::Channel(id) => {
                 // Resolve from the channel row (`Channel`, `ServerDm` or
                 // `SavedMessages`); the send path stores under the same value.
-                let conv_type = crate::services::message::conversion::conversation_type_for_channel(
+                let conv_type = crate::storage::repositories::channel_repo::conversation_type_for_channel(
                     &self.services.channel_repo,
                     id,
                 );

@@ -14,7 +14,7 @@ use crate::domain::ids::ChannelId;
 use crate::error::NetworkError;
 use crate::proto::chat_v1 as pb;
 use crate::services::channel::membership_log::{LogBackend, LogError, MembershipLog};
-use crate::services::channel::verified_state::{
+use crate::domain::verified_state::{
     self as vs, IdentityKeyVerifier, KeyBytes, MembershipState, VerifyError,
 };
 use crate::storage::Database;

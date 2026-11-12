@@ -172,12 +172,12 @@ pub enum MessageError {
     /// group-encrypted until it clears. Retrying cannot help.
     #[error("channel membership could not be verified ({})", match status {
         None => "no verified state",
-        Some(crate::services::channel::verified_state::VerificationStatus::Fork) => "fork detected",
+        Some(crate::domain::verified_state::VerificationStatus::Fork) => "fork detected",
         Some(_) => "verification failed",
     })]
     MembershipNotVerified {
         channel_id: ChannelId,
-        status: Option<crate::services::channel::verified_state::VerificationStatus>,
+        status: Option<crate::domain::verified_state::VerificationStatus>,
     },
 }
 
@@ -303,14 +303,6 @@ impl PendingFlush {
                 self.error = Some(e);
             }
         }
-    }
-}
-
-/// The bubble a queued `Content` belongs to: its `DataMessage.timestamp`.
-pub(crate) fn queued_bubble_timestamp(content: &crate::proto::content_v1::Content) -> Option<u64> {
-    match &content.content {
-        Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => Some(dm.timestamp),
-        _ => None,
     }
 }
 

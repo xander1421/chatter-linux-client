@@ -461,7 +461,7 @@ impl MessageService {
         generation: &str,
     ) -> Result<FirstAttempt, MessageError> {
         let result = self.deliver_sealed_dm(id, generation).await;
-        if crate::services::gateway::submission::check_send_session().is_err() {
+        if crate::state::send_session::check_send_session().is_err() {
             // Another account or session: the entry keeps its owner and lease.
             return Ok(FirstAttempt::Queued);
         }
@@ -636,7 +636,7 @@ pub(crate) fn spawn_dm_send_recovery(
                 }
             };
             let session =
-                crate::services::gateway::submission::SendSession::capture(client.auth_state());
+                crate::state::send_session::SendSession::capture(client.auth_state());
             let fail = |id: &MessageId,
                         generation: &str,
                         conversation: ChannelId,
@@ -678,7 +678,7 @@ pub(crate) fn spawn_dm_send_recovery(
                 {
                     break;
                 }
-                let result = crate::services::gateway::submission::SEND_SESSION
+                let result = crate::state::send_session::SEND_SESSION
                     .scope(
                         session.clone(),
                         tokio::time::timeout(

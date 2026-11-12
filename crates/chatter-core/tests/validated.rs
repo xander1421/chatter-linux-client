@@ -13801,7 +13801,7 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
 // ============================================================================
 
 use chatter_core::services::channel::membership_log::MembershipNotice;
-use chatter_core::services::channel::verified_state::{MemberStatus, VerifiedChannel};
+use chatter_core::domain::verified_state::{MemberStatus, VerifiedChannel};
 
 fn verified_of(client: &Arc<ChatterClient>, gid: &ChannelId) -> Option<VerifiedChannel> {
     client.channels().membership_log().load(gid).ok().flatten()
@@ -14549,7 +14549,7 @@ async fn v62_unverifiable_change_send_blocks_until_a_genuine_one() {
     use base64::Engine as _;
     use chatter_core::domain::channel::ChannelType;
     use chatter_core::proto::chat_v1::{self as pb, channel_action::Action};
-    use chatter_core::services::channel::verified_state::rules;
+    use chatter_core::domain::verified_state::rules;
     use tokio_stream::StreamExt as _;
     skip_if_no_server!();
     no_keyring_prompts();

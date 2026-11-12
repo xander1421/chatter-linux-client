@@ -9,40 +9,9 @@ use crate::domain::message::{
     ConversationType, Message, MessageContent, MixedContent, ReactionCount,
 };
 use crate::proto::chat_v1;
-use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::util::time::TimestampNanos;
 
 use super::MessageError;
-
-/// Derive the `ConversationType` for a given channel ID via
-/// `ChannelType::conversation_type()`. Defaults to `Channel` when the row
-/// isn't available yet (channel sync race). Use at RPC boundaries that
-/// hand proto Messages to `proto_to_domain_message_with_sender` —
-/// prevents every caller from repeating the same lookup boilerplate and
-/// keeps the mapping logic in one place.
-pub fn conversation_type_for_channel(
-    repo: &ChannelRepository,
-    channel_id: &ChannelId,
-) -> ConversationType {
-    match repo.get_channel_type(channel_id) {
-        Ok(Some(kind)) => kind.conversation_type(),
-        Ok(None) => {
-            tracing::debug!(
-                channel_id = %channel_id,
-                "conversation_type_for_channel: channel row missing, defaulting to Channel"
-            );
-            ConversationType::Channel
-        }
-        Err(e) => {
-            tracing::warn!(
-                channel_id = %channel_id,
-                error = %e,
-                "conversation_type_for_channel: repo error, defaulting to Channel"
-            );
-            ConversationType::Channel
-        }
-    }
-}
 
 /// Convert a proto Message to a domain Message.
 ///
@@ -304,6 +273,7 @@ pub fn proto_content_to_domain(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::repositories::channel_repo::{ChannelRepository, conversation_type_for_channel};
     use crate::domain::ids::ChannelId;
 
     /// F13: a server channel with `require_encryption` (the default) is still a

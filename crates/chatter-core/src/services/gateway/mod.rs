@@ -282,7 +282,7 @@ impl MessageGateway {
             // A server channel (sender-key or not) is filed as Channel;
             // anon groups never arrive on this path (they use the mailbox).
             let conversation_type =
-                crate::services::message::conversion::conversation_type_for_channel(
+                crate::storage::repositories::channel_repo::conversation_type_for_channel(
                     &self.channel_repo,
                     &cid,
                 );

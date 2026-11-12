@@ -83,7 +83,7 @@ impl ChannelEventService {
     }
 
     fn classify_unsigned(&self, channel_id: &ChannelId, user_id: &UserId, added: bool) {
-        use crate::services::channel::verified_state::UnsignedEvent;
+        use crate::domain::verified_state::UnsignedEvent;
         let user_id = user_id.to_string();
         let event = if added {
             UnsignedEvent::Added { user_id }
@@ -535,7 +535,7 @@ impl ChannelEventService {
     /// Whether our newest membership notice in `channel_id` is a join (or an
     /// "added you") filed in the last two minutes.
     fn recently_recorded_own_join(&self, channel_id: &ChannelId, me: &UserId) -> bool {
-        let conv_type = crate::services::message::conversion::conversation_type_for_channel(
+        let conv_type = crate::storage::repositories::channel_repo::conversation_type_for_channel(
             &self.channel_repo,
             channel_id,
         );
@@ -558,7 +558,7 @@ impl ChannelEventService {
     // time window, because the RPC and the broadcast carry no shared
     // id; a server-issued departure id on both would make this exact.
     fn recently_recorded_own_leave(&self, channel_id: &ChannelId, me: &UserId) -> bool {
-        let conv_type = crate::services::message::conversion::conversation_type_for_channel(
+        let conv_type = crate::storage::repositories::channel_repo::conversation_type_for_channel(
             &self.channel_repo,
             channel_id,
         );
@@ -636,7 +636,7 @@ impl ChannelEventService {
             conversation_id: *channel_id,
             // The channel's own bucket, as its messages are filed: anything
             // else is missing from its history and sidebar preview.
-            conversation_type: crate::services::message::conversion::conversation_type_for_channel(
+            conversation_type: crate::storage::repositories::channel_repo::conversation_type_for_channel(
                 &self.channel_repo,
                 channel_id,
             ),

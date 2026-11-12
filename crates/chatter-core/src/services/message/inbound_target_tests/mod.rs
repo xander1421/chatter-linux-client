@@ -1088,6 +1088,9 @@
 #[path = "reactions.rs"]
 mod reactions;
 
+#[path = "early_modifiers.rs"]
+mod early_modifiers;
+
 #[cfg(feature = "media")]
 mod stable_call_delete_tests {
     include!("../stable_call_delete_tests.rs");

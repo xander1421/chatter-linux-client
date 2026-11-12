@@ -19,7 +19,7 @@ impl MessageService {
         &self,
         channel_id: &crate::domain::ids::ChannelId,
     ) -> crate::domain::message::ConversationType {
-        conversion::conversation_type_for_channel(&self.channel_repo, channel_id)
+        crate::storage::repositories::channel_repo::conversation_type_for_channel(&self.channel_repo, channel_id)
     }
 
     pub fn classify_active_conversation(

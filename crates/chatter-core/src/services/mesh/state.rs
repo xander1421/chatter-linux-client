@@ -63,7 +63,7 @@ pub struct LinkStateInner {
     /// Chatter capability learned from encrypted, post-handshake hello frames.
     pub chatter_hello: super::chatter_hello::HelloPeers,
     /// Live transcript-bound proofs await an explicit trust decision in core.
-    pub pending_bindings: BTreeMap<PeerId, super::account_binding::BindingV1>,
+    pub pending_bindings: BTreeMap<PeerId, crate::domain::mesh::account_binding::BindingV1>,
     /// Verified group states awaiting local consent; never persisted.
     pub pending_group_invites: BTreeMap<String, PendingGroupInvite>,
     /// Declined invitation epochs stay suppressed while a creator retries them.

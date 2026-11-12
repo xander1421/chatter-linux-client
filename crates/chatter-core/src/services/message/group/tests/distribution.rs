@@ -212,9 +212,9 @@
         channel_id: ChannelId,
         revision: u64,
         members: &[UserId],
-    ) -> crate::services::channel::verified_state::StateHash {
+    ) -> crate::domain::verified_state::StateHash {
         use crate::proto::chat_v1 as pb;
-        use crate::services::channel::verified_state::{
+        use crate::domain::verified_state::{
             ChannelRole, Member, MemberStatus, MembershipState, PendingChange, Policy,
             VerifiedChange,
         };

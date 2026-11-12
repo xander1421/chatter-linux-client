@@ -14,6 +14,8 @@ pub mod disappearing;
 pub mod ephemeral;
 pub mod ids;
 pub mod link;
+#[cfg(feature = "mesh")]
+pub mod mesh;
 #[cfg(feature = "jarvis")]
 pub mod jarvis;
 pub mod mention;
@@ -27,6 +29,7 @@ pub mod section;
 pub mod unified_conversation;
 pub mod user;
 pub mod username_link;
+pub mod verified_state;
 
 // Re-export core types for convenience
 pub use anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, AnonDmMessage, AnonDmMessageId, AnonDmStatus};

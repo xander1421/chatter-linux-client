@@ -488,7 +488,7 @@
     /// channel stops distributing and sending until acknowledged.
     #[tokio::test]
     async fn fork_from_a_member_blocks_distribution_and_send() {
-        use crate::services::channel::verified_state::VerificationStatus;
+        use crate::domain::verified_state::VerificationStatus;
         let t = two_members();
         // Alice and Bob diverge at revision 2 (the server showed them different changes).
         seed_verified(&t.alice, t.channel_id, 2, &[t.alice_id, t.bob_id]);
@@ -565,7 +565,7 @@
     /// ahead of us has the channel service fetch the changes.
     #[tokio::test]
     async fn stamps_round_trip_and_a_peer_ahead_triggers_a_fetch() {
-        use crate::services::channel::verified_state::PeerStateCheck;
+        use crate::domain::verified_state::PeerStateCheck;
         let t = two_members();
         let alice_state = t
             .alice

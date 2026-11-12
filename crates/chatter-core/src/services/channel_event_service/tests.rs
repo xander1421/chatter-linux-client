@@ -244,7 +244,7 @@ use crate::proto::chat_v1::{
 };
 use crate::services::channel::membership_log::AuthorBase;
 use crate::services::channel::membership_log::test_support::{FakeServer, Who, who};
-use crate::services::channel::verified_state::{ChannelRole, Policy};
+use crate::domain::verified_state::{ChannelRole, Policy};
 
 fn act(a: Action) -> pb::ChannelAction {
     pb::ChannelAction { action: Some(a) }
@@ -817,7 +817,7 @@ async fn an_unsigned_roster_add_is_ignored_for_keys_and_surfaced() {
     };
     w.service.record_synced_join(&row);
     let v = w.my_log.load(&w.ch).unwrap().unwrap();
-    use crate::services::channel::verified_state::VerifiedMembership;
+    use crate::domain::verified_state::VerifiedMembership;
     assert!(!v.contains(&ghost.to_string()));
     let mut surfaced = false;
     while let Ok(ev) = rx.try_recv() {

@@ -18,8 +18,8 @@ use async_trait::async_trait;
 use libsignal_protocol::{KeyPair, PrivateKey};
 use rand::TryRngCore;
 
-use super::verified_state::canonical::{INVITE_DOMAIN, signed_message};
-use super::verified_state::{
+use crate::domain::verified_state::canonical::{INVITE_DOMAIN, signed_message};
+use crate::domain::verified_state::{
     self as vs, CachedKtVerifier, IdentityKeyVerifier, KeyBytes, MemberStatus, MembershipState,
     UnsignedDisposition, UnsignedEvent, VerificationStatus, VerifiedChange, VerifiedChannel,
     VerifyError, rules,

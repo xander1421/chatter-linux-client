@@ -355,7 +355,7 @@ impl MessageService {
                         }
                     }
 
-                        let conv_type = crate::services::message::conversion::conversation_type_for_channel(
+                        let conv_type = crate::storage::repositories::channel_repo::conversation_type_for_channel(
                             &messages.channel_repo, &channel_id,
                         );
                         let mut message = match proto_to_domain_message_with_sender(&patched, Some(sender_id), conv_type) {

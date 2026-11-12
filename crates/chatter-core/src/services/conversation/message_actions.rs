@@ -129,7 +129,7 @@ impl ConversationHandle {
         let stored = scoped_stored_message(repo, scope, &own, target_sent_timestamp)?;
         let row = pinned_saved_record(&stored, own, !unpin)?;
         let saved_session =
-            crate::services::gateway::submission::SendSession::capture(self.client.auth_state());
+            crate::state::send_session::SendSession::capture(self.client.auth_state());
         let now = self.client.auth_state().get();
         if now.current_user_id != Some(own) || now.session_revision != session_revision {
             return Err(ConversationError::Other(
@@ -137,7 +137,7 @@ impl ConversationHandle {
             ));
         }
         let now_ns = crate::util::time::TimestampNanos::now().as_u64();
-        match crate::services::gateway::submission::SEND_SESSION.sync_scope(
+        match crate::state::send_session::SEND_SESSION.sync_scope(
             saved_session.clone(),
             || {
                 SavedSyncRepository::new(repo.db()).apply_local_pin(
@@ -178,7 +178,7 @@ impl ConversationHandle {
         // The row as it is now stored, pin clock included, is what siblings get.
         match repo.get(&row.id) {
             Ok(Some(written)) => {
-                crate::services::gateway::submission::SEND_SESSION
+                crate::state::send_session::SEND_SESSION
                     .scope(saved_session, messages.sync_saved_record(&written))
                     .await;
             }
@@ -257,7 +257,7 @@ impl ConversationHandle {
         // The scope was resolved under this account and session; the write
         // happens under the same ones or not at all.
         let saved_session =
-            crate::services::gateway::submission::SendSession::capture(self.client.auth_state());
+            crate::state::send_session::SendSession::capture(self.client.auth_state());
         let now = self.client.auth_state().get();
         if now.current_user_id != Some(own) || now.session_revision != auth.session_revision {
             return Err(ConversationError::Other(
@@ -266,7 +266,7 @@ impl ConversationHandle {
         }
         // Body columns only, at the Saved key: a pin of this row landing
         // between the read above and this write keeps its pin.
-        if crate::services::gateway::submission::SEND_SESSION
+        if crate::state::send_session::SEND_SESSION
             .sync_scope(saved_session.clone(), || {
                 repo.write_saved_body(
                     scope,
@@ -297,7 +297,7 @@ impl ConversationHandle {
         // The row as it is now stored, edit clock included, is what siblings get.
         match repo.get(&edited.id) {
             Ok(Some(written)) => {
-                crate::services::gateway::submission::SEND_SESSION
+                crate::state::send_session::SEND_SESSION
                     .scope(saved_session, messages.sync_saved_record(&written))
                     .await;
             }
@@ -853,7 +853,7 @@ impl ConversationHandle {
         if matches!(self.conversation, ActiveConversation::Channel(_))
             && self.storage_scope()?.kind == ConversationType::SavedMessages
         {
-            let session = crate::services::gateway::submission::SendSession::capture(
+            let session = crate::state::send_session::SendSession::capture(
                 self.client.auth_state(),
             );
             let auth = self.client.auth_state().get();
@@ -879,7 +879,7 @@ impl ConversationHandle {
                     true,
                 ),
             };
-            let acknowledged = crate::services::gateway::submission::SEND_SESSION
+            let acknowledged = crate::state::send_session::SEND_SESSION
                 .scope(
                     session,
                     messages.submit_saved_delete(owner, id, target_sent_timestamp, prepare),

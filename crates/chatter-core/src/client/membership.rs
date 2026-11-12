@@ -16,7 +16,7 @@ use std::sync::Arc;
 use crate::domain::channel::{Channel, ChannelType, MemberRole};
 use crate::domain::ids::{ChannelId, UserId};
 use crate::services::channel::ChannelError;
-use crate::services::channel::verified_state::{
+use crate::domain::verified_state::{
     ChannelRole, JoinMode, MemberStatus, MembershipState, VerificationStatus, VerifiedChannel,
     VerifiedMembership,
 };
@@ -618,7 +618,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
-    use crate::services::channel::verified_state::{Invite, Member, Policy};
+    use crate::domain::verified_state::{Invite, Member, Policy};
 
     const OWNER: &str = "00000000-0000-4000-8000-000000000001";
     const ADMIN: &str = "00000000-0000-4000-8000-000000000002";

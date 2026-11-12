@@ -84,7 +84,8 @@ fn forged(f: &Fixture) -> Vec<AnonGroupMemberInfo> {
 
 #[tokio::test]
 async fn real_group_fanout_refuses_replaced_session_after_recipient_preparation() {
-    use crate::services::gateway::submission::{SEND_SESSION, SendSession, track_submission};
+    use crate::services::gateway::submission::track_submission;
+    use crate::state::send_session::{SEND_SESSION, SendSession};
     for earlier_submission in [false, true] {
         let f = fixture();
         let state = f._client.auth_state();
@@ -176,7 +177,8 @@ async fn real_group_fanout_refuses_replaced_session_after_recipient_preparation(
 
 #[tokio::test]
 async fn existing_unknown_recipient_claim_stays_uncertain_after_session_replacement() {
-    use crate::services::gateway::submission::{self, SEND_SESSION, SendSession};
+    use crate::services::gateway::submission;
+    use crate::state::send_session::{SEND_SESSION, SendSession};
     let f = fixture();
     let svc = f._client.anon_groups();
     let me = svc.current_user_id().unwrap();

@@ -112,7 +112,7 @@ impl ChatterClient {
         options: Option<SendOptions>,
     ) -> Result<SendResult, (SendError, Option<String>)> {
         let text = text.trim();
-        let session = crate::services::gateway::submission::SendSession::capture(self.auth_state());
+        let session = crate::state::send_session::SendSession::capture(self.auth_state());
         let key = self.retain_send_attempt(
             attempt,
             conversation,
@@ -122,7 +122,7 @@ impl ChatterClient {
             options.as_ref(),
         )
         .map_err(|error| (error, None))?;
-        let (outcome, started, original_row) = crate::services::gateway::submission::SEND_SESSION
+        let (outcome, started, original_row) = crate::state::send_session::SEND_SESSION
             .scope(
                 session,
                 crate::services::gateway::submission::track_submission(
@@ -281,7 +281,7 @@ impl ChatterClient {
         )
         .await
         .map_err(|e| SendError::from(e).before_submission())?;
-        crate::services::gateway::submission::check_send_session()
+        crate::state::send_session::check_send_session()
             .map_err(|_| SendError::NotLoggedIn.before_submission())?;
         // Saved Messages resolves its parent and preview itself, scoped to
         // the Saved conversation (`MessageService::save_message`); the
@@ -580,9 +580,9 @@ impl ChatterClient {
         ) {
             return Err(SendError::UnsupportedAction);
         }
-        let session = crate::services::gateway::submission::SendSession::capture(self.auth_state());
+        let session = crate::state::send_session::SendSession::capture(self.auth_state());
         let (key, attempt) = self.retain_retry_attempt(conversation, &message)?;
-        let (result, route_started, retry_row) = crate::services::gateway::submission::SEND_SESSION
+        let (result, route_started, retry_row) = crate::state::send_session::SEND_SESSION
             .scope(
                 session,
                 crate::services::gateway::submission::track_submission(
@@ -661,9 +661,9 @@ impl ChatterClient {
     ) -> Result<crate::domain::message::Message, SendError> {
         let id = message.id;
         let service = &self.services.message_service;
-        let session = crate::services::gateway::submission::SendSession::capture(self.auth_state());
+        let session = crate::state::send_session::SendSession::capture(self.auth_state());
         let (key, attempt) = self.retain_retry_attempt(conversation, &message)?;
-        let (result, started, _) = crate::services::gateway::submission::SEND_SESSION.scope(
+        let (result, started, _) = crate::state::send_session::SEND_SESSION.scope(
             session,
             crate::services::gateway::submission::track_submission(
                 self.services.anon_dm_service.retry_failed_message(&message),

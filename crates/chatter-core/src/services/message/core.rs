@@ -297,7 +297,7 @@ impl MessageService {
         // Derive ConversationType from the channel row so identified
         // channels don't get mistagged as AnonGroup.
         let conv_type =
-            super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
+            crate::storage::repositories::channel_repo::conversation_type_for_channel(&self.channel_repo, channel_id);
         let mut message = super::conversion::proto_to_outgoing_channel_message(
             &proto_message,
             sender_id,
@@ -453,7 +453,7 @@ impl MessageService {
             Err(error) => {
                 let mut message = Message::new_text(
                     *channel_id,
-                    super::conversion::conversation_type_for_channel(
+                    crate::storage::repositories::channel_repo::conversation_type_for_channel(
                         &self.channel_repo,
                         channel_id,
                     ),

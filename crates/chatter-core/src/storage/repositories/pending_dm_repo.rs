@@ -125,7 +125,7 @@ impl PendingDmRepository {
         };
         for bytes in &content {
             if let Some(sent_at) = crate::proto::content_v1::Content::decode(bytes.as_slice()).ok()
-                .and_then(|decoded| crate::services::message::queued_bubble_timestamp(&decoded)) {
+                .and_then(|decoded| queued_bubble_timestamp(&decoded)) {
                 tx.execute(
                     "UPDATE messages SET delivery_status='failed', failure_reason=?3
                      WHERE conversation_type='server_dm' AND conversation_id=?1 AND sent_at=?2
@@ -149,7 +149,7 @@ impl PendingDmRepository {
         for row in rows {
             let (id, bytes) = row?;
             if crate::proto::content_v1::Content::decode(bytes.as_slice()).ok()
-                .and_then(|content| crate::services::message::queued_bubble_timestamp(&content)) == Some(sent_at) {
+                .and_then(|content| queued_bubble_timestamp(&content)) == Some(sent_at) {
                 matching_id = Some(id);
                 break;
             }
@@ -164,5 +164,13 @@ impl PendingDmRepository {
     pub fn park(&self, id: i64) -> Result<(), StorageError> {
         self.db.connection()?.execute("UPDATE pending_dm_messages SET failed = 1 WHERE id = ?1", [id])?;
         Ok(())
+    }
+}
+
+/// The bubble a queued `Content` belongs to: its `DataMessage.timestamp`.
+pub(crate) fn queued_bubble_timestamp(content: &crate::proto::content_v1::Content) -> Option<u64> {
+    match &content.content {
+        Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => Some(dm.timestamp),
+        _ => None,
     }
 }

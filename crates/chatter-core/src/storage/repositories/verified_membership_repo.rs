@@ -1,6 +1,6 @@
 //! Verified channel membership: the state each channel's signed change log
 //! has reached on this device, plus the log itself (migration v082). Written
-//! only with states `services::channel::verified_state` has verified.
+//! only with states `domain::verified_state` has verified.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -10,7 +10,7 @@ use rusqlite::{OptionalExtension, params};
 use crate::domain::ids::ChannelId;
 use crate::error::StorageError;
 use crate::proto::chat_v1 as pb;
-use crate::services::channel::verified_state::{
+use crate::domain::verified_state::{
     ChannelRole, Invite, JoinMode, KeyBytes, Member, MemberStatus, MembershipState, Policy,
     StateHash, VerificationStatus, VerifiedChange, VerifiedChannel,
 };
@@ -430,7 +430,7 @@ impl VerifiedMembershipRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::channel::verified_state::{
+    use crate::domain::verified_state::{
         VerifiedMembership,
         canonical::{CHANGE_DOMAIN, signed_message},
         check_change,

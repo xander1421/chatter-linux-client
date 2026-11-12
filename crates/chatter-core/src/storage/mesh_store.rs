@@ -322,7 +322,7 @@ impl MeshSealer {
 
     /// A sealer that cannot seal, carrying why.
     ///
-    /// [`MeshService::start`](crate::services::mesh::MeshService::start) checks
+    /// `MeshService::start` checks
     /// this before it touches the radio, so the mesh reports the reason instead
     /// of coming up and failing every write.
     #[must_use]

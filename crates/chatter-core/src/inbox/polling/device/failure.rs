@@ -118,7 +118,7 @@ fn channel_marker_target(
     peer_id: Option<UserId>,
     envelope_ts_ns: u64,
 ) -> crate::inbox::ack_policy::MarkerTarget {
-    let conversation_type = crate::services::message::conversion::conversation_type_for_channel(
+    let conversation_type = crate::storage::repositories::channel_repo::conversation_type_for_channel(
         channel_repo,
         &channel_id,
     );

@@ -318,7 +318,7 @@ fn process_decrypted_data_message(
             // ride the mailbox, never this path), so its bucket is the channel
             // row's type — `Channel`, even when the row isn't synced yet.
             let conversation_type =
-                crate::services::message::conversion::conversation_type_for_channel(
+                crate::storage::repositories::channel_repo::conversation_type_for_channel(
                     channel_repo,
                     &channel_id,
                 );

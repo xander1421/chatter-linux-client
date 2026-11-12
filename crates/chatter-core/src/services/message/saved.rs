@@ -382,7 +382,7 @@ impl MessageService {
         // If a local write raced snapshot construction, its generation
         // supersedes this attempt and stays pending for the next pass.
         if journal.pending(&owner, &current.id).ok().flatten() != Some(generation)
-            || crate::services::gateway::submission::check_send_session().is_err()
+            || crate::state::send_session::check_send_session().is_err()
         {
             return 0;
         }
@@ -397,7 +397,7 @@ impl MessageService {
             Err(_) => (0, false),
         };
         if self.current_user_id().ok() == Some(owner)
-            && crate::services::gateway::submission::check_send_session().is_ok()
+            && crate::state::send_session::check_send_session().is_ok()
         {
             if let Err(error) = journal.finish(&owner, &current.id, generation, acknowledged) {
                 tracing::warn!(%error, "Saved sync acknowledgement could not be persisted");
@@ -417,7 +417,7 @@ impl MessageService {
         prepare: bool,
     ) -> Result<bool, MessageError> {
         let _gate = self.saved_sync_gate.lock().await;
-        crate::services::gateway::submission::check_send_session()?;
+        crate::state::send_session::check_send_session()?;
         if self.current_user_id()? != owner {
             return Err(MessageError::NotLoggedIn);
         }
@@ -456,7 +456,7 @@ impl MessageService {
         )
         .await
         .is_ok_and(|(_, acknowledged)| acknowledged);
-        if crate::services::gateway::submission::check_send_session().is_err()
+        if crate::state::send_session::check_send_session().is_err()
             || self.current_user_id().ok() != Some(owner)
         {
             return Ok(false);
@@ -1175,7 +1175,7 @@ pub(crate) fn spawn_saved_sync_recovery(
                     Err(_) => break,
                 }
             }
-            use crate::services::gateway::submission::{SEND_SESSION, SendSession};
+            use crate::state::send_session::{SEND_SESSION, SendSession};
             let send_session = SendSession::capture(client.auth_state());
             let state = client.auth_state().get();
             let Some(owner) = state

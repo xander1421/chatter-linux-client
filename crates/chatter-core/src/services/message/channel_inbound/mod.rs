@@ -24,7 +24,8 @@ use crate::proto::chat_v1;
 use crate::proto::content_v1::{self, GroupEncrypted};
 use crate::services::attachment::AttachmentService;
 
-use super::conversion::{conversation_type_for_channel, proto_to_domain_message_with_sender};
+use super::conversion::proto_to_domain_message_with_sender;
+use crate::storage::repositories::channel_repo::conversation_type_for_channel;
 use super::{MessageError, MessageService};
 
 mod edit;

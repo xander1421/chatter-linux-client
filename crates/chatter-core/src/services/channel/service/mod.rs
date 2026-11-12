@@ -32,7 +32,7 @@ use super::converters::{
 };
 use super::error::ChannelError;
 use super::membership_log::{AuthorBase, MembershipLog, password_invite_key};
-use super::verified_state::{ChannelRole, Policy};
+use crate::domain::verified_state::{ChannelRole, Policy};
 use membership::action;
 
 /// Channel service for all channel operations.
@@ -142,7 +142,7 @@ impl ChannelService {
             let mut policy = Policy::defaults(channel_type == ChannelType::Public);
             let mut genesis = Vec::new();
             if let Some(p) = password {
-                policy.join = super::verified_state::JoinMode::InviteOnly;
+                policy.join = crate::domain::verified_state::JoinMode::InviteOnly;
                 let key = password_invite_key(&channel_id, p)?;
                 genesis.push(action(Action::CreateInvite(pb::CreateInvite {
                     capability: Some(pb::InviteCapability {

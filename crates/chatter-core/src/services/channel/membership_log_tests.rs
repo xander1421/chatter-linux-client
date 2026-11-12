@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 
 use super::test_support::{FakeServer, Who, device, who};
 use super::*;
-use crate::services::channel::verified_state::{ChannelRole, Policy, VerifiedMembership};
+use crate::domain::verified_state::{ChannelRole, Policy, VerifiedMembership};
 
 fn act(a: Action) -> pb::ChannelAction {
     pb::ChannelAction { action: Some(a) }

@@ -185,7 +185,7 @@ impl ChatterClient {
         &self,
         channel_id: &crate::domain::ids::ChannelId,
     ) -> crate::domain::message::ConversationType {
-        crate::services::message::conversion::conversation_type_for_channel(
+        crate::storage::repositories::channel_repo::conversation_type_for_channel(
             &self.services.channel_repo,
             channel_id,
         )

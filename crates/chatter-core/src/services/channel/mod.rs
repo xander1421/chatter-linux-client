@@ -6,7 +6,6 @@ pub mod converters;
 pub mod error;
 pub mod membership_log;
 pub mod service;
-pub mod verified_state;
 
 // Re-export main types for convenience
 pub use converters::proto_to_domain_channel;

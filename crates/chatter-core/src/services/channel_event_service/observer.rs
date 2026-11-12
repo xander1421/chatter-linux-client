@@ -8,14 +8,14 @@ impl LogObserver for ChannelEventService {
         use crate::domain::channel::NotificationPreference;
         use crate::proto::chat_v1::{channel_action::Action, remove_member::Reason};
         use crate::services::channel::converters::proto_role_to_domain;
-        use crate::services::channel::verified_state::MemberStatus;
+        use crate::domain::verified_state::MemberStatus;
 
         let parse = |u: &str| u.parse::<uuid::Uuid>().ok().map(UserId::from);
         let Some(author) = parse(&a.author) else {
             return;
         };
         let ts = a.timestamp;
-        let active = |s: Option<&crate::services::channel::verified_state::MembershipState>,
+        let active = |s: Option<&crate::domain::verified_state::MembershipState>,
                       u: &str| {
             s.and_then(|s| s.members.get(u))
                 .filter(|m| m.status == MemberStatus::Active)

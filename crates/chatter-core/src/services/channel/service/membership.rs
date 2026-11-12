@@ -18,7 +18,7 @@ use crate::proto::chat_v1::{self as pb, ChannelEvent, channel_event};
 use crate::services::channel::membership_log::{
     AuthorBase, IntentContext, InviteLink, LogError, invite_pub_of, password_invite_key,
 };
-use crate::services::channel::verified_state::{ChannelRole, MemberStatus, UnsignedEvent};
+use crate::domain::verified_state::{ChannelRole, MemberStatus, UnsignedEvent};
 
 use crate::services::channel::converters::{domain_role_to_proto, proto_to_domain_membership};
 use crate::services::channel::error::ChannelError;
@@ -70,7 +70,7 @@ fn status_of(ctx: &IntentContext<'_>, user: &str) -> Option<MemberStatus> {
 
 fn intent_error(msg: &str) -> LogError {
     LogError::Intent(
-        crate::services::channel::verified_state::VerifyError::InvalidAction(msg.to_string()),
+        crate::domain::verified_state::VerifyError::InvalidAction(msg.to_string()),
     )
 }
 

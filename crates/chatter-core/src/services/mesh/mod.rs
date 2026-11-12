@@ -31,7 +31,6 @@
 //! - **Decisions live here.** The UI crate renders [`MeshEvent`]s and calls the
 //!   methods below; it filters nothing and derives nothing.
 
-pub mod account_binding;
 pub mod ble;
 pub mod chatter_hello;
 pub mod config;
@@ -88,7 +87,7 @@ use crate::storage::KeyStore;
 use crate::storage::mesh_binding_store::{BindingMethod, MeshBindingStore, PeerBinding};
 use crate::storage::mesh_identity_store::MeshIdentityStore;
 use crate::storage::repositories::MessageRepository;
-use account_binding::{BindingQr, BindingV1, PROOF_TTL_SECS};
+use crate::domain::mesh::account_binding::{BindingQr, BindingV1, PROOF_TTL_SECS};
 use private_channel::{Member, PendingLeave, PrivateChannel, PrivateChannelStore};
 
 /// A mesh conversation with its sidebar state resolved by the mesh service.

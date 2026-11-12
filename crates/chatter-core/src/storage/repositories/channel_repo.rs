@@ -855,6 +855,36 @@ fn notification_pref_from_i32(value: i32) -> NotificationPreference {
     }
 }
 
+/// Derive the `ConversationType` for a given channel ID via
+/// `ChannelType::conversation_type()`. Defaults to `Channel` when the row
+/// isn't available yet (channel sync race). Use at RPC boundaries that
+/// hand proto Messages to `proto_to_domain_message_with_sender` —
+/// prevents every caller from repeating the same lookup boilerplate and
+/// keeps the mapping logic in one place.
+pub fn conversation_type_for_channel(
+    repo: &ChannelRepository,
+    channel_id: &ChannelId,
+) -> crate::domain::message::ConversationType {
+    match repo.get_channel_type(channel_id) {
+        Ok(Some(kind)) => kind.conversation_type(),
+        Ok(None) => {
+            tracing::debug!(
+                channel_id = %channel_id,
+                "conversation_type_for_channel: channel row missing, defaulting to Channel"
+            );
+            crate::domain::message::ConversationType::Channel
+        }
+        Err(e) => {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "conversation_type_for_channel: repo error, defaulting to Channel"
+            );
+            crate::domain::message::ConversationType::Channel
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -873,7 +903,6 @@ mod tests {
     #[test]
     fn channel_type_lookup_matches_full_mapping_and_observes_updates() {
         use crate::domain::message::ConversationType;
-        use crate::services::message::conversion::conversation_type_for_channel;
 
         let (repo, _dir) = create_channel_type_repo();
         let id = ChannelId::new();
@@ -947,7 +976,6 @@ mod tests {
     #[test]
     fn channel_type_lookup_errors_still_fall_back_in_message_conversion() {
         use crate::domain::message::ConversationType;
-        use crate::services::message::conversion::conversation_type_for_channel;
 
         let (repo, _dir) = create_channel_type_repo();
         let channel = make_channel(ChannelId::new());
@@ -982,7 +1010,6 @@ mod tests {
     #[test]
     fn channel_type_lookup_does_not_parse_irrelevant_metadata() {
         use crate::domain::message::ConversationType;
-        use crate::services::message::conversion::conversation_type_for_channel;
 
         let (repo, _dir) = create_channel_type_repo();
         let mut channel = make_channel(ChannelId::new());

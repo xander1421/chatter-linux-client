@@ -13,9 +13,9 @@ use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::mailbox_v1::EnvelopeType;
 use crate::services::mailbox_manager::MailboxManager;
 
-use super::{
-    MessageError, MessageService, PendingFlush, SendDmContentParams, queued_bubble_timestamp,
-};
+use crate::storage::repositories::pending_dm_repo::queued_bubble_timestamp;
+
+use super::{MessageError, MessageService, PendingFlush, SendDmContentParams};
 
 impl MessageService {
     /// Send a Content proto to a DM peer via two-layer encryption.
@@ -208,7 +208,7 @@ impl MessageService {
         auth_client: &mut AuthClient,
         sync: crate::proto::content_v1::Content,
     ) -> (usize, bool) {
-        if crate::services::gateway::submission::check_send_session().is_err() {
+        if crate::state::send_session::check_send_session().is_err() {
             return (0, false);
         }
         self.sync_to_own_devices_result(auth_client, sync, true)

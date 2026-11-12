@@ -269,7 +269,7 @@ impl MessageService {
                 "message must have text".into(),
             ));
         }
-        crate::services::gateway::submission::check_send_session()?;
+        crate::state::send_session::check_send_session()?;
         let owner = self.current_user_id()?;
         let mut row = Message::new_text(
             *channel,
@@ -524,7 +524,7 @@ impl MessageService {
                 "Queued channel identity mismatch".into(),
             ));
         }
-        crate::services::gateway::submission::check_send_session()?;
+        crate::state::send_session::check_send_session()?;
         if row.sender_id != Some(self.current_user_id()?)
             || self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)? != Some(entry.device)
         {
@@ -593,7 +593,7 @@ impl MessageService {
         };
         let result = CHANNEL_DEPOSIT
             .scope(deposit, async {
-                crate::services::gateway::submission::check_send_session()?;
+                crate::state::send_session::check_send_session()?;
                 if row.sender_id != Some(self.current_user_id()?) {
                     return Err(MessageError::NotLoggedIn);
                 }
@@ -647,7 +647,7 @@ impl MessageService {
             .await;
         match result {
             Ok(mut sent) => {
-                crate::services::gateway::submission::check_send_session()?;
+                crate::state::send_session::check_send_session()?;
                 {
                     let mut conn = self.database.connection()?;
                     let tx = conn.transaction()?;
@@ -777,7 +777,7 @@ impl MessageService {
                 );
                 // A later preconnect miss does not undo an earlier ambiguous
                 // deposit. Keep replaying its exact request in that case.
-                let transient = crate::services::gateway::submission::check_send_session().is_err()
+                let transient = crate::state::send_session::check_send_session().is_err()
                     || if request_not_sent {
                         !first_attempt
                     } else {
@@ -868,7 +868,7 @@ impl MessageService {
             )?;
             tx.commit()?;
         }
-        crate::services::gateway::submission::check_send_session()?;
+        crate::state::send_session::check_send_session()?;
         if owner != self.current_user_id()?
             || self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)? != Some(target.device)
         {
@@ -960,7 +960,7 @@ pub(crate) fn spawn_channel_send_recovery(
             previous_session = Some((owner, state.session_revision));
             let messages = client.messages();
             let session =
-                crate::services::gateway::submission::SendSession::capture(client.auth_state());
+                crate::state::send_session::SendSession::capture(client.auth_state());
             if let Err(error) = messages.adopt_proven_unsent_channels(owner) {
                 tracing::warn!(%error,"Legacy predeposit channel recovery awaits storage");
             }
@@ -1064,7 +1064,7 @@ pub(crate) fn spawn_channel_send_recovery(
                 let entry = match job {
                     Due::Send(entry) => entry,
                     Due::Delete(target) => {
-                        crate::services::gateway::submission::SEND_SESSION
+                        crate::state::send_session::SEND_SESSION
                             .scope(
                                 session.clone(),
                                 messages.delete_channel_entry(&key, &generation, owner, &target),
@@ -1073,7 +1073,7 @@ pub(crate) fn spawn_channel_send_recovery(
                         continue;
                     }
                 };
-                let result = crate::services::gateway::submission::SEND_SESSION
+                let result = crate::state::send_session::SEND_SESSION
                     .scope(session.clone(), async {
                         messages.message_repo.insert_or_ignore(&entry.row)?;
                         messages
