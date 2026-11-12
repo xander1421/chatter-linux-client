@@ -192,6 +192,10 @@ async fn flushed_pending_dm_is_marked_delivered_by_the_peer_receipt() {
     let friend = UserId::from_uuid(uuid::Uuid::from_u128(1));
     let (client, _dir) = shield_client(me);
     let ms = client.messages();
+    // A Shield flush with no Tor stops before any deposit (no secret mailbox
+    // client), so it records no targets by design. The plain route reaches
+    // the target snapshot and then fails at the dead server URL.
+    ms.shield_mode.store(false, Ordering::Release);
     cache_sender_certificate(ms, &me);
     cache_device(ms, &friend, 6, &mut StdRng::seed_from_u64(0x5EC)).await;
     seed_half_open(ms, &friend, &ConversationKey::new(), 5);
