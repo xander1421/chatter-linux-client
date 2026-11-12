@@ -360,7 +360,7 @@ pub(crate) fn set_own_status_at(w: &MainWindow, timestamps: &[u64], status: &str
                     .parse::<u64>()
                     .is_ok_and(|ts| targets.contains(&ts))
             {
-                msg.delivery_status = chatter_core::services::message::advance_delivery_status(
+                msg.delivery_status = chatter_core::ui::advance_delivery_status(
                     msg.delivery_status.as_str(),
                     status,
                 )
@@ -404,7 +404,7 @@ pub(super) fn handle_delivery_status_update(
                     if msg.is_own && targets.contains(msg.timestamp_ns.as_str()) {
                         let mut updated = msg.clone();
                         updated.delivery_status =
-                            chatter_core::services::message::advance_delivery_status(
+                            chatter_core::ui::advance_delivery_status(
                                 msg.delivery_status.as_str(),
                                 new_status,
                             )
@@ -670,7 +670,7 @@ pub(super) fn handle_persisted_delivery_status(
     let status = stored
         .as_ref()
         .map(|message| {
-            chatter_core::services::message::display_delivery_status(
+            chatter_core::ui::display_delivery_status(
                 &message.delivery_status,
                 message.failure_reason.as_deref(),
             )
@@ -701,7 +701,7 @@ pub(super) fn handle_persisted_delivery_status(
                 };
                 if message.message_id.as_str() == message_id {
                     message.delivery_status =
-                        chatter_core::services::message::advance_delivery_status(
+                        chatter_core::ui::advance_delivery_status(
                             message.delivery_status.as_str(),
                             &status,
                         )

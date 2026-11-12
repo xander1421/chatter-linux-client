@@ -12,7 +12,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     // another channel. Weak handles are upgraded only on the event loop.
     let generation = Arc::new(AtomicU64::new(0));
     let loaded = Arc::new(Mutex::new(
-        chatter_core::services::server_records::RecordPage::default(),
+        chatter_core::client::RecordPage::default(),
     ));
     let weak = window.as_weak();
     let loaded_on_open = loaded.clone();
@@ -119,7 +119,7 @@ fn request(
     w: &MainWindow,
     client: &Arc<ChatterClient>,
     generation: &Arc<AtomicU64>,
-    loaded: &Arc<Mutex<chatter_core::services::server_records::RecordPage>>,
+    loaded: &Arc<Mutex<chatter_core::client::RecordPage>>,
     more: bool,
     action: Option<(String, String)>,
 ) {
@@ -158,7 +158,7 @@ fn request(
             match result {
                 Ok(next) => {
                     let page = if more {
-                        chatter_core::services::server_records::merge_pages(
+                        chatter_core::ui::merge_pages(
                             loaded.lock().unwrap().clone(),
                             next,
                         )

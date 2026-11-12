@@ -44,6 +44,8 @@ pub use search_visible::{SearchPage, VisibleSearchHit};
 pub use send_attempt::await_send_with_notice;
 mod receipts;
 pub use crate::network::connection::ConnectionState;
+/// `tracing` target of the onion connector, for the Tor stage trace.
+pub use crate::network::grpc::ONION_TRANSPORT_LOG_TARGET;
 pub use anon_group::{AnonGroupInviteCandidate, PrivateGroupRoster};
 pub use messaging::{
     ChannelInviteRow, ConversationPage, ForwardDestination, IncomingUpdate, InviteCandidate, PageAnchor,
@@ -645,6 +647,35 @@ pub struct ChatterClient {
 }
 
 pub use crate::services::user::ReceivedFriendRequestProfile;
+
+// Service types that are part of this façade's signatures: the error a
+// façade method returns, the value it hands back, or the setting it takes.
+// Each is named here because a caller of that method has to name it too.
+pub use crate::services::UserError;
+pub use crate::services::account_service::AccountError;
+pub use crate::services::anon_dm::AnonDmError;
+pub use crate::services::appearance::{MessageDensity, TextSize, ThemeMode};
+pub use crate::services::channel::ChannelError;
+#[cfg(feature = "jarvis")]
+pub use crate::services::jarvis::JarvisCommand;
+pub use crate::services::key_recovery::KeyRecoveryNeed;
+pub use crate::services::link_device_service::{LinkProgress, PinVerification};
+pub use crate::services::media_gallery::{GalleryAttachment, GalleryMessage};
+#[cfg(feature = "mesh")]
+pub use crate::services::mesh::{
+    MeshConversation, MeshDelivery, MeshError, MeshEvent, MeshMessage, MeshSidebarRow, MeshStatus,
+    RadioDown,
+};
+pub use crate::services::notification_service::NotificationDetailLevel;
+pub use crate::services::profile_visibility::ProfileVisibility;
+pub use crate::services::quick_switcher::QuickSwitcherEntry;
+pub use crate::services::search::{SearchQuery, SearchShortcut};
+pub use crate::services::section_service::SectionError;
+pub use crate::services::server_records::RecordPage;
+pub use crate::services::session_service::Session;
+pub use crate::services::voice_recording::{
+    NO_MICROPHONE, RecordedVoiceNote, RecordingEvent, RecordingSession,
+};
 
 mod account_settings;
 mod ai_settings;

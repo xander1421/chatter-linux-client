@@ -2,7 +2,7 @@
 //!
 //! Thin glue: forwards keystroke / idle signals to the core state machine,
 //! which owns the Signal-style refresh (10s) + pause (3s) timers. UI does
-//! not track typing state — see `chatter_core::services::outgoing_typing`.
+//! not track typing state — see `ChatterClient`'s outgoing-typing façade.
 
 use slint::ComponentHandle;
 use std::sync::Arc;

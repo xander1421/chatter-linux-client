@@ -11,7 +11,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::services::mesh::MeshMessage;
+use chatter_core::client::MeshMessage;
 use chatter_core::state::ActiveConversation;
 
 use chatter_core::ui::message_row::messages_to_rows;

@@ -10,7 +10,8 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
-use chatter_core::services::search::{SearchQuery, preview_fragments};
+use chatter_core::client::SearchQuery;
+use chatter_core::ui::preview_fragments;
 
 use crate::{CalendarDay, MainWindow, QuickSwitcherItem, SearchResult, SearchResultChannel};
 
@@ -256,7 +257,7 @@ fn person_query(q: &str) -> &str {
 /// True when `q` is resolvable to a person: a full handle OR a pasted
 /// `chatter://u/…` username link (shape check lives in core).
 fn resolvable_person_query(q: &str) -> bool {
-    chatter_core::services::user::is_lookup_handle(q)
+    chatter_core::ui::is_lookup_handle(q)
         || chatter_core::domain::UsernameLink::is_username_link(q)
 }
 
@@ -1120,7 +1121,7 @@ use requests::{PersonRow, SearchRequests};
 /// Jump-to rows for `query`: core builds them from the mode-filtered sidebar
 /// sources (folders included) and ranks them; this only converts.
 fn conversation_items(
-    entries: Vec<chatter_core::services::quick_switcher::QuickSwitcherEntry>,
+    entries: Vec<chatter_core::client::QuickSwitcherEntry>,
 ) -> Vec<QuickSwitcherItem> {
     entries
         .into_iter()

@@ -9,7 +9,7 @@
 //! These are pure functions with no dependencies.
 
 use chatter_proto::content_v1::{self, content};
-use chatter_core::services::{
+use chatter_core::testing::services::{
     CallHangupReason, PADDING_GROUP_CONTROL, PADDING_LARGE, PADDING_MESSAGE,
     build_call_hangup_content, build_call_key_answer, build_call_key_offer,
     build_data_message_content, build_delete_for_me_content, build_targeted_delete_content,

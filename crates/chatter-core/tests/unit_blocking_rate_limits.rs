@@ -12,9 +12,9 @@ use std::sync::Arc;
 use chatter_core::domain::UserId;
 use chatter_core::domain::anon_dm::{AnonDm, AnonDmId, AnonDmStatus};
 use chatter_core::domain::anon_group::{AnonGroup, AnonGroupId, AnonGroupStatus};
-use chatter_core::storage::Database;
-use chatter_core::storage::migrations::default_migrations;
-use chatter_core::storage::repositories::{AnonDmRepository, AnonGroupRepository};
+use chatter_core::testing::storage::Database;
+use chatter_core::testing::storage::migrations::default_migrations;
+use chatter_core::testing::storage::repositories::{AnonDmRepository, AnonGroupRepository};
 
 // ============================================================================
 // Test Helpers

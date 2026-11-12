@@ -38,7 +38,7 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeNotificationOp
             }
             return Ok(());
         }
-        if !chatter_core::services::notification_service::is_opaque_notification_key(&key) {
+        if !chatter_core::ui::is_opaque_notification_key(&key) {
             return Ok(());
         }
         if let Ok(mut pending) = PENDING_KEY.lock() {

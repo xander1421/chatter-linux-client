@@ -17,7 +17,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use chatter_core::storage::migrations::default_migrations;
+use chatter_core::testing::storage::migrations::default_migrations;
 use rusqlite::Connection;
 
 /// A migrated, empty database. Plain rusqlite rather than `Database::open`: this

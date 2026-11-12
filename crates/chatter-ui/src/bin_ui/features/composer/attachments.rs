@@ -136,7 +136,7 @@ pub(crate) fn render_attachments(
                 let worker_session = session.clone();
                 let worker_path = path.clone();
                 let worker_client = client.clone();
-                let pixels = chatter_core::services::attachment::run_attachment_work(move || {
+                let pixels = chatter_core::media::run_attachment_work(move || {
                     if !worker_session.is_current()
                         || !worker_client
                             .pending_attachments()
@@ -674,7 +674,7 @@ mod tests {
         let completed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let results = completed.clone();
         slint::spawn_local(async move {
-            let first = chatter_core::services::attachment::run_attachment_work(move || {
+            let first = chatter_core::media::run_attachment_work(move || {
                 assert_ne!(std::thread::current().id(), ui_thread);
                 entered_tx.send(()).unwrap();
                 // ONLY the event loop can release this worker. Inline work
@@ -690,7 +690,7 @@ mod tests {
             results.borrow_mut().push(first);
             for index in 1..8 {
                 results.borrow_mut().push(
-                    chatter_core::services::attachment::run_attachment_work(move || index)
+                    chatter_core::media::run_attachment_work(move || index)
                         .await
                         .unwrap(),
                 );

@@ -8,8 +8,8 @@
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
-use chatter_core::services::SignalService;
-use chatter_core::storage::{Database, KeyStore, SettingsRepository, settings_keys};
+use chatter_core::testing::services::SignalService;
+use chatter_core::testing::storage::{Database, KeyStore, SettingsRepository, settings_keys};
 use libsignal_protocol::{
     DeviceId, GenericSignedPreKey, IdentityKeyPair, InMemSignalProtocolStore, KeyPair,
     KyberPreKeyRecord, KyberPreKeyStore, PreKeyBundle, PreKeyId, PreKeyRecord, PreKeyStore,
@@ -362,11 +362,11 @@ async fn held_sessions_are_used_without_a_bundle_fetch() {
     );
 }
 
-fn unreachable_auth_client() -> chatter_core::network::grpc::AuthClient {
+fn unreachable_auth_client() -> chatter_core::testing::network::grpc::AuthClient {
     let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
-    chatter_core::network::grpc::AuthClient::new(
+    chatter_core::testing::network::grpc::AuthClient::new(
         channel.into(),
-        chatter_core::network::grpc::interceptors::AuthInterceptor::default(),
+        chatter_core::testing::network::grpc::interceptors::AuthInterceptor::default(),
     )
 }
 
@@ -563,8 +563,8 @@ async fn test_session_reuse_after_message_decrypt() {
 #[tokio::test]
 async fn ensure_session_refuses_a_stale_session_when_an_identity_change_is_parked() {
     use chatter_core::error::{CryptoError, IdentityChangeSource, ServiceError};
-    use chatter_core::network::grpc::auth_client::AuthClient;
-    use chatter_core::network::grpc::interceptors::AuthInterceptor;
+    use chatter_core::testing::network::grpc::auth_client::AuthClient;
+    use chatter_core::testing::network::grpc::interceptors::AuthInterceptor;
     use libsignal_protocol::IdentityKeyPair;
 
     let (service, key_store, _settings, _db_file) = setup_test_service().await;

@@ -991,7 +991,7 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 .set_channel_settings_saving(false);
                             w.global::<crate::ModalHostState>()
                                 .set_channel_settings_error(match &e {
-                                    chatter_core::services::channel::ChannelError::InvalidInput(message) => message.clone().into(),
+                                    chatter_core::client::ChannelError::InvalidInput(message) => message.clone().into(),
                                     _ => e.user_message().into(),
                                 });
                         }

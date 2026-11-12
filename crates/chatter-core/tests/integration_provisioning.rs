@@ -11,7 +11,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use chatter_core::crypto::{
     ProvisioningKeypair, decrypt_provision_envelope, encrypt_provision_envelope,
 };
-use chatter_core::network::grpc::{ProvisioningClient, ProvisioningPollResult};
+use chatter_core::testing::network::grpc::{ProvisioningClient, ProvisioningPollResult};
 use chatter_proto::chat_v1::SignalPreKeyBundle;
 use chatter_proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
 use chatter_proto::provisioning_v1::{ProvisionEnvelope, ProvisionMessage};

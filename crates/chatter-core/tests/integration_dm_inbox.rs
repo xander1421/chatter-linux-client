@@ -10,11 +10,11 @@ use tempfile::TempDir;
 
 use chatter_core::crypto::dm_crypto::{decrypt_dm_message, encrypt_dm_message};
 use chatter_core::domain::UserId;
-use chatter_core::inbox::InboxEvent;
+use chatter_core::testing::inbox::InboxEvent;
 use chatter_core::mailbox::dm::{
     ConversationKey, DmConversation, DmConversationManager, DmMailbox, PeerMailbox, TwoWayAnonymity,
 };
-use chatter_core::storage::Database;
+use chatter_core::testing::storage::Database;
 use chrono::{Duration, Utc};
 use rusqlite;
 

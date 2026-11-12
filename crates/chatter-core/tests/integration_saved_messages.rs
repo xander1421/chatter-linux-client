@@ -5,7 +5,7 @@
 use crate::{common, skip_if_no_server};
 
 use base64::Engine;
-use chatter_core::network::grpc::{ChannelClient, MessageClient};
+use chatter_core::testing::network::grpc::{ChannelClient, MessageClient};
 use chatter_proto::chat_v1::{
     ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };

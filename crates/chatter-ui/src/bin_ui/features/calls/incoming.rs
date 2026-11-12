@@ -3,7 +3,7 @@
 //! Thin UI glue around the client's `accept_presented_incoming_call` /
 //! `decline_presented_incoming_call` methods. All orchestration (modal
 //! policy, active-slot replacement, wire-level accept/decline) lives in
-//! [`chatter_core::services::call_worker`] and [`chatter_core::client`].
+//! the core call worker and [`chatter_core::client`].
 //! This file only:
 //! - subscribes to orchestrator broadcast events → repaints the modal
 //! - translates accept/decline button clicks into client calls
@@ -18,9 +18,7 @@ use chatter_core::ui::message_row::initials_from_name;
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 use chatter_core::client::ChatterClient;
 use chatter_core::client::calls::AcceptedIncomingCall;
-use chatter_core::services::call_worker::{
-    CallEndReason, CallOrchestratorEvent, OrchestratedCallKind,
-};
+use chatter_core::client::calls::{CallEndReason, CallOrchestratorEvent, OrchestratedCallKind};
 
 use super::timers::{
     start_call_timer, start_video_frame_timer, stop_call_timer, stop_video_frame_timer,
@@ -615,7 +613,7 @@ pub fn wire_orchestrator_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
 fn reconcile_incoming_modal(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
-    state: &chatter_core::services::call_worker::IncomingCallPresentationState,
+    state: &chatter_core::client::calls::IncomingCallPresentationState,
     revision: u64,
 ) {
     let weak = weak.clone();
@@ -826,7 +824,7 @@ fn handle_orchestrator_event(
                 // An established session the SDK and one fresh-token rejoin
                 // could not bring back is a loss, not a failed connect.
                 CallEndReason::Error(ref message)
-                    if message == chatter_core::services::call_worker::CONNECTION_LOST =>
+                    if message == chatter_core::client::calls::CONNECTION_LOST =>
                 {
                     Some(("Connection lost", "error"))
                 }
@@ -883,7 +881,7 @@ fn handle_orchestrator_event(
 mod session_tests {
     use super::*;
     use chatter_core::domain::ids::UserId;
-    use chatter_core::services::call_worker::{CallHandle, CallWorkerHandle, OrchestratedCallKind};
+    use chatter_core::testing::services::call_worker::{CallHandle, CallWorkerHandle, OrchestratedCallKind};
 
     const CHILD_MARKER: &str = "CHATTER_UI_INCOMING_SESSION_TEST_CHILD";
     const FIXTURE_COMPLETED: &str = "incoming session fixture completed";
@@ -978,7 +976,7 @@ mod session_tests {
             .data_dir(dir.path().to_string_lossy())
             .build()
             .unwrap();
-        let pool = chatter_core::network::grpc::GrpcClientPool::new("https://localhost:1").unwrap();
+        let pool = chatter_core::testing::network::grpc::GrpcClientPool::new("https://localhost:1").unwrap();
         let worker = CallWorkerHandle::spawn(pool.call_client());
         assert!(client.call_service().set(worker.clone()).is_ok());
         let window = MainWindow::new().unwrap();
@@ -1199,7 +1197,7 @@ mod session_tests {
                 } else {
                     current.orch_mark_ended(
                         CallHandle::from(id.to_string()),
-                        chatter_core::services::call_worker::CallEndReason::RemoteHangup,
+                        chatter_core::client::calls::CallEndReason::RemoteHangup,
                     );
                     runtime.block_on(current.orch_active_kind());
                 }

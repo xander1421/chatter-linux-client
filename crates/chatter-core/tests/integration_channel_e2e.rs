@@ -9,7 +9,7 @@
 
 use crate::{common, skip_if_no_server};
 
-use chatter_core::network::grpc::{ChannelClient, MessageClient};
+use chatter_core::testing::network::grpc::{ChannelClient, MessageClient};
 use chatter_proto::chat_v1::{
     ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };
@@ -23,7 +23,7 @@ const NUM_USERS: usize = 5;
 /// Helper struct to hold user pool and clients.
 struct TestUserContext {
     user: TestUser,
-    pool: std::sync::Arc<chatter_core::network::grpc::GrpcClientPool>,
+    pool: std::sync::Arc<chatter_core::testing::network::grpc::GrpcClientPool>,
 }
 
 impl TestUserContext {

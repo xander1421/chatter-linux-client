@@ -83,7 +83,7 @@ pub(super) fn maintain_history_window(
     } else {
         (first.max(0) as usize, last as usize)
     };
-    let range = chatter_core::services::message::retained_history_range(
+    let range = chatter_core::ui::retained_history_range(
         count,
         first_eff,
         last_eff,

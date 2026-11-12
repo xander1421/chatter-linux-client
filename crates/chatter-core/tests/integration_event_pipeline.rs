@@ -5,7 +5,7 @@
 
 use chatter_core::domain::ids::{ChannelId, MessageId, UserId};
 use chatter_core::events::EventBus;
-use chatter_core::inbox::handlers::DomainEvent;
+use chatter_core::testing::inbox::handlers::DomainEvent;
 
 #[test]
 fn test_event_bus_domain_publish_subscribe() {

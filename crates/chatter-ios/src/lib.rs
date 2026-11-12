@@ -39,13 +39,9 @@ fn check_crypto() -> Result<String, String> {
 
 /// SQLCipher open + write + read inside the app sandbox.
 fn check_storage(dir: &PathBuf) -> Result<String, String> {
-    use chatter_core::storage::database::Database;
     let path = dir.join("smoke.db");
     let _ = std::fs::remove_file(&path);
-    let db = Database::open(&path, "smoke-passphrase").map_err(|e| format!("{e:?}"))?;
-    let conn = db.open_reader_connection().map_err(|e| format!("{e:?}"))?;
-    let v: String = conn
-        .query_row("SELECT sqlite_version()", [], |r| r.get(0))
+    let v = chatter_core::system::sqlite_version_at(&path, "smoke-passphrase")
         .map_err(|e| format!("{e:?}"))?;
     Ok(format!(
         "SQLCipher opened at {}, sqlite {v}",

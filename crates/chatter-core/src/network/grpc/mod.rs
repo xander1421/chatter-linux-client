@@ -18,6 +18,9 @@ pub mod message_client;
 pub mod notification_client;
 #[cfg(feature = "onion")]
 pub mod onion_transport;
+/// `tracing` target of [`onion_transport`], for subscribers that trace the
+/// onion dial. Defined without the `onion` feature so they need no cfg.
+pub const ONION_TRANSPORT_LOG_TARGET: &str = concat!(module_path!(), "::onion_transport");
 pub mod provisioning_client;
 pub mod retry;
 pub mod svr_client;

@@ -34,8 +34,8 @@ use chatter_core::crypto::SignalStore;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::{Channel, ChannelType, MemberRole, Membership, NotificationPreference};
 use chatter_core::mailbox::dm::ConversationKey;
-use chatter_core::storage::repositories::channel_repo::ChannelRepository;
-use chatter_core::storage::{Database, KeyStore};
+use chatter_core::testing::storage::repositories::channel_repo::ChannelRepository;
+use chatter_core::testing::storage::{Database, KeyStore};
 
 use chrono::Utc;
 use libsignal_protocol::{DeviceId, Direction, IdentityKeyPair, IdentityKeyStore, ProtocolAddress};

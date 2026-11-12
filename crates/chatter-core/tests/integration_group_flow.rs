@@ -5,7 +5,7 @@
 use crate::{common, skip_if_no_server};
 
 use base64::Engine;
-use chatter_core::network::grpc::{ChannelClient, MessageClient};
+use chatter_core::testing::network::grpc::{ChannelClient, MessageClient};
 use chatter_proto::chat_v1::{
     ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };
@@ -741,7 +741,7 @@ async fn test_non_member_cannot_send_to_private_group() {
 /// owner's signed invite, then the invitee's own signed accept. Leaves the
 /// pool authenticated as `owner`.
 async fn join_by_invite(
-    pool: &chatter_core::network::grpc::GrpcClientPool,
+    pool: &chatter_core::testing::network::grpc::GrpcClientPool,
     owner_client: &mut ChannelClient,
     channel_id: &str,
     owner: &TestUser,

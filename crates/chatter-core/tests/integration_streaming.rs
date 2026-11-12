@@ -4,7 +4,7 @@
 
 use crate::{common, skip_if_no_server};
 
-use chatter_core::network::grpc::{ChannelClient, MessageClient, UserClient};
+use chatter_core::testing::network::grpc::{ChannelClient, MessageClient, UserClient};
 use chatter_proto::chat_v1::{
     ChannelType, UserPresence, message::Content, message::content::Type as ContentType,
 };

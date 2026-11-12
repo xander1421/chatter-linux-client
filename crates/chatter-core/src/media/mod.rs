@@ -47,3 +47,11 @@ pub use video_processor_android::{
     VideoMetadata, analyze_video, register_video_metadata_extractor,
 };
 pub use waveform::{WAVEFORM_BAR_COUNT, extract_waveform, extract_waveform_from_memory};
+
+// Attachment decode/decrypt plumbing the platform renderers drive directly:
+// seekable range decryption for video/GIF, decoded previews, the blocking
+// work pool, and the hook the Android video-thumbnail extractor registers.
+pub use crate::services::attachment::{
+    CbcRangeDecryptor, CbcRangeReader, ImageDecodeResult, ImagePreview, ThumbnailOwner,
+    register_video_thumbnail_extractor, run_attachment_work,
+};

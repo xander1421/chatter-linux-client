@@ -86,7 +86,7 @@ pub fn wire_message_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             row.delivery_status = if message.delivery_status.is_empty() {
                                 "sent".into()
                             } else {
-                                chatter_core::services::message::display_delivery_status(
+                                chatter_core::ui::display_delivery_status(
                                     &message.delivery_status,
                                     message.failure_reason.as_deref(),
                                 )

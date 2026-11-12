@@ -8,7 +8,7 @@
 
 use crate::{common, skip_if_no_server};
 
-use chatter_core::network::grpc::{ChannelClient, MessageClient};
+use chatter_core::testing::network::grpc::{ChannelClient, MessageClient};
 use chatter_proto::chat_v1::{
     self, ChannelType, EncryptedData, message::Content, message::content::Type as ContentType,
 };
@@ -218,7 +218,7 @@ fn test_prekey_requires_sender_context() {
 
 /// Helper to create a test channel and return its ID.
 async fn create_test_channel(
-    pool: &chatter_core::network::grpc::GrpcClientPool,
+    pool: &chatter_core::testing::network::grpc::GrpcClientPool,
     user: &TestUser,
 ) -> String {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -338,7 +338,7 @@ async fn test_server_device_list_includes_current() {
     let _user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut auth_client =
-        chatter_core::network::grpc::AuthClient::new(pool.channel(), pool.auth_clone());
+        chatter_core::testing::network::grpc::AuthClient::new(pool.channel(), pool.auth_clone());
 
     // Get device list
     let devices = assert_ok(auth_client.list_devices().await);
@@ -364,7 +364,7 @@ async fn test_server_saved_messages_single_device() {
 
     // Get device count
     let mut auth_client =
-        chatter_core::network::grpc::AuthClient::new(pool.channel(), pool.auth_clone());
+        chatter_core::testing::network::grpc::AuthClient::new(pool.channel(), pool.auth_clone());
     let devices = assert_ok(auth_client.list_devices().await);
 
     // For single device, saved messages are local-only

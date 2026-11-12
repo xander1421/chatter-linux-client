@@ -78,7 +78,7 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             tokio::spawn(async move {
                 let pin = zeroize::Zeroizing::new(pin);
                 let result = ui_ctx.verify_pin_for_anon_mode(&pin).await;
-                if let chatter_core::services::link_device_service::PinVerification::Error(
+                if let chatter_core::client::PinVerification::Error(
                     category,
                 ) = result
                 {
@@ -91,7 +91,7 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         return;
                     }
 
-                    if result == chatter_core::services::link_device_service::PinVerification::Match
+                    if result == chatter_core::client::PinVerification::Match
                     {
                         ui_ctx.set_anon_mode_enabled(true);
                         #[cfg(target_os = "android")]

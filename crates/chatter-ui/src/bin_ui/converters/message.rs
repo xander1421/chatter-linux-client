@@ -377,7 +377,7 @@ pub async fn prepare_display_media_guarded(
     attachments: bool,
     generation: u64,
 ) -> Vec<MessageDisplayData> {
-    chatter_core::services::attachment::run_attachment_work(move || {
+    chatter_core::media::run_attachment_work(move || {
         if generation != crate::bin_ui::decode_cache::thumbnail_generation() {
             return display;
         }
@@ -578,7 +578,7 @@ mod tests {
             .unwrap_or_else(|p| p.into_inner());
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let work = tokio::spawn(chatter_core::services::attachment::run_attachment_work(
+        let work = tokio::spawn(chatter_core::media::run_attachment_work(
             move || {
                 entered_tx.send(()).unwrap();
                 release_rx

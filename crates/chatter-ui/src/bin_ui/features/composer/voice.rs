@@ -1,7 +1,7 @@
 //! Thin microphone permission and recording presentation bridge.
 use crate::{MainWindow, VoiceRecording};
 use chatter_core::client::ChatterClient;
-use chatter_core::services::voice_recording::{
+use chatter_core::client::{
     RecordedVoiceNote, RecordingEvent, RecordingSession,
 };
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
@@ -144,7 +144,7 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                             }
                             Err(error) => {
                                 tracing::warn!(%error, "Voice recording failed");
-                                let message = if error == chatter_core::services::voice_recording::NO_MICROPHONE {
+                                let message = if error == chatter_core::client::NO_MICROPHONE {
                                     error
                                 } else {
                                     "Couldn't record a voice message. Please try again.".into()

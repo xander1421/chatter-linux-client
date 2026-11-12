@@ -7,7 +7,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::services::session_service::Session;
+use chatter_core::client::Session;
 
 use crate::{MainWindow, SessionInfo};
 
@@ -184,7 +184,7 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
                 w.global::<crate::SettingsPane>()
                     .set_settings_session_count(rows.len() as i32);
                 w.global::<crate::ModalHostState>().set_sessions_revocable_count(
-                    chatter_core::services::session_service::revocable_count(&rows) as i32,
+                    chatter_core::ui::revocable_count(&rows) as i32,
                 );
                 w.global::<crate::ModalHostState>()
                     .set_sessions(ModelRc::new(VecModel::from(

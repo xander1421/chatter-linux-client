@@ -9,7 +9,7 @@
 //! All tests are gated by skip_if_no_server!() and require INTEGRATION_TESTS=1.
 
 use crate::{common, skip_if_no_server};
-use chatter_core::network::grpc::*;
+use chatter_core::testing::network::grpc::*;
 use chatter_proto::chat_v1::*;
 use common::*;
 use tokio_stream::StreamExt;

@@ -129,7 +129,7 @@ pub(super) fn finish_channel_delete(
     channel_id: ChannelId,
     session_revision: u64,
     settings_epoch: u64,
-    result: Result<(), chatter_core::services::channel::ChannelError>,
+    result: Result<(), chatter_core::client::ChannelError>,
 ) {
     if !ui_ctx.composer_session_is_current(session_revision) {
         return;

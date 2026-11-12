@@ -33,7 +33,7 @@ pub fn refresh_group_invites(weak: &Weak<MainWindow>, ui_ctx: &Arc<ChatterClient
                         .filter(|name| !name.is_empty())
                         .or(invite.inviter_display_name)
                         .unwrap_or_else(|| {
-                            chatter_core::services::user::friend_display_name_placeholder(&invite.inviter_id)
+                            chatter_core::ui::friend_display_name_placeholder(&invite.inviter_id)
                         });
                     (invite.group_id.to_string(), invite.group_name, inviter_name)
                 })

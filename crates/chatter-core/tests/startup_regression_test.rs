@@ -184,7 +184,7 @@ fn test_05_keyring_with_env_bypass() {
 
 #[test]
 fn test_06_database_open() {
-    use chatter_core::storage::Database;
+    use chatter_core::testing::storage::Database;
 
     println!("\n=== Testing database open ===");
 
@@ -224,7 +224,7 @@ fn test_06_database_open() {
 
 #[test]
 fn test_07_grpc_pool_creation() {
-    use chatter_core::network::grpc::GrpcClientPool;
+    use chatter_core::testing::network::grpc::GrpcClientPool;
 
     println!("\n=== Testing gRPC pool creation ===");
 

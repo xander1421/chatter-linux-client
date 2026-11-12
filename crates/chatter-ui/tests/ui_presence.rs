@@ -14,8 +14,8 @@ fn profile_presence_label_follows_live_presence() {
             user::{PresenceStatus, Profile},
         },
         events::DomainEvent,
-        network::connection::ConnectionState,
-        storage::{Database, repositories::UserRepository},
+        client::ConnectionState,
+        testing::storage::{Database, repositories::UserRepository},
     };
 
     // Keep this isolated fixture off the desktop keyring.

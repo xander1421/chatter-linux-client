@@ -1,7 +1,7 @@
 //! Disappearing messages: live status below the chat header, and independent
 //! message lifetime / activation controls on the contact profile.
 //!
-//! Everything shown comes from `chatter_core::services::disappearing` and the
+//! Everything shown comes from core's disappearing service and the
 //! client facade (`disappearing_timer`, `set_disappearing_timer`); this module
 //! only moves values into `DisappearingGlobal` and the picker's choice back.
 
@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::disappearing::timer_label;
 use chatter_core::domain::ids::UserId;
-use chatter_core::services::disappearing;
+use chatter_core::ui::disappearing;
 use chatter_core::state::ActiveConversation;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
