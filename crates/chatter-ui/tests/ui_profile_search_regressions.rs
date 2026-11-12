@@ -36,7 +36,7 @@ fn selected_second_url_and_search_clear_use_production_callbacks() {
     let captured = opened.clone();
     // Replace the platform action, leaving production profile callback intact.
     w.global::<chatter_ui::ChatPane>()
-        .on_open_message_link(move |url| captured.borrow_mut().push(url.to_string()));
+        .on_open_message_link(move |url, _| captured.borrow_mut().push(url.to_string()));
     let urls = [
         "https://example.invalid/first",
         "https://example.invalid/second",

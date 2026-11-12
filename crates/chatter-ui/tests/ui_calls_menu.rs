@@ -1,7 +1,9 @@
 //! RC73: exercise real pointer hit testing, including the floating list that
 //! extends behind the Calls header. Run with --features ui-test-debug.
 use chatter_ui::{CallHistoryRow, MainWindow};
-pub use chatter_ui::{CallView, ChatPane, ModalHostState, SearchPane, SidebarPane};
+pub use chatter_ui::{
+    CallView, ChatPane, ConversationKind, ModalHostState, SearchPane, SidebarPane,
+};
 use i_slint_backend_testing as testing;
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
@@ -18,6 +20,9 @@ mod bin_ui {
                 pub fn retire_avatar_edit() {
                     RETIRED.with(|count| count.set(count.get() + 1));
                 }
+                // The shared-content page is application runtime state this
+                // target excludes; Back's own flag resets are still observed.
+                pub fn clear_shared_content(_w: &crate::MainWindow) {}
             }
         }
     }

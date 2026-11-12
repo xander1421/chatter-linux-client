@@ -870,7 +870,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     assert_eq!(input.preedit_text().as_str(), middle);
     assert_eq!(input.cursor_position_byte_offset(), insertion);
     assert_eq!(input.anchor_position_byte_offset(), insertion);
-    let visual = input.visual_representation(None);
+    let visual = input.visual_representation();
     assert_eq!(
         visual.cursor_position,
         Some(insertion as usize + middle.len())
@@ -1784,7 +1784,7 @@ fn assert_native_caret_visible(w: &MainWindow) {
     assert!((input.visual_cursor_height().get() - caret.size.height).abs() < 0.01);
     // Independently query the renderer at its actual drawn visual endpoint.
     // App input is plain text, so no password conversion is needed here.
-    if let Some(drawn_offset) = input.visual_representation(None).cursor_position {
+    if let Some(drawn_offset) = input.visual_representation().cursor_position {
         let drawn = item
             .window_adapter()
             .unwrap()

@@ -90,35 +90,6 @@ fn call_audio_arrows_are_independent_at_both_densities() {
             view.on_show_audio_device_picker(show);
         }
     }
-    view.set_audio_input_name("Antlion USB Microphone long device name".into());
-    view.set_audio_output_name("Scarlett Solo Headphones long device name".into());
-    let refreshes = Rc::new(Cell::new(0));
-    {
-        let count = refreshes.clone();
-        let weak = w.as_weak();
-        view.on_refresh_audio_controls(move || {
-            count.set(count.get() + 1);
-            let w = weak.upgrade().unwrap();
-            let view = w.global::<CallView>();
-            let linked = view.get_call_speaker_toggle();
-            view.set_audio_input_name(
-                if linked {
-                    "Speakerphone"
-                } else {
-                    "Antlion USB Microphone long device name"
-                }
-                .into(),
-            );
-            view.set_audio_output_name(
-                if linked {
-                    "Speakerphone"
-                } else {
-                    "Scarlett Solo Headphones long device name"
-                }
-                .into(),
-            );
-        });
-    }
     let ends = Rc::new(Cell::new(0));
     {
         let count = ends.clone();
@@ -174,18 +145,6 @@ fn call_audio_arrows_are_independent_at_both_densities() {
     ] {
         w.set_is_mobile_platform(linked);
         view.set_call_speaker_toggle(linked);
-        let input_name = if linked {
-            "Speakerphone"
-        } else {
-            "Antlion USB Microphone long device name"
-        };
-        let output_name = if linked {
-            "Speakerphone"
-        } else {
-            "Scarlett Solo Headphones long device name"
-        };
-        view.set_audio_input_name(input_name.into());
-        view.set_audio_output_name(output_name.into());
         for fullscreen in [false, true] {
             view.set_active_call_fullscreen(fullscreen);
             for video in [false, true] {
@@ -279,30 +238,10 @@ fn call_audio_arrows_are_independent_at_both_densities() {
                 for (label, output) in [(input_label, false), (output_label, true)] {
                     let speaker_before = speakers.get();
                     let before = if output { outputs.get() } else { inputs.get() };
-                    let refreshed = refreshes.get();
                     click(&w, label);
                     pump_at(&w, width, 800.0);
-                    assert!(view.get_audio_controls_visible());
-                    assert!(!view.get_device_picker_visible());
-                    assert_eq!(refreshes.get(), refreshed + 1);
-                    let input_pill = format!("Microphone: {input_name}");
-                    let output_pill = format!("Output: {output_name}");
-                    for pill in [&input_pill, &output_pill] {
-                        let element = testing::ElementHandle::find_by_accessible_label(&w, pill)
-                            .next()
-                            .unwrap();
-                        let pos = element.absolute_position();
-                        let size = element.size();
-                        assert!(size.width >= 44.0 && size.height >= 44.0);
-                        assert!(pos.x >= 0.0 && pos.x + size.width <= width + 0.5);
-                        assert!(
-                            pos.y >= 0.0 && pos.y + size.height <= boxes[0].2 + 0.5,
-                            "Popover must sit above controls: {pos:?} {size:?}"
-                        );
-                    }
-                    click(&w, if output { &output_pill } else { &input_pill });
-                    pump_at(&w, width, 800.0);
-                    assert!(!view.get_audio_controls_visible());
+                    // The arrow opens its picker directly; the combined
+                    // audio-controls popover was removed (bc79c834).
                     assert!(view.get_device_picker_visible());
                     assert_eq!(
                         if output { outputs.get() } else { inputs.get() },
@@ -347,32 +286,8 @@ fn call_audio_arrows_are_independent_at_both_densities() {
                     view.set_device_picker_visible(false);
                 }
                 pump_at(&w, width, 800.0);
-                for key in [slint::platform::Key::Escape, slint::platform::Key::Back] {
-                    click(&w, input_label);
-                    pump_at(&w, width, 800.0);
-                    assert!(view.get_audio_controls_visible());
-                    let text: slint::SharedString = key.into();
-                    w.window()
-                        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
-                            text: text.clone(),
-                        });
-                    w.window()
-                        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
-                    assert!(!view.get_audio_controls_visible());
-                    assert!(view.get_active_call_visible());
-                }
-                click(&w, input_label);
-                pump_at(&w, width, 800.0);
-                click(&w, "End call"); // Outside popover dismisses without activating the covered action.
-                assert!(!view.get_audio_controls_visible());
-                assert_eq!(ends.get(), 0);
-                click(&w, input_label);
-                assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
-                assert!(!view.get_audio_controls_visible());
-                click(&w, input_label);
                 view.set_active_call_visible(false);
                 pump_at(&w, width, 800.0);
-                assert!(!view.get_audio_controls_visible());
                 if !linked && !fullscreen && width < 368.0 {
                     assert!(
                         testing::ElementHandle::find_by_element_type_name(&w, "AppSidebarHost")
@@ -390,5 +305,4 @@ fn call_audio_arrows_are_independent_at_both_densities() {
     pump_at(&w, 320.0, 800.0);
     assert_eq!(ends.get(), 1);
     assert!(!view.get_active_call_visible());
-    assert!(!view.get_audio_controls_visible());
 }
