@@ -482,9 +482,9 @@ mod setup_cancellation_actor_tests {
     #[tokio::test]
     async fn cancelled_setup_command_never_enters_server_or_media_setup() {
         let worker = worker();
-        let attempt = crate::client::calls::CallStartAttempt::default();
+        let attempt = crate::services::call_signaling::CallStartAttempt::default();
         attempt.cancel();
-        let result = crate::client::calls::START_ATTEMPT
+        let result = crate::services::call_signaling::START_ATTEMPT
             .scope(
                 attempt,
                 worker.initiate_call(

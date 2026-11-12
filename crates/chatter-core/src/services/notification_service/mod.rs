@@ -22,7 +22,7 @@ mod listener;
 pub use account_keys::is_opaque_notification_key;
 #[cfg(feature = "mesh")]
 pub use listener::spawn_mesh_notification_listener;
-pub use listener::spawn_notification_listener;
+pub(crate) use listener::{is_private_notification, should_notify_message};
 
 use crate::domain::notification::{Notification, NotificationPriority};
 use crate::error::SystemError;

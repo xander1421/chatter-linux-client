@@ -181,10 +181,7 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
         let selected = id.to_string();
         std::thread::spawn(move || {
             let all = if needs_refresh {
-                let Ok(all) = chatter_core::services::media_gallery::conversation_media(
-                    &client,
-                    &conversation,
-                ) else {
+                let Ok(all) = client.conversation_media(&conversation) else {
                     return;
                 };
                 all

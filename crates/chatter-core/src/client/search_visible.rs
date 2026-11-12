@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Utc};
 
 use super::ChatterClient;
-use crate::services::search::{SearchCategory, SearchDocument, SearchQuery};
+use crate::services::search::{SearchCategory, SearchDocument, SearchQuery, preview_fragments};
+use unicode_segmentation::UnicodeSegmentation;
 
 pub struct SearchPage {
     pub hits: Vec<VisibleSearchHit>,
@@ -246,5 +247,103 @@ impl ChatterClient {
             })
             .collect();
         SearchPage { hits, counts }
+    }
+}
+
+impl ChatterClient {
+    /// Resolve result labels from the same local record as secret-chat rows.
+    pub fn search_conversation_display_name(
+        &self,
+        conversation_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+    ) -> String {
+        #[cfg(feature = "mesh")]
+        if matches!(
+            conversation_type,
+            crate::domain::message::ConversationType::Mesh
+                | crate::domain::message::ConversationType::MeshDm
+        ) {
+            return self
+                .mesh_conversation_name(conversation_id)
+                .unwrap_or_else(|| "Mesh chat".to_string());
+        }
+        if *conversation_type == crate::domain::message::ConversationType::AnonDm {
+            let id = crate::domain::anon_dm::AnonDmId::from_uuid(*conversation_id.as_uuid());
+            if let Some(dm) = self.get_anon_dm_conversation(&id) {
+                return dm
+                    .peer_display_name
+                    .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+            }
+        }
+        self.conversation_display_name(conversation_id, conversation_type)
+    }
+
+    /// Keep the first query match inside the compact one-line result preview.
+    pub fn search_result_preview(&self, text: &str, query: &str) -> String {
+        let flat = self.plain_message_preview(text);
+        let grapheme_count = flat.graphemes(true).count();
+        if grapheme_count <= 100 {
+            return crate::domain::message::format_preview_body("", &flat, None);
+        }
+        let (_, matched, _, start, _) = preview_fragments(&flat, query);
+        let match_at = flat[..start as usize].graphemes(true).count();
+        let start = if matched.is_empty() || match_at < 70 {
+            0
+        } else {
+            match_at.saturating_sub(30)
+        };
+        let end = (start + 99).min(grapheme_count);
+        let body = format!(
+            "{}{}{}",
+            if start > 0 { "…" } else { "" },
+            flat.graphemes(true)
+                .skip(start)
+                .take(end - start)
+                .collect::<String>(),
+            if end < grapheme_count { "…" } else { "" }
+        );
+        crate::domain::message::format_preview_body("", &body, None)
+    }
+
+    /// Resolve search labels in one directory lookup, preserving the special
+    /// labels used by mesh, self messages and sealed-sender DMs.
+    pub fn search_sender_display_names(
+        &self,
+        messages: &[crate::domain::message::Message],
+    ) -> Vec<String> {
+        use crate::domain::message::ConversationType;
+        let mut names = self.message_sender_display_names(messages);
+        for (message, name) in messages.iter().zip(names.iter_mut()) {
+            #[cfg(feature = "mesh")]
+            if matches!(
+                message.conversation_type,
+                ConversationType::Mesh | ConversationType::MeshDm
+            ) {
+                *name = message
+                    .sender_id
+                    .as_ref()
+                    .map(|sender| {
+                        if *sender == self.mesh_local_user_id() {
+                            "You".to_string()
+                        } else {
+                            self.mesh_sender_display_name(sender)
+                                .unwrap_or_else(|| "Unknown peer".to_string())
+                        }
+                    })
+                    .unwrap_or_else(|| "Unknown peer".to_string());
+                continue;
+            }
+            if message.sender_id.is_some() && message.sender_id == self.session_current_user_id() {
+                *name = "You".to_string();
+            } else if message.sender_id.is_none()
+                && message.conversation_type == ConversationType::ServerDm
+            {
+                *name = self.conversation_display_name(
+                    &message.conversation_id,
+                    &message.conversation_type,
+                );
+            }
+        }
+        names
     }
 }

@@ -45,7 +45,7 @@ impl CallSignalingService {
             .await
             .map_err(|e| CallSignalingError::CallWorker(e.to_string()))?;
 
-        if crate::client::calls::start_cancelled() {
+        if crate::services::call_signaling::start_cancelled() {
             call_worker
                 .rollback_setup(CallHandle::from(call.id.to_string().as_str()))
                 .await;
@@ -397,7 +397,8 @@ impl CallSignalingService {
 mod named_dm_completion_tests {
     use super::*;
     use crate::{
-        client::{ChatterClient, calls::CallStartAttempt},
+        client::ChatterClient,
+        services::call_signaling::CallStartAttempt,
         domain::call::{Call, CallType},
         services::call_worker::CallOrchestratorEvent,
     };

@@ -537,7 +537,7 @@ pub struct CallVerificationSnapshot {
 enum CallCommand {
     /// Initiate a new call.
     InitiateCall {
-        attempt: Option<crate::client::calls::CallStartAttempt>,
+        attempt: Option<crate::services::call_signaling::CallStartAttempt>,
         channel_id: ChannelId,
         title: String,
         call_type: CallType,
@@ -884,7 +884,7 @@ pub struct CallWorkerHandle {
 struct DmAnswerScope {
     call: CallHandle,
     session_revision: Option<u64>,
-    attempt: Option<crate::client::calls::CallStartAttempt>,
+    attempt: Option<crate::services::call_signaling::CallStartAttempt>,
 }
 
 impl DmAnswerScope {

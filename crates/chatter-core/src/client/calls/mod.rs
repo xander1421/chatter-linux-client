@@ -25,8 +25,5 @@ pub use incoming::AcceptedIncomingCall;
 #[cfg(feature = "media")]
 pub use media::{CallRoomSnapshot, room_roster_keeps_screen};
 #[cfg(feature = "media")]
-pub use outgoing::CallStartAttempt;
-#[cfg(feature = "media")]
-pub(crate) use outgoing::START_ATTEMPT;
-pub(crate) use outgoing::start_cancelled;
+pub use crate::services::call_signaling::CallStartAttempt;
 pub use outgoing::{OutgoingCallStart, RingingPeer};

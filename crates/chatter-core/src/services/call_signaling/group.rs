@@ -212,7 +212,7 @@ impl CallSignalingService {
 
         let mut sent_count = 0;
         for member in members.iter().filter(|m| m.user_id != current_user) {
-            if crate::client::calls::start_cancelled() {
+            if crate::services::call_signaling::start_cancelled() {
                 break;
             }
             let content = build_group_call_signal_content(

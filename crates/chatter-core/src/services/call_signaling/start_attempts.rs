@@ -1,10 +1,55 @@
 use super::*;
 
+/// The owner drains dispatched setup and rolls it back before releasing its gate.
+#[cfg(feature = "media")]
+#[derive(Clone, Default)]
+pub struct CallStartAttempt {
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    notify: std::sync::Arc<tokio::sync::Notify>,
+}
+#[cfg(feature = "media")]
+impl CallStartAttempt {
+    pub fn cancel(&self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.notify.notify_one();
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    pub(crate) fn same_owner(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.cancelled, &other.cancelled)
+    }
+    pub async fn cancelled(&self) {
+        loop {
+            let notified = self.notify.notified();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+#[cfg(feature = "media")]
+tokio::task_local! { pub(crate) static START_ATTEMPT: CallStartAttempt; }
+pub(crate) fn start_cancelled() -> bool {
+    #[cfg(feature = "media")]
+    {
+        START_ATTEMPT
+            .try_with(CallStartAttempt::is_cancelled)
+            .unwrap_or(false)
+    }
+    #[cfg(not(feature = "media"))]
+    {
+        false
+    }
+}
+
 impl CallSignalingService {
     #[cfg(feature = "media")]
     pub(crate) fn own_start(
         &self,
-        attempt: crate::client::calls::CallStartAttempt,
+        attempt: crate::services::call_signaling::CallStartAttempt,
     ) -> StartAttemptOwner {
         *self.inflight_start.lock() = Some(attempt);
         StartAttemptOwner(self.inflight_start.clone())
@@ -12,7 +57,7 @@ impl CallSignalingService {
     #[cfg(feature = "media")]
     pub(crate) async fn rollback_registered_attempt(
         &self,
-        attempt: &crate::client::calls::CallStartAttempt,
+        attempt: &crate::services::call_signaling::CallStartAttempt,
         worker: &CallWorkerHandle,
     ) {
         let ids: Vec<String> = self
@@ -23,24 +68,13 @@ impl CallSignalingService {
             .map(|(id, _)| id.clone())
             .collect();
         for id in ids {
-            self.rollback_start(
-                &crate::client::calls::OutgoingCallStart {
-                    call_id: id,
-                    channel_id: String::new(),
-                    is_video: false,
-                    verification_emojis: None,
-                    title: String::new(),
-                    peer: None,
-                },
-                worker,
-            )
-            .await;
+            self.rollback_start(&id, false, worker).await;
         }
     }
 
     #[cfg(feature = "media")]
     pub(crate) fn register_start_attempt(&self, id: &str) {
-        if let Ok(attempt) = crate::client::calls::START_ATTEMPT.try_with(Clone::clone) {
+        if let Ok(attempt) = crate::services::call_signaling::START_ATTEMPT.try_with(Clone::clone) {
             let mut attempts = self.start_attempts.lock();
             attempts.retain(|_, a| a.is_cancelled());
             self.start_groups
@@ -66,7 +100,7 @@ impl CallSignalingService {
     pub(crate) fn completion_attempt(
         &self,
         id: &str,
-    ) -> Option<crate::client::calls::CallStartAttempt> {
+    ) -> Option<crate::services::call_signaling::CallStartAttempt> {
         self.start_attempts.lock().get(id).cloned()
     }
 
@@ -85,10 +119,11 @@ impl CallSignalingService {
     #[cfg(feature = "media")]
     pub(crate) async fn rollback_start(
         &self,
-        start: &crate::client::calls::OutgoingCallStart,
+        call_id: &str,
+        is_video: bool,
         worker: &CallWorkerHandle,
     ) {
-        let id = &start.call_id;
+        let id = &call_id.to_string();
         let pending = {
             let mut slot = self.pending_dm_call.lock();
             if slot.as_ref().is_some_and(|p| p.call_id.to_string() == *id) {
@@ -150,7 +185,7 @@ impl CallSignalingService {
                                 id,
                                 crate::services::message::ChannelCallPhase::Ended,
                                 0,
-                                start.is_video,
+                                is_video,
                             )
                             .await;
                     };

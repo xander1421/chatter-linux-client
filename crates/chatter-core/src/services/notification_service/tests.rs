@@ -1,6 +1,7 @@
 use super::account_keys::{conversation_for_notification_key, notification_key};
 use super::listener::{is_private_notification, should_notify_message};
 use super::*;
+use crate::client::notification::spawn_notification_listener;
 
 #[test]
 fn own_message_never_notifies() {
