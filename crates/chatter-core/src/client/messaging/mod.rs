@@ -160,6 +160,8 @@ mod friends;
 mod history;
 mod open;
 pub use open::{ConversationPage, PageAnchor};
+mod receive;
+pub use receive::IncomingUpdate;
 mod search;
 mod sidebar;
 mod threads;

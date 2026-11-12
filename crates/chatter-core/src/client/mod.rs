@@ -45,7 +45,7 @@ mod receipts;
 pub use crate::network::connection::ConnectionState;
 pub use anon_group::{AnonGroupInviteCandidate, PrivateGroupRoster};
 pub use messaging::{
-    ChannelInviteRow, ConversationPage, ForwardDestination, InviteCandidate, PageAnchor,
+    ChannelInviteRow, ConversationPage, ForwardDestination, IncomingUpdate, InviteCandidate, PageAnchor,
     ReplyParentMedia,
 };
 pub use profile::{FriendCodeConnection, FriendCodeConnectionError};
