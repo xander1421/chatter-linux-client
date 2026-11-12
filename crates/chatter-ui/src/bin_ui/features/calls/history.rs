@@ -674,13 +674,13 @@ fn paint(window: &MainWindow, prepared: PreparedHistoryPage, how: Paint) -> bool
                 initials: chatter_core::ui::message_row::initials_from_name(name).into(),
                 timestamp: r
                     .started_at
-                    .map(crate::bin_ui::converters::sidebar_time)
+                    .map(chatter_core::ui::format::sidebar_time)
                     .unwrap_or_default()
                     .into(),
                 detail: (if r.in_progress {
                     "In progress".to_string()
                 } else {
-                    crate::bin_ui::converters::call_detail(r.result, r.is_incoming, r.duration_secs)
+                    chatter_core::ui::format::call_detail(r.result, r.is_incoming, r.duration_secs)
                 })
                 .into(),
                 is_missed: r.is_missed,

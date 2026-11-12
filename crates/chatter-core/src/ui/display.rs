@@ -1,4 +1,36 @@
-use super::*;
+//! Resolved display fields of messages and users: sender names, quote
+//! authors, reply-parent media and avatars. All business rules live here, not
+//! in the UI.
+
+use crate::client::ChatterClient;
+
+/// Media descriptor of a reply's quoted parent, shaped by
+/// [`ChatterClient::reply_parent_media`]. Lets the quote bubble render the
+/// parent's media richly (an inline audio player for audio parents, a thumbnail
+/// for visual parents) instead of plain text. All fields are empty/`None` when
+/// the message is not a reply, the parent or its first attachment can't be
+/// resolved locally, or the parent carries no renderable media.
+#[derive(Debug, Clone, Default)]
+pub struct ReplyParentMedia {
+    /// `"audio"`/`"image"`/`"gif"`/`"video"` — `"gif"` splits out of image so
+    /// the quote can badge it as animated. Empty when no renderable media.
+    pub category: String,
+    /// Parent attachment id (for play/seek callbacks).
+    pub attachment_id: String,
+    /// Formatted `"m:ss"` for audio, else empty.
+    pub duration: String,
+    /// Parent attachment's locally-stored thumbnail bytes for visual categories
+    /// — a fallback the converter uses when the wire quote thumbnail (capped at
+    /// ~12KB and often dropped) is absent, so image/gif/video quotes still show
+    /// a preview instead of degrading to text.
+    pub thumbnail: Option<Vec<u8>>,
+    /// Parent attachment filename, shown in the inline audio quote player.
+    pub filename: String,
+    /// Audio waveform (32 values, 0-100) for the inline quote player; empty when
+    /// the parent carries none.
+    pub waveform: Vec<i32>,
+}
+
 
 impl ChatterClient {
     // ── Resolved display fields (all business rules live here, not in the UI) ──
@@ -281,6 +313,19 @@ impl ChatterClient {
             self.get_profile_local(user_id).and_then(|p| p.avatar_bytes)
         };
         avatar.filter(|bytes| !bytes.is_empty())
+    }
+
+    /// Avatar bytes for a private-group invite candidate: anon-DM peers keep
+    /// theirs on the anon DM row, friends on their local profile.
+    pub fn invite_candidate_avatar(
+        &self,
+        c: &crate::client::AnonGroupInviteCandidate,
+    ) -> Option<Vec<u8>> {
+        if c.is_anonymous {
+            self.anon_dm_peer_avatar(&c.user_id)
+        } else {
+            self.user_avatar(&c.user_id)
+        }
     }
 
     /// Stable `User <id8>` placeholder for a user with no resolvable name.

@@ -145,6 +145,28 @@ pub struct ChatRowSendData {
 }
 
 impl ChatRowSendData {
+    /// The name the row shows: a secret-chat request carries its envelope
+    /// mark, an outgoing one also "(pending)". Initials still come from the
+    /// bare `display_name`.
+    #[must_use]
+    pub fn shown_name(&self) -> String {
+        match self.label {
+            ChatRowLabel::Plain => self.display_name.clone(),
+            ChatRowLabel::IncomingSecretRequest => format!("\u{1F4E9} {}", self.display_name),
+            ChatRowLabel::OutgoingSecretRequest => {
+                format!("\u{1F4EE} {} (pending)", self.display_name)
+            }
+        }
+    }
+
+    /// The activity time shown at the right of the row; empty without one.
+    #[must_use]
+    pub fn timestamp_text(&self) -> String {
+        self.timestamp_at
+            .map(crate::ui::format::sidebar_time)
+            .unwrap_or_default()
+    }
+
     /// A row of `kind` with everything else empty; builders fill what they know.
     #[must_use]
     pub fn new(

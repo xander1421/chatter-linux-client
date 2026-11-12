@@ -159,7 +159,7 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
                     w.global::<crate::ChatPane>().set_image_viewer_sender(sender.into());
                     w.global::<crate::ChatPane>().set_image_viewer_datetime(datetime.into());
                     w.global::<crate::ChatPane>().set_image_viewer_caption(
-                        crate::bin_ui::converters::markdown::strip_markdown(&caption).into(),
+                        chatter_core::ui::markdown::strip_markdown(&caption).into(),
                     );
                 }
             });

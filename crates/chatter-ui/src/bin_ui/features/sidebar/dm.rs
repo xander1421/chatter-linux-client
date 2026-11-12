@@ -484,7 +484,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let status_str = ui_ctx.peer_presence(&peer_id).as_str();
             let last_seen: String = ui_ctx.peer_last_seen(&peer_id)
-                .map(|(presence, at)| crate::bin_ui::converters::last_seen_label(presence, at))
+                .map(|(presence, at)| chatter_core::ui::format::last_seen_label(presence, at))
                 .unwrap_or_default();
 
             let display_messages = crate::bin_ui::converters::prepare_rows(page.rows, false, generation).await;

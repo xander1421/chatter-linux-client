@@ -1189,7 +1189,7 @@ fn search_messages(
             sender_name: hit.sender_name.into(),
             content_preview: hit.preview.into(),
             // The chat list's short date: today's hits read "23:04".
-            timestamp: crate::bin_ui::converters::sidebar_time(hit.created_at).into(),
+            timestamp: chatter_core::ui::format::sidebar_time(hit.created_at).into(),
             highlight_start: start,
             highlight_end: end,
             preview_before: before.into(),

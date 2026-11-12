@@ -4,15 +4,40 @@
 //! `**bold**`, `*italic*`, `~~strikethrough~~`, `` `code` ``, and fenced code blocks.
 //!
 //! [`parse_blocks`] turns a body into what the bubble lays out: the inline
-//! spans between fenced code blocks become one Slint `StyledText` each, so
-//! mixed styles flow and wrap together in one paragraph, and each fenced code
-//! block stays its own monospace box. The `StyledText` is built straight from
-//! these spans (`StyledText::from_paragraphs`, a patch in vendor/i-slint-core),
-//! never through Slint's own markdown parser, which rejects headings, quotes,
-//! fenced code and HTML that users type.
+//! spans between fenced code blocks become one paragraph list each, so mixed
+//! styles flow and wrap together in one paragraph, and each fenced code block
+//! stays its own monospace box. The UI turns each [`StyledParagraph`] into a
+//! Slint `StyledText` (`StyledText::from_paragraphs`, a patch in
+//! vendor/i-slint-core), never through Slint's own markdown parser, which
+//! rejects headings, quotes, fenced code and HTML that users type.
 
-use i_slint_core::styled_text::{FormattedSpan, Style, StyledTextParagraph};
-use chatter_core::domain::mention::{MentionExtractor, MentionMember, MentionType};
+use crate::domain::mention::{MentionExtractor, MentionMember, MentionType};
+
+/// Inline style of a [`FormattedSpan`]. Mirrors the Slint styles the UI maps
+/// these onto one to one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Style {
+    Strong,
+    Emphasis,
+    Strikethrough,
+    Code,
+    Link,
+}
+
+/// A style over a byte range of a paragraph's text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FormattedSpan {
+    pub range: std::ops::Range<usize>,
+    pub style: Style,
+}
+
+/// One line of inline text with its styles and link targets as byte ranges.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StyledParagraph {
+    pub text: String,
+    pub formatting: Vec<FormattedSpan>,
+    pub links: Vec<(std::ops::Range<usize>, String)>,
+}
 
 /// A parsed inline span.
 ///
@@ -29,9 +54,9 @@ struct MarkdownSpan {
 
 /// One block of a message body as the bubble lays it out.
 #[derive(Debug, PartialEq)]
-pub(crate) enum MarkdownBlock {
+pub enum MarkdownBlock {
     /// Inline text, one paragraph per line, its styles as byte ranges.
-    Inline(Vec<StyledTextParagraph>),
+    Inline(Vec<StyledParagraph>),
     /// A fenced code block's content, whitespace preserved.
     Code(String),
 }
@@ -40,7 +65,7 @@ pub(crate) enum MarkdownBlock {
 /// into lines) and fenced code blocks. Newlines that only separate a code
 /// block from its neighbours are dropped, so a code block does not gain a
 /// blank line above and below it.
-pub(crate) fn parse_blocks(
+pub fn parse_blocks(
     input: &str,
     members: &[MentionMember],
     broadcast: bool,
@@ -93,13 +118,9 @@ pub(crate) fn parse_blocks(
 
 /// Lay inline spans out as paragraphs, one per line. A span that crosses a
 /// line break is split into one formatting range per line.
-fn paragraphs(spans: &[MarkdownSpan]) -> Vec<StyledTextParagraph> {
+fn paragraphs(spans: &[MarkdownSpan]) -> Vec<StyledParagraph> {
     let mut out = Vec::new();
-    let mut para = StyledTextParagraph {
-        text: String::new(),
-        formatting: Vec::new(),
-        links: Vec::new(),
-    };
+    let mut para = StyledParagraph::default();
     for span in spans {
         let style = if span.bold {
             Some(Style::Strong)
@@ -116,11 +137,7 @@ fn paragraphs(spans: &[MarkdownSpan]) -> Vec<StyledTextParagraph> {
             if i > 0 {
                 out.push(std::mem::replace(
                     &mut para,
-                    StyledTextParagraph {
-                        text: String::new(),
-                        formatting: Vec::new(),
-                        links: Vec::new(),
-                    },
+                    StyledParagraph::default(),
                 ));
             }
             // Parley treats a lone CR as a line break of its own.
@@ -139,7 +156,7 @@ fn paragraphs(spans: &[MarkdownSpan]) -> Vec<StyledTextParagraph> {
             if let (Some(style), false) = (&style, line.is_empty()) {
                 para.formatting.push(FormattedSpan {
                     range: start..para.text.len(),
-                    style: style.clone(),
+                    style: *style,
                 });
             }
         }
@@ -151,7 +168,7 @@ fn paragraphs(spans: &[MarkdownSpan]) -> Vec<StyledTextParagraph> {
 /// Strip all markdown markers from text, returning clean plaintext.
 ///
 /// Used for the `content` field (reply previews, empty checks, system messages).
-pub(crate) fn strip_markdown(input: &str) -> String {
+pub fn strip_markdown(input: &str) -> String {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return String::new();
@@ -411,7 +428,7 @@ mod tests {
 
     #[test]
     fn mentions_are_styled_and_linked_only_outside_code() {
-        let user_id = chatter_core::domain::ids::UserId::new();
+        let user_id = crate::domain::ids::UserId::new();
         let members = [MentionMember { user_id, names: vec!["Alpha".into()] }];
         let blocks = parse_blocks("hey @Alpha `@Alpha` @here", &members, true);
         let [MarkdownBlock::Inline(paras)] = blocks.as_slice() else { panic!("inline block expected") };
@@ -434,7 +451,7 @@ mod tests {
         let styled = p
             .formatting
             .iter()
-            .map(|f| (p.text[f.range.clone()].to_string(), f.style.clone()))
+            .map(|f| (p.text[f.range.clone()].to_string(), f.style))
             .collect();
         (p.text.clone(), styled)
     }
@@ -582,7 +599,7 @@ fn bare_urls(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
 
 /// Browser destinations only; reject credentials, ambiguous separators and
 /// whitespace before URL parsing can silently normalize them.
-pub(crate) fn safe_web_url(value: &str) -> Option<String> {
+pub fn safe_web_url(value: &str) -> Option<String> {
     if value
         .chars()
         .any(|c| c.is_control() || c.is_whitespace() || c == '\\')

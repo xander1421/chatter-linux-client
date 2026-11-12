@@ -20,7 +20,7 @@ use chatter_core::system::ExternalOpener;
 
 use crate::MainWindow;
 use crate::bin_ui::audio_state;
-use crate::bin_ui::converters::format_file_size;
+use chatter_core::ui::format::format_file_size;
 use crate::bin_ui::preview_state;
 use crate::bin_ui::video_state;
 

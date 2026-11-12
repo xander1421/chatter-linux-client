@@ -2,11 +2,15 @@
 
 pub mod call_history_data;
 pub mod chat_data;
+pub mod display;
 pub mod emoji_data;
 mod emoji_table;
 pub mod file_data;
+pub mod format;
+pub mod markdown;
 pub mod message_row;
 pub mod picker_history;
+pub mod pin_preview;
 pub mod shared_content_data;
 pub mod sidebar_data;
 

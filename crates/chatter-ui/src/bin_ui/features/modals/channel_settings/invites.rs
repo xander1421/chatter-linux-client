@@ -49,7 +49,7 @@ pub fn open_private_group_invite_modal(
                 .list_anon_group_invite_candidates(Some(&group_id))
                 .into_iter()
                 .map(|c| {
-                    let avatar = crate::bin_ui::converters::invite_candidate_avatar(&ui_ctx, &c);
+                    let avatar = ui_ctx.invite_candidate_avatar(&c);
                     (c, avatar)
                 })
                 .collect::<Vec<_>>()

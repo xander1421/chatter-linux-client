@@ -762,7 +762,7 @@ fn pinned_plaintext_preview(
         ),
         _ => ui_ctx.get_message_local(message_id),
     };
-    crate::bin_ui::converters::pin_preview::preview_or_caption(
+    chatter_core::ui::pin_preview::preview_or_caption(
         message.as_ref().and_then(|message| message.as_text()),
         caption,
     )

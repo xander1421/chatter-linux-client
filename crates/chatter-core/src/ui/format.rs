@@ -1,9 +1,10 @@
-//! Local display formatting for rows rendered by the client.
+//! Local display formatting for rows rendered by the client: timestamps,
+//! presence, call outcomes, file sizes and attachment categories.
 
-use chatter_core::domain::attachment::format_bytes;
-use chatter_core::domain::call::CallResult;
-use chatter_core::domain::user::PresenceStatus;
-use chatter_core::ui::SharedContentItemData;
+use crate::domain::attachment::format_bytes;
+use crate::domain::call::CallResult;
+use crate::domain::user::PresenceStatus;
+use crate::ui::SharedContentItemData;
 use chrono::Duration;
 use chrono::{DateTime, Datelike, Local, Utc};
 
@@ -102,7 +103,7 @@ fn link_host(url: &str) -> String {
 
 /// The chat list's short local date, shared with call history.
 pub fn sidebar_time(at: DateTime<Utc>) -> String {
-    chatter_core::services::server_records::sidebar_time_at(at, Local::now())
+    crate::services::server_records::sidebar_time_at(at, Local::now())
 }
 
 pub fn call_detail(
@@ -143,4 +144,52 @@ pub fn server_record_time(nanos: u64) -> String {
         .with_timezone(&Local)
         .format("%Y-%m-%d %H:%M")
         .to_string()
+}
+
+/// Format file size in human-readable form.
+pub fn format_file_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+/// Map MIME type to category for UI display.
+pub fn mime_to_category(mime_type: &str) -> &'static str {
+    if mime_type.starts_with("image/") {
+        "image"
+    } else if mime_type.starts_with("video/") {
+        "video"
+    } else if mime_type.starts_with("audio/") {
+        "audio"
+    } else if mime_type.starts_with("text/") || mime_type == "application/json" {
+        "code"
+    } else if mime_type == "application/pdf"
+        || mime_type.starts_with("application/msword")
+        || mime_type.contains("document")
+    {
+        "document"
+    } else if mime_type == "application/zip"
+        || mime_type == "application/x-rar-compressed"
+        || mime_type == "application/x-tar"
+        || mime_type == "application/gzip"
+    {
+        "archive"
+    } else {
+        "other"
+    }
+}
+
+/// Convert stored/wire amplitudes (0-255) to the UI's percentage bar scale.
+pub fn waveform_bar(sample: i32) -> i32 {
+    (sample.clamp(0, 255) * 100 + 127) / 255
 }

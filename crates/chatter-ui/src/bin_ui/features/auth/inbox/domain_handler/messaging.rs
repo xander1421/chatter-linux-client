@@ -120,7 +120,7 @@ pub(super) async fn handle_message_received(
     let (preview, timestamp_at) =
         ui_ctx.sidebar_activity(Some(latest.as_ref().unwrap_or(&message)));
     let timestamp_str = timestamp_at
-        .map(crate::bin_ui::converters::sidebar_time)
+        .map(chatter_core::ui::format::sidebar_time)
         .unwrap_or_default();
 
     // Core's one "is this message on screen" rule (mailbox DMs included).
@@ -401,7 +401,7 @@ pub(super) fn handle_message_sent(
     preview: String,
     at: chrono::DateTime<chrono::Utc>,
 ) {
-    let timestamp = crate::bin_ui::converters::sidebar_time(at);
+    let timestamp = chatter_core::ui::format::sidebar_time(at);
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {

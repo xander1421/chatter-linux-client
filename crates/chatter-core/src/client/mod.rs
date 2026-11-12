@@ -46,7 +46,6 @@ pub use crate::network::connection::ConnectionState;
 pub use anon_group::{AnonGroupInviteCandidate, PrivateGroupRoster};
 pub use messaging::{
     ChannelInviteRow, ConversationPage, ForwardDestination, InviteCandidate, PageAnchor,
-    ReplyParentMedia,
 };
 pub use profile::{FriendCodeConnection, FriendCodeConnectionError};
 pub use secret_chat::{SecretChatError, SecretChatGate};
