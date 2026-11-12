@@ -34,7 +34,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
     ui_ctx.select_conversation(ActiveConversation::None);
     window.invoke_refresh_screen_protection();
 
-    crate::bin_ui::features::sidebar::stop_audio_playback();
+    crate::bin_ui::features::chat::open::stop_audio_playback();
     crate::bin_ui::gif_state::clear_inline_gifs();
 
     // The mesh carries no attachments, and the composer hides the attach
@@ -49,7 +49,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
 
     // Reveal the message pane the way every other conversation does; on a
     // phone this is the only thing that leaves the chat list.
-    crate::bin_ui::features::sidebar::show_chat_pane(&window.as_weak());
+    crate::bin_ui::features::chat::open::show_chat_pane(&window.as_weak());
     // The shared opener clears pushed screens; restore the mesh destination
     // so Back from this conversation returns to its own list.
     window.global::<crate::SidebarPane>().set_active_tab("mesh".into());

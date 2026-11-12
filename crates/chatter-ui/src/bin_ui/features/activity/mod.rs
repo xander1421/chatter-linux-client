@@ -164,7 +164,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                                     if let Some(message_id) = target.message_id {
                                         super::header::jump_to_conversation_message(&window, &client, conversation, &message_id);
                                     } else {
-                                        super::sidebar::select_conversation(&window, conversation);
+                                        super::chat::open::select_conversation(&window, conversation);
                                     }
                                 }
                             }

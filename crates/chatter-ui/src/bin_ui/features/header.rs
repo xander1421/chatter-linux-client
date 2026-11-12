@@ -110,7 +110,7 @@ pub(crate) fn jump_to_conversation_message(
     }
     PENDING_JUMP
         .with(|pending| *pending.borrow_mut() = Some((conversation, message_id.to_owned())));
-    super::sidebar::select_conversation(w, conversation);
+    super::chat::open::select_conversation(w, conversation);
 }
 
 /// Call after installing a conversation's messages and clearing loading.

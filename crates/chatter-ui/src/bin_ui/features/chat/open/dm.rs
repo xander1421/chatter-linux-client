@@ -61,7 +61,7 @@ pub fn wire_delete_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 });
                 return;
             }
-            super::conversation_removed(&weak, &ui_ctx, conv);
+            crate::bin_ui::features::sidebar::conversation_removed(&weak, &ui_ctx, conv);
         });
     });
 }
@@ -210,7 +210,7 @@ fn start_secret_chat(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>
         });
         match result {
             Ok(dm) => {
-                super::rebuild_chat_list(&weak, &ui_ctx);
+                crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
                 let dm_id = dm.id.to_string();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
@@ -266,8 +266,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if let Some(w) = weak.upgrade() {
                 w.global::<crate::SidebarPane>().set_mobile_show_chat(false);
                 w.global::<crate::ChatPane>().set_loading_messages(false);
-                super::super::header::finish_pending_jump(&w, &ui_ctx);
-                super::super::header::refresh_pinned_ui(&w, &ui_ctx);
+                crate::bin_ui::features::header::finish_pending_jump(&w, &ui_ctx);
+                crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx);
             }
             return;
         };
@@ -280,7 +280,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // Clear inline GIF animations
         crate::bin_ui::gif_state::clear_inline_gifs();
 
-        super::super::header::cancel_pending_jump_for(active);
+        crate::bin_ui::features::header::cancel_pending_jump_for(active);
 
         let is_anon_dm = matches!(active, chatter_core::state::ActiveConversation::AnonDm(_));
         let peer_id_for_dm: Option<UserId> = match active {
@@ -350,8 +350,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 let ui_ctx_for_sel = ui_ctx.clone();
                 crate::run_history_ui!(weak, owner, |w| {
-                    super::refresh_selection(&w, &ui_ctx_for_sel);
-                    super::refresh_section_badges(&w, &ui_ctx_for_sel);
+                    crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_for_sel);
+                    crate::bin_ui::features::sidebar::refresh_section_badges(&w, &ui_ctx_for_sel);
                 });
 
                 // Load pins for anon DM
@@ -403,8 +403,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::info!(kind = "secret_dm", stage = "model_replaced", rows = initial_count, elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
                     tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
                     w.global::<crate::ChatPane>().set_loading_messages(false);
-                super::super::header::finish_pending_jump(&w, &ui_ctx);
-                super::super::header::refresh_pinned_ui(&w, &ui_ctx);
+                crate::bin_ui::features::header::finish_pending_jump(&w, &ui_ctx);
+                crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx);
                     crate::bin_ui::converters::set_conversation_kind(
                         &w, &ui_ctx, &chatter_core::domain::message::ConversationType::AnonDm, false,
                     );
@@ -443,8 +443,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let ui_ctx_for_sel = ui_ctx.clone();
             crate::run_history_ui!(weak, owner, |w| {
-                super::refresh_selection(&w, &ui_ctx_for_sel);
-                super::refresh_section_badges(&w, &ui_ctx_for_sel);
+                crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_for_sel);
+                crate::bin_ui::features::sidebar::refresh_section_badges(&w, &ui_ctx_for_sel);
             });
 
             // Load pins
@@ -518,8 +518,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 crate::trace_chat_open_model(display_messages.len(), 0);
                 tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
                 w.global::<crate::ChatPane>().set_loading_messages(false);
-                super::super::header::finish_pending_jump(&w, &ui_ctx);
-                super::super::header::refresh_pinned_ui(&w, &ui_ctx);
+                crate::bin_ui::features::header::finish_pending_jump(&w, &ui_ctx);
+                crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx);
                 crate::bin_ui::converters::set_conversation_kind(&w, &ui_ctx, &conv_type, false);
                 w.global::<crate::ChatPane>().set_is_dm(true);
                 w.global::<crate::ChatPane>().set_channel_name(title.into());

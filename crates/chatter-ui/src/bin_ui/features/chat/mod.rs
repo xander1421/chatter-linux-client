@@ -12,6 +12,7 @@ pub mod emoji_loader;
 mod helpers;
 pub mod identity_change;
 pub mod membership;
+pub mod open;
 mod pin;
 mod reactions;
 mod selection;
@@ -48,6 +49,7 @@ pub use send_message::{refresh_send_notice, show_send_notice};
 
 /// Wire chat callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    open::wire(window, ui_ctx);
     let weak = window.as_weak();
     let client = ui_ctx.clone();
     window

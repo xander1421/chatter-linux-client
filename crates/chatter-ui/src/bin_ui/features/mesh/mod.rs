@@ -144,7 +144,7 @@ fn close_mesh_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         return;
     }
     clear_active(window);
-    crate::bin_ui::features::sidebar::close_open_conversation(window, ui_ctx);
+    crate::bin_ui::features::chat::open::close_open_conversation(window, ui_ctx);
     window
         .global::<crate::SidebarPane>()
         .set_active_tab("mesh".into());

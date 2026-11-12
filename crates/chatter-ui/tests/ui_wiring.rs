@@ -1124,7 +1124,7 @@ fn ai_channel_select_and_send_are_wired_to_jarvis() {
     );
 
     // L2 static (Rust): channel selection branches to the Jarvis history loader.
-    let sel_src = include_str!("../src/bin_ui/features/sidebar/channel.rs");
+    let sel_src = include_str!("../src/bin_ui/features/chat/open/channel.rs");
     let sidx = sel_src
         .find("is_jarvis_channel_str")
         .expect("selection must branch on the AI channel");
@@ -3346,7 +3346,7 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
          the folder badges must be rebuilt there or they stay frozen from launch"
     );
 
-    let channel = include_str!("../src/bin_ui/features/sidebar/channel.rs");
+    let channel = include_str!("../src/bin_ui/features/chat/open/channel.rs");
     let read_idx = channel
         .find("mark_read_local()")
         .expect("mark_read_local present");
@@ -3359,7 +3359,7 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
     // `messages.is_read`, so opening a DM cleared the Slint model and nothing
     // else — the count came straight back on the next refresh and after every
     // restart.
-    let dm = include_str!("../src/bin_ui/features/sidebar/dm.rs");
+    let dm = include_str!("../src/bin_ui/features/chat/open/dm.rs");
     let dm_read_idx = dm
         .find("mark_read_local()")
         .expect("selecting a DM must mark it read in core, not just zero the sidebar model");
@@ -3537,7 +3537,7 @@ fn a_foldered_dm_still_resolves_to_its_conversation() {
     }
 
     // L2 static: the handler asks core instead of the model it just emptied.
-    let src = include_str!("../src/bin_ui/features/sidebar/dm.rs");
+    let src = include_str!("../src/bin_ui/features/chat/open/dm.rs");
     assert!(
         src.contains("resolve_dm_conversation"),
         "DM selection must resolve the conversation through core"
@@ -4082,12 +4082,12 @@ fn conversation_open_anchors_on_the_unread_boundary() {
     for (name, src) in [
         (
             "channel",
-            include_str!("../src/bin_ui/features/sidebar/channel.rs"),
+            include_str!("../src/bin_ui/features/chat/open/channel.rs"),
         ),
-        ("dm", include_str!("../src/bin_ui/features/sidebar/dm.rs")),
+        ("dm", include_str!("../src/bin_ui/features/chat/open/dm.rs")),
         (
             "private_group",
-            include_str!("../src/bin_ui/features/sidebar/private_group.rs"),
+            include_str!("../src/bin_ui/features/chat/open/private_group.rs"),
         ),
     ] {
         // `mark_as_read`, or its local half `mark_read_local` when the open
@@ -4121,7 +4121,7 @@ fn conversation_open_anchors_on_the_unread_boundary() {
     }
 
     // Core owns which row the boundary is; the UI only forwards the number.
-    let sidebar = include_str!("../src/bin_ui/features/sidebar/mod.rs");
+    let sidebar = include_str!("../src/bin_ui/features/chat/open/mod.rs");
     assert!(
         sidebar.contains("anchor.divider_index(page)"),
         "the index must come from chatter-core's UnreadAnchor, not be recomputed \

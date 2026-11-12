@@ -89,7 +89,7 @@ fn edit(w: &MainWindow, f: impl FnOnce(&VecModel<MessageItemData>)) {
         .expect("VecModel"));
 }
 
-/// Open a conversation the way `sidebar::channel` does: loading raised, then
+/// Open a conversation the way `chat::open::channel` does: loading raised, then
 /// anchor + page + loading lowered in one UI closure. `unread_index` < 0 opens
 /// on the newest message.
 fn open(w: &MainWindow, rows: std::ops::Range<usize>, unread_index: i32) {

@@ -103,7 +103,7 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
                         refresh_private_requests(weak.clone(), &ui_ctx).await;
                         crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
                         // Open in the chat view: its Accept bar gives way to the composer.
-                        crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(
+                        crate::bin_ui::features::chat::open::dm::refresh_open_anon_dm(
                             &weak, &ui_ctx, dm_id,
                         );
 

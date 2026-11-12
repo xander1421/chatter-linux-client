@@ -313,7 +313,7 @@ fn save_success_reloads_metadata_and_sidebar_and_rejects_replacement_owners() {
             &w,
             &client,
             epoch,
-            crate::bin_ui::features::sidebar::channel::ChannelMetadata::from_channel(&channel),
+            crate::bin_ui::features::chat::open::channel::ChannelMetadata::from_channel(&channel),
             rows,
         );
     };

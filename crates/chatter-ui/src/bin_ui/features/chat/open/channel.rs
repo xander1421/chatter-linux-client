@@ -44,7 +44,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 "conversation_open"
             );
             if let Ok(id) = channel_id.parse::<ChannelId>() {
-                super::super::header::cancel_pending_jump_for(
+                crate::bin_ui::features::header::cancel_pending_jump_for(
                     chatter_core::state::ActiveConversation::Channel(id),
                 );
             }
@@ -85,7 +85,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let ui_ctx_for_sel = ui_ctx.clone();
                 run_ui!(weak, |w| {
                     w.global::<crate::ChatPane>().set_loading_messages(true);
-                    super::refresh_selection(&w, &ui_ctx_for_sel);
+                    crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_for_sel);
                 });
                 let weak = weak.clone();
                 let ui_ctx = ui_ctx.clone();
@@ -154,7 +154,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 // Active conversation already committed pre-spawn.
                 let ui_ctx_for_sel = ui_ctx.clone();
-                crate::run_history_ui!(weak, owner, |w| super::refresh_selection(
+                crate::run_history_ui!(weak, owner, |w| crate::bin_ui::features::sidebar::refresh_selection(
                     &w,
                     &ui_ctx_for_sel
                 ));
@@ -174,7 +174,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 );
                 // Reading a foldered channel has to clear its folder badge too.
                 let ui_ctx_badges = ui_ctx.clone();
-                crate::run_history_ui!(weak, owner, |w| super::refresh_section_badges(
+                crate::run_history_ui!(weak, owner, |w| crate::bin_ui::features::sidebar::refresh_section_badges(
                     &w,
                     &ui_ctx_badges
                 ));
@@ -447,8 +447,8 @@ pub(crate) async fn load_channel_into_ui_owned(
             crate::trace_chat_open_model(display_messages.len(), 0);
         }
         w.global::<crate::ChatPane>().set_loading_messages(false);
-        super::super::header::finish_pending_jump(&w, &ui_ctx);
-        super::super::header::refresh_pinned_ui(&w, &ui_ctx);
+        crate::bin_ui::features::header::finish_pending_jump(&w, &ui_ctx);
+        crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx);
 
         // Auto-register GIF animations for inline playback
         crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);
