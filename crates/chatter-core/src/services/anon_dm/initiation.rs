@@ -522,7 +522,7 @@ impl AnonDmService {
             timestamp: TimestampNanos::now().as_u64(),
             encrypted_display_name,
             avatar,
-            disappearing_seconds: crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS,
+            disappearing_seconds: crate::domain::disappearing::SECRET_CHAT_DEFAULT_SECONDS,
         };
 
         let content = Content {

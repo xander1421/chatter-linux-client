@@ -178,13 +178,13 @@ impl UnreadAnchor {
     /// is unread opens at the top with the divider above the first row.
     ///
     /// The index counts displayed rows: timer-change notices are stored but
-    /// never shown (`disappearing::is_timer_notice`), and counting them put
+    /// never shown (`domain::disappearing::is_timer_notice`), and counting them put
     /// the divider one row past each notice — past the end of the model when
     /// the first unread was the last row, so the open never settled.
     #[must_use]
     pub fn divider_index(&self, page: &[Message]) -> Option<usize> {
         page.iter()
-            .filter(|m| !crate::services::disappearing::is_timer_notice(m))
+            .filter(|m| !crate::domain::disappearing::is_timer_notice(m))
             .position(|m| self.unread_sent_at.binary_search(&m.sent_at).is_ok())
     }
 

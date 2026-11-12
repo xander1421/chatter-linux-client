@@ -375,7 +375,7 @@ impl AnonDmService {
                 crate::storage::repositories::ephemeral_repo::EphemeralRepository::new(
                     self.settings_repo.database().clone(),
                 )
-                .insert_armed(&msg.id, crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS)?;
+                .insert_armed(&msg.id, crate::domain::disappearing::SECRET_CHAT_DEFAULT_SECONDS)?;
             }
         }
 

@@ -453,7 +453,7 @@ pub fn message_to_display_data_with_replies(
                         seconds,
                     } => format!(
                         "set disappearing messages to {} after read",
-                        chatter_core::services::disappearing::timer_label(*seconds)
+                        chatter_core::domain::disappearing::timer_label(*seconds)
                     ),
                     _ => sys.description_for(&msg.conversation_type),
                 }
@@ -708,7 +708,7 @@ pub fn messages_to_display_batch_unprepared(
     > = std::collections::HashMap::new();
 
     for (i, msg) in messages.iter().enumerate() {
-        if chatter_core::services::disappearing::is_timer_notice(msg) {
+        if chatter_core::domain::disappearing::is_timer_notice(msg) {
             continue;
         }
         let identity = display_senders[i].as_ref();

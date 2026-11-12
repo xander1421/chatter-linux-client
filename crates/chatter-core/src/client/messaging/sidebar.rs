@@ -81,7 +81,7 @@ impl ChatterClient {
                 .ok()?;
             if let Some(message) = messages
                 .iter()
-                .find(|message| !crate::services::disappearing::is_timer_notice(message))
+                .find(|message| !crate::domain::disappearing::is_timer_notice(message))
             {
                 return Some(message.clone());
             }

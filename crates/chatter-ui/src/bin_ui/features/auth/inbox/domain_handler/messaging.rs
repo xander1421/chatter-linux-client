@@ -44,7 +44,7 @@ pub(super) async fn handle_message_received(
     } else {
         message
     };
-    if chatter_core::services::disappearing::is_timer_notice(&message) {
+    if chatter_core::domain::disappearing::is_timer_notice(&message) {
         return;
     }
     if let Err(error) = ui_ctx.unarchive_on_incoming_message(&message) {

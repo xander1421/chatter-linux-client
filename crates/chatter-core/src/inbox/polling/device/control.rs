@@ -43,7 +43,7 @@ pub(super) fn dispatch_secret_chat_bootstrap(
     let event = match inner {
         content::Content::AnonDmRequest(request)
             if request.disappearing_seconds
-                == crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS =>
+                == crate::domain::disappearing::SECRET_CHAT_DEFAULT_SECONDS =>
         {
             InboxEvent::AnonDmRequest {
                 peer_id: sender_id,

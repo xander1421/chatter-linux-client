@@ -76,7 +76,7 @@ impl PinService {
         let mut pinned_data = Vec::with_capacity(pinned_messages.len());
 
         for msg in &pinned_messages {
-            if crate::services::disappearing::is_timer_notice(msg) {
+            if crate::domain::disappearing::is_timer_notice(msg) {
                 continue;
             }
             // Resolve attachments for preview generation
@@ -118,7 +118,7 @@ impl PinService {
 
         let preview = Self::generate_preview(&message, &attachments);
 
-        if crate::services::disappearing::is_timer_notice(&message) {
+        if crate::domain::disappearing::is_timer_notice(&message) {
             return Ok(None);
         }
         Ok(Some(PinnedMessageData {

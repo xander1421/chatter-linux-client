@@ -30,6 +30,7 @@
 //! it afterwards — `channel/service/channels.go` UpdateChannel).
 
 use crate::domain::anon_dm::AnonDmId;
+use crate::domain::disappearing::{SECRET_CHAT_DEFAULT_SECONDS, is_timer_notice, timer_label};
 use crate::domain::ids::{ChannelId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
 use crate::error::StorageError;
@@ -46,18 +47,6 @@ pub fn activation_minutes(text: &str) -> Option<u32> {
 }
 
 pub const DEFAULT_ACTIVATION_SECONDS: u32 = 300;
-pub const SECRET_CHAT_DEFAULT_SECONDS: u32 = 86_400;
-
-/// Typed presentation filter for internal timer change notices. Keep storage
-/// intact: these rows still drive receive-side timer notifications.
-#[must_use]
-pub fn is_timer_notice(message: &Message) -> bool {
-    message.conversation_type != ConversationType::AnonDm
-        && matches!(
-            message.content,
-            MessageContent::System(SystemMessage::DisappearingTimerChanged { .. })
-        )
-}
 
 /// Keep internal timer-change rows out of the displayed message history.
 /// The caller may check whether the raw page was empty before shaping it.
@@ -70,34 +59,6 @@ pub fn visible_history_messages(messages: Vec<Message>) -> Vec<Message> {
 
 /// The picker's choices, in seconds. `0` = off.
 pub const TIMER_PRESETS: [u32; 8] = [0, 30, 300, 3_600, 28_800, 86_400, 604_800, 2_419_200];
-
-/// Human label for a timer value: "Off", "30 seconds", "1 hour", "4 weeks"…
-/// Any value (a peer may send one that is not a preset) is named by the
-/// largest unit that divides it exactly.
-#[must_use]
-pub fn timer_label(seconds: u32) -> String {
-    if seconds == 0 {
-        return "Off".to_string();
-    }
-    const UNITS: [(u32, &str); 5] = [
-        (604_800, "week"),
-        (86_400, "day"),
-        (3_600, "hour"),
-        (60, "minute"),
-        (1, "second"),
-    ];
-    let (size, name) = UNITS
-        .iter()
-        .copied()
-        .find(|(size, _)| seconds % size == 0)
-        .unwrap_or((1, "second"));
-    let n = seconds / size;
-    if n == 1 {
-        format!("1 {name}")
-    } else {
-        format!("{n} {name}s")
-    }
-}
 
 /// Compact form for the chat header: "30s", "5m", "1h", "1d", "4w".
 #[must_use]

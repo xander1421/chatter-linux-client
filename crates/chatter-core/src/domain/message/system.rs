@@ -196,7 +196,7 @@ impl SystemMessage {
             }
             Self::DisappearingTimerChanged { seconds } => format!(
                 "set disappearing messages to {}",
-                crate::services::disappearing::timer_label(*seconds)
+                crate::domain::disappearing::timer_label(*seconds)
             ),
         }
     }

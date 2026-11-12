@@ -10,6 +10,7 @@ pub mod anon_primitives;
 pub mod attachment;
 pub mod call;
 pub mod channel;
+pub mod disappearing;
 pub mod ephemeral;
 pub mod ids;
 pub mod link;
