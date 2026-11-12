@@ -80,7 +80,7 @@ pub struct ImageDecodeResult {
 /// Include Signal bucket padding as well as IV/MAC overhead in the work cap.
 /// A fixed overhead above plaintext size rejects valid near-limit originals.
 pub(crate) fn image_preview_ciphertext_limit() -> u64 {
-    crate::crypto::attachment_crypto::AttachmentCrypto::padded_size(
+    chatter_attachment_crypto::AttachmentCrypto::padded_size(
         crate::domain::attachment::Attachment::AUTO_DOWNLOAD_IMAGE_LIMIT as usize,
     ) as u64
         + 16
@@ -564,7 +564,7 @@ mod video_thumbnail_tests {
     }
     #[test]
     fn video_thumbnail_authenticates_owned_ciphertext_before_decoder() {
-        use crate::crypto::attachment_crypto::AttachmentCrypto;
+        use chatter_attachment_crypto::AttachmentCrypto;
         use crate::domain::attachment::{
             Attachment, AttachmentStatus, ContentLocation, FileMetadata,
         };
@@ -679,7 +679,7 @@ mod video_thumbnail_tests {
 #[cfg(test)]
 mod image_preview_tests {
     use super::*;
-    use crate::crypto::attachment_crypto::AttachmentCrypto;
+    use chatter_attachment_crypto::AttachmentCrypto;
     use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
     use crate::storage::repositories::AttachmentRepository;
 

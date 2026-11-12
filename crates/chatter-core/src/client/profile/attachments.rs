@@ -24,7 +24,7 @@ impl ChatterClient {
         &self,
         attachment_id: &crate::domain::ids::AttachmentId,
     ) -> Result<
-        crate::crypto::secure_buffer::SecureBuffer,
+        chatter_attachment_crypto::SecureBuffer,
         crate::services::attachment::AttachmentError,
     > {
         let _trace = trace::section(c"chatter.media.facade.decrypt_auto");

@@ -33,7 +33,7 @@ pub static ANON_HTTP_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Maximum encrypted storage object, including log-bucket padding, CBC
 /// alignment, IV and MAC. Do not trust a response's Content-Length for allocation.
 pub(crate) fn storage_response_limit() -> usize {
-    let size = crate::crypto::attachment_crypto::max_attachment_size();
+    let size = chatter_attachment_crypto::max_attachment_size();
     usize::try_from(size.saturating_add(size / 20).saturating_add(1024)).unwrap_or(usize::MAX)
 }
 

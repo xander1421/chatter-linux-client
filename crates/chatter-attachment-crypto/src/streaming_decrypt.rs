@@ -25,9 +25,9 @@ use aes::cipher::{BlockModeDecrypt, KeyIvInit};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
-use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
-use crate::crypto::hmac_compat::Sha256Stream;
-use crate::error::CryptoError;
+use crate::AttachmentCryptoError;
+use crate::attachment_crypto::KEY_SET_LENGTH;
+use crate::hmac_compat::Sha256Stream;
 
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
@@ -38,12 +38,17 @@ const AES_KEY_LENGTH: usize = 32;
 const HMAC_LENGTH: usize = 32;
 const CHUNK_SIZE: usize = 512 * 1024; // 512KB chunks - larger for better SQLite blob throughput
 
+trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
+
 /// Streaming decryptor for large attachments.
 ///
 /// Decrypts attachment data from a streaming source (e.g., SQLite BLOB)
 /// without loading the entire ciphertext into memory.
-pub struct StreamingDecryptor<R: Read + Seek> {
-    reader: R,
+pub struct StreamingDecryptor<'r> {
+    // Boxed rather than a type parameter so the AES-CBC code below is
+    // compiled in this crate, at its opt-level, instead of in each caller.
+    reader: Box<dyn ReadSeek + 'r>,
     aes_key: [u8; AES_KEY_LENGTH],
     mac_key: [u8; 32],
     expected_digest: [u8; 32],
@@ -54,7 +59,7 @@ pub struct StreamingDecryptor<R: Read + Seek> {
     decryptor: Option<Aes256CbcDec>,
 }
 
-impl<R: Read + Seek> Drop for StreamingDecryptor<R> {
+impl Drop for StreamingDecryptor<'_> {
     fn drop(&mut self) {
         use zeroize::Zeroize;
         self.aes_key.zeroize();
@@ -62,7 +67,7 @@ impl<R: Read + Seek> Drop for StreamingDecryptor<R> {
     }
 }
 
-impl<R: Read + Seek> StreamingDecryptor<R> {
+impl<'r> StreamingDecryptor<'r> {
     /// Create a new streaming decryptor.
     ///
     /// # Arguments
@@ -73,7 +78,7 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
     /// * `plaintext_size` - Expected size of decrypted data
     /// * `total_size` - Total size of ciphertext (including IV and HMAC)
     pub fn new(
-        reader: R,
+        reader: impl Read + Seek + 'r,
         key: &[u8; KEY_SET_LENGTH],
         expected_digest: &[u8; 32],
         plaintext_size: usize,
@@ -95,7 +100,7 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
         let plaintext_size = plaintext_size.min(ciphertext_body);
 
         Self {
-            reader,
+            reader: Box::new(reader),
             aes_key,
             mac_key,
             expected_digest: *expected_digest,
@@ -112,12 +117,12 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
     /// `total_size` is the size of a blob the storage server handed us. Too
     /// short and the offsets derived from it underflow; not a whole number of
     /// blocks and it cannot be raw CBC.
-    fn encrypted_len(&self) -> Result<usize, CryptoError> {
+    fn encrypted_len(&self) -> Result<usize, AttachmentCryptoError> {
         self.total_size
             .checked_sub(IV_LENGTH + HMAC_LENGTH)
             .filter(|len| *len >= AES_BLOCK && len % AES_BLOCK == 0)
             .ok_or_else(|| {
-                CryptoError::AttachmentDecryptionFailed(
+                AttachmentCryptoError::AttachmentDecryptionFailed(
                     "ciphertext too short or not block-aligned".into(),
                 )
             })
@@ -131,7 +136,7 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
     /// # Returns
     ///
     /// `Ok(())` if verification passes, `Err` if digest or HMAC mismatch.
-    pub fn verify(&mut self) -> Result<(), CryptoError> {
+    pub fn verify(&mut self) -> Result<(), AttachmentCryptoError> {
         if self.verified {
             return Ok(());
         }
@@ -139,15 +144,17 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
         let hmac_start = IV_LENGTH + self.encrypted_len()?;
 
         // Seek to beginning
-        self.reader
-            .seek(SeekFrom::Start(0))
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("seek: {}", e)))?;
+        self.reader.seek(SeekFrom::Start(0)).map_err(|e| {
+            AttachmentCryptoError::AttachmentDecryptionFailed(format!("seek: {}", e))
+        })?;
 
         // Initialize hashers using OpenSSL (hardware accelerated)
-        let mut digest_hasher = Sha256Stream::new()
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 init: {}", e)))?;
-        let mut hmac = crate::crypto::hmac_compat::hmac_init(&self.mac_key)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
+        let mut digest_hasher = Sha256Stream::new().map_err(|e| {
+            AttachmentCryptoError::AttachmentDecryptionFailed(format!("SHA256 init: {}", e))
+        })?;
+        let mut hmac = crate::hmac_compat::hmac_init(&self.mac_key).map_err(|e| {
+            AttachmentCryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e))
+        })?;
 
         // Read and hash in chunks
         let mut chunk = vec![0u8; CHUNK_SIZE];
@@ -155,41 +162,41 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
 
         while bytes_read < hmac_start {
             let to_read = CHUNK_SIZE.min(hmac_start - bytes_read);
-            let n = self
-                .reader
-                .read(&mut chunk[..to_read])
-                .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("read: {}", e)))?;
+            let n = self.reader.read(&mut chunk[..to_read]).map_err(|e| {
+                AttachmentCryptoError::AttachmentDecryptionFailed(format!("read: {}", e))
+            })?;
 
             if n == 0 {
                 break;
             }
 
             // Both digest and HMAC include IV + encrypted data
-            digest_hasher
-                .update(&chunk[..n])
-                .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e)))?;
-            hmac.update(&chunk[..n])
-                .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC: {}", e)))?;
+            digest_hasher.update(&chunk[..n]).map_err(|e| {
+                AttachmentCryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e))
+            })?;
+            hmac.update(&chunk[..n]).map_err(|e| {
+                AttachmentCryptoError::AttachmentDecryptionFailed(format!("HMAC: {}", e))
+            })?;
             bytes_read += n;
         }
 
         // Read the HMAC bytes
         let mut expected_hmac = [0u8; HMAC_LENGTH];
-        self.reader
-            .read_exact(&mut expected_hmac)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("read hmac: {}", e)))?;
+        self.reader.read_exact(&mut expected_hmac).map_err(|e| {
+            AttachmentCryptoError::AttachmentDecryptionFailed(format!("read hmac: {}", e))
+        })?;
 
         // Digest also includes HMAC bytes
-        digest_hasher
-            .update(&expected_hmac)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e)))?;
+        digest_hasher.update(&expected_hmac).map_err(|e| {
+            AttachmentCryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e))
+        })?;
 
         // Finalize
         let actual_digest = digest_hasher.finish().map_err(|e| {
-            CryptoError::AttachmentDecryptionFailed(format!("SHA256 finalize: {}", e))
+            AttachmentCryptoError::AttachmentDecryptionFailed(format!("SHA256 finalize: {}", e))
         })?;
         let computed_hmac = hmac.finalize().map_err(|e| {
-            CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e))
+            AttachmentCryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e))
         })?;
 
         // Verify digest (constant-time)
@@ -199,12 +206,12 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
             .unwrap_u8()
             != 1
         {
-            return Err(CryptoError::AttachmentDigestMismatch);
+            return Err(AttachmentCryptoError::AttachmentDigestMismatch);
         }
 
         // Verify HMAC (constant-time)
         if computed_hmac.ct_eq(&expected_hmac).unwrap_u8() != 1 {
-            return Err(CryptoError::AttachmentMacMismatch);
+            return Err(AttachmentCryptoError::AttachmentMacMismatch);
         }
 
         self.verified = true;
@@ -220,26 +227,27 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
     /// Initialize the AES decryptor for streaming decryption (pass 2).
     ///
     /// Must call `verify()` first.
-    pub fn init_decryption(&mut self) -> Result<(), CryptoError> {
+    pub fn init_decryption(&mut self) -> Result<(), AttachmentCryptoError> {
         if !self.verified {
-            return Err(CryptoError::AttachmentDecryptionFailed(
+            return Err(AttachmentCryptoError::AttachmentDecryptionFailed(
                 "must verify before decryption".into(),
             ));
         }
 
         // Seek to beginning and read IV
-        self.reader
-            .seek(SeekFrom::Start(0))
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("seek: {}", e)))?;
+        self.reader.seek(SeekFrom::Start(0)).map_err(|e| {
+            AttachmentCryptoError::AttachmentDecryptionFailed(format!("seek: {}", e))
+        })?;
 
         let mut iv = [0u8; IV_LENGTH];
-        self.reader
-            .read_exact(&mut iv)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("read iv: {}", e)))?;
+        self.reader.read_exact(&mut iv).map_err(|e| {
+            AttachmentCryptoError::AttachmentDecryptionFailed(format!("read iv: {}", e))
+        })?;
 
         // Create AES-CBC decryptor (raw, no block padding)
-        let decryptor = Aes256CbcDec::new_from_slices(&self.aes_key, &iv)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES init: {e}")))?;
+        let decryptor = Aes256CbcDec::new_from_slices(&self.aes_key, &iv).map_err(|e| {
+            AttachmentCryptoError::AttachmentDecryptionFailed(format!("AES init: {e}"))
+        })?;
 
         self.decryptor = Some(decryptor);
         self.decryption_position = 0;
@@ -257,9 +265,9 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
     /// * `output` - Buffer to write decrypted data, at least one AES block.
     ///   Whole blocks are decrypted in place in it, so up to 15 bytes past the
     ///   returned length may be overwritten with padding.
-    pub fn read_decrypted(&mut self, output: &mut [u8]) -> Result<usize, CryptoError> {
+    pub fn read_decrypted(&mut self, output: &mut [u8]) -> Result<usize, AttachmentCryptoError> {
         let Some(decryptor) = self.decryptor.as_mut() else {
-            return Err(CryptoError::AttachmentDecryptionFailed(
+            return Err(AttachmentCryptoError::AttachmentDecryptionFailed(
                 "decryption not initialized".into(),
             ));
         };
@@ -270,7 +278,7 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
             return Ok(0);
         }
         if output.len() < AES_BLOCK {
-            return Err(CryptoError::AttachmentDecryptionFailed(
+            return Err(AttachmentCryptoError::AttachmentDecryptionFailed(
                 "output buffer smaller than one AES block".into(),
             ));
         }
@@ -282,7 +290,9 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
             .min(plaintext_remaining.next_multiple_of(AES_BLOCK));
         self.reader
             .read_exact(&mut output[..to_read])
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("read: {}", e)))?;
+            .map_err(|e| {
+                AttachmentCryptoError::AttachmentDecryptionFailed(format!("read: {}", e))
+            })?;
         for blk in output[..to_read].chunks_exact_mut(AES_BLOCK) {
             decryptor.decrypt_block(blk.try_into().expect("AES block length"));
         }
@@ -292,9 +302,9 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
     }
 
     /// Finalize decryption and return any remaining data.
-    pub fn finalize(&mut self, _output: &mut [u8]) -> Result<usize, CryptoError> {
+    pub fn finalize(&mut self, _output: &mut [u8]) -> Result<usize, AttachmentCryptoError> {
         if self.decryptor.is_none() {
-            return Err(CryptoError::AttachmentDecryptionFailed(
+            return Err(AttachmentCryptoError::AttachmentDecryptionFailed(
                 "decryption not initialized".into(),
             ));
         }
@@ -307,7 +317,7 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
     ///
     /// Two passes over the blob: [`Self::verify`], then AES. Nothing is
     /// decrypted unless both the HMAC and the digest matched.
-    pub fn decrypt_all(&mut self) -> Result<Vec<u8>, CryptoError> {
+    pub fn decrypt_all(&mut self) -> Result<Vec<u8>, AttachmentCryptoError> {
         self.verify()?;
         self.init_decryption()?;
 
@@ -331,7 +341,7 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::attachment_crypto::AttachmentCrypto;
+    use crate::attachment_crypto::AttachmentCrypto;
     use std::io::Cursor;
 
     #[test]
@@ -381,7 +391,7 @@ mod tests {
         );
         assert!(matches!(
             d.decrypt_all(),
-            Err(CryptoError::AttachmentMacMismatch)
+            Err(AttachmentCryptoError::AttachmentMacMismatch)
         ));
         assert!(
             d.decryptor.is_none(),
@@ -406,11 +416,11 @@ mod tests {
             let mut d = StreamingDecryptor::new(Cursor::new(blob), &key, &digest, 1, total_size);
             assert!(matches!(
                 d.verify(),
-                Err(CryptoError::AttachmentDecryptionFailed(_))
+                Err(AttachmentCryptoError::AttachmentDecryptionFailed(_))
             ));
             assert!(matches!(
                 d.decrypt_all(),
-                Err(CryptoError::AttachmentDecryptionFailed(_))
+                Err(AttachmentCryptoError::AttachmentDecryptionFailed(_))
             ));
         }
     }
@@ -499,7 +509,10 @@ mod tests {
         );
 
         let result = decryptor.verify();
-        assert!(matches!(result, Err(CryptoError::AttachmentDigestMismatch)));
+        assert!(matches!(
+            result,
+            Err(AttachmentCryptoError::AttachmentDigestMismatch)
+        ));
     }
 
     #[test]

@@ -275,3 +275,18 @@ pub enum CryptoError {
     #[error("validation error: {0}")]
     Validation(String),
 }
+
+/// The attachment-crypto crate's error, as the `CryptoError` variant of the
+/// same name (identical messages).
+impl From<chatter_attachment_crypto::AttachmentCryptoError> for CryptoError {
+    fn from(e: chatter_attachment_crypto::AttachmentCryptoError) -> Self {
+        use chatter_attachment_crypto::AttachmentCryptoError as E;
+        match e {
+            E::AttachmentEncryptionFailed(m) => Self::AttachmentEncryptionFailed(m),
+            E::AttachmentDecryptionFailed(m) => Self::AttachmentDecryptionFailed(m),
+            E::AttachmentMacMismatch => Self::AttachmentMacMismatch,
+            E::AttachmentDigestMismatch => Self::AttachmentDigestMismatch,
+            E::AttachmentTooLarge { size, max } => Self::AttachmentTooLarge { size, max },
+        }
+    }
+}

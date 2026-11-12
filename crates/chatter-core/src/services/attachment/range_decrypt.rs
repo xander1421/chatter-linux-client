@@ -4,21 +4,17 @@
 //! attachment on demand instead of decrypting the whole file into memory
 //! before playback starts.
 //!
-//! File layout (same as [`crate::crypto::streaming_decrypt`]):
-//! `IV(16) ‖ AES-256-CBC ciphertext (block-aligned, raw/no padding) ‖ HMAC-SHA256(32)`.
-//!
-//! CBC is randomly readable: `plaintext[b] = AES_dec(C[b]) ⊕ C[b-1]`, with
-//! `C[-1]` = IV. So any range can be decrypted by touching only its covering
-//! ciphertext blocks plus the one preceding block for the chain.
+//! File layout: `IV(16) ‖ AES-256-CBC ciphertext (block-aligned, raw/no padding) ‖ HMAC-SHA256(32)`.
+//! The AES block loop is [`chatter_attachment_crypto::CbcRangeCipher`]; this
+//! type owns the mmap, the size checks and the trace probe.
 //!
 //! ## Security
 //!
 //! Range reads are **unauthenticated on their own**. The caller MUST verify the
-//! whole-file HMAC (via [`crate::crypto::streaming_decrypt::StreamingDecryptor::verify`])
+//! whole-file HMAC (via [`chatter_attachment_crypto::StreamingDecryptor::verify`])
 //! before constructing this — see `AttachmentService::open_range_decryptor`.
 
-use aes::Aes256;
-use aes::cipher::{BlockCipherDecrypt, KeyInit};
+use chatter_attachment_crypto::CbcRangeCipher;
 use memmap2::Mmap;
 
 const IV_LEN: usize = 16;
@@ -28,7 +24,7 @@ const AES_BLOCK: usize = 16;
 /// Decrypts plaintext byte-ranges of a CBC attachment on demand.
 pub struct CbcRangeDecryptor {
     mmap: Mmap,
-    cipher: Aes256,
+    cipher: CbcRangeCipher,
     plaintext_size: usize,
 }
 
@@ -53,7 +49,7 @@ impl CbcRangeDecryptor {
                 "plaintext_size {plaintext_size} exceeds ciphertext {encrypted_len}"
             ));
         }
-        let cipher = Aes256::new(aes_key.into());
+        let cipher = CbcRangeCipher::new(aes_key);
         Ok(Self {
             mmap,
             cipher,
@@ -65,24 +61,6 @@ impl CbcRangeDecryptor {
     #[inline]
     pub fn plaintext_size(&self) -> usize {
         self.plaintext_size
-    }
-
-    /// Ciphertext block `b` (0-based), 16 bytes.
-    #[inline]
-    fn cipher_block(&self, b: usize) -> &[u8] {
-        let start = IV_LEN + b * AES_BLOCK;
-        &self.mmap[start..start + AES_BLOCK]
-    }
-
-    /// CBC chaining input for block `b`: the previous ciphertext block, or the
-    /// IV for block 0.
-    #[inline]
-    fn chain_block(&self, b: usize) -> &[u8] {
-        if b == 0 {
-            &self.mmap[0..IV_LEN]
-        } else {
-            self.cipher_block(b - 1)
-        }
     }
 
     /// Decrypt plaintext bytes `[off, off + len)`, clamped to `plaintext_size`.
@@ -102,27 +80,8 @@ impl CbcRangeDecryptor {
         // One probe per caller range, never one per AES block or byte.
         let _read =
             crate::media::performance_trace::section(c"chatter.media.crypto.range_read_decrypt");
-        if off >= self.plaintext_size || output.is_empty() {
-            return 0;
-        }
-        let end = off.saturating_add(output.len()).min(self.plaintext_size);
-        let start_block = off / AES_BLOCK;
-        let end_block = (end - 1) / AES_BLOCK; // inclusive; end <= encrypted_len so in range
-        for b in start_block..=end_block {
-            let mut blk = [0u8; AES_BLOCK];
-            blk.copy_from_slice(self.cipher_block(b));
-            self.cipher.decrypt_block((&mut blk).into());
-            let chain = self.chain_block(b);
-            for i in 0..AES_BLOCK {
-                blk[i] ^= chain[i];
-            }
-            let block_start = b * AES_BLOCK;
-            let from = off.max(block_start);
-            let to = end.min(block_start + AES_BLOCK);
-            output[from - off..to - off].copy_from_slice(&blk[from - block_start..to - block_start]);
-            blk.fill(0);
-        }
-        end - off
+        self.cipher
+            .decrypt_range_into(&self.mmap, self.plaintext_size, off, output)
     }
 }
 
@@ -182,7 +141,7 @@ impl std::io::Seek for CbcRangeReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::attachment_crypto::AttachmentCrypto;
+    use chatter_attachment_crypto::AttachmentCrypto;
     use std::io::{Read, Seek, SeekFrom, Write};
     use tempfile::NamedTempFile;
 

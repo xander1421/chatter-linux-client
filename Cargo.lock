@@ -1916,6 +1916,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "chatter-attachment-crypto"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "cbc",
+ "hmac 0.13.0",
+ "rand 0.9.5",
+ "rayon",
+ "sha2 0.11.0",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
 name = "chatter-core"
 version = "0.1.0"
 dependencies = [
@@ -1934,6 +1951,7 @@ dependencies = [
  "bytes",
  "cbc",
  "chacha20poly1305 0.11.0",
+ "chatter-attachment-crypto",
  "chatter-mesh",
  "chatter-mesh-android",
  "chatter-mesh-ble",
@@ -2147,6 +2165,7 @@ dependencies = [
  "ab_glyph",
  "android-activity 0.6.1",
  "arboard",
+ "chatter-attachment-crypto",
  "chatter-core",
  "chatter-ui-slint",
  "chrono",

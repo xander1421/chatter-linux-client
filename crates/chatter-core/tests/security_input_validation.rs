@@ -12,7 +12,8 @@ use chatter_core::crypto::ecies::{
     IdentityHpkeUse, OVERHEAD, open_with_identity, seal_to_identity,
 };
 use chatter_core::crypto::profile_crypto;
-use chatter_core::crypto::{AttachmentCrypto, KEY_SET_LENGTH, decrypt_dm_bytes, encrypt_dm_bytes};
+use chatter_attachment_crypto::{AttachmentCrypto, KEY_SET_LENGTH};
+use chatter_core::crypto::{decrypt_dm_bytes, encrypt_dm_bytes};
 use chatter_core::services::{
     PADDING_MESSAGE, build_data_message_content, build_text_content, build_typing_content,
     generate_padding,

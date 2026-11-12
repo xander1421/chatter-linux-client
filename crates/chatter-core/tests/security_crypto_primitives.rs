@@ -9,9 +9,9 @@
 use chatter_core::crypto::ecies::{IdentityHpkeUse, open_with_identity, seal_to_identity};
 use chatter_core::crypto::envelope_crypto;
 use chatter_core::crypto::profile_crypto;
+// Attachment crypto (padding)
+use chatter_attachment_crypto::AttachmentCrypto;
 use chatter_core::crypto::{
-    // Attachment crypto (padding)
-    AttachmentCrypto,
     decrypt_dm_bytes,
     decrypt_dm_message,
     // DM message crypto

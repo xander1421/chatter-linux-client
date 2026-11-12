@@ -14,7 +14,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::crypto::attachment_crypto::{AttachmentCrypto, KEY_SET_LENGTH};
+use chatter_attachment_crypto::{AttachmentCrypto, KEY_SET_LENGTH};
 use crate::domain::anon_dm_init::MAX_AVATAR_SIZE;
 use crate::proto::content_v1::AttachmentPointer;
 use crate::services::attachment::{

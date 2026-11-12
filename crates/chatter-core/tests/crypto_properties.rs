@@ -14,9 +14,9 @@
 //! the failing seed is also stored under `proptest-regressions/` so flakes can
 //! be replayed.
 
-use chatter_core::crypto::AttachmentCrypto;
+use chatter_attachment_crypto::AttachmentCrypto;
 use chatter_core::crypto::envelope_crypto::decrypt_envelope;
-use chatter_core::error::CryptoError;
+use chatter_attachment_crypto::AttachmentCryptoError;
 
 use proptest::prelude::*;
 
@@ -140,9 +140,9 @@ proptest! {
         // And the error should be one of the integrity failures, not e.g.
         // a length error (we kept the length intact).
         match result {
-            Err(CryptoError::AttachmentDigestMismatch)
-            | Err(CryptoError::AttachmentMacMismatch)
-            | Err(CryptoError::AttachmentDecryptionFailed(_)) => {}
+            Err(AttachmentCryptoError::AttachmentDigestMismatch)
+            | Err(AttachmentCryptoError::AttachmentMacMismatch)
+            | Err(AttachmentCryptoError::AttachmentDecryptionFailed(_)) => {}
             other => prop_assert!(
                 false,
                 "expected integrity error, got {:?}",
