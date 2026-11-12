@@ -628,7 +628,7 @@ mod tests {
         assert!(rows[0].reply_to_thumbnail_decoded.is_none());
         let rows = prepare_display_media(rows, true).await;
         let pixels = rows[0].reply_to_thumbnail_decoded.as_ref().unwrap();
-        assert_eq!((pixels.width(), pixels.height()), (320, 160));
+        assert_eq!((pixels.width(), pixels.height()), (640, 320));
         crate::bin_ui::decode_cache::wipe();
     }
 

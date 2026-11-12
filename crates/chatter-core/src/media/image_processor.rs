@@ -317,14 +317,16 @@ impl ImageProcessor {
 
     /// Decode stored sidecars to the inline model's pixel budget.
     pub fn inline_pixels_from_memory(data: &[u8]) -> Result<image::RgbaImage, MediaError> {
-        // Decode the sidecar at its native inline resolution. The sender
-        // generates it at INLINE_THUMBNAIL_MAX_SIZE; decoding to 320 here threw
-        // most of that away, so inline images rendered soft on a HiDPI phone
-        // (bubble ~760px physical) until the full image was fetched on tap.
-        Ok(Self::fit_preview(
-            Self::load_preview_image(data)?,
-            INLINE_THUMBNAIL_MAX_SIZE,
-        ))
+        Ok(Self::inline_pixels(Self::load_preview_image(data)?))
+    }
+
+    /// The one inline-preview pixel bound for every source (sidecar bytes,
+    /// original file on disk, freshly decoded original). The sender generates
+    /// sidecars at INLINE_THUMBNAIL_MAX_SIZE; bounding lower threw most of
+    /// that away, so inline images rendered soft on a HiDPI phone (bubble
+    /// ~760px physical) until the full image was fetched on tap.
+    pub fn inline_pixels(image: DynamicImage) -> image::RgbaImage {
+        Self::fit_preview(image, INLINE_THUMBNAIL_MAX_SIZE)
     }
 
     // These are upper bounds, not target sizes. Enlarging a small sidecar adds
@@ -363,7 +365,7 @@ impl ImageProcessor {
             ));
         }
         Self::decode_preview(std::io::BufReader::new(file))
-            .map(|image| Self::fit_preview(image, 320))
+            .map(Self::inline_pixels)
     }
 
     fn load_preview_image(data: &[u8]) -> Result<DynamicImage, MediaError> {
@@ -758,14 +760,17 @@ mod preview_budget_tests {
     #[test]
     fn disk_and_memory_previews_have_same_bounded_pixels_and_reject_bad_sources() {
         let mut encoded = Cursor::new(Vec::new());
-        DynamicImage::new_rgb8(640, 320)
+        DynamicImage::new_rgb8(1600, 800)
             .write_to(&mut encoded, ImageFormat::Png)
             .unwrap();
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), encoded.get_ref()).unwrap();
         let memory = ImageProcessor::inline_pixels_from_memory(encoded.get_ref()).unwrap();
         let disk = ImageProcessor::inline_pixels_from_path(file.path()).unwrap();
-        assert_eq!(memory.dimensions(), (320, 160));
+        assert_eq!(
+            memory.dimensions(),
+            (INLINE_THUMBNAIL_MAX_SIZE, INLINE_THUMBNAIL_MAX_SIZE / 2)
+        );
         assert_eq!(memory, disk);
         assert!(ImageProcessor::inline_pixels_from_memory(b"not an image").is_err());
         std::fs::write(file.path(), b"not an image").unwrap();
