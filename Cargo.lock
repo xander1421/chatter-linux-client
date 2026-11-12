@@ -2058,7 +2058,7 @@ dependencies = [
 
 [[package]]
 name = "chatter-ios"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "chatter-core",
  "chatter-ui",
@@ -2069,7 +2069,7 @@ dependencies = [
 
 [[package]]
 name = "chatter-mesh"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "flate2",
  "hex",
@@ -2082,7 +2082,7 @@ dependencies = [
 
 [[package]]
 name = "chatter-mesh-android"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "chatter-mesh-link",
  "jni 0.22.4",
@@ -2092,7 +2092,7 @@ dependencies = [
 
 [[package]]
 name = "chatter-mesh-ble"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "bluer",
  "chatter-mesh-link",
@@ -2104,7 +2104,7 @@ dependencies = [
 
 [[package]]
 name = "chatter-mesh-link"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "chatter-mesh",
  "sha2 0.11.0",
@@ -2113,7 +2113,7 @@ dependencies = [
 
 [[package]]
 name = "chatter-mesh-noise"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "chatter-mesh",
  "chatter-mesh-noise",
@@ -2131,7 +2131,7 @@ dependencies = [
 
 [[package]]
 name = "chatter-mesh-nostr"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "base64 0.23.1",
  "bech32",
@@ -2151,7 +2151,7 @@ dependencies = [
 
 [[package]]
 name = "chatter-mesh-store"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "chatter-mesh",
  "chatter-mesh-noise",
@@ -2160,7 +2160,7 @@ dependencies = [
 
 [[package]]
 name = "chatter-ui"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "ab_glyph",
  "android-activity 0.6.1",
@@ -2209,7 +2209,7 @@ dependencies = [
 
 [[package]]
 name = "chatter-ui-slint"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "i-slint-core",
  "slint",

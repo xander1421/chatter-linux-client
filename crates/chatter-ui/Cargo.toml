@@ -1,12 +1,12 @@
 [package]
 name = "chatter-ui"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 authors = ["xander1421"]
 description = "Slint UI for Chatter secure messaging"
 license = "GPL-3.0"
 repository = "https://github.com/xander1421/chatter"
-rust-version = "1.99"
+rust-version.workspace = true
 default-run = "chatter-ui"
 
 [lib]
@@ -78,27 +78,27 @@ winit = { version = "0.30", optional = true }
 # ============================================================================
 # Shared runtime deps (needed directly by the binary)
 # ============================================================================
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal", "io-util", "net", "fs"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "signal", "io-util", "net", "fs"] }
 tokio-util = { version = "0.7", features = ["io"] }
-tracing = "0.1"
+tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 gstreamer = { version = "0.25", optional = true }
 gstreamer-app = { version = "0.25", optional = true }
 gstreamer-video = { version = "0.25", optional = true }
 gstreamer-gl = { version = "0.25", optional = true }
 livekit = { version = "0.7.52", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
-rand = "0.10.3"
+rand = { workspace = true }
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 ab_glyph = "0.2"
 tempfile = "3"
 pdfium-render = { version = "0.9", optional = true }
 dirs = "7.0.0"
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "v5", "serde"] }
+chrono = { workspace = true, features = ["serde"] }
+uuid = { workspace = true, features = ["v4", "v5", "serde"] }
 mime_guess = "2"
 url = "2"
 # once_cell + lazy_static removed — migrated to std::sync::LazyLock
-zeroize = { version = "1.8", features = ["derive"] }
+zeroize = { workspace = true, features = ["derive"] }
 arboard = { version = "3", features = ["wayland-data-control"], optional = true }
 
 # ============================================================================
@@ -138,7 +138,7 @@ i-slint-backend-selector = { version = "=1.18.1", default-features = false, opti
 # JNI bindings for Android system APIs (notifications, window insets).
 # These live in chatter-ui (platform layer), not chatter-core (platform-neutral).
 jni = "0.22.4"
-serde_json = "1"
+serde_json = { workspace = true }
 # Pinned libwebrtc exposes this JavaVM type at its one initialization boundary.
 jni_021 = { package = "jni", version = "=0.21.1" }
 ndk-context = "0.1"
@@ -280,3 +280,6 @@ window_soft_input_mode = "adjustResize"
 # path. android/build-android.sh RELEASE=1 signs with CHATTER_KEYSTORE,
 # CHATTER_KEYSTORE_PASSWORD, CHATTER_KEY_ALIAS and CHATTER_KEY_PASSWORD,
 # read by app/build.gradle.kts. A debug keystore does not belong in this file.
+
+[lints]
+workspace = true
