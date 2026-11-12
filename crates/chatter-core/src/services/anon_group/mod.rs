@@ -24,6 +24,8 @@ mod membership;
 mod messaging;
 mod processing;
 mod removal;
+#[cfg(test)]
+mod timer_tests;
 pub(crate) mod send_ledger;
 mod storage;
 

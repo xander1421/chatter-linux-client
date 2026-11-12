@@ -39,14 +39,13 @@ fn wire_secret_timer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Ok(seconds) = u32::try_from(seconds) else {
                 return;
             };
-            let ActiveConversation::AnonDm(id) = ctx.active_conversation() else {
+            let conv = ctx.active_conversation();
+            if !matches!(conv, ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_)) {
                 return;
-            };
+            }
             let (ctx, weak) = (ctx.clone(), weak.clone());
             tokio::spawn(async move {
-                let result = ctx
-                    .set_disappearing_timer(ActiveConversation::AnonDm(id), seconds)
-                    .await;
+                let result = ctx.set_disappearing_timer(conv, seconds).await;
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(w) = weak.upgrade() else { return };
                     refresh_header(&w, &ctx);

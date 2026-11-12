@@ -122,23 +122,11 @@ impl ChatterClient {
 
         let mut rows = self.message_rows(&messages);
 
-        // Today's rules, encoded once. Opening a private group marks no
-        // disappearing rows (whether private groups get timers at all is an
-        // open owner decision), and only channels — Saved Messages included —
-        // count thread replies on open. History paging does both for every
-        // kind.
-        let (marks_timers, counts_replies) = if opening {
-            (
-                !matches!(conversation, ActiveConversation::AnonGroup(_)),
-                matches!(conversation, ActiveConversation::Channel(_)),
-            )
-        } else {
-            (true, true)
-        };
-        if marks_timers {
-            mark_disappearing(self, &mut rows);
-        }
-        if counts_replies {
+        // Every kind marks its disappearing rows. Only channels — Saved
+        // Messages included — count thread replies on open; history paging
+        // counts them for every kind.
+        mark_disappearing(self, &mut rows);
+        if !opening || matches!(conversation, ActiveConversation::Channel(_)) {
             apply_reply_counts(&mut rows, &self.thread_reply_counts(&channel_id, &kind));
         }
 

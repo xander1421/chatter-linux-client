@@ -232,7 +232,7 @@ pub fn message_to_row(
     // Extract content and system flag
     let (content, is_system) = match &msg.content {
         MessageContent::System(sys) => {
-            let description = if msg.conversation_type == ConversationType::AnonDm {
+            let description = if msg.conversation_type.is_secret_chat() {
                 match sys {
                     SystemMessage::DisappearingTimerChanged { seconds: 0 } => {
                         "turned off disappearing messages".to_string()

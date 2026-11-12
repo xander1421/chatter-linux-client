@@ -387,7 +387,7 @@ impl AnonGroupService {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::sync::Arc;
 
     use ed25519_dalek::{Signer, SigningKey};
@@ -406,16 +406,16 @@ mod tests {
 
     /// We are a member (role `my_role`) of a group owned by `owner`, whose
     /// mailbox key is `owner_key`; `mallory` is a plain member.
-    struct Fixture {
-        client: Arc<ChatterClient>,
+    pub(in crate::services::anon_group) struct Fixture {
+        pub client: Arc<ChatterClient>,
         _dir: tempfile::TempDir,
-        group_id: AnonGroupId,
-        owner: UserId,
+        pub group_id: AnonGroupId,
+        pub owner: UserId,
         owner_key: SigningKey,
-        mallory: UserId,
+        pub mallory: UserId,
     }
 
-    fn fixture(my_role: AnonGroupRole) -> Fixture {
+    pub(in crate::services::anon_group) fn fixture(my_role: AnonGroupRole) -> Fixture {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
             keyring::set_default_store(crate::system::keyring::test_credential_store());

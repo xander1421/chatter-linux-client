@@ -12,6 +12,34 @@ use crate::util::time::TimestampNanos;
 use super::{AnonGroupError, AnonGroupService};
 
 impl AnonGroupService {
+    /// Stamp a post with the group's disappearing timer (every member adopts
+    /// it from there, so a lost timer update heals on the next post) and arm
+    /// its stored row when the timer is on.
+    fn apply_group_timer(
+        &self,
+        group_id: &AnonGroupId,
+        inner: &mut Content,
+        row: &AnonGroupMessageId,
+        sent_at: u64,
+    ) -> Result<(), AnonGroupError> {
+        use crate::services::disappearing::{SecretChat, secret_chat_state, stamp_timer};
+        let timer = secret_chat_state(&self.settings_repo, SecretChat::Group(*group_id));
+        if let Some(content_v1::content::Content::DataMessage(data)) = inner.content.as_mut() {
+            stamp_timer(data, timer);
+        }
+        if timer.effective_seconds(sent_at) > 0 {
+            let id = row
+                .as_str()
+                .parse()
+                .map_err(|_| AnonGroupError::InvalidData("Invalid group message ID".into()))?;
+            crate::storage::repositories::ephemeral_repo::EphemeralRepository::new(
+                self.settings_repo.database().clone(),
+            )
+            .insert_armed(&id, timer.seconds)?;
+        }
+        Ok(())
+    }
+
     fn retain_group_row(
         &self,
         group_id: &AnonGroupId,
@@ -82,10 +110,11 @@ impl AnonGroupService {
         let sent_at = TimestampNanos::now().as_u64();
 
         // Create DataMessage content
-        let inner_content = build_text_content(text, sent_at);
+        let mut inner_content = build_text_content(text, sent_at);
 
         // Store message locally first with the same timestamp we'll send
         let message_id = self.store_text_message(group_id, &current_user, text, sent_at)?;
+        self.apply_group_timer(group_id, &mut inner_content, &message_id, sent_at)?;
 
         self.retain_group_row(group_id, &current_user, &inner_content, &message_id)?;
         // Send to all members
@@ -130,7 +159,7 @@ impl AnonGroupService {
         let sent_at = TimestampNanos::now().as_u64();
 
         // Create DataMessage content with attachments
-        let inner_content = build_data_message_content(text, attachments, sent_at);
+        let mut inner_content = build_data_message_content(text, attachments, sent_at);
 
         // Store message locally first with the same timestamp we'll send
         let message_id = self.store_message_with_attachments(
@@ -142,6 +171,7 @@ impl AnonGroupService {
             None,
         )?;
 
+        self.apply_group_timer(group_id, &mut inner_content, &message_id, sent_at)?;
         self.retain_group_row(group_id, &current_user, &inner_content, &message_id)?;
         // NDSS '21 decorrelation: delay anonymous mailbox send after CDN upload
         // so the server can't correlate the authenticated upload with this write.
@@ -231,7 +261,7 @@ impl AnonGroupService {
 
         let sent_at = TimestampNanos::now().as_u64();
 
-        let inner_content =
+        let mut inner_content =
             build_data_message_content_with_quote(text, attachments, Some(quote), sent_at);
 
         // Resolve author display name for storage
@@ -271,6 +301,7 @@ impl AnonGroupService {
             quote_ctx,
         )?;
 
+        self.apply_group_timer(group_id, &mut inner_content, &message_id, sent_at)?;
         self.retain_group_row(group_id, &current_user, &inner_content, &message_id)?;
         // NDSS '21 decorrelation: delay anonymous mailbox send after CDN upload
         if !attachment_ids.is_empty() {

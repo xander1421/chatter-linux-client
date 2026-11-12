@@ -113,11 +113,11 @@ impl ConversationType {
         matches!(self, Self::Channel)
     }
 
-    /// Whether the chat menu offers "Disappearing messages". Only secret 1:1
-    /// chats set their timer from there.
+    /// Whether the chat menu offers "Disappearing messages": secret chats
+    /// (1:1 and private groups) set their timer from there.
     #[must_use]
     pub fn can_set_disappearing_from_menu(&self) -> bool {
-        matches!(self, Self::AnonDm)
+        self.is_secret_chat()
     }
 
     /// Whether a chat-list row of this kind offers "Delete chat" by kind
@@ -357,7 +357,7 @@ mod capability_tests {
             (CT::Channel, true, false, false, true, true),
             (CT::ServerDm, false, false, true, true, true),
             (CT::AnonDm, false, true, true, true, true),
-            (CT::AnonGroup, false, false, false, true, false),
+            (CT::AnonGroup, false, true, false, true, false),
             (CT::SavedMessages, false, false, false, false, false),
             (CT::Mesh, false, false, false, false, false),
             (CT::MeshDm, false, false, false, false, false),
