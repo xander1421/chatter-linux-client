@@ -266,8 +266,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if let Some(w) = weak.upgrade() {
                 w.global::<crate::SidebarPane>().set_mobile_show_chat(false);
                 w.global::<crate::ChatPane>().set_loading_messages(false);
-                crate::bin_ui::features::message_list::finish_pending_jump(&w, &ui_ctx);
-                crate::bin_ui::features::message_list::refresh_pinned_ui(&w, &ui_ctx);
+                crate::bin_ui::features::message_list::jump::finish_pending_jump(&w, &ui_ctx);
+                crate::bin_ui::features::message_list::pinned_bar::refresh_pinned_ui(&w, &ui_ctx);
             }
             return;
         };
@@ -280,7 +280,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // Clear inline GIF animations
         crate::bin_ui::gif_state::clear_inline_gifs();
 
-        crate::bin_ui::features::message_list::cancel_pending_jump_for(active);
+        crate::bin_ui::features::message_list::jump::cancel_pending_jump_for(active);
 
         let is_anon_dm = matches!(active, chatter_core::state::ActiveConversation::AnonDm(_));
         let peer_id_for_dm: Option<UserId> = match active {
@@ -403,8 +403,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::info!(kind = "secret_dm", stage = "model_replaced", rows = initial_count, elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
                     tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
                     w.global::<crate::ChatPane>().set_loading_messages(false);
-                crate::bin_ui::features::message_list::finish_pending_jump(&w, &ui_ctx);
-                crate::bin_ui::features::message_list::refresh_pinned_ui(&w, &ui_ctx);
+                crate::bin_ui::features::message_list::jump::finish_pending_jump(&w, &ui_ctx);
+                crate::bin_ui::features::message_list::pinned_bar::refresh_pinned_ui(&w, &ui_ctx);
                     crate::bin_ui::converters::set_conversation_kind(
                         &w, &ui_ctx, &chatter_core::domain::message::ConversationType::AnonDm, false,
                     );
@@ -518,8 +518,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 crate::trace_chat_open_model(display_messages.len(), 0);
                 tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
                 w.global::<crate::ChatPane>().set_loading_messages(false);
-                crate::bin_ui::features::message_list::finish_pending_jump(&w, &ui_ctx);
-                crate::bin_ui::features::message_list::refresh_pinned_ui(&w, &ui_ctx);
+                crate::bin_ui::features::message_list::jump::finish_pending_jump(&w, &ui_ctx);
+                crate::bin_ui::features::message_list::pinned_bar::refresh_pinned_ui(&w, &ui_ctx);
                 crate::bin_ui::converters::set_conversation_kind(&w, &ui_ctx, &conv_type, false);
                 w.global::<crate::ChatPane>().set_is_dm(true);
                 w.global::<crate::ChatPane>().set_channel_name(title.into());

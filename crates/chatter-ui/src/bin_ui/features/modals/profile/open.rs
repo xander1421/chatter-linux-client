@@ -239,7 +239,7 @@ pub fn open_user_profile_in_conversation(
             .unwrap_or(false);
 
         // The DM's disappearing-messages timer: this screen is the DM's
-        // settings (see header.rs `wire_chat_settings_clicked`).
+        // settings (see `chat::header_actions::wire_chat_settings_clicked`).
         match ui_ctx {
             Some(ctx) => crate::bin_ui::features::chat::disappearing::show_for_profile(
                 w, ctx, user_id, is_friend,

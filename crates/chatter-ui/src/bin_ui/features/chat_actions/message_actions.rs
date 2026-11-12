@@ -123,7 +123,7 @@ pub fn wire_quote_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return;
             }
             if let Some(w) = weak_window.upgrade() {
-                crate::bin_ui::features::message_list::jump_to_message(&w, &ui_ctx, parent_id.as_str());
+                crate::bin_ui::features::message_list::jump::jump_to_message(&w, &ui_ctx, parent_id.as_str());
             }
         });
 }
@@ -320,7 +320,7 @@ pub fn wire_close_image_viewer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     .set_media_viewer_attachment_id("".into());
                 w.global::<crate::ChatPane>()
                     .set_image_viewer_source(slint::Image::default());
-                crate::bin_ui::features::message_list::refresh_visible_media(
+                crate::bin_ui::features::message_list::viewport::refresh_visible_media(
                     &w,
                     &ui_ctx,
                     w.global::<crate::ChatPane>()

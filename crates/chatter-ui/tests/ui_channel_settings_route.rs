@@ -5,7 +5,7 @@ use chatter_core::{
 };
 use chatter_ui::{
     MainWindow,
-    bin_ui::features::{back, message_list, modals},
+    bin_ui::features::{back, chat::header_actions, modals},
 };
 use slint::ComponentHandle;
 
@@ -56,7 +56,7 @@ fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paint
     w.window().set_size(slint::LogicalSize::new(360.0, 740.0));
     w.set_current_view("main".into());
     w.show().unwrap();
-    message_list::wire(&w, &client);
+    header_actions::wire(&w, &client);
 
     // Stored invite-only channel: metadata must appear even when roster loading fails.
     let stored = ChannelId::new();

@@ -1104,7 +1104,7 @@ fn jump_once_open(
             return;
         }
         if !w.global::<crate::ChatPane>().get_loading_messages() {
-            crate::bin_ui::features::message_list::jump_to_message(&w, &ui_ctx, &message_id);
+            crate::bin_ui::features::message_list::jump::jump_to_message(&w, &ui_ctx, &message_id);
         } else if tries > 0 {
             jump_once_open(weak, ui_ctx, message_id, session, tries - 1);
         }

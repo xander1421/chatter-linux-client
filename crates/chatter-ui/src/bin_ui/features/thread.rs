@@ -973,7 +973,7 @@ pub fn load_thread_data(
 }
 
 /// Scroll the thread panel to reply `index` and flash it, as a jump in the
-/// main list does (header.rs `jump_to_message`). UI thread.
+/// main list does (`message_list::jump::jump_to_message`). UI thread.
 fn show_thread_reply_at(w: &MainWindow, index: usize, message_id: SharedString) {
     let pane = w.global::<crate::ChatPane>();
     pane.set_thread_focus_index(index as i32);

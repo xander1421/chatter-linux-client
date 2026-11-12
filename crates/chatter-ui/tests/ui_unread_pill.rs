@@ -111,7 +111,7 @@ fn open(w: &MainWindow, rows: std::ops::Range<usize>, unread_index: i32) {
     lay_out(w);
 }
 
-/// What `message_list::jump_to_message` does to the list.
+/// What `message_list::jump::jump_to_message` does to the list.
 fn jump(w: &MainWindow, index: i32) {
     w.global::<chatter_ui::ChatPane>()
         .set_scroll_to_message_index(index);
@@ -391,7 +391,7 @@ fn new_messages_are_followed_only_from_the_bottom(w: &MainWindow) {
 /// only when the model grew — which a request that added nothing never did.
 fn older_history_loads_to_the_beginning(w: &MainWindow, row_height: f32) {
     // History 0..200, the newest 50 loaded; each request adds the 50 before
-    // the oldest loaded row, on a later turn as `message_list::load_history` does —
+    // the oldest loaded row, on a later turn as `message_list::history::load_history` does —
     // alternately at once (the page is in before the reader reaches the top)
     // and late (the reader is waiting at the top, row 0 on screen).
     let requests = Rc::new(Cell::new(0));
