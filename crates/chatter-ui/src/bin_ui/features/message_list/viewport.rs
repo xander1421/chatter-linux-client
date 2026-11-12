@@ -562,7 +562,7 @@ mod visible_preview_tests {
                 crate::bin_ui::decode_cache::thumbnail_generation(),
             ))
             .unwrap();
-        assert_eq!((pixels.width(), pixels.height()), (320, 160));
+        assert_eq!((pixels.width(), pixels.height()), (768, 384));
         assert_eq!(dimensions, Some((2048, 1024)));
         assert_eq!(std::fs::read(&path).unwrap(), encrypted.ciphertext);
         // Simulate eviction/reopen: the authenticated original must not be
@@ -578,7 +578,7 @@ mod visible_preview_tests {
                 crate::bin_ui::decode_cache::thumbnail_generation(),
             ))
             .unwrap();
-        assert_eq!((pixels.width(), pixels.height()), (320, 160));
+        assert_eq!((pixels.width(), pixels.height()), (768, 384));
         assert_eq!(dimensions, Some((2048, 1024)));
     }
 }

@@ -1,12 +1,10 @@
 use super::*;
 
-/// F54: a REQUEST goes to EVERY live device of a multi-device peer, each
-/// sealed to that device under its own token — not to the newest one
-/// only (the offline Tab while the S9 was online). Nothing is behind the
-/// server URL, so the batched deposit fails after its credential is spent:
-/// four independently encrypted devices, one batch credential.
+/// Shield with no pinned server `.onion` refuses a multi-device REQUEST
+/// with `SecretChatNeedsTor`: the fan-out never falls back to the direct
+/// transport, and nothing is queued for a later flush.
 #[tokio::test]
-async fn request_fans_out_to_every_live_device() {
+async fn shield_request_without_onion_is_refused_not_sent_direct() {
     let me = UserId::from_uuid(uuid::Uuid::max());
     let friend = UserId::from_uuid(uuid::Uuid::from_u128(1));
     let (client, _dir) = shield_client(me);
@@ -19,38 +17,17 @@ async fn request_fans_out_to_every_live_device() {
     seed_half_open(ms, &friend, &crate::mailbox::dm::ConversationKey::new(), 5);
     seed_tokens(ms, 10);
 
-    let before: Vec<_> = [2, 6, 7, 8]
-        .into_iter()
-        .map(|device| {
-            ms.signal_service
-                .key_store
-                .load_session(&format!("{friend}:{device}"))
-                .unwrap()
-                .expect("cached device session")
-        })
-        .collect();
-
     let sent = ms
         .send_friend_dm_content(&friend, crate::services::build_text_content("hi", 1))
         .await;
     assert!(
-        matches!(sent, Err(MessageError::DmError(ref m)) if m.contains("Failed to send bootstrap")),
+        matches!(
+            sent,
+            Err(MessageError::Network(crate::error::NetworkError::SecretChatNeedsTor(_)))
+        ),
         "got {sent:?}"
     );
-    assert_eq!(
-        ms.token_manager.available_token_count().unwrap(),
-        9,
-        "one credential covers the complete device batch"
-    );
-    for (device, original) in [2, 6, 7, 8].into_iter().zip(before) {
-        let after = ms
-            .signal_service
-            .key_store
-            .load_session(&format!("{friend}:{device}"))
-            .unwrap()
-            .expect("device session retained");
-        assert_ne!(after, original, "REQUEST encrypted for device {device}");
-    }
+    assert!(ms.pending_dms.drain(&friend).unwrap().is_empty());
 }
 
 /// F54: with device 6 ready, a send owes its copy to devices 7 and 8

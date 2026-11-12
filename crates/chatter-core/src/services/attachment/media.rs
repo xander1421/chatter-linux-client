@@ -296,9 +296,10 @@ impl AttachmentService {
                 AttachmentError::InvalidAttachment("image preview encoding failed".into())
             })?;
         drop(encode);
+        let sidecar_dims = (thumbnail.width(), thumbnail.height());
         let pixels = {
             let _resize = trace::section(c"chatter.media.image.model_resize");
-            thumbnail.thumbnail(320, 320).into_rgba8()
+            ImageProcessor::inline_pixels(thumbnail)
         };
         if !owner() {
             return Err(stale());
@@ -310,7 +311,7 @@ impl AttachmentService {
                 &attachment,
                 encoded.get_ref(),
                 (width, height),
-                (thumbnail.width(), thumbnail.height()),
+                sidecar_dims,
             )
             .map_err(|e| AttachmentError::StorageError(e.to_string()))?
         {
@@ -799,14 +800,14 @@ mod image_preview_tests {
     }
 
     #[test]
-    fn missing_or_failed_sidecar_retains_only_small_pixels_and_reuses_durable_preview() {
+    fn missing_or_failed_sidecar_retains_inline_bounded_pixels_and_reuses_durable_preview() {
         let f = fixture();
         let result = f
             .service
             .prepare_image_preview_guarded(&f.source.id, Arc::new(|| true))
             .unwrap();
         assert_eq!((result.width, result.height), (2048, 1024));
-        assert_eq!(result.pixels.dimensions(), (320, 160));
+        assert_eq!(result.pixels.dimensions(), (768, 384));
         assert_eq!(
             std::fs::read(&f.path).unwrap(),
             f.ciphertext,
@@ -831,7 +832,7 @@ mod image_preview_tests {
                 panic!("cached sidecar must skip original decode")
             })
             .unwrap();
-        assert_eq!(reused.pixels.dimensions(), (320, 160));
+        assert_eq!(reused.pixels.dimensions(), (768, 384));
         assert_eq!((reused.width, reused.height), (2048, 1024));
         // A broken fetched sidecar must fall back to the authenticated original.
         let mut broken = f.repo.get(&f.source.id).unwrap().unwrap();
