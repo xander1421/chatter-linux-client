@@ -154,6 +154,15 @@ impl AnonGroupService {
         // 1. Create group locally
         let group = AnonGroup::new_as_owner(name, current_user);
         self.anon_group_repo.insert_group(&group)?;
+        // A new private group starts at the secret-chat default timer, like a
+        // secret 1:1 chat. Members adopt it from the first post, which states it.
+        crate::services::disappearing::initialize_secret_chat_timer(
+            &self.settings_repo,
+            &self.message_service.message_repo,
+            crate::services::disappearing::SecretChat::Group(group.id),
+            &current_user,
+            TimestampNanos::now().as_u64(),
+        )?;
 
         // 2. Create our mailbox for this group
         let mailbox = self.create_group_mailbox(&group.id).await?;
@@ -218,6 +227,15 @@ impl AnonGroupService {
         // 1. Create group locally
         let group = AnonGroup::new_as_owner(name, current_user);
         self.anon_group_repo.insert_group(&group)?;
+        // A new private group starts at the secret-chat default timer, like a
+        // secret 1:1 chat. Members adopt it from the first post, which states it.
+        crate::services::disappearing::initialize_secret_chat_timer(
+            &self.settings_repo,
+            &self.message_service.message_repo,
+            crate::services::disappearing::SecretChat::Group(group.id),
+            &current_user,
+            TimestampNanos::now().as_u64(),
+        )?;
 
         // 2. Create our mailbox for this group
         let mailbox = self.create_group_mailbox(&group.id).await?;

@@ -157,9 +157,9 @@ impl AnonDmService {
         // Create conversation locally
         let dm = AnonDm::new_initiated(peer_id);
         self.anon_dm_repo.insert_conversation(&dm)?;
-        crate::services::disappearing::initialize_anon_dm_timer(
+        crate::services::disappearing::initialize_secret_chat_timer(
             &self.settings_repo, &self.message_repo,
-            &dm.id,
+            crate::services::disappearing::SecretChat::Dm(dm.id),
             &current_user,
             TimestampNanos::now().as_u64(),
         )?;
@@ -324,9 +324,9 @@ impl AnonDmService {
         // Create conversation locally
         let dm = AnonDm::new_initiated(peer_id);
         self.anon_dm_repo.insert_conversation(&dm)?;
-        crate::services::disappearing::initialize_anon_dm_timer(
+        crate::services::disappearing::initialize_secret_chat_timer(
             &self.settings_repo, &self.message_repo,
-            &dm.id,
+            crate::services::disappearing::SecretChat::Dm(dm.id),
             &current_user,
             TimestampNanos::now().as_u64(),
         )?;
