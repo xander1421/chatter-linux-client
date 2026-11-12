@@ -33,8 +33,13 @@ async fn shield_bootstrap_without_cached_devices_is_not_reachable_privately() {
     );
 }
 
+/// Through the public core: a Shield send to a peer with no cached device
+/// is refused and releases admission. Once a device is cached the later
+/// send gets past device preparation, but with no pinned server `.onion` it
+/// is refused with `SecretChatNeedsTor` — and that refusal must release
+/// admission too and queue nothing for a later flush.
 #[tokio::test]
-async fn public_core_shield_refusal_releases_admission_for_later_reachable_preparation() {
+async fn public_core_shield_refusals_release_admission_including_no_tor_route() {
     use crate::state::ActiveConversation;
     let me = UserId::from_uuid(uuid::Uuid::from_u128(1));
     let friend = UserId::from_uuid(uuid::Uuid::max());
@@ -72,11 +77,25 @@ async fn public_core_shield_refusal_releases_admission_for_later_reachable_prepa
         vec![1]
     );
     seed_tokens(client.messages(), 2);
-    // A later public send now reaches actual mailbox bootstrap. The offline
-    // endpoint fails after its boundary, so admission must stay uncertain.
     let later = client.send_text(conversation, "second").await.unwrap();
-    assert_eq!(later.message.unwrap().delivery_status, "sending");
-    assert!(client.ensure_send_available(conversation).is_err());
+    assert!(
+        matches!(
+            later.send_error,
+            Some(MessageError::Network(crate::error::NetworkError::SecretChatNeedsTor(_)))
+        ),
+        "got {:?}",
+        later.send_error
+    );
+    assert!(!later.bootstrap_initiated);
+    client.ensure_send_available(conversation).unwrap();
+    assert!(
+        client
+            .messages()
+            .pending_dms
+            .drain(&friend)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// Shield uses every cached device, newest first, skipping one the server
