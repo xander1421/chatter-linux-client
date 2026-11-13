@@ -32,6 +32,42 @@ fn pump(w: &MainWindow) {
     slint::run_event_loop().unwrap();
 }
 
+/// Open the phone chat pane and let its push finish. Since 3cf2b504 the pane
+/// mounts offscreen and slides in from a one-frame timer over motion-standard
+/// (320ms at 1x). Mid-slide the composer's trailing controls are still past
+/// the right edge and not instantiated. Under the system-time backend a debug
+/// build renders far fewer frames than that, so wait until the composer stops
+/// moving rather than for a fixed time.
+fn settle_chat_push(w: &MainWindow) {
+    w.window()
+        .set_size(slint::LogicalSize::new(PHONE_W, PHONE_H));
+    w.show().unwrap();
+    let x = |w: &MainWindow| {
+        testing::ElementHandle::find_by_element_type_name(w, "MessageComposer")
+            .find(|e| e.size().height > 0.0)
+            .map(|e| e.absolute_position().x)
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut last = None;
+    loop {
+        slint::Timer::single_shot(std::time::Duration::from_millis(50), || {
+            slint::quit_event_loop().unwrap();
+        });
+        slint::run_event_loop().unwrap();
+        let now = x(w);
+        // On screen (the offscreen mount sits a window-width right) and still.
+        let half = w.window().size().to_logical(w.window().scale_factor()).width / 2.0;
+        if now.is_some_and(|x| x < half) && now == last {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the phone chat push never settled (composer x {now:?})"
+        );
+        last = now;
+    }
+}
+
 fn rect(e: &testing::ElementHandle) -> (f32, f32, f32, f32) {
     let p = e.absolute_position();
     let s = e.size();
@@ -252,12 +288,18 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         .set_channel_name("Bob".into());
     w.global::<chatter_ui::SidebarPane>()
         .set_mobile_show_chat(true);
-    pump(&w);
+    settle_chat_push(&w);
     let shell = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
         .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
         .expect("no MessageComposer on the open chat");
     let (sx, sy, sw, sh) = rect(&shell);
-    let (fx, fy, fw, fh) = rect(&one(&w, "Message input"));
+    // The field box the radius is concentric with (`input-field`), not the
+    // TextInput: since cc4a2aee that sits in a Flickable padded inside it.
+    let (fx, fy, fw, fh) = rect(
+        &testing::ElementHandle::find_by_element_id(&w, "MessageComposer::input-field")
+            .find(|e| e.size().height > 0.0)
+            .expect("no composer field box"),
+    );
     let (bx, _, bw, _) = rect(&one(&w, "Record voice message"));
     // The emoji & GIF toggle leads the row; the field sits one inset after it.
     let (ex, _, ew, _) = rect(&one(&w, "Emoji & GIF picker"));

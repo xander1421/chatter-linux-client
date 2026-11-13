@@ -26,8 +26,29 @@ fn visible(w: &MainWindow, label: &str) -> Option<testing::ElementHandle> {
     testing::ElementHandle::find_by_accessible_label(w, label)
         .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
 }
+/// `label`'s element once it is on screen and has stopped moving. Sheets and
+/// the phone chat pane slide in at the 1x default speed (15919403; the pane
+/// from a one-frame timer, 3cf2b504) and are not instantiated while
+/// offscreen; under this system-time backend a debug build renders far fewer
+/// frames than the animation has, so one fixed settle is not always enough.
+fn settled(w: &MainWindow, label: &str) -> testing::ElementHandle {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut last = None;
+    loop {
+        let now = visible(w, label).map(|e| (e.absolute_position(), e.size()));
+        if now.is_some() && now == last {
+            return visible(w, label).unwrap();
+        }
+        assert!(std::time::Instant::now() < deadline, "missing {label}");
+        last = now;
+        slint::Timer::single_shot(std::time::Duration::from_millis(50), || {
+            slint::quit_event_loop().unwrap()
+        });
+        slint::run_event_loop().unwrap();
+    }
+}
 fn click(w: &MainWindow, label: &str) {
-    let e = visible(w, label).unwrap_or_else(|| panic!("missing {label}"));
+    let e = settled(w, label);
     let p = e.absolute_position();
     let s = e.size();
     let position = slint::LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0);
@@ -139,30 +160,21 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
             assert!(visible(&w, "Delete selected for me").is_none());
             click(&w, "Delete selected");
             assert_eq!(visible(&w, "Delete for both").is_some(), eligible);
+            // One scope is no choice: the dialog confirms it directly, with no
+            // lone "Delete for me" chooser button (eec09335).
+            assert_eq!(visible(&w, "Delete for me").is_some(), eligible);
             let old = (local.get(), both.get());
-            click(
-                &w,
-                if eligible {
-                    "Delete for both"
-                } else {
-                    "Delete for me"
-                },
-            );
-            assert_eq!(
-                (local.get(), both.get()),
-                old,
-                "scope choice must not delete"
-            );
             click(&w, "Cancel");
             assert_eq!((local.get(), both.get()), old, "cancel must not delete");
+            assert_eq!(
+                w.global::<chatter_ui::ChatPane>()
+                    .get_delete_confirm_count(),
+                0
+            );
             click(&w, "Delete selected");
-            let label = if eligible {
-                "Delete for both"
-            } else {
-                "Delete for me"
-            };
-            click(&w, label);
-            click(&w, label);
+            // Choosing a scope performs the delete in one tap (ac426115); the
+            // single-scope confirm button reads "Delete" (eec09335).
+            click(&w, if eligible { "Delete for both" } else { "Delete" });
             assert_eq!(
                 (local.get(), both.get()),
                 if eligible {

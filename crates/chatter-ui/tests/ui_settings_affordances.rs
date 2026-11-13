@@ -15,6 +15,31 @@ fn pump(w: &MainWindow) {
     w.run().unwrap();
 }
 
+/// Pump until `probe` finds an element and it has stopped moving. Phone panes
+/// and sheets slide in at the 1x default speed (15919403), the chat pane from
+/// a one-frame timer (3cf2b504), and are not instantiated while offscreen;
+/// under this system-time backend a debug build renders far fewer frames
+/// than the animation has, so a fixed sleep is not enough.
+fn settle_on(w: &MainWindow, what: &str, probe: impl Fn(&MainWindow) -> Option<(f32, f32)>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut last = None;
+    loop {
+        pump(w);
+        let now = probe(w);
+        if now.is_some() && now == last {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "{what} never settled ({now:?})");
+        last = now;
+    }
+}
+
+fn settled_label(w: &MainWindow, label: &str) -> Option<(f32, f32)> {
+    ElementHandle::find_by_accessible_label(w, label)
+        .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
+        .map(|e| (e.absolute_position().x, e.absolute_position().y))
+}
+
 fn click(w: &MainWindow, element: &ElementHandle) {
     // mock_single_click advances the mock clock and cannot be combined with
     // the system-time integration backend. Use real production pointer events.
@@ -139,6 +164,7 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     w.window().set_size(slint::LogicalSize::new(360.0, 740.0));
     w.show().unwrap();
     finish_view_handoff(&w);
+    settle_on(&w, "the phone chat push", |w| settled_label(w, "Message input"));
     w.set_toast_visible(false);
     w.global::<chatter_ui::ChatPane>()
         .set_composer_gif_picker_visible(true);
@@ -154,7 +180,7 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     let witness = callbacks.clone();
     w.global::<chatter_ui::ChatPane>()
         .on_gif_clicked(move || witness.set(witness.get() + 1));
-    pump(&w);
+    settle_on(&w, "the emoji & GIF drawer", |w| settled_label(w, "GIFs"));
     let tab = ElementHandle::find_by_accessible_label(&w, "GIFs")
         .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
         .expect("visible GIF tab");
@@ -222,7 +248,7 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
             ..Default::default()
         }])));
     chatter_ui::bin_ui::features::back::push(&w, "channel-settings");
-    pump(&w);
+    settle_on(&w, "the channel settings sheet", |w| settled_label(w, "Group settings"));
     assert!(
         ElementHandle::find_by_accessible_label(&w, "Group settings")
             .next()
