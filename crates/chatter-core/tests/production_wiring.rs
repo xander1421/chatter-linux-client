@@ -681,13 +681,20 @@ fn every_sealed_sender_decrypt_consumer_refuses_unratcheted_plaintext() {
     /// Plaintext. A new entry here is a deliberate security review, not a typo
     /// fix.
     const EXPECTED_CONSUMERS: &[&str] = &[
-        "chatter-core/src/services/gateway/decryption.rs",
+        // Identified/group gateway: only the 0xC0 DecryptionErrorMessage
+        // ride-along is accepted as Plaintext; anything else is refused.
+        "chatter-core/src/services/gateway/decryption/mod.rs",
+        // Mailbox DM path: refuses every Plaintext before Content::decode.
+        "chatter-core/src/services/gateway/decryption/dm.rs",
         // Durable receive: `decrypt_durable_inner` returns None for Plaintext
         // before reading the bytes, surfaced as PlaintextRejected.
         "chatter-core/src/crypto/signal/receive_store.rs",
         // Plumbing: forwards the (result, type) tuple to the consumers above and
         // never interprets the bytes itself.
-        "chatter-core/src/services/signal/actor.rs",
+        "chatter-core/src/services/signal/actor/runtime.rs",
+        // The primitive's own unit tests (a `#[cfg(test)] mod tests;` file, which
+        // strip_cfg_test cannot see as test code from inside the file).
+        "chatter-core/src/crypto/signal/sealed_sender/tests.rs",
     ];
 
     let mut consumers: BTreeMap<String, bool> = BTreeMap::new();
@@ -799,7 +806,8 @@ fn fn_body(lines: &[String], name: &str) -> Option<String> {
 /// unanchored check. This test goes red naming the broken link.
 #[test]
 fn anon_kt_gate_is_anchored_to_the_device_pin() {
-    const SESSION: &str = "chatter-core/src/services/signal/session.rs";
+    // The session module is split across files (establish.rs, kt.rs, ...).
+    const SESSION: &str = "chatter-core/src/services/signal/session/";
     // (caller, callee): each caller's production body must call the callee.
     const CHAIN: &[(&str, &str)] = &[
         (
@@ -812,11 +820,15 @@ fn anon_kt_gate_is_anchored_to_the_device_pin() {
         ("check_tree_head_consistency", "hold_head_locked"),
     ];
 
-    let path = rust_sources()
+    let files: Vec<_> = rust_sources()
         .into_iter()
-        .find(|p| p.to_string_lossy().replace('\\', "/").ends_with(SESSION))
-        .expect("session.rs not found — update SESSION");
-    let lines = strip_cfg_test(&std::fs::read_to_string(&path).expect("read session.rs"));
+        .filter(|p| p.to_string_lossy().replace('\\', "/").contains(SESSION))
+        .collect();
+    assert!(!files.is_empty(), "no files under {SESSION} — update SESSION");
+    let lines: Vec<String> = files
+        .iter()
+        .flat_map(|p| strip_cfg_test(&std::fs::read_to_string(p).expect("read session module")))
+        .collect();
 
     let mut broken = Vec::new();
     for (caller, callee) in CHAIN {
