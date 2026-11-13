@@ -91,6 +91,8 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                         .set_settings_cloud_ai_mode(cloud.mode.as_str().into());
                     w.global::<crate::SettingsPane>()
                         .set_settings_cloud_ai_configured(cloud.is_available());
+                    w.global::<crate::SettingsPane>()
+                        .set_settings_cloud_ai_model(cloud.model.into());
                     // Never echo the stored key back into the field.
                     w.global::<crate::SettingsPane>()
                         .set_settings_cloud_ai_api_key("".into());

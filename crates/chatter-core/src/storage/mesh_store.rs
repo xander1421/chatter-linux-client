@@ -526,11 +526,6 @@ impl MeshSealer {
         }
     }
 
-    /// Remove the seal key from the keyring.
-    ///
-    /// Logout and account reset. Everything in `mesh_store` becomes permanently
-    /// unreadable, which is the point — call [`Storage::wipe_all`] alongside it
-    /// so the unreadable rows do not linger.
     /// The seal key from a plaintext file beside the database, generating it on
     /// first use.
     ///
@@ -617,7 +612,34 @@ impl MeshSealer {
         path
     }
 
-    pub fn delete_from_keyring(db_path: &Path) -> Result<(), StoreError> {
+    /// Destroy the seal key wherever this platform keeps it: the key file beside
+    /// the database (Android's Keystore-sealed file, or the plaintext file a
+    /// keyring opt-out uses) and, where the OS keyring is in use, its
+    /// `mesh-seal:` entry.
+    ///
+    /// Panic wipe. Everything ever sealed under the key — including copies a
+    /// row delete leaves behind in WAL frames, free pages or a backup — becomes
+    /// permanently unreadable, which is the point. Call it after the mesh rows
+    /// are wiped: the next start finds no key, generates one, and
+    /// [`sealed_store`] clears whatever the old key sealed.
+    ///
+    /// A `CHATTER_MESH_SEAL_KEY` override is not stored anywhere to destroy.
+    pub fn destroy_key(db_path: &Path) -> Result<(), StoreError> {
+        let use_keyring = !APP_SANDBOXED && !crate::system::keyring::keyring_disabled(db_path);
+        Self::destroy_key_with(db_path, use_keyring)
+    }
+
+    /// [`destroy_key`](Self::destroy_key) with the keyring decision as a
+    /// parameter, so the file paths are testable without an OS keyring.
+    fn destroy_key_with(db_path: &Path, use_keyring: bool) -> Result<(), StoreError> {
+        match std::fs::remove_file(Self::local_key_path(db_path)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(storage_error("key file delete", SEAL_KEY_LABEL, e)),
+        }
+        if !use_keyring {
+            return Ok(());
+        }
         crate::system::keyring::ensure_default_store()
             .map_err(|e| storage_error("keyring initialize", SEAL_KEY_LABEL, e))?;
         let entry = keyring::Entry::new(APP_ID, &Self::entry_username(db_path))
@@ -821,6 +843,38 @@ mod tests {
                 "a ready sealer's key must survive a restart"
             );
         }
+    }
+
+    #[test]
+    fn destroying_the_seal_key_leaves_nothing_that_opens_old_seals() {
+        // Panic wipe: the Android Keystore-sealed key file and the keyring
+        // opt-out's plaintext file both go, so the next run generates a new key
+        // and what the old one sealed never opens again. No OS keyring here.
+        use crate::system::sealed_secret::tests::FakeWrap;
+        let wrap = FakeWrap { fail_unseal: false };
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("chatter.db");
+
+        let first = MeshSealer::acquire_with(&db_path, Some(&wrap)).expect("first run");
+        let sealed = first.seal(b"peer pins").expect("seal");
+        MeshSealer::destroy_key_with(&db_path, false).expect("destroy");
+        assert!(!MeshSealer::local_key_path(&db_path).exists());
+        let next = MeshSealer::acquire_with(&db_path, Some(&wrap)).expect("next run");
+        assert!(next.key_is_new(), "a destroyed key must not come back");
+        assert!(next.open(&sealed).is_err());
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("chatter.db");
+        let plain = MeshSealer::from_local_key_file(&db_path).expect("plaintext key");
+        let sealed = plain.seal(b"outbox").expect("seal");
+        MeshSealer::destroy_key_with(&db_path, false).expect("destroy");
+        let next = MeshSealer::from_local_key_file(&db_path).expect("next run");
+        assert!(next.key_is_new());
+        assert!(next.open(&sealed).is_err());
+
+        MeshSealer::destroy_key_with(&db_path, false).expect("destroy");
+        MeshSealer::destroy_key_with(&db_path, false)
+            .expect("destroying a key that is already gone is not an error");
     }
 
     #[test]

@@ -13,12 +13,14 @@ export component AISettings inherits VerticalLayout {
     in property <string> cloud-ai-balance;
     in property <bool> cloud-ai-configured;
     in-out property <string> cloud-ai-mode;
+    in-out property <string> cloud-ai-model;
     in property <string> cloud-ai-status;
     in property <bool> mobile-platform;
     callback open-memory();
     callback ai-prefer-cloud-changed(bool);
     callback cloud-ai-api-key-changed(string);
     callback cloud-ai-mode-changed(string);
+    callback cloud-ai-model-changed(string);
     callback cloud-ai-refresh-quota();
 
 
@@ -93,6 +95,23 @@ export component AISettings inherits VerticalLayout {
                             root.cloud-ai-mode = "server-broker";
                             root.cloud-ai-mode-changed("server-broker");
                         }
+                    }
+                }
+
+                // The model both modes ask for. Blank means the provider default.
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    Input {
+                        placeholder: "Model (blank for the default)";
+                        text <=> root.cloud-ai-model;
+                        horizontal-stretch: 1;
+                        accepted(value) => { root.cloud-ai-model-changed(value); }
+                    }
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "Save model";
+                        variant: "secondary";
+                        clicked => { root.cloud-ai-model-changed(root.cloud-ai-model); }
                     }
                 }
 

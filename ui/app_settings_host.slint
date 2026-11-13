@@ -70,6 +70,7 @@ export component AppSettingsHost inherits Rectangle {
         ai-prefer-cloud <=> SettingsPane.settings-ai-prefer-cloud;
         cloud-ai-mode <=> SettingsPane.settings-cloud-ai-mode;
         cloud-ai-api-key <=> SettingsPane.settings-cloud-ai-api-key;
+        cloud-ai-model <=> SettingsPane.settings-cloud-ai-model;
         cloud-ai-configured: SettingsPane.settings-cloud-ai-configured;
         cloud-ai-status: SettingsPane.settings-cloud-ai-status;
         cloud-ai-balance: SettingsPane.settings-cloud-ai-balance;
@@ -166,6 +167,7 @@ export component AppSettingsHost inherits Rectangle {
         ai-prefer-cloud-changed(value) => { SettingsPane.settings-ai-prefer-cloud-changed(value); }
         cloud-ai-mode-changed(mode) => { SettingsPane.settings-cloud-ai-mode-changed(mode); }
         cloud-ai-api-key-changed(key) => { SettingsPane.settings-cloud-ai-api-key-changed(key); }
+        cloud-ai-model-changed(model) => { SettingsPane.settings-cloud-ai-model-changed(model); }
         cloud-ai-refresh-quota => { SettingsPane.settings-cloud-ai-refresh-quota(); }
         ai-open-memory => {
             ModalHostState.nav-push("jarvis-memory");

@@ -1045,6 +1045,7 @@ pub fn open_sender_sheet(
         );
         global.set_sheet_binding_label("Self-asserted · peer no longer nearby".into());
         global.set_sheet_fingerprint("".into());
+        global.set_sheet_own_fingerprint(ui_ctx.mesh_fingerprint().into());
         global.set_sheet_comparison_code("".into());
         global.set_sheet_peer_blocked(false);
         global.set_sheet_peer_muted(false);
@@ -1070,6 +1071,7 @@ fn open_peer_sheet(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, peer_id: &s
             .into(),
     );
     global.set_sheet_fingerprint(peer.fingerprint.unwrap_or_default().into());
+    global.set_sheet_own_fingerprint(ui_ctx.mesh_fingerprint().into());
     global.set_sheet_comparison_code(
         ui_ctx
             .mesh_comparison_code(peer_id)

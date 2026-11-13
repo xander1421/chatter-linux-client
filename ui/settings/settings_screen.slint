@@ -95,6 +95,7 @@ export component SettingsScreen inherits Rectangle {
     in-out property <bool> ai-prefer-cloud: false;
     in-out property <string> cloud-ai-mode: "direct-anthropic";  // | "server-broker"
     in-out property <string> cloud-ai-api-key: "";
+    in-out property <string> cloud-ai-model: "";
     in property <bool> cloud-ai-configured: false;
     in property <string> cloud-ai-status: "";
     in property <string> cloud-ai-balance: "";
@@ -201,6 +202,7 @@ export component SettingsScreen inherits Rectangle {
     callback ai-prefer-cloud-changed(bool);
     callback cloud-ai-mode-changed(string);      // "direct-anthropic" | "server-broker"
     callback cloud-ai-api-key-changed(string);
+    callback cloud-ai-model-changed(string);
     callback cloud-ai-refresh-quota();
 
     background: Materials.ambient;
@@ -483,11 +485,13 @@ export component SettingsScreen inherits Rectangle {
                             cloud-ai-balance : root.cloud-ai-balance;
                             cloud-ai-configured : root.cloud-ai-configured;
                             cloud-ai-mode <=> root.cloud-ai-mode;
+                            cloud-ai-model <=> root.cloud-ai-model;
                             cloud-ai-status : root.cloud-ai-status;
                             mobile-platform : root.mobile-platform;
                             ai-prefer-cloud-changed(arg0) => { root.ai-prefer-cloud-changed(arg0); }
                             cloud-ai-api-key-changed(arg0) => { root.cloud-ai-api-key-changed(arg0); }
                             cloud-ai-mode-changed(arg0) => { root.cloud-ai-mode-changed(arg0); }
+                            cloud-ai-model-changed(arg0) => { root.cloud-ai-model-changed(arg0); }
                             cloud-ai-refresh-quota() => { root.cloud-ai-refresh-quota(); }
                         }
 
