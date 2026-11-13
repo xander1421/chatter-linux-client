@@ -1425,9 +1425,11 @@ fn cloud_preference_does_not_override_the_dm_policy() {
     client.set_ai_enabled_for("dm-1", true).expect("enable");
     client.set_ai_enabled_for("chan-1", true).expect("enable");
 
+    // The policy clamps a DM to the local silo; with the local runtime
+    // removed (badf7e8a) that resolves Off — never to the cloud.
     assert_eq!(
         client.resolve_ai_for("dm-1", &ConversationType::ServerDm, false),
-        Resolved::Use(Silo::Local),
+        Resolved::Off,
         "a DM resolved to the cloud silo despite the policy clamp"
     );
     assert_eq!(
@@ -2000,6 +2002,14 @@ fn presence_status_picker_reaches_core() {
     let (rt, _tmp, client, w) = wired_offline();
     chatter_ui::init_rt_handle(rt.handle().clone());
     chatter_ui::bin_ui::features::status::wire(&w, &client);
+    // Presence writes are admitted only for the current signed-in session
+    // (presence_facade.rs with_presence_publication); the picker exists only
+    // then. In-memory fixture identity, no login or connection.
+    client.testing_set_logged_in(
+        chatter_core::domain::ids::UserId::new(),
+        1,
+        "Presence fixture".into(),
+    );
 
     // Negative control: nothing persisted before the callback fires.
     assert_eq!(
@@ -2041,9 +2051,13 @@ fn presence_status_picker_reaches_core() {
     }
 
     // Static half: the picker row actually invokes the callback chain.
+    // The pills are their own component (ProfileStatusPicker) since the
+    // profile split; the modal forwards its callback.
     let modal = include_str!("../../../ui/modals/user_profile.slint");
+    let picker = include_str!("../../../ui/modals/profile_status_picker.slint");
     assert!(
-        modal.contains("root.change-status(opt.mode)"),
+        picker.contains("clicked => { root.change-status(opt.mode); }")
+            && modal.contains("change-status(mode) => { root.change-status(mode); }"),
         "STATUS pills must fire change-status"
     );
     let app = include_str!("../../../ui/app_modal_host.slint");
@@ -2527,6 +2541,9 @@ fn new_channel_done_and_back_put_the_keyboard_away() {
                 .to_logical(scale),
         });
     chatter_ui::bin_ui::features::back::push(&w, "create-channel");
+    // The modal mounts from `changed active-modal` (app.slint →
+    // AppModalTransitions.present-active-modal), which runs on the next tick.
+    slint::platform::update_timers_and_animations();
     w.window().request_redraw();
     // Let the card's entrance animation settle so clicks land on the fields.
     testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
@@ -4351,9 +4368,34 @@ fn no_screen_defines_its_own_dismissal_glyph() {
         "close-settings",
     ];
 
+    // Not dismissal: the call controls' device-selector caret (5a1f220b).
+    const NOT_DISMISSAL: [(&str, &str); 1] = [("ui/calls/call_controls.slint", "Icons.chevron-left")];
+    // Sections split out of a Modal screen (0466f692): their Cancel forwards
+    // to the host's close, so the host's Modal is their dismissal.
+    const MODAL_SECTIONS: [(&str, &str, &str); 1] = [(
+        "ui/modals/join_channel_tab.slint",
+        "JoinChannelTab {",
+        "ui/modals/create_channel.slint",
+    )];
+    let screens = dismissable_screens();
+    for (section, element, host) in MODAL_SECTIONS {
+        let host_src = &screens.iter().find(|(n, _)| n == host).expect("modal host").1;
+        let at = host_src.find(element).expect("host instantiates the section");
+        assert!(
+            host_src.contains("Modal {") && block_around(host_src, at + element.len(), 1).contains("close => { root.close(); }"),
+            "{section} must close through {host}'s Modal"
+        );
+    }
+
     let mut findings = Vec::new();
-    for (name, src) in dismissable_screens() {
+    for (name, src) in screens {
+        if MODAL_SECTIONS.iter().any(|(section, _, _)| *section == name) {
+            continue;
+        }
         for needle in OWN_GLYPH {
+            if NOT_DISMISSAL.contains(&(name.as_str(), needle)) {
+                continue;
+            }
             if src.contains(needle) {
                 findings.push(format!(
                     "{name} draws its own dismissal glyph ({needle}) — use \
@@ -4524,10 +4566,12 @@ fn headers_use_the_shared_header_button() {
         "\\u{2715}",
         "\\u{22EE}",
     ];
-    const NOT_A_HEADER: [(&str, &str); 11] = [
+    const NOT_A_HEADER: [(&str, &str); 13] = [
+        ("calls/call_controls.slint", "Icons.chevron-left"), // a device button's selector caret
+        ("chat/composer_reply_preview.slint", "Icons.x"), // cancel the reply strip
         ("chat/chat_layout.slint", "Icons.x"), // clear the picker drawer's search field
-        ("chat/message_composer.slint", "Icons.x"), // cancel reply / edit strip
-        ("chat/message_composer.slint", "\\u{00D7}"), // remove a pending attachment
+        ("chat/composer_edit_bar.slint", "Icons.x"), // cancel the edit strip
+        ("chat/composer_attachment_strip.slint", "Icons.x"), // remove a pending attachment
         ("chat/pinned_bar.slint", "Icons.x"),  // dismiss the pinned banner
         ("components/connection_banner.slint", "Icons.x"), // dismiss the banner
         ("components/toast.slint", "Icons.x"), // dismiss a toast
@@ -5186,6 +5230,9 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
 
     chatter_ui::bin_ui::features::back::push(&w, "channel-settings");
     slint::platform::update_timers_and_animations();
+    // Let the sheet's entrance animation settle so taps land on its rows.
+    testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+    slint::platform::update_timers_and_animations();
     tap_text(&w, "Notifications");
 
     tap_text(&w, "Mute channel");
@@ -5235,6 +5282,9 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
     // ---- App settings > Privacy: a ToggleRow outside the modal --------------
     chatter_ui::bin_ui::features::back::close(&w, "channel-settings");
     chatter_ui::bin_ui::features::back::push(&w, "settings");
+    slint::platform::update_timers_and_animations();
+    testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+    slint::platform::update_timers_and_animations();
     tap_text(&w, "Privacy");
     let before = w
         .global::<chatter_ui::SettingsPane>()
@@ -5432,8 +5482,10 @@ fn ux3_account_menu_pushes_settings_and_fab_opens_create_menu() {
     w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
     w.global::<chatter_ui::SidebarPane>()
         .set_active_tab("profile".into());
-    let settings_row = testing::ElementHandle::find_by_accessible_label(&w, "Settings")
-        .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Button))
+    // The account menu's row, not the sidebar footer's gear, which is also a
+    // "Settings" button since 494ae5b2 made the footer keyboard accessible.
+    let settings_row = testing::ElementHandle::find_by_element_type_name(&w, "MenuRow")
+        .find(|e| e.accessible_label().as_deref() == Some("Settings"))
         .expect("the account menu has no Settings row");
     settings_row.mock_single_click(slint::platform::PointerEventButton::Left);
     assert_eq!(
@@ -5518,6 +5570,9 @@ fn phone_call_end_without_chat_returns_to_list() {
         // `changed` handlers run on the next tick, not inside the setter.
         w.global::<chatter_ui::CallView>()
             .set_active_call_visible(true);
+        // As calls/incoming.rs open_call_screen: Accept saves the route the
+        // call covers, and the call's end restores it (faecc37f).
+        w.global::<chatter_ui::CallView>().invoke_save_call_route();
         if !w.global::<chatter_ui::SidebarPane>().get_mobile_show_chat() {
             w.global::<chatter_ui::CallView>()
                 .set_call_raised_pane(true);
@@ -5701,9 +5756,12 @@ fn floating_chrome_keeps_content_insets_and_clear_materials() {
     // Calls reserves space for its confirmation footer. Its actual floating
     // viewport and footer hit isolation are checked by ui_calls_menu; an
     // unconditional full-height source rule would require the native overlap.
+    // The list viewports live in the tab components since 85f04336.
     assert!(
-        include_str!("../../../ui/modals/friends.slint")
+        include_str!("../../../ui/modals/friends_friends_tab.slint")
             .contains("height: root.mobile-mode ? root.height : parent.height;")
+            && include_str!("../../../ui/modals/friends_requests_tab.slint")
+                .contains("height: root.mobile-mode ? root.height : parent.height;")
     );
     assert!(material.contains("Appearance.glass-effects"));
     assert!(material.contains("blur-regular:") && material.contains("blur-thick:"));
@@ -6295,6 +6353,15 @@ fn video_call_lives_in_the_header_more_menu() {
         "the header still emits video-call-clicked"
     );
 
+    // Core: calls only in channels and friend DMs; settings everywhere but
+    // an anonymous DM.
+    let core = include_str!("../../chatter-core/src/client/auth_state.rs");
+    assert!(
+        core.contains("let can_call = matches!(kind, Kind::Channel | Kind::ServerDm)")
+            && core.contains("can_open_settings: matches!(kind, Kind::Channel | Kind::ServerDm | Kind::AnonGroup),"),
+        "core's header capabilities changed; update the table below"
+    );
+
     let w = boot();
     back::wire(&w);
     let started = std::rc::Rc::new(std::cell::Cell::new(0));
@@ -6334,6 +6401,13 @@ fn video_call_lives_in_the_header_more_menu() {
         });
         w.global::<chatter_ui::ChatPane>()
             .set_conversation_kind(kind);
+        // The header renders what core's conversation_actions decides
+        // (eeef4563; rule pinned below), which needs stored conversations
+        // this fixture does not have — so hand the header those two answers.
+        w.global::<chatter_ui::ChatPane>()
+            .set_header_can_call(calls);
+        w.global::<chatter_ui::ChatPane>()
+            .set_header_can_open_settings(settings_row);
         w.global::<chatter_ui::ChatPane>()
             .set_channel_name(name.into());
         w.global::<chatter_ui::SidebarPane>()
@@ -6421,6 +6495,16 @@ fn call_banners_use_connection_state_instead_of_roster_or_duration() {
     w.global::<chatter_ui::CallView>()
         .set_active_call_visible(true);
     w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+    // The return-to-call bar's clock is a plain Text (label = its text); the
+    // call view's is labelled "Call duration" with the text as its value
+    // (59ab7eac).
+    let shows = |w: &MainWindow, text: &str| {
+        testing::ElementHandle::find_by_accessible_label(w, text)
+            .next()
+            .is_some()
+            || testing::ElementHandle::find_by_accessible_label(w, "Call duration")
+                .any(|e| e.accessible_value().as_deref() == Some(text))
+    };
     let mut data = w.global::<chatter_ui::CallView>().get_active_call_data();
     data.call_id = "test-call".into();
     data.title = "Call test".into();
@@ -6435,9 +6519,7 @@ fn call_banners_use_connection_state_instead_of_roster_or_duration() {
             .set_active_call_fullscreen(fullscreen);
         slint::platform::update_timers_and_animations();
         assert!(
-            testing::ElementHandle::find_by_accessible_label(&w, "Calling…")
-                .next()
-                .is_some(),
+            shows(&w, "Calling…"),
             "ringing roster must not imply an answered call (fullscreen={fullscreen})"
         );
     }
@@ -6452,15 +6534,9 @@ fn call_banners_use_connection_state_instead_of_roster_or_duration() {
         w.global::<chatter_ui::CallView>()
             .set_active_call_fullscreen(fullscreen);
         slint::platform::update_timers_and_animations();
+        assert!(!shows(&w, "Calling…"));
         assert!(
-            testing::ElementHandle::find_by_accessible_label(&w, "Calling…")
-                .next()
-                .is_none()
-        );
-        assert!(
-            testing::ElementHandle::find_by_accessible_label(&w, "0:00")
-                .next()
-                .is_some(),
+            shows(&w, "0:00"),
             "connected zero-second call must show its clock (fullscreen={fullscreen})"
         );
     }
@@ -7529,9 +7605,9 @@ fn a_failed_gif_does_not_overwrite_a_new_uncommitted_word() {
 
 #[test]
 fn a_gif_finishing_after_an_account_change_is_discarded() {
+    // GifHarness is signed in as account A. Signing in again here would be
+    // a second session, which strands the harness's composer before A sends.
     let h = GifHarness::new();
-    h.client
-        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
     h.w.global::<chatter_ui::ChatPane>()
         .set_composer_text("A's caption".into());
     let (tx, task) = h.pick();
@@ -7559,9 +7635,9 @@ fn a_gif_finishing_after_an_account_change_is_discarded() {
 
 #[test]
 fn sign_out_invalidates_recovery_before_resetting_the_visible_composer() {
+    // GifHarness is signed in as account A. Signing in again here would be
+    // a second session, which strands the harness's composer before A sends.
     let h = GifHarness::new();
-    h.client
-        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
     h.w.global::<chatter_ui::ChatPane>()
         .set_composer_text("A's caption".into());
     let old = chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).unwrap();
@@ -7605,9 +7681,9 @@ fn sign_out_invalidates_recovery_before_resetting_the_visible_composer() {
 
 #[test]
 fn a_gif_upload_error_after_account_change_cannot_restore_or_show_a_toast() {
+    // GifHarness is signed in as account A. Signing in again here would be
+    // a second session, which strands the harness's composer before A sends.
     let h = GifHarness::new();
-    h.client
-        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
     h.w.global::<chatter_ui::ChatPane>()
         .set_composer_text("A's caption".into());
     let (tx, task) = h.pick();

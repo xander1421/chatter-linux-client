@@ -61,6 +61,14 @@ echo "=================================================================="
 # Filter the benign per-query debug-info notice.
 FEATURES=ui-test-debug,chatter-core/dev-trust-root,chatter-core/insecure-test-anchors,chatter-core/testing
 
+# ui-test-debug covers the generated MainWindow (chatter-ui-slint's build.rs).
+# The `slint::slint!` harnesses inside the test targets (ui_liquid_*,
+# ui_shield_profile, …) are compiled by the macro, which reads only this
+# variable; without it their `find_by_element_id` queries find nothing.
+# chatter-ui-slint's build script also tracks it, but this script is the only
+# builder of the ui-test-debug variant, so it reruns once and then stays put.
+export SLINT_EMIT_DEBUG_INFO=1
+
 CHATTER_NO_KEYRING=1 cargo test -j 2 -p chatter-ui --features $FEATURES --tests --no-fail-fast 2>&1 \
     | grep -v 'requires the presence of debug info'
 TEST_RC=${PIPESTATUS[0]}

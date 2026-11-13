@@ -81,7 +81,12 @@ fn call_clock_is_below_status_and_icon_with_channel_identity_only() {
                     _ if own => "Outgoing call",
                     _ => "Incoming call",
                 };
-                let status_el = visible(&w, label).into_iter().next().expect("call status");
+                // The bubble itself is an accessible button carrying the same
+                // label (77816701); the status is the element that is not.
+                let status_el = visible(&w, label)
+                    .into_iter()
+                    .find(|e| e.accessible_role() != Some(testing::AccessibleRole::Button))
+                    .expect("call status");
                 let cp = clock.absolute_position();
                 let sp = status_el.absolute_position();
                 assert!(

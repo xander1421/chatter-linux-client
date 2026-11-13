@@ -68,11 +68,15 @@ fn phone_media_actions_fit_and_mixed_height_pin_seek_lands_at_header() {
         chatter_core::domain::ids::ChannelId::new(),
     );
     client.select_conversation(a);
+    // Row edits go through the production MessageModel (cd18c496); a plain
+    // VecModel is refused with a warning, so the fixture uses the real model.
     w.global::<chatter_ui::ChatPane>()
-        .set_messages(ModelRc::new(VecModel::from(vec![MessageItemData {
-            message_id: "collision".into(),
-            ..Default::default()
-        }])));
+        .set_messages(ModelRc::new(chatter_ui::bin_ui::message_model::MessageModel::from(vec![
+            MessageItemData {
+                message_id: "collision".into(),
+                ..Default::default()
+            },
+        ])));
     let queued_client = client.clone();
     w.as_weak()
         .upgrade_in_event_loop(move |w| {

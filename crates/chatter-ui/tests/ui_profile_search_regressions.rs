@@ -183,8 +183,16 @@ fn selected_second_url_and_search_clear_use_production_callbacks() {
 
     // Check that both Slint row paths forward the URL discriminator and the
     // root binding preserves it; production Rust must use the safe shared action.
+    // The two row paths are ProfileSharedList and ProfileSharedGrid since the
+    // profile split (77d27489); each fires from pointer, keyboard and a11y.
     let modal = include_str!("../../../ui/modals/user_profile.slint");
-    assert_eq!(modal.matches("root.open-shared-item(item.message-id, item.attachment-id, item.category, item.subtitle)").count(), 2);
+    for rows in [
+        include_str!("../../../ui/modals/profile_shared_list.slint"),
+        include_str!("../../../ui/modals/profile_shared_grid.slint"),
+    ] {
+        assert_eq!(rows.matches("root.open-shared-item(item.message-id, item.attachment-id, item.category, item.subtitle)").count(), 3);
+    }
+    assert_eq!(modal.matches("open-shared-item(message-id, attachment-id, category, selected-url) => { root.open-shared-item(message-id, attachment-id, category, selected-url); }").count(), 2);
     let app = include_str!("../../../ui/app_modal_host.slint");
     assert!(app.contains(
         "ModalHostState.profile-open-shared-item(message-id, attachment-id, category, selected-url)"
