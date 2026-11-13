@@ -150,8 +150,6 @@ pub use anon_group::{AnonGroupError, AnonGroupService};
 pub use anon_dm::{AnonDmError, AnonDmService};
 
 // Re-exports for Jarvis AI assistant
-#[cfg(feature = "jarvis")]
-pub use jarvis::{JarvisBackground, JarvisBackgroundBuilder, JarvisError, JarvisService};
 
 // Re-exports for SVR backup service
 pub use message_backup_service::{BackupStats, MessageBackupError, MessageBackupService};

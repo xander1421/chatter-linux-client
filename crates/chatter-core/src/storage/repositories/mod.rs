@@ -49,6 +49,7 @@ pub mod shared_content_repo;
 pub mod unified_conversation_repo;
 pub mod unified_message_repo;
 pub mod user_repo;
+#[cfg(feature = "local-ai")]
 pub mod vector_repo;
 pub mod verified_membership_repo;
 
@@ -76,4 +77,3 @@ pub use unified_conversation_repo::UnifiedConversationRepository;
 pub use unified_message_repo::UnifiedMessageRepository as MessageRepository;
 pub use unified_message_repo::UnifiedMessageRepository;
 pub use user_repo::UserRepository;
-pub use vector_repo::{EmbeddingSourceType, StoredEmbedding, VectorRepository};
