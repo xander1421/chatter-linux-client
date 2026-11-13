@@ -15,7 +15,8 @@ for flag in DEV_TRUST_ROOT DEV_AUTO_REGISTER; do
 done
 for v in CHATTER_TLS_ROOT_CA_PEM CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX \
     CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX CHATTER_KT_VRF_PUBLIC_KEY_HEX \
-    CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX; do
+    CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX \
+    CHATTER_GROUP_SEND_PUBLIC_PARAMS_HEX; do
     [ -n "${!v:-}" ] || die "$v is required (existing provisioned production inputs)"
 done
 CHECK_SERVER_URL="$1" python3 - <<'CHECK'
@@ -65,6 +66,11 @@ for key in ('CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX', 'CHATTER_KT_TREE_HEAD_PUBLIC_KE
 value = os.environ['CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX']
 if not re.fullmatch(r'04[0-9a-fA-F]{128}', value) or value.lower() == '045c988a4c22744d60f5bf4ce414a33b51d7f467600ba1fbec3a1fad12d25c70b5ad2478b1ce8b4955dc9d933f1139c82403b3ddec0dab33d6ef10d97ce120cac7':
     fail('CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX must be the non-development P-256 point derived by make provision-keys')
+# zkgroup ServerPublicParams (673 bytes); the dev params begin 0054dd0b149bef60
+# (config.rs DEV_GROUP_SEND_PUBLIC_PARAMS_HEX, provision-trust-root.sh).
+value = os.environ['CHATTER_GROUP_SEND_PUBLIC_PARAMS_HEX']
+if not re.fullmatch(r'[0-9a-fA-F]{1346}', value) or value.lower().startswith('0054dd0b149bef60'):
+    fail('CHATTER_GROUP_SEND_PUBLIC_PARAMS_HEX must be the non-development params derived by make provision-keys')
 CHECK
 printf '%s\n' "$CHATTER_TLS_ROOT_CA_PEM" | openssl x509 -noout -checkend 0 >/dev/null || die 'CA is invalid or expired'
 ca_info=$(printf '%s\n' "$CHATTER_TLS_ROOT_CA_PEM" | openssl x509 -noout -text)
