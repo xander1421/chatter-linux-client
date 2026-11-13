@@ -66,6 +66,9 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
     assert!(chatter_ui::SLINT_DEBUG_INFO_ENABLED);
     testing::init_integration_test_with_system_time();
     let w = MainWindow::new().unwrap();
+    // Signed out, the floating mesh-only strip (main_status_notices.slint)
+    // covers the phone header where the selection bar's trash sits.
+    w.global::<chatter_ui::AuthFlow>().set_is_signed_in(true);
     w.set_current_view("main".into());
     // The view handoff's window-sized tap blocker (app_view_transition.slint)
     // lasts motion-standard + 40ms; settle past it before the first tap.
@@ -206,7 +209,7 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
         w.global::<chatter_ui::ChatPane>()
             .set_context_menu_visible(true);
         settle(&w);
-        click(&w, "More");
+        // One flat hold menu, no "More" drill-down (cc223345).
         click(&w, "Delete");
         assert_eq!(visible(&w, "Delete for both").is_some(), remote);
         assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
@@ -256,7 +259,6 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
             w.global::<chatter_ui::ChatPane>()
                 .set_context_menu_visible(true);
             settle(&w);
-            click(&w, "More");
             click(&w, "Delete");
             assert!(visible(&w, label).is_some());
             let wrong = if label == "Delete for both" {
@@ -267,11 +269,7 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
             assert!(visible(&w, wrong).is_none());
             let before = (remote_target.borrow().len(), local_target.borrow().len());
             let choice = if remote { label } else { "Delete for me" };
-            click(&w, choice);
-            assert_eq!(
-                (remote_target.borrow().len(), local_target.borrow().len()),
-                before
-            );
+            // Choosing a scope performs the delete in one tap (ac426115).
             click(&w, choice);
             let target = if remote {
                 remote_target.borrow()
@@ -292,15 +290,16 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
             );
         }
         // Actual Escape dispatch must dismiss either stage without deletion.
+        // The stages are the scope chooser and, with one scope, its direct
+        // confirm (eec09335); a chosen scope already deleted (ac426115).
         for confirm in [false, true] {
+            w.global::<MessageMenuActions>()
+                .set_delete_for_everyone(!confirm);
             w.global::<chatter_ui::ChatPane>()
                 .set_context_menu_visible(true);
             settle(&w);
-            click(&w, "More");
             click(&w, "Delete");
-            if confirm {
-                click(&w, label);
-            }
+            assert_eq!(visible(&w, label).is_some(), !confirm);
             let before = (remote_target.borrow().len(), local_target.borrow().len());
             let text: slint::SharedString = slint::platform::Key::Escape.into();
             w.window()
@@ -363,7 +362,7 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
     w.global::<chatter_ui::ChatPane>()
         .on_delete_everyone_message(move |_, _| observed.set(observed.get() + 1));
     click(&w, "Delete selected");
-    click(&w, "Delete for both");
+    // One tap applies the scope (ac426115).
     click(&w, "Delete for both");
     assert_eq!(sent.get(), 0);
     assert!(!w.global::<SelectionChrome>().get_can_delete_everyone());
