@@ -145,8 +145,8 @@ mod tor {
     use hyper::body::Bytes;
     use hyper_util::rt::TokioIo;
     use tokio_rustls::TlsConnector;
+    use tokio_rustls::rustls::ClientConfig;
     use tokio_rustls::rustls::pki_types::ServerName;
-    use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
     use arti_client::TorClient;
 
@@ -175,38 +175,19 @@ mod tor {
     /// anchor the direct gRPC path uses. This path tunnels ordinary hostname TLS
     /// through a Tor circuit, so it does the identical CA-only trust: only the
     /// provisioned chatter CA, never the webpki/system roots. SNI is supplied at
-    /// connect time. Uses the `ring` crypto provider explicitly so we never
-    /// depend on a process-global default being installed.
+    /// connect time. Post-quantum key exchange only (`network::pq_tls`), with
+    /// an explicit provider so we never depend on a process-global default.
     fn tls_config() -> ClientConfig {
-        use tokio_rustls::rustls::pki_types::{CertificateDer, pem::PemObject};
-
-        let mut roots = RootCertStore::empty();
-        if let Some(ca_pem) = crate::config::TLS_ROOT_CA_PEM {
-            // A malformed provisioned PEM must not panic a live request: on parse
-            // failure we log and leave the trust store empty, so the handshake
-            // fails closed with a clean "no trust anchor" TLS error instead. The
-            // dev/test CA is validated by `config::tls_root_ca_is_a_wellformed_pem_certificate`,
-            // and X.509 cannot be parsed in the const build-time guard.
-            for cert in CertificateDer::pem_slice_iter(ca_pem.as_bytes()) {
-                match cert {
-                    Ok(cert) => {
-                        if let Err(e) = roots.add(cert) {
-                            tracing::error!(error = %e, "pinned chatter TLS CA is not a valid trust anchor");
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "pinned chatter TLS CA PEM failed to parse");
-                    }
-                }
-            }
-        }
-        ClientConfig::builder_with_provider(Arc::new(
-            tokio_rustls::rustls::crypto::ring::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .expect("ring provider supports the default protocol versions")
-        .with_root_certificates(roots)
-        .with_no_client_auth()
+        // A malformed provisioned PEM must not panic a live request: on parse
+        // failure we log and leave the trust store empty, so the handshake
+        // fails closed with a clean "no trust anchor" TLS error instead. The
+        // dev/test CA is validated by `config::tls_root_ca_is_a_wellformed_pem_certificate`,
+        // and X.509 cannot be parsed in the const build-time guard.
+        let roots = crate::network::pq_tls::pinned_roots().unwrap_or_else(|e| {
+            tracing::error!(error = %e, "pinned chatter TLS CA unusable");
+            tokio_rustls::rustls::RootCertStore::empty()
+        });
+        crate::network::pq_tls::client_config(roots)
     }
 
     /// Bootstrap (once) and connect a raw Tor stream to `host:port`.
@@ -214,7 +195,7 @@ mod tor {
     /// This shares the gRPC pool's `SharedTorClient` OnceCell, so the init here
     /// MUST match the gRPC connector's: run on the dedicated Tor runtime (so Arti
     /// never binds to the app's DB-starved runtime, whichever path wins the init
-    /// race) and install the ring crypto provider before bootstrap. See
+    /// race) and install the default (aws-lc-rs) crypto provider before bootstrap. See
     /// [`crate::network::grpc::onion_transport::tor_runtime`].
     /// `isolated`: dial on a fresh isolation group. arti keeps onion-service
     /// state (descriptor, intro/rendezvous circuits) per (service, isolation)
@@ -231,8 +212,8 @@ mod tor {
             .get_or_try_init(|| async {
                 let config = crate::network::grpc::onion_transport::tor_client_config()?;
                 let mut task = TorTask(tor_runtime().spawn(async {
-                    let _ =
-                        tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+                    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
+                        .install_default();
                     TorClient::create_bootstrapped(config).await
                 }));
                 match tokio::time::timeout(std::time::Duration::from_secs(120), &mut task.0).await {

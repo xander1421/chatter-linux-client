@@ -197,19 +197,23 @@ impl GrpcClientPool {
         }
 
         // Onion transport tunnels the channel through Tor via the Arti connector;
-        // Direct transport uses tonic's built-in TCP/TLS dialer.
+        // Direct transport uses the pinned PQ-only TCP/TLS connector.
         #[cfg(feature = "onion")]
         let channel = if mode == TransportMode::Onion {
             endpoint
                 .connect_with_connector(self.onion_connector())
                 .await?
         } else {
-            endpoint.connect().await?
+            endpoint
+                .connect_with_connector(crate::network::pq_tls::grpc_connector(&endpoint))
+                .await?
         };
         #[cfg(not(feature = "onion"))]
         let channel = {
             let _ = mode;
-            endpoint.connect().await?
+            endpoint
+                .connect_with_connector(crate::network::pq_tls::grpc_connector(&endpoint))
+                .await?
         };
 
         // The probe won the race: prefer QUIC now rather than at the next dial.

@@ -1,6 +1,6 @@
 //! Minimal Arti onion-connectivity probe — isolates the Tor path from the app.
 //!
-//! Does exactly what `network/grpc/onion_transport.rs` does: install the ring
+//! Does exactly what `network/grpc/onion_transport.rs` does: install the aws-lc-rs
 //! rustls CryptoProvider, bootstrap a default `TorClient`, then
 //! `connect((onion, 443))`. Prints the FULL error chain on failure so we can see
 //! where the HS connection actually breaks (descriptor fetch / intro / rendezvous).
@@ -26,7 +26,7 @@ async fn main() {
 
     // Same as onion_transport.rs: Arti's rustls runtime needs a process-wide
     // default CryptoProvider.
-    let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let raw = std::env::var("CHATTER_ONION_ADDR").expect("set CHATTER_ONION_ADDR=<hash>.onion");
     // Normalize to a bare host (mirror how the URI host is extracted in the app).

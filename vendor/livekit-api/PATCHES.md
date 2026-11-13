@@ -55,3 +55,17 @@ pull protocol 0.8 types into the 0.7.52 SDK. Keep protocol 0.7.10,
 livekit-common 0.1.0, livekit-data-stream 0.1.0, livekit-datatrack 0.1.11, and
 libwebrtc 0.3.41 with webrtc-sys 0.3.38 and webrtc-sys-build 0.3.18 together until the deferred SDK upgrade has a live-call proof.
 These are dependency constraints only; no media implementation changed.
+
+## Post-quantum pinned TLS (2026-11-13)
+
+Owner decision: Chatter-operated endpoints require post-quantum key exchange,
+no classical fallback. `pinned_tls.rs` now builds one rustls config for both the
+WebSocket connector and the diagnostic HTTPS client: aws-lc-rs provider,
+TLS 1.3 only, `kx_groups = [X25519MLKEM768]` (same policy as chatter-core
+`network::pq_tls`). The HTTPS client takes it via `use_preconfigured_tls`, so
+it no longer depends on a process-default provider.
+
+Cargo.toml: `tokio-rustls` uses `aws_lc_rs` instead of `ring`, and
+`rustls-tls-webpki-roots` maps to reqwest's `rustls-tls-webpki-roots-no-provider`,
+so ring is no longer linked into the application. The test fixture server uses
+the aws-lc-rs default provider.

@@ -29,13 +29,16 @@ fn storage_http_client() -> reqwest::Client {
         !roots.is_empty(),
         "test storage CA must contain certificates"
     );
-    let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .expect("ring default protocols")
-    .with_root_certificates(roots)
-    .with_no_client_auth();
+    // Same policy as the app's storage client (network::pq_tls): PQ-only.
+    let provider = rustls::crypto::CryptoProvider {
+        kx_groups: vec![rustls::crypto::aws_lc_rs::kx_group::X25519MLKEM768],
+        ..rustls::crypto::aws_lc_rs::default_provider()
+    };
+    let tls = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .expect("aws-lc-rs TLS 1.3")
+        .with_root_certificates(roots)
+        .with_no_client_auth();
     reqwest::Client::builder()
         .tls_backend_preconfigured(tls)
         .https_only(true)
