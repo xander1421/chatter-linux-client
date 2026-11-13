@@ -44,12 +44,14 @@ pub fn generate_profile_key() -> [u8; 32] {
 ///
 /// Derived from the nickname ALONE. It used to mix in the password, which
 /// kept a database dump from enumerating nicknames but made the identifier
-/// itself a password-guessing oracle; OPAQUE needs neither. The cost, stated
-/// plainly: anyone can compute this for a guessed nickname, so a database dump
-/// reveals which guessed nicknames exist (by dictionary), and the per-account
-/// lockout is keyed on a value an attacker can name. Online, existence is not
-/// observable: the server answers an unknown identifier from a fake OPAQUE
-/// record (RFC 9807 §6.3.2.2), indistinguishable without the password.
+/// itself a password-guessing oracle; OPAQUE needs neither. Anyone can compute
+/// this for a guessed nickname, so the server never stores it as sent: it
+/// HMACs it under a server-held pepper first (server
+/// `internal/utils/usernamekey`), and users.username holds only that. A
+/// database dump alone therefore does not confirm guessed nicknames; a dump
+/// plus the server's pepper does. Online, existence is not observable: the
+/// server answers an unknown identifier from a fake OPAQUE record
+/// (RFC 9807 §6.3.2.2), indistinguishable without the password.
 ///
 /// `nickname` must be the bare registration nickname (what [`login_nickname`]
 /// returns and `keys::SVR_SALT_USERNAME` stores).
@@ -97,10 +99,12 @@ pub fn derive_delivery_token(profile_key: &[u8; 32]) -> [u8; 12] {
 /// Compute the Signal-compatible username discovery hash.
 ///
 /// `username` must be in `nickname.discriminator` form (e.g. `alice.4711`).
-/// The discriminator is picked at registration via [`username_candidates`]
-/// and makes wordlist enumeration of registered usernames infeasible: even
-/// with a complete dictionary of nicknames, an attacker has to grind 2-5
-/// digits of discriminator per nickname per query.
+/// The discriminator is picked at registration via [`username_candidates`].
+/// It raises the cost of ONLINE guessing (each query costs a rate-limited
+/// lookup), but it does not stop offline guessing: libsignal tries four
+/// two-digit discriminators first, so a nickname wordlist times 99 covers
+/// most hashes. The server therefore stores and matches only a peppered
+/// HMAC of this value (server `internal/utils/usernamekey`).
 ///
 /// Returns the 32-byte Ristretto255 compressed point that libsignal's
 /// `usernames::Username` uses as its lookup hash. Verification of ownership
