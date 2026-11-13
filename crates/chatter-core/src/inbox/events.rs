@@ -305,6 +305,9 @@ pub enum InboxEvent {
         channel_id: ChannelId,
         /// User who deleted.
         sender_id: UserId,
+        /// Author of the deleted message: the sender, or another member when
+        /// the sender moderates the channel (checked on apply).
+        target_author_id: UserId,
         /// Target message timestamp.
         target_sent_timestamp: u64,
     },

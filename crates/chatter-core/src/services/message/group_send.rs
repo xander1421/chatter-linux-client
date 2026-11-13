@@ -75,6 +75,15 @@ fn active_members(verified: &VerifiedChannel) -> Vec<String> {
 }
 
 impl MessageService {
+    /// Whether `channel_id` is a private channel, whose messages have no
+    /// server copy: they reach members anonymously (this file), so there is
+    /// nothing on the server to fetch, delete or pin.
+    pub(crate) fn is_private_channel(&self, channel_id: &ChannelId) -> bool {
+        self.channel_repo.get(channel_id).ok().flatten().is_some_and(|c| {
+            c.channel_type == crate::domain::channel::ChannelType::Private
+        })
+    }
+
     /// The serialized `GroupSendFullToken` for our verified state of
     /// `channel_id`. The issuance must be for exactly our verified revision;
     /// a server ahead of us starts a catch-up and fails this send (retryable).

@@ -178,7 +178,13 @@ impl SyncEngine {
                 result.channels = channel_result;
 
                 // Step 2: Sync messages for all channels
-                let channel_ids: Vec<ChannelId> = channels.iter().map(|c| c.id).collect();
+                // Private channels have no server timeline (see
+                // ChannelSync::local_timeline_channel_ids).
+                let channel_ids: Vec<ChannelId> = channels
+                    .iter()
+                    .filter(|c| c.channel_type != crate::domain::channel::ChannelType::Private)
+                    .map(|c| c.id)
+                    .collect();
                 result.messages = self.message_sync.sync_all(&channel_ids).await;
                 result.messages_failed = !result.messages.errors.is_empty();
             }
@@ -313,7 +319,7 @@ impl SyncEngine {
         let _sync_guard = self.sync_lock.lock().await;
         let channels = self
             .channel_sync
-            .local_channel_ids()
+            .local_timeline_channel_ids()
             .map_err(|e| e.to_string())?;
         let result = self.message_sync.sync_all(&channels).await;
         let _ = self.event_bus.domain_sender().send(DomainEvent::SyncComplete {

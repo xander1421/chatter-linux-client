@@ -942,11 +942,13 @@ impl MessageService {
             }
         }
 
-        // Call server: SpiceDB authorizes us as the message's author.
-        let mut message_client = self.message_client();
-        message_client
-            .delete_message(&message_id.to_string(), &channel_id.to_string())
-            .await?;
+        // Call server: SpiceDB authorizes us as the message's author. A private
+        // channel's message has no server copy.
+        if !self.is_private_channel(channel_id) {
+            self.message_client()
+                .delete_message(&message_id.to_string(), &channel_id.to_string())
+                .await?;
+        }
 
         // Soft delete locally - keep for history/sync
         let mut message = existing;
@@ -988,7 +990,9 @@ impl MessageService {
             }
             targets.push((id.to_string(), channel_id.to_string()));
         }
-        self.message_client().delete_messages(targets).await?;
+        if !self.is_private_channel(channel_id) {
+            self.message_client().delete_messages(targets).await?;
+        }
         self.message_repo.soft_delete_batch(message_ids)?;
         Ok(())
     }

@@ -314,15 +314,12 @@ pub fn dispatch_control_content(
                         peer_id: *sender_id,
                         target_sent_timestamp: delete.target_sent_timestamp,
                     });
-                } else if delete.target_call_id.is_some()
-                    || delete.destination_user_id.is_some()
-                    || !delete
-                        .target_author_aci
-                        .as_deref()
-                        .is_some_and(|author| author.parse::<UserId>().ok() == Some(*sender_id))
-                {
+                } else if delete.target_call_id.is_some() || delete.destination_user_id.is_some() {
                     return;
-                } else if let Ok(channel_id) = dm.channel_id.parse::<ChannelId>() {
+                } else if let (Ok(channel_id), Some(target_author_id)) = (
+                    dm.channel_id.parse::<ChannelId>(),
+                    delete.target_author_aci.as_deref().and_then(|a| a.parse::<UserId>().ok()),
+                ) {
                     tracing::debug!(
                         sender_id = %sender_id,
                         channel_id = %channel_id,
@@ -332,6 +329,7 @@ pub fn dispatch_control_content(
                     let _ = event_tx.send(InboxEvent::ChannelDeleteForEveryone {
                         channel_id,
                         sender_id: *sender_id,
+                        target_author_id,
                         target_sent_timestamp: delete.target_sent_timestamp,
                     });
                 } else {

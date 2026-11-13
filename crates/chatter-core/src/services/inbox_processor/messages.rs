@@ -424,18 +424,19 @@ impl InboxEventProcessor {
             InboxEvent::ChannelDeleteForEveryone {
                 channel_id,
                 sender_id,
+                target_author_id,
                 target_sent_timestamp,
-                ..
             } => {
                 match self.message_service.apply_channel_delete(
                     channel_id,
                     sender_id,
+                    target_author_id,
                     *target_sent_timestamp,
                 ) {
                     Ok(Some(msg)) => {
                         self.event_bus.emit_domain(DomainEvent::MessageDeleted {
                             message_id: msg.id,
-                            author_id: *sender_id,
+                            author_id: *target_author_id,
                             channel_id: Some(*channel_id),
                             target_sent_timestamp: *target_sent_timestamp,
                         });

@@ -722,10 +722,12 @@ impl ConversationHandle {
         if !batch.server_committed {
             // Preserve the entire original selected set in this one RPC. Never
             // combine journal rows from different submissions or split a batch.
+            // Only a public channel keeps server copies; a private channel's
+            // messages are deleted by the controls below alone.
             let server_targets = batch
                 .targets
                 .iter()
-                .filter(|_| matches!(self.conversation, ActiveConversation::Channel(_)))
+                .filter(|_| matches!(&self.conversation, ActiveConversation::Channel(id) if !self.client.messages().is_private_channel(id)))
                 .map(|t| (t.message_id.to_string(), t.conversation_id.to_string()))
                 .collect::<Vec<_>>();
             if !server_targets.is_empty() {
