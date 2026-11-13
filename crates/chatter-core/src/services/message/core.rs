@@ -210,11 +210,14 @@ impl MessageService {
                 super::group::stamp_group_data_message(&mut dm, state);
                 dm.profile_key = self.group_profile_key(state);
             }
-            let wrap = chatter_proto::content_v1::Content {
+            let mut wrap = chatter_proto::content_v1::Content {
                 timestamp: dm.timestamp,
                 content: Some(chatter_proto::content_v1::content::Content::DataMessage(dm)),
                 ..Default::default()
             };
+            // Same bucket padding as every pairwise Content: the sender-key
+            // ciphertext length otherwise tells the server the body length.
+            Self::pad_content_to_bucket(&mut wrap);
             wrap.encode_to_vec()
         };
 

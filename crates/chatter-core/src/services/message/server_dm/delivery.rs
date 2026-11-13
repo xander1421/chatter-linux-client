@@ -75,7 +75,7 @@ impl MessageService {
     async fn send_sealed_dm_content(
         &self,
         peer_id: &UserId,
-        content: chatter_proto::content_v1::Content,
+        mut content: chatter_proto::content_v1::Content,
     ) -> Result<(), MessageError> {
         // Backstop for `send_friend_dm_content`: this transport names the
         // recipient to the server, which Shield mode must never do.
@@ -85,6 +85,7 @@ impl MessageService {
             ));
         }
         validate_sealed_plaintext_size(content.encoded_len())?;
+        Self::pad_content_to_bucket(&mut content);
         let plaintext = content.encode_to_vec();
 
         let mut auth_client = self.auth_client();
