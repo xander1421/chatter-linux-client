@@ -209,7 +209,7 @@ impl MessageService {
         let membership = self.database.run_blocking(move || {
             admitted.check()?;
             messages.sync_channel_state_if_behind_received(&channel_id, &admitted)?;
-            Ok(!has_pending || messages.group_gate().admits(&channel_id, &sender_id))
+            Ok(!has_pending || messages.group_gate().admits_content(&channel_id, &sender_id))
         }).await;
         if session.check().is_err() { return; }
         if pending.is_empty() { return; }

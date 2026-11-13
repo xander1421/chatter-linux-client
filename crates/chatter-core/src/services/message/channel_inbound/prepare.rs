@@ -190,12 +190,12 @@ impl ChannelInbound {
             let admitted = self
                 .messages
                 .database
-                .run_blocking(move || Ok(messages.group_gate().admits(&channel_id, &sid)))
+                .run_blocking(move || Ok(messages.group_gate().admits_content(&channel_id, &sid)))
                 .await
                 .map_err(|_| Ingested::RetryableFailure)?;
             if !admitted {
                 tracing::warn!(%channel_id, %sid, message_id = %proto_msg.id,
-                    "Group message from a sender outside the verified membership; dropped");
+                    "Group message from a sender outside the verified membership or muted; dropped");
                 return Err(Ingested::Dropped);
             }
 

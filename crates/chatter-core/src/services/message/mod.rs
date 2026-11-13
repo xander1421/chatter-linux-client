@@ -168,6 +168,11 @@ pub enum MessageError {
     #[error("invalid message: {0}")]
     InvalidMessage(String),
 
+    /// This account is muted in the channel's signed membership state; every
+    /// member would drop the message (`GroupStateGate::admits_content`).
+    #[error("you are muted in this channel")]
+    Muted,
+
     /// Group mailbox operation failed.
     #[error("mailbox error: {0}")]
     MailboxError(String),

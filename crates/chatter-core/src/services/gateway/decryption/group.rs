@@ -144,9 +144,9 @@ impl MessageGateway {
         // (Signal drops group messages from non-members); checked before
         // decrypting so a non-member cannot draw a SenderKeyRequest either.
         let gate = crate::services::message::GroupStateGate::new(&self.settings_repo);
-        if !gate.admits(&channel_id, sender_id) {
+        if !gate.admits_content(&channel_id, sender_id) {
             tracing::warn!(%channel_id, %sender_id,
-                "[MSG_RECV] Group message from a sender outside the verified membership; dropped");
+                "[MSG_RECV] Group message from a sender outside the verified membership or muted; dropped");
             return Err(ServiceError::Validation(
                 "group message from a sender outside the verified channel membership".into(),
             ));

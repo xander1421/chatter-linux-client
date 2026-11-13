@@ -307,6 +307,21 @@ impl VerifiedMembershipRepository {
             .is_some())
     }
 
+    /// `user_id`'s signed mute in `channel_id` (Unix nanoseconds; 0 = none,
+    /// `u64::MAX` = until unmuted); 0 when not in the verified state. Decoded
+    /// in Rust: `u64::MAX` is stored as the i64 -1, so SQL cannot compare it.
+    pub fn muted_until(&self, channel_id: &ChannelId, user_id: &str) -> Result<u64, StorageError> {
+        let conn = self.db.connection()?;
+        Ok(conn
+            .query_row(
+                "SELECT muted_until FROM verified_channel_members WHERE channel_id = ?1 AND user_id = ?2",
+                params![channel_id.to_string(), user_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map_or(0, |v| v as u64))
+    }
+
     /// Channels whose distribution set holds `user_id` (ACTIVE, not excluded):
     /// the channels that must rotate when the server says the account is gone.
     pub fn channels_distributing_to(&self, user_id: &str) -> Result<Vec<ChannelId>, StorageError> {
@@ -489,6 +504,47 @@ mod tests {
         };
         let v = VerifiedChange(check_change(cid, prev, &c).unwrap());
         (c, v)
+    }
+
+    /// The signed mute survives storage exactly, `u64::MAX` (stored as the
+    /// i64 -1) included, and is 0 for anyone outside the verified state.
+    #[test]
+    fn muted_until_reads_back_the_signed_mute() {
+        let (_dir, repo) = repo();
+        let channel = ChannelId::new();
+        let cid = channel.to_string();
+        let owner = (uuid::Uuid::new_v4().to_string(), KeyPair::generate(&mut rand::rng()));
+        let bob = (uuid::Uuid::new_v4().to_string(), KeyPair::generate(&mut rand::rng()));
+        let (c1, v1) = change(
+            &cid,
+            None,
+            (&owner.0, &owner.1),
+            vec![
+                Action::Genesis(pb::Genesis {
+                    policy: Some(Policy::defaults(false).to_proto()),
+                    disappearing_seconds: 0,
+                }),
+                Action::AddMember(pb::AddMember {
+                    user_id: bob.0.clone(),
+                    role: ChannelRole::Member as i32,
+                    identity_key: key(&bob.1),
+                    pending: false,
+                }),
+            ],
+        );
+        repo.commit(&channel, &c1, &v1).unwrap();
+        assert_eq!(repo.muted_until(&channel, &bob.0).unwrap(), 0);
+
+        let (c2, v2) = change(
+            &cid,
+            Some(&v1.0.new_state),
+            (&owner.0, &owner.1),
+            vec![Action::SetMuted(pb::SetMuted { user_id: bob.0.clone(), muted_until: u64::MAX })],
+        );
+        repo.commit(&channel, &c2, &v2).unwrap();
+        assert_eq!(repo.muted_until(&channel, &bob.0).unwrap(), u64::MAX);
+        assert!(repo.load(&channel).unwrap().unwrap().state.members[&bob.0].is_muted(u64::MAX - 1));
+        assert_eq!(repo.muted_until(&channel, "00000000-0000-4000-8000-000000000000").unwrap(), 0);
     }
 
     #[test]

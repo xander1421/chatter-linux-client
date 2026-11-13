@@ -130,6 +130,15 @@ impl MessageService {
     ) -> Result<chat_v1::Message, MessageError> {
         let channel_id: ChannelId = request.channel_id.parse().map_err(invalid)?;
         let verified = self.group_gate().for_distribution(&channel_id)?;
+        let me = self.current_user_id()?.to_string();
+        if verified
+            .state
+            .members
+            .get(&me)
+            .is_some_and(|m| m.is_muted(crate::inbox::ack_policy::now_ns()))
+        {
+            return Err(MessageError::Muted);
+        }
         let contents = match request.content.as_ref().and_then(|c| c.r#type.as_ref()) {
             Some(chat_v1::message::content::Type::Encrypted(e)) => e.ciphertext.clone(),
             _ => return Err(invalid("a private-channel send must carry sender-key content")),

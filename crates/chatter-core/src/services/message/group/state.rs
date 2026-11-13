@@ -82,6 +82,20 @@ impl GroupStateGate {
             .unwrap_or(false)
     }
 
+    /// Whether group CONTENT from `sender` is accepted: [`Self::admits`] and
+    /// not muted in the signed state at receipt (mutes live in the signed
+    /// membership so every receiver enforces them, not only the server).
+    /// SKDMs still use `admits`, so an unmuted member needs no new key.
+    /// Fails closed.
+    pub(crate) fn admits_content(&self, channel_id: &ChannelId, sender: &UserId) -> bool {
+        self.admits(channel_id, sender)
+            && self
+                .repo
+                .muted_until(channel_id, &sender.to_string())
+                .inspect_err(|e| tracing::warn!(%channel_id, %sender, error = %e, "Verified mute lookup failed"))
+                .is_ok_and(|until| until <= crate::inbox::ack_policy::now_ns())
+    }
+
     /// Check a peer's `(revision, state_hash)` stamp against our verified
     /// state. A fork marks the channel `Fork` (send-blocked until the user
     /// acknowledges it) — only on the word of a verified member, or anyone
