@@ -45,6 +45,9 @@ pub(crate) fn wire_drag_drop(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 }
                 ui_ctx.set_app_visible(*focused);
+                if let Some(w) = weak.upgrade() {
+                    crate::bin_ui::features::app_lock::refresh(&w, &ui_ctx);
+                }
                 EventResult::Propagate
             }
             WindowEvent::DroppedFile(path) => {

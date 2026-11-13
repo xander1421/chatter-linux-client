@@ -11,6 +11,7 @@
 //!
 //! Services encapsulate all repository access - UI code never touches repos directly.
 
+pub mod app_lock;
 pub mod auth;
 pub mod activity;
 pub(crate) mod avatar_defaults;
@@ -51,6 +52,7 @@ use chatter_core::client::ChatterClient;
 pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     static_images::wire(window, ui_ctx);
     auth::wire(window, ui_ctx);
+    app_lock::wire(window, ui_ctx);
     activity::wire(window, ui_ctx);
     back::wire(window);
     navigation::wire(window, ui_ctx);

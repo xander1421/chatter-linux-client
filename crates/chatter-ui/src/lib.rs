@@ -43,6 +43,12 @@ static ANDROID_SERVICES_READY: std::sync::atomic::AtomicBool =
 #[cfg(target_os = "android")]
 static ANDROID_HEADLESS_CONTEXT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 #[cfg(target_os = "android")]
+thread_local! {
+    /// The window on the Slint thread, for the app lock refresh above.
+    static ANDROID_LOCK_WINDOW: std::cell::OnceCell<slint::Weak<MainWindow>> =
+        const { std::cell::OnceCell::new() };
+}
+#[cfg(target_os = "android")]
 static ANDROID_ACTIVITY_VISIBLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -61,6 +67,16 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeSetAppVisible(
         if let Some(client) = ANDROID_CLIENT.get() {
             let _rt = android_runtime().enter();
             client.set_app_visible(visible);
+            // Cover (or keep covering) the app the moment core says it is
+            // locked — on pause too, so the recents thumbnail is the lock.
+            let client = client.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                ANDROID_LOCK_WINDOW.with(|cell| {
+                    if let Some(window) = cell.get().and_then(slint::Weak::upgrade) {
+                        crate::bin_ui::features::app_lock::refresh(&window, &client);
+                    }
+                });
+            });
         }
         Ok(())
     })
@@ -484,6 +500,12 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
                         window.invoke_refresh_screen_protection();
                     }
                 }
+                if let (Some(window), Some(client)) = (
+                    listener_window.get().and_then(slint::Weak::upgrade),
+                    ANDROID_CLIENT.get(),
+                ) {
+                    crate::bin_ui::features::app_lock::refresh(&window, client);
+                }
             },
         )
         .with_refresh_rate_vote(crate::platform::android::activity::set_ui_moving)
@@ -516,6 +538,9 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
         }
     };
     let _ = visibility_window.set(slint::ComponentHandle::as_weak(&app_state.window));
+    ANDROID_LOCK_WINDOW.with(|cell| {
+        let _ = cell.set(slint::ComponentHandle::as_weak(&app_state.window));
+    });
 
     // Safe-area insets (status bar, nav bar, IME) are now bound in `app.slint`
     // directly off the Window's built-in `safe-area-insets` and

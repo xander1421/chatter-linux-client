@@ -7,6 +7,7 @@ import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { ToggleRow } from "../components/toggle_row.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+import { AppLockSettings } from "../app_lock.slint";
 
 export component PrivacySettings inherits VerticalLayout {
     in property <bool> mobile-platform;
@@ -192,6 +193,9 @@ export component PrivacySettings inherits VerticalLayout {
     // moves it once the mode actually flips.
     // Offered without Tor too (see the chat-list
     // header shield); only the Tor promise is gated.
+    // App lock + duress PIN (ui/app_lock.slint; state in AppLockPane).
+    AppLockSettings { }
+
     Rectangle {
         height: shield-row.preferred-height;
         background: Colors.surface-section;

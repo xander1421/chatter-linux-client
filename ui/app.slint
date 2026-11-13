@@ -10,6 +10,7 @@ import { SettingsPane } from "app_settings_pane.slint";
 import { AppBottomChrome } from "app_bottom_chrome.slint";
 import { AppShortcuts } from "app_shortcuts.slint";
 import { AppTopOverlays } from "app_top_overlays.slint";
+import { AppLockPane, LockScreen } from "app_lock.slint";
 import { AppSettingsHost } from "app_settings_host.slint";
 import { AppSecondaryModals } from "app_secondary_modals.slint";
 import { AppTabScreens } from "app_tab_screens.slint";
@@ -932,5 +933,13 @@ export component MainWindow inherits Window {
         z: 10;
         width: root.width;
         height: root.height;
+    }
+
+    // Above everything, including modals and calls (core decides `locked`).
+    if AppLockPane.locked: LockScreen {
+        z: 20;
+        width: root.width;
+        height: root.height;
+        safe-area-top: root.safe-area-top;
     }
 }
