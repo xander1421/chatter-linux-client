@@ -2565,8 +2565,10 @@ fn new_channel_done_and_back_put_the_keyboard_away() {
     testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
     // Since 3cf2b504 a phone sheet mounts offscreen and starts its slide from
     // a one-frame timer; fire it, then let the slide finish.
-    slint::platform::update_timers_and_animations();
-    testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+    for _ in 0..2 {
+        slint::platform::update_timers_and_animations();
+        testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+    }
     slint::platform::update_timers_and_animations();
 
     let key = |t: slint::SharedString| {
@@ -2617,6 +2619,15 @@ fn new_channel_done_and_back_put_the_keyboard_away() {
         "Done on Description did not drop focus — the keyboard stays up"
     );
 
+    // The first lookup found the placeholder Text, which typing removed: look
+    // the field itself up. And a second tap on the same spot right after the
+    // first is a double tap (word select, so "b" would replace "a"); a user's
+    // second tap comes seconds later.
+    let name = testing::ElementHandle::find_by_accessible_label(&w, "Channel name")
+        .find(|e| e.accessible_role() == Some(testing::AccessibleRole::TextInput))
+        .expect("the New Channel name field is not on screen");
+    testing::mock_elapsed_time(std::time::Duration::from_millis(2000));
+    slint::platform::update_timers_and_animations();
     name.mock_single_click(slint::platform::PointerEventButton::Left);
     key("b".into());
     assert_eq!(
