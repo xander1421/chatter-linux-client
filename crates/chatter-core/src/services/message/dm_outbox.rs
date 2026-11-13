@@ -191,6 +191,10 @@ impl MessageService {
         let devices = devices
             .map(|d| serde_json::to_string(d).map_err(|_| invalid("Cannot retain retry devices")))
             .transpose()?;
+        // Stored padded, so the first attempt and every retry seal the
+        // same bucket-sized plaintext.
+        let mut content = content.clone();
+        Self::pad_content_to_bucket(&mut content);
         let conn = self.database.connection()?;
         let inserted = conn.execute(
             "INSERT INTO dm_outbox(owner_id,message_id,peer_id,device_id,request_id,content,devices,generation,next_attempt_at,created_at)
