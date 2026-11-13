@@ -6600,6 +6600,19 @@ fn video_call_lives_in_the_header_more_menu() {
         if calls {
             let before = started.get();
             click(&w, "Video call");
+            // A channel video call rings every member, so it asks first
+            // (76941dc4); a DM starts at once.
+            if kind == ConversationKind::Channel {
+                let pane = w.global::<chatter_ui::ChatPane>();
+                assert!(
+                    pane.get_call_confirm_open() && pane.get_call_confirm_video(),
+                    "{kind:?}: the menu's Video call did not ask before ringing everyone"
+                );
+                assert_eq!(started.get(), before, "{kind:?}: rang before confirming");
+                slint::platform::update_timers_and_animations();
+                click(&w, "Start call");
+                assert!(!pane.get_call_confirm_open(), "{kind:?}: confirm stayed open");
+            }
             assert_eq!(
                 started.get(),
                 before + 1,
