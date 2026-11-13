@@ -24,10 +24,12 @@ use crate::util::time::TimestampNanos;
 pub use inbound::{DecryptResult, DmContent, RouteResult, SealedSenderResult, content_type_name};
 
 // Re-export all content builders
+#[cfg(any(test, feature = "testing"))]
 pub use builders::{
-    PADDING_GROUP_CONTROL,
-    PADDING_LARGE,
-    PADDING_MESSAGE,
+    PADDING_GROUP_CONTROL, PADDING_LARGE, PADDING_MESSAGE, build_reaction_content,
+    build_reaction_content_with_channel,
+};
+pub use builders::{
     // Call hangup
     build_call_hangup_content,
     build_call_key_answer,
@@ -45,8 +47,6 @@ pub use builders::{
     build_group_call_signal_content,
     build_pin_content,
     build_pin_content_with_channel,
-    build_reaction_content,
-    build_reaction_content_with_channel,
     build_read_receipt_content,
     build_read_receipt_content_with_channel,
     build_reply_content,

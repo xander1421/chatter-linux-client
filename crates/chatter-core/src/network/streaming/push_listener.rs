@@ -221,12 +221,14 @@ impl PushListenerConfig {
         }
     }
 
+    #[cfg(test)]
     /// Set an auth token for topic subscription.
     pub fn with_auth(mut self, token: String) -> Self {
         self.auth_token = Some(token);
         self
     }
 
+    #[cfg(test)]
     /// Override the reconnect tuning. Also updates `reconnect_delay` to the
     /// supplied config's `initial_delay` for consistency.
     pub fn with_reconnect(mut self, reconnect: ReconnectConfig) -> Self {

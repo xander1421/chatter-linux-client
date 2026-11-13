@@ -64,6 +64,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chatter_mesh::ids::PeerId;
+#[cfg(test)]
 use chatter_mesh::packet::NoisePayloadType;
 use chatter_mesh::tlv::file::BitchatFilePacket;
 use chatter_mesh::tlv::file_stream::{MAX_SINGLE_PACKET_FILE_BYTES, MAX_STREAMED_FILE_BYTES};

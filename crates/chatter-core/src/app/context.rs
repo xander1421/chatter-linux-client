@@ -72,6 +72,7 @@ impl AppContext {
         Self::with_config_and_sink(None, data_dir, None)
     }
 
+    #[cfg(any(test, feature = "testing"))]
     /// Create a new AppContext with optional overrides.
     ///
     /// If `server_url` is `Some(url)`, that URL is used instead of the

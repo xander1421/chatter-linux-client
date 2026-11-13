@@ -86,6 +86,7 @@ impl MessageModifierRepository {
         prune(&conn, now)
     }
 
+    #[cfg(test)]
     /// Hold `author`'s edit of its message sent at `target_sent_at` until the
     /// message arrives. `conversation` is where that message must turn up
     /// (`None`: anywhere — an edit from our own other device). Of two pending

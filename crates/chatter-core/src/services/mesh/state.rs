@@ -420,6 +420,7 @@ impl NostrState {
         self.with(|state| state.nicknames.get(peer).cloned())
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn joined_cells(&self) -> Vec<String> {
         self.with(|state| state.joined.iter().cloned().collect())

@@ -82,6 +82,7 @@ impl MeshService {
         self.running.load(Ordering::SeqCst)
     }
 
+    #[cfg(test)]
     /// The geohash cells currently joined.
     #[must_use]
     pub fn joined_geohashes(&self) -> Vec<String> {

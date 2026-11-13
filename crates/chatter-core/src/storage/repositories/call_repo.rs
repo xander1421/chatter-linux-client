@@ -228,6 +228,7 @@ impl CallHistoryRepository {
         rows.next()?.map(row_to_entry).transpose()
     }
 
+    #[cfg(test)]
     /// Total number of entries. Cheap — uses SQLite's cached index count.
     pub fn count(&self) -> Result<u64, StorageError> {
         let conn = self.db.read_connection()?;

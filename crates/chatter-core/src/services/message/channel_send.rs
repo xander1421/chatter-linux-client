@@ -54,6 +54,7 @@ fn send_request_key(owner: UserId, device: u32, channel: ChannelId, request: &st
     key.finalize().into()
 }
 
+#[cfg(test)]
 /// Whether `post` is the deposit of a send the user deleted before its
 /// canonical id came back: its `send_request_key` is exactly the one a
 /// retained (`unresolved`) journal of `owner` in `channel` sent under, the

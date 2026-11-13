@@ -499,6 +499,7 @@ impl RetryBudget {
         self.attempts.lock().remove(envelope_id);
     }
 
+    #[cfg(test)]
     /// How many envelopes are currently being retained.
     #[must_use]
     pub fn tracked(&self) -> usize {

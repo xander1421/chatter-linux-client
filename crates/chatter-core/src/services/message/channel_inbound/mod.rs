@@ -115,6 +115,7 @@ impl ChannelInbound {
         &self.messages.event_bus
     }
 
+    #[cfg(test)]
     /// Decrypt, persist and announce one channel message.
     ///
     /// `live` skips this device's optimistic sends. Every newly inserted row
@@ -141,6 +142,7 @@ impl ChannelInbound {
 
     pub(crate) fn database(&self) -> &Arc<crate::storage::Database> { &self.messages.database }
 
+    #[cfg(test)]
     pub(crate) async fn ingest_with_hint(
         &self,
         proto_msg: &chat_v1::Message,

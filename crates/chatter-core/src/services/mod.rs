@@ -91,13 +91,15 @@ pub use user::{FriendResponseResult, UserError, UserService};
 pub use attachment::{AttachmentError, AttachmentService, CdnUploadResult};
 #[cfg(feature = "media")]
 pub use call_worker::CallWorkerHandle;
+#[cfg(any(test, feature = "testing"))]
+pub use gateway::{
+    PADDING_GROUP_CONTROL, PADDING_LARGE, PADDING_MESSAGE, build_reaction_content,
+    build_reaction_content_with_channel,
+};
 pub use gateway::{
     CallHangupReason,
     DmContent,
     MessageGateway,
-    PADDING_GROUP_CONTROL,
-    PADDING_LARGE,
-    PADDING_MESSAGE,
     RouteResult,
     // Call hangup
     build_call_hangup_content,
@@ -115,8 +117,6 @@ pub use gateway::{
     build_group_call_signal_content,
     build_pin_content,
     build_pin_content_with_channel,
-    build_reaction_content,
-    build_reaction_content_with_channel,
     build_read_receipt_content,
     build_read_receipt_content_with_channel,
     build_reply_content,

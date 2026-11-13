@@ -46,6 +46,7 @@ impl UnifiedConversationRepository {
         Ok(names)
     }
 
+    #[cfg(test)]
     /// List all conversations for the unified sidebar.
     ///
     /// Consolidates data from channels, anon_dm_conversations, and anon_groups.

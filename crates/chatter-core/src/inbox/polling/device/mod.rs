@@ -37,6 +37,7 @@ mod sealed;
 mod sender_key;
 
 pub use control::dispatch_control_content;
+#[cfg(any(test, feature = "testing"))]
 pub use failure::{delivery_issue_message, identity_changed_message};
 pub use route::process_device_message;
 

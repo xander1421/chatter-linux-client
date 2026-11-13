@@ -115,6 +115,7 @@ impl MessageReceiptRepository {
         rows.map(|row| row.map_err(StorageError::from)).collect()
     }
 
+    #[cfg(any(test, feature = "testing"))]
     /// Convenience for an already-stored outgoing message.
     pub fn snapshot_targets(
         &self,

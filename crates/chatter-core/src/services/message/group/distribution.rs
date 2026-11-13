@@ -261,6 +261,7 @@ impl MessageService {
             .collect()
     }
 
+    #[cfg(test)]
     /// Verified channel members (our own user included, for our other devices)
     /// with a device that does not hold our CURRENT sender key — Signal-Desktop's
     /// `newToMemberServiceIds`. A member other than us with no known device

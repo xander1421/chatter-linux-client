@@ -22,12 +22,15 @@ use super::CallHangupReason;
 // =============================================================================
 
 /// Group control messages (membership, leave, kick, ephemeral).
+#[cfg(any(test, feature = "testing"))]
 pub const PADDING_GROUP_CONTROL: usize = 160;
 
 /// Standard messages, DM wrappers, ephemeral DM messages.
+#[cfg(any(test, feature = "testing"))]
 pub const PADDING_MESSAGE: usize = 256;
 
 /// Profile updates, call signaling (larger payloads).
+#[cfg(any(test, feature = "testing"))]
 pub const PADDING_LARGE: usize = 512;
 
 /// Generate random NDSS '21 padding.
@@ -217,6 +220,7 @@ pub fn build_delivery_receipt_content_with_channel(
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 /// Create a Content proto for reaction.
 pub fn build_reaction_content(
     emoji: &str,
@@ -233,6 +237,7 @@ pub fn build_reaction_content(
     )
 }
 
+#[cfg(any(test, feature = "testing"))]
 /// Create a Content proto for reaction with optional channel context.
 pub fn build_reaction_content_with_channel(
     emoji: &str,

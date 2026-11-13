@@ -81,6 +81,7 @@ impl MeshConfig {
         }
     }
 
+    #[cfg(test)]
     /// The nickname, trimmed, or `None` when it is blank.
     ///
     /// A blank nickname is omitted from the wire rather than sent empty, so that

@@ -356,6 +356,7 @@ pub fn server_dm_timer(settings: &SettingsRepository, peer_id: &UserId) -> u32 {
         .effective_seconds(crate::util::time::TimestampNanos::now().as_u64())
 }
 
+#[cfg(test)]
 /// Enable this DM's timer for five minutes (or turn it off), incrementing
 /// the version and retaining a non-visible notice for receive event plumbing.
 pub fn change_server_dm_timer(

@@ -217,6 +217,7 @@ impl MeshService {
         Ok(delivery)
     }
 
+    #[cfg(test)]
     /// Acknowledge that a message has been read.
     ///
     /// Routed over the same first-reachable rule the router uses, because a

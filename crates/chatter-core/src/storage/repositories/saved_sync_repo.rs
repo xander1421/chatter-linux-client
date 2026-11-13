@@ -338,6 +338,7 @@ impl SavedSyncRepository {
         Ok(due)
     }
 
+    #[cfg(test)]
     /// Clock of the last pin change applied to this record; 0 when none.
     pub fn pin_watermark(&self, id: &MessageId) -> Result<u64, StorageError> {
         let conn = self.db.read_connection()?;

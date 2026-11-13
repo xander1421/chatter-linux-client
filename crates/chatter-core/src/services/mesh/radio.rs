@@ -40,6 +40,7 @@ fn build() -> Option<Arc<dyn MeshLink>> {
 /// A `const` rather than a probe: it is a property of the target, not of the
 /// machine. Whether the adapter is *present and powered* is a separate question,
 /// answered by `LinkEvent::AdapterPowerChanged`.
+#[cfg(test)]
 pub const HAS_RADIO: bool = cfg!(any(target_os = "linux", target_os = "android"));
 
 #[cfg(test)]
