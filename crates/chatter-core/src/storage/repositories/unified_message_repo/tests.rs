@@ -234,7 +234,7 @@ fn stored_timestamp_quote_resolves_when_parent_arrives_in_same_conversation() {
     assert_eq!(resolve(), None);
     for (sender, channel) in [(other_author, conversation), (author, other_conversation)] {
         conn.execute(
-            "INSERT INTO messages VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO messages (id, sender_id, conversation_id, conversation_type, timestamp_quote_key) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 MessageId::new().to_string(),
                 sender.to_string(),
@@ -247,7 +247,7 @@ fn stored_timestamp_quote_resolves_when_parent_arrives_in_same_conversation() {
     }
     assert_eq!(resolve(), None);
     conn.execute(
-        "INSERT INTO messages VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO messages (id, sender_id, conversation_id, conversation_type, timestamp_quote_key) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
             parent.to_string(),
             author.to_string(),
