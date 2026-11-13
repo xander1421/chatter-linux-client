@@ -35,6 +35,36 @@ impl SignalService {
 
         Ok(sender_cert)
     }
+    /// Seal sender-key `contents` (a serialized GroupEncrypted) for every
+    /// device of every one of `members`, our own sending device included
+    /// (crypto/signal/sealed_sender/multi.rs says why), as one SSv2
+    /// multi-recipient message. Devices are the ones we hold sessions with; a
+    /// member the server says has others is reconciled by the caller.
+    pub(crate) async fn seal_group_message(
+        &self,
+        auth_client: &mut AuthClient,
+        channel_id: &crate::domain::ids::ChannelId,
+        contents: Vec<u8>,
+        members: &[String],
+    ) -> Result<Vec<u8>, ServiceError> {
+        let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
+        let ours = self.get_our_address()?;
+        let mut destinations = Vec::new();
+        for member in members {
+            for device in self.session_devices(member).await? {
+                let device = libsignal_protocol::DeviceId::try_from(device)
+                    .map_err(|e| ServiceError::Validation(format!("device id: {e}")))?;
+                destinations.push(ProtocolAddress::new(member.clone(), device));
+            }
+            if *member == ours.name() {
+                destinations.push(ours.clone());
+            }
+        }
+        self.actor
+            .encrypt_multi_recipient(contents, sender_cert, destinations, channel_id.as_bytes().to_vec())
+            .await
+    }
+
     /// Get cached sender certificate without making auth request.
     ///
     /// Returns None if no valid cached certificate exists.

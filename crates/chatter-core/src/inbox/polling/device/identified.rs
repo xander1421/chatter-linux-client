@@ -353,6 +353,7 @@ pub(super) async fn process_identified_sender_message(
         // authenticated by the sealed-sender certificate. The identified
         // path's sender is server-claimed, so no DEM is built for it.
         Ok(SealedSenderResult::DecryptionErrorNeedsReport { .. })
+        | Ok(SealedSenderResult::SealedGroupMessage { .. })
         | Ok(SealedSenderResult::SessionHealed { .. })
         | Ok(SealedSenderResult::ResendRequested { .. }) => {
             tracing::warn!(

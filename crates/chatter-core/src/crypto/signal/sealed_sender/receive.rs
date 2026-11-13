@@ -156,7 +156,10 @@ impl SealedSenderManager {
             (Some(l), Some(s)) if l == s
         );
         if (is_local_e164 || is_local_uuid) && sender_device_id == local_device_id {
-            return Err(map_envelope_err(SignalProtocolError::SealedSenderSelfSend));
+            // Our own private-channel send coming back to the device that
+            // sent it (multi.rs addresses it on purpose). Expected, not a
+            // failure: no error log.
+            return Err(CryptoError::SealedSenderSelfSend);
         }
 
         let remote_address = ProtocolAddress::new(sender_uuid.clone(), sender_device_id);
@@ -220,6 +223,10 @@ impl SealedSenderManager {
             // The `Plaintext` type travels back with it so every caller that
             // is NOT the DEM handler can refuse these unratcheted bytes.
             CiphertextMessageType::Plaintext => contents.to_vec(),
+            // An anonymous private-channel send: the contents are the
+            // sender-key GroupEncrypted, decrypted by the group path with the
+            // sender this (authenticated) certificate names.
+            CiphertextMessageType::SenderKey => contents.to_vec(),
             other => {
                 return Err(map_envelope_err(SignalProtocolError::InvalidMessage(
                     other,

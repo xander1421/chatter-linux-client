@@ -281,7 +281,13 @@ impl MessageService {
             request,
             group_state.as_ref().map(|state| state.state_hash.to_vec()),
         )?;
-        let proto_message = message_client.send_prepared_message(request).await?;
+        // A private channel goes out anonymously to every member device
+        // (group_send.rs); only a public channel still posts to the server.
+        let proto_message = if group_state.is_some() {
+            self.submit_group_request(&request).await?
+        } else {
+            message_client.send_prepared_message(request).await?
+        };
         super::channel_send::retain_channel_response(&proto_message)?;
         crate::services::gateway::submission::bind_original_row(proto_message.id.clone())?;
         tracing::info!(

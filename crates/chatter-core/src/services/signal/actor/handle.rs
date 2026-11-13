@@ -139,6 +139,23 @@ impl SignalActorHandle {
         .await?
     }
 
+    pub(crate) async fn encrypt_multi_recipient(
+        &self,
+        contents: Vec<u8>,
+        sender_cert: SenderCertificate,
+        destinations: Vec<ProtocolAddress>,
+        group_id: Vec<u8>,
+    ) -> Result<Vec<u8>, ServiceError> {
+        self.send(|tx| SignalCommand::EncryptMultiRecipient {
+            contents,
+            sender_cert,
+            destinations,
+            group_id,
+            response: tx,
+        })
+        .await?
+    }
+
     pub async fn encrypt_identified(
         &self,
         plaintext: Vec<u8>,

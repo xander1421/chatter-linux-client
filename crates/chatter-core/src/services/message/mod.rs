@@ -23,6 +23,7 @@ pub(crate) use dm::null_message_content;
 mod dm_bootstrap;
 mod dm_resend;
 mod group;
+mod group_send;
 pub use group::ChannelStateSync;
 pub(crate) use group::GroupStateGate;
 mod call_event;
@@ -409,6 +410,9 @@ pub struct MessageService {
     /// [`group::ChannelStateSync`].
     pub(crate) channel_state_sync:
         Arc<parking_lot::RwLock<Option<Arc<dyn group::ChannelStateSync>>>>,
+    /// Group send tokens per private channel, for the verified state they
+    /// were made for (group_send.rs).
+    pub(crate) group_send_tokens: Arc<group_send::TokenCache>,
 }
 
 /// `(channel, sender, server sent_at in epoch millis)` of every group message

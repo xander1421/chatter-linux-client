@@ -73,6 +73,7 @@ pub(crate) fn validate_sealed_body_size(
 
 mod certificate;
 mod receive;
+mod multi;
 mod send;
 
 pub use certificate::{

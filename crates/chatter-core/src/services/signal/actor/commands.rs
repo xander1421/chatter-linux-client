@@ -70,6 +70,15 @@ pub(crate) enum SignalCommand {
         permit: crate::services::gateway::submission::SubmissionPermit,
         response: oneshot::Sender<Result<Vec<(ProtocolAddress, Vec<u8>, u32)>, ServiceError>>,
     },
+    /// Seal sender-key `contents` (a GroupEncrypted) once for every
+    /// destination as an SSv2 multi-recipient message.
+    EncryptMultiRecipient {
+        contents: Vec<u8>,
+        sender_cert: SenderCertificate,
+        destinations: Vec<ProtocolAddress>,
+        group_id: Vec<u8>,
+        response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
+    },
     EncryptIdentified {
         plaintext: Vec<u8>,
         recipient_address: ProtocolAddress,

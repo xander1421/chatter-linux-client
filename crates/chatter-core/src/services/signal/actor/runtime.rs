@@ -163,6 +163,26 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
+                        SignalCommand::EncryptMultiRecipient { contents, sender_cert, destinations, group_id, response } => {
+                            let local_address = match local_protocol_address(&settings_repo) {
+                                Ok(a) => a,
+                                Err(e) => { let _ = response.send(Err(e)); continue; }
+                            };
+                            let res = async {
+                                let usmc = SealedSenderManager::create_content(
+                                    libsignal_protocol::CiphertextMessageType::SenderKey,
+                                    sender_cert,
+                                    contents,
+                                    libsignal_protocol::ContentHint::Resendable,
+                                    Some(group_id),
+                                )?;
+                                SealedSenderManager::encrypt_multi_recipient(&usmc, &destinations, &local_address, &store).await
+                            }
+                            .await
+                            .map_err(ServiceError::Crypto);
+                            let _ = response.send(res);
+                        }
+
                         SignalCommand::EncryptIdentified { plaintext, recipient_address, response } => {
                             let local_address = match local_protocol_address(&settings_repo) {
                                 Ok(a) => a,
