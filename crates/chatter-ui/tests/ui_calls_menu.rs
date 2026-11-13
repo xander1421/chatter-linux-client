@@ -2,7 +2,7 @@
 //! extends behind the Calls header. Run with --features ui-test-debug.
 use chatter_ui::{CallHistoryRow, MainWindow};
 pub use chatter_ui::{
-    CallView, ChatPane, ConversationKind, ModalHostState, SearchPane, SidebarPane,
+    AppLockPane, CallView, ChatPane, ConversationKind, ModalHostState, SearchPane, SidebarPane,
 };
 use i_slint_backend_testing as testing;
 use slint::platform::{PointerEventButton, WindowEvent};

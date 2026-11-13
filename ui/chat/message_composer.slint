@@ -578,7 +578,7 @@ export component MessageComposer inherits GlassSurface {
             }
 
             // One native input below the toolbar beside Send; compact inline when empty.
-            Rectangle {
+            input-field := Rectangle {
                 x: root.row-padding + (1 - root.lift-layout) * (Spacing.touch-target-min + Spacing.xs);
                 y: root.row-padding + root.raised-toolbar-height;
                 width: parent.width - root.row-padding * 2

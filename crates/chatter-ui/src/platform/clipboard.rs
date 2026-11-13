@@ -1,7 +1,31 @@
-//! Clipboard writes shared by the settings and friend-code UI.
+//! Clipboard writes shared by the settings, friend-code and profile UI.
+
+/// Headless UI suites (built with `ui-test-debug`, never shipped) must not touch
+/// the desktop clipboard: `wl-copy` daemonizes holding the test's stdout pipe
+/// and the gate hangs. In that build every write lands here instead.
+#[cfg(feature = "ui-test-debug")]
+static TEST_CLIPBOARD: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// The last text written to the clipboard by a `ui-test-debug` build.
+#[cfg(feature = "ui-test-debug")]
+pub fn test_clipboard_text() -> Option<String> {
+    TEST_CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
 
 /// Write text to the system clipboard. Recovery codes use `secret = true`.
 pub fn set_text(label: &str, text: &str, secret: bool) -> Result<(), String> {
+    #[cfg(feature = "ui-test-debug")]
+    {
+        let _ = (label, secret);
+        *TEST_CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(text.to_owned());
+        Ok(())
+    }
+    #[cfg(not(feature = "ui-test-debug"))]
+    system_set_text(label, text, secret)
+}
+
+#[cfg(not(feature = "ui-test-debug"))]
+fn system_set_text(label: &str, text: &str, secret: bool) -> Result<(), String> {
     if secret {
         return set_secret_text(label, text);
     }
@@ -46,6 +70,7 @@ pub fn set_text(label: &str, text: &str, secret: bool) -> Result<(), String> {
 }
 
 /// Recovery codes unlock a backup, so their clipboard lifetime is limited.
+#[cfg(not(feature = "ui-test-debug"))]
 fn set_secret_text(label: &str, text: &str) -> Result<(), String> {
     #[cfg(target_os = "ios")]
     {
@@ -88,7 +113,7 @@ fn set_secret_text(label: &str, text: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", not(feature = "ui-test-debug")))]
 fn ios_set_text(text: &str, secret: bool) -> Result<(), String> {
     use std::ffi::{CString, c_char};
 

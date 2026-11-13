@@ -1668,6 +1668,20 @@ fn profile_share_username_link_is_wired() {
             .is_empty(),
         "copy-share-link did NOT run the real handler (status not set)"
     );
+    // The copy reached the clipboard writer — the in-memory one of this
+    // ui-test-debug build, never the desktop's wl-copy (it daemonizes holding
+    // the test's pipe and hung the gate).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while chatter_ui::platform::clipboard::test_clipboard_text().as_deref()
+        != Some("chatter://u/test-id#AAAA")
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "copy-share-link never wrote the link to the clipboard (got {:?})",
+            chatter_ui::platform::clipboard::test_clipboard_text()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 
     // ---- L2: static — handlers reach core; Slint fires the callbacks --------
     let profile_src = concat!(
@@ -2724,6 +2738,92 @@ fn back_key_event_reaches_the_handler() {
         "a real Key::Back window event never reached back-pressed — the top-level \
          FocusScope is not receiving key events (check `forward-focus: back-scope`)"
     );
+}
+
+/// App lock (78fd3d41): the lock screen's PIN field takes focus, so a real
+/// Back key is delivered to that field and must bubble to back-pressed. While
+/// locked, Back leaves the app (Signal's lock screen does the same) and pops
+/// NOTHING: the layers hidden behind the lock screen stay as they were. After
+/// unlocking, Back works on the app again.
+#[test]
+fn back_on_the_lock_screen_leaves_the_app_and_pops_nothing() {
+    use slint::ComponentHandle;
+    use std::{cell::Cell, rc::Rc};
+    require_element_queries();
+    let w = boot();
+    chatter_ui::bin_ui::features::back::push(&w, "sessions");
+    let scale = w.window().scale_factor();
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::Resized {
+            size: slint::LogicalSize::new(1000.0, 800.0)
+                .to_physical(scale)
+                .to_logical(scale),
+        });
+    let presses = Rc::new(Cell::new(0u32));
+    let consumed = Rc::new(Cell::new(None));
+    {
+        let (weak, presses, consumed) = (w.as_weak(), presses.clone(), consumed.clone());
+        w.on_back_pressed(move || {
+            presses.set(presses.get() + 1);
+            consumed.set(Some(chatter_ui::bin_ui::features::back::handle_back(
+                &weak.upgrade().unwrap(),
+            )));
+        });
+    }
+
+    w.global::<chatter_ui::AppLockPane>().set_locked(true);
+    slint::platform::update_timers_and_animations();
+    assert_eq!(
+        testing::ElementHandle::find_by_accessible_label(&w, "PIN")
+            .filter(|e| e.accessible_role() == Some(testing::AccessibleRole::TextInput))
+            .count(),
+        1,
+        "the lock screen's PIN field was not instantiated"
+    );
+    // The PIN field holds focus: typed text lands in it.
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "7".into() });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: "7".into() });
+    assert_eq!(
+        w.global::<chatter_ui::AppLockPane>().get_pin().as_str(),
+        "7",
+        "the PIN field does not hold focus on the lock screen"
+    );
+
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
+    assert_eq!(
+        presses.get(),
+        1,
+        "Back from the focused PIN field never reached back-pressed"
+    );
+    assert_eq!(
+        consumed.get(),
+        Some(false),
+        "Back on the lock screen must fall through to leaving the app"
+    );
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "sessions",
+        "Back on the lock screen popped a layer hidden behind it"
+    );
+
+    w.global::<chatter_ui::AppLockPane>().set_locked(false);
+    slint::platform::update_timers_and_animations();
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
+    assert_eq!(
+        presses.get(),
+        2,
+        "after unlocking, Back no longer reaches back-pressed (focus was lost with the PIN field)"
+    );
+    assert_eq!(consumed.get(), Some(true));
+    assert_eq!(w.get_active_modal().as_str(), "none");
 }
 
 /// The Back scope must not become a focus thief. It is an ancestor of the whole
@@ -5322,6 +5422,10 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
 
     // ---- App settings > Privacy: a ToggleRow outside the modal --------------
     chatter_ui::bin_ui::features::back::close(&w, "channel-settings");
+    // The App lock card (78fd3d41) sits above Read receipts in Privacy and
+    // pushed the row below an 800px window, where it is not instantiated
+    // until scrolled to. A taller window keeps the row on screen.
+    w.window().set_size(slint::LogicalSize::new(1000.0, 1600.0));
     chatter_ui::bin_ui::features::back::push(&w, "settings");
     slint::platform::update_timers_and_animations();
     testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
@@ -6411,6 +6515,10 @@ fn video_call_lives_in_the_header_more_menu() {
 
     let w = boot();
     back::wire(&w);
+    // Channels and friend DMs are an account's. Signed out, the mesh-only
+    // strip (ui/components/mesh_only_bar.slint) floats over the header and
+    // takes the tap meant for ⋯.
+    w.global::<chatter_ui::AuthFlow>().set_is_signed_in(true);
     let started = std::rc::Rc::new(std::cell::Cell::new(0));
     let s = started.clone();
     w.global::<chatter_ui::ChatPane>()
@@ -6461,10 +6569,13 @@ fn video_call_lives_in_the_header_more_menu() {
         w.global::<chatter_ui::SidebarPane>()
             .set_mobile_show_chat(true);
         slint::platform::update_timers_and_animations();
-        // A phone pushes the chat from a one-frame timer (3cf2b504); let the
-        // push run as the frames after the tap would.
-        testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
-        slint::platform::update_timers_and_animations();
+        // A phone pushes the chat from a one-frame timer (3cf2b504), then
+        // animates it in; let both run as the frames after the tap would: the
+        // timer fires on the first tick and the slide only moves on the next.
+        for _ in 0..2 {
+            testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+            slint::platform::update_timers_and_animations();
+        }
 
         assert_eq!(
             button(&w, "Voice call").is_some(),

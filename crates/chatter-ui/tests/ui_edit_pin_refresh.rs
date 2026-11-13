@@ -18,6 +18,39 @@ fn pump(w: &MainWindow, width: f32) {
     }
 }
 
+/// Open the phone chat pane and let its push finish. Since 3cf2b504 the pane
+/// mounts offscreen and slides in from a one-frame timer over motion-standard
+/// (320ms at 1x). Mid-slide the composer's trailing controls are still past
+/// the right edge and not instantiated. Under the system-time backend a debug
+/// build renders far fewer frames than that, so wait until the composer stops
+/// moving rather than for a fixed time.
+fn settle_chat_push(w: &MainWindow) {
+    let x = |w: &MainWindow| {
+        testing::ElementHandle::find_by_element_type_name(w, "MessageComposer")
+            .find(|e| e.size().height > 0.0)
+            .map(|e| e.absolute_position().x)
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut last = None;
+    loop {
+        slint::Timer::single_shot(std::time::Duration::from_millis(50), || {
+            slint::quit_event_loop().unwrap();
+        });
+        w.run().unwrap();
+        let now = x(w);
+        // On screen (the offscreen mount sits a window-width right) and still.
+        let half = w.window().size().to_logical(w.window().scale_factor()).width / 2.0;
+        if now.is_some_and(|x| x < half) && now == last {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the phone chat push never settled (composer x {now:?})"
+        );
+        last = now;
+    }
+}
+
 /// The view handoff (app_view_transition.slint) holds a window-sized
 /// stray-tap blocker for motion-standard + 40ms after `current-view` changes:
 /// 360ms at the default animation speed since 15919403 (120ms before). Until
@@ -64,6 +97,9 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
         .set_mobile_show_chat(true);
     w.global::<chatter_ui::ChatPane>()
         .set_composer_text("Edited plaintext".into());
+    w.window().set_size(slint::LogicalSize::new(360.0, 700.0));
+    w.show().unwrap();
+    settle_chat_push(&w);
     for width in [360.0, 412.0] {
         for (editing, replying) in [(false, false), (true, false), (false, true), (false, false)] {
             w.global::<chatter_ui::ChatPane>()

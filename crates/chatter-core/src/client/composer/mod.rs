@@ -608,7 +608,16 @@ impl ChatterClient {
         }
         match self.park_unstarted_queued_send(&send) {
             Ok(false) => {},
-            Ok(true) | Err(()) => return None,
+            // Parked durably (never reached the send journal). Its own
+            // composer still empty and open: hand it straight back, as an
+            // unqueued failure is. Core installs its trays in that transfer,
+            // so the caller must not stage the attachments again.
+            Ok(true) => {
+                let mut back = self.take_parked(composer_empty, Some(send.attempt_id))?;
+                back.attachments.clear();
+                return Some(back);
+            },
+            Err(()) => return None,
         }
         // A completed failed task no longer owns admission. Keeping its
         // recoverable draft must not hold later accepted batches forever.
@@ -638,6 +647,11 @@ impl ChatterClient {
     /// A kept failed send for the active conversation, if the composer has
     /// room for it now. Checked on entering a conversation.
     pub fn take_parked_send(&self, composer_empty: bool) -> Option<ComposerSend> {
+        self.take_parked(composer_empty, None)
+    }
+
+    /// [`Self::take_parked_send`], limited to one attempt when `attempt` is set.
+    fn take_parked(&self, composer_empty: bool, attempt: Option<uuid::Uuid>) -> Option<ComposerSend> {
         let active = self.chat_state().active_conversation();
         if !self.composer_has_room(active, composer_empty) {
             return None;
@@ -654,7 +668,11 @@ impl ChatterClient {
         let revision = self.auth_state().get().session_revision;
         let at = parked
             .iter()
-            .position(|s| s.conversation == active && s.session_revision == revision)?;
+            .position(|s| {
+                s.conversation == active
+                    && s.session_revision == revision
+                    && attempt.is_none_or(|id| s.attempt_id == id)
+            })?;
         let send = parked[at].clone();
         let key = active.channel_id()?.to_string();
         let mut next_drafts = drafts.clone();
