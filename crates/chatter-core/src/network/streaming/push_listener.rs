@@ -536,25 +536,9 @@ impl PushListener {
             "anonymous ntfy wake connecting"
         );
         if url.scheme() == "https" {
-            use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
-            use tokio_rustls::rustls::{ClientConfig, RootCertStore};
-            let pem = crate::config::TLS_ROOT_CA_PEM.ok_or(PushError::Trust)?;
-            let mut roots = RootCertStore::empty();
-            for cert in CertificateDer::pem_slice_iter(pem.as_bytes()) {
-                roots
-                    .add(cert.map_err(|_| PushError::Trust)?)
-                    .map_err(|_| PushError::Trust)?;
-            }
-            if roots.is_empty() {
-                return Err(PushError::Trust.into());
-            }
-            let config = ClientConfig::builder_with_provider(Arc::new(
-                tokio_rustls::rustls::crypto::ring::default_provider(),
-            ))
-            .with_safe_default_protocol_versions()
-            .map_err(|_| PushError::Trust)?
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+            use tokio_rustls::rustls::pki_types::ServerName;
+            let config =
+                crate::network::pq_tls::pinned_client_config().map_err(|_| PushError::Trust)?;
             let name = ServerName::try_from(host).map_err(|_| PushError::Endpoint)?;
             let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
             let tls =

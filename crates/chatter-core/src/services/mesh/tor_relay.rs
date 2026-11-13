@@ -86,8 +86,8 @@ impl TorRelayConnector {
                     // Arti's rustls runtime needs a process-wide default
                     // provider. Idempotent: an error means someone installed one
                     // already.
-                    let _ =
-                        tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+                    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
+                        .install_default();
                     TorClient::create_bootstrapped(config).await
                 });
                 match tokio::time::timeout(BOOTSTRAP_TIMEOUT, started).await {
@@ -185,7 +185,7 @@ fn tls_config() -> Result<ClientConfig, NostrError> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     ClientConfig::builder_with_provider(Arc::new(
-        tokio_rustls::rustls::crypto::ring::default_provider(),
+        tokio_rustls::rustls::crypto::aws_lc_rs::default_provider(),
     ))
     .with_safe_default_protocol_versions()
     .map_err(|error| relay_error(format!("TLS provider rejected the defaults: {error}")))

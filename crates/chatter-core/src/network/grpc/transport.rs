@@ -180,8 +180,6 @@ mod quic_enabled {
     use std::time::Duration;
 
     use http::{Request, Response};
-    use rustls::pki_types::{CertificateDer, pem::PemObject};
-    use rustls::{ClientConfig as RustlsClientConfig, RootCertStore};
     use tonic::body::Body;
 
     use super::BoxError;
@@ -238,30 +236,11 @@ mod quic_enabled {
         }
     }
 
-    /// Build a quinn client config trusting ONLY the pinned chatter CA — the
-    /// same private-PKI pin (§8) as the TCP path's `ClientTlsConfig`
-    /// (`client_pool.rs`) and the Tor-tunnelled TLS in `anon_http.rs`. Three
-    /// different wrapper types (tonic's `ClientTlsConfig`, plain
-    /// `rustls::ClientConfig`, quinn's `QuicClientConfig`) with no shared
-    /// constructor, so the trust-store-building code is duplicated rather
-    /// than the trust decision itself (CA PEM comes from the one source of
-    /// truth, `config::TLS_ROOT_CA_PEM`, in all three places).
+    /// Build a quinn client config trusting ONLY the pinned chatter CA, with
+    /// post-quantum key exchange only — the same `network::pq_tls` config as
+    /// the TCP gRPC connector, storage HTTP and the Tor-tunnelled TLS.
     fn quic_client_config() -> Result<quinn::ClientConfig, BoxError> {
-        let ca_pem = crate::config::TLS_ROOT_CA_PEM.ok_or(
-            "no TLS root CA provisioned; refusing to open an unpinned QUIC connection \
-             (build with CHATTER_TLS_ROOT_CA_PEM, or --features dev-trust-root)",
-        )?;
-        let mut roots = RootCertStore::empty();
-        for cert in CertificateDer::pem_slice_iter(ca_pem.as_bytes()) {
-            roots.add(cert?)?;
-        }
-        let mut tls_config = RustlsClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .map_err(|e| BoxError::from(e.to_string()))?
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+        let mut tls_config = crate::network::pq_tls::pinned_client_config()?;
         // Required for QUIC/h3 protocol negotiation — without it the peer has
         // nothing to select and the handshake fails.
         tls_config.alpn_protocols = vec![b"h3".to_vec()];

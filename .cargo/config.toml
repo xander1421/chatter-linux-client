@@ -42,3 +42,12 @@ rustc-wrapper = "sccache"
 # share falls back to OpenH264 software (60+ fps on a beefy NVIDIA box
 # would otherwise be impossible — encoder is the bottleneck at high res).
 CUDA_HOME = "/opt/cuda"
+
+# aws-lc-sys (rustls' crypto provider) auto-adopts an AWS-LC it finds through
+# OPENSSL_DIR / pkg-config. The Android and Windows builds point OPENSSL_DIR at
+# webrtc's BoringSSL for SQLCipher; never let aws-lc-sys probe it. Always build
+# AWS-LC from source as a static library whose symbols carry the default
+# `aws_lc_<version>_` prefix, so they cannot collide with BoringSSL or OpenSSL
+# under `--allow-multiple-definition`. (Never set AWS_LC_SYS_NO_PREFIX.)
+AWS_LC_SYS_USE_SYSTEM = "0"
+

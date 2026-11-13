@@ -50,7 +50,7 @@ async-trait = "0.1"
 # ============================================================================
 # gRPC (Generated code dependencies)
 # ============================================================================
-tonic = { workspace = true, features = ["tls-ring"] }
+tonic = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 # Generated protobuf/gRPC types, response codec and declared validation.
@@ -207,13 +207,13 @@ mistralrs = { version = "0.8.1", optional = true, default-features = false }
 arti-client = { version = "0.47.0", default-features = false, features = ["tokio", "rustls", "onion-service-client", "hs-pow-full", "experimental-api"], optional = true }
 tor-rtcompat = { version = "0.47.0", default-features = false, features = ["tokio", "rustls"], optional = true }
 tor-netdir = { version = "0.47.0", optional = true }
-hyper-util = { version = "0.1", features = ["tokio"], optional = true }
+hyper-util = { version = "0.1", features = ["client-legacy", "tokio", "http2"] }
 # HTTP-over-Tor client (anon_http): a hyper HTTP/1.1 client run over a rustls TLS
 # session tunnelled through the Arti DataStream. All already transitive deps of
 # arti/tonic/reqwest — declared here (optional) only to name them under `onion`.
 hyper = { version = "1", features = ["client", "http1"], optional = true }
 http-body-util = { version = "0.1", optional = true }
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"], optional = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12", "logging"] }
 webpki-roots = "1"
 # WebSocket framing for Nostr relays, over the Tor DataStream. Under `onion`
 # because that is the only build with a relay connector at all. Replaces a
@@ -235,13 +235,17 @@ tempfile = "3"
 # default-features = false and only the "futures-io" feature, deliberately
 # leaving the crypto backend to the consuming crate. quinn/rustls are ALSO
 # declared here (not just referenced through tonic-h3's re-export) so Cargo's
-# feature unification turns on quinn's rustls-ring backend and Endpoint::client
+# feature unification turns on quinn's rustls-aws-lc-rs backend and Endpoint::client
 # for the whole dependency graph, including inside h3-quinn itself — the
 # version ranges match what quinn/h3-quinn already pin, so this resolves to
 # the SAME crate instances, never a second mismatched copy.
 tonic-h3 = { version = "0.0.6", default-features = false, features = ["quinn"], optional = true }
-quinn = { version = "0.11", default-features = false, features = ["rustls-ring", "runtime-tokio"], optional = true }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+quinn = { version = "0.11", default-features = false, features = ["rustls-aws-lc-rs", "runtime-tokio"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
+# Direct gRPC TLS (network::pq_tls): tonic's own ClientTlsConfig cannot
+# restrict key-exchange groups, so the pinned, PQ-only rustls config is driven
+# through this connector instead. No provider feature: the config carries one.
+hyper-rustls = { version = "0.27", default-features = false, features = ["http2"] }
 
 # ============================================================================
 # Desktop-only system deps (not available on Android or iOS)
@@ -305,6 +309,8 @@ oboe = { version = "0.6", features = ["java-interface"] }
 # with a software fallback; Android needs no separate `asm` dependency.
 
 [dev-dependencies]
+# Disposable CA/leaf for the PQ TLS loopback handshake tests (network/pq_tls.rs).
+rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem", "crypto"] }
 chatter-attachment-crypto = { path = "../chatter-attachment-crypto", features = ["test-support"] }
 # `test_plaintext` for unit tests.
 chatter-proto = { path = "../chatter-proto", features = ["testing"] }
@@ -343,8 +349,8 @@ dev-trust-root = []
 # dependency (arti-client, added in Stage 2). Without it, switching to onion
 # transport returns an error and anon mode stays UI-filter-only.
 onion = [
-    "dep:arti-client", "dep:tor-rtcompat", "dep:tor-netdir", "dep:hyper-util",
-    "dep:hyper", "dep:http-body-util", "dep:tokio-rustls",
+    "dep:arti-client", "dep:tor-rtcompat", "dep:tor-netdir",
+    "dep:hyper", "dep:http-body-util",
     "dep:tokio-tungstenite",
 ]
 desktop-system = ["dep:zbus-secret-service-keyring-store", "dep:windows-native-keyring-store", "dep:apple-native-keyring-store"]

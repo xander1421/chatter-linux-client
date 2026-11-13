@@ -101,10 +101,14 @@ impl GrpcClientPool {
                 .connect_with_connector_lazy(self.onion_connector())
                 .into()
         } else {
-            endpoint.connect_lazy().into()
+            endpoint
+                .connect_with_connector_lazy(crate::network::pq_tls::grpc_connector(&endpoint))
+                .into()
         };
         #[cfg(not(feature = "onion"))]
-        let channel: GrpcTransport = endpoint.connect_lazy().into();
+        let channel: GrpcTransport = endpoint
+            .connect_with_connector_lazy(crate::network::pq_tls::grpc_connector(&endpoint))
+            .into();
         tracing::warn!(
             "GrpcClientPool: no active connection — created lazy channel (RPCs will attempt on-demand connect)"
         );
