@@ -626,17 +626,27 @@ impl crate::services::inbox_processor::InboxFacade for ChatterClient {
         peer_id: crate::domain::UserId,
         timestamp: u64,
     ) -> futures::future::BoxFuture<'static, Result<(), String>> {
-        // Same conversation as a sealed-sender DM; the receipt's transport is
-        // picked by mode in `send_friend_dm_content`.
-        let handle = super::conversation::ConversationHandle::new(
-            crate::state::ActiveConversation::ServerDm { peer_id },
-            self,
-        );
+        // Accepted senders only, batched behind a random delay so the
+        // receipt's send time does not mark the DM's arrival
+        // (`delivery_receipt_batch`). Joining a waiting batch is done here.
+        let Some(key) = self.queue_dm_delivery_receipt(peer_id, timestamp) else {
+            return Box::pin(async { Ok(()) });
+        };
         Box::pin(async move {
-            handle
-                .send_delivery_receipt(&[timestamp])
-                .await
-                .map_err(|e| e.to_string())
+            tokio::time::sleep(super::delivery_receipt_batch::delivery_receipt_delay()).await;
+            let timestamps = self.dm_delivery_receipts.take(&key);
+            if self.auth_state().get().session_revision != key.0 {
+                return Ok(());
+            }
+            // Same conversation as a sealed-sender DM; the receipt's transport
+            // is picked by mode in `send_friend_dm_content`.
+            super::conversation::ConversationHandle::new(
+                crate::state::ActiveConversation::ServerDm { peer_id },
+                self,
+            )
+            .send_delivery_receipt(&timestamps)
+            .await
+            .map_err(|e| e.to_string())
         })
     }
 

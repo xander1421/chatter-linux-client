@@ -43,6 +43,7 @@ mod shield_recovery;
 pub use search_visible::{SearchPage, VisibleSearchHit};
 pub use send_attempt::await_send_with_notice;
 mod receipts;
+mod delivery_receipt_batch;
 pub use crate::network::connection::ConnectionState;
 /// `tracing` target of the onion connector, for the Tor stage trace.
 pub use crate::network::grpc::ONION_TRANSPORT_LOG_TARGET;
@@ -268,6 +269,7 @@ impl ClientBuilder {
             tasks: Mutex::new(Vec::new()),
             pending_receipts: Mutex::new(Vec::new()),
             sent_receipts: Mutex::new(Vec::new()),
+            dm_delivery_receipts: Default::default(),
             upload_cancels: Mutex::new(std::collections::HashMap::new()),
             started: AtomicBool::new(false),
             channel_delivery_shutdown: AtomicBool::new(false),
@@ -543,6 +545,9 @@ pub struct ChatterClient {
     /// Failed ephemeral receipts for this process and auth session only.
     pub(crate) pending_receipts: Mutex<Vec<conversation::PendingReceipt>>,
     pub(crate) sent_receipts: Mutex<Vec<conversation::PendingReceipt>>,
+    /// Friend-DM delivery receipts waiting out their random delay.
+    pub(crate) dm_delivery_receipts:
+        delivery_receipt_batch::ReceiptBatch<delivery_receipt_batch::DmReceiptKey>,
     /// Cancellation tokens for in-flight outgoing attachment uploads, keyed by
     /// the tray (pending) attachment id. The composer's per-file cancel X
     /// aborts just that file via [`Self::cancel_attachment_upload`]; the upload
