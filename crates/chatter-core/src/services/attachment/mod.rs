@@ -18,7 +18,7 @@ pub use media::{
     register_video_thumbnail_extractor,
 };
 pub use range_decrypt::{CbcRangeDecryptor, CbcRangeReader};
-pub use sanitize::{SanitizeOutcome, sanitize_media, sanitize_media_file, validate_media};
+pub use sanitize::validate_media;
 
 use std::path::PathBuf;
 use std::sync::Arc;

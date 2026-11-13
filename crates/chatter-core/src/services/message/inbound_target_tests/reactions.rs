@@ -115,7 +115,7 @@ use super::*;
         let (tx, mut rx) = broadcast::channel(8);
         let mut domain = f.client.event_bus().subscribe_domain();
         let stats = Arc::new(RwLock::new(InboxStats::default()));
-        let reaction = crate::services::build_reaction_content_with_channel(
+        let reaction = crate::services::gateway::builders::build_reaction_content_with_channel(
             "👍",
             false,
             &f.carol.to_string(),

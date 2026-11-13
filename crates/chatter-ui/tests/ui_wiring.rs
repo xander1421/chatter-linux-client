@@ -7588,7 +7588,7 @@ fn reaction_converter_callback_preserves_author_and_nanosecond_clock() {
             let parsed_author: UserId = sender.as_str().parse().unwrap();
             let parsed_clock: u64 = timestamp.as_str().parse().unwrap();
             *capture.lock().unwrap() = Some(
-                chatter_core::testing::services::build_reaction_content_with_channel(
+                chatter_core::testing::services::gateway::builders::build_reaction_content_with_channel(
                     emoji.as_str(),
                     false,
                     &parsed_author.to_string(),

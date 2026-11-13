@@ -25,7 +25,7 @@ async fn higher_uuid_without_a_peer_mailbox_waits_for_prefetched_tokens() {
     seed_half_open(ms, &friend, &ours, 5);
 
     let sent = ms
-        .send_friend_dm_content(&friend, crate::services::build_text_content("hi", 1))
+        .send_friend_dm_content(&friend, crate::services::gateway::builders::build_text_content("hi", 1))
         .await;
     assert!(
         matches!(sent, Err(MessageError::ShieldNotReady)),

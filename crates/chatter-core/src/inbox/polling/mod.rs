@@ -14,7 +14,7 @@ pub mod device;
 pub mod dm;
 pub mod group;
 
-pub use anon_dm::{ProcessedAnonDmMessages, process_anon_dm_results};
-pub use device::{dispatch_control_content, process_device_message};
+pub use anon_dm::process_anon_dm_results;
+pub use device::process_device_message;
 pub use dm::poll_dm_mailboxes;
 pub use group::poll_group_mailboxes;

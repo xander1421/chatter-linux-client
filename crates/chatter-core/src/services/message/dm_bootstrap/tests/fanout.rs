@@ -19,7 +19,7 @@ async fn shield_request_without_onion_is_refused_not_sent_direct() {
     seed_tokens(ms, 10);
 
     let sent = ms
-        .send_friend_dm_content(&friend, crate::services::build_text_content("hi", 1))
+        .send_friend_dm_content(&friend, crate::services::gateway::builders::build_text_content("hi", 1))
         .await;
     assert!(
         matches!(
@@ -187,7 +187,7 @@ async fn flushed_pending_dm_is_marked_delivered_by_the_peer_receipt() {
 
     // Queued before the bootstrap, stored as a "sending" bubble.
     let sent_at = 1_700_000_000_123_456_789u64;
-    let content = crate::services::build_text_content("first", sent_at);
+    let content = crate::services::gateway::builders::build_text_content("first", sent_at);
     ms.pending_dms
         .queue(&friend, content.encode_to_vec(), vec![], None)
         .unwrap();
@@ -258,7 +258,7 @@ async fn initiator_flush_completion_does_not_regress_a_delivered_pending_dm() {
     seed_half_open(ms, &friend, &ConversationKey::new(), 5);
 
     let sent_at = 1_700_000_000_987_654_321u64;
-    let content = crate::services::build_text_content("shield over tor", sent_at);
+    let content = crate::services::gateway::builders::build_text_content("shield over tor", sent_at);
     ms.pending_dms
         .queue(&friend, content.encode_to_vec(), vec![], None)
         .unwrap();

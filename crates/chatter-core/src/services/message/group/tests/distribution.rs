@@ -453,7 +453,7 @@
             .record_reaction_at(&scope, &t.alice_id, sent, &t.alice_id, "😂", false, 2)
             .unwrap();
         for (receiver, actor) in [(&t.alice, t.bob_id), (&t.bob, t.bob_id)] {
-            let content = crate::services::build_reaction_content_with_channel(
+            let content = crate::services::gateway::builders::build_reaction_content_with_channel(
                 "😂",
                 false,
                 &t.alice_id.to_string(),

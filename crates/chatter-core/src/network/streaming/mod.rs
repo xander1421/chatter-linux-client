@@ -11,6 +11,6 @@ pub mod heartbeat;
 pub mod push_listener;
 
 // Re-exports for convenience
-pub use push_listener::{PushEvent, PushListener, PushListenerConfig};
+pub use push_listener::{PushListener, PushListenerConfig};
 
 pub(crate) mod mailbox_wakes;

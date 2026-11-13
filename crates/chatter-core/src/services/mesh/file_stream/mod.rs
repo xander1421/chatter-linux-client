@@ -172,5 +172,5 @@ mod outbound;
 mod tests;
 
 pub use bitmap::ChunkBitmap;
-pub use inbound::{ChunkOutcome, FileStreamSpool, InboundTransfer, ManifestOutcome};
+pub use inbound::{ChunkOutcome, FileStreamSpool, ManifestOutcome};
 pub use outbound::OutboundTransfer;

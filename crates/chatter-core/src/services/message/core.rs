@@ -1208,9 +1208,7 @@ impl MessageService {
 }
 
 // Re-export proto conversion functions from conversion module
-pub use super::conversion::{
-    proto_content_to_domain, proto_to_domain_message, proto_to_domain_message_with_sender,
-};
+pub use super::conversion::proto_to_domain_message_with_sender;
 
 #[cfg(test)]
 mod send_failure_tests {

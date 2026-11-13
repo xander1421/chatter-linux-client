@@ -6,9 +6,7 @@ pub mod deduplicator;
 pub mod orderer;
 pub mod validator;
 
-pub use deduplicator::{DeduplicatorStats, MessageDeduplicator};
-pub use orderer::{MessageOrderer, OrdererStats, OrderingResult};
+pub use deduplicator::MessageDeduplicator;
 pub use validator::{
-    ContentValidator, MessageValidationPipeline, PipelineResult, PipelineStats, ValidationError,
-    ValidationLimits,
+    MessageValidationPipeline, PipelineResult,
 };

@@ -500,7 +500,7 @@ mod tests {
             target.solicited_resends.clone(),
         );
         for (timestamp, early) in [(123, false), (124, true)] {
-            let original = crate::services::build_text_content("phone message", timestamp);
+            let original = crate::services::gateway::builders::build_text_content("phone message", timestamp);
             phone
                 .messages()
                 .snapshot_dm_content_targets(peer, &original, &[1, 2])

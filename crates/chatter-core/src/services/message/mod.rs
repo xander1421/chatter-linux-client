@@ -497,9 +497,6 @@ impl SolicitedResends {
 
 
 // Re-export helper functions used by other parts of the codebase
-pub use self::core::{
-    proto_content_to_domain, proto_to_domain_message, proto_to_domain_message_with_sender,
-};
 
 #[cfg(test)]
 mod solicited_resends_tests {

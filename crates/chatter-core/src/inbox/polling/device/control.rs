@@ -575,7 +575,7 @@ mod call_control_tests {
         let (event_tx, mut event_rx) = broadcast::channel(4);
         let stats = Arc::new(RwLock::new(InboxStats::default()));
         let caller = UserId::new();
-        let offer = crate::services::build_call_key_offer("call-1", [7u8; 32], "");
+        let offer = crate::services::gateway::build_call_key_offer("call-1", [7u8; 32], "");
 
         dispatch_control_content(
             offer.content.unwrap(),

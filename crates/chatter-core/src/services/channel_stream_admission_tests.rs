@@ -2,9 +2,9 @@ use super::*;
 use crate::domain::ids::UserId;
 use crate::domain::message::{ConversationType, Message};
 
-fn fixture() -> (tempfile::TempDir, Arc<crate::app::CoreServices>) {
+fn fixture() -> (tempfile::TempDir, Arc<crate::app::core_services::CoreServices>) {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = crate::app::AppContext::with_config(
+    let ctx = crate::app::context::AppContext::with_config(
         Some("https://localhost:1".into()),
         Some(dir.path().to_str().unwrap().into()),
     )
