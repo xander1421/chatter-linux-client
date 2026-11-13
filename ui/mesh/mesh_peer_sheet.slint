@@ -188,7 +188,10 @@ export component MeshPeerSheet inherits Rectangle {
                                     clicked => { MeshGlobal.scan-binding-qr(MeshGlobal.sheet-peer-id, root.qr-text); root.qr-text = ""; } }
                             }
                         }
-                        Text { text: MeshGlobal.sheet-fingerprint == "" ? "Waiting for encrypted link" : "Fingerprint: " + MeshGlobal.sheet-fingerprint;
+                        Text { text: MeshGlobal.sheet-fingerprint == "" ? "Waiting for encrypted link" : "Their fingerprint: " + MeshGlobal.sheet-fingerprint;
+                            color: Colors.text-muted; font-size: Typography.xs; font-family: Typography.font-family-mono;
+                            wrap: char-wrap; }
+                        Text { text: "Your fingerprint: " + MeshGlobal.sheet-own-fingerprint;
                             color: Colors.text-muted; font-size: Typography.xs; font-family: Typography.font-family-mono;
                             wrap: char-wrap; }
                     }

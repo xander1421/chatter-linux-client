@@ -160,6 +160,13 @@ impl ChatterClient {
         crate::services::mesh::mapping::peer_user_id(&self.mesh().local_peer())
     }
 
+    /// This device's mesh fingerprint, shown beside a peer's so both sides of
+    /// an out-of-band comparison have something to read out.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_fingerprint(&self) -> String {
+        self.mesh().fingerprint()
+    }
+
     #[cfg(feature = "mesh")]
     pub fn mesh_share_identity(&self, peer: &str) -> Result<(), crate::services::mesh::MeshError> {
         let owner = self.session_current_user_id().ok_or_else(|| {
