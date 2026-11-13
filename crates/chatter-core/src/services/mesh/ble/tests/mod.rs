@@ -23,7 +23,7 @@ fn runtime_parts() -> (
 ) {
     let radio = MockLink::shared();
     let identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
-    let state = Arc::new(MeshState::new(identity.peer_id()));
+    let state = Arc::new(MeshState::new());
     let nostr_state = Arc::new(NostrState::new());
     let timeline = crate::services::mesh::timeline::temp_timeline();
     let events = MeshEvents::new(64, Arc::clone(&timeline));

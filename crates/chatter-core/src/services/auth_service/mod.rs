@@ -27,7 +27,6 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::services::key_recovery::KeyRecoveryNeed;
-use crate::storage::KeyStore;
 use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 use crate::storage::repositories::user_repo::UserRepository;
 
@@ -150,7 +149,6 @@ pub struct AuthService {
     prekey_manager: Arc<PreKeyManager>,
     user_repo: Arc<UserRepository>,
     pub(crate) settings_repo: Arc<SettingsRepository>,
-    key_store: Arc<KeyStore>,
     pub(crate) auth_interceptor: AuthInterceptor,
     /// `(login identifier, grant)` from the last recovery, spent by the next
     /// login for that identifier (server OPEN-ITEMS §133). Memory only: it

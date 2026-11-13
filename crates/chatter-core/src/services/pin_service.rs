@@ -129,24 +129,6 @@ impl PinService {
         }))
     }
 
-    /// Pin a message.
-    pub async fn pin_message(
-        &self,
-        _channel_id: &ChannelId,
-        message_id: &MessageId,
-    ) -> PinResult<()> {
-        // Update message as pinned in database
-        self.message_service.set_message_pinned(message_id, true)?;
-        Ok(())
-    }
-
-    /// Unpin a message.
-    pub async fn unpin_message(&self, message_id: &MessageId) -> PinResult<()> {
-        // Update message as unpinned in database
-        self.message_service.set_message_pinned(message_id, false)?;
-        Ok(())
-    }
-
     fn thumbnail(attachments: &[Attachment]) -> Vec<u8> {
         attachments
             .iter()

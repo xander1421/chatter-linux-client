@@ -197,7 +197,7 @@ use crate::services::user::UserService;
 use crate::state::JarvisState;
 use crate::state::chat_state::PendingAttachment;
 use crate::state::{
-    ActiveConversation, AuthState, ChatState, MessageState, OfflineState, UserState,
+    ActiveConversation, AuthState, ChatState, MessageState, OfflineState,
 };
 use crate::storage::settings_keys;
 use crate::system::Directories;

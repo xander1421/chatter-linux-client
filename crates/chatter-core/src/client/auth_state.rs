@@ -443,9 +443,6 @@ impl ChatterClient {
     pub(crate) fn message_state(&self) -> &MessageState {
         &self.services.message_state
     }
-    pub(crate) fn user_state(&self) -> &UserState {
-        &self.services.user_state
-    }
 
     /// Persistent sidebar collapsed flag (settings-backed). Defaults to false.
     pub fn sidebar_collapsed(&self) -> bool {

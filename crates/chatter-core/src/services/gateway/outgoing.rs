@@ -20,17 +20,15 @@ use std::sync::Arc;
 
 use crate::domain::anon_dm::AnonDmId;
 use crate::domain::anon_group::AnonGroupId;
-use crate::domain::attachment::Attachment;
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, UserId};
 use crate::domain::message::Message;
 use crate::mailbox::group::GroupFanout;
 use chatter_proto::content_v1::AttachmentPointer;
 use crate::services::anon_dm::{AnonDmError, AnonDmService};
 use crate::services::anon_group::{AnonGroupError, AnonGroupService};
-use crate::services::attachment::{AttachmentError, AttachmentService};
+use crate::services::attachment::AttachmentError;
 use crate::services::message::{MessageError, MessageService};
 use crate::services::user::{UserError, UserService};
-use crate::state::chat_state::PendingAttachment;
 
 // =============================================================================
 // Intent
@@ -90,14 +88,6 @@ pub enum OutgoingIntent {
         /// row written by `save_message` is the one every reload reads:
         /// without `reply_to*` on it the quote strip vanishes at restart.
         quote: Option<QuoteIntent>,
-    },
-
-    /// Connect with a user (Friend Request or Anon DM Request).
-    Connect {
-        peer_id: UserId,
-        message: Option<String>,
-        use_anonymous_dm: bool, // If true, starts an Anon DM instead of Friend Request
-        private_friend_code: Option<String>, // NDSS'21 compliant code
     },
 }
 
@@ -317,38 +307,6 @@ pub async fn route_outgoing(
                 send_error: None,
             })
         }
-
-        OutgoingIntent::Connect {
-            peer_id,
-            message,
-            use_anonymous_dm,
-            private_friend_code,
-        } => {
-            if use_anonymous_dm {
-                let anon_dm_service = services.anon_dm_service.ok_or(SendError::NotLoggedIn)?;
-                if let Some(code_str) = private_friend_code {
-                    let code =
-                        crate::domain::private_friend_code::PrivateFriendCode::parse(&code_str)
-                            .map_err(|e| {
-                                SendError::AnonDm(AnonDmError::InvalidFriendCode(e.to_string()))
-                            })?;
-                    anon_dm_service
-                        .start_conversation_private(&code, message.as_deref(), None)
-                        .await?;
-                } else {
-                    anon_dm_service
-                        .start_conversation(peer_id, message.as_deref())
-                        .await?;
-                }
-                Ok(SendResult::empty())
-            } else {
-                let user_service = services.user_service.ok_or(SendError::NotLoggedIn)?;
-                user_service
-                    .send_friend_request(&peer_id, message.as_deref())
-                    .await?;
-                Ok(SendResult::empty())
-            }
-        }
     }
 }
 
@@ -359,25 +317,6 @@ pub struct OutgoingServices<'a> {
     pub group_fanout: Option<&'a GroupFanout>,
     pub anon_dm_service: Option<&'a AnonDmService>,
     pub anon_group_service: Option<&'a AnonGroupService>,
-}
-
-impl<'a> OutgoingServices<'a> {
-    /// Build from CoreServices — fills all service references, eliminating
-    /// the per-branch Some/None assembly in send_message.rs.
-    ///
-    /// `group_fanout` is optional because it's a post-boot service.
-    pub fn from_ctx(
-        ctx: &'a crate::app::CoreServices,
-        group_fanout: Option<&'a GroupFanout>,
-    ) -> Self {
-        Self {
-            message_service: &ctx.message_service,
-            user_service: Some(&ctx.user_service),
-            group_fanout,
-            anon_dm_service: Some(&ctx.anon_dm_service),
-            anon_group_service: Some(&ctx.anon_group_service),
-        }
-    }
 }
 
 /// Owned variant of [`OutgoingServices`] for use across await points.
@@ -423,18 +362,6 @@ impl SendResult {
     /// Check if this was a text-only send (no attachments).
     pub fn is_text_only(&self) -> bool {
         self.attachment_ids.is_empty()
-    }
-
-    fn empty() -> Self {
-        Self {
-            sent_at: crate::util::time::TimestampNanos::now().as_u64(),
-            message: None,
-            attachment_ids: vec![],
-            gif_attachment_ids: vec![],
-            bootstrap_initiated: false,
-            anon_message_id: None,
-            send_error: None,
-        }
     }
 }
 
@@ -656,67 +583,4 @@ async fn route_anon_group(
         anon_message_id: Some(message_id.as_str().to_string()),
         send_error: None,
     })
-}
-
-// =============================================================================
-// Send options + upload helpers (shared by ChatterClient and CoreServices)
-// =============================================================================
-
-/// Options for [`send_message()`].
-#[derive(Debug, Default)]
-pub struct SendOptions {
-    /// Thread ID for thread replies (channels only).
-    pub thread_id: Option<MessageId>,
-    /// Integration IDs mentioned in the message (channels only).
-    pub mentioned_integrations: Vec<IntegrationId>,
-    /// Whether this message targets an AI bot (channels only).
-    pub targets_ai_bot: bool,
-}
-
-/// Result of uploading pending attachments.
-pub struct UploadedAttachments {
-    /// AttachmentPointer protos for the Content proto.
-    pub pointers: Vec<AttachmentPointer>,
-    /// Full Attachment domain objects for display.
-    pub attachments: Vec<Attachment>,
-}
-
-/// Upload pending attachments to CDN, returning pointers and display data.
-pub async fn upload_attachments(
-    pending: &[PendingAttachment],
-    attachment_service: &AttachmentService,
-) -> UploadedAttachments {
-    let mut pointers = Vec::with_capacity(pending.len());
-    let mut attachments = Vec::with_capacity(pending.len());
-
-    for att in pending {
-        if let Some(pointer) = &att.pointer {
-            pointers.push(pointer.clone());
-            if let Ok(Some(full_att)) = attachment_service.get(&att.id) {
-                attachments.push(full_att);
-            }
-            continue;
-        }
-
-        match attachment_service.upload_to_cdn_encrypted(&att.path).await {
-            Ok(res) => {
-                pointers.push(res.to_attachment_pointer());
-                if let Ok(Some(full_att)) = attachment_service.get(&res.attachment_id) {
-                    attachments.push(full_att);
-                }
-            }
-            Err(e) => {
-                tracing::error!(
-                    path = %att.path.display(),
-                    error = %e,
-                    "Failed to upload attachment"
-                );
-            }
-        }
-    }
-
-    UploadedAttachments {
-        pointers,
-        attachments,
-    }
 }

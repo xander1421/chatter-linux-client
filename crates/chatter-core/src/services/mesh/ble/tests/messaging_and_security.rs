@@ -581,7 +581,7 @@ async fn a_courier_envelope_sealed_to_our_prekey_opens_and_consumes_it() {
         .expect("bundle");
 
     let sender = MeshIdentity::generate(&mut os_rng());
-    let peer_state = MeshState::new(sender.peer_id());
+    let peer_state = MeshState::new();
     peer_state.with(|inner| inner.prekeys.peers.ingest(bundle.clone(), now_millis()));
     let inner = PrivateMessagePacket::new("PK-1".to_string(), "forward secret".to_string())
         .encode()

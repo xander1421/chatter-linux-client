@@ -141,11 +141,6 @@ impl LinkDeviceService {
         }
     }
 
-    /// True if a new-device flow is currently running.
-    pub fn has_active_session(&self) -> bool {
-        self.active_uuid.lock().is_some()
-    }
-
     /// Whether this install already holds an identity that linking must not
     /// overwrite with a different account's keys.
     pub fn has_local_identity(&self) -> Result<bool, LinkDeviceError> {

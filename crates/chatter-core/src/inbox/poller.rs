@@ -376,11 +376,6 @@ impl InboxPoller {
 
         Ok(())
     }
-
-    /// Get the current polling interval.
-    pub fn poll_interval(&self) -> std::time::Duration {
-        self.current_interval()
-    }
 }
 
 #[cfg(test)]

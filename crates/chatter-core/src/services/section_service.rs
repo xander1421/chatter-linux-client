@@ -287,14 +287,6 @@ impl SectionService {
             })
     }
 
-    /// Check whether a conversation belongs to any custom section.
-    pub fn is_in_section(&self, conversation_id: &str) -> Result<bool, SectionError> {
-        Ok(self
-            .section_repo
-            .get_conversation_section(conversation_id)?
-            .is_some())
-    }
-
     /// Return the set of all conversation IDs that belong to any section.
     pub fn all_sectioned_conversation_ids(
         &self,

@@ -88,12 +88,6 @@ impl MeshService {
         self.nostr_state.joined_cells()
     }
 
-    /// The conversation a public mesh room message belongs to.
-    #[must_use]
-    pub fn room_conversation() -> MeshConversation {
-        MeshConversation::Room
-    }
-
     /// Every mesh conversation, shaped for the unified sidebar.
     ///
     /// The public room, every joined geohash cell, and every mesh DM — already

@@ -24,7 +24,7 @@ pub use account_keys::is_opaque_notification_key;
 pub use listener::spawn_mesh_notification_listener;
 pub(crate) use listener::{is_private_notification, should_notify_message};
 
-use crate::domain::notification::{Notification, NotificationPriority};
+use crate::domain::notification::NotificationPriority;
 use crate::error::SystemError;
 use crate::system::notification_sink::{NoopNotificationSink, NotificationSink};
 use std::collections::HashMap;
@@ -268,20 +268,6 @@ impl NotificationService {
         self.deliver(|sink| sink.cancel_conversation(&key))?;
         notifications.remove(&key);
         Ok(())
-    }
-
-    /// Show a notification from a domain Notification object.
-    pub fn show(&self, notification: &Notification) -> Result<(), SystemError> {
-        let level = self.detail_level();
-
-        match level {
-            NotificationDetailLevel::None => self.show_platform_notification(
-                "Chatter",
-                "New notification",
-                NotificationPriority::Normal,
-            ),
-            _ => self.deliver(|sink| sink.show_domain(notification)),
-        }
     }
 
     // `show_push_event` was removed alongside push_listener's
