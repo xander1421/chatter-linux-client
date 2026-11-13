@@ -6,9 +6,9 @@
 //!
 //! # Privacy
 //!
-//! The backend sends either content-free ("New activity") or full notifications
-//! depending on the server's `NTFY_PUSH_MODE` setting. The client always wakes
-//! up and pulls actual message content via the encrypted gRPC stream.
+//! Inbox wakes are always content-free (the server ignores `NTFY_PUSH_MODE` for
+//! them, `internal/services/notification/push/wake.go`). The client wakes up and
+//! pulls the actual message content via the encrypted gRPC stream.
 //!
 //! # Architecture
 //!

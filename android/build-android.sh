@@ -180,7 +180,7 @@ else
     if [ -n "$missing" ]; then
         echo "FATAL: DEV_TRUST_ROOT=0 but unset:$missing"
         echo
-        echo "All four public keys are compile-time pins. Without them the cargo build fails"
+        echo "These public keys are compile-time pins. Without them the cargo build fails"
         echo "(config.rs refuses to fall back to a dev key), so this stops here"
         echo "with a better message than a const-eval panic."
         echo
