@@ -189,7 +189,7 @@ fn icon_picker_stages_bytes_preserves_drafts_and_rejects_obsolete_completions() 
     assert!(
         w.global::<crate::ModalHostState>()
             .get_channel_settings_error()
-            .contains("Couldn't open channel icon")
+            .contains("Couldn't open that image")
     );
     assert_eq!(
         w.global::<crate::ModalHostState>()
@@ -232,7 +232,8 @@ fn icon_picker_stages_bytes_preserves_drafts_and_rejects_obsolete_completions() 
     assert!(
         w.global::<crate::ModalHostState>()
             .get_channel_settings_error()
-            .contains("fixture read failed")
+            // The cause is logged; the user gets plain copy (fb46b93b).
+            .contains("Couldn't open that image")
     );
     let old_session = begin_icon_request(&w, &client).unwrap();
     client.clear_composer_session();
@@ -318,6 +319,11 @@ fn save_success_reloads_metadata_and_sidebar_and_rejects_replacement_owners() {
         );
     };
     complete(epoch);
+    // The header shows the saved icon as is; sidebar rows render avatars
+    // through the shared decode cache, which fits them to AVATAR_PX on the
+    // long edge, so the row shows the 3x2 icon as 128x85.
+    let px = crate::bin_ui::decode_cache::AVATAR_PX;
+    let saved_icon_px = (px, px * 2 / 3);
     assert_eq!(
         w.global::<crate::ChatPane>().get_channel_name().as_str(),
         "Saved name"
@@ -353,7 +359,7 @@ fn save_success_reloads_metadata_and_sidebar_and_rejects_replacement_owners() {
             row.avatar_source.size().width,
             row.avatar_source.size().height
         ),
-        (3, 2)
+        saved_icon_px
     );
     assert_ne!(w.get_active_modal().as_str(), "channel-settings");
 

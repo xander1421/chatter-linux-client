@@ -110,8 +110,8 @@ export component CallControls inherits GlassSurface {
     height: 48px;
     HorizontalLayout {
         alignment: center;
-        spacing: 0px;
-        padding: 0px;
+        spacing: Spacing.none;
+        padding: Spacing.none;
         // Microphone: body toggles mute, caret opens the input-device list.
         DeviceButton {
             icon: root.is-muted ? Icons.mic-off : Icons.mic;

@@ -1,5 +1,4 @@
 import { SidebarPane } from "app_sidebar_pane.slint";
-import { SearchPane } from "app_search_pane.slint";
 import { ModalHostState } from "app_modal_host_state.slint";
 import { JarvisPane } from "app_jarvis_pane.slint";
 import { ChatPane } from "app_chat_pane.slint";
@@ -15,15 +14,11 @@ import { Materials } from "theme/materials.slint";
 import { Colors } from "theme/colors.slint";
 import { Spacing } from "theme/spacing.slint";
 import { Typography } from "theme/typography.slint";
-import { Sidebar, ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
-import { ChatLayout, MessageItemData, PendingAttachmentData } from "chat/chat_layout.slint";
-import { ConversationKind } from "chat/conversation_kind.slint";
+import { Sidebar } from "sidebar/sidebar.slint";
+import { ChatLayout, MessageItemData } from "chat/chat_layout.slint";
 import { SelectionBar, SelectionChrome } from "chat/selection_bar.slint";
 import { EmojiData } from "components/emoji_picker.slint";
-import { GifData } from "components/gif_picker.slint";
-import { FriendRequestData } from "modals/friends.slint";
 import { EmojiData } from "components/mod.slint";
-import { ActiveCallData } from "calls/mod.slint";
 
 // Main conversation shell: sidebar, call dock, chat pane and status notices.
 export component MainChatShell inherits Rectangle {

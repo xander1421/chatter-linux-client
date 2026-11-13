@@ -6,10 +6,8 @@ import { CallView } from "app_call_view.slint";
 import { AuthFlow } from "app_auth_flow.slint";
 import { Sidebar } from "sidebar/sidebar.slint";
 import { Spacing } from "theme/spacing.slint";
-import { ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
 import { ChatPane } from "app_chat_pane.slint";
-import { FriendRequestData } from "modals/friends.slint";
 
 // Sidebar wiring and list navigation for the main conversation shell.
 export component AppSidebarHost inherits Rectangle {
@@ -257,9 +255,6 @@ export component AppSidebarHost inherits Rectangle {
         settings-clicked => {
             ModalHostState.nav-push("settings");
             SidebarPane.settings-clicked();
-        }
-        mesh-setup-clicked => {
-            ModalHostState.nav-push("mesh-setup");
         }
         tab-selected(tab) => {
             SidebarPane.active-tab = tab;

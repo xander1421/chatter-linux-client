@@ -1,14 +1,12 @@
 import { AppViewTransition } from "app_view_transition.slint";
 import { AppCallLifecycle } from "app_call_lifecycle.slint";
 import { AppModalTransitions } from "app_modal_transitions.slint";
-import { JarvisPane } from "app_jarvis_pane.slint";
 import { CallView } from "app_call_view.slint";
 import { ModalHostState } from "app_modal_host_state.slint";
 import { ChatPane } from "app_chat_pane.slint";
 import { SidebarPane } from "app_sidebar_pane.slint";
 import { SearchPane } from "app_search_pane.slint";
 import { SettingsPane } from "app_settings_pane.slint";
-import { AuthFlow } from "app_auth_flow.slint";
 import { AppBottomChrome } from "app_bottom_chrome.slint";
 import { AppShortcuts } from "app_shortcuts.slint";
 import { AppTopOverlays } from "app_top_overlays.slint";
@@ -33,13 +31,11 @@ import { VirtualKeyboard } from "components/modal_container.slint";
 // Import auth screens
 import { AuthPages } from "auth_pages.slint";
 import { MainChatShell } from "main_chat_shell.slint";
-import { AvatarOption } from "components/avatar_picker.slint";
 
 // Import main layout components
 import { Sidebar, ChatRowData, CustomSectionData, SidebarRowData } from "sidebar/sidebar.slint";
 import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
-import { SelectionBar } from "chat/selection_bar.slint";
 import { EmojiData } from "components/emoji_picker.slint";
 import { GifData } from "components/gif_picker.slint";
 import { MentionSuggestion } from "components/mention_autocomplete.slint";
@@ -53,7 +49,7 @@ import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
 import { SearchResultChannel } from "modals/join_channel.slint";
 import { ChannelMemberData, BannedMemberData } from "modals/channel_member_types.slint";
 import { InviteUser } from "modals/invite_member.slint";
-import { QuickSwitcherItem, SearchResult, CalendarDay } from "components/unified_search.slint";
+import { QuickSwitcherItem, SearchResult } from "components/unified_search.slint";
 
 // Import settings
 import { PinnedItem } from "modals/pinned_messages.slint";
@@ -65,7 +61,7 @@ import { EmojiData } from "components/mod.slint";
 import { ToastOverlay } from "components/toast_overlay.slint";
 
 // Import call UI
-import { ActiveCallView, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
+import { IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
 
 // Import anon mode global + PIN modal
 import { ShieldWash } from "anon_mode/shield_wash.slint";

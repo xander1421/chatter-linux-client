@@ -67,9 +67,16 @@ fn image_is_visible_at_fit_and_after_double_tap() {
     let w = ViewerHarness::new().unwrap();
     w.window().set_size(LogicalSize::new(400., 800.));
     w.set_picture(slint::Image::load_from_path(&path).unwrap());
+    // Let the viewer's arrival animation (f7ffe165) settle before measuring.
+    for _ in 0..60 {
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+        slint::platform::update_timers_and_animations();
+    }
     let fit = save_snapshot(&w, "fit");
     let bounds = red_bounds(&fit).expect("full-size image absent at fit");
-    assert_eq!(bounds, (8, 304, 391, 495), "fitted image rectangle");
+    // The touch viewer is full screen since ae494f07: 320x160 fits the
+    // 400px width as 400x200, centred in the 800px height.
+    assert_eq!(bounds, (0, 300, 399, 499), "fitted image rectangle");
 
     let point = LogicalPosition::new(200., 400.);
     for _ in 0..2 {
@@ -84,11 +91,16 @@ fn image_is_visible_at_fit_and_after_double_tap() {
             button: slint::platform::PointerEventButton::Left,
         });
     }
+    for _ in 0..60 {
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+        slint::platform::update_timers_and_animations();
+    }
     let zoomed = save_snapshot(&w, "zoom");
     let bounds = red_bounds(&zoomed).expect("full-size image absent after double tap");
+    // 2.5x about the centre: 1000x500, clipped to the 400px-wide viewport.
     assert_eq!(
         bounds,
-        (8, 160, 391, 639),
+        (0, 150, 399, 649),
         "2.5x image rectangle after double tap"
     );
 }

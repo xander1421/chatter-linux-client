@@ -143,6 +143,8 @@ export component SidebarFooter inherits GlassSurface {
                             width: 7px; height: 7px; border-radius: 3.5px;
                             border-width: 1px; border-color: Colors.surface;
                             background: root.server-unreachable ? Colors.error : Colors.primary;
+                            accessible-role: text;
+                            accessible-label: root.server-unreachable ? "Server unreachable" : "New activity";
                         }
                         bell-touch := TouchArea { clicked => { ActivityUi.open(); } }
                     }

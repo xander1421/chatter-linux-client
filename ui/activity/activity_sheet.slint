@@ -217,7 +217,7 @@ export component ActivitySheet inherits Rectangle {
                                 color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; }
                         }
                         for item[i] in ActivityGlobal.items: VerticalLayout {
-                            spacing: 0px;
+                            spacing: Spacing.none;
                             if i == 0 || item.section != ActivityGlobal.items[i - 1].section: Text {
                                 text: item.section; color: Colors.text-muted; font-size: Typography.xs;
                                 font-weight: Typography.semibold; height: 28px; vertical-alignment: center; }
