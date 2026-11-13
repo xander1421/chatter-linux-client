@@ -631,6 +631,7 @@ mod tests {
             role,
             status,
             identity_key: [5; 33],
+            muted_until: 0,
         }
     }
 

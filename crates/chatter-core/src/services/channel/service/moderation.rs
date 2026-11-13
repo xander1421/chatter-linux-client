@@ -1,7 +1,8 @@
 //! Channel moderation operations.
 //!
-//! Kick and ban are signed `RemoveMember` changes; unban, mute and unmute
-//! stay unsigned server actions (they do not change who holds keys).
+//! Kick and ban are signed `RemoveMember` changes, mute and unmute signed
+//! `SetMuted` changes (who may send is part of the verified state); unban
+//! stays an unsigned server action (it does not change who holds keys).
 
 use tokio_stream::StreamExt;
 
@@ -196,20 +197,27 @@ impl ChannelService {
         Ok(())
     }
 
-    /// Mute a member for `duration`, or until unmuted when `None`. The server
-    /// enforces it (SpiceDB `send_message` excludes `muted`, so their sends are
-    /// refused) and lifts a timed mute when it lapses; the local membership
-    /// flag only mirrors it so the member list can mark them.
+    /// Mute a member for `duration`, or until unmuted when `None`: a signed
+    /// `SetMuted`, so every member can verify who may send. The server mirrors
+    /// it (SpiceDB `send_message` excludes `muted`) and lifts a timed mute when
+    /// it lapses; the local membership flag only mirrors it so the member list
+    /// can mark them.
     pub async fn mute_user(
         &self,
         channel_id: &ChannelId,
         user_id: &UserId,
         duration: Option<std::time::Duration>,
     ) -> Result<(), ChannelError> {
-        let _ = self.settings_repo.current_user_id()?;
-        self.channel_client()
-            .mute_user(&channel_id.to_string(), &user_id.to_string(), duration)
-            .await?;
+        let muted_until = match duration {
+            None => u64::MAX,
+            Some(d) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                u64::try_from((now + d).as_nanos()).unwrap_or(u64::MAX)
+            }
+        };
+        self.set_muted(channel_id, user_id, muted_until).await?;
         self.mirror_member_muted(channel_id, user_id, true)
     }
 
@@ -219,11 +227,45 @@ impl ChannelService {
         channel_id: &ChannelId,
         user_id: &UserId,
     ) -> Result<(), ChannelError> {
-        let _ = self.settings_repo.current_user_id()?;
-        self.channel_client()
-            .unmute_user(&channel_id.to_string(), &user_id.to_string())
-            .await?;
+        self.set_muted(channel_id, user_id, 0).await?;
         self.mirror_member_muted(channel_id, user_id, false)
+    }
+
+    /// Signed `SetMuted{user_id, muted_until}` (0 = unmute).
+    async fn set_muted(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+        muted_until: u64,
+    ) -> Result<(), ChannelError> {
+        let _ = self.settings_repo.current_user_id()?;
+        let target = user_id.to_string();
+        let cid = channel_id.to_string();
+        self.membership_log
+            .author(
+                channel_id,
+                AuthorBase::Verified,
+                None,
+                |_| {
+                    Ok(vec![action(Action::SetMuted(pb::SetMuted {
+                        user_id: target.clone(),
+                        muted_until,
+                    }))])
+                },
+                |change| {
+                    let mut client = self.channel_client();
+                    let cid = cid.clone();
+                    async move {
+                        if muted_until == 0 {
+                            client.unmute_user(&cid, change).await
+                        } else {
+                            client.mute_user(&cid, change).await
+                        }
+                    }
+                },
+            )
+            .await?;
+        Ok(())
     }
 
     /// Mirror a server-confirmed mute onto the local membership row, if this

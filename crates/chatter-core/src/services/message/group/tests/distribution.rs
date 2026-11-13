@@ -230,6 +230,7 @@
                             role: ChannelRole::Member,
                             status: MemberStatus::Active,
                             identity_key: [5; 33],
+                            muted_until: 0,
                         },
                     )
                 })

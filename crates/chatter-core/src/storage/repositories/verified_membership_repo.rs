@@ -108,9 +108,9 @@ impl VerifiedMembershipRepository {
         )?;
         for (user_id, m) in &st.members {
             tx.execute(
-                "INSERT INTO verified_channel_members (channel_id, user_id, role, status, identity_key)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![cid, user_id, m.role as i32, m.status as i32, m.identity_key.as_slice()],
+                "INSERT INTO verified_channel_members (channel_id, user_id, role, status, identity_key, muted_until)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![cid, user_id, m.role as i32, m.status as i32, m.identity_key.as_slice(), m.muted_until as i64],
             )?;
         }
         tx.execute(
@@ -197,7 +197,7 @@ impl VerifiedMembershipRepository {
 
         let mut members = BTreeMap::new();
         let mut stmt = conn.prepare(
-            "SELECT user_id, role, status, identity_key FROM verified_channel_members WHERE channel_id = ?1",
+            "SELECT user_id, role, status, identity_key, muted_until FROM verified_channel_members WHERE channel_id = ?1",
         )?;
         let rows = stmt.query_map(params![cid], |r| {
             Ok((
@@ -205,10 +205,11 @@ impl VerifiedMembershipRepository {
                 r.get::<_, i64>(1)?,
                 r.get::<_, i32>(2)?,
                 r.get::<_, Vec<u8>>(3)?,
+                r.get::<_, i64>(4)?,
             ))
         })?;
         for row in rows {
-            let (user_id, role, status, key) = row?;
+            let (user_id, role, status, key, muted_until) = row?;
             let status = match MemberStatus::try_from(status) {
                 Ok(
                     s @ (MemberStatus::Active | MemberStatus::Invited | MemberStatus::Requesting),
@@ -221,6 +222,7 @@ impl VerifiedMembershipRepository {
                     role: role_of(role)?,
                     status,
                     identity_key: key_of(key)?,
+                    muted_until: muted_until as u64,
                 },
             );
         }

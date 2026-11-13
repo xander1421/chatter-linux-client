@@ -62,6 +62,8 @@ tower = "0.5"
 # ============================================================================
 libsignal-protocol = { workspace = true }
 libsignal-core = { workspace = true }
+# Group send endorsements (crypto/group_send.rs)
+zkgroup = { workspace = true }
 signal-media = { workspace = true }
 # RFC 9180 HPKE (base, X25519/HKDF-SHA256/AES-256-GCM) for the mailbox envelope.
 signal-crypto = { workspace = true }

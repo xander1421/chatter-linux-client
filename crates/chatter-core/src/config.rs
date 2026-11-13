@@ -75,6 +75,44 @@ const _: () = {
     assert!(!same, "production update key is the public development key; use a provisioned release-update key");
 };
 
+// ─── Group send endorsement server key ─────────────────────────────────────
+
+/// zkgroup `ServerPublicParams` the development group send seed
+/// (SHA-256("chatter-dev-group-send-params-v1"), deploy/vault/init-and-unseal.sh)
+/// derives to: `go run ./cmd/group-send-params`. Anyone can issue endorsements
+/// under it.
+const DEV_GROUP_SEND_PUBLIC_PARAMS_HEX: &str = "0054dd0b149bef604f602b36a8509175d6e9d8a9a607ec43e71ad45776c2bb124cbed09df326bf18172300b786942349a45ed56afb7eac22c8b5075bf1ff135845b40b8401fa086933c9825624daaf7d64225d64238fa4b925f50ec009552f687a22fd286d689da6dcafd5344c94d13dfdd8129b9763bebe591c713a50b0338b567a8b495cd81d103127e9c3f7f8a65861fba73114e8b7894c813ce3a674e31731a4c75fe758a2ddba8921b647df92d4b7f182964a7cd6a1f9bedd77323bd7a836e8c8d9fb5cde6546391e5144bf1343bdca8b8e40f3990fc1b2ab13ccd7f9367f82db2aa79e2affe043c55fdea5d692e0b79081e3151d469fa45d14e029fb31489466b273f3b0fb9ce47223d3daa7a4ba7b53e412df7b2277b9f9cffa04c6cc22c0abcefc9cfe7782927b1abab1f9462f2760d4aa3bd0c8927a32b2233236105502a52c726407f300e625411d7ca12f07bc43b1f7d37b235c0a15b467ce712001ba8a7e600ce6650dea91eec52addbffa9ec15a2f2a81708ed9bf8d452f1a87558a7101ec07625c8e005d382f7a33a2e7f55f3680d99bb1e2e2c84bf29449a31fb4d2d6caa05d72e3b1850610d765c6f68e09020261eef92276505ccb2ac59e569a8f1a12fce15247b002fd88626ee55ddd45bba1ec1635040f6aec6bb2dcef29a850800e0459cc6390da06c4cada9eeb6d39fb8bcf4c2435cad56b6c92830f2c1440921010ec737e88378bfa6169efa9f246c99fa7194fb9a7176a63572984222ee99ff2971fa98822185e7c15d72d13656f4b5a51166446bb282fab4130b3564ad7453c7ebbb6a1a0a4a9f40dab0ac9b54236da02478209ba1f0712acd18e1a8431b51943e8ee069e4a77ec3177a5745b479141df0f9929b9467ce7715b8b053431d5e5d1f16ad634812532b66a99f57ccd4bfc1990bab1b1698348f476165d";
+
+/// The zkgroup server public params group send endorsements must verify under
+/// (crypto/group_send.rs). Pinned so the server cannot issue one member
+/// endorsements under a key of its own and so tell that member's sends apart.
+#[cfg(feature = "dev-trust-root")]
+pub const GROUP_SEND_PUBLIC_PARAMS_HEX: &str = DEV_GROUP_SEND_PUBLIC_PARAMS_HEX;
+
+#[cfg(not(feature = "dev-trust-root"))]
+pub const GROUP_SEND_PUBLIC_PARAMS_HEX: &str =
+    match option_env!("CHATTER_GROUP_SEND_PUBLIC_PARAMS_HEX") {
+        Some(hex) => hex,
+        None if cfg!(test) || cfg!(feature = "insecure-test-anchors") =>
+            DEV_GROUP_SEND_PUBLIC_PARAMS_HEX,
+        None => panic!("no group send public params are baked into this build; provision CHATTER_GROUP_SEND_PUBLIC_PARAMS_HEX or use --features dev-trust-root for local development"),
+    };
+
+#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "insecure-test-anchors")))]
+const _: () = {
+    let (a, b) = (GROUP_SEND_PUBLIC_PARAMS_HEX.as_bytes(), DEV_GROUP_SEND_PUBLIC_PARAMS_HEX.as_bytes());
+    let mut same = a.len() == b.len();
+    let mut i = 0;
+    while same && i < a.len() {
+        // ASCII case-fold: hex digits compare equal in either case.
+        if a[i] | 0x20 != b[i] | 0x20 {
+            same = false;
+        }
+        i += 1;
+    }
+    assert!(!same, "production group send params are the public development params; provision CHATTER_GROUP_SEND_PUBLIC_PARAMS_HEX");
+};
+
 // ─── Sealed sender trust root ──────────────────────────────────────────────
 
 /// Public half of the development trust root that signed the development

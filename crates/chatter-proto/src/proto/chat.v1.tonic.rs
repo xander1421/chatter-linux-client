@@ -2126,6 +2126,33 @@ pub mod channel_service_client {
                 .insert(GrpcMethod::new("chat.v1.ChannelService", "GetChannelState"));
             self.inner.unary(req, path, codec).await
         }
+        ///
+        pub async fn get_group_send_endorsements(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetGroupSendEndorsementsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetGroupSendEndorsementsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.ChannelService/GetGroupSendEndorsements",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("chat.v1.ChannelService", "GetGroupSendEndorsements"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /** Event streaming
 */
         pub async fn stream_channel_events(
