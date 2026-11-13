@@ -13,6 +13,7 @@ pub mod device_name;
 pub mod dm_crypto;
 pub mod ecies;
 pub mod envelope_crypto;
+pub mod group_send;
 pub mod kdf;
 pub mod keytransparency;
 pub mod message_backup;

@@ -683,6 +683,21 @@ impl ChannelClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
+    /// The caller's group send endorsements (serialized zkgroup response) and
+    /// the membership revision they were issued for.
+    pub async fn get_group_send_endorsements(
+        &mut self,
+        channel_id: &str,
+    ) -> Result<chatter_proto::chat_v1::GetGroupSendEndorsementsResponse, NetworkError> {
+        self.inner
+            .get_group_send_endorsements(chatter_proto::chat_v1::GetGroupSendEndorsementsRequest {
+                channel_id: channel_id.to_string(),
+            })
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
     // ==================== Event Streaming ====================
 
     /// Stream channel events.

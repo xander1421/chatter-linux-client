@@ -8,6 +8,7 @@
 //! - listing.rs: List, search, archive operations
 //! - mailbox.rs: Group mailbox setup
 
+mod group_send;
 mod listing;
 mod membership;
 mod moderation;
@@ -52,6 +53,9 @@ pub struct ChannelService {
     pub(crate) message_service: Arc<crate::services::message::MessageService>,
     /// Authoring and verification of the signed membership log.
     pub(crate) membership_log: Arc<MembershipLog>,
+    /// Group send tokens per channel, for the verified state they were made
+    /// for (group_send.rs).
+    pub(crate) group_send_tokens: Arc<group_send::TokenCache>,
 }
 
 impl ChannelService {
@@ -75,6 +79,7 @@ impl ChannelService {
             group_coordinator,
             message_service,
             membership_log,
+            group_send_tokens: Default::default(),
         }
     }
 
