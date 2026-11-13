@@ -40,7 +40,9 @@ pub struct InboxEventProcessor {
 /// The façade operations the processor needs and cannot reach through a
 /// service: they go through `ChatterClient` (implemented in `client/`).
 pub(crate) trait InboxFacade: Send + Sync {
-    /// Send a delivery receipt for a received friend DM (`ServerDm`).
+    /// Owe a delivery receipt for a received friend DM (`ServerDm`): accepted
+    /// senders only, batched and sent after a random delay
+    /// (`client::delivery_receipt_batch`).
     fn send_dm_delivery_receipt(
         self: Arc<Self>,
         peer_id: UserId,
