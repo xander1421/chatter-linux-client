@@ -57,6 +57,10 @@ name = "ui_reaction_footer"
 required-features = ["ui-test-debug"]
 
 [[test]]
+name = "ui_upload_queue_status"
+required-features = ["ui-test-debug"]
+
+[[test]]
 name = "ui_remote_ai_settings"
 required-features = ["ui-test-debug"]
 
