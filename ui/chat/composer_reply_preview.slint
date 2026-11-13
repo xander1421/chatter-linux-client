@@ -4,7 +4,6 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
-import { Materials } from "../theme/materials.slint";
 
 // Reply preview directly above the field, beneath the raised
 // action circles. Its own row remains reserved during the lift.
@@ -25,9 +24,7 @@ export component ComposerReplyPreview inherits GlassSurface {
     border-radius: Spacing.radius-chrome;
     clip: true;
     material-enabled: false;
-    background: Materials.opaque;
-    border-width: Materials.glass-edge-width;
-    border-color: Materials.glass-edge;
+    opaque: true;
 
     HorizontalLayout {
         padding-left: Spacing.md;
