@@ -46,6 +46,19 @@ impl AnonGroupService {
             return Ok(false);
         }
 
+        // The joiner starts with no timer and cannot tell "off" from "not yet
+        // heard", so tell it the group's timer ahead of anything else we hold
+        // for it: queued here, it rides the drain below and survives restarts.
+        if let Some(update) = self.join_timer_update(&group_id, timestamp)? {
+            if let Err(e) = self.anon_group_repo.enqueue_pending_message(
+                &group_id,
+                &joiner_id,
+                &update.encode_to_vec(),
+            ) {
+                tracing::warn!(error = %e, "Failed to queue group timer for joiner");
+            }
+        }
+
         // 4. Drain any messages queued for this member while mailbox_pk was
         //    unknown. Failures are logged and left for retry (rows persist).
         if let Err(e) = self
@@ -72,6 +85,43 @@ impl AnonGroupService {
 
         tracing::info!("Member joined group with mailbox key");
         Ok(true)
+    }
+
+    /// The group's timer, as a timer update for a member who just joined, or
+    /// `None` while the group has never had one (a joiner already agrees).
+    /// Its version is the group's own, so a member already holding it
+    /// adopts nothing and files no notice.
+    pub(in crate::services::anon_group) fn join_timer_update(
+        &self,
+        group_id: &AnonGroupId,
+        admitted_at: u64,
+    ) -> Result<Option<Content>, AnonGroupError> {
+        use crate::services::disappearing::{
+            DmTimer, INITIAL_TIMER_VERSION, SecretChat, secret_chat_state, timer_update_content,
+        };
+        let timer = secret_chat_state(&self.settings_repo, SecretChat::Group(*group_id));
+        let never_set = DmTimer {
+            seconds: 0,
+            version: INITIAL_TIMER_VERSION,
+            enabled_until: 0,
+            activation_seconds: 0,
+        };
+        if timer == never_set {
+            return Ok(None);
+        }
+        // Not before the joiner's admission, or the queue refuses the row.
+        let sent_at = TimestampNanos::now().as_u64().max(admitted_at);
+        Ok(Some(Content {
+            content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(
+                content_v1::AnonGroupMessage {
+                    group_id: group_id.to_vec(),
+                    inner_content: Some(Box::new(timer_update_content(timer, sent_at))),
+                },
+            ))),
+            ephemeral_reply_to: None,
+            timestamp: sent_at,
+            padding: Self::generate_padding(160),
+        }))
     }
 
     /// Broadcast the current member list to all confirmed members.
