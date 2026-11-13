@@ -325,8 +325,9 @@ impl SyncEngine {
         Ok(result)
     }
 
-    /// Like [`Self::trigger_sync`], but also skipped when a cycle finished
-    /// within `max_age`.
+    /// Run a sync cycle unless one finished within `max_age`. Waits for a
+    /// cycle that started after this call; `None` when another caller's cycle
+    /// was that one.
     pub async fn sync_if_stale(&self, max_age: Duration) -> Option<SyncCycleResult> {
         let result = self.coalescer.run(max_age, || self.sync_all()).await;
         if result.is_none() {
