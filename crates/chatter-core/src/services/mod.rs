@@ -77,8 +77,6 @@ pub use current_user::CurrentUserError;
 // Re-exports for call verification
 pub use call_verification::{CallVerification, CallVerificationData, VERIFICATION_EMOJI_COUNT};
 
-// Re-export ReactionEvent from aggregator for convenience
-pub use crate::network::streaming::reaction_stream::ReactionEvent;
 
 // Re-exports for AI service
 pub use ai_service::{AIError, AIService};
