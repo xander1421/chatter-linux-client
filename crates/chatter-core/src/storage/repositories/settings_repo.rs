@@ -155,6 +155,10 @@ pub mod keys {
     /// Default: "none" (just "Chatter: New message" — no sender, no content)
     pub const NOTIFICATION_DETAIL_LEVEL: &str = "notification.detail_level";
 
+    /// App lock record (`services::app_lock`): salt, Argon2id PIN hashes,
+    /// timeout, failed-attempt counter. Local only, never synced.
+    pub const APP_LOCK: &str = "app_lock";
+
     // Local AI settings
     pub const LOCAL_AI_ENABLED: &str = "local_ai.enabled";
     pub const LOCAL_AI_MODEL_ID: &str = "local_ai.model_id";

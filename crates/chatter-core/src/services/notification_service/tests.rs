@@ -544,3 +544,41 @@ fn test_detail_level_roundtrip() {
         assert_eq!(NotificationDetailLevel::from_str(level.as_str()), level);
     }
 }
+
+#[test]
+fn locked_app_hides_sender_and_content() {
+    use crate::services::app_lock::{AppLock, LockTimeout};
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::storage::Database::open(&dir.path().join("n.db"), "p").unwrap();
+    db.run_migrations().unwrap();
+    let settings = Arc::new(
+        crate::storage::repositories::settings_repo::SettingsRepository::new(Arc::new(db)),
+    );
+    AppLock::new(settings.clone())
+        .enable(None, "482916", "482916", LockTimeout::Immediate)
+        .unwrap();
+    let lock = Arc::new(AppLock::new(settings));
+    let service = NotificationService::noop();
+    service.set_detail_level(NotificationDetailLevel::NameAndMessage);
+    service.set_app_lock(lock.clone());
+
+    // A fresh process with the lock on is locked.
+    assert_eq!(service.effective_detail_level(), NotificationDetailLevel::None);
+    assert_eq!(
+        service.message_text(Some("Alice"), Some("meet at 6"), false),
+        ("Chatter".to_string(), "New message".to_string())
+    );
+    lock.attempt_unlock("482916").unwrap();
+    assert_eq!(
+        service.message_text(Some("Alice"), Some("meet at 6"), false),
+        ("Alice".to_string(), "meet at 6".to_string())
+    );
+    // Backgrounded past the (immediate) timeout: generic again.
+    lock.set_visible(false);
+    assert_eq!(
+        service.message_text(Some("Alice"), Some("meet at 6"), false),
+        ("Chatter".to_string(), "New message".to_string())
+    );
+    // The stored setting itself is untouched.
+    assert_eq!(service.detail_level(), NotificationDetailLevel::NameAndMessage);
+}

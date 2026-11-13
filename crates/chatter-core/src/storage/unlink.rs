@@ -111,17 +111,37 @@ pub fn forget_unlinked_device(db: &Database, former_owner: UserId) -> Result<(),
 /// until every table is empty; one that never empties fails the wipe rather
 /// than reporting a partial one as done.
 pub fn wipe_account_data(db: &Database) -> Result<(), StorageError> {
+    wipe_rows(db, false)
+}
+
+/// Every row of every table except the migration ledger, mesh included: the
+/// row step of the duress wipe (`storage::local_wipe`).
+pub(crate) fn wipe_all_rows(db: &Database) -> Result<(), StorageError> {
+    wipe_rows(db, true)
+}
+
+fn wipe_rows(db: &Database, include_mesh: bool) -> Result<(), StorageError> {
     let mut conn = db.connection()?;
     let tx = conn.transaction()?;
     tx.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+    let mesh_filter = if include_mesh {
+        ""
+    } else {
+        r"AND name NOT LIKE 'mesh\_%' ESCAPE '\'"
+    };
+    let settings_filter = if include_mesh {
+        "DELETE FROM settings"
+    } else {
+        "DELETE FROM settings WHERE key NOT LIKE 'mesh.%'"
+    };
     let tables: Vec<String> = {
-        let mut stmt = tx.prepare(
+        let mut stmt = tx.prepare(&format!(
             r"SELECT name FROM pragma_table_list
               WHERE schema = 'main' AND type IN ('table', 'virtual')
                 AND name NOT LIKE 'sqlite\_%' ESCAPE '\'
-                AND name NOT LIKE 'mesh\_%' ESCAPE '\'
-                AND name NOT IN ('schema_version', 'settings')",
-        )?;
+                {mesh_filter}
+                AND name NOT IN ('schema_version', 'settings')"
+        ))?;
         stmt.query_map([], |row| row.get(0))?
             .collect::<Result<_, _>>()?
     };
@@ -132,7 +152,7 @@ pub fn wipe_account_data(db: &Database) -> Result<(), StorageError> {
                 [],
             )?;
         }
-        tx.execute("DELETE FROM settings WHERE key NOT LIKE 'mesh.%'", [])?;
+        tx.execute(settings_filter, [])?;
         if !any_rows(&tx, &tables)? {
             tx.commit()?;
             return Ok(());

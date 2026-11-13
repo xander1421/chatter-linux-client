@@ -11,6 +11,7 @@ mod android_aac;
 pub mod anon_dm;
 pub mod anon_group;
 pub(crate) mod anon_shared;
+pub mod app_lock;
 pub mod appearance;
 pub mod attachment;
 pub mod auth_service;
