@@ -16,7 +16,10 @@ fn pump_at(w: &MainWindow, width: f32, height: f32) {
             slint::quit_event_loop().unwrap();
         });
         w.run().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        // ~550ms in all: longer than the slowest transition at the default
+        // 1x animation speed (motion-emphasized 480ms since 15919403; the
+        // device sheet's closing scrim otherwise still takes the next tap).
+        std::thread::sleep(std::time::Duration::from_millis(45));
     }
 }
 
@@ -41,6 +44,17 @@ fn click(w: &MainWindow, label: &str) {
 
 /// Exercise the real dock -> picker callbacks with pointer clicks.
 /// No client or audio backend is created: callbacks stand in for enumeration.
+/// The view handoff (app_view_transition.slint) holds a window-sized
+/// stray-tap blocker for motion-standard + 40ms after `current-view` changes:
+/// 360ms at the default animation speed since 15919403 (120ms before). Run
+/// the loop past it once, as a user's first tap would come after it.
+fn finish_view_handoff(w: &MainWindow) {
+    slint::Timer::single_shot(std::time::Duration::from_millis(500), || {
+        slint::quit_event_loop().unwrap();
+    });
+    w.run().unwrap();
+}
+
 #[test]
 fn call_audio_arrows_are_independent_at_both_densities() {
     assert!(chatter_ui::SLINT_DEBUG_INFO_ENABLED);
@@ -50,6 +64,7 @@ fn call_audio_arrows_are_independent_at_both_densities() {
 
     let w = MainWindow::new().unwrap();
     w.set_current_view("main".into());
+    finish_view_handoff(&w);
     w.global::<chatter_ui::SidebarPane>()
         .set_mobile_show_chat(true);
     w.global::<chatter_ui::ChatPane>()

@@ -18,6 +18,17 @@ fn pump(w: &MainWindow, width: f32) {
     }
 }
 
+/// The view handoff (app_view_transition.slint) holds a window-sized
+/// stray-tap blocker for motion-standard + 40ms after `current-view` changes:
+/// 360ms at the default animation speed since 15919403 (120ms before). Until
+/// it lifts, pointer events stop there and never instantiate the composer.
+fn finish_view_handoff(w: &MainWindow) {
+    slint::Timer::single_shot(std::time::Duration::from_millis(500), || {
+        slint::quit_event_loop().unwrap();
+    });
+    w.run().unwrap();
+}
+
 #[test]
 fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
     assert!(chatter_ui::SLINT_DEBUG_INFO_ENABLED);
@@ -43,6 +54,7 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
         .unwrap();
     let w = MainWindow::new().unwrap();
     w.set_current_view("main".into());
+    finish_view_handoff(&w);
     w.global::<chatter_ui::ChatPane>()
         .set_channel_name("Owned edit fixture".into());
     w.global::<chatter_ui::ChatPane>()
@@ -61,67 +73,30 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
             w.global::<chatter_ui::ChatPane>()
                 .set_composer_reply_preview("Reply accessory material".into());
             pump(&w, width);
-            let right = testing::ElementHandle::find_by_element_id(
-                &w,
-                "MessageComposer::right-action-surface",
-            )
-            .filter(|e| e.size().width > 0.0 && e.size().height > 0.0)
-            .collect::<Vec<_>>();
+            // The per-button `*-action-surface` materials were folded into the
+            // composer's one silhouette in 4fd3d8ea; what an edit must still
+            // not show is the attachment control, and each control keeps to
+            // its own button box.
+            let shown = |label: &str| {
+                testing::ElementHandle::find_by_accessible_label(&w, label)
+                    .filter(|e| e.size().width > 0.0 && e.size().height > 0.0)
+                    .collect::<Vec<_>>()
+            };
+            let attach = shown("Attach file");
             if editing {
-                assert!(
-                    right.is_empty(),
-                    "Edit must not render an empty attachment material"
-                );
-                assert!(
-                    testing::ElementHandle::find_by_accessible_label(&w, "Attach file")
-                        .next()
-                        .is_none()
-                );
+                assert!(attach.is_empty(), "Edit must not offer an attachment");
             } else {
-                assert_eq!(right.len(), 1);
-                assert!(
-                    right[0].size().width <= 64.0,
-                    "Material must fit its actual button"
-                );
+                assert_eq!(attach.len(), 1, "width {width}: one Attach file control");
+                assert!(attach[0].size().width <= 64.0, "Attach must fit its button");
             }
-            let left = testing::ElementHandle::find_by_element_id(
-                &w,
-                "MessageComposer::left-action-surface",
-            )
-            .next()
-            .unwrap();
-            assert!(left.size().width <= 64.0);
-            // Check painted descendants, not just the named action rectangles:
-            // a vertically centered accessory material passes button geometry.
-            let gap_x = left.absolute_position().x + left.size().width + 8.0;
-            let gap_y = left.absolute_position().y + left.size().height / 2.0;
-            // A reply's preview fills that gap (649b152a); otherwise it is empty.
-            let mut materials = 0;
-            let mut gap_painted = false;
-            for layer in testing::ElementHandle::find_by_element_type_name(&w, "Backdrop") {
-                let pos = layer.absolute_position();
-                let size = layer.size();
-                if size.width <= 0.0 || size.height <= 0.0 {
-                    continue;
-                }
-                if pos.y <= gap_y && pos.y + size.height > gap_y {
-                    materials += 1;
-                    if pos.x <= gap_x && pos.x + size.width > gap_x {
-                        assert!(
-                            replying,
-                            "Material paints the empty action center: {pos:?} {size:?}"
-                        );
-                        gap_painted = true;
-                    }
-                }
-            }
-            assert!(
-                !replying || gap_painted,
-                "the reply preview does not fill the action gap"
-            );
-            assert!(
-                materials > 0,
-                "Regression must inspect actual material layers"
+            let emoji = shown("Emoji & GIF picker");
+            assert_eq!(emoji.len(), 1);
+            assert!(emoji[0].size().width <= 64.0);
+            // A reply's preview fills the gap between the controls (649b152a).
+            assert_eq!(
+                !shown("Cancel reply").is_empty(),
+                replying,
+                "the reply preview shows exactly while replying"
             );
         }
     }

@@ -66,6 +66,17 @@ fn harness_never_reaches_the_os_keyring() {
 /// Install the headless backend for the current test thread. Safe to call once
 /// per thread; a second call on the same thread would panic (platform already
 /// initialized), which cargo's thread-per-test model avoids.
+/// Let a `current-view` change finish its handoff, as the real loop does
+/// within a few frames. Since 4877b9e6 the outgoing page holds a window-sized
+/// stray-tap blocker (app.slint, `exiting-view`) until AppViewTransition's
+/// leave timer fires; a harness that never advances time clicks into it and
+/// nothing underneath sees the press.
+fn settle_view_handoff() {
+    slint::platform::update_timers_and_animations();
+    testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+    slint::platform::update_timers_and_animations();
+}
+
 fn boot() -> MainWindow {
     testing::init_no_event_loop();
     MainWindow::new().expect("MainWindow::new under testing backend")
@@ -2478,6 +2489,11 @@ fn opening_a_composer_picker_on_a_phone_keeps_back_alive() {
     w.window().request_redraw();
     resize(801.0);
     slint::platform::update_timers_and_animations();
+    // On a phone the palette is one of the menus that drop text focus to
+    // back-scope (`other-menu-open`, 2817c408); its field takes focus back
+    // from its own 50ms timer (unified_search.slint), so let that fire.
+    testing::mock_elapsed_time(std::time::Duration::from_millis(100));
+    slint::platform::update_timers_and_animations();
     w.window()
         .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "r".into() });
     assert_eq!(
@@ -2547,6 +2563,11 @@ fn new_channel_done_and_back_put_the_keyboard_away() {
     w.window().request_redraw();
     // Let the card's entrance animation settle so clicks land on the fields.
     testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+    // Since 3cf2b504 a phone sheet mounts offscreen and starts its slide from
+    // a one-frame timer; fire it, then let the slide finish.
+    slint::platform::update_timers_and_animations();
+    testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+    slint::platform::update_timers_and_animations();
 
     let key = |t: slint::SharedString| {
         w.window()
@@ -4368,8 +4389,6 @@ fn no_screen_defines_its_own_dismissal_glyph() {
         "close-settings",
     ];
 
-    // Not dismissal: the call controls' device-selector caret (5a1f220b).
-    const NOT_DISMISSAL: [(&str, &str); 1] = [("ui/calls/call_controls.slint", "Icons.chevron-left")];
     // Sections split out of a Modal screen (0466f692): their Cancel forwards
     // to the host's close, so the host's Modal is their dismissal.
     const MODAL_SECTIONS: [(&str, &str, &str); 1] = [(
@@ -4393,9 +4412,6 @@ fn no_screen_defines_its_own_dismissal_glyph() {
             continue;
         }
         for needle in OWN_GLYPH {
-            if NOT_DISMISSAL.contains(&(name.as_str(), needle)) {
-                continue;
-            }
             if src.contains(needle) {
                 findings.push(format!(
                     "{name} draws its own dismissal glyph ({needle}) — use \
@@ -4566,8 +4582,7 @@ fn headers_use_the_shared_header_button() {
         "\\u{2715}",
         "\\u{22EE}",
     ];
-    const NOT_A_HEADER: [(&str, &str); 13] = [
-        ("calls/call_controls.slint", "Icons.chevron-left"), // a device button's selector caret
+    const NOT_A_HEADER: [(&str, &str); 15] = [
         ("chat/composer_reply_preview.slint", "Icons.x"), // cancel the reply strip
         ("chat/chat_layout.slint", "Icons.x"), // clear the picker drawer's search field
         ("chat/composer_edit_bar.slint", "Icons.x"), // cancel the edit strip
@@ -4577,9 +4592,14 @@ fn headers_use_the_shared_header_button() {
         ("components/toast.slint", "Icons.x"), // dismiss a toast
         ("components/emoji_picker.slint", "Icons.x"), // clear the search field
         ("components/gif_picker.slint", "Icons.x"), // clear the search field
-        ("modals/channel_settings.slint", "Icons.more-vertical"), // a member row's menu
-        ("modals/friends.slint", "Icons.more-vertical"), // a friend row's menu
-        ("sidebar/sidebar.slint", "Icons.chevron-left"), // the rail's collapse control
+        // The rows below moved files in the 2026-10-18 splits (853d5fde,
+        // 85f04336, 852e5c15); the controls are the same.
+        ("modals/channel_members.slint", "Icons.more-vertical"), // a member row's menu
+        ("modals/friends_friends_tab.slint", "Icons.more-vertical"), // a friend row's menu
+        ("sidebar/sidebar_footer.slint", "Icons.chevron-left"), // the rail's collapse control
+        ("sidebar/sidebar.slint", "Icons.chevron-left"), // the archive list's back row
+        ("chat/message_attachments.slint", "Icons.x"), // cancel an upload on its bubble
+        ("pages/register.slint", "Icons.chevron-left"), // the avatar carousel's previous
     ];
     for (name, src) in &sources {
         if name.ends_with("header_button.slint") || name.ends_with("dismiss_button.slint") {
@@ -4620,7 +4640,8 @@ fn headers_use_the_shared_header_button() {
         "chat/chat_header.slint",
         "chat/selection_bar.slint",
         "chat/thread_panel.slint",
-        "sidebar/sidebar.slint",
+        // The sidebar's title row moved to sidebar_header.slint (852e5c15).
+        "sidebar/sidebar_header.slint",
         "calls/device_picker.slint",
         "calls/active_call_view.slint",
         "modals/user_profile.slint",
@@ -4631,7 +4652,8 @@ fn headers_use_the_shared_header_button() {
         "components/image_viewer.slint",
         "components/video_player.slint",
         "pages/register.slint",
-        "app.slint",
+        // app.slint's one titled overlay became keyboard_shortcuts.slint (7ab433cf).
+        "modals/keyboard_shortcuts.slint",
     ] {
         let src = &sources
             .iter()
@@ -4658,7 +4680,14 @@ fn headers_use_the_shared_header_button() {
             findings.push(format!("HeaderButton lost `{token}`"));
         }
     }
-    if button.contains("border-width") {
+    // The only stroke allowed is the keyboard focus ring (9c4e86e9): every
+    // border is conditioned on key focus and drawn in Colors.focus-ring.
+    if button
+        .lines()
+        .filter(|l| l.contains("border-width:"))
+        .any(|l| !l.contains("keys.has-focus ?"))
+        || button.matches("border-color:").count() != button.matches("border-color: Colors.focus-ring;").count()
+    {
         findings
             .push("HeaderButton draws its own stroke instead of using the shared material".into());
     }
@@ -5216,6 +5245,7 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
     require_element_queries();
     let w = boot();
     w.set_current_view("main".into());
+    settle_view_handoff();
     w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
 
     // ---- Channel Settings > Notifications: Mute + AI ------------------------
@@ -5285,7 +5315,12 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
     slint::platform::update_timers_and_animations();
     testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
     slint::platform::update_timers_and_animations();
-    tap_text(&w, "Privacy");
+    // Settings' section list rows are accessible tabs since 77816701 (their
+    // label Text is no longer a separate node): tap the row itself.
+    testing::ElementHandle::find_by_accessible_label(&w, "Privacy")
+        .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Tab))
+        .expect("no Privacy section tab on screen")
+        .mock_single_click(slint::platform::PointerEventButton::Left);
     let before = w
         .global::<chatter_ui::SettingsPane>()
         .get_settings_read_receipts();
@@ -5455,6 +5490,7 @@ fn ux3_account_menu_pushes_settings_and_fab_opens_create_menu() {
     let w = boot();
     back::wire(&w);
     w.set_current_view("main".into());
+    settle_view_handoff();
 
     // The bar is Chats, Calls, Contacts, Profile; nothing routes to a
     // Settings tab any more.
@@ -6373,6 +6409,7 @@ fn video_call_lives_in_the_header_more_menu() {
     w.global::<chatter_ui::ChatPane>()
         .on_chat_settings_clicked(move || o.set(o.get() + 1));
     w.set_current_view("main".into());
+    settle_view_handoff();
 
     let button = |w: &MainWindow, label: &str| {
         testing::ElementHandle::find_by_accessible_label(w, label)
@@ -6412,6 +6449,10 @@ fn video_call_lives_in_the_header_more_menu() {
             .set_channel_name(name.into());
         w.global::<chatter_ui::SidebarPane>()
             .set_mobile_show_chat(true);
+        slint::platform::update_timers_and_animations();
+        // A phone pushes the chat from a one-frame timer (3cf2b504); let the
+        // push run as the frames after the tap would.
+        testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
         slint::platform::update_timers_and_animations();
 
         assert_eq!(
@@ -6585,6 +6626,7 @@ fn composer_with_caret(
     w.global::<chatter_ui::ChatPane>()
         .set_channel_name("A".into());
     w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+    settle_view_handoff();
     let input = testing::ElementHandle::find_by_accessible_label(&w, "Message input")
         .next()
         .expect("the composer's text input is not in the tree");
@@ -7213,6 +7255,8 @@ fn a_composition_lost_with_the_pane_goes_to_its_own_chat_not_the_next() {
             .as_str(),
         "ab"
     );
+    // Reopening A restores its draft with the caret at the end (dcfe24b6),
+    // so the word composes after "ab", not where the caret was before B.
     ime(&w, "X", false);
     w.global::<chatter_ui::CallView>()
         .set_active_call_fullscreen(true);
@@ -7247,7 +7291,7 @@ fn a_composition_lost_with_the_pane_goes_to_its_own_chat_not_the_next() {
         w.global::<chatter_ui::ChatPane>()
             .get_composer_text()
             .as_str(),
-        "aXb"
+        "abX"
     );
 }
 

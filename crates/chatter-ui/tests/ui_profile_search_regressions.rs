@@ -209,7 +209,8 @@ fn selected_second_url_and_search_clear_use_production_callbacks() {
     );
     assert!(
         profile.contains("w.global::<crate::ChatPane>()")
-            && profile.contains(".invoke_open_message_link(url.into())")
+            // (shown text, url) since cbe6d4ef: a shared link shows its URL.
+            && profile.contains(".invoke_open_message_link(url.clone().into(), url.into())")
     );
     assert!(!profile.contains("ExternalOpener"));
 }
