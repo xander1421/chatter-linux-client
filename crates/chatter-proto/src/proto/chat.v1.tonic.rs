@@ -3696,6 +3696,32 @@ pub mod message_service_client {
                 .insert(GrpcMethod::new("chat.v1.MessageService", "SendSealedMessage"));
             self.inner.unary(req, path, codec).await
         }
+        /** Anonymous send to a private channel's members (no auth header).
+*/
+        pub async fn send_group_message(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SendGroupMessageRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SendGroupMessageResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.MessageService/SendGroupMessage",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.MessageService", "SendGroupMessage"));
+            self.inner.unary(req, path, codec).await
+        }
         /** Device Message Queue (Signal-style inbox)
  Requires device authentication (Basic auth with device token)
 */
@@ -3750,8 +3776,6 @@ pub mod message_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /** Pin/Unpin Messages
-*/
         pub async fn pin_message(
             &mut self,
             request: impl tonic::IntoRequest<super::MessageUpdate>,

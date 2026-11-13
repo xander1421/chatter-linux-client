@@ -304,6 +304,14 @@ pub enum RouteResult {
 /// Result of processing a sealed sender message.
 #[derive(Debug)]
 pub enum SealedSenderResult {
+    /// An anonymous private-channel message (SendGroupMessage): the
+    /// sender-key ciphertext and its authenticated sender, for the inbox's
+    /// sender-key handler.
+    SealedGroupMessage {
+        sender_id: UserId,
+        sender_device_id: u32,
+        encrypted: chatter_proto::chat_v1::EncryptedData,
+    },
     /// Regular message stored successfully (no details needed for UI).
     MessageStored,
     /// An own-device channel target transcript may have applied receipts that

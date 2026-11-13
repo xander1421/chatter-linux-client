@@ -27,6 +27,20 @@ impl GroupStateGate {
         }
     }
 
+    /// Whether `user` may delete other members' messages for everyone in
+    /// `channel_id`: ACTIVE and at least MODERATOR in the verified state (the
+    /// server's old `message#delete = author + channel->moderate`, now judged
+    /// by every receiver from the signed state, since a private channel has no
+    /// server copy to delete). Fails closed on a missing or unhealthy state.
+    pub(crate) fn may_moderate(&self, channel_id: &ChannelId, user: &UserId) -> bool {
+        use crate::domain::verified_state::{ChannelRole, MemberStatus};
+        self.for_distribution(channel_id).is_ok_and(|v| {
+            v.state.members.get(&user.to_string()).is_some_and(|m| {
+                m.status == MemberStatus::Active && m.role >= ChannelRole::Moderator
+            })
+        })
+    }
+
     fn peer_ahead_key(channel_id: &ChannelId) -> String {
         format!("channel_state_peer_ahead:{channel_id}")
     }

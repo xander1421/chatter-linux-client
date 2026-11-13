@@ -281,7 +281,13 @@ impl MessageService {
             request,
             group_state.as_ref().map(|state| state.state_hash.to_vec()),
         )?;
-        let proto_message = message_client.send_prepared_message(request).await?;
+        // A private channel goes out anonymously to every member device
+        // (group_send.rs); only a public channel still posts to the server.
+        let proto_message = if group_state.is_some() {
+            self.submit_group_request(&request).await?
+        } else {
+            message_client.send_prepared_message(request).await?
+        };
         super::channel_send::retain_channel_response(&proto_message)?;
         crate::services::gateway::submission::bind_original_row(proto_message.id.clone())?;
         tracing::info!(
@@ -936,11 +942,13 @@ impl MessageService {
             }
         }
 
-        // Call server: SpiceDB authorizes us as the message's author.
-        let mut message_client = self.message_client();
-        message_client
-            .delete_message(&message_id.to_string(), &channel_id.to_string())
-            .await?;
+        // Call server: SpiceDB authorizes us as the message's author. A private
+        // channel's message has no server copy.
+        if !self.is_private_channel(channel_id) {
+            self.message_client()
+                .delete_message(&message_id.to_string(), &channel_id.to_string())
+                .await?;
+        }
 
         // Soft delete locally - keep for history/sync
         let mut message = existing;
@@ -982,7 +990,9 @@ impl MessageService {
             }
             targets.push((id.to_string(), channel_id.to_string()));
         }
-        self.message_client().delete_messages(targets).await?;
+        if !self.is_private_channel(channel_id) {
+            self.message_client().delete_messages(targets).await?;
+        }
         self.message_repo.soft_delete_batch(message_ids)?;
         Ok(())
     }

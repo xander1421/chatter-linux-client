@@ -46,14 +46,25 @@ pub struct ChannelSyncResult {
 impl ChannelSync {
     /// Local memberships define the channels covered by a successful global
     /// subscription until the next periodic channel-list reconciliation.
-    pub(crate) fn local_channel_ids(&self) -> Result<Vec<ChannelId>, SyncError> {
+    /// Private channels are left out: their messages have no server copy
+    /// (they arrive anonymously in the device inbox, and a joiner gets no
+    /// history, as in Signal), so there is no timeline to catch up on.
+    pub(crate) fn local_timeline_channel_ids(&self) -> Result<Vec<ChannelId>, SyncError> {
         let me = self
             .settings_repo
             .current_user_id()
             .map_err(|e| SyncError::Storage(e.to_string()))?;
-        self.channel_repo
+        Ok(self
+            .channel_repo
             .list_channels_for_user(&me)
-            .map_err(|e| SyncError::Storage(e.to_string()))
+            .map_err(|e| SyncError::Storage(e.to_string()))?
+            .into_iter()
+            .filter(|id| {
+                !self.channel_repo.get(id).ok().flatten().is_some_and(|c| {
+                    c.channel_type == crate::domain::channel::ChannelType::Private
+                })
+            })
+            .collect())
     }
 
     pub fn new(

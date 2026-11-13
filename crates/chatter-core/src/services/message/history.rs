@@ -80,6 +80,7 @@ impl MessageService {
             eviction_resends: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             receive_auth: Arc::new(std::sync::OnceLock::new()),
             channel_state_sync: Arc::new(parking_lot::RwLock::new(None)),
+            group_send_tokens: Default::default(),
         }
     }
 

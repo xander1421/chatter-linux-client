@@ -536,12 +536,15 @@ impl MessageService {
             return Err(invalid("Channel send lease expired or message deleted").into());
         }
         crate::services::gateway::submission::mark_submission_started()?;
-        let proto = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            self.message_client().send_prepared_message(request),
-        )
+        let proto = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            if prepared.state_hash.is_some() {
+                self.submit_group_request(&request).await
+            } else {
+                Ok(self.message_client().send_prepared_message(request).await?)
+            }
+        })
         .await
-        .unwrap_or(Err(NetworkError::Timeout))?;
+        .unwrap_or(Err(MessageError::Network(NetworkError::Timeout)))?;
         retain_channel_response(&proto)?;
         self.materialize_channel_response(entry, prepared, &proto)
     }
@@ -876,15 +879,22 @@ impl MessageService {
             tracing::warn!(message_id=%server_id, "Channel delete-for-everyone sender changed; deletion retained");
             return retain();
         }
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            self.message_client().delete_message(
-                &server_id.to_string(),
-                &target.channel.to_string(),
-            ),
-        )
-        .await
-        .unwrap_or(Err(NetworkError::Timeout))
+        // A private channel's message has no server copy to delete; the
+        // delete-for-everyone control reaches the members end to end.
+        let remote = if self.is_private_channel(&target.channel) {
+            Ok(())
+        } else {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                self.message_client().delete_message(
+                    &server_id.to_string(),
+                    &target.channel.to_string(),
+                ),
+            )
+            .await
+            .unwrap_or(Err(NetworkError::Timeout))
+        };
+        match remote
         {
             Ok(()) | Err(NetworkError::NotFound(_)) => {
                 self.database.connection()?.execute("DELETE FROM settings WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation])?;
