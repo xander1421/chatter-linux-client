@@ -78,6 +78,7 @@ impl ChatterClient {
             platform,
             channel,
             installed_code,
+            self.directories().data_dir(),
           ) => result,
           _ = changed.changed() => Err("network mode changed during update check".into()),
         }

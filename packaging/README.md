@@ -29,6 +29,7 @@ Operator inputs, all required unless marked optional:
 | `CHATTER_SERVER_URL` (or `CHATTER_ANDROID_SERVER`, which wins on Android) | public `https://<dns-host>[:port]` RPC origin; no IP literal, localhost, `.local`/`.test`/`.internal`/example domains |
 | `CHATTER_TLS_ROOT_CA_PEM` | provisioned private CA PEM (not expired, `CA:TRUE`, not the committed `dev_tls_root_ca.pem`) |
 | `CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX`, `CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX`, `CHATTER_KT_VRF_PUBLIC_KEY_HEX`, `CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX` | provisioned 32-byte hex pins, never the `scripts/anchors.sh` dev values |
+| `CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX` | provisioned uncompressed P-256 point (130 hex) that signs the release's Rekor entry; `make provision-keys` derives it from the release-update seed |
 | `CHATTER_KEYSTORE` | release keystore file **outside** the repository |
 | `CHATTER_KEYSTORE_PASSWORD`, `CHATTER_KEY_ALIAS`, `CHATTER_KEY_PASSWORD` | the established external signing setup |
 | `CHATTER_NTFY_URL` (optional) | public HTTPS push edge or v3 onion; without it no push wake |

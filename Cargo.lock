@@ -2022,6 +2022,7 @@ dependencies = [
  "oboe",
  "opaque-ke",
  "open",
+ "p256",
  "parking_lot",
  "paste",
  "proptest",

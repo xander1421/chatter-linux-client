@@ -55,6 +55,7 @@ jobs:
           CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX: ${{ vars.CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX }}
           CHATTER_KT_VRF_PUBLIC_KEY_HEX: ${{ vars.CHATTER_KT_VRF_PUBLIC_KEY_HEX }}
           CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX: ${{ vars.CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX }}
+          CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX: ${{ vars.CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX }}
           CHATTER_TLS_ROOT_CA_PEM: ${{ vars.CHATTER_TLS_ROOT_CA_PEM }}
         run: |
           # Committed development public keys (scripts/anchors.sh DEV_*_HEX) —
@@ -71,6 +72,9 @@ jobs:
             if ($value -cnotmatch '^[0-9a-fA-F]{64}$') { throw "Set repository Variable $name to the provisioned 32-byte public pin" }
             if ($dev -contains $value.ToLower()) { throw "$name is a committed development key — refusing to build a forgeable release" }
           }
+          $transparency = $env:CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX
+          if ($transparency -cnotmatch '^04[0-9a-fA-F]{128}$') { throw "Set repository Variable CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX to the provisioned P-256 point" }
+          if ($transparency.ToLower() -eq '045c988a4c22744d60f5bf4ce414a33b51d7f467600ba1fbec3a1fad12d25c70b5ad2478b1ce8b4955dc9d933f1139c82403b3ddec0dab33d6ef10d97ce120cac7') { throw "CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX is the committed development key — refusing to build a forgeable release" }
           if ($env:CHATTER_TLS_ROOT_CA_PEM -notmatch '-----BEGIN CERTIFICATE-----') {
             throw "Set repository Variable CHATTER_TLS_ROOT_CA_PEM to the provisioned CA PEM"
           }
@@ -189,6 +193,7 @@ jobs:
           CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX: ${{ vars.CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX }}
           CHATTER_KT_VRF_PUBLIC_KEY_HEX: ${{ vars.CHATTER_KT_VRF_PUBLIC_KEY_HEX }}
           CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX: ${{ vars.CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX }}
+          CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX: ${{ vars.CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX }}
           CHATTER_TLS_ROOT_CA_PEM: ${{ vars.CHATTER_TLS_ROOT_CA_PEM }}
           CHATTER_NTFY_URL: ${{ vars.CHATTER_NTFY_URL }}
           CHATTER_ONION_ADDR: ${{ vars.CHATTER_ONION_ADDR }}
