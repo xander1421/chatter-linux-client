@@ -18,7 +18,7 @@ pub use media::{
     register_video_thumbnail_extractor,
 };
 pub use range_decrypt::{CbcRangeDecryptor, CbcRangeReader};
-pub use sanitize::{SanitizeOutcome, sanitize_media, sanitize_media_file, validate_media};
+pub use sanitize::validate_media;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -223,15 +223,6 @@ pub fn ensure_attachments_dir() -> std::io::Result<()> {
 ///
 /// The `grpc_pool` field is required for upload/download operations but
 /// optional for local-only use (storing records from incoming messages).
-/// Decoded image pixels cached for fast UI render.
-/// Send+Sync so it can live in a shared cache without touching UI types.
-#[derive(Clone)]
-pub struct DecodedImagePixels {
-    pub width: u32,
-    pub height: u32,
-    pub rgba: Vec<u8>,
-}
-
 #[derive(Clone)]
 pub struct AttachmentService {
     pub(crate) attachment_repo: Arc<AttachmentRepository>,

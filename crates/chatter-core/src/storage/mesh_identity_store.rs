@@ -56,6 +56,7 @@ impl MeshIdentityStore {
         Self { db }
     }
 
+    #[cfg(test)]
     /// Load the stored mesh identity.
     ///
     /// Returns `None` if this device has never generated one, or if it was

@@ -49,6 +49,7 @@ pub mod shared_content_repo;
 pub mod unified_conversation_repo;
 pub mod unified_message_repo;
 pub mod user_repo;
+#[cfg(feature = "local-ai")]
 pub mod vector_repo;
 pub mod verified_membership_repo;
 
@@ -62,11 +63,13 @@ pub use ephemeral_repo::EphemeralRepository;
 pub use jarvis_graph_repo::JarvisGraphRepository;
 #[cfg(feature = "jarvis")]
 pub use jarvis_memory_repo::JarvisMemoryRepository;
+#[cfg(feature = "mesh")]
 pub use mesh_conversation_repo::{MeshConversationRepository, StoredMeshConversation};
+#[cfg(feature = "mesh")]
 pub use mesh_delivery_repo::MeshDeliveryRepository;
-pub use pending_dm_repo::{PendingDm, PendingDmRepository};
+pub use pending_dm_repo::PendingDmRepository;
 pub use saved_sync_repo::{PinWrite, SavedReply, SavedSyncRepository};
-pub use search_index::{SearchIndex, SearchResult};
+pub use search_index::SearchIndex;
 pub use section_repo::SectionRepository;
 pub use settings_repo::{SettingsRepository, keys as settings_keys};
 pub use shared_content_repo::{SharedContentRepository, SharedContentRow};
@@ -76,4 +79,3 @@ pub use unified_conversation_repo::UnifiedConversationRepository;
 pub use unified_message_repo::UnifiedMessageRepository as MessageRepository;
 pub use unified_message_repo::UnifiedMessageRepository;
 pub use user_repo::UserRepository;
-pub use vector_repo::{EmbeddingSourceType, StoredEmbedding, VectorRepository};

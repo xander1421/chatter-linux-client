@@ -152,6 +152,7 @@ impl SessionManager {
             .map(|session| fingerprint_of(&session.remote_static()))
     }
 
+    #[cfg(test)]
     /// Every peer we hold an established session with.
     #[must_use]
     pub fn established_peers(&self) -> Vec<PeerId> {

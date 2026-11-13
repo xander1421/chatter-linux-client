@@ -166,9 +166,6 @@ pub fn extract_attachment_ids(pointers: &[AttachmentPointer]) -> Vec<AttachmentI
 /// Content type constants for message storage.
 ///
 /// These match the `content_type` column in the unified `messages` table.
-pub const CONTENT_TYPE_EMPTY: i32 = 0;
-pub const CONTENT_TYPE_TEXT: i32 = 1;
-pub const CONTENT_TYPE_ATTACHMENT: i32 = 2;
 pub const CONTENT_TYPE_MIXED: i32 = 3;
 
 /// Build `content_json` for a reply message with quote metadata.
@@ -193,9 +190,6 @@ pub fn build_reply_content_json(
     })
     .to_string()
 }
-
-/// The empty-vec bincode encoding used when there are no attachments.
-pub const EMPTY_ATTACHMENTS_BLOB: [u8; 8] = [8, 0, 0, 0, 0, 0, 0, 0];
 
 // =============================================================================
 // Error handling

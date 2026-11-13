@@ -330,23 +330,6 @@ impl AttachmentService {
         })
     }
 
-    /// Decrypt a video attachment and extract a thumbnail frame.
-    ///
-    /// Server-managed DMs strip the inline thumbnail before sealing (sealed
-    /// envelope is padded to ≤4096-byte buckets for metadata privacy), so the
-    /// receiver derives one from the downloaded video. Returns the encoded
-    /// thumbnail bytes + dims, reusing [`ImageDecodeResult`] (`image_bytes` =
-    /// the thumbnail).
-    ///
-    /// Blocking platform decode — call from a background thread. Android uses
-    /// an authenticated, bounded range source; desktop keeps GStreamer.
-    pub fn decrypt_and_extract_video_thumbnail(
-        &self,
-        attachment_id: &AttachmentId,
-    ) -> Result<ImageDecodeResult, AttachmentError> {
-        self.decrypt_and_extract_video_thumbnail_guarded(attachment_id, Arc::new(|| true))
-    }
-
     /// Revoke decoder reads immediately when the requesting account owner changes.
     pub fn decrypt_and_extract_video_thumbnail_guarded(
         &self,

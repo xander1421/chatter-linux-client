@@ -15,6 +15,7 @@ pub(super) fn ensure_resync_ingested(outcome: Ingested) -> Result<(), MessageErr
 }
 
 impl ChannelInbound {
+    #[cfg(test)]
     /// One undeleted message from a resync page (`get_message_changes`).
     ///
     /// Missing sender keys and retryable ingest failures are typed application

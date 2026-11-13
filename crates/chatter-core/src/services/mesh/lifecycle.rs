@@ -7,7 +7,7 @@ impl MeshService {
         let identity_store = Arc::clone(&deps.identity_store);
         let identity = Arc::new(deps.identity_store.get_or_create()?);
         let config = Arc::new(config);
-        let state = Arc::new(MeshState::new(identity.peer_id()));
+        let state = Arc::new(MeshState::new());
         let nostr_state = Arc::new(NostrState::new());
         let timeline = Arc::new(MeshTimeline::new(
             deps.messages,

@@ -25,7 +25,9 @@ use std::collections::btree_map::Entry;
 
 use chatter_mesh_noise::MeshIdentity;
 use chatter_mesh_nostr::NostrError;
-use chatter_mesh_nostr::identity::{NostrIdentity, derive_for_bridge, derive_for_geohash};
+#[cfg(test)]
+use chatter_mesh_nostr::identity::derive_for_bridge;
+use chatter_mesh_nostr::identity::{NostrIdentity, derive_for_geohash};
 use hkdf::Hkdf;
 use sha2::Sha256;
 
@@ -92,6 +94,7 @@ impl NostrIdentities {
         }
     }
 
+    #[cfg(test)]
     /// The mesh-bridge rendezvous identity for a cell.
     ///
     /// Deliberately distinct from [`Self::for_geohash`] for the same cell: the

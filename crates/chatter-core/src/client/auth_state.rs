@@ -440,11 +440,9 @@ impl ChatterClient {
     pub fn set_message_loading(&self, channel: crate::domain::ids::ChannelId, loading: bool) {
         self.services.message_state.set_loading(channel, loading);
     }
+    #[cfg(test)]
     pub(crate) fn message_state(&self) -> &MessageState {
         &self.services.message_state
-    }
-    pub(crate) fn user_state(&self) -> &UserState {
-        &self.services.user_state
     }
 
     /// Persistent sidebar collapsed flag (settings-backed). Defaults to false.

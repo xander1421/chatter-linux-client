@@ -186,32 +186,6 @@ impl AIService {
         Ok(())
     }
 
-    /// Remove an integration from a channel.
-    ///
-    /// Disassociates an integration from a channel, disabling its
-    /// functionality within that channel.
-    ///
-    /// # Arguments
-    ///
-    /// * `integration_id` - Integration to remove
-    /// * `channel_id` - Target channel
-    pub async fn detach_from_channel(
-        &self,
-        integration_id: &str,
-        channel_id: &str,
-    ) -> Result<(), AIError> {
-        // Check logged in
-        let _ = self.settings_repo.current_user_id()?;
-
-        // Call server
-        let mut client = self.client();
-        client
-            .remove_integration_from_channel(integration_id, channel_id)
-            .await?;
-
-        Ok(())
-    }
-
     // ========================================================================
     // Integration CRUD
     // ========================================================================

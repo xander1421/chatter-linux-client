@@ -21,13 +21,10 @@ use crate::storage::repositories::MessageRepository;
 
 // Re-export inbound types (moved from inline definitions)
 use crate::util::time::TimestampNanos;
-pub use inbound::{DecryptResult, DmContent, RouteResult, SealedSenderResult, content_type_name};
+pub use inbound::{DecryptResult, DmContent, RouteResult, SealedSenderResult};
 
 // Re-export all content builders
 pub use builders::{
-    PADDING_GROUP_CONTROL,
-    PADDING_LARGE,
-    PADDING_MESSAGE,
     // Call hangup
     build_call_hangup_content,
     build_call_key_answer,
@@ -35,36 +32,24 @@ pub use builders::{
     build_call_key_offer,
     build_call_self_sync,
     build_data_message_content,
-    build_data_message_content_with_quote,
     build_delete_for_me_content,
-    build_delivery_receipt_content,
     build_delivery_receipt_content_with_channel,
     build_edit_content,
-    build_edit_content_with_channel,
     // Group call key distribution (pairwise sealed sender)
     build_group_call_signal_content,
     build_pin_content,
     build_pin_content_with_channel,
-    build_reaction_content,
-    build_reaction_content_with_channel,
-    build_read_receipt_content,
     build_read_receipt_content_with_channel,
     build_reply_content,
     build_saved_message_sync_content,
-    // DataMessage builders
-    build_targeted_delete_content,
-    build_text_content,
     // Control message builders
     build_typing_content,
     build_typing_content_with_channel,
-    // Padding
-    generate_padding,
 };
 
 // Re-export outgoing router
 pub use outgoing::{
-    OutgoingIntent, OutgoingServices, OwnedOutgoingServices, QuoteIntent, SendError, SendResult,
-    route_outgoing, route_outgoing_owned,
+    QuoteIntent, SendError, SendResult,
 };
 
 // ============================================================================

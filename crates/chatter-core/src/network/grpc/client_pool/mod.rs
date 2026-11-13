@@ -4,7 +4,9 @@
 
 use std::future::Future;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "onion")]
+use std::time::Instant;
 
 use parking_lot::RwLock;
 use tonic::transport::Endpoint;

@@ -8,7 +8,6 @@ pub mod membership_log;
 pub mod service;
 
 // Re-export main types for convenience
-pub use converters::proto_to_domain_channel;
 pub use error::ChannelError;
 pub use service::ChannelService;
 

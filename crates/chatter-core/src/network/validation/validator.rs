@@ -217,6 +217,7 @@ impl ContentValidator {
         }
     }
 
+    #[cfg(test)]
     /// Get the current validation limits.
     pub fn limits(&self) -> &ValidationLimits {
         &self.limits

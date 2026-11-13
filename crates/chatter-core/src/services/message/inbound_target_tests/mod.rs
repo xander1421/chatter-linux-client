@@ -970,7 +970,7 @@
                 .unwrap()
                 .is_some()
         );
-        let catchup = crate::services::gateway::build_text_content("late peer", 804);
+        let catchup = crate::services::gateway::builders::build_text_content("late peer", 804);
         let events = anon
             .process_incoming_content(&dm.id, &f.carol, &catchup)
             .unwrap();

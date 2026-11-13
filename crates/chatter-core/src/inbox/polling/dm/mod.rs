@@ -29,7 +29,7 @@ mod dispatch;
 mod policy;
 mod poll;
 
-use bootstrap::{process_bootstrap_key_exchange, try_parse_bootstrap_response};
+use bootstrap::try_parse_bootstrap_response;
 pub(crate) use dispatch::dispatch_dm_content;
 pub(crate) use policy::dm_failure_decision;
 use policy::{addressed_to_another_device, local_recipient_address};

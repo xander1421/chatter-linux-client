@@ -516,7 +516,7 @@ mod tests {
         mpsc::UnboundedReceiver<BleCommand>,
     ) {
         let identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
-        let state = Arc::new(MeshState::new(identity.peer_id()));
+        let state = Arc::new(MeshState::new());
         let (bus, rx) = crate::services::mesh::CommandBus::new();
         (
             BleTransport::new(Arc::clone(&state), identity, bus),
@@ -720,7 +720,7 @@ mod tests {
     #[test]
     fn the_directory_reads_a_key_straight_out_of_a_full_key_peer_id() {
         let identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
-        let state = Arc::new(MeshState::new(identity.peer_id()));
+        let state = Arc::new(MeshState::new());
         let directory = MeshDirectory::new(state);
 
         let key = identity.static_public();
@@ -731,7 +731,7 @@ mod tests {
     #[test]
     fn the_directory_has_no_key_for_a_nostr_only_peer() {
         let identity = MeshIdentity::generate(&mut os_rng());
-        let directory = MeshDirectory::new(Arc::new(MeshState::new(identity.peer_id())));
+        let directory = MeshDirectory::new(Arc::new(MeshState::new()));
         // A secp256k1 pubkey is not a Noise static key; sealing to it would
         // produce envelopes nobody can open.
         assert!(directory.noise_key(&nostr_peer()).is_none());

@@ -66,98 +66,53 @@ pub mod user;
 pub mod validation;
 
 // Re-exports for DM bootstrap service
-pub use dm_bootstrap_service::DmBootstrapService;
 
 // Re-exports for channel event service
-pub use channel_event_service::{ChannelEventError, ChannelEventService};
 
 // Re-export the current-user lookup error.
-pub use current_user::CurrentUserError;
 
 // Re-exports for call verification
-pub use call_verification::{CallVerification, CallVerificationData, VERIFICATION_EMOJI_COUNT};
 
-// Re-export ReactionEvent from aggregator for convenience
-pub use crate::network::streaming::reaction_stream::ReactionEvent;
 
 // Re-exports for AI service
-pub use ai_service::{AIError, AIService};
 
 pub mod channel_bootstrap_service;
 pub mod inbox_processor;
 pub mod mailbox_manager;
 
 // Re-exports for user service
-pub use user::{FriendResponseResult, UserError, UserService};
+pub use user::UserError;
 
-pub use attachment::{AttachmentError, AttachmentService, CdnUploadResult};
+pub use attachment::AttachmentService;
 #[cfg(feature = "media")]
 pub use call_worker::CallWorkerHandle;
 pub use gateway::{
-    CallHangupReason,
-    DmContent,
-    MessageGateway,
-    PADDING_GROUP_CONTROL,
-    PADDING_LARGE,
-    PADDING_MESSAGE,
-    RouteResult,
-    // Call hangup
-    build_call_hangup_content,
-    build_call_key_answer,
-    // DM call key exchange (ephemeral keys for PFS)
-    build_call_key_offer,
     build_data_message_content,
-    build_data_message_content_with_quote,
     build_delete_for_me_content,
-    build_delivery_receipt_content,
-    build_delivery_receipt_content_with_channel,
     build_edit_content,
-    build_edit_content_with_channel,
-    // Group call key distribution
-    build_group_call_signal_content,
     build_pin_content,
     build_pin_content_with_channel,
-    build_reaction_content,
-    build_reaction_content_with_channel,
-    build_read_receipt_content,
-    build_read_receipt_content_with_channel,
     build_reply_content,
-    build_saved_message_sync_content,
-    // DataMessage builders
-    build_targeted_delete_content,
-    build_text_content,
     // Control message builders
     build_typing_content,
     build_typing_content_with_channel,
-    // Padding
-    generate_padding,
 };
 pub use inbox_processor::InboxEventProcessor;
-pub use mailbox_manager::{MailboxError, MailboxManager};
-pub use message::core::{
-    proto_content_to_domain, proto_to_domain_message, proto_to_domain_message_with_sender,
-};
-pub use message::{MessageError, MessageService, SendDmContentParams};
+pub use message::{MessageError, MessageService};
 pub use signal::SignalService;
 
 // Re-exports for pairwise encryption service
-pub use pairwise::{PairwiseError, PairwiseService};
 
 // Re-exports for anon group service
-pub use anon_group::{AnonGroupError, AnonGroupService};
+pub use anon_group::AnonGroupError;
 
 // Re-exports for anon DM service
-pub use anon_dm::{AnonDmError, AnonDmService};
+pub use anon_dm::AnonDmError;
 
 // Re-exports for Jarvis AI assistant
-#[cfg(feature = "jarvis")]
-pub use jarvis::{JarvisBackground, JarvisBackgroundBuilder, JarvisError, JarvisService};
 
 // Re-exports for SVR backup service
-pub use message_backup_service::{BackupStats, MessageBackupError, MessageBackupService};
-pub use svr_backup_service::{RestoreResult, SvrBackupError, SvrBackupService};
 
 // Re-exports for section service
-pub use section_service::{SectionError, SectionService};
 
 pub mod voice_recording;

@@ -257,7 +257,7 @@ fn test_08_infrastructure_container() {
         set_env("XDG_DATA_HOME", "/tmp/chatter-startup-test-infra");
     }
 
-    use chatter_core::app::InfrastructureContainer;
+    use chatter_core::app::infrastructure::InfrastructureContainer;
 
     let (result, duration) = with_timeout("InfrastructureContainer::new", || {
         InfrastructureContainer::new(None, "https://localhost:50051")
@@ -295,7 +295,7 @@ fn test_09_app_context() {
         set_env("XDG_DATA_HOME", "/tmp/chatter-startup-test-ctx");
     }
 
-    use chatter_core::app::AppContext;
+    use chatter_core::app::context::AppContext;
 
     let (result, duration) = with_timeout("AppContext::new", || AppContext::new(None))
         .expect("AppContext::new should not hang");
@@ -494,7 +494,7 @@ fn test_13_infrastructure_real_path() {
     let (tx, rx) = mpsc::channel();
 
     let handle = thread::spawn(move || {
-        use chatter_core::app::InfrastructureContainer;
+        use chatter_core::app::infrastructure::InfrastructureContainer;
 
         println!("  [thread] Creating InfrastructureContainer...");
         let start = std::time::Instant::now();

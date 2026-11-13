@@ -2,7 +2,6 @@
 //!
 //! - `heartbeat` — liveness of the long-lived gRPC subscription streams.
 //! - `push_listener` — self-hosted ntfy SSE wake-up hints (Android background push).
-//! - `reaction_stream` — reaction aggregation for efficient UI updates.
 //!
 //! Presence delivery does NOT live here: friend presence arrives as
 //! `EventTypeUserPresenceUpdated` on the `StreamUserEvents` gRPC stream
@@ -10,10 +9,8 @@
 
 pub mod heartbeat;
 pub mod push_listener;
-pub mod reaction_stream;
 
 // Re-exports for convenience
-pub use push_listener::{PushEvent, PushListener, PushListenerConfig};
-pub use reaction_stream::{ReactionAggregator, ReactionEvent};
+pub use push_listener::{PushListener, PushListenerConfig};
 
 pub(crate) mod mailbox_wakes;

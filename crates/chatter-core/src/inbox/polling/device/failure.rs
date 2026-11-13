@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(any(test, feature = "testing"))]
 /// Build the conversation entry that marks a DM we could not decrypt.
 ///
 /// The inbox acks every polled envelope whatever the outcome, so an
@@ -26,6 +27,7 @@ pub fn delivery_issue_message(peer_id: UserId, envelope_ts_ns: u64) -> Message {
     )
 }
 
+#[cfg(any(test, feature = "testing"))]
 /// Build the conversation entry that marks the message which surfaced a peer
 /// identity change.
 ///
@@ -306,6 +308,7 @@ pub(crate) fn blocked_sender_decision(
     crate::inbox::ack_policy::drop_and_ack("blocked sender", envelope_id, budget)
 }
 
+#[cfg(any(test, feature = "testing"))]
 /// Shared shape for the system entries the device inbox writes into a DM.
 ///
 /// Delegates to the one builder in [`crate::inbox::ack_policy`] so the four

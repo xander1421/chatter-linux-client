@@ -18,7 +18,7 @@ async fn shield_bootstrap_without_cached_devices_is_not_reachable_privately() {
     let ms = client.messages();
 
     let sent = ms
-        .send_friend_dm_content(&friend, crate::services::build_text_content("hi", 1))
+        .send_friend_dm_content(&friend, crate::services::gateway::builders::build_text_content("hi", 1))
         .await;
     assert!(
         matches!(sent, Err(MessageError::NotReachablePrivately(p)) if p == friend),
@@ -170,7 +170,7 @@ async fn shield_send_with_empty_token_batch_fails_without_requesting_tokens() {
     cache_device(ms, &friend, 2, &mut StdRng::seed_from_u64(9)).await;
 
     let sent = ms
-        .send_friend_dm_content(&friend, crate::services::build_text_content("hi", 1))
+        .send_friend_dm_content(&friend, crate::services::gateway::builders::build_text_content("hi", 1))
         .await;
     match sent {
         Err(MessageError::ShieldNotReady) => {}

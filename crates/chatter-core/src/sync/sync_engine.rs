@@ -306,14 +306,6 @@ impl SyncEngine {
         tracing::info!("Sync engine shutting down");
     }
 
-    /// Trigger an immediate sync (e.g., after reconnect). Waits for a cycle
-    /// that started after this call; `None` when another trigger's cycle was
-    /// that one.
-    pub async fn trigger_sync(&self) -> Option<SyncCycleResult> {
-        tracing::info!("Triggered immediate sync");
-        self.sync_if_stale(Duration::ZERO).await
-    }
-
     /// Close the post-subscribe stream gap using only durable messages for
     /// locally joined channels. The periodic full pass owns list and roster
     /// reconciliation; this pass retains each channel's message checkpoint.
@@ -333,19 +325,15 @@ impl SyncEngine {
         Ok(result)
     }
 
-    /// Like [`Self::trigger_sync`], but also skipped when a cycle finished
-    /// within `max_age`.
+    /// Run a sync cycle unless one finished within `max_age`. Waits for a
+    /// cycle that started after this call; `None` when another caller's cycle
+    /// was that one.
     pub async fn sync_if_stale(&self, max_age: Duration) -> Option<SyncCycleResult> {
         let result = self.coalescer.run(max_age, || self.sync_all()).await;
         if result.is_none() {
             tracing::debug!("Sync trigger coalesced into another cycle");
         }
         result
-    }
-
-    /// Check if this is the first sync (no channels synced yet).
-    pub fn is_initial_sync(&self) -> bool {
-        self.channel_sync.last_synced_at().is_none()
     }
 }
 

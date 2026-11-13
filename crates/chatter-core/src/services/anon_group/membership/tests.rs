@@ -120,7 +120,7 @@ async fn real_group_fanout_refuses_replaced_session_after_recipient_preparation(
                             .anon_groups()
                             .send_message(
                                 &group,
-                                crate::services::build_text_content("old content", 41),
+                                crate::services::gateway::builders::build_text_content("old content", 41),
                             )
                             .await
                     },
@@ -189,7 +189,7 @@ async fn existing_unknown_recipient_claim_stays_uncertain_after_session_replacem
         content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(
             content_v1::AnonGroupMessage {
                 group_id: f.group_id.to_vec(),
-                inner_content: Some(Box::new(crate::services::build_text_content(
+                inner_content: Some(Box::new(crate::services::gateway::builders::build_text_content(
                     "retained", 42,
                 ))),
             },

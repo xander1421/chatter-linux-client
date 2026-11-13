@@ -14,7 +14,7 @@ use chatter_core::crypto::ecies::{
 use chatter_core::crypto::profile_crypto;
 use chatter_attachment_crypto::{AttachmentCrypto, KEY_SET_LENGTH};
 use chatter_core::crypto::{decrypt_dm_bytes, encrypt_dm_bytes};
-use chatter_core::testing::services::{
+use chatter_core::testing::services::gateway::builders::{
     PADDING_MESSAGE, build_data_message_content, build_text_content, build_typing_content,
     generate_padding,
 };

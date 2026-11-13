@@ -35,12 +35,9 @@ pub mod streaming;
 // Re-export main types for convenience
 pub use config::InboxConfig;
 pub use events::InboxEvent;
-pub use poller::InboxPoller;
 pub use provider::DeviceInboxProvider;
-pub use state::{InboxState, InboxStats};
 
 // Re-export DomainEvent (emitted by all inbox dispatchers).
 pub use handlers::DomainEvent;
 
 // Re-export streaming handlers
-pub use streaming::{spawn_dm_bootstrap_handler_from_bus, spawn_user_events_stream};

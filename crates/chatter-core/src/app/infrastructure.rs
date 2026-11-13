@@ -14,7 +14,7 @@ use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::storage::repositories::{
     AnonDmRepository, AnonGroupRepository, EphemeralRepository, PendingDmRepository,
-    SectionRepository, UnifiedConversationRepository, VectorRepository,
+    SectionRepository, UnifiedConversationRepository,
 };
 #[cfg(feature = "jarvis")]
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
@@ -79,8 +79,6 @@ pub struct InfrastructureContainer {
     pub(crate) jarvis_graph_repo: Arc<JarvisGraphRepository>,
     /// Custom sidebar section repository.
     pub(crate) section_repo: Arc<SectionRepository>,
-    /// Vector embedding repository for semantic search.
-    pub(crate) vector_repo: Arc<VectorRepository>,
     /// DMs held back until a first-contact bootstrap completes.
     pub(crate) pending_dm_repo: Arc<PendingDmRepository>,
 
@@ -255,7 +253,6 @@ impl InfrastructureContainer {
         #[cfg(feature = "jarvis")]
         let jarvis_graph_repo = Arc::new(JarvisGraphRepository::new(database.clone()));
         let section_repo = Arc::new(SectionRepository::new(database.clone()));
-        let vector_repo = Arc::new(VectorRepository::new(database.clone()));
         let pending_dm_repo = Arc::new(PendingDmRepository::new(database.clone()));
 
         // 8. Create crypto managers
@@ -324,7 +321,6 @@ impl InfrastructureContainer {
             #[cfg(feature = "jarvis")]
             jarvis_graph_repo,
             section_repo,
-            vector_repo,
             event_bus: crate::events::EventBus::new(),
             group_fanout: Arc::new(std::sync::OnceLock::new()),
         })

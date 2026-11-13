@@ -1141,7 +1141,7 @@ mod sync_sent_copy_tests {
     fn wraps_messages_only_and_names_the_peer() {
         let peer = UserId::new();
         let copy =
-            super::sync_sent_copy(&peer, &crate::services::build_text_content("hi", 7)).unwrap();
+            super::sync_sent_copy(&peer, &crate::services::gateway::builders::build_text_content("hi", 7)).unwrap();
         let Some(content::Content::SyncSent(sync)) = copy.content else {
             panic!("not a SyncSent")
         };

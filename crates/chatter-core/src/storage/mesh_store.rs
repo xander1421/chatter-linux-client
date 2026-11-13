@@ -333,6 +333,7 @@ impl MeshSealer {
         }
     }
 
+    #[cfg(test)]
     /// Whether this sealer holds a key.
     #[must_use]
     pub fn is_ready(&self) -> bool {
@@ -359,6 +360,7 @@ impl MeshSealer {
         }
     }
 
+    #[cfg(test)]
     /// Why the key is missing, if it is.
     #[must_use]
     pub fn unavailable_reason(&self) -> Option<&str> {

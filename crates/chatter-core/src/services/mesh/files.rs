@@ -174,6 +174,7 @@ impl MeshService {
         Ok(message_id)
     }
 
+    #[cfg(test)]
     /// How long a file would take to put on the air, in seconds, at the two ends
     /// of the goodput measured on this hardware.
     ///

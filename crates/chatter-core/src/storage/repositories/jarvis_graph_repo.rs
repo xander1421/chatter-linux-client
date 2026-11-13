@@ -8,10 +8,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 
-use crate::domain::jarvis::{
-    EntityKnowledge, EntityType, JarvisEntity, JarvisEntityId, JarvisEntityMention,
-    JarvisRelationship, JarvisRelationshipId, SubjectType,
-};
+use crate::domain::jarvis::{EntityType, JarvisEntity, JarvisEntityId};
+#[cfg(feature = "testing")]
+use crate::domain::jarvis::{JarvisRelationship, JarvisRelationshipId};
 use crate::error::StorageError;
 use crate::storage::Database;
 
@@ -38,6 +37,7 @@ impl JarvisGraphRepository {
         Ok(count as u32)
     }
 
+    #[cfg(feature = "testing")]
     /// Insert or update an entity.
     ///
     /// If an entity with the same normalized name exists, updates it.
@@ -87,6 +87,7 @@ impl JarvisGraphRepository {
         }
     }
 
+    #[cfg(feature = "testing")]
     /// Get entity by ID.
     pub fn get_entity(&self, id: &JarvisEntityId) -> Result<Option<JarvisEntity>, StorageError> {
         let conn = self.db.read_connection()?;
@@ -102,6 +103,7 @@ impl JarvisGraphRepository {
         }
     }
 
+    #[cfg(feature = "testing")]
     /// Get entity by normalized name.
     pub fn get_entity_by_name(&self, name: &str) -> Result<Option<JarvisEntity>, StorageError> {
         let normalized = name.trim().to_lowercase();
@@ -118,6 +120,7 @@ impl JarvisGraphRepository {
         }
     }
 
+    #[cfg(feature = "testing")]
     /// Search entities by name (fuzzy match).
     pub fn search_entities(
         &self,
@@ -164,6 +167,7 @@ impl JarvisGraphRepository {
         Ok(entities)
     }
 
+    #[cfg(feature = "testing")]
     /// Get entities by type.
     pub fn get_entities_by_type(
         &self,
@@ -193,6 +197,7 @@ impl JarvisGraphRepository {
     // Relationship CRUD
     // ========================================================================
 
+    #[cfg(feature = "testing")]
     /// Insert or update a relationship.
     pub fn upsert_relationship(
         &self,
@@ -244,6 +249,7 @@ impl JarvisGraphRepository {
         }
     }
 
+    #[cfg(feature = "testing")]
     /// Get relationships from an entity.
     pub fn get_relationships_from(
         &self,
@@ -271,6 +277,7 @@ impl JarvisGraphRepository {
         Ok(results)
     }
 
+    #[cfg(feature = "testing")]
     /// Get relationships to an entity.
     pub fn get_relationships_to(
         &self,
@@ -345,84 +352,10 @@ impl JarvisGraphRepository {
     // Mention CRUD
     // ========================================================================
 
-    /// Insert an entity mention.
-    pub fn insert_mention(&self, mention: &JarvisEntityMention) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        conn.execute(
-            "INSERT INTO jarvis_entity_mentions (id, entity_id, context_type, context_id, message_id, timestamp)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                mention.id,
-                mention.entity_id.as_str(),
-                mention.context_type.to_i32(),
-                mention.context_id,
-                mention.message_id,
-                mention.timestamp as i64,
-            ],
-        )?;
-        Ok(())
-    }
-
     // ========================================================================
     // High-level Knowledge Queries
     // ========================================================================
 
-    /// Get comprehensive knowledge about an entity.
-    pub fn get_entity_knowledge(
-        &self,
-        name: &str,
-        memory_repo: &super::jarvis_memory_repo::JarvisMemoryRepository,
-    ) -> Result<EntityKnowledge, StorageError> {
-        let entity = self.get_entity_by_name(name)?;
-
-        let (related, facts) = if let Some(ref ent) = entity {
-            // Get relationships
-            let from_rels = self.get_relationships_from(&ent.id)?;
-            let to_rels = self.get_relationships_to(&ent.id)?;
-            let mut related: Vec<(JarvisRelationship, JarvisEntity)> = from_rels;
-            related.extend(to_rels);
-
-            // Get facts about this entity
-            let facts = memory_repo.get_facts_about(SubjectType::Topic, &ent.normalized_name)?;
-
-            (related, facts)
-        } else {
-            (vec![], vec![])
-        };
-
-        Ok(EntityKnowledge {
-            entity,
-            related,
-            facts,
-        })
-    }
-
-    /// Delete old mentions and prune unused entities.
-    pub fn prune_old_data(&self, days_old: u32) -> Result<(u32, u32), StorageError> {
-        let conn = self.db.connection()?;
-        let cutoff = Utc::now() - chrono::Duration::days(days_old as i64);
-        let cutoff_ns = cutoff.timestamp_nanos_opt().unwrap_or(0);
-
-        // Delete old mentions
-        let mentions_deleted = conn.execute(
-            "DELETE FROM jarvis_entity_mentions WHERE timestamp < ?1",
-            params![cutoff_ns],
-        )?;
-
-        // Delete entities with no mentions and no relationships
-        let entities_deleted = conn.execute(
-            "DELETE FROM jarvis_entities WHERE id NOT IN (
-                SELECT DISTINCT entity_id FROM jarvis_entity_mentions
-            ) AND id NOT IN (
-                SELECT DISTINCT from_entity_id FROM jarvis_relationships
-            ) AND id NOT IN (
-                SELECT DISTINCT to_entity_id FROM jarvis_relationships
-            )",
-            [],
-        )?;
-
-        Ok((mentions_deleted as u32, entities_deleted as u32))
-    }
 }
 
 // ============================================================================
@@ -462,6 +395,7 @@ fn row_to_entity_offset(
     })
 }
 
+#[cfg(feature = "testing")]
 fn row_to_relationship(row: &rusqlite::Row) -> Result<JarvisRelationship, rusqlite::Error> {
     let id: String = row.get(0)?;
     let from_entity_id: String = row.get(1)?;

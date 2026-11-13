@@ -82,16 +82,11 @@ impl MeshService {
         self.running.load(Ordering::SeqCst)
     }
 
+    #[cfg(test)]
     /// The geohash cells currently joined.
     #[must_use]
     pub fn joined_geohashes(&self) -> Vec<String> {
         self.nostr_state.joined_cells()
-    }
-
-    /// The conversation a public mesh room message belongs to.
-    #[must_use]
-    pub fn room_conversation() -> MeshConversation {
-        MeshConversation::Room
     }
 
     /// Every mesh conversation, shaped for the unified sidebar.

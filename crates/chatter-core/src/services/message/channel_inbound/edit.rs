@@ -1,6 +1,7 @@
 use super::*;
 
 impl ChannelInbound {
+    #[cfg(test)]
     /// Same path, for a message the server says was EDITED
     /// (`message_updated`). Decrypts like any channel message (sender keys
     /// for an encrypted channel), then applies the new body through the one

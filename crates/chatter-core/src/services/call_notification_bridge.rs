@@ -74,6 +74,7 @@ pub fn spawn_session_call_notification_bridge(
     SessionBridge { stop, done }
 }
 
+#[cfg(test)]
 /// Subscribe before reading presentation authority. Broadcast events only
 /// invalidate the projection; their buffered payloads are never replayed.
 #[cfg(feature = "media")]

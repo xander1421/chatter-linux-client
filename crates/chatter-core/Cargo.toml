@@ -168,7 +168,6 @@ gstreamer-pbutils = { version = "0.25", optional = true }
 # Media Utilities
 # ============================================================================
 # once_cell removed — migrated to std::sync::LazyLock
-moka = { version = "0.12", features = ["sync"] }
 zeroize = { workspace = true, features = ["derive", "serde"] }
 libc = "0.2"
 

@@ -251,7 +251,7 @@ async fn friend_dm_transport_follows_shield_mode() {
     ms.settings_repo
         .set(keys::CURRENT_DEVICE_ID, &1u32)
         .unwrap();
-    let content = || crate::services::build_text_content("hi", 1);
+    let content = || crate::services::gateway::builders::build_text_content("hi", 1);
 
     ms.shield_mode.store(true, Ordering::Release);
     let shield = ms.send_friend_dm_content(&friend, content()).await;

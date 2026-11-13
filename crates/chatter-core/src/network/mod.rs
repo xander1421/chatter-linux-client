@@ -11,7 +11,6 @@ pub(crate) mod storage_http;
 pub mod streaming;
 pub mod validation;
 
-pub use connection::{ConnectionState, FailReason, ServerStatus, server_status};
 pub use reconnect_config::ReconnectConfig;
 
 /// Public HTTP retains the WebPKI roots and ring provider used before reqwest 0.13.

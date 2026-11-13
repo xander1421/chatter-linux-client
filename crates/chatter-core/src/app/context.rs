@@ -67,10 +67,12 @@ pub struct AppContext {
 impl AppContext {
     /// Create a new AppContext, initializing all subsystems, against
     /// `CHATTER_SERVER_URL` or the built-in default server.
+    #[cfg(feature = "testing")]
     pub fn new(data_dir: Option<String>) -> Result<Self, ContextError> {
         Self::with_config_and_sink(None, data_dir, None)
     }
 
+    #[cfg(any(test, feature = "testing"))]
     /// Create a new AppContext with optional overrides.
     ///
     /// If `server_url` is `Some(url)`, that URL is used instead of the
@@ -255,20 +257,6 @@ impl AppContext {
     /// This starts the background service that owns the gRPC stream,
     /// handles reconnection, and emits domain events.
     pub fn start_channel_event_stream(&self) -> tokio::task::JoinHandle<()> {
-        self.services
-            .channel_event_service
-            .clone()
-            .start_event_stream()
-    }
-
-    /// Restart the channel event stream service.
-    ///
-    /// This is needed after re-login to ensure the stream uses the new
-    /// authentication credentials. Returns a new task handle.
-    pub fn restart_channel_event_stream(&self) -> tokio::task::JoinHandle<()> {
-        // The service handles stream lifecycle internally with retry logic
-        // Just start a new instance - the old one will eventually stop
-        // when it fails to authenticate with old credentials
         self.services
             .channel_event_service
             .clone()
