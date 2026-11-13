@@ -75,6 +75,105 @@ const _: () = {
     assert!(!same, "production update key is the public development key; use a provisioned release-update key");
 };
 
+// ─── Release transparency (Sigstore Rekor) ─────────────────────────────────
+//
+// Every release artifact must be logged in Rekor before a client installs it
+// (docs/IN-APP-UPDATER.md "Transparency"). Two pins, both uncompressed SEC1
+// P-256 points (65 bytes):
+//
+// - the Rekor LOG key that signs checkpoints and signed entry timestamps. Not a
+//   secret and not provisioned: production pins the public-good instance
+//   rekor.sigstore.dev (fetched from /api/v1/log/publicKey on 2026-11-13);
+//   `dev-trust-root` pins a dev log key whose private scalar is
+//   SHA-256("chatter-dev-rekor-log-v1"), used by `publish-update.py
+//   --test-dev-seed`'s mock log.
+// - the release TRANSPARENCY key that signs the hashedrekord entry. Its scalar
+//   is SHA-256("chatter-release-transparency-p256-v1" || release-update seed),
+//   so it needs no extra Vault secret; pinning it is what lets a monitor find
+//   every Chatter release in the public log by key.
+
+/// rekor.sigstore.dev log key (SPKI SHA-256 = its logID
+/// c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d).
+pub const PUBLIC_GOOD_REKOR_LOG_PUBLIC_KEY: [u8; 65] = decode_hex65(
+    "04d86d98fb6b5a6dd4d5e41706881231d1af5f005c2b9016e62d21ad92ce0bdea5fac98634cee7c19e10bc52bfe2cb9e468563fff40fdb6362e10b7d0cf7e458b7",
+);
+
+/// Dev log key; the private scalar is SHA-256 of a public string.
+pub const DEV_REKOR_LOG_PUBLIC_KEY: [u8; 65] = decode_hex65(
+    "040a37b2ed0b074e38e90ee756402a247b2e7fcd1e1ea9c742d0251b21a65e86098386c5d5664dbee0ca3fca52ac484041d120acb3b200da9f13151372cf53cd53",
+);
+
+#[cfg(not(feature = "dev-trust-root"))]
+pub const REKOR_LOG_PUBLIC_KEY: [u8; 65] = PUBLIC_GOOD_REKOR_LOG_PUBLIC_KEY;
+
+#[cfg(feature = "dev-trust-root")]
+pub const REKOR_LOG_PUBLIC_KEY: [u8; 65] = DEV_REKOR_LOG_PUBLIC_KEY;
+
+/// Derived from the development release-update seed.
+const DEV_RELEASE_TRANSPARENCY_PUBLIC_KEY: [u8; 65] = decode_hex65(
+    "045c988a4c22744d60f5bf4ce414a33b51d7f467600ba1fbec3a1fad12d25c70b5ad2478b1ce8b4955dc9d933f1139c82403b3ddec0dab33d6ef10d97ce120cac7",
+);
+
+#[cfg(feature = "dev-trust-root")]
+pub const RELEASE_TRANSPARENCY_PUBLIC_KEY: [u8; 65] = DEV_RELEASE_TRANSPARENCY_PUBLIC_KEY;
+
+#[cfg(not(feature = "dev-trust-root"))]
+pub const RELEASE_TRANSPARENCY_PUBLIC_KEY: [u8; 65] = match option_env!(
+    "CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX"
+) {
+    Some(hex) => decode_hex65(hex),
+    None if cfg!(test) || cfg!(feature = "insecure-test-anchors") => {
+        DEV_RELEASE_TRANSPARENCY_PUBLIC_KEY
+    }
+    None => panic!(
+        "no release-transparency public key is baked into this build; provision CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX or use --features dev-trust-root for local development"
+    ),
+};
+
+#[cfg(all(
+    not(feature = "dev-trust-root"),
+    not(test),
+    not(feature = "insecure-test-anchors")
+))]
+const _: () = {
+    let mut same = true;
+    let mut i = 0;
+    while i < 65 {
+        if RELEASE_TRANSPARENCY_PUBLIC_KEY[i] != DEV_RELEASE_TRANSPARENCY_PUBLIC_KEY[i] {
+            same = false;
+        }
+        i += 1;
+    }
+    assert!(
+        !same,
+        "production release-transparency key is the public development key; use the key derived from the provisioned release-update seed"
+    );
+};
+
+const fn decode_hex65(hex: &str) -> [u8; 65] {
+    let bytes = hex.as_bytes();
+    assert!(
+        bytes.len() == 130 && bytes[0] == b'0' && bytes[1] == b'4',
+        "a P-256 anchor must be 130 hex characters: an uncompressed SEC1 point (04 || x || y)"
+    );
+    let mut out = [0u8; 65];
+    let mut i = 0;
+    while i < 65 {
+        out[i] = anchor_nibble(bytes[i * 2]) * 16 + anchor_nibble(bytes[i * 2 + 1]);
+        i += 1;
+    }
+    out
+}
+
+const fn anchor_nibble(c: u8) -> u8 {
+    match c {
+        b'0'..=b'9' => c - b'0',
+        b'a'..=b'f' => c - b'a' + 10,
+        b'A'..=b'F' => c - b'A' + 10,
+        _ => panic!("a P-256 anchor contains a non-hex character"),
+    }
+}
+
 // ─── Sealed sender trust root ──────────────────────────────────────────────
 
 /// Public half of the development trust root that signed the development

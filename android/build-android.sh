@@ -175,6 +175,7 @@ else
     [ -z "${CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX"
     [ -z "${CHATTER_KT_VRF_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_KT_VRF_PUBLIC_KEY_HEX"
     [ -z "${CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX"
+    [ -z "${CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX"
     if [ -n "$missing" ]; then
         echo "FATAL: DEV_TRUST_ROOT=0 but unset:$missing"
         echo

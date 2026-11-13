@@ -385,7 +385,11 @@ mod tor {
     }
 
     /// A missing public object means no update has been published yet.
-    pub async fn get_optional(tor: &SharedTorClient, url: &str) -> Result<Option<Vec<u8>>, String> {
+    pub async fn get_optional(
+        tor: &SharedTorClient,
+        url: &str,
+        limit: usize,
+    ) -> Result<Option<Vec<u8>>, String> {
         let p = parse_url(url)?;
         let req = hyper::Request::builder()
             .method(hyper::Method::GET)
@@ -393,8 +397,7 @@ mod tor {
             .header(hyper::header::HOST, host_header(&p))
             .body(Full::new(Bytes::new()))
             .map_err(|_| "update request construction failed".to_string())?;
-        let (status, _headers, body) =
-            request(tor, &p, req, crate::update::MAX_MANIFEST_BYTES).await?;
+        let (status, _headers, body) = request(tor, &p, req, limit).await?;
         if status == 404 {
             return Ok(None);
         }
