@@ -198,6 +198,7 @@ fn canonical_encoding_is_the_specified_layout() {
             role: ChannelRole::Member,
             status: MemberStatus::Invited,
             identity_key: owner,
+            muted_until: 0x0a0b,
         },
     );
     s.members.insert(
@@ -206,6 +207,7 @@ fn canonical_encoding_is_the_specified_layout() {
             role: ChannelRole::Owner,
             status: MemberStatus::Active,
             identity_key: owner,
+            muted_until: 0,
         },
     );
     s.invites.insert(
@@ -219,22 +221,23 @@ fn canonical_encoding_is_the_specified_layout() {
         },
     );
 
-    let mut want = vec![1u8];
+    let mut want = vec![2u8];
     want.extend(36u32.to_be_bytes());
     want.extend(CH.as_bytes());
     want.extend(7u64.to_be_bytes());
     want.extend([3, 2, 3, 3, 3, 1]);
     want.extend(3600u32.to_be_bytes());
     want.extend(2u32.to_be_bytes());
-    for (id, role, status) in [
-        ("aaaaaaaa-0000-4000-8000-000000000000", 4u8, 1u8),
-        ("bbbbbbbb-0000-4000-8000-000000000000", 1, 2),
+    for (id, role, status, muted_until) in [
+        ("aaaaaaaa-0000-4000-8000-000000000000", 4u8, 1u8, 0u64),
+        ("bbbbbbbb-0000-4000-8000-000000000000", 1, 2, 0x0a0b),
     ] {
         want.extend(36u32.to_be_bytes());
         want.extend(id.as_bytes());
         want.extend([role, status]);
         want.extend(33u32.to_be_bytes());
         want.extend(owner);
+        want.extend(muted_until.to_be_bytes());
     }
     want.extend(1u32.to_be_bytes());
     want.extend(33u32.to_be_bytes());
@@ -1007,7 +1010,8 @@ fn open_channels_admit_self_signed_joins() {
         Member {
             role: ChannelRole::Member,
             status: MemberStatus::Active,
-            identity_key: key(&anyone.kp)
+            identity_key: key(&anyone.kp),
+            muted_until: 0,
         }
     );
     // A second self-join by a member is refused, and a stray proof is malformed.
@@ -1177,6 +1181,7 @@ async fn bootstrap_trusts_state_only_through_change_n() {
         role: ChannelRole::Admin as i32,
         identity_key: vec![5; 33],
         status: MemberStatus::Active as i32,
+        muted_until: 0,
     });
     assert_eq!(
         bootstrap(CH, Some(&doctored), &n, &verifier)
@@ -1300,6 +1305,7 @@ fn vector_state(v: &serde_json::Value) -> pb::MembershipState {
                 role: m["role"].as_i64().unwrap() as i32,
                 identity_key: hexd(m["identity_key"].as_str().unwrap()),
                 status: m["status"].as_i64().unwrap() as i32,
+                muted_until: m["muted_until"].as_u64().unwrap(),
             })
             .collect(),
         policy: Some(pb::AccessPolicy {

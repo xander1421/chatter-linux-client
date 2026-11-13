@@ -474,22 +474,17 @@ impl ChannelClient {
             .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
     }
 
-    /// Mute a channel member for `duration`, or until unmuted when `None`.
-    /// Server-enforced: SpiceDB `send_message` excludes `muted`, and the
-    /// server's expiry sweep lifts a timed mute once it lapses.
+    /// Mute a channel member: the moderator's signed `SetMuted{muted_until > 0}`.
+    /// The server mirrors it into SpiceDB `muted`, and its expiry sweep lifts
+    /// a timed mute once it lapses.
     pub async fn mute_user(
         &mut self,
         channel_id: &str,
-        user_id: &str,
-        duration: Option<std::time::Duration>,
+        change: ChannelChange,
     ) -> Result<(), NetworkError> {
         let request = MuteUserRequest {
             channel_id: channel_id.to_string(),
-            user_id: user_id.to_string(),
-            duration: duration.map(|d| prost_types::Duration {
-                seconds: d.as_secs() as i64,
-                nanos: d.subsec_nanos() as i32,
-            }),
+            change: Some(change),
         };
         self.inner
             .mute_user(request)
@@ -498,15 +493,15 @@ impl ChannelClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
-    /// Lift a mute.
+    /// Lift a mute: the moderator's signed `SetMuted{muted_until: 0}`.
     pub async fn unmute_user(
         &mut self,
         channel_id: &str,
-        user_id: &str,
+        change: ChannelChange,
     ) -> Result<(), NetworkError> {
         let request = UnmuteUserRequest {
             channel_id: channel_id.to_string(),
-            user_id: user_id.to_string(),
+            change: Some(change),
         };
         self.inner
             .unmute_user(request)

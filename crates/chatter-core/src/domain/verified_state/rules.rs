@@ -110,6 +110,7 @@ pub fn apply(
                     role: ChannelRole::Owner,
                     status: MemberStatus::Active,
                     identity_key: ctx.author_key,
+                    muted_until: 0,
                 },
             );
             state = Some(MembershipState {
@@ -190,6 +191,7 @@ fn apply_one(
                             role: new_role,
                             status,
                             identity_key,
+                            muted_until: 0,
                         },
                     );
                 }
@@ -301,6 +303,7 @@ fn apply_one(
                 role: ChannelRole::Member,
                 status: MemberStatus::Active,
                 identity_key: ctx.author_key,
+                muted_until: 0,
             };
             if j.invite_pub.is_empty() {
                 if st.policy.join != JoinMode::Open {
@@ -361,6 +364,20 @@ fn apply_one(
                 return Err(deny("set_disappearing below policy"));
             }
             st.disappearing_seconds = d.seconds;
+        }
+
+        Action::SetMuted(m) => {
+            let role = need_active()?;
+            let target_role = match st.members.get(&m.user_id) {
+                Some(t) if t.status == MemberStatus::Active && m.user_id != ctx.author => t.role,
+                _ => return Err(invalid("set_muted target must be another active member")),
+            };
+            if role < st.policy.remove_member || target_role >= role {
+                return Err(deny("set_muted at or above own role or below policy"));
+            }
+            if let Some(t) = st.members.get_mut(&m.user_id) {
+                t.muted_until = m.muted_until;
+            }
         }
 
         Action::TransferOwnership(t) => {

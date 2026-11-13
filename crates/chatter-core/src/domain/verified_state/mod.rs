@@ -178,6 +178,15 @@ pub struct Member {
     pub role: ChannelRole,
     pub status: MemberStatus,
     pub identity_key: KeyBytes,
+    /// Unix nanoseconds; 0 = not muted, `u64::MAX` = until unmuted.
+    pub muted_until: u64,
+}
+
+impl Member {
+    /// Whether a mute is in force at `now` (Unix nanoseconds).
+    pub fn is_muted(&self, now: u64) -> bool {
+        self.muted_until > now
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,6 +250,7 @@ impl MembershipState {
                 role: role(m.role)?,
                 status,
                 identity_key: key33(&m.identity_key)?,
+                muted_until: m.muted_until,
             };
             if members.insert(m.user_id.clone(), member).is_some() {
                 return Err(malformed("duplicate member"));
@@ -299,6 +309,7 @@ impl MembershipState {
                     role: m.role as i32,
                     identity_key: m.identity_key.to_vec(),
                     status: m.status as i32,
+                    muted_until: m.muted_until,
                 })
                 .collect(),
             policy: Some(self.policy.to_proto()),

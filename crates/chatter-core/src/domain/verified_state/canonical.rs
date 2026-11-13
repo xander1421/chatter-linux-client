@@ -11,7 +11,7 @@ use super::{MembershipState, StateHash};
 pub const STATE_DOMAIN: &[u8] = b"chatter-channel-state-v1\0";
 pub const CHANGE_DOMAIN: &[u8] = b"chatter-channel-change-v1\0";
 pub const INVITE_DOMAIN: &[u8] = b"chatter-channel-invite-v1\0";
-pub const FORMAT_VERSION: u8 = 1;
+pub const FORMAT_VERSION: u8 = 2;
 
 fn put_bin(out: &mut Vec<u8>, b: &[u8]) {
     // Every field is bounded far below 4 GiB (keys 33 B, UUIDs 36 B).
@@ -44,6 +44,7 @@ pub fn canonical_state(s: &MembershipState) -> Vec<u8> {
         out.push(m.role as i32 as u8);
         out.push(m.status as i32 as u8);
         put_bin(&mut out, &m.identity_key);
+        out.extend_from_slice(&m.muted_until.to_be_bytes());
     }
 
     out.extend_from_slice(&(s.invites.len() as u32).to_be_bytes());
