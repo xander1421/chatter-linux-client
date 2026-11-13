@@ -1096,11 +1096,16 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // The recording panel still owns the shell and its controls; ordinary
     // input is disabled without replacing it or consuming the draft.
     let recording = w.global::<chatter_ui::VoiceRecording>();
+    // A recording belongs to one composer since 5349ab7c (main or thread).
+    recording.set_owner("main".into());
     recording.set_active(true);
     pump_size(&w, PHONE_W, 460.0);
-    let panel = testing::ElementHandle::find_by_element_id(&w, "MessageComposer::recording-panel")
-        .find(|e| e.size().height > 0.0)
-        .unwrap();
+    // Its own ComposerRecordingPanel since e1dde46a.
+    let panel = testing::ElementHandle::find_by_element_type_name(&w, "ComposerRecordingPanel")
+        .find(|e| {
+            e.type_name().is_some_and(|t| t == "ComposerRecordingPanel") && e.size().height > 0.0
+        })
+        .expect("recording panel");
     let shell = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
         .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
         .unwrap();
@@ -1426,6 +1431,22 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
             })
             .expect("focused native drawer search")
     };
+    // The drawer moves over motion time at the 1x default speed (15919403);
+    // under this system-time debug backend one 200ms pump can land mid-way.
+    // Read it once it has stopped moving.
+    let settled_drawer = |width: f32, height: f32| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut last = rect(&drawer_element("ChatLayout::picker-drawer"));
+        loop {
+            pump_size(w, width, height);
+            let now = rect(&drawer_element("ChatLayout::picker-drawer"));
+            if now == last {
+                return now;
+            }
+            assert!(std::time::Instant::now() < deadline, "picker drawer never settled");
+            last = now;
+        }
+    };
     // Search owns a visible drawer ABOVE the actual IME. Exercise the real
     // search input and tab callbacks; a zero-height clipped picker cannot pass.
     for (width, height, ime) in [
@@ -1446,7 +1467,7 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         w.global::<chatter_ui::ChatPane>()
             .set_composer_gif_picker_search("".into());
         pump_size(w, width, height);
-        let baseline = rect(&drawer_element("ChatLayout::picker-drawer"));
+        let baseline = settled_drawer(width, height);
         click_element(w, "Search emoji and GIFs");
         let search_item = focused_search();
         // Focus alone, without actual IME, must keep the bottom baseline.
@@ -1539,7 +1560,7 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         let first_gif = gif_results.row_data(0).expect("fixture GIF result");
         keyboard(0.0);
         pump_size(w, width, height);
-        let closed = rect(&drawer_element("ChatLayout::picker-drawer"));
+        let closed = settled_drawer(width, height);
         assert!(
             (closed.1 - baseline.1).abs() < 0.5 && (closed.3 - baseline.3).abs() < 0.5,
             "keyboard close must move DOWN to original baseline despite retained focus"
