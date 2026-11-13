@@ -356,11 +356,6 @@ impl HttpLocalAIService {
             .set_string("cloud_ai.mode", mode.as_str())
     }
 
-    /// Persist the model used when the active provider is a cloud one.
-    pub fn set_cloud_model(&self, model: &str) -> Result<(), crate::error::StorageError> {
-        self.settings_repo.set_string("cloud_ai.model", model)
-    }
-
     // ==================== Cloud silo ====================
 
     /// Current cloud-silo configuration, read fresh from the repo.
