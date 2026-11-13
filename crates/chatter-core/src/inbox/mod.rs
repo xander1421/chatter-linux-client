@@ -34,7 +34,6 @@ pub mod streaming;
 
 // Re-export main types for convenience
 pub use config::InboxConfig;
-pub use error::InboxError;
 pub use events::InboxEvent;
 pub use poller::InboxPoller;
 pub use provider::DeviceInboxProvider;
