@@ -33,6 +33,9 @@ pub trait KeyWrap: Send + Sync {
     fn seal(&self, alias: &str, plaintext: &[u8]) -> Result<Vec<u8>, String>;
     /// Must fail — never return garbage — when the blob does not authenticate.
     fn unseal(&self, alias: &str, blob: &[u8]) -> Result<Vec<u8>, String>;
+    /// Delete the key behind `alias` (absent is not an error). Everything
+    /// sealed under it becomes unreadable: the duress wipe's first step.
+    fn destroy(&self, alias: &str) -> Result<(), String>;
 }
 
 static KEY_WRAP: OnceLock<Box<dyn KeyWrap>> = OnceLock::new();
@@ -166,6 +169,9 @@ pub(crate) mod tests {
                 return Err("wrong key".into());
             }
             Ok(blob[tag_len..].iter().map(|b| b ^ 0x5a).collect())
+        }
+        fn destroy(&self, _alias: &str) -> Result<(), String> {
+            Ok(())
         }
     }
 

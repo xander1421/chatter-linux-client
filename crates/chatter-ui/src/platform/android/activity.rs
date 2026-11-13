@@ -66,6 +66,24 @@ pub fn install_verified_update(path: &str, version_code: i64) -> Result<(), Stri
     })
 }
 
+/// Duress wipe: Kotlin clears notifications and SharedPreferences and
+/// schedules the relaunch (`MainActivity.wipeAndRestart`). The caller exits.
+pub fn wipe_and_restart() -> Result<(), String> {
+    let act = activity()?;
+    with_jni_env(|env| {
+        let result = env.call_method(
+            act,
+            jni::jni_str!("wipeAndRestart"),
+            jni::jni_sig!("()Z"),
+            &[],
+        );
+        if result.is_err() {
+            clear_exception(env);
+        }
+        result.and_then(|value| value.z()).map(drop).map_err(|e| e.to_string())
+    })
+}
+
 pub fn update_network_metered() -> Result<bool, String> {
     let act = activity()?;
     with_jni_env(|env| {

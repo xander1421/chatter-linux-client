@@ -84,6 +84,8 @@ pub struct CoreServices {
     #[cfg(feature = "jarvis")]
     pub jarvis_engine: SharedJarvisEngine,
     pub notification_service: Arc<NotificationService>,
+    /// App lock + duress PIN; also gates notification content.
+    pub app_lock: Arc<crate::services::app_lock::AppLock>,
     pub section_service: Arc<SectionService>,
     pub conversation_pins: Arc<ConversationPins>,
     pub device_service: Arc<DeviceService>,
@@ -160,6 +162,9 @@ impl CoreServices {
             }
         });
         let auth_state = AuthState::new();
+        let app_lock = Arc::new(crate::services::app_lock::AppLock::new(
+            infra.settings_repo.clone(),
+        ));
         let _ = services
             .message_service
             .receive_auth
@@ -240,8 +245,10 @@ impl CoreServices {
                         .flatten()
                         .unwrap_or(true),
                 );
+                svc.set_app_lock(app_lock.clone());
                 Arc::new(svc)
             },
+            app_lock,
             section_service: services.section_service.clone(),
             conversation_pins: services.conversation_pins.clone(),
             device_service: services.device_service.clone(),

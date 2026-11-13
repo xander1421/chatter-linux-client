@@ -563,6 +563,22 @@ class MainActivity : GameActivity() {
     private external fun nativeNotificationOpened(key: String)
 
     /** Called by core after login/start and before sign-out teardown. */
+    /**
+     * Duress wipe, platform half (Rust already destroyed the keys and deleted
+     * the app's files): stop the messaging service, remove every posted
+     * notification and every SharedPreferences file, then relaunch into a
+     * fresh start. Rust ends this process right after this returns.
+     */
+    fun wipeAndRestart(): Boolean {
+        MessagingService.stop(this)
+        (getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager).cancelAll()
+        java.io.File(applicationInfo.dataDir, "shared_prefs").listFiles()?.forEach { file ->
+            deleteSharedPreferences(file.name.removeSuffix(".xml"))
+        }
+        startActivity(Intent.makeRestartActivityTask(android.content.ComponentName(this, MainActivity::class.java)))
+        return true
+    }
+
     fun setMessagingSignedIn(signedIn: Boolean) {
         runOnUiThread {
             MessagingService.setSignedIn(this, signedIn)

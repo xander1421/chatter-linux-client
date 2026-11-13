@@ -322,6 +322,34 @@ const TABLE: &[Entry] = &[
         expect: Expect::Wired,
         why: "Private-group leave (client/conversation `leave`, from Settings and \
               the sidebar row menu). Dead until 2026-10-04: a group could not be left.",
+    },    // ---- App lock + duress wipe ------------------------------------------
+    Entry {
+        symbol: "unlock_app",
+        defined_in: "chatter-core/src/client/app_lock.rs",
+        expect: Expect::Wired,
+        why: "The lock screen's only path to core (chatter-ui features/app_lock.rs), and the \
+              only caller of full_local_wipe. Lose it and the duress PIN wipes nothing.",
+    },
+    Entry {
+        symbol: "destroy_keys",
+        defined_in: "chatter-core/src/storage/local_wipe.rs",
+        expect: Expect::Wired,
+        why: "First step of the duress wipe (client/app_lock.rs full_local_wipe): the \
+              Keystore keys, keyring entry and key files. Lose it and the deleted files' \
+              bytes left on flash stay decryptable.",
+    },
+    Entry {
+        symbol: "wipe_rows_and_files",
+        defined_in: "chatter-core/src/storage/local_wipe.rs",
+        expect: Expect::Wired,
+        why: "Second step of the duress wipe: every row, then the data/cache/config dirs.",
+    },
+    Entry {
+        symbol: "set_app_lock",
+        defined_in: "chatter-core/src/services/notification_service/mod.rs",
+        expect: Expect::Wired,
+        why: "Hands the app lock to the notification service (app/core_services.rs). Lose \
+              it and notifications show sender and text while the app is locked.",
     },
 ];
 

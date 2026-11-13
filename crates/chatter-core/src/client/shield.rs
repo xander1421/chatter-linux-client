@@ -22,6 +22,8 @@ impl ChatterClient {
         // background loop (user-events stream, channel stream, recovery tickers)
         // reads/awaits this global to go quiet when backgrounded.
         crate::network::connection::set_app_visible(visible);
+        // The app lock's background timeout starts and ends here.
+        self.services.app_lock.set_visible(visible);
         let was_visible = self.chat_state().set_app_visible(visible);
         #[cfg(target_os = "android")]
         if let Some(provider) = self.services.device_inbox_provider.get() {

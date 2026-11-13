@@ -771,7 +771,10 @@ pub(crate) fn spawn_notification_listener(
                     if *approved_by_self {
                         continue;
                     }
+                    // Locked: no device name or model on the lock screen.
+                    let locked = notification_service.app_locked();
                     let body = match (device_name.as_deref(), device_info.as_deref()) {
+                        _ if locked => "A new device was just linked to your account.".to_string(),
                         (Some(name), _) if !name.is_empty() => {
                             format!("\"{}\" is now linked to your account.", name)
                         }

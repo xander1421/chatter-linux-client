@@ -685,6 +685,9 @@ pub use crate::services::voice_recording::{
 };
 
 mod account_settings;
+mod app_lock;
+pub use app_lock::AppUnlock;
+pub use crate::services::app_lock::{AppLockError, AppLockSettings, LockTimeout};
 mod ai_settings;
 mod auth_state;
 mod backup;

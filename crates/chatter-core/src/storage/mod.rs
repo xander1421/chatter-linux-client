@@ -5,6 +5,7 @@
 pub mod backup_data;
 pub mod database;
 pub mod key_store;
+pub(crate) mod local_wipe;
 #[cfg(feature = "mesh")]
 pub mod mesh_binding_store;
 #[cfg(feature = "mesh")]

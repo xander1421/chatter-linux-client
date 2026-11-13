@@ -64,6 +64,13 @@ object KeyStoreHelper {
         return cipher.doFinal(blob, IV_LEN, blob.size - IV_LEN)
     }
 
+    /** Delete `alias` (duress wipe). Absent is fine: deleteEntry ignores it. */
+    @JvmStatic
+    @Synchronized
+    fun destroy(alias: String) {
+        keyStore().deleteEntry(alias)
+    }
+
     private fun keyStore(): KeyStore = KeyStore.getInstance(ANDROID_KEY_STORE).apply { load(null) }
 
     private fun existingKey(alias: String): SecretKey? {

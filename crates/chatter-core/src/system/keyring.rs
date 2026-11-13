@@ -314,18 +314,18 @@ impl Keyring {
         Err(SystemError::Keyring("Failed to store in keyring".into()))
     }
 
-    /// Removes the database passphrase from the keyring.
-    ///
-    /// Use this during logout or account reset.
+    /// Removes the database passphrase from the keyring. An absent entry is
+    /// already removed.
     ///
     /// # Errors
     ///
-    /// Returns `SystemError::Keyring` if:
-    /// - The passphrase doesn't exist
-    /// - The keyring service is unavailable
-    /// - Access is denied
+    /// Returns `SystemError::Keyring` if the keyring service is unavailable or
+    /// access is denied.
     pub fn delete_passphrase(&self) -> Result<(), SystemError> {
-        self.entry()?.delete_credential().map_err(map_keyring_error)
+        match self.entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(map_keyring_error(e)),
+        }
     }
 
     /// Checks if a passphrase exists in the keyring or environment.
