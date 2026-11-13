@@ -74,7 +74,7 @@ echo "  static wiring lint : $([ $LINT_RC -eq 0 ] && echo PASS || echo 'FAIL (st
 echo "  chatter-ui tests   : $([ $TEST_RC -eq 0 ] && echo PASS || echo FAIL)"
 
 # Everything the lint reports as "known" is allowlisted with a written reason in
-# scripts/ui-wiring-lint.py — 3 code-preview no-ops, 1 never-rendered import,
-# 7 never-invoked callbacks. Those allowlists are the positive control: they are
+# scripts/ui-wiring-lint.py — currently 1 never-invoked callback
+# (get-user-status). Those allowlists are the positive control: they are
 # real findings the gate CAN see, held green so a NEW one stands out.
 [ $TEST_RC -eq 0 ] && [ $LINT_RC -eq 0 ] && [ $DEVGATE_RC -eq 0 ]
