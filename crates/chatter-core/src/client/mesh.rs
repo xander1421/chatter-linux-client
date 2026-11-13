@@ -698,7 +698,7 @@ impl ChatterClient {
     ///
     /// Identity keypair, retained mail, carried courier envelopes, gossip
     /// history, bridge dedup sets, every mesh message, the conversation
-    /// directory, and favourites.
+    /// directory, favourites, and the key the mesh store was sealed under.
     ///
     /// **It does not touch the chatter account**, its Signal identity, or its
     /// messages. Those are a separate identity with a separate threat model,
@@ -708,7 +708,15 @@ impl ChatterClient {
     #[cfg(feature = "mesh")]
     pub fn mesh_panic_wipe(&self) -> Result<(), crate::services::mesh::MeshError> {
         use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
-        let wiped = self.mesh().panic_wipe();
+        let mut wiped = self.mesh().panic_wipe();
+        // After the rows: with the key gone, every copy the deletes left behind
+        // (WAL frames, free pages, a backup) is unreadable too. The mesh cannot
+        // seal again this run (`identity_wiped`), and the next start generates a
+        // fresh key and clears whatever the old one sealed (`sealed_store`).
+        let db_path = self.directories().database_path();
+        if let Err(error) = crate::storage::mesh_store::MeshSealer::destroy_key(&db_path) {
+            wiped = wiped.and(Err(error.into()));
+        }
         let settings = SettingsRepository::new(self.services.database.clone());
         for key in [
             keys::MESH_NICKNAME,
