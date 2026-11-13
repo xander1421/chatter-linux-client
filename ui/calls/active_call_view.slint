@@ -27,7 +27,13 @@ component ParticipantTile inherits Rectangle {
     in property <bool> is-local: false;
     in property <bool> show-video: true;
     in property <bool> interactive: true;
+    // The front/back lens swap sits on the local self-view, not in the call
+    // bar: with full 44px device carets the bar holds seven targets, all a
+    // 320px phone fits (owner 2026-11-13).
+    in property <bool> show-camera-swap: false;
+    in property <bool> camera-swap-enabled: true;
     callback clicked();
+    callback swap-camera();
     callback video-size(string, length, length, bool);
     in property <int> video-layout-revision;
     private property <string> video-id: participant.user-id;
@@ -180,6 +186,18 @@ component ParticipantTile inherits Rectangle {
             vertical-alignment: center;
         }
     }
+
+    // Top-left: the screen-share mark owns the top-right corner.
+    if root.show-camera-swap: IconAction {
+        x: Spacing.xs;
+        y: Spacing.xs;
+        width: 44px;
+        height: 44px;
+        enabled: root.camera-swap-enabled;
+        icon: Icons.rotate-ccw;
+        label: "Switch camera";
+        clicked => { root.swap-camera(); }
+    }
 }
 
 export component ActiveCallView inherits Rectangle {
@@ -191,7 +209,7 @@ export component ActiveCallView inherits Rectangle {
     // See CallControls: phone route toggle vs desktop output picker.
     in property <bool> speaker-toggle: false;
     in property <bool> speaker-on: false;
-    // Drives the mobile-only camera-swap button in the controls.
+    // Drives the mobile-only camera-swap button on the local tile.
     in property <bool> is-mobile-platform: false;
     callback video-size(string, length, length, bool);
     in property <int> video-layout-revision;
@@ -355,6 +373,11 @@ export component ActiveCallView inherits Rectangle {
                 video-frame: source-index >= 0 && source-index == call-data.participants.length - 1 ? local-video-frame
                     : source-index >= 0 && remote-video-frames.length > source-index ? remote-video-frames[source-index] : local-video-frame;
                 is-local: source-index == call-data.participants.length - 1;
+                // Mobile + camera on: offer the front/back lens swap.
+                show-camera-swap: self.is-local && root.is-mobile-platform && root.is-video-enabled
+                    && self.opacity > 0.95;
+                camera-swap-enabled: root.call-data.is-connected;
+                swap-camera => { root.swap-camera(); }
                 video-layout-revision: root.video-layout-revision;
                 video-size(id, width, height, screen) => { root.video-size(id, width, height, screen); }
                 clicked => {
@@ -601,8 +624,8 @@ export component ActiveCallView inherits Rectangle {
             padding-bottom: Spacing.sm;
 
             CallControls {
-                // Seven separate targets fit a 320px phone in one row.
-                width: 308px;
+                // Seven separate 44px targets fill a 320px phone's row.
+                width: 7 * 44px;
                 height: controls-height;
                 button-size: root.button-size;
                 is-connected: root.call-data.is-connected;
@@ -610,15 +633,12 @@ export component ActiveCallView inherits Rectangle {
                 is-video-enabled: is-video-enabled;
                 is-screen-sharing: is-screen-sharing;
                 is-video-call: call-data.is-video-call;
-                // Mobile + camera on: offer the front/back lens swap.
-                show-camera-swap: root.is-mobile-platform && is-video-enabled;
                 speaker-toggle: root.speaker-toggle;
                 speaker-on: root.speaker-on;
                 toggle-speaker => { root.toggle-speaker(); }
 
                 toggle-mute => { root.toggle-mute(); }
                 toggle-video => { root.toggle-video(); }
-                swap-camera => { root.swap-camera(); }
                 toggle-screen-share => { root.toggle-screen-share(); }
                 end-call => { root.end-call(); }
                 show-audio-input => { root.show-audio-input(); }

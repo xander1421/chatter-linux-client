@@ -81,11 +81,18 @@ fn call_clock_is_below_status_and_icon_with_channel_identity_only() {
                     _ if own => "Outgoing call",
                     _ => "Incoming call",
                 };
-                // The bubble itself is an accessible button carrying the same
-                // label (77816701); the status is the element that is not.
-                let status_el = visible(&w, label)
-                    .into_iter()
-                    .find(|e| e.accessible_role() != Some(testing::AccessibleRole::Button))
+                // Since 77816701 the bubble is the accessible button carrying
+                // this label and the status Text is `accessible-role: none`,
+                // out of the accessibility tree: find the status by its id,
+                // and the label on the button that speaks it.
+                assert!(
+                    visible(&w, label)
+                        .iter()
+                        .any(|e| e.accessible_role() == Some(testing::AccessibleRole::Button)),
+                    "the call card does not speak {label:?}"
+                );
+                let status_el = testing::ElementHandle::find_by_element_id(&w, "MessageCall::call-status")
+                    .find(|e| e.size().height > 0.0 && e.size().width > 0.0)
                     .expect("call status");
                 let cp = clock.absolute_position();
                 let sp = status_el.absolute_position();
@@ -114,8 +121,10 @@ fn call_clock_is_below_status_and_icon_with_channel_identity_only() {
                 }
                 let identity =
                     kind == ConversationKind::Channel && !own && !continuation && show_sender;
+                // The avatar is a profile button named for its action since
+                // 77816701 (it overrides Avatar's own "Avatar for CF").
                 assert_eq!(
-                    !visible(&w, "Avatar for CF").is_empty(),
+                    !visible(&w, "View profile of Caller Fixture").is_empty(),
                     identity,
                     "avatar: {kind:?}, own={own}, continuation={continuation}, show={show_sender}, status={status}"
                 );

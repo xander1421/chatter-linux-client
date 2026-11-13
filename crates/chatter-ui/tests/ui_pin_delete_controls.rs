@@ -15,7 +15,9 @@ use std::{
 fn settle(w: &MainWindow) {
     w.window().set_size(slint::LogicalSize::new(412.0, 891.0));
     w.show().unwrap();
-    slint::Timer::single_shot(std::time::Duration::from_millis(50), || {
+    // Past the slowest transition at the default 1x animation speed
+    // (motion-emphasized 480ms since 15919403; 50ms covered it at 4x).
+    slint::Timer::single_shot(std::time::Duration::from_millis(550), || {
         slint::quit_event_loop().unwrap()
     });
     slint::run_event_loop().unwrap();
@@ -44,6 +46,9 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
     testing::init_integration_test_with_system_time();
     let w = MainWindow::new().unwrap();
     w.set_current_view("main".into());
+    // The view handoff's window-sized tap blocker (app_view_transition.slint)
+    // lasts motion-standard + 40ms; settle past it before the first tap.
+    settle(&w);
     w.set_is_mobile_platform(true);
     w.global::<chatter_ui::SidebarPane>()
         .set_mobile_show_chat(true);

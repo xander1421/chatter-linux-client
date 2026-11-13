@@ -52,8 +52,8 @@ export component SidebarFooter inherits GlassSurface {
             height: root.collapsed
                 ? root.rail-button-count * root.rail-icon-size
                     + (root.rail-button-count - 1) * 8px + 16px
-                    // The 13px divider between the tabs and the tools, and its gap.
-                    + 13px + 8px
+                    // The divider slot between the tabs and the tools, and its gap.
+                    + Spacing.md + 8px
                 : 44px;
 
             // Top edge only — the one side that separates this strip from the
@@ -309,7 +309,7 @@ export component SidebarFooter inherits GlassSurface {
                 // block; a hairline plus extra breathing room lets the eye
                 // parse two small groups instead, without hiding anything.
                 Rectangle {
-                    height: 13px;
+                    height: Spacing.md;
                     Rectangle {
                         y: parent.height / 2;
                         width: root.rail-slot-size * 0.6;

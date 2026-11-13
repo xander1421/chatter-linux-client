@@ -11,6 +11,10 @@ export component IconAction inherits Rectangle {
     in property <bool> enabled: true;
     in property <length> size: Spacing.button-height;
     callback clicked();
+    // `focus()` on the action reaches its key scope, and a container that
+    // tracks which control holds focus (a menu row) can read it here.
+    forward-focus: keys;
+    out property <bool> key-focused: keys.has-focus;
 
     width: max(Spacing.touch-target-min, root.size);
     height: self.width;

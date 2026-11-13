@@ -54,6 +54,16 @@ fn scroll_to_label(w: &MainWindow, label: &str) {
     panic!("account section did not expose {label} after bounded scrolling");
 }
 
+/// The view handoff (app_view_transition.slint) holds a window-sized
+/// stray-tap blocker for motion-standard + 40ms after `current-view` changes:
+/// 360ms at the default animation speed since 15919403 (120ms before).
+fn finish_view_handoff(w: &MainWindow) {
+    slint::Timer::single_shot(std::time::Duration::from_millis(500), || {
+        slint::quit_event_loop().unwrap();
+    });
+    w.run().unwrap();
+}
+
 #[test]
 fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_search() {
     assert!(
@@ -128,6 +138,7 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
         .set_mobile_show_chat(true);
     w.window().set_size(slint::LogicalSize::new(360.0, 740.0));
     w.show().unwrap();
+    finish_view_handoff(&w);
     w.set_toast_visible(false);
     w.global::<chatter_ui::ChatPane>()
         .set_composer_gif_picker_visible(true);
