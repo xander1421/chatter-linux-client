@@ -608,6 +608,12 @@ export component MessageList inherits Rectangle {
                 if (self.unread-tail-in-view) {
                     root.seen-opening-tail = true;
                     root.unread-count = 0;
+                    // The same conclusion `newest-visible` draws (a08304d2).
+                    // Zeroing the count stops the tail Timer that calls it, so
+                    // when this fires first the open stayed "away from the
+                    // bottom": the next incoming message was not followed and
+                    // put "1 new message" back over a fully visible chat.
+                    root.is-at-bottom = true;
                 }
             }
 
