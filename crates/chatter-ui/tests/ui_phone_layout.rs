@@ -22,6 +22,35 @@ use slint::{ComponentHandle, Model};
 const PHONE_W: f32 = 412.0;
 const PHONE_H: f32 = 891.0;
 
+slint::slint! {
+    // A mounted TextInput for the mid-word wrap fixture's prefix.
+    export component WrapProbe inherits Window {
+        in property <string> probe-text;
+        in property <length> probe-width;
+        in property <length> probe-font-size;
+        in property <string> probe-font-family;
+        in property <int> probe-font-weight;
+        in property <bool> probe-font-italic;
+        in property <length> probe-letter-spacing;
+        width: 2000px;
+        height: 2000px;
+        TextInput {
+            x: 0px;
+            y: 0px;
+            width: root.probe-width;
+            height: self.preferred-height;
+            text: root.probe-text;
+            font-size: root.probe-font-size;
+            font-family: root.probe-font-family;
+            font-weight: root.probe-font-weight;
+            font-italic: root.probe-font-italic;
+            letter-spacing: root.probe-letter-spacing;
+            wrap: word-wrap;
+            single-line: false;
+        }
+    }
+}
+
 fn pump(w: &MainWindow) {
     w.window()
         .set_size(slint::LogicalSize::new(PHONE_W, PHONE_H));
@@ -919,28 +948,57 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         )
     );
     let mut prefix_wrap_differs = false;
+    let wrap_probe = WrapProbe::new().unwrap();
     for width in (280..=440).step_by(8) {
         pump_size(&w, width as f32, 460.0);
         assert_native_caret_visible(&w);
         let prefix = format!("{}{}", &body[..insertion as usize], middle);
-        let probe = Box::pin(i_slint_core::items::TextInput::default());
-        let probe = probe.as_ref();
-        probe.text.set(prefix.clone().into());
-        probe.width.set(input.width());
-        probe.height.set(input.height());
-        probe.font_family.set(input.font_family());
-        probe.font_size.set(input.font_size());
-        probe.font_weight.set(input.font_weight());
-        probe.font_italic.set(input.font_italic());
-        probe.letter_spacing.set(input.letter_spacing());
-        probe.wrap.set(input.wrap());
-        probe.single_line.set(false);
-        probe.text_cursor_width.set(input.text_cursor_width());
-        let prefix_rect =
-            window
+        // A mounted TextInput of the same width and font holds the prefix
+        // alone. A detached probe borrowing the composer's item no longer
+        // measures its own text under the 1.18.1 fork (7a8e9d5b caches
+        // paragraphs per item). Each caret is read against its own first-line
+        // caret, so the two windows' frames cancel out.
+        // The resolved font, window defaults included (MainWindow's
+        // default-font-family).
+        let font = i_slint_core::item_rendering::HasFont::font_request(input, &item);
+        wrap_probe.set_probe_text(prefix.clone().into());
+        wrap_probe.set_probe_width(input.width().get());
+        wrap_probe.set_probe_font_size(font.pixel_size.expect("composer font size").get());
+        wrap_probe.set_probe_font_family(font.family.unwrap_or_default());
+        wrap_probe.set_probe_font_weight(font.weight.unwrap_or_default());
+        wrap_probe.set_probe_font_italic(font.italic);
+        wrap_probe.set_probe_letter_spacing(font.letter_spacing.map_or(0.0, |l| l.get()));
+        let probe_item = i_slint_core::window::WindowInner::from_pub(wrap_probe.window())
+            .window_item_rc()
+            .unwrap()
+            .visit_descendants(|item| {
+                if item.downcast::<i_slint_core::items::TextInput>().is_some() {
+                    std::ops::ControlFlow::Break(item.clone())
+                } else {
+                    std::ops::ControlFlow::Continue(())
+                }
+            })
+            .expect("probe TextInput");
+        let probe = probe_item.downcast::<i_slint_core::items::TextInput>().unwrap();
+        let probe = probe.as_pin_ref();
+        assert_eq!(probe.text().as_str(), prefix);
+        let caret = |item: &i_slint_core::item_tree::ItemRc,
+                     text_input: std::pin::Pin<&i_slint_core::items::TextInput>,
+                     offset| {
+            item.window_adapter()
+                .unwrap()
                 .renderer()
-                .text_input_cursor_rect_for_byte_offset(probe, &item, prefix.len(), i_slint_core::items::TextCursorAffinity::default());
-        let full_rect = input.visual_cursor_rect(&window, &item);
+                .text_input_cursor_rect_for_byte_offset(
+                    text_input,
+                    item,
+                    offset,
+                    i_slint_core::items::TextCursorAffinity::default(),
+                )
+        };
+        let mut prefix_rect = caret(&probe_item, probe, prefix.len());
+        prefix_rect.origin.y -= caret(&probe_item, probe, 0).origin.y;
+        let mut full_rect = input.visual_cursor_rect(&window, &item);
+        full_rect.origin.y -= caret(&item, input, 0).origin.y;
         if full_rect.origin.y > prefix_rect.origin.y + full_rect.size.height * 0.5 {
             // Equal caret metrics and a leftward move prove an actual line
             // wrap, rather than an origin shift from a taller fallback font.
@@ -1038,11 +1096,16 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // The recording panel still owns the shell and its controls; ordinary
     // input is disabled without replacing it or consuming the draft.
     let recording = w.global::<chatter_ui::VoiceRecording>();
+    // A recording belongs to one composer since 5349ab7c (main or thread).
+    recording.set_owner("main".into());
     recording.set_active(true);
     pump_size(&w, PHONE_W, 460.0);
-    let panel = testing::ElementHandle::find_by_element_id(&w, "MessageComposer::recording-panel")
-        .find(|e| e.size().height > 0.0)
-        .unwrap();
+    // Its own ComposerRecordingPanel since e1dde46a.
+    let panel = testing::ElementHandle::find_by_element_type_name(&w, "ComposerRecordingPanel")
+        .find(|e| {
+            e.type_name().is_some_and(|t| t == "ComposerRecordingPanel") && e.size().height > 0.0
+        })
+        .expect("recording panel");
     let shell = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
         .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
         .unwrap();
@@ -1368,6 +1431,22 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
             })
             .expect("focused native drawer search")
     };
+    // The drawer moves over motion time at the 1x default speed (15919403);
+    // under this system-time debug backend one 200ms pump can land mid-way.
+    // Read it once it has stopped moving.
+    let settled_drawer = |width: f32, height: f32| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut last = rect(&drawer_element("ChatLayout::picker-drawer"));
+        loop {
+            pump_size(w, width, height);
+            let now = rect(&drawer_element("ChatLayout::picker-drawer"));
+            if now == last {
+                return now;
+            }
+            assert!(std::time::Instant::now() < deadline, "picker drawer never settled");
+            last = now;
+        }
+    };
     // Search owns a visible drawer ABOVE the actual IME. Exercise the real
     // search input and tab callbacks; a zero-height clipped picker cannot pass.
     for (width, height, ime) in [
@@ -1388,7 +1467,7 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         w.global::<chatter_ui::ChatPane>()
             .set_composer_gif_picker_search("".into());
         pump_size(w, width, height);
-        let baseline = rect(&drawer_element("ChatLayout::picker-drawer"));
+        let baseline = settled_drawer(width, height);
         click_element(w, "Search emoji and GIFs");
         let search_item = focused_search();
         // Focus alone, without actual IME, must keep the bottom baseline.
@@ -1481,7 +1560,7 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         let first_gif = gif_results.row_data(0).expect("fixture GIF result");
         keyboard(0.0);
         pump_size(w, width, height);
-        let closed = rect(&drawer_element("ChatLayout::picker-drawer"));
+        let closed = settled_drawer(width, height);
         assert!(
             (closed.1 - baseline.1).abs() < 0.5 && (closed.3 - baseline.3).abs() < 0.5,
             "keyboard close must move DOWN to original baseline despite retained focus"
