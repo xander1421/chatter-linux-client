@@ -1,3 +1,4 @@
+import { Spacing } from "theme/spacing.slint";
 import { Colors } from "theme/colors.slint";
 import { Typography } from "theme/typography.slint";
 import { Button } from "components/button.slint";
@@ -17,10 +18,10 @@ export component StartupErrorWindow inherits Window {
     background: Colors.background;
 
     VerticalLayout {
-        padding-left: 24px;
-        padding-right: 24px;
-        padding-top: root.safe-area-insets.top + 24px;
-        padding-bottom: root.safe-area-insets.bottom + 24px;
+        padding-left: Spacing.xl;
+        padding-right: Spacing.xl;
+        padding-top: root.safe-area-insets.top + Spacing.xl;
+        padding-bottom: root.safe-area-insets.bottom + Spacing.xl;
         spacing: 20px;
         alignment: center;
 

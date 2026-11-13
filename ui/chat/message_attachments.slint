@@ -70,7 +70,7 @@ export component MessageAttachments inherits VerticalLayout {
             width: is-last-odd ? width : side, height: side };
     }
 
-    spacing: root.edge-to-edge ? 0px : Spacing.sm;
+    spacing: root.edge-to-edge ? Spacing.none : Spacing.sm;
 
     if root.album-count >= 2: album := Rectangle {
         width: root.media-width;
@@ -207,7 +207,7 @@ export component MessageAttachments inherits VerticalLayout {
 
     for index in root.standalone-attachment-indices: HorizontalLayout {
         property <MessageAttachmentData> attachment: root.attachments[index];
-        padding: root.edge-to-edge && root.album-count >= 2 ? Spacing.sm : 0px;
+        padding: root.edge-to-edge && root.album-count >= 2 ? Spacing.sm : Spacing.none;
         // Let the media set the bubble's preferred width. The
         // row may grow with a wider caption, where image and
         // video attachments stay centered.
