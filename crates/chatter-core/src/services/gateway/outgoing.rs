@@ -28,7 +28,7 @@ use crate::services::anon_dm::{AnonDmError, AnonDmService};
 use crate::services::anon_group::{AnonGroupError, AnonGroupService};
 use crate::services::attachment::AttachmentError;
 use crate::services::message::{MessageError, MessageService};
-use crate::services::user::{UserError, UserService};
+use crate::services::user::UserError;
 
 // =============================================================================
 // Intent
@@ -313,7 +313,6 @@ pub async fn route_outgoing(
 /// Services needed by the outgoing router.
 pub struct OutgoingServices<'a> {
     pub message_service: &'a MessageService,
-    pub user_service: Option<&'a UserService>,
     pub group_fanout: Option<&'a GroupFanout>,
     pub anon_dm_service: Option<&'a AnonDmService>,
     pub anon_group_service: Option<&'a AnonGroupService>,
@@ -322,7 +321,6 @@ pub struct OutgoingServices<'a> {
 /// Owned variant of [`OutgoingServices`] for use across await points.
 pub struct OwnedOutgoingServices {
     pub message_service: Arc<MessageService>,
-    pub user_service: Option<Arc<UserService>>,
     pub group_fanout: Option<Arc<GroupFanout>>,
     pub anon_dm_service: Option<Arc<AnonDmService>>,
     pub anon_group_service: Option<Arc<AnonGroupService>>,
@@ -332,7 +330,6 @@ impl OwnedOutgoingServices {
     fn as_borrowed(&self) -> OutgoingServices<'_> {
         OutgoingServices {
             message_service: &self.message_service,
-            user_service: self.user_service.as_deref(),
             group_fanout: self.group_fanout.as_deref(),
             anon_dm_service: self.anon_dm_service.as_deref(),
             anon_group_service: self.anon_group_service.as_deref(),

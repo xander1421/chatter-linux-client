@@ -323,7 +323,6 @@ impl ChatterClient {
         .map_err(SendError::before_submission)?;
         let services = OwnedOutgoingServices {
             message_service: self.messages().clone(),
-            user_service: Some(self.users().clone()),
             group_fanout: self.group_fanout().get().cloned(),
             anon_dm_service: Some(self.anon_dms().clone()),
             anon_group_service: Some(self.anon_groups().clone()),
