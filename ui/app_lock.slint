@@ -62,11 +62,14 @@ export component LockScreen inherits Rectangle {
             font-weight: Typography.semibold;
         }
 
+        // The error takes the subtitle's place: below the button it sat
+        // under the on-screen keyboard and the wrong PIN showed no text.
         Text {
             horizontal-alignment: center;
-            text: "Enter your app lock PIN";
-            color: Colors.text-muted;
+            text: AppLockPane.error != "" ? AppLockPane.error : "Enter your app lock PIN";
+            color: AppLockPane.error != "" ? Colors.error : Colors.text-muted;
             font-size: Typography.sm;
+            wrap: word-wrap;
         }
 
         HorizontalLayout {
@@ -97,13 +100,6 @@ export component LockScreen inherits Rectangle {
                     clicked => { AppLockPane.unlock(AppLockPane.pin); }
                 }
 
-                if AppLockPane.error != "": Text {
-                    horizontal-alignment: center;
-                    text: AppLockPane.error;
-                    color: Colors.error;
-                    font-size: Typography.sm;
-                    wrap: word-wrap;
-                }
             }
         }
     }
