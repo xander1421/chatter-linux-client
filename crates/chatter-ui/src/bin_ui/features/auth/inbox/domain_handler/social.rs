@@ -482,7 +482,8 @@ pub(super) fn handle_user_profile_updated(
     // is built inside the event-loop closure below, for the own-profile
     // surfaces, the open header and the profile sheet.
     let avatar_decoded: Option<(u32, u32, Vec<u8>)> = avatar_bytes.as_ref().and_then(|b| {
-        image::load_from_memory(b).ok().map(|img| {
+        // Synced bytes: capped like every other received image.
+        chatter_core::media::ImageProcessor::decode_untrusted(b).ok().map(|img| {
             let rgba = img.to_rgba8();
             let (aw, ah) = rgba.dimensions();
             (aw, ah, rgba.into_raw())
