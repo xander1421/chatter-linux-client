@@ -18,7 +18,7 @@ msgstr "En pause dans Shield"
 
 #: crates/chatter-core/src/client/activity.rs:30
 msgid "Configured, not registered"
-msgstr "Configuré, non enregistré"
+msgstr "Configurées, non enregistrées"
 
 #: crates/chatter-core/src/client/auth.rs:20
 msgid "Wrong password."
@@ -63,7 +63,7 @@ msgid ""
 "This device has no verified member list for this channel yet, so it does not "
 "know who may receive your messages. Sending resumes once the channel's "
 "signed membership log verifies."
-msgstr "Cet appareil n'a pas encore de liste de membres vérifiée pour ce canal, il ne sait donc pas qui peut recevoir vos messages. L'envoi reprend une fois le journal d'adhésion signé du canal vérifié."
+msgstr "Cet appareil n'a pas encore de liste de membres vérifiée pour ce canal et ne sait donc pas qui peut recevoir vos messages. L'envoi reprend une fois vérifié le journal signé des adhésions au canal."
 
 #: crates/chatter-core/src/client/membership.rs:179
 msgid "Membership could not be verified — sending is paused"
@@ -75,7 +75,7 @@ msgid ""
 "make it, or did not match the list this device holds. It was not applied, "
 "and nobody it named receives your messages. Sending resumes when a later "
 "change verifies. {}"
-msgstr "Une modification de la liste des membres de ce canal n'a pas été signée par une personne autorisée, ou ne correspond pas à la liste de cet appareil. Elle n'a pas été appliquée, et personne parmi les noms indiqués ne reçoit vos messages. L'envoi reprend lorsqu'une modification ultérieure est vérifiée. {}"
+msgstr "Une modification de la liste des membres de ce canal n'a pas été signée par une personne autorisée, ou ne correspond pas à la liste de cet appareil. Elle n'a pas été appliquée, et aucune des personnes qu'elle désigne ne reçoit vos messages. L'envoi reprend lorsqu'une modification ultérieure est vérifiée. {}"
 
 #: crates/chatter-core/src/client/membership.rs:190
 msgid "The server is showing members different member lists"
@@ -88,15 +88,15 @@ msgid ""
 "until you resume it. Compare the state code below with another member over a "
 "channel you trust first: resuming sends only to the members this device "
 "verified, and a new mismatch pauses it again. {}"
-msgstr "Un autre membre, ou le journal du serveur, a une liste de membres différente pour une révision déjà vérifiée par cet appareil. L'envoi reste en pause pour ce canal jusqu'à ce que vous le repreniez. Comparez d'abord le code d'état ci-dessous avec un autre membre, sur un canal de confiance : la reprise n'envoie qu'aux membres vérifiés par cet appareil, et un nouvel écart remet l'envoi en pause. {}"
+msgstr "Un autre membre, ou le journal du serveur, a une liste de membres différente pour une révision déjà vérifiée par cet appareil. L'envoi reste en pause pour ce canal jusqu'à ce que vous le repreniez. Comparez d'abord le code d'état ci-dessous avec un autre membre, par un moyen de communication de confiance : à la reprise, vos messages ne sont envoyés qu'aux membres vérifiés par cet appareil, et un nouvel écart remet l'envoi en pause. {}"
 
 #: crates/chatter-core/src/client/membership.rs:211
 msgid "Public — anyone can join and read"
-msgstr "Public — tout le monde peut rejoindre et lire"
+msgstr "Public — tout le monde peut rejoindre le canal et lire les messages"
 
 #: crates/chatter-core/src/client/membership.rs:237
 msgid "Invite only — people join through an invitation or a join link."
-msgstr "Sur invitation — on rejoint par une invitation ou un lien d'invitation."
+msgstr "Sur invitation — l'accès se fait par une invitation ou un lien d'invitation."
 
 #: crates/chatter-core/src/client/membership.rs:244
 msgid "Only the owner creates and revokes join links."
@@ -254,7 +254,7 @@ msgstr "Le serveur indique que cela vient de votre contact, mais rien ne le prou
 
 #: crates/chatter-core/src/client/notification.rs:735
 msgid "Reacted {}"
-msgstr "A réagi {}"
+msgstr "A réagi avec {}"
 
 #: crates/chatter-core/src/client/notification.rs:781
 #: crates/chatter-core/src/client/notification.rs:789
@@ -477,11 +477,11 @@ msgstr "Vous ne pouvez pas envoyer de messages dans ce canal tant que la publica
 #: crates/chatter-core/src/domain/channel.rs:360
 #: crates/chatter-core/src/domain/channel.rs:380
 msgid "You can't send messages in this channel while muted until {}"
-msgstr "Vous ne pouvez pas envoyer de messages dans ce canal tant que la publication vous est interdite, jusqu'à {}"
+msgstr "Vous ne pouvez pas publier dans ce canal jusqu'à {}"
 
 #: crates/chatter-core/src/domain/channel.rs:365
 msgid "You can't send messages in this channel while muted until tomorrow {}"
-msgstr "Vous ne pouvez pas envoyer de messages dans ce canal tant que la publication vous est interdite, jusqu'à demain {}"
+msgstr "Vous ne pouvez pas publier dans ce canal jusqu'à demain à {}"
 
 #: crates/chatter-core/src/domain/channel.rs:372
 #: crates/chatter-core/src/util/time.rs:76
@@ -676,15 +676,15 @@ msgstr "{} a banni un membre"
 
 #: crates/chatter-core/src/domain/message/system.rs:188
 msgid "{} made {} the owner"
-msgstr "{} a rendu {} propriétaire"
+msgstr "{} a désigné {} comme propriétaire"
 
 #: crates/chatter-core/src/domain/message/system.rs:189
 msgid "{} made a member the owner"
-msgstr "{} a rendu un membre propriétaire"
+msgstr "{} a désigné un membre comme propriétaire"
 
 #: crates/chatter-core/src/domain/message/system.rs:191
 msgid "{} made you the owner"
-msgstr "{} vous a rendu propriétaire"
+msgstr "{} vous a désigné comme propriétaire"
 
 #: crates/chatter-core/src/domain/message/system.rs:192
 msgid "{} removed you"
@@ -721,13 +721,13 @@ msgid ""
 "{} may have changed their safety number, so the message could not be read. "
 "The server says it came from them, but nothing proved that. Compare safety "
 "numbers over another channel before you accept."
-msgstr "{} a peut-être changé de numéro de sécurité, le message n'a donc pas pu être lu. Le serveur indique que cela vient de cette personne, mais rien ne le prouve. Comparez les numéros de sécurité par un autre canal avant d'accepter."
+msgstr "{} a peut-être changé de numéro de sécurité, le message n'a donc pas pu être lu. Le serveur indique que cela vient de cette personne, mais rien ne le prouve. Comparez les numéros de sécurité par un autre moyen de communication avant d'accepter."
 
 #: crates/chatter-core/src/domain/message/system.rs:216
 msgid ""
 "{} did not get your message \"{}\" — it could not be sent after several "
 "tries. Send it again if it mattered."
-msgstr "{} n'a pas reçu votre message « {} » — l'envoi a échoué après plusieurs essais. Renvoyez-le s'il comptait."
+msgstr "{} n'a pas reçu votre message « {} » — l'envoi a échoué après plusieurs essais. Renvoyez-le s'il était important."
 
 #: crates/chatter-core/src/domain/message/system.rs:222
 #: crates/chatter-core/src/ui/message_row.rs:270
@@ -788,15 +788,15 @@ msgstr "a banni un membre"
 
 #: crates/chatter-core/src/domain/message/system.rs:258
 msgid "made {} the owner"
-msgstr "a rendu {} propriétaire"
+msgstr "a désigné {} comme propriétaire"
 
 #: crates/chatter-core/src/domain/message/system.rs:259
 msgid "made a member the owner"
-msgstr "a rendu un membre propriétaire"
+msgstr "a désigné un membre comme propriétaire"
 
 #: crates/chatter-core/src/domain/message/system.rs:261
 msgid "made you the owner"
-msgstr "vous a rendu propriétaire"
+msgstr "vous a désigné comme propriétaire"
 
 #: crates/chatter-core/src/domain/message/system.rs:262
 msgid "removed you"
@@ -833,13 +833,13 @@ msgid ""
 "may have changed their safety number, so the message could not be read. The "
 "server says it came from them, but nothing proved that. Compare safety "
 "numbers over another channel before you accept."
-msgstr "a peut-être changé de numéro de sécurité, le message n'a donc pas pu être lu. Le serveur indique que cela vient de cette personne, mais rien ne le prouve. Comparez les numéros de sécurité par un autre canal avant d'accepter."
+msgstr "a peut-être changé de numéro de sécurité, le message n'a donc pas pu être lu. Le serveur indique que cela vient de cette personne, mais rien ne le prouve. Comparez les numéros de sécurité par un autre moyen de communication avant d'accepter."
 
 #: crates/chatter-core/src/domain/message/system.rs:287
 msgid ""
 "did not get your message \"{}\" — it could not be sent after several tries. "
 "Send it again if it mattered."
-msgstr "n'a pas reçu votre message « {} » — l'envoi a échoué après plusieurs essais. Renvoyez-le s'il comptait."
+msgstr "n'a pas reçu votre message « {} » — l'envoi a échoué après plusieurs essais. Renvoyez-le s'il était important."
 
 #: crates/chatter-core/src/domain/message/system.rs:294
 msgid "turned off disappearing messages"
@@ -851,7 +851,7 @@ msgstr "a réglé les messages éphémères sur {}"
 
 #: crates/chatter-core/src/services/activity_service.rs:120
 msgid "now"
-msgstr "maintenant"
+msgstr "maint."
 
 #: crates/chatter-core/src/services/activity_service.rs:122
 #: crates/chatter-core/src/services/disappearing.rs:79
@@ -1009,7 +1009,7 @@ msgstr "Les messages disparaissent {} après la lecture"
 
 #: crates/chatter-core/src/services/disappearing.rs:148
 msgid "{} · enabled for {} · {} left"
-msgstr "{} · activé pendant {} · {} restant"
+msgstr "{} · activation pendant {} · temps restant : {}"
 
 #: crates/chatter-core/src/services/disappearing.rs:76
 msgid "{}w"
@@ -1047,7 +1047,7 @@ msgstr "La distribution d'un message précédent n'est pas confirmée. Ce nouvea
 
 #: crates/chatter-core/src/services/gateway/shared.rs:238
 msgid "This send attempt was already confirmed. It was not sent again."
-msgstr "Cette tentative d'envoi était déjà confirmée. Elle n'a pas été renvoyée."
+msgstr "Cette tentative d'envoi était déjà confirmée. Le message n'a pas été renvoyé."
 
 #: crates/chatter-core/src/services/gateway/shared.rs:241
 msgid "Action not supported for this channel type"
@@ -1123,11 +1123,11 @@ msgstr "Mot de passe ou PIN incorrect."
 
 #: crates/chatter-core/src/services/link_device_service/types.rs:34
 msgid "That isn't a device link. Copy the whole link from the new device."
-msgstr "Ce n'est pas un lien d'appareil. Copiez le lien en entier depuis le nouvel appareil."
+msgstr "Ce n'est pas un lien d'association d'appareil. Copiez le lien en entier depuis le nouvel appareil."
 
 #: crates/chatter-core/src/services/link_device_service/types.rs:38
 msgid "This link expired. Generate a new QR on the new device."
-msgstr "Ce lien a expiré. Générez un nouveau QR sur le nouvel appareil."
+msgstr "Ce lien a expiré. Générez un nouveau code QR sur le nouvel appareil."
 
 #: crates/chatter-core/src/services/link_device_service/types.rs:42
 msgid "Couldn't link the device. Try again."
@@ -1143,7 +1143,7 @@ msgstr "Shield n'est pas encore configuré sur cet appareil"
 
 #: crates/chatter-core/src/services/link_device_service/types.rs:79
 msgid "Enter a PIN with 8–64 printable ASCII characters"
-msgstr "Saisissez un PIN de 8–64 caractères ASCII imprimables"
+msgstr "Saisissez un PIN de 8 à 64 caractères ASCII imprimables"
 
 #: crates/chatter-core/src/services/link_device_service/types.rs:82
 msgid "Too many PIN attempts. Wait before trying again"
@@ -1234,7 +1234,7 @@ msgstr "Appel"
 
 #: crates/chatter-core/src/services/server_records.rs:58
 msgid "Now"
-msgstr "Maintenant"
+msgstr "Maint."
 
 #: crates/chatter-core/src/services/session_service.rs:143
 msgid ""
@@ -1447,7 +1447,7 @@ msgstr "Impossible d'envoyer le message"
 
 #: crates/chatter-core/src/ui/message_row.rs:212
 msgid "Secure channel setup timed out. Tap Retry"
-msgstr "La configuration du canal sécurisé a expiré. Appuyez sur Réessayer"
+msgstr "Le délai de configuration du canal sécurisé est dépassé. Appuyez sur Réessayer"
 
 #: crates/chatter-core/src/ui/message_row.rs:214
 msgid "Waiting for connection"
@@ -1585,7 +1585,7 @@ msgstr "PIN incorrect. Réessayez dans {} minutes."
 
 #: crates/chatter-ui/src/bin_ui/features/app_lock.rs:202
 msgid "Wrong PIN. Try again in {} seconds."
-msgstr "PIN incorrect. Réessayez dans {} secondes."
+msgstr "PIN incorrect. Réessayez dans {} s."
 
 #: crates/chatter-ui/src/bin_ui/features/app_lock.rs:209
 msgid "Try again in {} minutes."
@@ -1593,7 +1593,7 @@ msgstr "Réessayez dans {} minutes."
 
 #: crates/chatter-ui/src/bin_ui/features/app_lock.rs:211
 msgid "Try again in {} seconds."
-msgstr "Réessayez dans {} secondes."
+msgstr "Réessayez dans {} s."
 
 #: crates/chatter-ui/src/bin_ui/features/app_lock.rs:73
 msgid "App lock is on."
@@ -1736,7 +1736,7 @@ msgstr "Génération du code QR…"
 msgid ""
 "Verification code: {}\n"
 "Check your other device shows the same code, then approve there."
-msgstr "Code de vérification : {}\nVérifiez que votre autre appareil affiche le même code, puis approuvez-le là-bas."
+msgstr "Code de vérification : {}\nVérifiez que votre autre appareil affiche le même code, puis confirmez l'association sur l'autre appareil."
 
 #: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:85
 msgid "Approved! Setting up this device…"
@@ -1764,13 +1764,13 @@ msgid ""
 "Account recovered successfully! {} recovery codes remaining. Your previous "
 "PIN-based backup was invalidated by this recovery — set up a new backup from "
 "Settings after signing in. Please sign in with your new credentials."
-msgstr "Compte récupéré ! Il reste {} codes de récupération. Votre précédente sauvegarde par PIN a été invalidée par cette récupération — configurez une nouvelle sauvegarde dans Paramètres après la connexion. Connectez-vous avec vos nouveaux identifiants."
+msgstr "Compte récupéré ! Codes de récupération restants : {}. Votre précédente sauvegarde par PIN a été invalidée par cette récupération — configurez une nouvelle sauvegarde dans Paramètres après la connexion. Connectez-vous avec vos nouveaux identifiants."
 
 #: crates/chatter-ui/src/bin_ui/features/auth/recovery.rs:50
 msgid ""
 "Account recovered successfully! {} recovery codes remaining. Please sign in "
 "with your new credentials."
-msgstr "Compte récupéré ! Il reste {} codes de récupération. Connectez-vous avec vos nouveaux identifiants."
+msgstr "Compte récupéré ! Codes de récupération restants : {}. Connectez-vous avec vos nouveaux identifiants."
 
 #: crates/chatter-ui/src/bin_ui/features/auth/register.rs:271
 msgid ""
@@ -1957,7 +1957,7 @@ msgstr "Échec de l'appel — connexion impossible"
 
 #: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:201
 msgid "Calls need microphone access — allow it to call."
-msgstr "Les appels ont besoin du micro — autorisez-le pour appeler."
+msgstr "Autorisez l'accès au micro pour passer des appels."
 
 #: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:213
 msgid "Your session changed. Start the call again."
@@ -2032,7 +2032,7 @@ msgstr "Impossible de supprimer le message pour tout le monde : {}"
 
 #: crates/chatter-ui/src/bin_ui/features/chat/disappearing.rs:281
 msgid "Enter a whole number of minutes from 1 to 525600."
-msgstr "Saisissez un nombre entier de minutes entre 1 et 525600."
+msgstr "Saisissez un nombre entier de minutes entre 1 et 525 600."
 
 #: crates/chatter-ui/src/bin_ui/features/chat/disappearing.rs:297
 msgid "Timer changed here. Your friend receives it with your next message."
@@ -2245,7 +2245,7 @@ msgstr "Enregistrer le fichier de code"
 
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/code_preview.rs:40
 msgid "Copied {} lines"
-msgstr "{} lignes copiées"
+msgstr "Lignes copiées : {}"
 
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/code_preview.rs:43
 msgid "Unable to copy code"
@@ -2630,7 +2630,7 @@ msgstr "Impossible de définir le nom mesh : {}"
 msgid ""
 "Account proof sent over this peer's encrypted Noise link. They still need to "
 "verify it."
-msgstr "Preuve de compte envoyée via la liaison Noise chiffrée de ce pair. Il reste à la vérifier."
+msgstr "Preuve de compte envoyée via la liaison Noise chiffrée de ce pair. Ce pair doit encore la vérifier."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:606
 msgid "Could not show QR: {}"
@@ -2849,7 +2849,7 @@ msgstr "Impossible de débannir ce membre. Réessayez."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/channel_settings/moderation.rs:84
 msgid "Couldn't mute this member. Please try again."
-msgstr "Impossible d'interdire la publication à ce membre. Réessayez."
+msgstr "Impossible d'interdire à ce membre de publier. Réessayez."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/channel_settings/moderation.rs:87
 msgid "Couldn't unmute this member. Please try again."
@@ -3074,7 +3074,7 @@ msgstr "L'accès à la caméra est désactivé. Collez le lien, ou autorisez la 
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/avatar_edit.rs:147
 msgid "Wait for the avatar picker to finish."
-msgstr "Attendez la fin du sélecteur d'avatar."
+msgstr "Terminez la sélection de l'avatar avant de continuer."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/avatar_edit.rs:185
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/avatar_edit.rs:189
@@ -3083,7 +3083,7 @@ msgstr "Impossible de lire l'avatar choisi."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/avatar_edit.rs:191
 msgid "Choose an image smaller than 32 MiB."
-msgstr "Choisissez une image de moins de 32 MiB."
+msgstr "Choisissez une image de moins de 32 Mio."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/avatar_edit.rs:198
 msgid "Unable to use this avatar. Choose a valid, smaller image."
@@ -3099,7 +3099,7 @@ msgstr "Impossible d'afficher l'aperçu de cet avatar. Choisissez une autre imag
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/avatar_edit.rs:299
 msgid "Profile response belongs to another account. Retry."
-msgstr "La réponse de profil appartient à un autre compte. Réessayez."
+msgstr "Le profil reçu correspond à un autre compte. Réessayez."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/avatar_edit.rs:316
 msgid "Unable to display saved avatar. Try another image."
@@ -3178,7 +3178,7 @@ msgstr "Message vocal"
 msgid ""
 "Action timed out; its outcome is uncertain. Review the refreshed devices and "
 "pending links."
-msgstr "L'action a expiré ; son résultat est incertain. Vérifiez les appareils actualisés et les associations en attente."
+msgstr "Le délai de l'action est dépassé ; son résultat est incertain. Vérifiez la liste actualisée des appareils et les associations en attente."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/sessions.rs:133
 msgid "Could not load sessions: {}"
@@ -3186,7 +3186,7 @@ msgstr "Impossible de charger les sessions : {}"
 
 #: crates/chatter-ui/src/bin_ui/features/modals/sessions.rs:137
 msgid "Loading sessions timed out."
-msgstr "Le chargement des sessions a expiré."
+msgstr "Le délai de chargement des sessions est dépassé."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/sessions.rs:164
 msgid "Could not load pending links: {}"
@@ -3194,7 +3194,7 @@ msgstr "Impossible de charger les associations en attente : {}"
 
 #: crates/chatter-ui/src/bin_ui/features/modals/sessions.rs:168
 msgid "Loading pending links timed out."
-msgstr "Le chargement des associations en attente a expiré."
+msgstr "Le délai de chargement des associations en attente est dépassé."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/account.rs:159
 msgid "Incorrect password. Try again."
@@ -3222,7 +3222,7 @@ msgstr "Impossible d'enregistrer la clé : {}"
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/ai.rs:136
 msgid "{} tokens remaining · {} used"
-msgstr "{} jetons restants · {} utilisés"
+msgstr "Jetons restants : {} · utilisés : {}"
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/ai.rs:156
 msgid "Could not fetch balance: {}"
