@@ -20,7 +20,7 @@ msgstr "Atividade"
 #: ui/activity/activity_global.slint:15
 msgctxt "push notifications"
 msgid "Off"
-msgstr "Desligado"
+msgstr "Desativadas"
 
 #: ui/activity/activity_global.slint:16
 msgid "Never"
@@ -105,7 +105,7 @@ msgstr "Última conexão"
 #: ui/activity/activity_sheet.slint:170
 msgctxt "push notifications"
 msgid "Push"
-msgstr "Push"
+msgstr "Notificações push"
 
 #: ui/activity/activity_sheet.slint:173 ui/mesh/mesh_list.slint:44
 #: ui/mesh/mesh_setup_sheet.slint:120 ui/sidebar/sidebar_footer.slint:264
@@ -136,7 +136,7 @@ msgstr "Versão do app"
 #: ui/activity/activity_sheet.slint:184
 msgctxt "installed version"
 msgid "Unknown"
-msgstr "Desconhecido"
+msgstr "Desconhecida"
 
 #: ui/activity/activity_sheet.slint:187 ui/sidebar/update_banner.slint:30
 msgid "Update available"
@@ -1087,9 +1087,7 @@ msgstr "Duração da mensagem"
 msgid ""
 "Each new message disappears after the selected time once its expiry clock "
 "starts."
-msgstr ""
-"Cada mensagem nova some depois do tempo escolhido, quando o prazo começa a "
-"contar."
+msgstr "Cada mensagem nova desaparece após o tempo escolhido, contado a partir do início do prazo de expiração."
 
 #: ui/chat/disappearing_settings.slint:78
 msgid "How long to enable"
@@ -1697,10 +1695,7 @@ msgstr "Todas as mensagens fixadas"
 msgid ""
 "New messages disappear after this time. Received messages count down after "
 "you read them; your sent messages count down after sending."
-msgstr ""
-"Mensagens novas somem depois deste tempo. As mensagens recebidas começam a "
-"contar depois que você lê; as que você envia começam a contar depois do "
-"envio."
+msgstr "Mensagens novas somem depois deste tempo. O prazo das mensagens recebidas começa quando você as lê; o das enviadas, após o envio."
 
 #: ui/chat/secret_timer_modal.slint:26
 msgid "Current: {}"
@@ -1803,7 +1798,7 @@ msgstr "Criar"
 
 #: ui/components/connection_banner.slint:110
 msgid "The mesh is not running either, so there is nothing to fall back to."
-msgstr "O Mesh também não está em execução, então não há para onde recorrer."
+msgstr "O Mesh também não está em execução, então não há alternativa."
 
 #: ui/components/connection_banner.slint:117
 msgid ""
@@ -1856,9 +1851,7 @@ msgstr[1] ""
 msgid ""
 "Mesh is running over Bluetooth. Nobody is in range yet; what you send waits "
 "to be carried."
-msgstr ""
-"O Mesh está em execução pelo Bluetooth. Ninguém está no alcance ainda; o que "
-"você enviar espera para ser levado."
+msgstr "O Mesh está em execução pelo Bluetooth. Ninguém está no alcance ainda; as mensagens que você enviar ficam aguardando transporte."
 
 #: ui/components/connection_banner.slint:124
 msgid ""
@@ -2101,11 +2094,11 @@ msgstr "Perfil"
 
 #: ui/components/modal.slint:109
 msgid "Dialog"
-msgstr "Diálogo"
+msgstr "Janela"
 
 #: ui/components/modal.slint:109
 msgid "{} dialog"
-msgstr "Diálogo {}"
+msgstr "Janela {}"
 
 #. never one name for every dialog.
 #: ui/components/modal_container.slint:41
@@ -2137,13 +2130,11 @@ msgstr ""
 msgid ""
 "The mesh is not running on this device either, so there is nothing to fall "
 "back to right now."
-msgstr ""
-"O Mesh também não está em execução neste dispositivo, então não há para onde "
-"recorrer agora."
+msgstr "O Mesh também não está em execução neste dispositivo, então não há alternativa agora."
 
 #: ui/components/offline_mesh_notice.slint:104
 msgid "This build has no mesh, so there is nothing to fall back to."
-msgstr "Esta versão não tem Mesh, então não há para onde recorrer."
+msgstr "Esta versão não tem Mesh, então não há alternativa."
 
 #: ui/components/offline_mesh_notice.slint:144
 msgid "Use the mesh without an account"
@@ -2197,7 +2188,7 @@ msgstr "Cancelar pesquisa"
 #: ui/components/unified_search.slint:615
 msgctxt "search filter"
 msgid "All"
-msgstr "Todas"
+msgstr "Tudo"
 
 #: ui/components/unified_search.slint:617
 msgid "Messages"
@@ -2223,7 +2214,7 @@ msgstr "Voz"
 #: ui/components/unified_search.slint:629
 msgctxt "tab"
 msgid "Selected"
-msgstr "Selecionado"
+msgstr "Selecionada"
 
 #: ui/components/unified_search.slint:654
 msgid "{0} {1}+"
@@ -2265,7 +2256,7 @@ msgstr "Menos recentes"
 
 #: ui/components/unified_search.slint:685
 msgid "Largest"
-msgstr "Maior tamanho"
+msgstr "Maiores"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: any"
@@ -2882,7 +2873,7 @@ msgstr "Verificado"
 
 #: ui/mesh/mesh_peer_sheet.slint:109 ui/modals/profile_action_tiles.slint:34
 msgid "Message"
-msgstr "Mensagem"
+msgstr "Enviar mensagem"
 
 #: ui/mesh/mesh_peer_sheet.slint:116 ui/mesh/mesh_peer_sheet.slint:186
 msgid "Verify"
@@ -3255,15 +3246,15 @@ msgstr "Descrição (opcional)"
 
 #: ui/modals/channel_members.slint:130
 msgid "Mute 1h"
-msgstr "Silenciar 1 h"
+msgstr "Impedir envio por 1 h"
 
 #: ui/modals/channel_members.slint:131
 msgid "Mute 1 day"
-msgstr "Silenciar 1 dia"
+msgstr "Impedir envio por 1 dia"
 
 #: ui/modals/channel_members.slint:132
 msgid "Mute until unmuted"
-msgstr "Silenciar por tempo indeterminado"
+msgstr "Impedir envio até liberação"
 
 #: ui/modals/channel_members.slint:137
 msgid "Moderator"
@@ -3302,7 +3293,7 @@ msgstr "convidado"
 #: ui/modals/channel_members.slint:335
 msgctxt "member moderation"
 msgid "muted"
-msgstr "silenciado"
+msgstr "envio impedido"
 
 #: ui/modals/channel_members.slint:353
 msgctxt "member identity"
@@ -3316,7 +3307,7 @@ msgstr "Ações para {}"
 #: ui/modals/channel_members.slint:435
 msgctxt "member list"
 msgid "Banned"
-msgstr "Banido"
+msgstr "Banidos"
 
 #: ui/modals/channel_members.slint:469
 msgid "Unban"
@@ -3329,11 +3320,11 @@ msgstr "FUNÇÃO"
 #: ui/modals/channel_members.slint:537
 msgctxt "member moderation"
 msgid "Unmute"
-msgstr "Remover silêncio"
+msgstr "Permitir envio"
 
 #: ui/modals/channel_members.slint:545
 msgid "MUTE IN CHANNEL"
-msgstr "SILENCIAR NO CANAL"
+msgstr "IMPEDIR ENVIO NO CANAL"
 
 #: ui/modals/channel_members.slint:565
 msgid "Make owner…"
@@ -3531,7 +3522,7 @@ msgstr "Silenciado"
 #: ui/modals/channel_settings.slint:427
 msgctxt "notifications"
 msgid "Off"
-msgstr "Desligado"
+msgstr "Desativadas"
 
 #: ui/modals/channel_settings.slint:449
 msgid "Call history"
@@ -4308,7 +4299,7 @@ msgstr "Ligar"
 #: ui/modals/profile_info_card.slint:57
 msgctxt "profile bio"
 msgid "About"
-msgstr "Sobre"
+msgstr "Bio"
 
 #: ui/modals/profile_info_card.slint:83 ui/pages/account_recovery.slint:112
 #: ui/pages/register.slint:373
@@ -5053,9 +5044,7 @@ msgstr "Ver licenças e avisos de terceiros no Chatter."
 msgid ""
 "Privacy: Your settings control read receipts, notification previews, and "
 "whether AI requests leave this device."
-msgstr ""
-"Privacidade: suas configurações controlam confirmações de leitura, prévias "
-"de notificação e se pedidos de AI saem deste dispositivo."
+msgstr "Privacidade: suas configurações controlam confirmações de leitura, prévias de notificação e se solicitações à AI saem deste dispositivo."
 
 #: ui/settings/account_menu.slint:198
 msgid "My profile"
@@ -5290,7 +5279,7 @@ msgstr ""
 
 #: ui/settings/ai_settings.slint:132
 msgid "API key saved — enter a new one to replace it"
-msgstr "Chave de API salva — digite uma nova para substituir"
+msgstr "Chave de API salva — digite uma nova para substituí-la"
 
 #: ui/settings/ai_settings.slint:132
 msgid "Anthropic API key"

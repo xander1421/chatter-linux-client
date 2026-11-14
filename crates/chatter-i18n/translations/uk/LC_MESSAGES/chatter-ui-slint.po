@@ -108,7 +108,7 @@ msgstr "Останнє з’єднання"
 #: ui/activity/activity_sheet.slint:170
 msgctxt "push notifications"
 msgid "Push"
-msgstr "Push"
+msgstr "Push-сповіщення"
 
 #: ui/activity/activity_sheet.slint:173 ui/mesh/mesh_list.slint:44
 #: ui/mesh/mesh_setup_sheet.slint:120 ui/sidebar/sidebar_footer.slint:264
@@ -139,7 +139,7 @@ msgstr "Версія застосунку"
 #: ui/activity/activity_sheet.slint:184
 msgctxt "installed version"
 msgid "Unknown"
-msgstr "Невідомо"
+msgstr "Невідома"
 
 #: ui/activity/activity_sheet.slint:187 ui/sidebar/update_banner.slint:30
 msgid "Update available"
@@ -2556,7 +2556,7 @@ msgstr "Приєднатися до комірки"
 #: ui/mesh/mesh_compose_sheet.slint:95
 msgctxt "compose menu"
 msgid "New"
-msgstr "Нове"
+msgstr "Нова розмова"
 
 #: ui/mesh/mesh_compose_sheet.slint:149
 msgid "Invite only"
@@ -2623,7 +2623,7 @@ msgstr "Очікуємо, доки автор змінить ключ групи
 
 #: ui/mesh/mesh_context_bar.slint:17
 msgid "No route to this person · waiting for a carrier"
-msgstr "Немає маршруту до цієї людини · чекаємо на носія"
+msgstr "Немає маршруту до цієї людини · очікування пристрою-посередника"
 
 #: ui/mesh/mesh_context_bar.slint:57
 msgid "Turn on"
@@ -2902,7 +2902,7 @@ msgstr "Підтверджено"
 
 #: ui/mesh/mesh_peer_sheet.slint:109 ui/modals/profile_action_tiles.slint:34
 msgid "Message"
-msgstr "Повідомлення"
+msgstr "Написати"
 
 #: ui/mesh/mesh_peer_sheet.slint:116 ui/mesh/mesh_peer_sheet.slint:186
 msgid "Verify"
@@ -3276,15 +3276,15 @@ msgstr "Опис (необов’язково)"
 
 #: ui/modals/channel_members.slint:130
 msgid "Mute 1h"
-msgstr "На 1 год"
+msgstr "Заборонити писати на 1 год"
 
 #: ui/modals/channel_members.slint:131
 msgid "Mute 1 day"
-msgstr "На 1 день"
+msgstr "Заборонити писати на 1 день"
 
 #: ui/modals/channel_members.slint:132
 msgid "Mute until unmuted"
-msgstr "До скасування обмеження"
+msgstr "Заборонити писати до скасування"
 
 #: ui/modals/channel_members.slint:137
 msgid "Moderator"
@@ -3337,7 +3337,7 @@ msgstr "Дії для {}"
 #: ui/modals/channel_members.slint:435
 msgctxt "member list"
 msgid "Banned"
-msgstr "Забанено"
+msgstr "Забанені"
 
 #: ui/modals/channel_members.slint:469
 msgid "Unban"
@@ -3580,7 +3580,7 @@ msgstr "Архівувати або видалити"
 
 #: ui/modals/channel_settings.slint:559
 msgid "Messages disappear after {} (set when the channel was created)"
-msgstr "Повідомлення зникають за {} (задано під час створення каналу)"
+msgstr "Повідомлення зникають через {} (задано під час створення каналу)"
 
 #: ui/modals/channel_settings.slint:589
 msgid "Name must be at least 3 characters"
@@ -3669,7 +3669,7 @@ msgstr "Автовидалення повідомлень"
 
 #: ui/modals/create_channel.slint:553
 msgid "Messages expire after the chosen time."
-msgstr "Повідомлення зникають за вибраний час."
+msgstr "Повідомлення зникають через вибраний час."
 
 #: ui/modals/create_channel.slint:566
 msgctxt "message expiry"
@@ -3945,12 +3945,12 @@ msgstr ""
 #: ui/modals/friends_requests_tab.slint:408
 msgctxt "request type"
 msgid "Private · {}"
-msgstr "Приватно · {}"
+msgstr "Приватний · {}"
 
 #: ui/modals/friends_requests_tab.slint:408
 msgctxt "request type"
 msgid "Private"
-msgstr "Приватно"
+msgstr "Приватний"
 
 #: ui/modals/friends_requests_tab.slint:484
 msgid "No pending group invites"
@@ -4334,7 +4334,7 @@ msgstr "Зателефонувати"
 #: ui/modals/profile_info_card.slint:57
 msgctxt "profile bio"
 msgid "About"
-msgstr "Інформація"
+msgstr "Про себе"
 
 #: ui/modals/profile_info_card.slint:83 ui/pages/account_recovery.slint:112
 #: ui/pages/register.slint:373
@@ -5041,9 +5041,7 @@ msgstr ""
 #: ui/server_records/screen.slint:71
 msgid ""
 "Call records from this channel’s server. Private call history stays in Calls."
-msgstr ""
-"Записи дзвінків із сервера цього каналу. Приватна історія дзвінків лишається "
-"в Дзвінках."
+msgstr "Записи дзвінків із сервера цього каналу. Приватна історія дзвінків лишається в розділі «Дзвінки»."
 
 #: ui/server_records/screen.slint:96
 msgid "You're all caught up"
@@ -5360,7 +5358,7 @@ msgstr "Тема"
 
 #: ui/settings/appearance_settings.slint:48
 msgid "System"
-msgstr "Система"
+msgstr "Системна"
 
 #: ui/settings/appearance_settings.slint:48
 msgid "Match this device's light or dark setting"
@@ -5410,7 +5408,7 @@ msgstr "Великий"
 #: ui/settings/appearance_settings.slint:254
 msgctxt "text size"
 msgid "Largest"
-msgstr "Найбільші"
+msgstr "Найбільший"
 
 #: ui/settings/appearance_settings.slint:341
 msgid "Glass effects"
@@ -5455,12 +5453,12 @@ msgstr "Інтервал між повідомленнями"
 #: ui/settings/appearance_settings.slint:482
 msgctxt "message spacing"
 msgid "Comfortable"
-msgstr "Зручно"
+msgstr "Звичайний"
 
 #: ui/settings/appearance_settings.slint:483
 msgctxt "message spacing"
 msgid "Compact"
-msgstr "Компактно"
+msgstr "Зменшений"
 
 #: ui/settings/appearance_settings.slint:483
 msgid "Fit more messages and conversations on screen"
@@ -5485,7 +5483,7 @@ msgstr "Ctrl+F"
 #: ui/settings/appearance_settings.slint:603
 msgctxt "search shortcut"
 msgid "Both"
-msgstr "Обидва"
+msgstr "Обидва сполучення"
 
 #: ui/settings/appearance_settings.slint:607
 msgid "Search shortcut {}"
@@ -5547,7 +5545,7 @@ msgstr "Відбиток недоступний"
 
 #: ui/settings/encryption_settings.slint:88
 msgid "To verify a contact, compare safety numbers from their profile"
-msgstr "Щоб перевірити контакт, порівняйте номери безпеки в його профілі"
+msgstr "Щоб перевірити контакт, відкрийте його профіль і порівняйте ваші номери безпеки"
 
 #: ui/settings/encryption_settings.slint:130
 msgid "Allow sealed sender from anyone"
@@ -5689,7 +5687,7 @@ msgstr "Звіти про прочитання"
 
 #: ui/settings/privacy_settings.slint:373
 msgid "Let others know when you've read their messages"
-msgstr "Повідомляти інших, коли ви прочитали їхні повідомлення"
+msgstr "Повідомляти інших про прочитання їхніх повідомлень"
 
 #: ui/settings/privacy_settings.slint:396
 msgid "Typing indicators"
@@ -5770,7 +5768,7 @@ msgstr "Сортувати за"
 #: ui/sidebar/section_context_menu.slint:277
 msgctxt "conversation sort"
 msgid "Recent"
-msgstr "Нещодавні"
+msgstr "За останньою активністю"
 
 #: ui/sidebar/section_context_menu.slint:294
 msgid "Unread first"

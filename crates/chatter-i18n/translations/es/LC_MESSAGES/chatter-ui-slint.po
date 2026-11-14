@@ -20,7 +20,7 @@ msgstr "Actividad"
 #: ui/activity/activity_global.slint:15
 msgctxt "push notifications"
 msgid "Off"
-msgstr "Desactivado"
+msgstr "Desactivadas"
 
 #: ui/activity/activity_global.slint:16
 msgid "Never"
@@ -60,7 +60,7 @@ msgstr "No disponible"
 
 #: ui/activity/activity_sheet.slint:105 ui/mesh/mesh_setup_sheet.slint:122
 msgid "Off"
-msgstr "Desactivado"
+msgstr "Desactivada"
 
 #: ui/activity/activity_sheet.slint:106 ui/mesh/mesh_list.slint:15
 msgid "Bluetooth off"
@@ -75,8 +75,8 @@ msgstr[1] "Radio no disponible · {n} repetidores"
 #: ui/activity/activity_sheet.slint:110
 msgid "On · {0} nearby · {n} relay"
 msgid_plural "On · {0} nearby · {n} relays"
-msgstr[0] "Activado · {0} cerca · {n} repetidor"
-msgstr[1] "Activado · {0} cerca · {n} repetidores"
+msgstr[0] "Activada · {0} cerca · {n} repetidor"
+msgstr[1] "Activada · {0} cerca · {n} repetidores"
 
 #: ui/activity/activity_sheet.slint:129
 msgid "Close activity"
@@ -136,7 +136,7 @@ msgstr "Versión de la app"
 #: ui/activity/activity_sheet.slint:184
 msgctxt "installed version"
 msgid "Unknown"
-msgstr "Desconocido"
+msgstr "Desconocida"
 
 #: ui/activity/activity_sheet.slint:187 ui/sidebar/update_banner.slint:30
 msgid "Update available"
@@ -2196,7 +2196,7 @@ msgstr "Cancelar búsqueda"
 #: ui/components/unified_search.slint:615
 msgctxt "search filter"
 msgid "All"
-msgstr "Todas"
+msgstr "Todos"
 
 #: ui/components/unified_search.slint:617
 msgid "Messages"
@@ -2222,7 +2222,7 @@ msgstr "Voz"
 #: ui/components/unified_search.slint:629
 msgctxt "tab"
 msgid "Selected"
-msgstr "Seleccionado"
+msgstr "Seleccionada"
 
 #: ui/components/unified_search.slint:654
 msgid "{0} {1}+"
@@ -2238,15 +2238,15 @@ msgstr "Orden: relevancia"
 
 #: ui/components/unified_search.slint:675
 msgid "Sort: newest"
-msgstr "Orden: más reciente"
+msgstr "Orden: más recientes"
 
 #: ui/components/unified_search.slint:675
 msgid "Sort: oldest"
-msgstr "Orden: más antiguo"
+msgstr "Orden: más antiguos"
 
 #: ui/components/unified_search.slint:675
 msgid "Sort: largest"
-msgstr "Orden: más grande"
+msgstr "Orden: más grandes"
 
 #: ui/components/unified_search.slint:685
 msgid "Relevance"
@@ -2255,16 +2255,16 @@ msgstr "Relevancia"
 #: ui/components/unified_search.slint:685
 msgctxt "search sort"
 msgid "Newest"
-msgstr "Más reciente"
+msgstr "Más recientes"
 
 #: ui/components/unified_search.slint:685
 msgctxt "search sort"
 msgid "Oldest"
-msgstr "Más antiguo"
+msgstr "Más antiguos"
 
 #: ui/components/unified_search.slint:685
 msgid "Largest"
-msgstr "Más grande"
+msgstr "Más grandes"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: any"
@@ -2884,7 +2884,7 @@ msgstr "Verificado"
 
 #: ui/mesh/mesh_peer_sheet.slint:109 ui/modals/profile_action_tiles.slint:34
 msgid "Message"
-msgstr "Mensaje"
+msgstr "Escribir"
 
 #: ui/mesh/mesh_peer_sheet.slint:116 ui/mesh/mesh_peer_sheet.slint:186
 msgid "Verify"
@@ -2975,13 +2975,13 @@ msgstr "Radio no disponible"
 
 #: ui/mesh/mesh_setup_sheet.slint:124
 msgid "On · nobody nearby"
-msgstr "Activado · nadie cerca"
+msgstr "Activada · nadie cerca"
 
 #: ui/mesh/mesh_setup_sheet.slint:125
 msgid "On · {n} nearby"
 msgid_plural "On · {n} nearby"
-msgstr[0] "Activado · {n} cerca"
-msgstr[1] "Activado · {n} cerca"
+msgstr[0] "Activada · {n} cerca"
+msgstr[1] "Activada · {n} cerca"
 
 #: ui/mesh/mesh_setup_sheet.slint:138
 msgid "Nearby devices will appear here when discovered."
@@ -3257,15 +3257,15 @@ msgstr "Descripción (opcional)"
 
 #: ui/modals/channel_members.slint:130
 msgid "Mute 1h"
-msgstr "Silenciar 1 h"
+msgstr "Impedir publicar 1 h"
 
 #: ui/modals/channel_members.slint:131
 msgid "Mute 1 day"
-msgstr "Silenciar 1 día"
+msgstr "Impedir publicar 1 día"
 
 #: ui/modals/channel_members.slint:132
 msgid "Mute until unmuted"
-msgstr "Silenciar siempre"
+msgstr "Impedir publicar sin límite"
 
 #: ui/modals/channel_members.slint:137
 msgid "Moderator"
@@ -3304,7 +3304,7 @@ msgstr "invitado"
 #: ui/modals/channel_members.slint:335
 msgctxt "member moderation"
 msgid "muted"
-msgstr "silenciado"
+msgstr "no puede publicar"
 
 #: ui/modals/channel_members.slint:353
 msgctxt "member identity"
@@ -3318,7 +3318,7 @@ msgstr "Acciones para {}"
 #: ui/modals/channel_members.slint:435
 msgctxt "member list"
 msgid "Banned"
-msgstr "Vetado"
+msgstr "Vetados"
 
 #: ui/modals/channel_members.slint:469
 msgid "Unban"
@@ -3331,11 +3331,11 @@ msgstr "ROL"
 #: ui/modals/channel_members.slint:537
 msgctxt "member moderation"
 msgid "Unmute"
-msgstr "Dejar de silenciar"
+msgstr "Permitir publicar"
 
 #: ui/modals/channel_members.slint:545
 msgid "MUTE IN CHANNEL"
-msgstr "SILENCIAR EN EL CANAL"
+msgstr "IMPEDIR PUBLICAR EN EL CANAL"
 
 #: ui/modals/channel_members.slint:565
 msgid "Make owner…"
@@ -3533,7 +3533,7 @@ msgstr "Silenciado"
 #: ui/modals/channel_settings.slint:427
 msgctxt "notifications"
 msgid "Off"
-msgstr "Desactivado"
+msgstr "Desactivadas"
 
 #: ui/modals/channel_settings.slint:449
 msgid "Call history"
@@ -3925,12 +3925,12 @@ msgstr ""
 #: ui/modals/friends_requests_tab.slint:408
 msgctxt "request type"
 msgid "Private · {}"
-msgstr "Privado · {}"
+msgstr "Privada · {}"
 
 #: ui/modals/friends_requests_tab.slint:408
 msgctxt "request type"
 msgid "Private"
-msgstr "Privado"
+msgstr "Privada"
 
 #: ui/modals/friends_requests_tab.slint:484
 msgid "No pending group invites"
@@ -4003,7 +4003,7 @@ msgstr "Memoria de Jarvis"
 #: ui/modals/jarvis_memory.slint:107
 msgctxt "chat history"
 msgid "Clear"
-msgstr "Borrar"
+msgstr "Vaciar"
 
 #: ui/modals/jarvis_memory.slint:108
 msgid "Reload"
@@ -4219,7 +4219,7 @@ msgstr "Tachado / código"
 
 #: ui/modals/keyboard_shortcuts.slint:154
 msgid "↑ (empty message box)"
-msgstr "↑ (caja de mensaje vacía)"
+msgstr "↑ (campo de mensaje vacío)"
 
 #: ui/modals/keyboard_shortcuts.slint:154
 msgid "Edit your last message"
@@ -4315,7 +4315,7 @@ msgstr "Llamar"
 #: ui/modals/profile_info_card.slint:57
 msgctxt "profile bio"
 msgid "About"
-msgstr "Info"
+msgstr "Biografía"
 
 #: ui/modals/profile_info_card.slint:83 ui/pages/account_recovery.slint:112
 #: ui/pages/register.slint:373
@@ -4686,7 +4686,7 @@ msgstr "Código de recuperación"
 
 #: ui/pages/account_recovery.slint:137
 msgid "26 letters and digits 2–9. Spaces and hyphens are OK."
-msgstr "26 letras y dígitos 2–9. Se admiten espacios y guiones."
+msgstr "26 caracteres: letras y dígitos del 2 al 9. Se admiten espacios y guiones."
 
 #: ui/pages/account_recovery.slint:143
 msgid "Enter your recovery code"
@@ -5529,7 +5529,7 @@ msgstr ""
 
 #: ui/settings/encryption_settings.slint:130
 msgid "Allow sealed sender from anyone"
-msgstr "Permitir remitente sellado de cualquiera"
+msgstr "Permitir mensajes con remitente sellado de cualquiera"
 
 #: ui/settings/encryption_settings.slint:145
 msgid ""
@@ -5751,7 +5751,7 @@ msgstr "Recientes"
 
 #: ui/sidebar/section_context_menu.slint:294
 msgid "Unread first"
-msgstr "No leídos primero"
+msgstr "Sin leer primero"
 
 #: ui/sidebar/section_context_menu.slint:311
 msgid "Name (A–Z)"
@@ -5896,7 +5896,7 @@ msgstr "Listo para reiniciar"
 
 #: ui/sidebar/update_banner.slint:30
 msgid "Confirm system install"
-msgstr "Confirma la instalación en el sistema"
+msgstr "Confirmar la instalación en el sistema"
 
 #: ui/sidebar/update_banner.slint:30
 msgid "Update failed"

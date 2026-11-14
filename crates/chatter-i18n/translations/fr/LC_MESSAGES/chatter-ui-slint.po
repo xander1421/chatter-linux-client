@@ -20,7 +20,7 @@ msgstr "Activité"
 #: ui/activity/activity_global.slint:15
 msgctxt "push notifications"
 msgid "Off"
-msgstr "Désactivé"
+msgstr "Désactivées"
 
 #: ui/activity/activity_global.slint:16
 msgid "Never"
@@ -105,7 +105,7 @@ msgstr "Dernière connexion"
 #: ui/activity/activity_sheet.slint:170
 msgctxt "push notifications"
 msgid "Push"
-msgstr "Push"
+msgstr "Notifications push"
 
 #: ui/activity/activity_sheet.slint:173 ui/mesh/mesh_list.slint:44
 #: ui/mesh/mesh_setup_sheet.slint:120 ui/sidebar/sidebar_footer.slint:264
@@ -136,7 +136,7 @@ msgstr "Version de l’application"
 #: ui/activity/activity_sheet.slint:184
 msgctxt "installed version"
 msgid "Unknown"
-msgstr "Inconnu"
+msgstr "Inconnue"
 
 #: ui/activity/activity_sheet.slint:187 ui/sidebar/update_banner.slint:30
 msgid "Update available"
@@ -2225,7 +2225,7 @@ msgstr "Liens"
 #: ui/components/unified_search.slint:621
 msgctxt "search filter"
 msgid "Voice"
-msgstr "Vocal"
+msgstr "Messages vocaux"
 
 #: ui/components/unified_search.slint:629
 msgctxt "tab"
@@ -2246,11 +2246,11 @@ msgstr "Tri : pertinence"
 
 #: ui/components/unified_search.slint:675
 msgid "Sort: newest"
-msgstr "Tri : plus récent"
+msgstr "Tri : plus récents"
 
 #: ui/components/unified_search.slint:675
 msgid "Sort: oldest"
-msgstr "Tri : plus ancien"
+msgstr "Tri : plus anciens"
 
 #: ui/components/unified_search.slint:675
 msgid "Sort: largest"
@@ -2263,12 +2263,12 @@ msgstr "Pertinence"
 #: ui/components/unified_search.slint:685
 msgctxt "search sort"
 msgid "Newest"
-msgstr "Plus récent"
+msgstr "Plus récents"
 
 #: ui/components/unified_search.slint:685
 msgctxt "search sort"
 msgid "Oldest"
-msgstr "Plus ancien"
+msgstr "Plus anciens"
 
 #: ui/components/unified_search.slint:685
 msgid "Largest"
@@ -2436,7 +2436,7 @@ msgstr "Plus de liens"
 
 #: ui/components/unified_search.slint:1053
 msgid "Show more voice"
-msgstr "Plus de vocaux"
+msgstr "Plus de messages vocaux"
 
 #: ui/components/unified_search.slint:1066
 msgid "Searching this device…"
@@ -2726,11 +2726,11 @@ msgstr ""
 #: ui/mesh/mesh_info_sheet.slint:259 ui/mesh/mesh_list_item.slint:138
 #: ui/modals/profile_action_tiles.slint:31
 msgid "Mute"
-msgstr "Sourdine"
+msgstr "Mettre en sourdine"
 
 #: ui/mesh/mesh_info_sheet.slint:263 ui/mesh/mesh_list_item.slint:142
 msgid "Mute channel"
-msgstr "Sourdine du canal"
+msgstr "Mettre le canal en sourdine"
 
 #: ui/mesh/mesh_info_sheet.slint:271
 msgid "{n} relay connected"
@@ -2868,11 +2868,11 @@ msgstr "Chiffré · à proximité"
 
 #: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
 msgid "Unmute"
-msgstr "Réactiver le son"
+msgstr "Réactiver les notifications"
 
 #: ui/mesh/mesh_list_item.slint:142
 msgid "Unmute channel"
-msgstr "Réactiver le son du canal"
+msgstr "Réactiver les notifications du canal"
 
 #: ui/mesh/mesh_list_item.slint:149 ui/modals/channel_danger.slint:74
 msgid "Leave"
@@ -2892,7 +2892,7 @@ msgstr "Vérifié"
 
 #: ui/mesh/mesh_peer_sheet.slint:109 ui/modals/profile_action_tiles.slint:34
 msgid "Message"
-msgstr "Message"
+msgstr "Écrire"
 
 #: ui/mesh/mesh_peer_sheet.slint:116 ui/mesh/mesh_peer_sheet.slint:186
 msgid "Verify"
@@ -2928,7 +2928,7 @@ msgstr "Coller son code QR"
 
 #: ui/mesh/mesh_peer_sheet.slint:191
 msgid "Waiting for encrypted link"
-msgstr "En attente du lien chiffré"
+msgstr "En attente de la liaison chiffrée"
 
 #: ui/mesh/mesh_peer_sheet.slint:191
 msgid "Their fingerprint: {}"
@@ -3268,15 +3268,15 @@ msgstr "Description (facultative)"
 
 #: ui/modals/channel_members.slint:130
 msgid "Mute 1h"
-msgstr "Sourdine 1 h"
+msgstr "Interdire de publier 1 h"
 
 #: ui/modals/channel_members.slint:131
 msgid "Mute 1 day"
-msgstr "Sourdine 1 jour"
+msgstr "Interdire de publier 1 jour"
 
 #: ui/modals/channel_members.slint:132
 msgid "Mute until unmuted"
-msgstr "Sourdine permanente"
+msgstr "Interdire de publier jusqu’à révocation"
 
 #: ui/modals/channel_members.slint:137
 msgid "Moderator"
@@ -3315,7 +3315,7 @@ msgstr "invité"
 #: ui/modals/channel_members.slint:335
 msgctxt "member moderation"
 msgid "muted"
-msgstr "en sourdine"
+msgstr "publication interdite"
 
 #: ui/modals/channel_members.slint:353
 msgctxt "member identity"
@@ -3329,7 +3329,7 @@ msgstr "Actions pour {}"
 #: ui/modals/channel_members.slint:435
 msgctxt "member list"
 msgid "Banned"
-msgstr "Banni"
+msgstr "Bannis"
 
 #: ui/modals/channel_members.slint:469
 msgid "Unban"
@@ -3342,11 +3342,11 @@ msgstr "RÔLE"
 #: ui/modals/channel_members.slint:537
 msgctxt "member moderation"
 msgid "Unmute"
-msgstr "Retirer la sourdine"
+msgstr "Autoriser à publier"
 
 #: ui/modals/channel_members.slint:545
 msgid "MUTE IN CHANNEL"
-msgstr "SOURDINE DANS LE CANAL"
+msgstr "INTERDIRE DE PUBLIER DANS LE CANAL"
 
 #: ui/modals/channel_members.slint:565
 msgid "Make owner…"
@@ -3407,7 +3407,7 @@ msgstr "Notifications"
 
 #: ui/modals/channel_notifications.slint:32
 msgid "Mute group"
-msgstr "Sourdine du groupe"
+msgstr "Mettre le groupe en sourdine"
 
 #: ui/modals/channel_notifications.slint:46
 msgid "You won't receive any notifications from this group"
@@ -3544,7 +3544,7 @@ msgstr "En sourdine"
 #: ui/modals/channel_settings.slint:427
 msgctxt "notifications"
 msgid "Off"
-msgstr "Désactivé"
+msgstr "Désactivées"
 
 #: ui/modals/channel_settings.slint:449
 msgid "Call history"
@@ -3763,7 +3763,7 @@ msgstr "Groupe"
 #: ui/modals/forward_message.slint:223
 msgctxt "chat type"
 msgid "Secret"
-msgstr "Secret"
+msgstr "Secrète"
 
 #: ui/modals/forward_message.slint:223
 msgid "DM"
@@ -3937,12 +3937,12 @@ msgstr ""
 #: ui/modals/friends_requests_tab.slint:408
 msgctxt "request type"
 msgid "Private · {}"
-msgstr "Privé · {}"
+msgstr "Privée · {}"
 
 #: ui/modals/friends_requests_tab.slint:408
 msgctxt "request type"
 msgid "Private"
-msgstr "Privé"
+msgstr "Privée"
 
 #: ui/modals/friends_requests_tab.slint:484
 msgid "No pending group invites"
@@ -4107,7 +4107,7 @@ msgstr "Navigation"
 #: ui/modals/keyboard_shortcuts.slint:124
 msgctxt "action"
 msgid "Search"
-msgstr "Recherche"
+msgstr "Rechercher"
 
 #: ui/modals/keyboard_shortcuts.slint:125
 msgid "Ctrl + K"
@@ -4310,7 +4310,7 @@ msgstr "Faites un clic droit sur un message et choisissez Épingler"
 
 #: ui/modals/profile_action_tiles.slint:28
 msgid "Unmute conversation"
-msgstr "Réactiver le son de la discussion"
+msgstr "Réactiver les notifications de la discussion"
 
 #: ui/modals/profile_action_tiles.slint:28
 msgid "Mute conversation"
@@ -4328,7 +4328,7 @@ msgstr "Appeler"
 #: ui/modals/profile_info_card.slint:57
 msgctxt "profile bio"
 msgid "About"
-msgstr "À propos"
+msgstr "Bio"
 
 #: ui/modals/profile_info_card.slint:83 ui/pages/account_recovery.slint:112
 #: ui/pages/register.slint:373
@@ -5166,11 +5166,11 @@ msgstr "Sauvegarde des clés"
 
 #: ui/settings/account_settings.slint:449
 msgid "Status: Backed up"
-msgstr "État : sauvegardé"
+msgstr "État : clés sauvegardées"
 
 #: ui/settings/account_settings.slint:449
 msgid "Status: Not backed up"
-msgstr "État : non sauvegardé"
+msgstr "État : clés non sauvegardées"
 
 #: ui/settings/account_settings.slint:449
 msgid "Status: Unknown"
@@ -5409,7 +5409,7 @@ msgstr "Grande"
 #: ui/settings/appearance_settings.slint:254
 msgctxt "text size"
 msgid "Largest"
-msgstr "Plus volumineux"
+msgstr "Très grande"
 
 #: ui/settings/appearance_settings.slint:341
 msgid "Glass effects"
@@ -5553,7 +5553,7 @@ msgstr ""
 
 #: ui/settings/encryption_settings.slint:130
 msgid "Allow sealed sender from anyone"
-msgstr "Autoriser l'expéditeur scellé pour tout le monde"
+msgstr "Autoriser les messages scellés de tout le monde"
 
 #: ui/settings/encryption_settings.slint:145
 msgid ""
@@ -5775,11 +5775,11 @@ msgstr "Trier par"
 #: ui/sidebar/section_context_menu.slint:277
 msgctxt "conversation sort"
 msgid "Recent"
-msgstr "Récents"
+msgstr "Récentes"
 
 #: ui/sidebar/section_context_menu.slint:294
 msgid "Unread first"
-msgstr "Non lus d'abord"
+msgstr "Non lues d’abord"
 
 #: ui/sidebar/section_context_menu.slint:311
 msgid "Name (A–Z)"

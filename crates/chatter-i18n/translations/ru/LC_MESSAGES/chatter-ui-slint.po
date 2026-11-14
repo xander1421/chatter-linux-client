@@ -139,7 +139,7 @@ msgstr "Версия приложения"
 #: ui/activity/activity_sheet.slint:184
 msgctxt "installed version"
 msgid "Unknown"
-msgstr "Неизвестно"
+msgstr "Неизвестна"
 
 #: ui/activity/activity_sheet.slint:187 ui/sidebar/update_banner.slint:30
 msgid "Update available"
@@ -1857,13 +1857,13 @@ msgid_plural ""
 "Mesh is on but the Bluetooth radio is unavailable. Only the {n} connected "
 "relays can carry, and relays need internet."
 msgstr[0] ""
-"Меш включён, но радиомодуль Bluetooth недоступно. Сообщение может донести "
+"Меш включён, но радиомодуль Bluetooth недоступен. Сообщение может донести "
 "только {n} подключённый ретранслятор, а ретрансляторам нужен интернет."
 msgstr[1] ""
-"Меш включён, но радиомодуль Bluetooth недоступно. Сообщение могут донести "
+"Меш включён, но радиомодуль Bluetooth недоступен. Сообщение могут донести "
 "только {n} подключённых ретранслятора, а ретрансляторам нужен интернет."
 msgstr[2] ""
-"Меш включён, но радиомодуль Bluetooth недоступно. Сообщение могут донести "
+"Меш включён, но радиомодуль Bluetooth недоступен. Сообщение могут донести "
 "только {n} подключённых ретрансляторов, а ретрансляторам нужен интернет."
 
 #: ui/components/connection_banner.slint:123
@@ -2211,7 +2211,7 @@ msgstr "Отменить поиск"
 #: ui/components/unified_search.slint:615
 msgctxt "search filter"
 msgid "All"
-msgstr "Все"
+msgstr "Всё"
 
 #: ui/components/unified_search.slint:617
 msgid "Messages"
@@ -2237,7 +2237,7 @@ msgstr "Голосовые"
 #: ui/components/unified_search.slint:629
 msgctxt "tab"
 msgid "Selected"
-msgstr "Выбрано"
+msgstr "Выбрана"
 
 #: ui/components/unified_search.slint:654
 msgid "{0} {1}+"
@@ -2901,7 +2901,7 @@ msgstr "Проверено"
 
 #: ui/mesh/mesh_peer_sheet.slint:109 ui/modals/profile_action_tiles.slint:34
 msgid "Message"
-msgstr "Сообщение"
+msgstr "Написать"
 
 #: ui/mesh/mesh_peer_sheet.slint:116 ui/mesh/mesh_peer_sheet.slint:186
 msgid "Verify"
@@ -3426,7 +3426,7 @@ msgstr "Уведомления из этого канала приходить �
 
 #: ui/modals/channel_notifications.slint:60
 msgid "When not muted, notify me for:"
-msgstr "Когда уведомления включены, уведомлять о:"
+msgstr "Когда уведомления включены:"
 
 #: ui/modals/channel_notifications.slint:76
 msgid "All messages"
@@ -3944,12 +3944,12 @@ msgstr ""
 #: ui/modals/friends_requests_tab.slint:408
 msgctxt "request type"
 msgid "Private · {}"
-msgstr "Личное · {}"
+msgstr "Личный · {}"
 
 #: ui/modals/friends_requests_tab.slint:408
 msgctxt "request type"
 msgid "Private"
-msgstr "Личное"
+msgstr "Личный"
 
 #: ui/modals/friends_requests_tab.slint:484
 msgid "No pending group invites"
@@ -4028,7 +4028,7 @@ msgstr "Очистить"
 
 #: ui/modals/jarvis_memory.slint:108
 msgid "Reload"
-msgstr "Перезагрузить"
+msgstr "Обновить"
 
 #: ui/modals/jarvis_memory.slint:108 ui/server_records/screen.slint:57
 msgid "Refresh"
@@ -4328,7 +4328,7 @@ msgstr "Ещё"
 #: ui/modals/profile_action_tiles.slint:39
 msgctxt "action"
 msgid "Call"
-msgstr "Звонок"
+msgstr "Позвонить"
 
 #: ui/modals/profile_info_card.slint:57
 msgctxt "profile bio"
@@ -4562,7 +4562,7 @@ msgstr "Подтвердить"
 
 #: ui/modals/sessions.slint:373
 msgid "Revoke all other sessions"
-msgstr "Отозвать все другие сеансы"
+msgstr "Завершить все другие сеансы"
 
 #: ui/modals/sessions.slint:386
 msgid ""
@@ -4583,7 +4583,7 @@ msgstr[2] ""
 
 #: ui/modals/sessions.slint:403
 msgid "Revoke all"
-msgstr "Отозвать все"
+msgstr "Завершить все"
 
 #: ui/modals/user_profile.slint:203
 msgid "Offline"
@@ -4665,9 +4665,7 @@ msgstr "Заблокировать {}?"
 msgid ""
 "Blocked people can't call or message you. You can unblock them from their "
 "profile or Contacts › Blocked."
-msgstr ""
-"Заблокированные не смогут звонить вам и писать. Разблокировать можно в "
-"профиле или в Контактах › Заблокированные."
+msgstr "Заблокированные не смогут звонить вам и писать. Разблокировать можно в профиле или в разделе «Контакты» › «Заблокированные»."
 
 #: ui/modals/user_profile.slint:826
 msgid "Contact name"
@@ -5403,7 +5401,7 @@ msgstr "Крупный"
 #: ui/settings/appearance_settings.slint:254
 msgctxt "text size"
 msgid "Largest"
-msgstr "Сначала большие"
+msgstr "Самый крупный"
 
 #: ui/settings/appearance_settings.slint:341
 msgid "Glass effects"
@@ -5478,7 +5476,7 @@ msgstr "Ctrl+F"
 #: ui/settings/appearance_settings.slint:603
 msgctxt "search shortcut"
 msgid "Both"
-msgstr "Оба"
+msgstr "Оба сочетания"
 
 #: ui/settings/appearance_settings.slint:607
 msgid "Search shortcut {}"
@@ -5695,7 +5693,7 @@ msgstr "Показывать, когда вы печатаете"
 
 #: ui/settings/settings_screen.slint:283 ui/settings/settings_screen.slint:617
 msgid "About"
-msgstr "О себе"
+msgstr "О приложении"
 
 #: ui/sidebar/channel_list_item.slint:238 ui/sidebar/dm_list_item.slint:238
 msgid "Pinned"
@@ -5735,7 +5733,7 @@ msgstr "Нет контактов по запросу «{}»"
 
 #: ui/sidebar/create_menu.slint:180
 msgid "No friends yet. Add one from Contacts."
-msgstr "Пока нет друзей. Добавьте кого-нибудь в Контактах."
+msgstr "Пока нет друзей. Добавьте кого-нибудь в разделе «Контакты»."
 
 #: ui/sidebar/custom_section_list.slint:52
 msgid "Expanded section. Press Shift+F10 or Menu for section options."
@@ -5762,7 +5760,7 @@ msgstr "Сортировка"
 #: ui/sidebar/section_context_menu.slint:277
 msgctxt "conversation sort"
 msgid "Recent"
-msgstr "Недавние"
+msgstr "По последней активности"
 
 #: ui/sidebar/section_context_menu.slint:294
 msgid "Unread first"

@@ -21,7 +21,7 @@ msgstr "Activitate"
 #: ui/activity/activity_global.slint:15
 msgctxt "push notifications"
 msgid "Off"
-msgstr "Oprit"
+msgstr "Oprite"
 
 #: ui/activity/activity_global.slint:16
 msgid "Never"
@@ -108,7 +108,7 @@ msgstr "Ultima conectare"
 #: ui/activity/activity_sheet.slint:170
 msgctxt "push notifications"
 msgid "Push"
-msgstr "Push"
+msgstr "Notificări push"
 
 #: ui/activity/activity_sheet.slint:173 ui/mesh/mesh_list.slint:44
 #: ui/mesh/mesh_setup_sheet.slint:120 ui/sidebar/sidebar_footer.slint:264
@@ -139,7 +139,7 @@ msgstr "Versiunea aplicației"
 #: ui/activity/activity_sheet.slint:184
 msgctxt "installed version"
 msgid "Unknown"
-msgstr "Necunoscut"
+msgstr "Necunoscută"
 
 #: ui/activity/activity_sheet.slint:187 ui/sidebar/update_banner.slint:30
 msgid "Update available"
@@ -1277,27 +1277,27 @@ msgstr "Apel primit"
 
 #: ui/chat/message_call.slint:157
 msgid "Outgoing video call started"
-msgstr "Apel video efectuat, început"
+msgstr "Apel video inițiat, în curs"
 
 #: ui/chat/message_call.slint:157
 msgid "Outgoing call started"
-msgstr "Apel efectuat, început"
+msgstr "Apel inițiat, în curs"
 
 #: ui/chat/message_call.slint:158
 msgid "Incoming video call started"
-msgstr "Apel video primit, început"
+msgstr "Apel video primit, în curs"
 
 #: ui/chat/message_call.slint:158
 msgid "Incoming call started"
-msgstr "Apel primit, început"
+msgstr "Apel primit, în curs"
 
 #: ui/chat/message_call.slint:161
 msgid "Outgoing video call ended"
-msgstr "Apel video efectuat, încheiat"
+msgstr "Apel video inițiat, încheiat"
 
 #: ui/chat/message_call.slint:161
 msgid "Outgoing call ended"
-msgstr "Apel efectuat, încheiat"
+msgstr "Apel inițiat, încheiat"
 
 #: ui/chat/message_call.slint:162
 msgid "Incoming video call ended"
@@ -2235,12 +2235,12 @@ msgstr "Linkuri"
 #: ui/components/unified_search.slint:621
 msgctxt "search filter"
 msgid "Voice"
-msgstr "Voce"
+msgstr "Mesaje vocale"
 
 #: ui/components/unified_search.slint:629
 msgctxt "tab"
 msgid "Selected"
-msgstr "Selectat"
+msgstr "Selectată"
 
 #: ui/components/unified_search.slint:654
 msgid "{0} {1}+"
@@ -2756,9 +2756,7 @@ msgstr "Elimini persoana {}? Cheia grupului se va schimba."
 
 #: ui/mesh/mesh_info_sheet.slint:308
 msgid "Reachable members will pause sending until the creator rotates the key."
-msgstr ""
-"Membrii care pot fi contactați nu vor putea trimite mesaje până când "
-"persoana care a creat grupul nu schimbă cheia."
+msgstr "Membrii care pot fi contactați nu vor putea trimite mesaje până când persoana care a creat grupul nu schimbă cheia."
 
 #: ui/mesh/mesh_info_sheet.slint:309
 msgid "Leave this mesh conversation?"
@@ -2907,7 +2905,7 @@ msgstr "Verificat"
 
 #: ui/mesh/mesh_peer_sheet.slint:109 ui/modals/profile_action_tiles.slint:34
 msgid "Message"
-msgstr "Mesaj"
+msgstr "Scrie"
 
 #: ui/mesh/mesh_peer_sheet.slint:116 ui/mesh/mesh_peer_sheet.slint:186
 msgid "Verify"
@@ -3184,7 +3182,7 @@ msgstr "Fă alt membru proprietar ca să poți ieși."
 
 #: ui/modals/channel_danger.slint:140
 msgid "Transfer ownership to leave, or delete the channel."
-msgstr "Transferă proprietatea ca să ieși, sau șterge canalul."
+msgstr "Transferă proprietatea ca să ieși sau șterge canalul."
 
 #: ui/modals/channel_danger.slint:150
 msgid "Transfer…"
@@ -3273,19 +3271,19 @@ msgstr "Numele este obligatoriu"
 
 #: ui/modals/channel_identity_fields.slint:105
 msgid "Description (optional)"
-msgstr "Descriere (opțional)"
+msgstr "Descriere (opțională)"
 
 #: ui/modals/channel_members.slint:130
 msgid "Mute 1h"
-msgstr "Restricționează 1 oră"
+msgstr "Interzice scrierea 1 oră"
 
 #: ui/modals/channel_members.slint:131
 msgid "Mute 1 day"
-msgstr "Restricționează 1 zi"
+msgstr "Interzice scrierea 1 zi"
 
 #: ui/modals/channel_members.slint:132
 msgid "Mute until unmuted"
-msgstr "Restricționează nelimitat"
+msgstr "Interzice scrierea nelimitat"
 
 #: ui/modals/channel_members.slint:137
 msgid "Moderator"
@@ -3324,7 +3322,7 @@ msgstr "invitat"
 #: ui/modals/channel_members.slint:335
 msgctxt "member moderation"
 msgid "muted"
-msgstr "restricționat"
+msgstr "fără drept de scriere"
 
 #: ui/modals/channel_members.slint:353
 msgctxt "member identity"
@@ -3338,7 +3336,7 @@ msgstr "Acțiuni pentru {}"
 #: ui/modals/channel_members.slint:435
 msgctxt "member list"
 msgid "Banned"
-msgstr "Acces interzis"
+msgstr "Membri cu acces interzis"
 
 #: ui/modals/channel_members.slint:469
 msgid "Unban"
@@ -3351,11 +3349,11 @@ msgstr "ROL"
 #: ui/modals/channel_members.slint:537
 msgctxt "member moderation"
 msgid "Unmute"
-msgstr "Anulează restricția"
+msgstr "Permite scrierea"
 
 #: ui/modals/channel_members.slint:545
 msgid "MUTE IN CHANNEL"
-msgstr "RESTRICȚIONARE ÎN CANAL"
+msgstr "INTERZICE SCRIEREA ÎN CANAL"
 
 #: ui/modals/channel_members.slint:565
 msgid "Make owner…"
@@ -3554,7 +3552,7 @@ msgstr "Fără sunet"
 #: ui/modals/channel_settings.slint:427
 msgctxt "notifications"
 msgid "Off"
-msgstr "Oprit"
+msgstr "Oprite"
 
 #: ui/modals/channel_settings.slint:449
 msgid "Call history"
@@ -3582,7 +3580,7 @@ msgstr "Arhivează sau șterge"
 
 #: ui/modals/channel_settings.slint:559
 msgid "Messages disappear after {} (set when the channel was created)"
-msgstr "Mesajele dispar după {} (setat la crearea canalului)"
+msgstr "Mesajele dispar după {} (durată stabilită la crearea canalului)"
 
 #: ui/modals/channel_settings.slint:589
 msgid "Name must be at least 3 characters"
@@ -3635,7 +3633,7 @@ msgstr "Canal nou"
 
 #: ui/modals/create_channel.slint:279
 msgid "Password (optional)"
-msgstr "Parolă (opțional)"
+msgstr "Parolă (opțională)"
 
 #: ui/modals/create_channel.slint:286
 msgid "Anyone with password joins without invite"
@@ -3771,7 +3769,7 @@ msgstr "Grup"
 #: ui/modals/forward_message.slint:223
 msgctxt "chat type"
 msgid "Secret"
-msgstr "Secret"
+msgstr "Secretă"
 
 #: ui/modals/forward_message.slint:223
 msgid "DM"
@@ -3948,12 +3946,12 @@ msgstr ""
 #: ui/modals/friends_requests_tab.slint:408
 msgctxt "request type"
 msgid "Private · {}"
-msgstr "Privat · {}"
+msgstr "Privată · {}"
 
 #: ui/modals/friends_requests_tab.slint:408
 msgctxt "request type"
 msgid "Private"
-msgstr "Privat"
+msgstr "Privată"
 
 #: ui/modals/friends_requests_tab.slint:484
 msgid "No pending group invites"
@@ -4118,7 +4116,7 @@ msgstr "Navigare"
 #: ui/modals/keyboard_shortcuts.slint:124
 msgctxt "action"
 msgid "Search"
-msgstr "Căutare"
+msgstr "Caută"
 
 #: ui/modals/keyboard_shortcuts.slint:125
 msgid "Ctrl + K"
@@ -4337,7 +4335,7 @@ msgstr "Apelează"
 #: ui/modals/profile_info_card.slint:57
 msgctxt "profile bio"
 msgid "About"
-msgstr "Despre"
+msgstr "Bio"
 
 #: ui/modals/profile_info_card.slint:83 ui/pages/account_recovery.slint:112
 #: ui/pages/register.slint:373
@@ -4864,7 +4862,7 @@ msgstr "Înregistrare"
 
 #: ui/pages/login.slint:319
 msgid "Link to an existing account on another device"
-msgstr "Asociază un cont existent de pe alt dispozitiv"
+msgstr "Asociază acest dispozitiv cu un cont existent pe alt dispozitiv"
 
 #: ui/pages/register.slint:117 ui/pages/register.slint:602
 msgid "Create account"
@@ -4908,7 +4906,7 @@ msgstr "Puterea parolei: bună"
 
 #: ui/pages/register.slint:422
 msgid "Password strength: Strong"
-msgstr "Puterea parolei: puternică"
+msgstr "Puterea parolei: mare"
 
 #: ui/pages/register.slint:440
 msgctxt "password strength"
@@ -4956,7 +4954,7 @@ msgstr "Puterea PIN-ului: medie"
 
 #: ui/pages/register.slint:514
 msgid "PIN strength: Strong"
-msgstr "Puterea PIN-ului: puternică"
+msgstr "Puterea PIN-ului: mare"
 
 #: ui/pages/register.slint:538 ui/settings/account_settings.slint:381
 msgid "PINs do not match"
@@ -5391,12 +5389,12 @@ msgstr "Mărimea textului"
 #: ui/settings/appearance_settings.slint:251
 msgctxt "text size"
 msgid "Small"
-msgstr "Mic"
+msgstr "Mică"
 
 #: ui/settings/appearance_settings.slint:252
 msgctxt "text size"
 msgid "Default"
-msgstr "Implicit"
+msgstr "Implicită"
 
 #: ui/settings/appearance_settings.slint:252
 msgid "Match this device's font size"
@@ -5410,7 +5408,7 @@ msgstr "Mare"
 #: ui/settings/appearance_settings.slint:254
 msgctxt "text size"
 msgid "Largest"
-msgstr "Cele mai mari"
+msgstr "Cea mai mare"
 
 #: ui/settings/appearance_settings.slint:341
 msgid "Glass effects"
@@ -5709,7 +5707,7 @@ msgstr "Despre"
 
 #: ui/sidebar/channel_list_item.slint:238 ui/sidebar/dm_list_item.slint:238
 msgid "Pinned"
-msgstr "Fixat"
+msgstr "Fixată"
 
 #: ui/sidebar/channel_list_item.slint:262 ui/sidebar/dm_list_item.slint:260
 msgid "typing"

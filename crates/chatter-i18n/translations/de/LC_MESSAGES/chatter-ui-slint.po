@@ -553,7 +553,7 @@ msgstr "Alle"
 #: ui/calls/call_history_screen.slint:216
 msgctxt "call filter"
 msgid "Missed"
-msgstr "Verpasst"
+msgstr "Verpasste"
 
 #: ui/calls/call_history_screen.slint:258 ui/modals/channel_settings.slint:363
 #: ui/server_records/screen.slint:94
@@ -1925,7 +1925,7 @@ msgstr "Schließen"
 #. is not a name.
 #: ui/components/emoji_picker.slint:73 ui/components/gif_picker.slint:181
 msgid "Recent"
-msgstr "Zuletzt"
+msgstr "Zuletzt verwendet"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
@@ -2200,7 +2200,7 @@ msgstr "Suche abbrechen"
 #: ui/components/unified_search.slint:615
 msgctxt "search filter"
 msgid "All"
-msgstr "Alle"
+msgstr "Alles"
 
 #: ui/components/unified_search.slint:617
 msgid "Messages"
@@ -2887,7 +2887,7 @@ msgstr "Verifiziert"
 
 #: ui/mesh/mesh_peer_sheet.slint:109 ui/modals/profile_action_tiles.slint:34
 msgid "Message"
-msgstr "Nachricht"
+msgstr "Schreiben"
 
 #: ui/mesh/mesh_peer_sheet.slint:116 ui/mesh/mesh_peer_sheet.slint:186
 msgid "Verify"
@@ -3264,15 +3264,15 @@ msgstr "Beschreibung (optional)"
 
 #: ui/modals/channel_members.slint:130
 msgid "Mute 1h"
-msgstr "1 Std. stumm"
+msgstr "1 Std. Schreibsperre"
 
 #: ui/modals/channel_members.slint:131
 msgid "Mute 1 day"
-msgstr "1 Tag stumm"
+msgstr "1 Tag Schreibsperre"
 
 #: ui/modals/channel_members.slint:132
 msgid "Mute until unmuted"
-msgstr "Dauerhaft stummschalten"
+msgstr "Schreibsperre bis zur Aufhebung"
 
 #: ui/modals/channel_members.slint:137
 msgid "Moderator"
@@ -3311,7 +3311,7 @@ msgstr "eingeladen"
 #: ui/modals/channel_members.slint:335
 msgctxt "member moderation"
 msgid "muted"
-msgstr "stumm"
+msgstr "Schreibsperre"
 
 #: ui/modals/channel_members.slint:353
 msgctxt "member identity"
@@ -3325,7 +3325,7 @@ msgstr "Aktionen für {}"
 #: ui/modals/channel_members.slint:435
 msgctxt "member list"
 msgid "Banned"
-msgstr "Gesperrt"
+msgstr "Gesperrte Mitglieder"
 
 #: ui/modals/channel_members.slint:469
 msgid "Unban"
@@ -3338,11 +3338,11 @@ msgstr "ROLLE"
 #: ui/modals/channel_members.slint:537
 msgctxt "member moderation"
 msgid "Unmute"
-msgstr "Stummschaltung aufheben"
+msgstr "Schreibsperre aufheben"
 
 #: ui/modals/channel_members.slint:545
 msgid "MUTE IN CHANNEL"
-msgstr "IM KANAL STUMMSCHALTEN"
+msgstr "SCHREIBSPERRE IM KANAL"
 
 #: ui/modals/channel_members.slint:565
 msgid "Make owner…"
@@ -3415,7 +3415,7 @@ msgstr "Du bekommst keine Benachrichtigungen von diesem Kanal"
 
 #: ui/modals/channel_notifications.slint:60
 msgid "When not muted, notify me for:"
-msgstr "Wenn nicht stumm, benachrichtige mich bei:"
+msgstr "Ohne Stummschaltung benachrichtigen bei:"
 
 #: ui/modals/channel_notifications.slint:76
 msgid "All messages"
@@ -3762,7 +3762,7 @@ msgstr "Geheim"
 
 #: ui/modals/forward_message.slint:223
 msgid "DM"
-msgstr "Direkt"
+msgstr "Direktnachricht"
 
 #: ui/modals/forward_message.slint:285
 msgid "Share"
@@ -4323,7 +4323,7 @@ msgstr "Anrufen"
 #: ui/modals/profile_info_card.slint:57
 msgctxt "profile bio"
 msgid "About"
-msgstr "Über"
+msgstr "Bio"
 
 #: ui/modals/profile_info_card.slint:83 ui/pages/account_recovery.slint:112
 #: ui/pages/register.slint:373
@@ -4358,10 +4358,7 @@ msgstr "Nicht verifiziert · Sicherheitsnummer"
 msgid ""
 "Compare this number with your contact to verify end-to-end encryption. If "
 "the numbers match, your conversation is secure."
-msgstr ""
-"Vergleiche diese Nummer mit deinem Kontakt, um die Ende-zu-Ende-"
-"Verschlüsselung zu prüfen. Wenn die Nummern übereinstimmen, ist eure "
-"Unterhaltung sicher."
+msgstr "Vergleiche diese Nummer mit der deines Kontakts, um die Ende-zu-Ende-Verschlüsselung zu prüfen. Wenn die Nummern übereinstimmen, ist eure Unterhaltung sicher."
 
 #: ui/modals/profile_safety_number.slint:127
 msgid "Updating verification…"
@@ -4794,7 +4791,7 @@ msgstr ""
 
 #: ui/pages/link_device.slint:188
 msgid "Generate QR"
-msgstr "QR erzeugen"
+msgstr "QR-Code erzeugen"
 
 #: ui/pages/login.slint:123
 msgid "Sign in to continue"
@@ -4995,7 +4992,7 @@ msgstr "Freunde hinzufügen"
 
 #: ui/pages/welcome.slint:131 ui/pages/welcome.slint:171
 msgid "Find people you know on Chatter"
-msgstr "Finde Leute, die du auf Chatter kennst"
+msgstr "Finde Bekannte auf Chatter"
 
 #: ui/pages/welcome.slint:202 ui/pages/welcome.slint:235
 #: ui/sidebar/sidebar.slint:768
@@ -5403,7 +5400,7 @@ msgstr "Groß"
 #: ui/settings/appearance_settings.slint:254
 msgctxt "text size"
 msgid "Largest"
-msgstr "Größte"
+msgstr "Am größten"
 
 #: ui/settings/appearance_settings.slint:341
 msgid "Glass effects"
@@ -5702,7 +5699,7 @@ msgstr "Zeigen, wenn du eine Nachricht schreibst"
 
 #: ui/settings/settings_screen.slint:283 ui/settings/settings_screen.slint:617
 msgid "About"
-msgstr "Über"
+msgstr "Über Chatter"
 
 #: ui/sidebar/channel_list_item.slint:238 ui/sidebar/dm_list_item.slint:238
 msgid "Pinned"
@@ -5771,7 +5768,7 @@ msgstr "Sortieren nach"
 #: ui/sidebar/section_context_menu.slint:277
 msgctxt "conversation sort"
 msgid "Recent"
-msgstr "Zuletzt"
+msgstr "Letzte Aktivität"
 
 #: ui/sidebar/section_context_menu.slint:294
 msgid "Unread first"
