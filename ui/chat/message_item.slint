@@ -63,6 +63,7 @@ export component MessageItem inherits Rectangle {
     in property <length> cache-viewport-height: 0px;
     in property <bool> can-thread: true;  // Threads are a channel feature
     in property <string> failure-reason: "";
+    in property <bool> can-retry: false;
     in property <string> delivery-status: "";  // "sending", "unconfirmed", "sent", "failed", "delivered", "read" for own messages
     /// Whether this message went over the mesh. Set by the caller rather than
     /// inferred from the status string: "sent" is a mesh state too — in fact the
@@ -899,6 +900,7 @@ export component MessageItem inherits Rectangle {
                             message-id: root.message-id;
                             delivery-status: root.delivery-status;
                             failure-reason: root.failure-reason;
+                            can-retry: root.can-retry;
                             is-own: root.is-own;
                             is-edited: root.is-edited;
                             disappearing: root.disappearing;
@@ -973,6 +975,7 @@ export component MessageItem inherits Rectangle {
                             padding-bottom: root.photo-message ? Spacing.sm : Spacing.none;
                             delivery-status: root.delivery-status;
                             failure-reason: root.failure-reason;
+                            can-retry: root.can-retry;
                             has-reactions: root.has-reactions;
                             is-edited: root.is-edited;
                             disappearing: root.disappearing;

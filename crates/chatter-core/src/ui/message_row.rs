@@ -82,6 +82,8 @@ pub struct MessageRow {
     pub reply_to_thumbnail_bytes: Option<Vec<u8>>,
     pub delivery_status: String,
     pub failure_reason: String,
+    /// A failed send that Retry can still deliver (`Message::can_retry_send`).
+    pub can_retry: bool,
     /// Raw avatar bytes for anonymous group members.
     pub sender_avatar_bytes: Option<Arc<[u8]>>,
     // Call message fields
@@ -302,6 +304,7 @@ pub fn message_to_row(
         )
         .to_owned(),
         failure_reason: msg.failure_reason.clone().unwrap_or_default(),
+        can_retry: msg.can_retry_send(),
         is_pinned: msg.is_pinned,
         is_call,
         is_channel_call: matches!(msg.conversation_type, ConversationType::Channel),

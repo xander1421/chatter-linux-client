@@ -214,8 +214,15 @@ impl Message {
     /// transport limit permanently.
     #[must_use]
     pub fn can_retry_send(&self) -> bool {
+        let reason = self.failure_reason.as_deref();
+        // A channel refusal is final: the send journal goes `terminal` and
+        // `durable_channel_retry` refuses a fresh post, so Retry would only
+        // ever fail.
+        let channel_refused = self.conversation_type == ConversationType::Channel
+            && matches!(reason, Some("Message rejected" | "Not allowed" | "You are muted"));
         self.delivery_status == "failed" && !self.is_deleted
-            && self.failure_reason.as_deref() != Some("Message too long")
+            && reason != Some("Message too long")
+            && !channel_refused
     }
 
     /// Menu actions for this message. `is_own` is the caller's authorship check

@@ -33,6 +33,7 @@ export component MessageAttachments inherits VerticalLayout {
     in property <string> message-id;
     in property <string> delivery-status;
     in property <string> failure-reason;
+    in property <bool> can-retry;
     in property <bool> is-own;
     in property <bool> is-edited;
     in property <bool> disappearing;
@@ -194,7 +195,7 @@ export component MessageAttachments inherits VerticalLayout {
                 x: Spacing.sm; y: Spacing.xs;
                 width: self.preferred-width; height: self.preferred-height;
                 has-reactions: false; overlay-media: true;
-                delivery-status: root.delivery-status; failure-reason: root.failure-reason;
+                delivery-status: root.delivery-status; failure-reason: root.failure-reason; can-retry: root.can-retry;
                 is-edited: root.is-edited; is-own: root.is-own; disappearing: root.disappearing;
                 is-pinned: root.is-pinned; mesh-delivery: root.mesh-delivery;
                 message-id: root.message-id; mobile: root.mobile;
@@ -394,7 +395,7 @@ export component MessageAttachments inherits VerticalLayout {
                     has-reactions: false;
                     overlay-media: true;
                     delivery-status: root.delivery-status;
-                    failure-reason: root.failure-reason;
+                    failure-reason: root.failure-reason; can-retry: root.can-retry;
                     is-edited: root.is-edited;
                     disappearing: root.disappearing;
                     is-own: root.is-own;

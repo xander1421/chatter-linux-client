@@ -677,6 +677,7 @@ pub(super) fn handle_persisted_delivery_status(
             .to_owned()
         })
         .unwrap_or(status);
+    let can_retry = stored.as_ref().is_some_and(|message| message.can_retry_send());
     let failure_reason = stored
         .and_then(|message| message.failure_reason)
         .unwrap_or_default();
@@ -707,6 +708,7 @@ pub(super) fn handle_persisted_delivery_status(
                         )
                         .into();
                     message.failure_reason = failure_reason.clone().into();
+                    message.can_retry = can_retry;
                     model.set_row_data(i, message);
                     // message_id is unique across both models; done.
                     return;

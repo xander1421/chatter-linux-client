@@ -107,6 +107,7 @@ export struct MessageItemData {
     reply-to-thumbnail-height: int,  // Quoted thumbnail natural height (px)
     show-sender: bool,
     failure-reason: string,
+    can-retry: bool,
     delivery-status: string,  // "sending", "sent", "failed", "delivered", "read", or "" for non-own messages
     is-pinned: bool,          // Whether message is pinned
     // Call message fields

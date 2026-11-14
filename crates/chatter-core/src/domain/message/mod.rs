@@ -526,6 +526,14 @@ mod tests {
         assert!(actions.resend && !actions.download && !actions.edit);
         assert!(!actions.react && !actions.delete_for_everyone && !actions.info);
 
+        let mut refused = bubble("failed", Some("hello"), false, young);
+        refused.failure_reason = Some("Message rejected".into());
+        assert!(refused.can_retry_send(), "a refused DM retries with new ciphertext");
+        refused.conversation_type = ConversationType::Channel;
+        assert!(!refused.can_retry_send(), "a refused channel post never retries");
+        refused.failure_reason = Some("Not delivered".into());
+        assert!(refused.can_retry_send());
+
         let sent_text = bubble("sent", Some("hello"), false, young);
         assert!(!sent_text.can_retry_send());
         let actions = sent_text.actions(true, NOW);

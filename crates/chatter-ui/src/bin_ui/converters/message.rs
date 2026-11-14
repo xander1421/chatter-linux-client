@@ -294,6 +294,7 @@ impl MessageDisplayData {
             reply_to_thumbnail_height: reply_to_thumb_h,
             show_sender: true,
             failure_reason: self.row.failure_reason.clone().into(),
+            can_retry: self.row.can_retry,
             delivery_status: viewer.delivery_status.into(),
             is_pinned: self.row.is_pinned,
             is_call: self.row.is_call,

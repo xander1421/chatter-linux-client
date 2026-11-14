@@ -94,6 +94,7 @@ pub fn wire_message_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             };
                             row.failure_reason =
                                 message.failure_reason.clone().unwrap_or_default().into();
+                            row.can_retry = message.can_retry_send();
                         } else {
                             row.delivery_status = "failed".into();
                         }

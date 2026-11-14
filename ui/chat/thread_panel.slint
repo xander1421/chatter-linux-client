@@ -627,6 +627,7 @@ export component ThreadPanel inherits Rectangle {
                         highlighted: item.message-id == root.highlighted-id;
                         delivery-status: item.delivery-status;
                         failure-reason: item.failure-reason;
+                        can-retry: item.can-retry;
                         can-thread: false;
                         has-avatar: item.has-avatar;
                         sender-avatar-source: item.sender-avatar-source;
