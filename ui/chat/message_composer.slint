@@ -559,8 +559,10 @@ export component MessageComposer inherits GlassSurface {
                 plain: true;
                 glyph: 20px;
                 // Above the shell, an opaque neutral plate keeps media out of
-                // the glyph. Inline controls share the shell.
-                background: root.lift-layout > 0 ? Colors.surface : transparent;
+                // the glyph. Inline controls share the shell, so the plate
+                // fades with the travel: held opaque until the row landed, it
+                // showed as a grey disc inside the shell on the way down.
+                background: Colors.surface.with-alpha(root.lift-layout);
                 border-radius: self.height / 2;
                 enabled: !root.disabled;
                 // On a phone the open drawer stands where the keyboard was, so
@@ -738,7 +740,7 @@ export component MessageComposer inherits GlassSurface {
                 touch: true;
                 plain: true;
                 glyph: 20px;
-                background: root.lift-layout > 0 ? Colors.surface : transparent;
+                background: Colors.surface.with-alpha(root.lift-layout);
                 border-radius: self.height / 2;
                 enabled: !root.disabled;
                 icon: Icons.paperclip;
