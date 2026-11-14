@@ -3776,6 +3776,8 @@ pub mod message_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Pin/Unpin Messages
+*/
         pub async fn pin_message(
             &mut self,
             request: impl tonic::IntoRequest<super::MessageUpdate>,
@@ -3797,6 +3799,7 @@ pub mod message_service_client {
                 .insert(GrpcMethod::new("chat.v1.MessageService", "PinMessage"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn unpin_message(
             &mut self,
             request: impl tonic::IntoRequest<super::MessageUpdate>,
@@ -3818,6 +3821,7 @@ pub mod message_service_client {
                 .insert(GrpcMethod::new("chat.v1.MessageService", "UnpinMessage"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn list_pinned_messages(
             &mut self,
             request: impl tonic::IntoRequest<super::GetMessagesRequest>,
@@ -3842,6 +3846,8 @@ pub mod message_service_client {
                 .insert(GrpcMethod::new("chat.v1.MessageService", "ListPinnedMessages"));
             self.inner.unary(req, path, codec).await
         }
+        /** Search Messages
+*/
         pub async fn search(
             &mut self,
             request: impl tonic::IntoRequest<super::MessageSearchRequest>,
@@ -3866,6 +3872,8 @@ pub mod message_service_client {
                 .insert(GrpcMethod::new("chat.v1.MessageService", "Search"));
             self.inner.unary(req, path, codec).await
         }
+        /** Event streaming (for real-time updates like new messages, edits, deletions, reactions)
+*/
         pub async fn stream_message_events(
             &mut self,
             request: impl tonic::IntoRequest<super::StreamMessageEventsRequest>,
@@ -3892,6 +3900,7 @@ pub mod message_service_client {
                 );
             self.inner.server_streaming(req, path, codec).await
         }
+        ///
         pub async fn stream_global_events(
             &mut self,
             request: impl tonic::IntoRequest<super::StreamGlobalEventsRequest>,
@@ -3915,134 +3924,6 @@ pub mod message_service_client {
             req.extensions_mut()
                 .insert(GrpcMethod::new("chat.v1.MessageService", "StreamGlobalEvents"));
             self.inner.server_streaming(req, path, codec).await
-        }
-    }
-}
-/// Generated client implementations.
-pub mod internal_message_service_client {
-    #![allow(
-        unused_variables,
-        dead_code,
-        missing_docs,
-        clippy::wildcard_imports,
-        clippy::let_unit_value,
-    )]
-    use tonic::codegen::*;
-    use tonic::codegen::http::Uri;
-    ///
-    #[derive(Debug, Clone)]
-    pub struct InternalMessageServiceClient<T> {
-        inner: tonic::client::Grpc<T>,
-    }
-    impl InternalMessageServiceClient<tonic::transport::Channel> {
-        /// Attempt to create a new client by connecting to a given endpoint.
-        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
-        where
-            D: TryInto<tonic::transport::Endpoint>,
-            D::Error: Into<StdError>,
-        {
-            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
-            Ok(Self::new(conn))
-        }
-    }
-    impl<T> InternalMessageServiceClient<T>
-    where
-        T: tonic::client::GrpcService<tonic::body::Body>,
-        T::Error: Into<StdError>,
-        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
-        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
-    {
-        pub fn new(inner: T) -> Self {
-            let inner = tonic::client::Grpc::new(inner);
-            Self { inner }
-        }
-        pub fn with_origin(inner: T, origin: Uri) -> Self {
-            let inner = tonic::client::Grpc::with_origin(inner, origin);
-            Self { inner }
-        }
-        pub fn with_interceptor<F>(
-            inner: T,
-            interceptor: F,
-        ) -> InternalMessageServiceClient<InterceptedService<T, F>>
-        where
-            F: tonic::service::Interceptor,
-            T::ResponseBody: Default,
-            T: tonic::codegen::Service<
-                http::Request<tonic::body::Body>,
-                Response = http::Response<
-                    <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
-                >,
-            >,
-            <T as tonic::codegen::Service<
-                http::Request<tonic::body::Body>,
-            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
-        {
-            InternalMessageServiceClient::new(
-                InterceptedService::new(inner, interceptor),
-            )
-        }
-        /// Compress requests with the given encoding.
-        ///
-        /// This requires the server to support it otherwise it might respond with an
-        /// error.
-        #[must_use]
-        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
-            self.inner = self.inner.send_compressed(encoding);
-            self
-        }
-        /// Enable decompressing responses.
-        #[must_use]
-        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
-            self.inner = self.inner.accept_compressed(encoding);
-            self
-        }
-        /// Limits the maximum size of a decoded message.
-        ///
-        /// Default: `4MB`
-        #[must_use]
-        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
-            self.inner = self.inner.max_decoding_message_size(limit);
-            self
-        }
-        /// Limits the maximum size of an encoded message.
-        ///
-        /// Default: `usize::MAX`
-        #[must_use]
-        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
-            self.inner = self.inner.max_encoding_message_size(limit);
-            self
-        }
-        /** Internal-only comprehensive message deletion
- Only callable by Temporal workers with internal API key
-*/
-        pub async fn internal_delete_message(
-            &mut self,
-            request: impl tonic::IntoRequest<super::InternalDeleteMessageRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::InternalDeleteMessageResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.InternalMessageService/InternalDeleteMessage",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new(
-                        "chat.v1.InternalMessageService",
-                        "InternalDeleteMessage",
-                    ),
-                );
-            self.inner.unary(req, path, codec).await
         }
     }
 }
