@@ -70,7 +70,8 @@ final class DeviceControl: XCTestCase {
             add(dump)
         }
 
-        // `x,y` taps, `wait:N` sleeps. Steps are separated by `|`, and every one
+        // `x,y` taps, `wait:N` sleeps, `home` backgrounds, `activate` resumes.
+        // Steps are separated by `|`, and every one
         // gets a screenshot so a failure shows which step it stopped on.
         for (i, raw) in (env["CHATTER_STEPS"] ?? "").split(separator: "|").enumerated() {
             let step = raw.trimmingCharacters(in: .whitespaces)
@@ -79,6 +80,12 @@ final class DeviceControl: XCTestCase {
             if step.hasPrefix("text:") {
                 XCTFail("typing is not automatable on Slint/iOS — see the note at the top of this file. Type by hand, then drive taps.")
                 return
+            } else if step == "home" {
+                XCUIDevice.shared.press(.home)
+                Thread.sleep(forTimeInterval: 1.5)
+            } else if step == "activate" {
+                app.activate()
+                Thread.sleep(forTimeInterval: 1.5)
             } else if let secs = step.dropFirstIfPrefixed("wait:").flatMap(Double.init) {
                 // For steps that kick off slow work (registration does key
                 // generation + several RPCs) — screenshot after it settles.
