@@ -14,6 +14,8 @@ use std::sync::Arc;
 pub mod keys {
     // App settings
     pub const THEME: &str = "app.theme";
+    /// Settings › Appearance › Language — "system" or a shipped language code.
+    pub const LANGUAGE: &str = "app.language";
     /// Settings › Appearance › Text size — `services::appearance::TextSize`.
     pub const TEXT_SIZE: &str = "app.text_size";
     /// Settings › Appearance › Message spacing — `services::appearance::MessageDensity`.

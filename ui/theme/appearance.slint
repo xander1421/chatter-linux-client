@@ -6,7 +6,16 @@
 
 import { Palette } from "std-widgets.slint";
 
+export struct LanguageOption { code: string, name: string }
+
 export global Appearance {
+    // Settings › Appearance › Language. "system" or a `chatter_i18n` code.
+    // Written from Rust with what core persisted; the settings page writes it
+    // back and fires `language-changed`, and Rust switches the bundled
+    // translation. `languages` is "system" plus every shipped language.
+    in-out property <string> language: "system";
+    in property <[LanguageOption]> languages;
+    callback language-changed(string);
     in-out property <bool> keyboard-focus-visible: false;
     // Settings › Appearance › Reduce animations. Written from Rust with what
     // core persisted; the settings page writes it back and fires

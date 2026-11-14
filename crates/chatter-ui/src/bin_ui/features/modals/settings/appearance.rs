@@ -25,6 +25,29 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
     });
 
+    // Language (Settings › Appearance). Same shape as the theme; the window
+    // exists by now, which `select_bundled_translation` requires.
+    let languages: Vec<crate::LanguageOption> =
+        std::iter::once(crate::LanguageOption { code: "system".into(), name: "".into() })
+            .chain(chatter_i18n::LANGUAGES.iter().map(|language| crate::LanguageOption {
+                code: language.code.into(),
+                name: language.native_name.into(),
+            }))
+            .collect();
+    appearance.set_languages(slint::ModelRc::new(slint::VecModel::from(languages)));
+    appearance.set_language(apply_language(&ui_ctx.app_language()).into());
+    let ui_ctx_language = ui_ctx.clone();
+    let weak_language = window.as_weak();
+    appearance.on_language_changed(move |value: SharedString| {
+        if let Err(e) = ui_ctx_language.set_app_language(value.as_str()) {
+            tracing::error!("Failed to save language: {}", e);
+        }
+        let saved = apply_language(&ui_ctx_language.app_language());
+        if let Some(w) = weak_language.upgrade() {
+            w.global::<crate::Appearance>().set_language(saved.into());
+        }
+    });
+
     // Text size and message spacing (Settings › Appearance) — the theme's
     // shape: applied before the first frame, a pick saved then re-read.
     let system_font_scale = system_font_scale();
@@ -105,6 +128,22 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
         }
     });
+}
+
+/// Switch the UI to `choice` ("system" or a shipped code) and return the
+/// choice in force: an unknown code falls back to "system".
+fn apply_language(choice: &str) -> &'static str {
+    let (choice, language) = match chatter_i18n::language(choice) {
+        Some(language) => (language.code, language),
+        None => (
+            "system",
+            chatter_i18n::language_for_locale(&sys_locale::get_locale().unwrap_or_default()),
+        ),
+    };
+    if let Err(e) = slint::select_bundled_translation(language.code) {
+        tracing::error!("Failed to switch language to {}: {}", language.code, e);
+    }
+    choice
 }
 
 /// Status/nav-bar icon colour for the palette in force: the app draws

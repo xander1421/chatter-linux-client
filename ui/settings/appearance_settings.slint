@@ -125,6 +125,106 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
 
+    // Language. Kept on this device (core: `app_language`); "system" follows
+    // the OS language when it is one Chatter ships, else English. Names come
+    // from `chatter_i18n::LANGUAGES`, each in its own language.
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            Text {
+                text: @tr("Language");
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+
+            for opt in Appearance.languages: Rectangle {
+                property <bool> selected: Appearance.language == opt.code;
+                property <string> label: opt.code == "system" ? @tr("System") : opt.name;
+                min-height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-md;
+                background: language-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: label;
+                accessible-checkable: true;
+                accessible-checked: selected;
+                accessible-action-default => {
+                    Appearance.language = opt.code;
+                    Appearance.language-changed(opt.code);
+                }
+                KeyFocus {
+                    border-radius: parent.border-radius;
+                    activate => {
+                        Appearance.language = opt.code;
+                        Appearance.language-changed(opt.code);
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.md;
+                    alignment: start;
+
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            border-radius: 9px;
+                            border-width: Spacing.stroke;
+                            border-color: selected ? Colors.primary : Colors.text-muted;
+
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: selected ? Colors.primary : transparent;
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: Spacing.xxs;
+
+                        Text {
+                            text: label;
+                            color: selected ? Colors.text-primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: selected ? Typography.medium : Typography.normal;
+                        }
+
+                        if opt.code == "system": Text {
+                            text: @tr("Match this device's language");
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                language-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        Appearance.language = opt.code;
+                        Appearance.language-changed(opt.code);
+                    }
+                }
+            }
+        }
+    }
+
     // Text size. Kept on this device (core: `TextSize`); every
     // Typography step is drawn at `Appearance.text-scale`.
     Rectangle {
