@@ -1,7 +1,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: chatter\n"
-"POT-Creation-Date: 2026-11-14 19:40+0000\n"
+"POT-Creation-Date: 2026-11-14 20:32+0000\n"
 "Language: de\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -10,144 +10,144 @@ msgstr ""
 
 #: ui/activity/activity_bell.slint:66 ui/sidebar/sidebar_footer.slint:134
 msgid "Activity, {} unread"
-msgstr ""
+msgstr "Aktivität, {} ungelesen"
 
 #: ui/activity/activity_bell.slint:66 ui/activity/activity_sheet.slint:116
 #: ui/sidebar/sidebar_footer.slint:134 ui/sidebar/sidebar_footer.slint:287
 msgid "Activity"
-msgstr ""
+msgstr "Aktivität"
 
 #: ui/activity/activity_global.slint:15 ui/activity/activity_sheet.slint:105
 #: ui/mesh/mesh_setup_sheet.slint:122
 msgid "Off"
-msgstr ""
+msgstr "Aus"
 
 #: ui/activity/activity_global.slint:16
 msgid "Never"
-msgstr ""
+msgstr "Nie"
 
 #: ui/activity/activity_global.slint:17 ui/activity/activity_sheet.slint:184
 msgid "Unknown"
-msgstr ""
+msgstr "Unbekannt"
 
 #: ui/activity/activity_sheet.slint:18 ui/activity/activity_sheet.slint:162
 msgid "Server"
-msgstr ""
+msgstr "Server"
 
 #: ui/activity/activity_sheet.slint:18 ui/activity/activity_sheet.slint:100
 msgid "Unreachable — messages will send later"
-msgstr ""
+msgstr "Nicht erreichbar — Nachrichten werden später gesendet"
 
 #: ui/activity/activity_sheet.slint:101
 msgid "Reconnecting (attempt {})"
-msgstr ""
+msgstr "Neu verbinden (Versuch {})"
 
 #: ui/activity/activity_sheet.slint:102
 msgid "Connecting…"
-msgstr ""
+msgstr "Verbinden…"
 
 #: ui/activity/activity_sheet.slint:103 ui/activity/activity_sheet.slint:178
 msgid "Connected"
-msgstr ""
+msgstr "Verbunden"
 
 #: ui/activity/activity_sheet.slint:103
 msgid "Disconnected"
-msgstr ""
+msgstr "Getrennt"
 
 #: ui/activity/activity_sheet.slint:104 ui/activity/activity_sheet.slint:107
 msgid "Unavailable"
-msgstr ""
+msgstr "Nicht verfügbar"
 
 #: ui/activity/activity_sheet.slint:106 ui/mesh/mesh_list.slint:15
 msgid "Bluetooth off"
-msgstr ""
+msgstr "Bluetooth aus"
 
 #: ui/activity/activity_sheet.slint:109 ui/mesh/mesh_list.slint:18
 msgid "Radio unavailable · {n} relay"
 msgid_plural "Radio unavailable · {n} relays"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "Funk nicht verfügbar · {n} Relais"
+msgstr[1] "Funk nicht verfügbar · {n} Relais"
 
 #: ui/activity/activity_sheet.slint:110
 msgid "On · {0} nearby · {n} relay"
 msgid_plural "On · {0} nearby · {n} relays"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "An · {0} in der Nähe · {n} Relais"
+msgstr[1] "An · {0} in der Nähe · {n} Relais"
 
 #: ui/activity/activity_sheet.slint:129
 msgid "Close activity"
-msgstr ""
+msgstr "Aktivität schließen"
 
 #: ui/activity/activity_sheet.slint:132 ui/mesh/mesh_peer_sheet.slint:72
 msgid "Done"
-msgstr ""
+msgstr "Fertig"
 
 #: ui/activity/activity_sheet.slint:141 ui/activity/activity_sheet.slint:145
 msgid "Mark all read"
-msgstr ""
+msgstr "Alles gelesen"
 
 #: ui/activity/activity_sheet.slint:166
 msgid "Server host"
-msgstr ""
+msgstr "Server-Host"
 
 #: ui/activity/activity_sheet.slint:168
 msgid "Connected since"
-msgstr ""
+msgstr "Verbunden seit"
 
 #: ui/activity/activity_sheet.slint:168
 msgid "Last connected"
-msgstr ""
+msgstr "Zuletzt verbunden"
 
 #: ui/activity/activity_sheet.slint:170
 msgid "Push"
-msgstr ""
+msgstr "Push"
 
 #: ui/activity/activity_sheet.slint:173 ui/mesh/mesh_list.slint:44
 #: ui/mesh/mesh_setup_sheet.slint:120 ui/sidebar/sidebar_footer.slint:264
 msgid "Mesh"
-msgstr ""
+msgstr "Mesh"
 
 #: ui/activity/activity_sheet.slint:177
 msgid "Shield / Tor"
-msgstr ""
+msgstr "Shield / Tor"
 
 #: ui/activity/activity_sheet.slint:179
 msgid "Bootstrapping {}"
-msgstr ""
+msgstr "Aufbau {}"
 
 #: ui/activity/activity_sheet.slint:180
 msgid "Failed"
-msgstr ""
+msgstr "Fehlgeschlagen"
 
 #: ui/activity/activity_sheet.slint:183
 msgid "App version"
-msgstr ""
+msgstr "App-Version"
 
 #: ui/activity/activity_sheet.slint:187 ui/sidebar/update_banner.slint:30
 msgid "Update available"
-msgstr ""
+msgstr "Update verfügbar"
 
 #: ui/activity/activity_sheet.slint:196
 msgid "Loading activity…"
-msgstr ""
+msgstr "Aktivität wird geladen…"
 
 #: ui/activity/activity_sheet.slint:202
 msgid "Could not load activity."
-msgstr ""
+msgstr "Aktivität konnte nicht geladen werden."
 
 #: ui/activity/activity_sheet.slint:203 ui/calls/call_history_screen.slint:299
 #: ui/components/gif_picker.slint:269 ui/modals/friends_requests_tab.slint:58
 #: ui/settings/account_settings.slint:453 ui/startup_error.slint:43
 msgid "Retry"
-msgstr ""
+msgstr "Erneut"
 
 #: ui/activity/activity_sheet.slint:215
 msgid "No activity yet"
-msgstr ""
+msgstr "Noch keine Aktivität"
 
 #: ui/activity/activity_sheet.slint:217
 msgid "Mentions, replies, and updates will appear here."
-msgstr ""
+msgstr "Erwähnungen, Antworten und Updates erscheinen hier."
 
 #: ui/anon_mode/shield_network_banner.slint:16
 msgid ""
@@ -155,129 +155,140 @@ msgid ""
 "messages are still end-to-end encrypted and routed through anonymous "
 "mailboxes."
 msgstr ""
+"Shield kann deinen Netzwerkstandort gerade nicht verbergen (Tor nicht "
+"verfügbar). Deine Nachrichten sind weiterhin Ende-zu-Ende-verschlüsselt und "
+"laufen über anonyme Briefkästen."
 
 #: ui/anon_mode/shield_onboarding.slint:30
 msgid "Shield unavailable"
-msgstr ""
+msgstr "Shield nicht verfügbar"
 
 #: ui/anon_mode/shield_onboarding.slint:31
 msgid "Shield on"
-msgstr ""
+msgstr "Shield an"
 
 #: ui/anon_mode/shield_onboarding.slint:31
 msgid "Shield off"
-msgstr ""
+msgstr "Shield aus"
 
 #: ui/anon_mode/shield_onboarding.slint:42
 msgid "Shield unavailable: this build has no Tor onion service"
-msgstr ""
+msgstr "Shield nicht verfügbar: Dieser Build hat keinen Tor-Onion-Dienst"
 
 #: ui/anon_mode/shield_onboarding.slint:43 ui/sidebar/sidebar_header.slint:109
 msgid "Shield on - tap to turn off"
-msgstr ""
+msgstr "Shield an - zum Ausschalten tippen"
 
 #: ui/anon_mode/shield_onboarding.slint:43
 msgid "Shield off - tap to connect over Tor"
-msgstr ""
+msgstr "Shield aus - tippen, um über Tor zu verbinden"
 
 #: ui/anon_mode/shield_onboarding.slint:79
 msgid ""
 "You'll connect over Tor to the server's onion service, so it never sees your "
 "IP address. The first connection can take up to a minute."
 msgstr ""
+"Du verbindest dich über Tor mit dem Onion-Dienst des Servers, sodass er "
+"deine IP-Adresse nie sieht. Die erste Verbindung kann bis zu einer Minute "
+"dauern."
 
 #. the taskbar and window switcher show while the window is in the back.
 #: ui/app.slint:76
 msgid "Chatter ({})"
-msgstr ""
+msgstr "Chatter ({})"
 
 #. the taskbar and window switcher show while the window is in the back.
 #: ui/app.slint:76 ui/pages/account_recovery.slint:80 ui/pages/login.slint:115
 msgid "Chatter"
-msgstr ""
+msgstr "Chatter"
 
 #. ========== Loading page properties ==========
 #: ui/app_auth_flow.slint:10 ui/pages/loading.slint:10
 msgid "Loading..."
-msgstr ""
+msgstr "Laden..."
 
 #: ui/app_auth_flow.slint:58
 msgid "Generate a QR to begin."
-msgstr ""
+msgstr "Erzeuge einen QR-Code, um zu beginnen."
 
 #. Properties
 #: ui/app_chat_pane.slint:58 ui/chat/chat_layout.slint:194
 msgid "Type a message..."
-msgstr ""
+msgstr "Nachricht schreiben..."
 
 #: ui/app_lock.slint:59
 msgid "Chatter is locked"
-msgstr ""
+msgstr "Chatter ist gesperrt"
 
 #: ui/app_lock.slint:69
 msgid "Enter your app lock PIN"
-msgstr ""
+msgstr "Gib deine PIN für die App-Sperre ein"
 
 #: ui/app_lock.slint:82 ui/modals/anon_mode_pin.slint:74
 #: ui/settings/privacy_settings.slint:150
 msgid "PIN"
-msgstr ""
+msgstr "PIN"
 
 #: ui/app_lock.slint:96
 msgid "Unlock"
-msgstr ""
+msgstr "Entsperren"
 
 #: ui/app_lock.slint:130
 msgid "App lock"
-msgstr ""
+msgstr "App-Sperre"
 
 #: ui/app_lock.slint:138
 msgid ""
 "On. Chatter asks for your PIN when it opens and after it has been in the "
 "background. Notifications show no sender or text while locked."
 msgstr ""
+"An. Chatter fragt nach deiner PIN beim Öffnen und nachdem es im Hintergrund "
+"war. Im gesperrten Zustand zeigen Benachrichtigungen keinen Absender und "
+"keinen Text."
 
 #: ui/app_lock.slint:139
 msgid ""
 "Ask for a PIN whenever Chatter opens. This PIN stays on this device and is "
 "separate from your account PIN."
 msgstr ""
+"Beim Öffnen nach einer PIN fragen. Diese PIN bleibt auf diesem Gerät und ist "
+"unabhängig von deiner Konto-PIN."
 
 #: ui/app_lock.slint:145
 msgid "New PIN (6 or more characters)"
-msgstr ""
+msgstr "Neue PIN (mindestens 6 Zeichen)"
 
 #: ui/app_lock.slint:151 ui/pages/register.slint:533
 msgid "Confirm PIN"
-msgstr ""
+msgstr "PIN bestätigen"
 
 #: ui/app_lock.slint:157
 msgid "Turn on app lock"
-msgstr ""
+msgstr "App-Sperre einschalten"
 
 #: ui/app_lock.slint:169
 msgid "Lock after leaving Chatter"
-msgstr ""
+msgstr "Sperren, wenn du Chatter verlässt"
 
 #: ui/app_lock.slint:175
 msgid "Immediately"
-msgstr ""
+msgstr "Sofort"
 
 #: ui/app_lock.slint:176
 msgid "After 1 minute"
-msgstr ""
+msgstr "Nach 1 Minute"
 
 #: ui/app_lock.slint:177
 msgid "After 5 minutes"
-msgstr ""
+msgstr "Nach 5 Minuten"
 
 #: ui/app_lock.slint:178
 msgid "After 30 minutes"
-msgstr ""
+msgstr "Nach 30 Minuten"
 
 #: ui/app_lock.slint:226 ui/app_lock.slint:239
 msgid "Duress PIN"
-msgstr ""
+msgstr "Nötigungs-PIN"
 
 #: ui/app_lock.slint:234
 msgid ""
@@ -285,6 +296,10 @@ msgid ""
 "keeps on this device — keys, messages, attachments, mesh data — and Chatter "
 "starts as if newly installed. Your account stays on the server."
 msgstr ""
+"Gesetzt. Wer sie auf dem Sperrbildschirm eingibt, löscht dauerhaft alles, "
+"was Chatter auf diesem Gerät hat — Schlüssel, Nachrichten, Anhänge, Mesh-"
+"Daten — und Chatter startet wie neu installiert. Dein Konto bleibt auf dem "
+"Server."
 
 #: ui/app_lock.slint:235
 msgid ""
@@ -293,296 +308,308 @@ msgid ""
 "Your account stays on the server. It must differ from your lock PIN and your "
 "account PIN."
 msgstr ""
+"Optional. Eine zweite PIN, die auf dem Sperrbildschirm alles dauerhaft "
+"löscht, was Chatter auf diesem Gerät hat, und es wie neu installiert "
+"startet. Dein Konto bleibt auf dem Server. Sie muss sich von deiner Sperr-"
+"PIN und deiner Konto-PIN unterscheiden."
 
 #: ui/app_lock.slint:245
 msgid "Confirm duress PIN"
-msgstr ""
+msgstr "Nötigungs-PIN bestätigen"
 
 #: ui/app_lock.slint:252
 msgid "Current app lock PIN"
-msgstr ""
+msgstr "Aktuelle PIN der App-Sperre"
 
 #: ui/app_lock.slint:261
 msgid "Set duress PIN"
-msgstr ""
+msgstr "Nötigungs-PIN festlegen"
 
 #: ui/app_lock.slint:270
 msgid "Remove duress PIN"
-msgstr ""
+msgstr "Nötigungs-PIN entfernen"
 
 #: ui/app_lock.slint:277
 msgid "Turn off app lock"
-msgstr ""
+msgstr "App-Sperre ausschalten"
 
 #. ── Properties: User profile ──
 #: ui/app_sidebar_pane.slint:14 ui/sidebar/dm_list_item.slint:19
 msgid "User"
-msgstr ""
+msgstr "Nutzer"
 
 #: ui/app_top_overlays.slint:101
 msgid "Microphone + output (linked)"
-msgstr ""
+msgstr "Mikrofon + Ausgabe (gekoppelt)"
 
 #: ui/app_top_overlays.slint:102 ui/calls/call_controls.slint:57
 msgid "Select microphone"
-msgstr ""
+msgstr "Mikrofon wählen"
 
 #: ui/app_top_overlays.slint:103
 msgid "Select speaker"
-msgstr ""
+msgstr "Lautsprecher wählen"
 
 #: ui/app_top_overlays.slint:103
 msgid "Select screen to share"
-msgstr ""
+msgstr "Bildschirm zum Teilen wählen"
 
 #: ui/calls/active_call_view.slint:123 ui/calls/active_call_view.slint:183
 msgid "You"
-msgstr ""
+msgstr "Du"
 
 #: ui/calls/active_call_view.slint:198
 msgid "Switch camera"
-msgstr ""
+msgstr "Kamera wechseln"
 
 #: ui/calls/active_call_view.slint:298
 msgid "Call information"
-msgstr ""
+msgstr "Anrufinfo"
 
 #: ui/calls/active_call_view.slint:305
 msgid "Call duration"
-msgstr ""
+msgstr "Anrufdauer"
 
 #: ui/calls/active_call_view.slint:307 ui/calls/return_to_call_bar.slint:117
 msgid "Calling…"
-msgstr ""
+msgstr "Anrufen…"
 
 #: ui/calls/active_call_view.slint:315
 msgid "Call participants"
-msgstr ""
+msgstr "Teilnehmer"
 
 #: ui/calls/active_call_view.slint:327
 msgid "Exit full screen"
-msgstr ""
+msgstr "Vollbild beenden"
 
 #: ui/calls/active_call_view.slint:327
 msgid "Full screen"
-msgstr ""
+msgstr "Vollbild"
 
 #: ui/calls/active_call_view.slint:336
 msgid "Call participants grid"
-msgstr ""
+msgstr "Teilnehmer-Raster"
 
 #: ui/calls/active_call_view.slint:415
 msgid "Unmute {} for you"
-msgstr ""
+msgstr "{} für dich entstummen"
 
 #: ui/calls/active_call_view.slint:416
 msgid "Mute {} for you"
-msgstr ""
+msgstr "{} für dich stummschalten"
 
 #: ui/calls/active_call_view.slint:429
 msgid "Resume {}'s video for you"
-msgstr ""
+msgstr "Video von {} für dich fortsetzen"
 
 #: ui/calls/active_call_view.slint:430
 msgid "Pause {}'s video for you"
-msgstr ""
+msgstr "Video von {} für dich anhalten"
 
 #: ui/calls/active_call_view.slint:470
 msgid "Sharing your screen"
-msgstr ""
+msgstr "Du teilst deinen Bildschirm"
 
 #: ui/calls/active_call_view.slint:485
 msgid "Stop screen sharing"
-msgstr ""
+msgstr "Bildschirmteilen beenden"
 
 #: ui/calls/active_call_view.slint:492
 msgid "Stop"
-msgstr ""
+msgstr "Stopp"
 
 #: ui/calls/active_call_view.slint:515
 msgid "Show all call participants"
-msgstr ""
+msgstr "Alle Teilnehmer anzeigen"
 
 #: ui/calls/active_call_view.slint:549
 msgid "Pin {}"
-msgstr ""
+msgstr "{} anheften"
 
 #: ui/calls/active_call_view.slint:589
 msgid "Call verification"
-msgstr ""
+msgstr "Anruf-Verifizierung"
 
 #: ui/calls/active_call_view.slint:590
 msgid "Compare these four emojis with everyone in the call."
-msgstr ""
+msgstr "Vergleiche diese vier Emojis mit allen im Anruf."
 
 #: ui/calls/active_call_view.slint:596
 msgid "Call verification emoji 1: {}"
-msgstr ""
+msgstr "Anruf-Verifizierung, Emoji 1: {}"
 
 #: ui/calls/active_call_view.slint:597
 msgid "Call verification emoji 2: {}"
-msgstr ""
+msgstr "Anruf-Verifizierung, Emoji 2: {}"
 
 #: ui/calls/active_call_view.slint:598
 msgid "Call verification emoji 3: {}"
-msgstr ""
+msgstr "Anruf-Verifizierung, Emoji 3: {}"
 
 #: ui/calls/active_call_view.slint:599
 msgid "Call verification emoji 4: {}"
-msgstr ""
+msgstr "Anruf-Verifizierung, Emoji 4: {}"
 
 #: ui/calls/active_call_view.slint:603
 msgid "Call key version {}"
-msgstr ""
+msgstr "Anrufschlüssel, Version {}"
 
 #: ui/calls/active_call_view.slint:613
 msgid "Call verification pending"
-msgstr ""
+msgstr "Anruf-Verifizierung ausstehend"
 
 #: ui/calls/active_call_view.slint:614
 msgid "Verification pending"
-msgstr ""
+msgstr "Verifizierung ausstehend"
 
 #: ui/calls/call_controls.slint:57
 msgid "Select microphone, linked audio route"
-msgstr ""
+msgstr "Mikrofon wählen, gekoppelte Audioausgabe"
 
 #: ui/calls/call_controls.slint:65 ui/calls/return_to_call_bar.slint:129
 msgid "Unmute microphone"
-msgstr ""
+msgstr "Mikrofon entstummen"
 
 #: ui/calls/call_controls.slint:65 ui/calls/return_to_call_bar.slint:129
 msgid "Mute microphone"
-msgstr ""
+msgstr "Mikrofon stummschalten"
 
 #: ui/calls/call_controls.slint:76
 msgid "Select output, linked audio route"
-msgstr ""
+msgstr "Ausgabe wählen, gekoppelte Audiostrecke"
 
 #: ui/calls/call_controls.slint:76
 msgid "Select output"
-msgstr ""
+msgstr "Ausgabe wählen"
 
 #: ui/calls/call_controls.slint:84
 msgid "Toggle speaker"
-msgstr ""
+msgstr "Lautsprecher umschalten"
 
 #: ui/calls/call_controls.slint:84
 msgid "Select audio output"
-msgstr ""
+msgstr "Audioausgabe wählen"
 
 #: ui/calls/call_controls.slint:101 ui/calls/return_to_call_bar.slint:136
 msgid "Turn camera off"
-msgstr ""
+msgstr "Kamera aus"
 
 #: ui/calls/call_controls.slint:101 ui/calls/return_to_call_bar.slint:136
 msgid "Turn camera on"
-msgstr ""
+msgstr "Kamera an"
 
 #: ui/calls/call_controls.slint:113
 msgid "Stop sharing screen"
-msgstr ""
+msgstr "Bildschirmteilen beenden"
 
 #: ui/calls/call_controls.slint:113 ui/calls/device_picker.slint:248
 msgid "Share screen"
-msgstr ""
+msgstr "Bildschirm teilen"
 
 #: ui/calls/call_controls.slint:123 ui/calls/return_to_call_bar.slint:142
 msgid "End call"
-msgstr ""
+msgstr "Auflegen"
 
 #: ui/calls/call_history_screen.slint:118 ui/sidebar/sidebar.slint:66
 #: ui/sidebar/sidebar.slint:578
 msgid "Calls"
-msgstr ""
+msgstr "Anrufe"
 
 #: ui/calls/call_history_screen.slint:162 ui/chat/selection_bar.slint:76
 msgid "Exit selection"
-msgstr ""
+msgstr "Auswahl beenden"
 
 #: ui/calls/call_history_screen.slint:181
 msgid "Deselect all"
-msgstr ""
+msgstr "Nichts auswählen"
 
 #: ui/calls/call_history_screen.slint:181 ui/chat/selection_bar.slint:95
 msgid "Select all"
-msgstr ""
+msgstr "Alle auswählen"
 
 #: ui/calls/call_history_screen.slint:188 ui/chat/selection_bar.slint:121
 msgid "Delete selected"
-msgstr ""
+msgstr "Auswahl löschen"
 
 #. stored and compared). The name a person reads is separate.
 #: ui/calls/call_history_screen.slint:215
 msgid "All"
-msgstr ""
+msgstr "Alle"
 
 #: ui/calls/call_history_screen.slint:216
 msgid "Missed"
-msgstr ""
+msgstr "Verpasst"
 
 #: ui/calls/call_history_screen.slint:258 ui/modals/channel_settings.slint:363
 #: ui/server_records/screen.slint:94
 msgid "Loading…"
-msgstr ""
+msgstr "Laden…"
 
 #: ui/calls/call_history_screen.slint:282
 msgid "No missed calls"
-msgstr ""
+msgstr "Keine verpassten Anrufe"
 
 #: ui/calls/call_history_screen.slint:282 ui/server_records/screen.slint:96
 msgid "No calls yet"
-msgstr ""
+msgstr "Noch keine Anrufe"
 
 #: ui/calls/call_history_screen.slint:289
 msgid "Calls you did not answer show up here."
-msgstr ""
+msgstr "Anrufe, die du nicht angenommen hast, erscheinen hier."
 
 #: ui/calls/call_history_screen.slint:289
 msgid "Use the phone icon in a regular chat or channel."
-msgstr ""
+msgstr "Nutze das Telefon-Symbol in einem normalen Chat oder Kanal."
 
 #: ui/calls/call_history_screen.slint:458
 msgid "Select call with {}"
-msgstr ""
+msgstr "Anruf mit {} auswählen"
 
 #: ui/calls/call_history_screen.slint:491 ui/components/avatar.slint:32
 #: ui/components/avatar.slint:34
 msgid "Avatar for {}"
-msgstr ""
+msgstr "Avatar von {}"
 
 #: ui/calls/call_history_screen.slint:576
 msgid "Call {}"
-msgstr ""
+msgstr "{} anrufen"
 
 #: ui/calls/call_history_screen.slint:607
 msgid "Video call {}"
-msgstr ""
+msgstr "Videoanruf mit {}"
 
 #: ui/calls/call_history_screen.slint:657
 msgid "Older calls were not checked yet."
-msgstr ""
+msgstr "Ältere Anrufe wurden noch nicht geprüft."
 
 #: ui/calls/call_history_screen.slint:668
 msgid "Load older calls"
-msgstr ""
+msgstr "Ältere Anrufe laden"
 
 #: ui/calls/call_history_screen.slint:698
 msgid "Delete every call in this list from this device? This cannot be undone."
 msgstr ""
+"Alle Anrufe in dieser Liste von diesem Gerät löschen? Das kann nicht "
+"rückgängig gemacht werden."
 
 #: ui/calls/call_history_screen.slint:699
 msgid "Delete {n} selected call from this device? This cannot be undone."
 msgid_plural ""
 "Delete {n} selected calls from this device? This cannot be undone."
 msgstr[0] ""
+"{n} ausgewählten Anruf von diesem Gerät löschen? Das kann nicht rückgängig "
+"gemacht werden."
 msgstr[1] ""
+"{n} ausgewählte Anrufe von diesem Gerät löschen? Das kann nicht rückgängig "
+"gemacht werden."
 
 #: ui/calls/call_history_screen.slint:708
 msgid ""
 "Other people's call history and the call messages in your chats are not "
 "changed. A call in progress is kept."
 msgstr ""
+"Der Anrufverlauf anderer und die Anrufnachrichten in deinen Chats bleiben "
+"unverändert. Ein laufender Anruf bleibt erhalten."
 
 #: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36
 #: ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113
@@ -593,1165 +620,1177 @@ msgstr ""
 #: ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762
 #: ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
 msgid "Cancel"
-msgstr ""
+msgstr "Abbrechen"
 
 #: ui/calls/call_history_screen.slint:728 ui/chat/delete_confirm.slint:80
 #: ui/modals/channel_danger.slint:264 ui/server_records/screen.slint:242
 msgid "Delete"
-msgstr ""
+msgstr "Löschen"
 
 #: ui/calls/call_history_screen.slint:728 ui/modals/jarvis_memory.slint:107
 msgid "Clear history"
-msgstr ""
+msgstr "Verlauf löschen"
 
 #: ui/calls/call_history_screen.slint:786
 msgid "Select calls"
-msgstr ""
+msgstr "Anrufe auswählen"
 
 #: ui/calls/call_history_screen.slint:825
 msgid "Clear call history"
-msgstr ""
+msgstr "Anrufverlauf löschen"
 
 #: ui/calls/device_picker.slint:90
 msgid "Select device"
-msgstr ""
+msgstr "Gerät wählen"
 
 #: ui/calls/device_picker.slint:185
 msgid ""
 "Microphone and output change together. The check mark shows the active "
 "device."
 msgstr ""
+"Mikrofon und Ausgabe wechseln zusammen. Das Häkchen zeigt das aktive Gerät."
 
 #: ui/calls/device_picker.slint:199 ui/calls/device_picker.slint:219
 msgid "Default"
-msgstr ""
+msgstr "Standard"
 
 #: ui/calls/device_picker.slint:204
 msgid "No microphones found"
-msgstr ""
+msgstr "Keine Mikrofone gefunden"
 
 #: ui/calls/device_picker.slint:224
 msgid "No speakers found"
-msgstr ""
+msgstr "Keine Lautsprecher gefunden"
 
 #: ui/calls/device_picker.slint:240
 msgid "Click below to open the system screen picker"
-msgstr ""
+msgstr "Unten klicken, um die Systemauswahl für den Bildschirm zu öffnen"
 
 #: ui/calls/device_picker.slint:250
 msgid "Opens system dialog to select screen or window"
-msgstr ""
+msgstr "Öffnet den Systemdialog zur Auswahl von Bildschirm oder Fenster"
 
 #: ui/calls/device_picker.slint:261
 msgid "Screens"
-msgstr ""
+msgstr "Bildschirme"
 
 #: ui/calls/device_picker.slint:272
 msgid "{}x{} (Primary)"
-msgstr ""
+msgstr "{}x{} (Primär)"
 
 #: ui/calls/device_picker.slint:273
 msgid "Primary"
-msgstr ""
+msgstr "Primär"
 
 #: ui/calls/device_picker.slint:279
 msgid "Windows"
-msgstr ""
+msgstr "Fenster"
 
 #: ui/calls/device_picker.slint:295
 msgid "No screens or windows found"
-msgstr ""
+msgstr "Keine Bildschirme oder Fenster gefunden"
 
 #: ui/calls/incoming_call_modal.slint:125
 msgid "Join group video call"
-msgstr ""
+msgstr "Gruppen-Videoanruf beitreten"
 
 #: ui/calls/incoming_call_modal.slint:125
 msgid "Join group voice call"
-msgstr ""
+msgstr "Gruppenanruf beitreten"
 
 #: ui/calls/incoming_call_modal.slint:126
 msgid "Incoming video call..."
-msgstr ""
+msgstr "Eingehender Videoanruf..."
 
 #: ui/calls/incoming_call_modal.slint:126
 msgid "Incoming voice call..."
-msgstr ""
+msgstr "Eingehender Sprachanruf..."
 
 #: ui/calls/incoming_call_modal.slint:146
 msgid "Accepting will end your current call"
-msgstr ""
+msgstr "Annehmen beendet deinen aktuellen Anruf"
 
 #: ui/calls/incoming_call_modal.slint:194
 msgid "Decline call"
-msgstr ""
+msgstr "Ablehnen"
 
 #: ui/calls/incoming_call_modal.slint:233
 msgid "Accept call"
-msgstr ""
+msgstr "Annehmen"
 
 #: ui/calls/return_to_call_bar.slint:66
 msgid "Return to call with {}"
-msgstr ""
+msgstr "Zurück zum Anruf mit {}"
 
 #: ui/chat/attach_sheet.slint:92
 msgid "Gallery"
-msgstr ""
+msgstr "Galerie"
 
 #: ui/chat/attach_sheet.slint:99
 msgid "Camera"
-msgstr ""
+msgstr "Kamera"
 
 #: ui/chat/attach_sheet.slint:106 ui/chat/message_item.slint:93
 msgid "Video"
-msgstr ""
+msgstr "Video"
 
 #: ui/chat/attach_sheet.slint:113
 msgid "File"
-msgstr ""
+msgstr "Datei"
 
 #: ui/chat/audio_player.slint:56
 msgid "Retry download"
-msgstr ""
+msgstr "Erneut laden"
 
 #: ui/chat/audio_player.slint:57
 msgid "Pause voice message"
-msgstr ""
+msgstr "Sprachnachricht pausieren"
 
 #: ui/chat/audio_player.slint:57
 msgid "Play voice message"
-msgstr ""
+msgstr "Sprachnachricht abspielen"
 
 #: ui/chat/audio_player.slint:146 ui/chat/message_attachments.slint:324
 #: ui/chat/message_attachments.slint:605
 msgid "Download failed · tap to retry"
-msgstr ""
+msgstr "Download fehlgeschlagen · zum Wiederholen tippen"
 
 #: ui/chat/audio_player.slint:146
 msgid "{0} / {1}"
-msgstr ""
+msgstr "{0} / {1}"
 
 #: ui/chat/call_confirm.slint:17
 msgid "Start a video call?"
-msgstr ""
+msgstr "Videoanruf starten?"
 
 #: ui/chat/call_confirm.slint:17
 msgid "Start a call?"
-msgstr ""
+msgstr "Anruf starten?"
 
 #: ui/chat/call_confirm.slint:26
 msgid "Everyone in {} will be notified."
-msgstr ""
+msgstr "Alle in {} werden benachrichtigt."
 
 #: ui/chat/call_confirm.slint:41
 msgid "Start call"
-msgstr ""
+msgstr "Anruf starten"
 
 #: ui/chat/chat_header.slint:180 ui/chat/chat_header.slint:520
 #: ui/mesh/mesh_compose_sheet.slint:113
 msgid "Back"
-msgstr ""
+msgstr "Zurück"
 
 #: ui/chat/chat_header.slint:335
 msgid "Typing"
-msgstr ""
+msgstr "Schreibt"
 
 #: ui/chat/chat_header.slint:385 ui/sidebar/dm_list_item.slint:196
 msgid "Secret chat"
-msgstr ""
+msgstr "Geheimer Chat"
 
 #: ui/chat/chat_header.slint:441
 msgid "Jarvis is thinking..."
-msgstr ""
+msgstr "Jarvis denkt nach..."
 
 #: ui/chat/chat_header.slint:467
 msgid "Voice call"
-msgstr ""
+msgstr "Sprachanruf"
 
 #: ui/chat/chat_header.slint:490 ui/mesh/mesh_info_sheet.slint:220
 #: ui/modals/invite_member.slint:255
 msgid "Invite"
-msgstr ""
+msgstr "Einladen"
 
 #: ui/chat/chat_header.slint:498 ui/components/modal.slint:55
 msgid "More options"
-msgstr ""
+msgstr "Mehr Optionen"
 
 #: ui/chat/chat_header.slint:571 ui/mesh/mesh_list_item.slint:34
 msgid "Waiting for a carrier"
-msgstr ""
+msgstr "Wartet auf einen Überbringer"
 
 #: ui/chat/chat_header.slint:572
 msgid "Verified ✓"
-msgstr ""
+msgstr "Verifiziert ✓"
 
 #: ui/chat/chat_header.slint:572
 msgid "Not verified ›"
-msgstr ""
+msgstr "Nicht verifiziert ›"
 
 #: ui/chat/chat_header.slint:573 ui/mesh/mesh_info_sheet.slint:104
 msgid "Private group · invited devices"
-msgstr ""
+msgstr "Private Gruppe · eingeladene Geräte"
 
 #: ui/chat/chat_header.slint:575 ui/mesh/mesh_list.slint:13
 msgid "{n} relay"
 msgid_plural "{n} relays"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "{n} Relais"
+msgstr[1] "{n} Relais"
 
 #: ui/chat/chat_header.slint:576
 msgid "{n} nearby"
 msgid_plural "{n} nearby"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "{n} in der Nähe"
+msgstr[1] "{n} in der Nähe"
 
 #: ui/chat/chat_header.slint:588
 msgid "Open mesh conversation information"
-msgstr ""
+msgstr "Infos zur Mesh-Unterhaltung öffnen"
 
 #: ui/chat/chat_header.slint:605
 msgid "Conversation info"
-msgstr ""
+msgstr "Unterhaltungsinfo"
 
 #: ui/chat/chat_header_menu.slint:94 ui/modals/keyboard_shortcuts.slint:130
 msgid "Search in chat"
-msgstr ""
+msgstr "Im Chat suchen"
 
 #: ui/chat/chat_header_menu.slint:95 ui/modals/channel_settings.slint:433
 msgid "Pinned messages"
-msgstr ""
+msgstr "Angeheftete Nachrichten"
 
 #: ui/chat/chat_header_menu.slint:96 ui/modals/user_profile.slint:469
 msgid "Video call"
-msgstr ""
+msgstr "Videoanruf"
 
 #: ui/chat/chat_header_menu.slint:97 ui/mesh/mesh_info_sheet.slint:62
 msgid "Add members"
-msgstr ""
+msgstr "Mitglieder hinzufügen"
 
 #: ui/chat/chat_header_menu.slint:98
 msgid "Conversation settings"
-msgstr ""
+msgstr "Unterhaltungseinstellungen"
 
 #: ui/chat/chat_header_menu.slint:99 ui/modals/user_profile.slint:470
 msgid "Start secret chat"
-msgstr ""
+msgstr "Geheimen Chat starten"
 
 #: ui/chat/chat_header_menu.slint:100 ui/chat/secret_timer_modal.slint:14
 #: ui/modals/user_profile.slint:522
 msgid "Disappearing messages"
-msgstr ""
+msgstr "Verschwindende Nachrichten"
 
 #: ui/chat/chat_layout.slint:385
 msgid "Anyone in radio range can read this"
-msgstr ""
+msgstr "Jeder in Funkreichweite kann das lesen"
 
 #: ui/chat/chat_layout.slint:387
 msgid "Anyone in this cell can read this"
-msgstr ""
+msgstr "Jeder in dieser Zelle kann das lesen"
 
 #: ui/chat/chat_layout.slint:389
 msgid "Invited devices · encrypted over mesh"
-msgstr ""
+msgstr "Eingeladene Geräte · über Mesh verschlüsselt"
 
 #: ui/chat/chat_layout.slint:391
 msgid "Public channel — anyone can read this"
-msgstr ""
+msgstr "Öffentlicher Kanal — jeder kann das lesen"
 
 #. so this component never has to know what a geohash cell is.
 #: ui/chat/chat_layout.slint:392 ui/chat/message_list.slint:114
 msgid "Messages are end-to-end encrypted"
-msgstr ""
+msgstr "Nachrichten sind Ende-zu-Ende-verschlüsselt"
 
 #: ui/chat/chat_layout.slint:538
 msgid "Call in progress · {n} participant"
 msgid_plural "Call in progress · {n} participants"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "Anruf läuft · {n} Teilnehmer"
+msgstr[1] "Anruf läuft · {n} Teilnehmer"
 
 #: ui/chat/chat_layout.slint:539
 msgid "Call in progress"
-msgstr ""
+msgstr "Anruf läuft"
 
 #: ui/chat/chat_layout.slint:544 ui/chat/chat_layout.slint:660
 #: ui/mesh/mesh_compose_sheet.slint:127 ui/mesh/mesh_list.slint:118
 #: ui/modals/create_channel.slint:191
 msgid "Join"
-msgstr ""
+msgstr "Beitreten"
 
 #: ui/chat/chat_layout.slint:655 ui/mesh/mesh_peer_sheet.slint:273
 #: ui/modals/friends_blocked_tab.slint:132
 msgid "Unblock"
-msgstr ""
+msgstr "Entblocken"
 
 #: ui/chat/chat_layout.slint:670 ui/mesh/mesh_list.slint:108
 #: ui/modals/friends_requests_tab.slint:177
 msgid "Decline"
-msgstr ""
+msgstr "Ablehnen"
 
 #: ui/chat/chat_layout.slint:677 ui/modals/friends_requests_tab.slint:166
 msgid "Accept"
-msgstr ""
+msgstr "Annehmen"
 
 #: ui/chat/chat_layout.slint:879
 msgid "Search GIFs"
-msgstr ""
+msgstr "GIFs suchen"
 
 #: ui/chat/chat_layout.slint:879 ui/components/emoji_picker.slint:137
 msgid "Search emoji"
-msgstr ""
+msgstr "Emoji suchen"
 
 #: ui/chat/chat_layout.slint:891
 msgid "Search emoji and GIFs"
-msgstr ""
+msgstr "Emoji und GIFs suchen"
 
 #: ui/chat/chat_layout.slint:907 ui/components/emoji_picker.slint:166
 msgid "Clear search"
-msgstr ""
+msgstr "Suche leeren"
 
 #: ui/chat/chat_layout.slint:965
 msgid "Emoji"
-msgstr ""
+msgstr "Emoji"
 
 #: ui/chat/chat_layout.slint:965
 msgid "GIFs"
-msgstr ""
+msgstr "GIFs"
 
 #: ui/chat/composer_attachment_strip.slint:142
 msgid "Encrypting..."
-msgstr ""
+msgstr "Verschlüsseln..."
 
 #: ui/chat/composer_attachment_strip.slint:161
 msgid "Remove attachment"
-msgstr ""
+msgstr "Anhang entfernen"
 
 #: ui/chat/composer_attachment_strip.slint:196
 msgid "Add attachment"
-msgstr ""
+msgstr "Anhang hinzufügen"
 
 #: ui/chat/composer_edit_bar.slint:34
 msgid "Editing message"
-msgstr ""
+msgstr "Nachricht bearbeiten"
 
 #: ui/chat/composer_edit_bar.slint:49
 msgid "Cancel edit"
-msgstr ""
+msgstr "Bearbeitung abbrechen"
 
 #: ui/chat/composer_format_toolbar.slint:25
 msgid "Bold"
-msgstr ""
+msgstr "Fett"
 
 #: ui/chat/composer_format_toolbar.slint:62
 msgid "Italic"
-msgstr ""
+msgstr "Kursiv"
 
 #: ui/chat/composer_format_toolbar.slint:99
 msgid "Strikethrough"
-msgstr ""
+msgstr "Durchgestrichen"
 
 #: ui/chat/composer_format_toolbar.slint:144
 msgid "Inline code"
-msgstr ""
+msgstr "Code im Text"
 
 #: ui/chat/composer_format_toolbar.slint:190
 msgid "Code block"
-msgstr ""
+msgstr "Codeblock"
 
 #: ui/chat/composer_recording_panel.slint:40
 msgid "Cancel voice message"
-msgstr ""
+msgstr "Sprachnachricht abbrechen"
 
 #: ui/chat/composer_recording_panel.slint:63
 msgid "Send voice message"
-msgstr ""
+msgstr "Sprachnachricht senden"
 
 #: ui/chat/composer_reply_preview.slint:68
 msgid "Reply to {}"
-msgstr ""
+msgstr "Antwort an {}"
 
 #: ui/chat/composer_reply_preview.slint:92
 msgid "Cancel reply"
-msgstr ""
+msgstr "Antwort abbrechen"
 
 #: ui/chat/delete_confirm.slint:17
 msgid "Delete for both"
-msgstr ""
+msgstr "Für beide löschen"
 
 #: ui/chat/delete_confirm.slint:17
 msgid "Delete for everyone"
-msgstr ""
+msgstr "Für alle löschen"
 
 #: ui/chat/delete_confirm.slint:32
 msgid "Delete message"
 msgid_plural "Delete {n} messages"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "Nachricht löschen"
+msgstr[1] "{n} Nachrichten löschen"
 
 #: ui/chat/delete_confirm.slint:34
 msgid "Delete for both?"
-msgstr ""
+msgstr "Für beide löschen?"
 
 #: ui/chat/delete_confirm.slint:34
 msgid "Delete for everyone?"
-msgstr ""
+msgstr "Für alle löschen?"
 
 #: ui/chat/delete_confirm.slint:35
 msgid "Delete message?"
 msgid_plural "Delete {n} messages?"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "Nachricht löschen?"
+msgstr[1] "{n} Nachrichten löschen?"
 
 #: ui/chat/delete_confirm.slint:45
 msgid "Choose who to delete these messages for."
-msgstr ""
+msgstr "Wähle, für wen diese Nachrichten gelöscht werden."
 
 #: ui/chat/delete_confirm.slint:45
 msgid "Choose who to delete this message for."
-msgstr ""
+msgstr "Wähle, für wen diese Nachricht gelöscht wird."
 
 #: ui/chat/delete_confirm.slint:46
 msgid "These messages will be deleted for everyone in the chat."
-msgstr ""
+msgstr "Diese Nachrichten werden für alle im Chat gelöscht."
 
 #: ui/chat/delete_confirm.slint:46
 msgid "This message will be deleted for everyone in the chat."
-msgstr ""
+msgstr "Diese Nachricht wird für alle im Chat gelöscht."
 
 #: ui/chat/delete_confirm.slint:48
 msgid "These messages will be deleted from your history."
-msgstr ""
+msgstr "Diese Nachrichten werden aus deinem Verlauf gelöscht."
 
 #: ui/chat/delete_confirm.slint:49
 msgid "This message will be deleted from your history."
-msgstr ""
+msgstr "Diese Nachricht wird aus deinem Verlauf gelöscht."
 
 #: ui/chat/delete_confirm.slint:58 ui/chat/delete_confirm.slint:80
 msgid "Delete for me"
-msgstr ""
+msgstr "Für mich löschen"
 
 #: ui/chat/disappearing_settings.slint:19
 msgid "Selected"
-msgstr ""
+msgstr "Ausgewählt"
 
 #: ui/chat/disappearing_settings.slint:62
 msgid "Message lifetime"
-msgstr ""
+msgstr "Nachrichtendauer"
 
 #: ui/chat/disappearing_settings.slint:63
 msgid ""
 "Each new message disappears after the selected time once its expiry clock "
 "starts."
 msgstr ""
+"Jede neue Nachricht verschwindet nach der gewählten Zeit, sobald ihr Ablauf "
+"beginnt."
 
 #: ui/chat/disappearing_settings.slint:78
 msgid "How long to enable"
-msgstr ""
+msgstr "Wie lange"
 
 #: ui/chat/disappearing_settings.slint:79
 msgid "Current: {}. The window applies to new messages only."
-msgstr ""
+msgstr "Aktuell: {}. Gilt nur für neue Nachrichten."
 
 #: ui/chat/disappearing_settings.slint:81
 msgid "5 minutes"
-msgstr ""
+msgstr "5 Minuten"
 
 #: ui/chat/disappearing_settings.slint:89
 msgid "Custom duration in minutes"
-msgstr ""
+msgstr "Eigene Dauer in Minuten"
 
 #: ui/chat/disappearing_settings.slint:94
 msgid "Set duration"
-msgstr ""
+msgstr "Dauer festlegen"
 
 #. a new key, and the label should say so.
 #: ui/chat/identity_change_bar.slint:130 ui/chat/identity_change_bar.slint:142
 msgid "Accept new safety number"
-msgstr ""
+msgstr "Neue Sicherheitsnummer annehmen"
 
 #: ui/chat/link_confirm.slint:14
 msgid "Open this link?"
-msgstr ""
+msgstr "Diesen Link öffnen?"
 
 #: ui/chat/link_confirm.slint:41 ui/components/unified_search.slint:963
 msgid "Open"
-msgstr ""
+msgstr "Öffnen"
 
 #: ui/chat/membership_bar.slint:115
 msgid "Resume sending"
-msgstr ""
+msgstr "Senden fortsetzen"
 
 #: ui/chat/membership_bar.slint:127
 msgid "Resume sending in this channel"
-msgstr ""
+msgstr "Senden in diesem Kanal fortsetzen"
 
 #: ui/chat/membership_bar.slint:150
 msgid "Hide"
-msgstr ""
+msgstr "Ausblenden"
 
 #: ui/chat/membership_bar.slint:150 ui/server_records/screen.slint:240
 msgid "Details"
-msgstr ""
+msgstr "Details"
 
 #: ui/chat/membership_bar.slint:162
 msgid "Hide membership details"
-msgstr ""
+msgstr "Mitgliedsdetails ausblenden"
 
 #: ui/chat/membership_bar.slint:162
 msgid "Show membership details"
-msgstr ""
+msgstr "Mitgliedsdetails anzeigen"
 
 #: ui/chat/message_actions.slint:66
 msgid "Reply to message"
-msgstr ""
+msgstr "Auf Nachricht antworten"
 
 #: ui/chat/message_actions.slint:75
 msgid "Add reaction"
-msgstr ""
+msgstr "Reaktion hinzufügen"
 
 #: ui/chat/message_actions.slint:89 ui/chat/message_context_menu.slint:644
 msgid "Reply in thread"
-msgstr ""
+msgstr "Im Thread antworten"
 
 #: ui/chat/message_actions.slint:98
 msgid "More message actions"
-msgstr ""
+msgstr "Weitere Aktionen"
 
 #: ui/chat/message_attachments.slint:118 ui/chat/message_attachments.slint:288
 msgid "Queued"
-msgstr ""
+msgstr "Eingereiht"
 
 #: ui/chat/message_attachments.slint:119 ui/chat/message_attachments.slint:289
 msgid "Uploading…"
-msgstr ""
+msgstr "Hochladen…"
 
 #: ui/chat/message_attachments.slint:120 ui/chat/message_attachments.slint:290
 msgid "Upload failed"
-msgstr ""
+msgstr "Hochladen fehlgeschlagen"
 
 #: ui/chat/message_attachments.slint:121 ui/chat/message_attachments.slint:291
 msgid "Cancelled"
-msgstr ""
+msgstr "Abgebrochen"
 
 #: ui/chat/message_attachments.slint:122
 msgid "Download failed"
-msgstr ""
+msgstr "Download fehlgeschlagen"
 
 #: ui/chat/message_attachments.slint:145 ui/chat/message_attachments.slint:341
 msgid "Open photo {}"
-msgstr ""
+msgstr "Foto {} öffnen"
 
 #: ui/chat/message_attachments.slint:280
 msgid "Uploading {}"
-msgstr ""
+msgstr "{} wird hochgeladen"
 
 #: ui/chat/message_attachments.slint:280
 msgid "Downloading {}"
-msgstr ""
+msgstr "{} wird heruntergeladen"
 
 #: ui/chat/message_attachments.slint:292
 msgid "Downloading..."
-msgstr ""
+msgstr "Herunterladen..."
 
 #: ui/chat/message_attachments.slint:552
 msgid "Play video {}"
-msgstr ""
+msgstr "Video {} abspielen"
 
 #: ui/chat/message_attachments.slint:636
 msgid "Upload progress"
-msgstr ""
+msgstr "Upload-Fortschritt"
 
 #: ui/chat/message_attachments.slint:636
 msgid "Download progress"
-msgstr ""
+msgstr "Download-Fortschritt"
 
 #: ui/chat/message_attachments.slint:655
 msgid "Open file {}"
-msgstr ""
+msgstr "Datei {} öffnen"
 
 #: ui/chat/message_call.slint:54 ui/chat/message_item.slint:527
 msgid "View profile of {}"
-msgstr ""
+msgstr "Profil von {} ansehen"
 
 #: ui/chat/message_call.slint:143
 msgid "Missed video call"
-msgstr ""
+msgstr "Verpasster Videoanruf"
 
 #: ui/chat/message_call.slint:143
 msgid "Missed call"
-msgstr ""
+msgstr "Verpasster Anruf"
 
 #: ui/chat/message_call.slint:145
 msgid "Declined video call"
-msgstr ""
+msgstr "Abgelehnter Videoanruf"
 
 #: ui/chat/message_call.slint:145
 msgid "Declined call"
-msgstr ""
+msgstr "Abgelehnter Anruf"
 
 #: ui/chat/message_call.slint:147
 msgid "Video call started"
-msgstr ""
+msgstr "Videoanruf gestartet"
 
 #: ui/chat/message_call.slint:147
 msgid "Call started"
-msgstr ""
+msgstr "Anruf gestartet"
 
 #: ui/chat/message_call.slint:149
 msgid "Video call ended"
-msgstr ""
+msgstr "Videoanruf beendet"
 
 #: ui/chat/message_call.slint:149
 msgid "Call ended"
-msgstr ""
+msgstr "Anruf beendet"
 
 #: ui/chat/message_call.slint:151
 msgid "Outgoing video call"
-msgstr ""
+msgstr "Ausgehender Videoanruf"
 
 #: ui/chat/message_call.slint:151
 msgid "Outgoing call"
-msgstr ""
+msgstr "Ausgehender Anruf"
 
 #: ui/chat/message_call.slint:152
 msgid "Incoming video call"
-msgstr ""
+msgstr "Eingehender Videoanruf"
 
 #: ui/chat/message_call.slint:152
 msgid "Incoming call"
-msgstr ""
+msgstr "Eingehender Anruf"
 
 #: ui/chat/message_call.slint:157
 msgid "Outgoing video call started"
-msgstr ""
+msgstr "Ausgehender Videoanruf gestartet"
 
 #: ui/chat/message_call.slint:157
 msgid "Outgoing call started"
-msgstr ""
+msgstr "Ausgehender Anruf gestartet"
 
 #: ui/chat/message_call.slint:158
 msgid "Incoming video call started"
-msgstr ""
+msgstr "Eingehender Videoanruf gestartet"
 
 #: ui/chat/message_call.slint:158
 msgid "Incoming call started"
-msgstr ""
+msgstr "Eingehender Anruf gestartet"
 
 #: ui/chat/message_call.slint:161
 msgid "Outgoing video call ended"
-msgstr ""
+msgstr "Ausgehender Videoanruf beendet"
 
 #: ui/chat/message_call.slint:161
 msgid "Outgoing call ended"
-msgstr ""
+msgstr "Ausgehender Anruf beendet"
 
 #: ui/chat/message_call.slint:162
 msgid "Incoming video call ended"
-msgstr ""
+msgstr "Eingehender Videoanruf beendet"
 
 #: ui/chat/message_call.slint:162
 msgid "Incoming call ended"
-msgstr ""
+msgstr "Eingehender Anruf beendet"
 
 #: ui/chat/message_call.slint:185
 msgid "Video call icon"
-msgstr ""
+msgstr "Videoanruf-Symbol"
 
 #: ui/chat/message_call.slint:185
 msgid "Call icon"
-msgstr ""
+msgstr "Anruf-Symbol"
 
 #: ui/chat/message_composer.slint:339
 msgid "Mg"
-msgstr ""
+msgstr "Mg"
 
 #: ui/chat/message_composer.slint:573
 msgid "Show keyboard"
-msgstr ""
+msgstr "Tastatur anzeigen"
 
 #: ui/chat/message_composer.slint:573
 msgid "Close picker"
-msgstr ""
+msgstr "Auswahl schließen"
 
 #: ui/chat/message_composer.slint:573
 msgid "Emoji & GIF picker"
-msgstr ""
+msgstr "Emoji- und GIF-Auswahl"
 
 #. what was typed (Android bridge maps value → text).
 #: ui/chat/message_composer.slint:639
 msgid "Message input"
-msgstr ""
+msgstr "Nachrichteneingabe"
 
 #: ui/chat/message_composer.slint:747
 msgid "Attach file"
-msgstr ""
+msgstr "Datei anhängen"
 
 #: ui/chat/message_composer.slint:764
 msgid "Record voice message"
-msgstr ""
+msgstr "Sprachnachricht aufnehmen"
 
 #: ui/chat/message_composer.slint:796
 msgid "Send message"
-msgstr ""
+msgstr "Nachricht senden"
 
 #: ui/chat/message_context_menu.slint:70 ui/chat/reaction_picker.slint:144
 msgid "React with {}"
-msgstr ""
+msgstr "Mit {} reagieren"
 
 #: ui/chat/message_context_menu.slint:580
 msgid "More reactions and stickers"
-msgstr ""
+msgstr "Weitere Reaktionen und Sticker"
 
 #: ui/chat/message_context_menu.slint:599
 msgid "Resend"
-msgstr ""
+msgstr "Erneut senden"
 
 #: ui/chat/message_context_menu.slint:614
 msgid "Reply"
-msgstr ""
+msgstr "Antworten"
 
 #: ui/chat/message_context_menu.slint:629
 msgid "Edit"
-msgstr ""
+msgstr "Bearbeiten"
 
 #: ui/chat/message_context_menu.slint:659
 msgid "Copy"
-msgstr ""
+msgstr "Kopieren"
 
 #: ui/chat/message_context_menu.slint:674 ui/modals/forward_message.slint:53
 msgid "Forward"
-msgstr ""
+msgstr "Weiterleiten"
 
 #: ui/chat/message_context_menu.slint:691
 msgid "Select"
-msgstr ""
+msgstr "Auswählen"
 
 #: ui/chat/message_context_menu.slint:706
 msgid "Unpin"
-msgstr ""
+msgstr "Nicht anheften"
 
 #: ui/chat/message_context_menu.slint:706
 msgid "Pin"
-msgstr ""
+msgstr "Anheften"
 
 #: ui/chat/message_context_menu.slint:721 ui/components/image_viewer.slint:41
 msgid "Download"
-msgstr ""
+msgstr "Herunterladen"
 
 #: ui/chat/message_context_menu.slint:736 ui/modals/channel_settings.slint:199
 msgid "Info"
-msgstr ""
+msgstr "Info"
 
 #: ui/chat/message_footer.slint:49
 msgid "Reactions: {}"
-msgstr ""
+msgstr "Reaktionen: {}"
 
 #: ui/chat/message_footer.slint:73
 msgid "{}, your reaction"
-msgstr ""
+msgstr "{}, deine Reaktion"
 
 #: ui/chat/message_footer.slint:134
 msgid "Disappearing message"
-msgstr ""
+msgstr "Verschwindende Nachricht"
 
 #: ui/chat/message_footer.slint:139
 msgid "edited"
-msgstr ""
+msgstr "bearbeitet"
 
 #. packet: there is no recipient ACK.
 #: ui/chat/message_footer.slint:159 ui/chat/message_footer.slint:201
 msgid "queued"
-msgstr ""
+msgstr "eingereiht"
 
 #: ui/chat/message_footer.slint:160
 msgid "relayed"
-msgstr ""
+msgstr "per Relais"
 
 #: ui/chat/message_footer.slint:161
 msgid "carried"
-msgstr ""
+msgstr "mitgenommen"
 
 #: ui/chat/message_footer.slint:162
 msgid "waiting"
-msgstr ""
+msgstr "wartend"
 
 #: ui/chat/message_footer.slint:163
 msgid "not delivered"
-msgstr ""
+msgstr "nicht zugestellt"
 
 #: ui/chat/message_footer.slint:164
 msgid "delivered"
-msgstr ""
+msgstr "zugestellt"
 
 #: ui/chat/message_footer.slint:165
 msgid "read"
-msgstr ""
+msgstr "gelesen"
 
 #: ui/chat/message_footer.slint:166
 msgid "broadcast"
-msgstr ""
+msgstr "Funk"
 
 #: ui/chat/message_footer.slint:167
 msgid "sent"
-msgstr ""
+msgstr "gesendet"
 
 #: ui/chat/message_footer.slint:173
 msgid "Signal ciphertext queued on this device; no route has accepted it"
 msgstr ""
+"Signal-Geheimtext wartet auf diesem Gerät; keine Route hat ihn angenommen"
 
 #: ui/chat/message_footer.slint:175
 msgid ""
 "Sealed Signal ciphertext queued onto a courier link; recipient has not "
 "acknowledged it"
 msgstr ""
+"Versiegelter Signal-Geheimtext liegt auf einer Kurierverbindung; der "
+"Empfänger hat ihn nicht bestätigt"
 
 #: ui/chat/message_footer.slint:177
 msgid "Handed to a passing device; may arrive later"
-msgstr ""
+msgstr "An ein vorbeikommendes Gerät übergeben; kommt vielleicht später an"
 
 #: ui/chat/message_footer.slint:179
 msgid "Held on this device until something can carry it"
-msgstr ""
+msgstr "Bleibt auf diesem Gerät, bis es etwas mitnehmen kann"
 
 #: ui/chat/message_footer.slint:181
 msgid "Left the outbox without ever being acknowledged"
-msgstr ""
+msgstr "Hat den Postausgang verlassen und wurde nie bestätigt"
 
 #: ui/chat/message_footer.slint:183
 msgid "The peer's device acknowledged it"
-msgstr ""
+msgstr "Das Gerät der anderen Person hat es bestätigt"
 
 #: ui/chat/message_footer.slint:185
 msgid "Read by the peer"
-msgstr ""
+msgstr "Von der anderen Person gelesen"
 
 #: ui/chat/message_footer.slint:187
 msgid "Put on the air without recipient acknowledgement"
-msgstr ""
+msgstr "Über Funk gesendet, ohne Bestätigung des Empfängers"
 
 #: ui/chat/message_footer.slint:188
 msgid "Handed to a live link; not yet acknowledged"
-msgstr ""
+msgstr "An eine aktive Verbindung übergeben; noch nicht bestätigt"
 
 #: ui/chat/message_footer.slint:201
 msgid "waiting for Tor"
-msgstr ""
+msgstr "wartet auf Tor"
 
 #: ui/chat/message_footer.slint:201
 msgid "sending"
-msgstr ""
+msgstr "wird gesendet"
 
 #: ui/chat/message_footer.slint:206
 msgid "Queued behind an earlier send; upload has not started"
-msgstr ""
+msgstr "Wartet hinter einem früheren Senden; der Upload hat nicht begonnen"
 
 #: ui/chat/message_footer.slint:206 ui/chat/message_item.slint:659
 msgid "Waiting for Tor"
-msgstr ""
+msgstr "Wartet auf Tor"
 
 #: ui/chat/message_footer.slint:206 ui/chat/message_item.slint:659
 msgid "Sending"
-msgstr ""
+msgstr "Senden"
 
 #: ui/chat/message_footer.slint:216
 msgid "{}. Tap to retry now"
-msgstr ""
+msgstr "{}. Tippe, um es jetzt erneut zu versuchen"
 
 #: ui/chat/message_footer.slint:226
 msgid "not sent"
-msgstr ""
+msgstr "nicht gesendet"
 
 #: ui/chat/message_footer.slint:226
 msgid "not sent · {}"
-msgstr ""
+msgstr "nicht gesendet · {}"
 
 #: ui/chat/message_footer.slint:231
 msgid "Not sent, {}"
-msgstr ""
+msgstr "Nicht gesendet, {}"
 
 #: ui/chat/message_footer.slint:234
 msgid "not sent · Retry"
-msgstr ""
+msgstr "nicht gesendet · Erneut"
 
 #: ui/chat/message_footer.slint:234
 msgid "not sent · {} · Retry"
-msgstr ""
+msgstr "nicht gesendet · {} · Erneut"
 
 #: ui/chat/message_footer.slint:239
 msgid "Not sent, tap to retry"
-msgstr ""
+msgstr "Nicht gesendet, zum Wiederholen tippen"
 
 #: ui/chat/message_footer.slint:252 ui/chat/message_footer.slint:257
 msgid "Delivery could not be confirmed, tap to retry"
-msgstr ""
+msgstr "Zustellung nicht bestätigt, zum Wiederholen tippen"
 
 #: ui/chat/message_footer.slint:292
 msgid "Delivered"
-msgstr ""
+msgstr "Zugestellt"
 
 #: ui/chat/message_footer.slint:293
 msgid "Read"
-msgstr ""
+msgstr "Gelesen"
 
 #: ui/chat/message_footer.slint:293
 msgid "Sent"
-msgstr ""
+msgstr "Gesendet"
 
 #: ui/chat/message_item.slint:91
 msgid "Voice message, {}"
-msgstr ""
+msgstr "Sprachnachricht, {}"
 
 #: ui/chat/message_item.slint:92
 msgid "Photo"
 msgid_plural "{n} photos"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "Foto"
+msgstr[1] "{n} Fotos"
 
 #: ui/chat/message_item.slint:94
 msgid "File {}"
-msgstr ""
+msgstr "Datei {}"
 
 #: ui/chat/message_item.slint:500
 msgid "Message deleted"
-msgstr ""
+msgstr "Nachricht gelöscht"
 
 #: ui/chat/message_item.slint:575
 msgid "Your message: {}"
-msgstr ""
+msgstr "Deine Nachricht: {}"
 
 #: ui/chat/message_item.slint:575
 msgid "{0} says: {1}"
-msgstr ""
+msgstr "{0} sagt: {1}"
 
 #: ui/chat/message_item.slint:659
 msgid "Not sent"
-msgstr ""
+msgstr "Nicht gesendet"
 
 #: ui/chat/message_item.slint:792 ui/sidebar/sidebar_footer.slint:229
 msgid "AI"
-msgstr ""
+msgstr "AI"
 
 #: ui/chat/message_item.slint:821
 msgid "Thread reply"
-msgstr ""
+msgstr "Thread-Antwort"
 
 #: ui/chat/message_list_overlays.slint:26
 msgid "{n} new message, jump to newest"
 msgid_plural "{n} new messages, jump to newest"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "{n} neue Nachricht, zur neuesten springen"
+msgstr[1] "{n} neue Nachrichten, zur neuesten springen"
 
 #: ui/chat/message_list_overlays.slint:27
 msgid "Scroll to bottom"
-msgstr ""
+msgstr "Nach unten"
 
 #: ui/chat/message_list_overlays.slint:50
 msgid "{n} new message"
 msgid_plural "{n} new messages"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "{n} neue Nachricht"
+msgstr[1] "{n} neue Nachrichten"
 
 #: ui/chat/message_list_overlays.slint:94
 msgid "Older messages didn't load"
-msgstr ""
+msgstr "Ältere Nachrichten wurden nicht geladen"
 
 #: ui/chat/message_list_overlays.slint:106
 msgid "Retry loading older messages"
-msgstr ""
+msgstr "Ältere Nachrichten erneut laden"
 
 #: ui/chat/message_list_states.slint:83
 msgid "Your saved messages"
-msgstr ""
+msgstr "Deine gespeicherten Nachrichten"
 
 #: ui/chat/message_list_states.slint:83
 msgid "No messages yet"
-msgstr ""
+msgstr "Noch keine Nachrichten"
 
 #: ui/chat/message_list_states.slint:92
 msgid "Forward messages here or write notes to yourself"
-msgstr ""
+msgstr "Leite Nachrichten hierher weiter oder schreib dir selbst Notizen"
 
 #: ui/chat/message_list_states.slint:93
 msgid "Write a message to start the conversation"
-msgstr ""
+msgstr "Schreib eine Nachricht, um die Unterhaltung zu starten"
 
 #: ui/chat/message_quote.slint:46
 msgid "Go to quoted message from {}"
-msgstr ""
+msgstr "Zum Zitat von {}"
 
 #: ui/chat/message_quote.slint:125
 msgid "GIF"
-msgstr ""
+msgstr "GIF"
 
 #: ui/chat/message_quote.slint:176
 msgid "📎 Attachment"
-msgstr ""
+msgstr "📎 Anhang"
 
 #: ui/chat/message_quote.slint:176 ui/mesh/mesh_peer_sheet.slint:109
 msgid "Message"
-msgstr ""
+msgstr "Nachricht"
 
 #: ui/chat/message_quote.slint:184
 msgid "Original message not found"
-msgstr ""
+msgstr "Originalnachricht nicht gefunden"
 
 #: ui/chat/message_row_separators.slint:32
 msgid "Unread messages"
-msgstr ""
+msgstr "Ungelesene Nachrichten"
 
 #: ui/chat/message_thread.slint:27
 msgid "Open thread: {}"
-msgstr ""
+msgstr "Thread öffnen: {}"
 
 #. Computed
 #: ui/chat/pinned_bar.slint:32
 msgid "Pinned message {0} of {1}"
-msgstr ""
+msgstr "Angeheftete Nachricht {0} von {1}"
 
 #. Computed
 #: ui/chat/pinned_bar.slint:32
 msgid "Pinned message"
-msgstr ""
+msgstr "Angeheftete Nachricht"
 
 #: ui/chat/pinned_bar.slint:77
 msgid "Previous pinned message"
-msgstr ""
+msgstr "Vorherige angeheftete Nachricht"
 
 #: ui/chat/pinned_bar.slint:110
 msgid "Next pinned message"
-msgstr ""
+msgstr "Nächste angeheftete Nachricht"
 
 #: ui/chat/pinned_bar.slint:138 ui/modals/pinned_messages.slint:111
 msgid "Pinned message image"
-msgstr ""
+msgstr "Bild der angehefteten Nachricht"
 
 #: ui/chat/pinned_bar.slint:151
 msgid "Go to pinned message: {}"
-msgstr ""
+msgstr "Zur angehefteten Nachricht: {}"
 
 #: ui/chat/pinned_bar.slint:195
 msgid "All pinned messages"
-msgstr ""
+msgstr "Alle angehefteten Nachrichten"
 
 #: ui/chat/secret_timer_modal.slint:20
 msgid ""
 "New messages disappear after this time. Received messages count down after "
 "you read them; your sent messages count down after sending."
 msgstr ""
+"Neue Nachrichten verschwinden nach dieser Zeit. Empfangene Nachrichten "
+"zählen ab, nachdem du sie gelesen hast; gesendete ab dem Senden."
 
 #: ui/chat/secret_timer_modal.slint:26
 msgid "Current: {}"
-msgstr ""
+msgstr "Aktuell: {}"
 
 #: ui/chat/selection_bar.slint:103
 msgid "Copy selected"
-msgstr ""
+msgstr "Auswahl kopieren"
 
 #: ui/chat/selection_bar.slint:112
 msgid "Forward selected"
-msgstr ""
+msgstr "Auswahl weiterleiten"
 
 #: ui/chat/thread_panel.slint:245
 msgid "Thread"
-msgstr ""
+msgstr "Thread"
 
 #: ui/chat/thread_panel.slint:246 ui/modals/pinned_messages.slint:28
 msgid "{n} pinned message"
 msgid_plural "{n} pinned messages"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "{n} angeheftete Nachricht"
+msgstr[1] "{n} angeheftete Nachrichten"
 
 #: ui/chat/thread_panel.slint:308
 msgid "Original message from {0}: {1}"
-msgstr ""
+msgstr "Originalnachricht von {0}: {1}"
 
 #: ui/chat/thread_panel.slint:422 ui/modals/pinned_messages.slint:51
 msgid "No pinned messages"
-msgstr ""
+msgstr "Keine angehefteten Nachrichten"
 
 #: ui/chat/thread_panel.slint:422
 msgid "No replies yet"
-msgstr ""
+msgstr "Noch keine Antworten"
 
 #: ui/chat/thread_panel.slint:429
 msgid "Be the first to reply!"
-msgstr ""
+msgstr "Schreib die erste Antwort!"
 
 #: ui/chat/thread_panel.slint:448 ui/chat/thread_panel.slint:461
 msgid "Load earlier replies"
-msgstr ""
+msgstr "Frühere Antworten laden"
 
 #: ui/chat/thread_panel.slint:727
 msgid "Unpin message"
 msgid_plural "Unpin all {n} messages"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "Nachricht nicht mehr anheften"
+msgstr[1] "Alle {n} Nachrichten nicht mehr anheften"
 
 #: ui/chat/thread_panel.slint:755
 msgid "Reply in thread..."
-msgstr ""
+msgstr "Im Thread antworten..."
 
 #. Spoken names, index-aligned with `emojis` (CLDR short names).
 #: ui/chat/types.slint:11
 msgid "thumbs up"
-msgstr ""
+msgstr "Daumen hoch"
 
 #. Spoken names, index-aligned with `emojis` (CLDR short names).
 #: ui/chat/types.slint:11
 msgid "red heart"
-msgstr ""
+msgstr "rotes Herz"
 
 #. Spoken names, index-aligned with `emojis` (CLDR short names).
 #: ui/chat/types.slint:11
 msgid "face with tears of joy"
-msgstr ""
+msgstr "Gesicht mit Freudentränen"
 
 #. Spoken names, index-aligned with `emojis` (CLDR short names).
 #: ui/chat/types.slint:11
 msgid "face with open mouth"
-msgstr ""
+msgstr "Gesicht mit offenem Mund"
 
 #. Spoken names, index-aligned with `emojis` (CLDR short names).
 #: ui/chat/types.slint:11
 msgid "crying face"
-msgstr ""
+msgstr "weinendes Gesicht"
 
 #. Spoken names, index-aligned with `emojis` (CLDR short names).
 #: ui/chat/types.slint:11
 msgid "folded hands"
-msgstr ""
+msgstr "gefaltete Hände"
 
 #: ui/components/avatar.slint:34
 msgid "Avatar"
-msgstr ""
+msgstr "Avatar"
 
 #: ui/components/avatar_picker.slint:17
 msgid "Choose your avatar"
-msgstr ""
+msgstr "Wähle deinen Avatar"
 
 #: ui/components/code_preview_panel.slint:107
 msgid "Open externally"
-msgstr ""
+msgstr "Extern öffnen"
 
 #: ui/components/compose_fab.slint:38 ui/mesh/mesh_compose_sheet.slint:127
 #: ui/modals/create_channel.slint:191 ui/modals/create_section.slint:228
 msgid "Create"
-msgstr ""
+msgstr "Erstellen"
 
 #: ui/components/connection_banner.slint:110
 msgid "The mesh is not running either, so there is nothing to fall back to."
-msgstr ""
+msgstr "Mesh läuft auch nicht, es gibt also keinen Ersatz."
 
 #: ui/components/connection_banner.slint:117
 msgid ""
 "Mesh is on, but Bluetooth is off and no relay is connected — nothing can "
 "carry a message right now."
 msgstr ""
+"Mesh ist an, aber Bluetooth ist aus und kein Relais ist verbunden — gerade "
+"kann nichts eine Nachricht mitnehmen."
 
 #: ui/components/connection_banner.slint:118
 msgid ""
 "Mesh is on, but the Bluetooth radio is unavailable and no relay is connected "
 "— nothing can carry a message right now."
 msgstr ""
+"Mesh ist an, aber das Bluetooth-Funkgerät ist nicht verfügbar und kein "
+"Relais ist verbunden — gerade kann nichts eine Nachricht mitnehmen."
 
 #: ui/components/connection_banner.slint:120
 msgid ""
@@ -1761,7 +1800,11 @@ msgid_plural ""
 "Mesh is on but Bluetooth is off. Only the {n} connected relays can carry, "
 "and relays need internet."
 msgstr[0] ""
+"Mesh ist an, aber Bluetooth ist aus. Nur {n} verbundenes Relais kann etwas "
+"mitnehmen, und Relais brauchen Internet."
 msgstr[1] ""
+"Mesh ist an, aber Bluetooth ist aus. Nur {n} verbundene Relais können etwas "
+"mitnehmen, und Relais brauchen Internet."
 
 #: ui/components/connection_banner.slint:121
 msgid ""
@@ -1771,13 +1814,19 @@ msgid_plural ""
 "Mesh is on but the Bluetooth radio is unavailable. Only the {n} connected "
 "relays can carry, and relays need internet."
 msgstr[0] ""
+"Mesh ist an, aber das Bluetooth-Funkgerät ist nicht verfügbar. Nur {n} "
+"verbundenes Relais kann etwas mitnehmen, und Relais brauchen Internet."
 msgstr[1] ""
+"Mesh ist an, aber das Bluetooth-Funkgerät ist nicht verfügbar. Nur {n} "
+"verbundene Relais können etwas mitnehmen, und Relais brauchen Internet."
 
 #: ui/components/connection_banner.slint:123
 msgid ""
 "Mesh is running over Bluetooth. Nobody is in range yet; what you send waits "
 "to be carried."
 msgstr ""
+"Mesh läuft über Bluetooth. Noch ist niemand in Reichweite; was du sendest, "
+"wartet darauf, mitgenommen zu werden."
 
 #: ui/components/connection_banner.slint:124
 msgid ""
@@ -1787,1107 +1836,1137 @@ msgid_plural ""
 "Mesh is running over Bluetooth — {n} nearby. Mesh conversations do not need "
 "the server."
 msgstr[0] ""
+"Mesh läuft über Bluetooth — {n} in der Nähe. Mesh-Unterhaltungen brauchen "
+"den Server nicht."
 msgstr[1] ""
+"Mesh läuft über Bluetooth — {n} in der Nähe. Mesh-Unterhaltungen brauchen "
+"den Server nicht."
 
 #: ui/components/connection_banner.slint:211
 msgid "Tor error — retrying…"
-msgstr ""
+msgstr "Tor-Fehler — neuer Versuch…"
 
 #: ui/components/connection_banner.slint:211
 msgid "Tor connection error — retrying…"
-msgstr ""
+msgstr "Tor-Verbindungsfehler — neuer Versuch…"
 
 #: ui/components/connection_banner.slint:212
 msgid "Connecting over Tor…"
-msgstr ""
+msgstr "Verbinden über Tor…"
 
 #: ui/components/connection_banner.slint:215
 msgid "Reconnecting…"
-msgstr ""
+msgstr "Neu verbinden…"
 
 #: ui/components/connection_banner.slint:216
 msgid "Reconnecting (attempt {})…"
-msgstr ""
+msgstr "Neu verbinden (Versuch {})…"
 
 #: ui/components/connection_banner.slint:217
 #: ui/sidebar/sidebar_footer.slint:357
 msgid "Server unreachable"
-msgstr ""
+msgstr "Server nicht erreichbar"
 
 #: ui/components/connection_banner.slint:217
 msgid "Server unreachable — check your network"
-msgstr ""
+msgstr "Server nicht erreichbar — prüfe dein Netz"
 
 #: ui/components/connection_banner.slint:218
 msgid "No server — messages will send later"
-msgstr ""
+msgstr "Kein Server — Nachrichten werden später gesendet"
 
 #: ui/components/connection_banner.slint:219
 msgid "Server unreachable — messages will send later"
-msgstr ""
+msgstr "Server nicht erreichbar — Nachrichten werden später gesendet"
 
 #: ui/components/connection_banner.slint:260
 msgid "Dismiss the connection banner"
-msgstr ""
+msgstr "Verbindungshinweis schließen"
 
 #: ui/components/dismiss_button.slint:38 ui/server_records/screen.slint:87
 msgid "Close"
-msgstr ""
+msgstr "Schließen"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73 ui/components/gif_picker.slint:181
 msgid "Recent"
-msgstr ""
+msgstr "Zuletzt"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Smileys"
-msgstr ""
+msgstr "Smileys"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73 ui/components/unified_search.slint:815
 msgid "People"
-msgstr ""
+msgstr "Personen"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Animals"
-msgstr ""
+msgstr "Tiere"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Food"
-msgstr ""
+msgstr "Essen"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Travel"
-msgstr ""
+msgstr "Reisen"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Activities"
-msgstr ""
+msgstr "Aktivitäten"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Objects"
-msgstr ""
+msgstr "Objekte"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Symbols"
-msgstr ""
+msgstr "Symbole"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Flags"
-msgstr ""
+msgstr "Flaggen"
 
 #: ui/components/emoji_picker.slint:274
 msgid "Default skin tone"
-msgstr ""
+msgstr "Standard-Hautton"
 
 #: ui/components/emoji_picker.slint:274
 msgid "Skin tone {}"
-msgstr ""
+msgstr "Hautton {}"
 
 #: ui/components/emoji_picker.slint:299
 msgid "Search results"
-msgstr ""
+msgstr "Suchergebnisse"
 
 #: ui/components/emoji_picker.slint:375
 msgid "No emoji found"
-msgstr ""
+msgstr "Kein Emoji gefunden"
 
 #: ui/components/emoji_picker.slint:376
 msgid "Emoji you use show up here"
-msgstr ""
+msgstr "Emoji, die du nutzt, erscheinen hier"
 
 #: ui/components/emoji_picker.slint:377
 msgid "No emoji in this category"
-msgstr ""
+msgstr "Kein Emoji in dieser Kategorie"
 
 #: ui/components/gif_picker.slint:41
 msgid "GIF {}, preview unavailable"
-msgstr ""
+msgstr "GIF {}, keine Vorschau"
 
 #: ui/components/gif_picker.slint:41
 msgid "GIF {}"
-msgstr ""
+msgstr "GIF {}"
 
 #: ui/components/gif_picker.slint:208
 msgid "Loading trending…"
-msgstr ""
+msgstr "Trends werden geladen…"
 
 #: ui/components/gif_picker.slint:208
 msgid "Trending"
-msgstr ""
+msgstr "Trends"
 
 #: ui/components/gif_picker.slint:252
 msgid "Couldn't load GIFs"
-msgstr ""
+msgstr "GIFs konnten nicht geladen werden"
 
 #: ui/components/gif_picker.slint:252
 msgid "No GIFs found"
-msgstr ""
+msgstr "Keine GIFs gefunden"
 
 #: ui/components/gif_picker.slint:252
 msgid "No trending GIFs"
-msgstr ""
+msgstr "Keine Trend-GIFs"
 
 #: ui/components/gif_picker.slint:259
 msgid "The GIF service is unavailable."
-msgstr ""
+msgstr "Der GIF-Dienst ist nicht verfügbar."
 
 #: ui/components/gif_picker.slint:259
 msgid "Try a different search term"
-msgstr ""
+msgstr "Versuch einen anderen Suchbegriff"
 
 #: ui/components/gif_picker.slint:259
 msgid "Try again later."
-msgstr ""
+msgstr "Versuch es später noch einmal."
 
 #: ui/components/gif_picker.slint:282
 msgid "Powered by Klipy"
-msgstr ""
+msgstr "Bereitgestellt von Klipy"
 
 #: ui/components/image_viewer.slint:42
 msgid "Copy image"
-msgstr ""
+msgstr "Bild kopieren"
 
 #: ui/components/image_viewer.slint:43
 msgid "Open downloads"
-msgstr ""
+msgstr "Downloads öffnen"
 
 #: ui/components/image_viewer.slint:44
 msgid "Previous media"
-msgstr ""
+msgstr "Vorheriges Medium"
 
 #: ui/components/image_viewer.slint:46
 msgid "Next media"
-msgstr ""
+msgstr "Nächstes Medium"
 
 #: ui/components/input.slint:167
 msgid "Hide password"
-msgstr ""
+msgstr "Passwort verbergen"
 
 #: ui/components/input.slint:167
 msgid "Show password"
-msgstr ""
+msgstr "Passwort anzeigen"
 
 #: ui/components/mention_autocomplete.slint:173
 msgid "Notify online members"
-msgstr ""
+msgstr "Online-Mitglieder benachrichtigen"
 
 #: ui/components/mention_autocomplete.slint:180
 msgid "Notify all members"
-msgstr ""
+msgstr "Alle Mitglieder benachrichtigen"
 
 #: ui/components/mention_autocomplete.slint:217
 msgid "No suggestions"
-msgstr ""
+msgstr "Keine Vorschläge"
 
 #. genuinely work here, and channels and DMs genuinely do not.
 #: ui/components/mesh_only_bar.slint:54
 msgid ""
 "Not signed in — mesh conversations only. Channels and DMs need an account."
 msgstr ""
+"Nicht angemeldet — nur Mesh-Unterhaltungen. Kanäle und Direktnachrichten "
+"brauchen ein Konto."
 
 #: ui/components/mesh_only_bar.slint:76 ui/components/mesh_only_bar.slint:91
 #: ui/pages/register.slint:619
 msgid "Sign in"
-msgstr ""
+msgstr "Anmelden"
 
 #: ui/components/mobile_bottom_nav.slint:216
 #: ui/sidebar/sidebar_footer.slint:103 ui/sidebar/sidebar_footer.slint:249
 msgid "Chats"
-msgstr ""
+msgstr "Chats"
 
 #: ui/components/mobile_bottom_nav.slint:249 ui/modals/friends.slint:146
 msgid "Contacts"
-msgstr ""
+msgstr "Kontakte"
 
 #: ui/components/mobile_bottom_nav.slint:259 ui/sidebar/sidebar_footer.slint:78
 msgid "Profile"
-msgstr ""
+msgstr "Profil"
 
 #: ui/components/modal.slint:109
 msgid "Dialog"
-msgstr ""
+msgstr "Dialog"
 
 #: ui/components/modal.slint:109
 msgid "{} dialog"
-msgstr ""
+msgstr "{} Dialog"
 
 #. never one name for every dialog.
 #: ui/components/modal_container.slint:41
 msgid "Modal dialog"
-msgstr ""
+msgstr "Modaldialog"
 
 #: ui/components/offline_mesh_notice.slint:80
 msgid "Can't reach the server"
-msgstr ""
+msgstr "Server nicht erreichbar"
 
 #: ui/components/offline_mesh_notice.slint:90
 msgid ""
 "Creating an account and signing in both need it, so neither will work until "
 "it comes back."
 msgstr ""
+"Konto erstellen und die Anmeldung brauchen ihn beide, also geht beides "
+"nicht, bis er wieder da ist."
 
 #: ui/components/offline_mesh_notice.slint:101
 msgid ""
 "The mesh does not. It carries messages between nearby devices over Bluetooth "
 "with no server, no internet and no account — and it is running now."
 msgstr ""
+"Mesh braucht ihn nicht. Es trägt Nachrichten zwischen Geräten in der Nähe "
+"über Bluetooth, ohne Server, ohne Internet und ohne Konto — und es läuft "
+"gerade."
 
 #: ui/components/offline_mesh_notice.slint:103
 msgid ""
 "The mesh is not running on this device either, so there is nothing to fall "
 "back to right now."
 msgstr ""
+"Mesh läuft auf diesem Gerät auch nicht, es gibt also gerade keinen Ersatz."
 
 #: ui/components/offline_mesh_notice.slint:104
 msgid "This build has no mesh, so there is nothing to fall back to."
-msgstr ""
+msgstr "Dieser Build hat kein Mesh, es gibt also keinen Ersatz."
 
 #: ui/components/offline_mesh_notice.slint:144
 msgid "Use the mesh without an account"
-msgstr ""
+msgstr "Mesh ohne Konto nutzen"
 
 #: ui/components/offline_mesh_notice.slint:169
 msgid ""
 "Your channels and DMs stay where they are. Sign in whenever the server is "
 "back."
 msgstr ""
+"Deine Kanäle und Direktnachrichten bleiben, wo sie sind. Melde dich an, "
+"sobald der Server wieder da ist."
 
 #: ui/components/pdf_preview_panel.slint:80
 msgid "PDF"
-msgstr ""
+msgstr "PDF"
 
 #: ui/components/pdf_preview_panel.slint:158
 msgid "PDF document"
-msgstr ""
+msgstr "PDF-Dokument"
 
 #: ui/components/pdf_preview_panel.slint:165
 msgid "View this PDF in another app."
-msgstr ""
+msgstr "Dieses PDF in einer anderen App ansehen."
 
 #: ui/components/pdf_preview_panel.slint:174
 msgid "Open PDF"
-msgstr ""
+msgstr "PDF öffnen"
 
 #: ui/components/pdf_preview_panel.slint:187
 msgid "Loading PDF..."
-msgstr ""
+msgstr "PDF wird geladen..."
 
 #: ui/components/pdf_preview_panel.slint:207
 msgid "Previous page"
-msgstr ""
+msgstr "Vorherige Seite"
 
 #: ui/components/pdf_preview_panel.slint:223
 msgid "Next page"
-msgstr ""
+msgstr "Nächste Seite"
 
 #: ui/components/unified_search.slint:551
 msgid "Search…"
-msgstr ""
+msgstr "Suchen…"
 
 #: ui/components/unified_search.slint:575
 msgid "Cancel search"
-msgstr ""
+msgstr "Suche abbrechen"
 
 #: ui/components/unified_search.slint:617
 msgid "Messages"
-msgstr ""
+msgstr "Nachrichten"
 
 #: ui/components/unified_search.slint:618
 msgid "Media"
-msgstr ""
+msgstr "Medien"
 
 #: ui/components/unified_search.slint:619
 msgid "Files"
-msgstr ""
+msgstr "Dateien"
 
 #: ui/components/unified_search.slint:620
 msgid "Links"
-msgstr ""
+msgstr "Links"
 
 #: ui/components/unified_search.slint:621
 msgid "Voice"
-msgstr ""
+msgstr "Audio"
 
 #: ui/components/unified_search.slint:654
 msgid "{0} {1}+"
-msgstr ""
+msgstr "{0} {1}+"
 
 #: ui/components/unified_search.slint:654
 msgid "{0} {1}"
-msgstr ""
+msgstr "{0} {1}"
 
 #: ui/components/unified_search.slint:675
 msgid "Sort: relevance"
-msgstr ""
+msgstr "Sortierung: Relevanz"
 
 #: ui/components/unified_search.slint:675
 msgid "Sort: newest"
-msgstr ""
+msgstr "Sortierung: Neueste"
 
 #: ui/components/unified_search.slint:675
 msgid "Sort: oldest"
-msgstr ""
+msgstr "Sortierung: Älteste"
 
 #: ui/components/unified_search.slint:675
 msgid "Sort: largest"
-msgstr ""
+msgstr "Sortierung: Größte"
 
 #: ui/components/unified_search.slint:685
 msgid "Relevance"
-msgstr ""
+msgstr "Relevanz"
 
 #: ui/components/unified_search.slint:685
 msgid "Newest"
-msgstr ""
+msgstr "Neueste"
 
 #: ui/components/unified_search.slint:685
 msgid "Oldest"
-msgstr ""
+msgstr "Älteste"
 
 #: ui/components/unified_search.slint:685
 msgid "Largest"
-msgstr ""
+msgstr "Größte"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: any"
-msgstr ""
+msgstr "Zeitfilter: jederzeit"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: today"
-msgstr ""
+msgstr "Zeitfilter: heute"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: week"
-msgstr ""
+msgstr "Zeitfilter: Woche"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: month"
-msgstr ""
+msgstr "Zeitfilter: Monat"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: year"
-msgstr ""
+msgstr "Zeitfilter: Jahr"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: {}"
-msgstr ""
+msgstr "Zeitfilter: {}"
 
 #. `choice` is compared to pick the date-filter key. Shown text is separate.
 #: ui/components/unified_search.slint:699
 msgid "Any time"
-msgstr ""
+msgstr "Jederzeit"
 
 #: ui/components/unified_search.slint:699
 msgid "Today"
-msgstr ""
+msgstr "Heute"
 
 #: ui/components/unified_search.slint:699
 msgid "7 days"
-msgstr ""
+msgstr "7 Tage"
 
 #: ui/components/unified_search.slint:699
 msgid "30 days"
-msgstr ""
+msgstr "30 Tage"
 
 #: ui/components/unified_search.slint:699
 msgid "This year"
-msgstr ""
+msgstr "Dieses Jahr"
 
 #: ui/components/unified_search.slint:714
 msgid "Filter by sender"
-msgstr ""
+msgstr "Nach Absender filtern"
 
 #: ui/components/unified_search.slint:714
 msgid "Filter by conversation"
-msgstr ""
+msgstr "Nach Unterhaltung filtern"
 
 #: ui/components/unified_search.slint:723
 msgid "From"
-msgstr ""
+msgstr "Von"
 
 #: ui/components/unified_search.slint:723
 msgid "From: {}"
-msgstr ""
+msgstr "Von: {}"
 
 #: ui/components/unified_search.slint:723
 msgid "In"
-msgstr ""
+msgstr "In"
 
 #: ui/components/unified_search.slint:723
 msgid "In: {}"
-msgstr ""
+msgstr "In: {}"
 
 #: ui/components/unified_search.slint:729
 msgid "Clear sender filter"
-msgstr ""
+msgstr "Absenderfilter löschen"
 
 #: ui/components/unified_search.slint:729
 msgid "Clear conversation filter"
-msgstr ""
+msgstr "Unterhaltungsfilter löschen"
 
 #: ui/components/unified_search.slint:756
 msgid "Recent searches"
-msgstr ""
+msgstr "Letzte Suchen"
 
 #: ui/components/unified_search.slint:758
 msgid "Clear recent searches"
-msgstr ""
+msgstr "Letzte Suchen löschen"
 
 #: ui/components/unified_search.slint:765 ui/modals/jarvis_memory.slint:107
 msgid "Clear"
-msgstr ""
+msgstr "Leeren"
 
 #: ui/components/unified_search.slint:771
 msgid "Search for {}"
-msgstr ""
+msgstr "Nach {} suchen"
 
 #: ui/components/unified_search.slint:783
 msgid "Remove recent search {}"
-msgstr ""
+msgstr "Letzte Suche {} entfernen"
 
 #: ui/components/unified_search.slint:799
 msgid "Suggested chats"
-msgstr ""
+msgstr "Vorgeschlagene Chats"
 
 #: ui/components/unified_search.slint:826
 msgid "Searching {}…"
-msgstr ""
+msgstr "{} wird gesucht…"
 
 #: ui/components/unified_search.slint:831
 msgid "No user {}"
-msgstr ""
+msgstr "Kein Nutzer {}"
 
 #: ui/components/unified_search.slint:849
 msgid "Find {}"
-msgstr ""
+msgstr "{} finden"
 
 #: ui/components/unified_search.slint:913
 msgid "Jump to"
-msgstr ""
+msgstr "Wechseln zu"
 
 #: ui/components/unified_search.slint:933
 msgid "Public channels"
-msgstr ""
+msgstr "Öffentliche Kanäle"
 
 #: ui/components/unified_search.slint:944
 msgid "Open {}"
-msgstr ""
+msgstr "{} öffnen"
 
 #: ui/components/unified_search.slint:944
 msgid "Join {}"
-msgstr ""
+msgstr "{} beitreten"
 
 #: ui/components/unified_search.slint:974
 msgid "Messages and shared content"
-msgstr ""
+msgstr "Nachrichten und geteilte Inhalte"
 
 #: ui/components/unified_search.slint:975
 msgid "Photos and videos"
-msgstr ""
+msgstr "Fotos und Videos"
 
 #: ui/components/unified_search.slint:978
 msgid "Voice messages"
-msgstr ""
+msgstr "Sprachnachrichten"
 
 #. `section` is a category key (`to-lowercase()` selects the page).
 #: ui/components/unified_search.slint:1049
 msgid "Show more messages"
-msgstr ""
+msgstr "Mehr Nachrichten"
 
 #: ui/components/unified_search.slint:1050
 msgid "Show more media"
-msgstr ""
+msgstr "Mehr Medien"
 
 #: ui/components/unified_search.slint:1051
 msgid "Show more files"
-msgstr ""
+msgstr "Mehr Dateien"
 
 #: ui/components/unified_search.slint:1052
 msgid "Show more links"
-msgstr ""
+msgstr "Mehr Links"
 
 #: ui/components/unified_search.slint:1053
 msgid "Show more voice"
-msgstr ""
+msgstr "Mehr Sprachnachrichten"
 
 #: ui/components/unified_search.slint:1066
 msgid "Searching this device…"
-msgstr ""
+msgstr "Dieses Gerät wird durchsucht…"
 
 #: ui/components/unified_search.slint:1076
 msgid "No photos or videos yet"
-msgstr ""
+msgstr "Noch keine Fotos oder Videos"
 
 #: ui/components/unified_search.slint:1077
 msgid "No files yet"
-msgstr ""
+msgstr "Noch keine Dateien"
 
 #: ui/components/unified_search.slint:1078
 msgid "No links yet"
-msgstr ""
+msgstr "Noch keine Links"
 
 #: ui/components/unified_search.slint:1078
 msgid "No voice messages yet"
-msgstr ""
+msgstr "Noch keine Sprachnachrichten"
 
 #: ui/components/unified_search.slint:1085
 msgid "No matches on this device"
-msgstr ""
+msgstr "Keine Treffer auf diesem Gerät"
 
 #: ui/components/unified_search.slint:1115
 msgid "When"
-msgstr ""
+msgstr "Wann"
 
 #: ui/components/unified_search.slint:1160
 msgid "Previous month"
-msgstr ""
+msgstr "Vorheriger Monat"
 
 #: ui/components/unified_search.slint:1172
 msgid "Next month"
-msgstr ""
+msgstr "Nächster Monat"
 
 #: ui/components/unified_search.slint:1262
 msgid "Tap a start day, then an end day"
-msgstr ""
+msgstr "Tippe einen Starttag, dann einen Endtag"
 
 #: ui/components/unified_search.slint:1262
 msgid "Start: {} · choose end"
-msgstr ""
+msgstr "Start: {} · Ende wählen"
 
 #: ui/components/unified_search.slint:1290
 msgid "From a person"
-msgstr ""
+msgstr "Von einer Person"
 
 #: ui/components/unified_search.slint:1290
 msgid "In a chat"
-msgstr ""
+msgstr "In einem Chat"
 
 #: ui/components/unified_search.slint:1296
 msgid "Search people"
-msgstr ""
+msgstr "Personen suchen"
 
 #: ui/components/unified_search.slint:1296
 msgid "Search chats"
-msgstr ""
+msgstr "Chats suchen"
 
 #: ui/components/unified_search.slint:1343
 msgid "No matches"
-msgstr ""
+msgstr "Keine Treffer"
 
 #: ui/components/video_player.slint:153
 msgid "Pause video"
-msgstr ""
+msgstr "Video pausieren"
 
 #: ui/components/video_player.slint:153
 msgid "Play video"
-msgstr ""
+msgstr "Video abspielen"
 
 #: ui/components/video_player.slint:167
 msgid "Video position"
-msgstr ""
+msgstr "Videoposition"
 
 #: ui/components/video_player.slint:226
 msgid "Mute video"
-msgstr ""
+msgstr "Video stummschalten"
 
 #: ui/components/video_player.slint:226
 msgid "Unmute video"
-msgstr ""
+msgstr "Video entstummen"
 
 #: ui/main_chat_shell.slint:468
 msgid "Select a conversation"
-msgstr ""
+msgstr "Unterhaltung wählen"
 
 #: ui/mesh/mesh_compose_sheet.slint:92 ui/mesh/mesh_compose_sheet.slint:149
 msgid "New private group"
-msgstr ""
+msgstr "Neue private Gruppe"
 
 #: ui/mesh/mesh_compose_sheet.slint:93 ui/mesh/mesh_compose_sheet.slint:153
 msgid "Join public channel"
-msgstr ""
+msgstr "Öffentlichem Kanal beitreten"
 
 #: ui/mesh/mesh_compose_sheet.slint:94 ui/mesh/mesh_compose_sheet.slint:156
 msgid "Join with invite"
-msgstr ""
+msgstr "Mit Einladung beitreten"
 
 #: ui/mesh/mesh_compose_sheet.slint:95 ui/mesh/mesh_compose_sheet.slint:160
 msgid "Join location cell"
-msgstr ""
+msgstr "Standortzelle beitreten"
 
 #: ui/mesh/mesh_compose_sheet.slint:95
 msgid "New"
-msgstr ""
+msgstr "Neu"
 
 #: ui/mesh/mesh_compose_sheet.slint:149
 msgid "Invite only"
-msgstr ""
+msgstr "Nur mit Einladung"
 
 #: ui/mesh/mesh_compose_sheet.slint:153
 msgid "Talk with devices nearby"
-msgstr ""
+msgstr "Mit Geräten in der Nähe sprechen"
 
 #: ui/mesh/mesh_compose_sheet.slint:156
 msgid "Paste or scan a private invite"
-msgstr ""
+msgstr "Private Einladung einfügen oder scannen"
 
 #: ui/mesh/mesh_compose_sheet.slint:160
 msgid "Connect through nearby relays"
-msgstr ""
+msgstr "Über Relais in der Nähe verbinden"
 
 #: ui/mesh/mesh_compose_sheet.slint:170 ui/modals/channel_settings.slint:586
 msgid "Group name"
-msgstr ""
+msgstr "Gruppenname"
 
 #: ui/mesh/mesh_compose_sheet.slint:176
 msgid ""
 "Only devices you invite can read it. You can add members after creating it."
 msgstr ""
+"Nur Geräte, die du einlädst, können es lesen. Mitglieder kannst du danach "
+"hinzufügen."
 
 #: ui/mesh/mesh_compose_sheet.slint:187
 msgid "SEEN NEARBY"
-msgstr ""
+msgstr "IN DER NÄHE GESEHEN"
 
 #: ui/mesh/mesh_compose_sheet.slint:204
 msgid "Paste private invite"
-msgstr ""
+msgstr "Private Einladung einfügen"
 
 #: ui/mesh/mesh_compose_sheet.slint:209 ui/modals/link_device_approve.slint:80
 msgid "Scan QR code"
-msgstr ""
+msgstr "QR-Code scannen"
 
 #: ui/mesh/mesh_compose_sheet.slint:218
 msgid "Location cell (e.g. u4pruy)"
-msgstr ""
+msgstr "Standortzelle (z. B. u4pruy)"
 
 #: ui/mesh/mesh_compose_sheet.slint:225
 msgid ""
 "Location cells use geohashes and available relays to connect devices in an "
 "area."
 msgstr ""
+"Standortzellen nutzen Geohashes und verfügbare Relais, um Geräte in einem "
+"Gebiet zu verbinden."
 
 #: ui/mesh/mesh_context_bar.slint:12
 msgid "Mesh is off"
-msgstr ""
+msgstr "Mesh ist aus"
 
 #: ui/mesh/mesh_context_bar.slint:13 ui/mesh/mesh_setup_sheet.slint:123
 msgid "Bluetooth is off"
-msgstr ""
+msgstr "Bluetooth ist aus"
 
 #: ui/mesh/mesh_context_bar.slint:15
 msgid "Waiting for the creator to rotate the group key"
-msgstr ""
+msgstr "Wartet, bis der Ersteller den Gruppenschlüssel wechselt"
 
 #: ui/mesh/mesh_context_bar.slint:17
 msgid "No route to this person · waiting for a carrier"
-msgstr ""
+msgstr "Keine Route zu dieser Person · wartet auf einen Überbringer"
 
 #: ui/mesh/mesh_context_bar.slint:57
 msgid "Turn on"
-msgstr ""
+msgstr "Einschalten"
 
 #: ui/mesh/mesh_context_bar.slint:67
 msgid "Turn on mesh"
-msgstr ""
+msgstr "Mesh einschalten"
 
 #: ui/mesh/mesh_context_bar.slint:87
 msgid "Dismiss mesh notice"
-msgstr ""
+msgstr "Mesh-Hinweis schließen"
 
 #: ui/mesh/mesh_global.slint:161
 msgid "Mesh peer · self-asserted name"
-msgstr ""
+msgstr "Mesh-Peer · selbst angegebener Name"
 
 #: ui/mesh/mesh_global.slint:164
 msgid "Noise (bitchat)"
-msgstr ""
+msgstr "Noise (bitchat)"
 
 #: ui/mesh/mesh_info_sheet.slint:57 ui/modals/channel_danger.slint:57
 #: ui/modals/channel_settings.slint:476
 msgid "Leave group"
-msgstr ""
+msgstr "Gruppe verlassen"
 
 #: ui/mesh/mesh_info_sheet.slint:58
 msgid "Leave cell"
-msgstr ""
+msgstr "Zelle verlassen"
 
 #: ui/mesh/mesh_info_sheet.slint:58 ui/mesh/mesh_list_item.slint:152
 #: ui/modals/channel_danger.slint:111
 msgid "Leave channel"
-msgstr ""
+msgstr "Kanal verlassen"
 
 #: ui/mesh/mesh_info_sheet.slint:63
 msgid "Group info"
-msgstr ""
+msgstr "Gruppeninfo"
 
 #: ui/mesh/mesh_info_sheet.slint:64
 msgid "Cell info"
-msgstr ""
+msgstr "Zelleninfo"
 
 #: ui/mesh/mesh_info_sheet.slint:64
 msgid "Channel info"
-msgstr ""
+msgstr "Kanalinfo"
 
 #: ui/mesh/mesh_info_sheet.slint:105
 msgid "Public cell"
-msgstr ""
+msgstr "Öffentliche Zelle"
 
 #: ui/mesh/mesh_info_sheet.slint:106 ui/modals/invite_member.slint:81
 msgid "Public channel"
-msgstr ""
+msgstr "Öffentlicher Kanal"
 
 #: ui/mesh/mesh_info_sheet.slint:139
 msgid "View {}"
-msgstr ""
+msgstr "{} ansehen"
 
 #: ui/mesh/mesh_info_sheet.slint:164
 msgid ""
 "Only invited devices can read this group. Removing someone rotates the key."
 msgstr ""
+"Nur eingeladene Geräte können diese Gruppe lesen. Wer jemanden entfernt, "
+"wechselt den Schlüssel."
 
 #: ui/mesh/mesh_info_sheet.slint:168
 msgid "Waiting for the creator to rotate the group key. Sending is paused."
 msgstr ""
+"Wartet, bis der Ersteller den Gruppenschlüssel wechselt. Senden ist pausiert."
 
 #: ui/mesh/mesh_info_sheet.slint:175
 msgid "NEARBY DEVICES"
-msgstr ""
+msgstr "GERÄTE IN DER NÄHE"
 
 #: ui/mesh/mesh_info_sheet.slint:178
 msgid "No devices nearby yet."
-msgstr ""
+msgstr "Noch keine Geräte in der Nähe."
 
 #: ui/mesh/mesh_info_sheet.slint:194
 msgid "Nearby"
-msgstr ""
+msgstr "In der Nähe"
 
 #: ui/mesh/mesh_info_sheet.slint:194
 msgid "Waiting for a route"
-msgstr ""
+msgstr "Wartet auf eine Route"
 
 #: ui/mesh/mesh_info_sheet.slint:199 ui/modals/channel_members.slint:136
 #: ui/modals/invite_member.slint:186
 msgid "Member"
-msgstr ""
+msgstr "Mitglied"
 
 #: ui/mesh/mesh_info_sheet.slint:210
 msgid "Invite {} with QR"
-msgstr ""
+msgstr "{} per QR einladen"
 
 #: ui/mesh/mesh_info_sheet.slint:224
 msgid "Invite {}"
-msgstr ""
+msgstr "{} einladen"
 
 #: ui/mesh/mesh_info_sheet.slint:239
 msgid ""
 "Invite sends the group key over the encrypted mesh link. QR shows a code the "
 "other person scans."
 msgstr ""
+"Die Einladung schickt den Gruppenschlüssel über die verschlüsselte Mesh-"
+"Verbindung. QR zeigt einen Code, den die andere Person scannt."
 
 #: ui/mesh/mesh_info_sheet.slint:259 ui/mesh/mesh_list_item.slint:138
 #: ui/modals/profile_action_tiles.slint:31
 msgid "Mute"
-msgstr ""
+msgstr "Stumm"
 
 #: ui/mesh/mesh_info_sheet.slint:263 ui/mesh/mesh_list_item.slint:142
 msgid "Mute channel"
-msgstr ""
+msgstr "Kanal stummschalten"
 
 #: ui/mesh/mesh_info_sheet.slint:271
 msgid "{n} relay connected"
 msgid_plural "{n} relays connected"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "{n} Relais verbunden"
+msgstr[1] "{n} Relais verbunden"
 
 #: ui/mesh/mesh_info_sheet.slint:306
 msgid "Remove {}? The group key will rotate."
-msgstr ""
+msgstr "{} entfernen? Der Gruppenschlüssel wird gewechselt."
 
 #: ui/mesh/mesh_info_sheet.slint:308
 msgid "Reachable members will pause sending until the creator rotates the key."
 msgstr ""
+"Erreichbare Mitglieder pausieren das Senden, bis der Ersteller den Schlüssel "
+"wechselt."
 
 #: ui/mesh/mesh_info_sheet.slint:309
 msgid "Leave this mesh conversation?"
-msgstr ""
+msgstr "Diese Mesh-Unterhaltung verlassen?"
 
 #: ui/mesh/mesh_info_sheet.slint:315
 msgid "View contact"
-msgstr ""
+msgstr "Kontakt ansehen"
 
 #: ui/mesh/mesh_info_sheet.slint:322 ui/modals/channel_members.slint:635
 msgid "Remove"
-msgstr ""
+msgstr "Entfernen"
 
 #: ui/mesh/mesh_list.slint:12
 msgid "{n} device nearby"
 msgid_plural "{n} devices nearby"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "{n} Gerät in der Nähe"
+msgstr[1] "{n} Geräte in der Nähe"
 
 #: ui/mesh/mesh_list.slint:14
 msgid "Mesh off"
-msgstr ""
+msgstr "Mesh aus"
 
 #: ui/mesh/mesh_list.slint:15
 msgid "Mesh on"
-msgstr ""
+msgstr "Mesh an"
 
 #: ui/mesh/mesh_list.slint:16
 msgid "Radio off · {n} relay"
 msgid_plural "Radio off · {n} relays"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "Funk aus · {n} Relais"
+msgstr[1] "Funk aus · {n} Relais"
 
 #: ui/mesh/mesh_list.slint:17
 msgid "Bluetooth is off · {n} relay"
 msgid_plural "Bluetooth is off · {n} relays"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "Bluetooth ist aus · {n} Relais"
+msgstr[1] "Bluetooth ist aus · {n} Relais"
 
 #: ui/mesh/mesh_list.slint:35
 msgid "Mesh setup"
-msgstr ""
+msgstr "Mesh-Einrichtung"
 
 #: ui/mesh/mesh_list.slint:79
 msgid "Mesh radio"
-msgstr ""
+msgstr "Mesh-Funk"
 
 #: ui/mesh/mesh_list.slint:98 ui/mesh/mesh_setup_sheet.slint:93
 msgid "{0} invited you to {1}"
-msgstr ""
+msgstr "{0} hat dich zu {1} eingeladen"
 
 #: ui/mesh/mesh_list.slint:111
 msgid "Decline mesh invitation"
-msgstr ""
+msgstr "Mesh-Einladung ablehnen"
 
 #: ui/mesh/mesh_list.slint:121
 msgid "Join mesh invitation"
-msgstr ""
+msgstr "Mesh-Einladung annehmen"
 
 #: ui/mesh/mesh_list.slint:134
 msgid "NEARBY"
-msgstr ""
+msgstr "IN DER NÄHE"
 
 #: ui/mesh/mesh_list.slint:158
 msgid "Open nearby mesh peer {}"
-msgstr ""
+msgstr "Mesh-Peer in der Nähe öffnen: {}"
 
 #: ui/mesh/mesh_list.slint:182
 msgid "No mesh conversations"
-msgstr ""
+msgstr "Keine Mesh-Unterhaltungen"
 
 #: ui/mesh/mesh_list.slint:185
 msgid "Create a group or start a nearby conversation."
-msgstr ""
+msgstr "Erstelle eine Gruppe oder starte eine Unterhaltung in der Nähe."
 
 #: ui/mesh/mesh_list.slint:190
 msgid "New group"
-msgstr ""
+msgstr "Neue Gruppe"
 
 #: ui/mesh/mesh_list.slint:193
 msgid "New mesh group"
-msgstr ""
+msgstr "Neue Mesh-Gruppe"
 
 #: ui/mesh/mesh_list.slint:203
 msgid "GROUPS"
-msgstr ""
+msgstr "GRUPPEN"
 
 #: ui/mesh/mesh_list.slint:227
 msgid "CHANNELS"
-msgstr ""
+msgstr "KANÄLE"
 
 #: ui/mesh/mesh_list.slint:251
 msgid "DIRECT MESSAGES"
-msgstr ""
+msgstr "DIREKTNACHRICHTEN"
 
 #: ui/mesh/mesh_list_item.slint:29
 msgid "Public · {}"
-msgstr ""
+msgstr "Öffentlich · {}"
 
 #: ui/mesh/mesh_list_item.slint:30
 msgid "Everyone in radio range"
-msgstr ""
+msgstr "Alle in Funkreichweite"
 
 #: ui/mesh/mesh_list_item.slint:31
 msgid "Public to nearby listeners"
-msgstr ""
+msgstr "Öffentlich für Zuhörer in der Nähe"
 
 #: ui/mesh/mesh_list_item.slint:32
 msgid "Invited devices · encrypted"
-msgstr ""
+msgstr "Eingeladene Geräte · verschlüsselt"
 
 #: ui/mesh/mesh_list_item.slint:33
 msgid "Verified Chatter contact"
-msgstr ""
+msgstr "Verifizierter Chatter-Kontakt"
 
 #: ui/mesh/mesh_list_item.slint:34
 msgid "Encrypted · nearby"
-msgstr ""
+msgstr "Verschlüsselt · in der Nähe"
 
 #: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
 #: ui/modals/profile_action_tiles.slint:31
 msgid "Unmute"
-msgstr ""
+msgstr "Nicht stumm"
 
 #: ui/mesh/mesh_list_item.slint:142
 msgid "Unmute channel"
-msgstr ""
+msgstr "Kanal nicht mehr stumm"
 
 #: ui/mesh/mesh_list_item.slint:149 ui/modals/channel_danger.slint:74
 msgid "Leave"
-msgstr ""
+msgstr "Verlassen"
 
 #: ui/mesh/mesh_peer_sheet.slint:59
 msgid "Mesh peer"
-msgstr ""
+msgstr "Mesh-Peer"
 
 #: ui/mesh/mesh_peer_sheet.slint:70
 msgid "Contact"
-msgstr ""
+msgstr "Kontakt"
 
 #: ui/mesh/mesh_peer_sheet.slint:102
 msgid "Verified"
-msgstr ""
+msgstr "Verifiziert"
 
 #: ui/mesh/mesh_peer_sheet.slint:116 ui/mesh/mesh_peer_sheet.slint:186
 msgid "Verify"
-msgstr ""
+msgstr "Verifizieren"
 
 #: ui/mesh/mesh_peer_sheet.slint:134
 msgid "Compare these numbers in person with {}."
-msgstr ""
+msgstr "Vergleiche diese Nummern persönlich mit {}."
 
 #: ui/mesh/mesh_peer_sheet.slint:142
 msgid "Show my QR code"
-msgstr ""
+msgstr "Meinen QR-Code zeigen"
 
 #: ui/mesh/mesh_peer_sheet.slint:146
 msgid "Scan their code"
-msgstr ""
+msgstr "Deren Code scannen"
 
 #: ui/mesh/mesh_peer_sheet.slint:150
 msgid "Verify known contact"
-msgstr ""
+msgstr "Bekannten Kontakt verifizieren"
 
 #: ui/mesh/mesh_peer_sheet.slint:154
 msgid "Share my Chatter identity"
-msgstr ""
+msgstr "Meine Chatter-Identität teilen"
 
 #: ui/mesh/mesh_peer_sheet.slint:160 ui/mesh/mesh_peer_sheet.slint:162
 msgid "Use Signal encryption"
-msgstr ""
+msgstr "Signal-Verschlüsselung nutzen"
 
 #: ui/mesh/mesh_peer_sheet.slint:183
 msgid "Paste their QR code"
-msgstr ""
+msgstr "Deren QR-Code einfügen"
 
 #: ui/mesh/mesh_peer_sheet.slint:191
 msgid "Waiting for encrypted link"
-msgstr ""
+msgstr "Wartet auf verschlüsselte Verbindung"
 
 #: ui/mesh/mesh_peer_sheet.slint:191
 msgid "Their fingerprint: {}"
-msgstr ""
+msgstr "Fingerabdruck der anderen Person: {}"
 
 #: ui/mesh/mesh_peer_sheet.slint:194
 msgid "Your fingerprint: {}"
-msgstr ""
+msgstr "Dein Fingerabdruck: {}"
 
 #: ui/mesh/mesh_peer_sheet.slint:200
 msgid "ADD TO GROUP"
-msgstr ""
+msgstr "ZUR GRUPPE HINZUFÜGEN"
 
 #: ui/mesh/mesh_peer_sheet.slint:229
 msgid "Invite to {} with QR"
-msgstr ""
+msgstr "Per QR zu {} einladen"
 
 #: ui/mesh/mesh_peer_sheet.slint:243
 msgid "Invite to {}"
-msgstr ""
+msgstr "Zu {} einladen"
 
 #: ui/mesh/mesh_peer_sheet.slint:268
 msgid "Remove from {}"
-msgstr ""
+msgstr "Aus {} entfernen"
 
 #: ui/mesh/mesh_peer_sheet.slint:273 ui/modals/channel_danger.slint:188
 #: ui/modals/user_profile.slint:808
 msgid "Block"
-msgstr ""
+msgstr "Blockieren"
 
 #: ui/mesh/mesh_peer_sheet.slint:298
 msgid "Remove {0} from {1}? The group key will rotate."
-msgstr ""
+msgstr "{0} aus {1} entfernen? Der Gruppenschlüssel wird gewechselt."
 
 #: ui/mesh/mesh_peer_sheet.slint:300
 msgid "Remove and rotate key"
-msgstr ""
+msgstr "Entfernen und Schlüssel wechseln"
 
 #: ui/mesh/mesh_setup_sheet.slint:62 ui/mesh/mesh_setup_sheet.slint:73
 msgid "Mesh settings"
-msgstr ""
+msgstr "Mesh-Einstellungen"
 
 #: ui/mesh/mesh_setup_sheet.slint:97
 msgid "Peer names are self-asserted until you verify in person."
 msgstr ""
+"Namen von Peers gelten nur als selbst angegeben, bis du sie persönlich "
+"verifizierst."
 
 #: ui/mesh/mesh_setup_sheet.slint:123
 msgid "Radio unavailable"
-msgstr ""
+msgstr "Funk nicht verfügbar"
 
 #: ui/mesh/mesh_setup_sheet.slint:124
 msgid "On · nobody nearby"
-msgstr ""
+msgstr "An · niemand in der Nähe"
 
 #: ui/mesh/mesh_setup_sheet.slint:125
 msgid "On · {n} nearby"
 msgid_plural "On · {n} nearby"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "An · {n} in der Nähe"
+msgstr[1] "An · {n} in der Nähe"
 
 #: ui/mesh/mesh_setup_sheet.slint:138
 msgid "Nearby devices will appear here when discovered."
-msgstr ""
+msgstr "Geräte in der Nähe erscheinen hier, sobald sie gefunden werden."
 
 #: ui/mesh/mesh_setup_sheet.slint:148
 msgid "Nickname"
-msgstr ""
+msgstr "Spitzname"
 
 #. "Save", not "Done": the sheet's own Done closes it.
 #: ui/mesh/mesh_setup_sheet.slint:152 ui/modals/create_section.slint:228
 #: ui/settings/account_settings.slint:233
 msgid "Save"
-msgstr ""
+msgstr "Speichern"
 
 #: ui/mesh/mesh_setup_sheet.slint:158
 msgid "Visible to anyone nearby. Names are self-asserted."
-msgstr ""
+msgstr "Für alle in der Nähe sichtbar. Namen sind selbst angegeben."
 
 #: ui/mesh/mesh_setup_sheet.slint:168
 msgid "Erase Mesh data…"
-msgstr ""
+msgstr "Mesh-Daten löschen…"
 
 #: ui/mesh/mesh_setup_sheet.slint:188
 msgid ""
 "Erase this device's mesh identity, messages, carried mail and favourites? "
 "Your Chatter account stays intact. This cannot be undone."
 msgstr ""
+"Mesh-Identität, Nachrichten, mitgenommene Post und Favoriten dieses Geräts "
+"löschen? Dein Chatter-Konto bleibt erhalten. Das kann nicht rückgängig "
+"gemacht werden."
 
 #: ui/mesh/mesh_setup_sheet.slint:190
 msgid "Erase Mesh data"
-msgstr ""
+msgstr "Mesh-Daten löschen"
 
 #: ui/modals/anon_mode_pin.slint:51
 msgid "Enter PIN to enable Shield"
-msgstr ""
+msgstr "PIN eingeben, um Shield zu aktivieren"
 
 #: ui/modals/anon_mode_pin.slint:61
 msgid ""
@@ -2897,1438 +2976,1487 @@ msgid ""
 "reached you will be told. Enter your PIN to enable. On a device checking "
 "online, wrong attempts can delete your key backup."
 msgstr ""
+"Shield blendet deine Kanäle und deine gespeicherten Nachrichten aus und "
+"zeigt deine anonymen Direktnachrichten. Direktnachrichten mit Freunden "
+"bleiben und laufen über anonyme Briefkästen statt über den Server. Dein "
+"Netzwerkstandort liegt hinter Tor — wenn Tor nicht erreichbar ist, wird dir "
+"das gesagt. Gib deine PIN ein, um es zu aktivieren. Auf einem Gerät, das "
+"online prüft, können falsche Versuche deine Schlüsselsicherung löschen."
 
 #: ui/modals/anon_mode_pin.slint:117
 msgid "Enable"
-msgstr ""
+msgstr "Aktivieren"
 
 #: ui/modals/channel_access.slint:20 ui/modals/channel_settings.slint:199
 msgid "Access"
-msgstr ""
+msgstr "Zugang"
 
 #: ui/modals/channel_access.slint:84
 msgid "Join links"
-msgstr ""
+msgstr "Beitrittslinks"
 
 #: ui/modals/channel_access.slint:91
 msgid ""
 "Anyone with a link can join. The link can be copied only now, when it is "
 "created."
 msgstr ""
+"Jeder mit einem Link kann beitreten. Der Link lässt sich nur jetzt kopieren, "
+"wenn er erstellt wird."
 
 #: ui/modals/channel_access.slint:99 ui/modals/channel_access.slint:103
 msgid "Require approval"
-msgstr ""
+msgstr "Freigabe nötig"
 
 #: ui/modals/channel_access.slint:110
 msgid "People who use the link wait until an admin lets them in"
-msgstr ""
+msgstr "Wer den Link nutzt, wartet, bis ein Admin die Person reinlässt"
 
 #: ui/modals/channel_access.slint:121 ui/modals/profile_info_card.slint:186
 msgid "Create link"
-msgstr ""
+msgstr "Link erstellen"
 
 #: ui/modals/channel_access.slint:146 ui/modals/profile_info_card.slint:186
 msgid "Copy link"
-msgstr ""
+msgstr "Link kopieren"
 
 #: ui/modals/channel_access.slint:167 ui/modals/sessions.slint:339
 msgid "Revoke"
-msgstr ""
+msgstr "Widerrufen"
 
 #: ui/modals/channel_access.slint:180
 msgid "No join requests"
-msgstr ""
+msgstr "Keine Beitrittsanfragen"
 
 #: ui/modals/channel_access.slint:180
 msgid "Join requests"
-msgstr ""
+msgstr "Beitrittsanfragen"
 
 #: ui/modals/channel_access.slint:199
 msgid "Approve"
-msgstr ""
+msgstr "Genehmigen"
 
 #: ui/modals/channel_access.slint:206
 msgid "Reject"
-msgstr ""
+msgstr "Ablehnen"
 
 #: ui/modals/channel_access_choices.slint:18
 msgid "Who can join?"
-msgstr ""
+msgstr "Wer kann beitreten?"
 
 #: ui/modals/channel_access_choices.slint:73
 msgid "Anyone finds and joins. New members see messages from when they join."
 msgstr ""
+"Jeder findet den Kanal und tritt bei. Neue Mitglieder sehen Nachrichten ab "
+"ihrem Beitritt."
 
 #: ui/modals/channel_access_choices.slint:90
 msgid "Invite-only"
-msgstr ""
+msgstr "Nur mit Einladung"
 
 #: ui/modals/channel_access_choices.slint:132
 msgid "Hidden from discovery. Invite or password to join."
-msgstr ""
+msgstr "Nicht auffindbar. Einladung oder Passwort zum Beitreten."
 
 #: ui/modals/channel_access_choices.slint:149
 msgid "Anon group"
-msgstr ""
+msgstr "Anon-Gruppe"
 
 #: ui/modals/channel_access_choices.slint:191
 msgid "End-to-end encrypted. Server can't see it exists."
-msgstr ""
+msgstr "Ende-zu-Ende-verschlüsselt. Der Server sieht nicht, dass es sie gibt."
 
 #: ui/modals/channel_access_choices.slint:217
 msgid "End-to-end encrypted"
-msgstr ""
+msgstr "Ende-zu-Ende-verschlüsselt"
 
 #: ui/modals/channel_danger.slint:26 ui/settings/account_settings.slint:635
 msgid "Danger zone"
-msgstr ""
+msgstr "Gefahrenzone"
 
 #: ui/modals/channel_danger.slint:64
 msgid "The group and its messages are removed from this device"
-msgstr ""
+msgstr "Die Gruppe und ihre Nachrichten werden von diesem Gerät entfernt"
 
 #: ui/modals/channel_danger.slint:64
 msgid "You will lose access to this channel's messages"
-msgstr ""
+msgstr "Du verlierst den Zugang zu den Nachrichten dieses Kanals"
 
 #: ui/modals/channel_danger.slint:89
 msgid "Leave {}? You can only come back if a member invites you again."
 msgstr ""
+"{} verlassen? Zurück kommst du nur, wenn ein Mitglied dich erneut einlädt."
 
 #: ui/modals/channel_danger.slint:90
 msgid ""
 "Leave {}? You won't get new messages, and an invite-only channel cannot be "
 "rejoined on your own."
 msgstr ""
+"{} verlassen? Du bekommst keine neuen Nachrichten, und einem Kanal nur mit "
+"Einladung kannst du nicht allein wieder beitreten."
 
 #: ui/modals/channel_danger.slint:133
 msgid "Transfer ownership"
-msgstr ""
+msgstr "Inhaberschaft übertragen"
 
 #: ui/modals/channel_danger.slint:140
 msgid "Make another member the owner to leave."
-msgstr ""
+msgstr "Mach ein anderes Mitglied zum Inhaber, um zu verlassen."
 
 #: ui/modals/channel_danger.slint:140
 msgid "Transfer ownership to leave, or delete the channel."
-msgstr ""
+msgstr "Übertrage die Inhaberschaft, um zu verlassen, oder lösche den Kanal."
 
 #: ui/modals/channel_danger.slint:150
 msgid "Transfer…"
-msgstr ""
+msgstr "Übertragen…"
 
 #: ui/modals/channel_danger.slint:169
 msgid "Unblock group"
-msgstr ""
+msgstr "Gruppe entblocken"
 
 #: ui/modals/channel_danger.slint:169
 msgid "Block group"
-msgstr ""
+msgstr "Gruppe blockieren"
 
 #: ui/modals/channel_danger.slint:177
 msgid "Messages from this group are being dropped on this device"
-msgstr ""
+msgstr "Nachrichten dieser Gruppe werden auf diesem Gerät verworfen"
 
 #: ui/modals/channel_danger.slint:178
 msgid "Drop everything this group sends, on this device"
-msgstr ""
+msgstr "Alles verwerfen, was diese Gruppe sendet, auf diesem Gerät"
 
 #: ui/modals/channel_danger.slint:204
 msgid "Unarchive channel"
-msgstr ""
+msgstr "Kanal dearchivieren"
 
 #: ui/modals/channel_danger.slint:204
 msgid "Archive channel"
-msgstr ""
+msgstr "Kanal archivieren"
 
 #: ui/modals/channel_danger.slint:211
 msgid "Make channel active again"
-msgstr ""
+msgstr "Kanal wieder aktiv machen"
 
 #: ui/modals/channel_danger.slint:211
 msgid "Archive to hide from active channels"
-msgstr ""
+msgstr "Archivieren, um ihn aus den aktiven Kanälen zu nehmen"
 
 #: ui/modals/channel_danger.slint:221
 msgid "Unarchive"
-msgstr ""
+msgstr "Dearchivieren"
 
 #: ui/modals/channel_danger.slint:221
 msgid "Archive"
-msgstr ""
+msgstr "Archivieren"
 
 #: ui/modals/channel_danger.slint:246 ui/modals/channel_danger.slint:302
 msgid "Delete channel"
-msgstr ""
+msgstr "Kanal löschen"
 
 #: ui/modals/channel_danger.slint:254
 msgid "Deletes the channel and all its messages. Can't be undone."
 msgstr ""
+"Löscht den Kanal und alle seine Nachrichten. Kann nicht rückgängig gemacht "
+"werden."
 
 #: ui/modals/channel_danger.slint:278
 msgid ""
 "Delete \"{}\" permanently? Every message in it goes with it. This cannot be "
 "undone."
 msgstr ""
+"„{}“ dauerhaft löschen? Jede Nachricht darin wird mitgelöscht. Das kann "
+"nicht rückgängig gemacht werden."
 
 #: ui/modals/channel_identity_fields.slint:37
 msgid "Change channel icon"
-msgstr ""
+msgstr "Kanalsymbol ändern"
 
 #: ui/modals/channel_identity_fields.slint:37
 msgid "Upload channel icon"
-msgstr ""
+msgstr "Kanalsymbol hochladen"
 
 #: ui/modals/channel_identity_fields.slint:64
 msgid "Change"
-msgstr ""
+msgstr "Ändern"
 
 #: ui/modals/channel_identity_fields.slint:64
 msgid "Upload"
-msgstr ""
+msgstr "Hochladen"
 
 #: ui/modals/channel_identity_fields.slint:83
 #: ui/modals/channel_settings.slint:586
 msgid "Channel name"
-msgstr ""
+msgstr "Kanalname"
 
 #: ui/modals/channel_identity_fields.slint:88
 msgid "Name is required"
-msgstr ""
+msgstr "Name ist erforderlich"
 
 #: ui/modals/channel_identity_fields.slint:105
 msgid "Description (optional)"
-msgstr ""
+msgstr "Beschreibung (optional)"
 
 #: ui/modals/channel_members.slint:130
 msgid "Mute 1h"
-msgstr ""
+msgstr "1 Std. stumm"
 
 #: ui/modals/channel_members.slint:131
 msgid "Mute 1 day"
-msgstr ""
+msgstr "1 Tag stumm"
 
 #: ui/modals/channel_members.slint:132
 msgid "Mute until unmuted"
-msgstr ""
+msgstr "Stumm, bis du es aufhebst"
 
 #: ui/modals/channel_members.slint:137
 msgid "Moderator"
-msgstr ""
+msgstr "Moderator"
 
 #: ui/modals/channel_members.slint:138 ui/modals/create_channel.slint:452
 msgid "Admin"
-msgstr ""
+msgstr "Admin"
 
 #: ui/modals/channel_members.slint:152 ui/modals/channel_settings.slint:199
 msgid "Members"
-msgstr ""
+msgstr "Mitglieder"
 
 #: ui/modals/channel_members.slint:173 ui/modals/channel_members.slint:199
 #: ui/modals/invite_private_group.slint:27
 msgid "Invite members"
-msgstr ""
+msgstr "Mitglieder einladen"
 
 #: ui/modals/channel_members.slint:180 ui/modals/channel_members.slint:206
 msgid "+ Invite"
-msgstr ""
+msgstr "+ Einladen"
 
 #: ui/modals/channel_members.slint:233
 msgid "Loading members…"
-msgstr ""
+msgstr "Mitglieder werden geladen…"
 
 #: ui/modals/channel_members.slint:233
 msgid "No members to show yet"
-msgstr ""
+msgstr "Noch keine Mitglieder"
 
 #: ui/modals/channel_members.slint:317
 msgid "invited"
-msgstr ""
+msgstr "eingeladen"
 
 #: ui/modals/channel_members.slint:335
 msgid "muted"
-msgstr ""
+msgstr "stumm"
 
 #: ui/modals/channel_members.slint:353
 msgid "unverified"
-msgstr ""
+msgstr "nicht verifiziert"
 
 #: ui/modals/channel_members.slint:392
 msgid "Actions for {}"
-msgstr ""
+msgstr "Aktionen für {}"
 
 #: ui/modals/channel_members.slint:435 ui/modals/invite_member.slint:186
 msgid "Banned"
-msgstr ""
+msgstr "Gebannt"
 
 #: ui/modals/channel_members.slint:469
 msgid "Unban"
-msgstr ""
+msgstr "Entbannen"
 
 #: ui/modals/channel_members.slint:515
 msgid "ROLE"
-msgstr ""
+msgstr "ROLLE"
 
 #: ui/modals/channel_members.slint:545
 msgid "MUTE IN CHANNEL"
-msgstr ""
+msgstr "IM KANAL STUMM"
 
 #: ui/modals/channel_members.slint:565
 msgid "Make owner…"
-msgstr ""
+msgstr "Zum Inhaber machen…"
 
 #: ui/modals/channel_members.slint:570
 msgid "Unblock in group"
-msgstr ""
+msgstr "In der Gruppe entblocken"
 
 #: ui/modals/channel_members.slint:570
 msgid "Block in group"
-msgstr ""
+msgstr "In der Gruppe blockieren"
 
 #: ui/modals/channel_members.slint:581 ui/modals/channel_members.slint:635
 msgid "Cancel invite"
-msgstr ""
+msgstr "Einladung zurückziehen"
 
 #: ui/modals/channel_members.slint:582
 msgid "Remove from group"
-msgstr ""
+msgstr "Aus der Gruppe entfernen"
 
 #: ui/modals/channel_members.slint:582
 msgid "Remove from channel"
-msgstr ""
+msgstr "Aus dem Kanal entfernen"
 
 #: ui/modals/channel_members.slint:588 ui/modals/channel_members.slint:635
 msgid "Ban"
-msgstr ""
+msgstr "Bannen"
 
 #: ui/modals/channel_members.slint:611
 msgid "Ban {}? They will be removed and can't rejoin."
-msgstr ""
+msgstr "{} bannen? Die Person wird entfernt und kann nicht wieder beitreten."
 
 #: ui/modals/channel_members.slint:613
 msgid "Make {0} the owner of {1}? You'll become an admin."
-msgstr ""
+msgstr "{0} zum Inhaber von {1} machen? Du wirst Admin."
 
 #: ui/modals/channel_members.slint:615
 msgid "Cancel {}'s invite?"
-msgstr ""
+msgstr "Einladung von {} zurückziehen?"
 
 #: ui/modals/channel_members.slint:617
 msgid "Remove {} from this group?"
-msgstr ""
+msgstr "{} aus dieser Gruppe entfernen?"
 
 #: ui/modals/channel_members.slint:618
 msgid "Remove {} from this channel?"
-msgstr ""
+msgstr "{} aus diesem Kanal entfernen?"
 
 #: ui/modals/channel_members.slint:635
 msgid "Make owner"
-msgstr ""
+msgstr "Zum Inhaber machen"
 
 #: ui/modals/channel_notifications.slint:22
 #: ui/settings/settings_screen.slint:612
 msgid "Notifications"
-msgstr ""
+msgstr "Benachrichtigungen"
 
 #: ui/modals/channel_notifications.slint:32
 msgid "Mute group"
-msgstr ""
+msgstr "Gruppe stummschalten"
 
 #: ui/modals/channel_notifications.slint:46
 msgid "You won't receive any notifications from this group"
-msgstr ""
+msgstr "Du bekommst keine Benachrichtigungen von dieser Gruppe"
 
 #: ui/modals/channel_notifications.slint:46
 msgid "You won't receive any notifications from this channel"
-msgstr ""
+msgstr "Du bekommst keine Benachrichtigungen von diesem Kanal"
 
 #: ui/modals/channel_notifications.slint:60
 msgid "When not muted, notify me for:"
-msgstr ""
+msgstr "Wenn nicht stumm, benachrichtige mich bei:"
 
 #: ui/modals/channel_notifications.slint:76
 msgid "All messages"
-msgstr ""
+msgstr "Alle Nachrichten"
 
 #: ui/modals/channel_notifications.slint:112
 msgid "Get notified for every message"
-msgstr ""
+msgstr "Bei jeder Nachricht benachrichtigen"
 
 #: ui/modals/channel_notifications.slint:135
 msgid "Mentions only"
-msgstr ""
+msgstr "Nur Erwähnungen"
 
 #: ui/modals/channel_notifications.slint:171
 msgid "When someone mentions you or everyone"
-msgstr ""
+msgstr "Wenn dich jemand oder alle erwähnt"
 
 #: ui/modals/channel_notifications.slint:194
 msgid "Nothing"
-msgstr ""
+msgstr "Nichts"
 
 #: ui/modals/channel_notifications.slint:230
 msgid "Never notify (still shows unread badge)"
-msgstr ""
+msgstr "Nie benachrichtigen (Ungelesen-Zähler bleibt)"
 
 #: ui/modals/channel_notifications.slint:251 ui/modals/create_channel.slint:616
 msgid "AI assistant"
-msgstr ""
+msgstr "AI-Assistent"
 
 #: ui/modals/channel_notifications.slint:265
 msgid ""
 "Allow remote AI to read this channel when you explicitly ask it something "
 "here. Off by default."
 msgstr ""
+"Erlaube entfernter AI, diesen Kanal zu lesen, wenn du sie hier ausdrücklich "
+"etwas fragst. Standardmäßig aus."
 
 #: ui/modals/channel_settings.slint:150
 msgid "Group settings"
-msgstr ""
+msgstr "Gruppeneinstellungen"
 
 #: ui/modals/channel_settings.slint:150
 msgid "Channel settings"
-msgstr ""
+msgstr "Kanaleinstellungen"
 
 #: ui/modals/channel_settings.slint:199
 msgid "Alerts"
-msgstr ""
+msgstr "Mitteilungen"
 
 #: ui/modals/channel_settings.slint:281
 msgid "Discard unsaved changes?"
-msgstr ""
+msgstr "Ungespeicherte Änderungen verwerfen?"
 
 #: ui/modals/channel_settings.slint:289
 msgid "Keep editing"
-msgstr ""
+msgstr "Weiter bearbeiten"
 
 #: ui/modals/channel_settings.slint:294
 msgid "Discard"
-msgstr ""
+msgstr "Verwerfen"
 
 #: ui/modals/channel_settings.slint:326
 msgid "‹ Info • unsaved changes"
-msgstr ""
+msgstr "‹ Info • ungespeicherte Änderungen"
 
 #: ui/modals/channel_settings.slint:326
 msgid "‹ Info"
-msgstr ""
+msgstr "‹ Info"
 
 #: ui/modals/channel_settings.slint:355 ui/modals/channel_settings.slint:513
 msgid "Group icon"
-msgstr ""
+msgstr "Gruppensymbol"
 
 #: ui/modals/channel_settings.slint:355 ui/modals/channel_settings.slint:514
 msgid "Private channel icon"
-msgstr ""
+msgstr "Symbol des privaten Kanals"
 
 #: ui/modals/channel_settings.slint:355 ui/modals/channel_settings.slint:514
 msgid "Channel icon"
-msgstr ""
+msgstr "Kanalsymbol"
 
 #: ui/modals/channel_settings.slint:363
 msgid "Info unavailable"
-msgstr ""
+msgstr "Info nicht verfügbar"
 
 #: ui/modals/channel_settings.slint:370 ui/modals/channel_settings.slint:536
 msgid "Created {}"
-msgstr ""
+msgstr "Erstellt {}"
 
 #: ui/modals/channel_settings.slint:382 ui/modals/channel_settings.slint:489
 msgid "Edit group info"
-msgstr ""
+msgstr "Gruppeninfo bearbeiten"
 
 #: ui/modals/channel_settings.slint:382 ui/modals/channel_settings.slint:489
 msgid "Edit channel info"
-msgstr ""
+msgstr "Kanalinfo bearbeiten"
 
 #: ui/modals/channel_settings.slint:389
 msgid "Loading group info…"
-msgstr ""
+msgstr "Gruppeninfo wird geladen…"
 
 #: ui/modals/channel_settings.slint:397
 msgid "Add a description so members know what this is for"
-msgstr ""
+msgstr "Beschreibung hinzufügen, damit Mitglieder wissen, worum es geht"
 
 #: ui/modals/channel_settings.slint:402
 msgid "Unsaved changes to group info"
-msgstr ""
+msgstr "Ungespeicherte Änderungen an der Gruppeninfo"
 
 #: ui/modals/channel_settings.slint:402
 msgid "Unsaved changes to channel info"
-msgstr ""
+msgstr "Ungespeicherte Änderungen an der Kanalinfo"
 
 #: ui/modals/channel_settings.slint:420
 msgid "Access and invite links"
-msgstr ""
+msgstr "Zugang und Einladungslinks"
 
 #: ui/modals/channel_settings.slint:427 ui/sidebar/channel_list_item.slint:224
 msgid "Muted"
-msgstr ""
+msgstr "Stumm"
 
 #: ui/modals/channel_settings.slint:449
 msgid "Call history"
-msgstr ""
+msgstr "Anrufverlauf"
 
 #: ui/modals/channel_settings.slint:455
 msgid "Integrations"
-msgstr ""
+msgstr "Integrationen"
 
 #: ui/modals/channel_settings.slint:462 ui/modals/channel_settings.slint:475
 msgid "Manage group"
-msgstr ""
+msgstr "Gruppe verwalten"
 
 #: ui/modals/channel_settings.slint:462
 msgid "Manage channel"
-msgstr ""
+msgstr "Kanal verwalten"
 
 #: ui/modals/channel_settings.slint:474
 msgid "Leave, archive or delete"
-msgstr ""
+msgstr "Verlassen, archivieren oder löschen"
 
 #: ui/modals/channel_settings.slint:474
 msgid "Archive or delete"
-msgstr ""
+msgstr "Archivieren oder löschen"
 
 #: ui/modals/channel_settings.slint:559
 msgid "Messages disappear after {} (set when the channel was created)"
 msgstr ""
+"Nachrichten verschwinden nach {} (festgelegt bei der Erstellung des Kanals)"
 
 #: ui/modals/channel_settings.slint:589
 msgid "Name must be at least 3 characters"
-msgstr ""
+msgstr "Der Name muss mindestens 3 Zeichen haben"
 
 #: ui/modals/channel_settings.slint:609
 msgid "Description"
-msgstr ""
+msgstr "Beschreibung"
 
 #: ui/modals/channel_settings.slint:618
 msgid "Add a description..."
-msgstr ""
+msgstr "Beschreibung hinzufügen..."
 
 #: ui/modals/channel_settings.slint:627
 msgid "No description"
-msgstr ""
+msgstr "Keine Beschreibung"
 
 #: ui/modals/channel_settings.slint:641
 msgid "Group photo"
-msgstr ""
+msgstr "Gruppenfoto"
 
 #: ui/modals/channel_settings.slint:659
 msgid "Change photo"
-msgstr ""
+msgstr "Foto ändern"
 
 #: ui/modals/channel_settings.slint:659
 msgid "Change icon"
-msgstr ""
+msgstr "Symbol ändern"
 
 #: ui/modals/channel_settings.slint:674 ui/modals/edit_profile.slint:200
 msgid "Save changes"
-msgstr ""
+msgstr "Änderungen speichern"
 
 #: ui/modals/create_channel.slint:86
 msgid "Claude (Anthropic)"
-msgstr ""
+msgstr "Claude (Anthropic)"
 
 #: ui/modals/create_channel.slint:87
 msgid "OpenAI"
-msgstr ""
+msgstr "OpenAI"
 
 #: ui/modals/create_channel.slint:88
 msgid "Hosted Ollama"
-msgstr ""
+msgstr "Gehostetes Ollama"
 
 #: ui/modals/create_channel.slint:159 ui/settings/account_menu.slint:214
 #: ui/sidebar/create_menu.slint:170 ui/sidebar/sidebar.slint:727
 msgid "New channel"
-msgstr ""
+msgstr "Neuer Kanal"
 
 #: ui/modals/create_channel.slint:279
 msgid "Password (optional)"
-msgstr ""
+msgstr "Passwort (optional)"
 
 #: ui/modals/create_channel.slint:286
 msgid "Anyone with password joins without invite"
-msgstr ""
+msgstr "Wer das Passwort hat, tritt ohne Einladung bei"
 
 #: ui/modals/create_channel.slint:301
 msgid "Select friends to invite"
-msgstr ""
+msgstr "Freunde zum Einladen wählen"
 
 #: ui/modals/create_channel.slint:325 ui/modals/friends_friends_tab.slint:53
 msgid "No friends yet"
-msgstr ""
+msgstr "Noch keine Freunde"
 
 #: ui/modals/create_channel.slint:331
 msgid "Add friends first to create a private group"
-msgstr ""
+msgstr "Füge zuerst Freunde hinzu, um eine private Gruppe zu erstellen"
 
 #: ui/modals/create_channel.slint:445 ui/modals/invite_private_group.slint:148
 msgid "Role for {0}: {1}"
-msgstr ""
+msgstr "Rolle für {0}: {1}"
 
 #: ui/modals/create_channel.slint:485
 msgid "Hide more options"
-msgstr ""
+msgstr "Weniger Optionen"
 
 #: ui/modals/create_channel.slint:485
 msgid "Show more options"
-msgstr ""
+msgstr "Mehr Optionen"
 
 #: ui/modals/create_channel.slint:541 ui/modals/create_channel.slint:545
 msgid "Auto-delete messages"
-msgstr ""
+msgstr "Nachrichten automatisch löschen"
 
 #: ui/modals/create_channel.slint:553
 msgid "Messages expire after the chosen time."
-msgstr ""
+msgstr "Nachrichten verfallen nach der gewählten Zeit."
 
 #: ui/modals/create_channel.slint:566
 msgid "After"
-msgstr ""
+msgstr "Nach"
 
 #: ui/modals/create_channel.slint:591
 msgid "hours"
-msgstr ""
+msgstr "Stunden"
 
 #: ui/modals/create_channel.slint:612
 msgid "Enable AI assistant"
-msgstr ""
+msgstr "AI-Assistent aktivieren"
 
 #: ui/modals/create_channel.slint:624
 msgid "Add an AI bot that replies in this channel."
-msgstr ""
+msgstr "Füge einen AI-Bot hinzu, der in diesem Kanal antwortet."
 
 #: ui/modals/create_channel.slint:691
 msgid "Loading models..."
-msgstr ""
+msgstr "Modelle werden geladen..."
 
 #: ui/modals/create_channel.slint:789
 msgid "Create group"
-msgstr ""
+msgstr "Gruppe erstellen"
 
 #: ui/modals/create_section.slint:70 ui/sidebar/section_context_menu.slint:335
 msgid "Rename section"
-msgstr ""
+msgstr "Bereich umbenennen"
 
 #: ui/modals/create_section.slint:70 ui/sidebar/create_menu.slint:117
 #: ui/sidebar/sidebar.slint:742
 msgid "New section"
-msgstr ""
+msgstr "Neuer Bereich"
 
 #: ui/modals/create_section.slint:98
 msgid "Section icon {}"
-msgstr ""
+msgstr "Bereichssymbol {}"
 
 #: ui/modals/create_section.slint:122
 msgid "Section name"
-msgstr ""
+msgstr "Bereichsname"
 
 #: ui/modals/create_section.slint:169
 msgid "Choose icon {}"
-msgstr ""
+msgstr "Symbol {} wählen"
 
 #: ui/modals/edit_profile.slint:36 ui/modals/user_profile.slint:554
 msgid "Edit profile"
-msgstr ""
+msgstr "Profil bearbeiten"
 
 #: ui/modals/edit_profile.slint:70
 msgid "Edit profile photo"
-msgstr ""
+msgstr "Profilfoto bearbeiten"
 
 #: ui/modals/edit_profile.slint:101
 msgid "Choose photo"
-msgstr ""
+msgstr "Foto wählen"
 
 #: ui/modals/edit_profile.slint:106 ui/pages/register.slint:349
 msgid "Remove photo"
-msgstr ""
+msgstr "Foto entfernen"
 
 #: ui/modals/edit_profile.slint:125 ui/pages/register.slint:359
 msgid "Display name"
-msgstr ""
+msgstr "Anzeigename"
 
 #: ui/modals/edit_profile.slint:131
 msgid "Your name"
-msgstr ""
+msgstr "Dein Name"
 
 #: ui/modals/edit_profile.slint:139
 msgid "Bio"
-msgstr ""
+msgstr "Bio"
 
 #: ui/modals/forward_message.slint:53
 msgid "Share contact"
-msgstr ""
+msgstr "Kontakt teilen"
 
 #: ui/modals/forward_message.slint:94
 msgid "Forwarding:"
-msgstr ""
+msgstr "Weiterleiten:"
 
 #: ui/modals/forward_message.slint:113
 msgid "Search channels or people..."
-msgstr ""
+msgstr "Kanäle oder Personen suchen..."
 
 #: ui/modals/forward_message.slint:223
 msgid "Channel"
-msgstr ""
+msgstr "Kanal"
 
 #: ui/modals/forward_message.slint:223
 msgid "Group"
-msgstr ""
+msgstr "Gruppe"
 
 #: ui/modals/forward_message.slint:223
 msgid "Secret"
-msgstr ""
+msgstr "Geheim"
 
 #: ui/modals/forward_message.slint:223
 msgid "DM"
-msgstr ""
+msgstr "Direkt"
 
 #: ui/modals/forward_message.slint:285
 msgid "Share"
-msgstr ""
+msgstr "Teilen"
 
 #: ui/modals/friends.slint:146 ui/sidebar/sidebar.slint:759
 msgid "Add a friend"
-msgstr ""
+msgstr "Freund hinzufügen"
 
 #: ui/modals/friends.slint:188 ui/sidebar/sidebar.slint:65
 #: ui/sidebar/sidebar.slint:548
 msgid "Friends"
-msgstr ""
+msgstr "Freunde"
 
 #: ui/modals/friends.slint:189 ui/sidebar/sidebar.slint:67
 #: ui/sidebar/sidebar.slint:677
 msgid "Requests"
-msgstr ""
+msgstr "Anfragen"
 
 #: ui/modals/friends.slint:190
 msgid "Blocked"
-msgstr ""
+msgstr "Blockiert"
 
 #: ui/modals/friends_blocked_tab.slint:25
 msgid "{n} blocked user"
 msgid_plural "{n} blocked users"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "{n} blockierte Person"
+msgstr[1] "{n} blockierte Personen"
 
 #: ui/modals/friends_blocked_tab.slint:48
 msgid "No blocked users"
-msgstr ""
+msgstr "Keine blockierten Nutzer"
 
 #: ui/modals/friends_blocked_tab.slint:55
 msgid "Users you block won't be able to message you"
-msgstr ""
+msgstr "Nutzer, die du blockierst, können dir nicht schreiben"
 
 #: ui/modals/friends_blocked_tab.slint:113
 msgid "Delete this chat? They stay blocked."
-msgstr ""
+msgstr "Diesen Chat löschen? Die Person bleibt blockiert."
 
 #: ui/modals/friends_blocked_tab.slint:113
 msgid "Remove from friends and unblock?"
-msgstr ""
+msgstr "Aus Freunden entfernen und entblocken?"
 
 #: ui/modals/friends_blocked_tab.slint:120
 msgid "Blocked {}"
-msgstr ""
+msgstr "{} blockiert"
 
 #: ui/modals/friends_blocked_tab.slint:146
 msgid "Delete chat"
-msgstr ""
+msgstr "Chat löschen"
 
 #: ui/modals/friends_find_tab.slint:96
 msgid "Scan to start a secret chat with me"
-msgstr ""
+msgstr "Scannen, um einen geheimen Chat mit mir zu starten"
 
 #: ui/modals/friends_find_tab.slint:96
 msgid "Scan to add me"
-msgstr ""
+msgstr "Scannen, um mich hinzuzufügen"
 
 #: ui/modals/friends_find_tab.slint:110
 msgid "Share my code"
-msgstr ""
+msgstr "Meinen Code teilen"
 
 #: ui/modals/friends_find_tab.slint:118
 msgid "Copy my code"
-msgstr ""
+msgstr "Meinen Code kopieren"
 
 #: ui/modals/friends_find_tab.slint:126
 msgid "Scan a code"
-msgstr ""
+msgstr "Code scannen"
 
 #: ui/modals/friends_find_tab.slint:134
 msgid "Paste a code or link"
-msgstr ""
+msgstr "Code oder Link einfügen"
 
 #: ui/modals/friends_find_tab.slint:145
 msgid "Paste"
-msgstr ""
+msgstr "Einfügen"
 
 #: ui/modals/friends_find_tab.slint:152
 msgid "Add"
-msgstr ""
+msgstr "Hinzufügen"
 
 #: ui/modals/friends_friends_tab.slint:27
 msgid "{n} private contact"
 msgid_plural "{n} private contacts"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "{n} privater Kontakt"
+msgstr[1] "{n} private Kontakte"
 
 #: ui/modals/friends_friends_tab.slint:28
 msgid "{n} Friend"
 msgid_plural "{n} Friends"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "{n} Freund"
+msgstr[1] "{n} Freunde"
 
 #: ui/modals/friends_friends_tab.slint:53
 msgid "No private contacts yet"
-msgstr ""
+msgstr "Noch keine privaten Kontakte"
 
 #: ui/modals/friends_friends_tab.slint:60
 msgid "Share your private code to start a secret chat"
-msgstr ""
+msgstr "Teile deinen privaten Code, um einen geheimen Chat zu starten"
 
 #: ui/modals/friends_friends_tab.slint:60
 msgid "Use the Add friend tab to connect"
-msgstr ""
+msgstr "Nutze den Tab Freund hinzufügen, um dich zu verbinden"
 
 #: ui/modals/friends_friends_tab.slint:200
 msgid "Message {}"
-msgstr ""
+msgstr "Nachricht an {}"
 
 #: ui/modals/friends_request_tabs.slint:64
 msgid "Received ({})"
-msgstr ""
+msgstr "Erhalten ({})"
 
 #: ui/modals/friends_request_tabs.slint:106
 msgid "Sent ({})"
-msgstr ""
+msgstr "Gesendet ({})"
 
 #: ui/modals/friends_request_tabs.slint:148
 msgid "Private ({})"
-msgstr ""
+msgstr "Privat ({})"
 
 #: ui/modals/friends_request_tabs.slint:190
 msgid "Groups ({})"
-msgstr ""
+msgstr "Gruppen ({})"
 
 #: ui/modals/friends_request_tabs.slint:232
 msgid "Channels ({})"
-msgstr ""
+msgstr "Kanäle ({})"
 
 #: ui/modals/friends_requests_tab.slint:57
 msgid "Could not refresh requests. Showing the last loaded list."
 msgstr ""
+"Anfragen konnten nicht aktualisiert werden. Die zuletzt geladene Liste wird "
+"angezeigt."
 
 #: ui/modals/friends_requests_tab.slint:84
 msgid "No pending requests"
-msgstr ""
+msgstr "Keine offenen Anfragen"
 
 #: ui/modals/friends_requests_tab.slint:86
 msgid "Friend requests you receive appear here"
-msgstr ""
+msgstr "Freundschaftsanfragen, die du bekommst, erscheinen hier"
 
 #: ui/modals/friends_requests_tab.slint:202
 msgid "No outgoing requests"
-msgstr ""
+msgstr "Keine gesendeten Anfragen"
 
 #: ui/modals/friends_requests_tab.slint:204
 msgid "Requests you send appear here until they are answered"
-msgstr ""
+msgstr "Anfragen, die du sendest, erscheinen hier, bis sie beantwortet werden"
 
 #: ui/modals/friends_requests_tab.slint:320
 msgid "No private message requests"
-msgstr ""
+msgstr "Keine privaten Nachrichtenanfragen"
 
 #: ui/modals/friends_requests_tab.slint:327
 msgid ""
 "Private requests use end-to-end encryption\n"
 "with no server involvement"
 msgstr ""
+"Private Anfragen sind Ende-zu-Ende-verschlüsselt\n"
+"ohne Beteiligung des Servers"
 
 #: ui/modals/friends_requests_tab.slint:408
 msgid "Private · {}"
-msgstr ""
+msgstr "Privat · {}"
 
 #: ui/modals/friends_requests_tab.slint:408
 msgid "Private"
-msgstr ""
+msgstr "Privat"
 
 #: ui/modals/friends_requests_tab.slint:484
 msgid "No pending group invites"
-msgstr ""
+msgstr "Keine offenen Gruppeneinladungen"
 
 #: ui/modals/friends_requests_tab.slint:491
 msgid ""
 "Group invites use end-to-end encryption\n"
 "with anonymous mailboxes"
 msgstr ""
+"Gruppeneinladungen sind Ende-zu-Ende-verschlüsselt\n"
+"über anonyme Briefkästen"
 
 #: ui/modals/friends_requests_tab.slint:558
 msgid "Invited by {}"
-msgstr ""
+msgstr "Eingeladen von {}"
 
 #: ui/modals/friends_requests_tab.slint:624
 msgid "No pending channel invites"
-msgstr ""
+msgstr "Keine offenen Kanaleinladungen"
 
 #: ui/modals/friends_requests_tab.slint:631
 msgid "Channel invitations you receive will appear here"
-msgstr ""
+msgstr "Kanaleinladungen, die du bekommst, erscheinen hier"
 
 #: ui/modals/invite_member.slint:69
 msgid "Invite to"
-msgstr ""
+msgstr "Einladen in"
 
 #: ui/modals/invite_member.slint:81
 msgid "Private channel"
-msgstr ""
+msgstr "Privater Kanal"
 
 #: ui/modals/invite_member.slint:96
 msgid "Search by name or username..."
-msgstr ""
+msgstr "Nach Name oder Benutzername suchen..."
 
 #: ui/modals/invite_member.slint:256
 msgid "Invite {n} user"
 msgid_plural "Invite {n} users"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "{n} Person einladen"
+msgstr[1] "{n} Personen einladen"
 
 #: ui/modals/invite_private_group.slint:41
 msgid "Select friends to invite to this group"
-msgstr ""
+msgstr "Wähle Freunde, die du in diese Gruppe einlädst"
 
 #: ui/modals/invite_private_group.slint:55
 msgid "No friends available to invite"
-msgstr ""
+msgstr "Keine Freunde zum Einladen"
 
 #: ui/modals/invite_private_group.slint:223
 msgid "Invite {n} member"
 msgid_plural "Invite {n} members"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "{n} Mitglied einladen"
+msgstr[1] "{n} Mitglieder einladen"
 
 #: ui/modals/jarvis_memory.slint:94
 msgid "Memory"
-msgstr ""
+msgstr "Gedächtnis"
 
 #: ui/modals/jarvis_memory.slint:94
 msgid "Jarvis memory"
-msgstr ""
+msgstr "Jarvis-Gedächtnis"
 
 #: ui/modals/jarvis_memory.slint:108
 msgid "Reload"
-msgstr ""
+msgstr "Neu laden"
 
 #: ui/modals/jarvis_memory.slint:108 ui/server_records/screen.slint:57
 msgid "Refresh"
-msgstr ""
+msgstr "Aktualisieren"
 
 #: ui/modals/jarvis_memory.slint:144
 msgid "Facts"
-msgstr ""
+msgstr "Fakten"
 
 #: ui/modals/jarvis_memory.slint:150
 msgid ""
 "Nothing yet — chat with Jarvis and durable facts land here automatically."
 msgstr ""
+"Noch nichts — chatte mit Jarvis, und dauerhafte Fakten landen hier "
+"automatisch."
 
 #: ui/modals/jarvis_memory.slint:210
 msgid "Knowledge graph"
-msgstr ""
+msgstr "Wissensgraph"
 
 #: ui/modals/jarvis_memory.slint:216
 msgid ""
 "No entities yet — Jarvis learns people, projects, and topics from "
 "conversations."
 msgstr ""
+"Noch keine Einträge — Jarvis lernt Personen, Projekte und Themen aus "
+"Unterhaltungen."
 
 #: ui/modals/jarvis_memory.slint:318
 msgid "Select an entity to map its connections"
-msgstr ""
+msgstr "Wähle einen Eintrag, um seine Verbindungen zu sehen"
 
 #: ui/modals/join_channel.slint:111
 msgid "Joined"
-msgstr ""
+msgstr "Beigetreten"
 
 #: ui/modals/join_channel_tab.slint:39
 msgid "Search channels, or paste a channel ID or invite link"
-msgstr ""
+msgstr "Kanäle suchen oder eine Kanal-ID oder einen Einladungslink einfügen"
 
 #: ui/modals/join_channel_tab.slint:45
 msgid "Name, channel ID or chatter://join/ link"
-msgstr ""
+msgstr "Name, Kanal-ID oder chatter://join/-Link"
 
 #: ui/modals/join_channel_tab.slint:79
 msgid "Searching..."
-msgstr ""
+msgstr "Suchen..."
 
 #: ui/modals/join_channel_tab.slint:116
 msgid "Invite link"
-msgstr ""
+msgstr "Einladungslink"
 
 #: ui/modals/join_channel_tab.slint:123
 msgid "Press Join to use it. Anyone holding this link can join the channel."
 msgstr ""
+"Tippe auf Beitreten, um ihn zu nutzen. Jeder mit diesem Link kann dem Kanal "
+"beitreten."
 
 #: ui/modals/join_channel_tab.slint:142
 msgid "No channels found"
-msgstr ""
+msgstr "Keine Kanäle gefunden"
 
 #: ui/modals/join_channel_tab.slint:149
 msgid "Try a different search or paste a channel ID"
-msgstr ""
+msgstr "Andere Suche versuchen oder eine Kanal-ID einfügen"
 
 #: ui/modals/join_channel_tab.slint:169
 msgid "Search for public channels"
-msgstr ""
+msgstr "Öffentliche Kanäle suchen"
 
 #: ui/modals/join_channel_tab.slint:176
 msgid "Enter a channel name or paste a channel ID to join directly"
 msgstr ""
+"Gib einen Kanalnamen ein oder füge eine Kanal-ID ein, um direkt beizutreten"
 
 #: ui/modals/keyboard_shortcuts.slint:72 ui/modals/keyboard_shortcuts.slint:89
 msgid "Keyboard shortcuts"
-msgstr ""
+msgstr "Tastaturkurzbefehle"
 
 #: ui/modals/keyboard_shortcuts.slint:116
 msgid "Navigation"
-msgstr ""
+msgstr "Navigation"
 
 #: ui/modals/keyboard_shortcuts.slint:124 ui/sidebar/sidebar.slint:68
 #: ui/sidebar/sidebar.slint:463 ui/sidebar/sidebar_header.slint:66
 msgid "Search"
-msgstr ""
+msgstr "Suchen"
 
 #: ui/modals/keyboard_shortcuts.slint:125
 msgid "Ctrl + K"
-msgstr ""
+msgstr "Ctrl + K"
 
 #: ui/modals/keyboard_shortcuts.slint:126
 msgid "Ctrl + F"
-msgstr ""
+msgstr "Ctrl + F"
 
 #: ui/modals/keyboard_shortcuts.slint:126
 msgid "Ctrl + K / Ctrl + F"
-msgstr ""
+msgstr "Ctrl + K / Ctrl + F"
 
 #: ui/modals/keyboard_shortcuts.slint:128
 msgid "Open AI chat"
-msgstr ""
+msgstr "AI-Chat öffnen"
 
 #: ui/modals/keyboard_shortcuts.slint:128
 msgid "Ctrl + J"
-msgstr ""
+msgstr "Ctrl + J"
 
 #: ui/modals/keyboard_shortcuts.slint:130
 msgid "Ctrl + Shift + F"
-msgstr ""
+msgstr "Ctrl + Shift + F"
 
 #: ui/modals/keyboard_shortcuts.slint:131
 msgid "Ctrl + ,"
-msgstr ""
+msgstr "Ctrl + ,"
 
 #: ui/modals/keyboard_shortcuts.slint:131
 msgid "Open settings"
-msgstr ""
+msgstr "Einstellungen öffnen"
 
 #: ui/modals/keyboard_shortcuts.slint:132
 msgid "Alt + ↓ / Ctrl + Tab"
-msgstr ""
+msgstr "Alt + ↓ / Ctrl + Tab"
 
 #: ui/modals/keyboard_shortcuts.slint:132
 msgid "Next chat"
-msgstr ""
+msgstr "Nächster Chat"
 
 #: ui/modals/keyboard_shortcuts.slint:133
 msgid "Alt + ↑ / Ctrl + Shift + Tab"
-msgstr ""
+msgstr "Alt + ↑ / Ctrl + Shift + Tab"
 
 #: ui/modals/keyboard_shortcuts.slint:133
 msgid "Previous chat"
-msgstr ""
+msgstr "Vorheriger Chat"
 
 #: ui/modals/keyboard_shortcuts.slint:134
 msgid "Ctrl + 0"
-msgstr ""
+msgstr "Ctrl + 0"
 
 #: ui/modals/keyboard_shortcuts.slint:134 ui/settings/account_menu.slint:201
 #: ui/sidebar/sidebar.slint:480 ui/sidebar/sidebar.slint:493
 msgid "Saved messages"
-msgstr ""
+msgstr "Gespeicherte Nachrichten"
 
 #: ui/modals/keyboard_shortcuts.slint:135
 msgid "↑ / ↓, Home / End"
-msgstr ""
+msgstr "↑ / ↓, Home / End"
 
 #: ui/modals/keyboard_shortcuts.slint:135
 msgid "Move in sidebar"
-msgstr ""
+msgstr "In der Seitenleiste bewegen"
 
 #: ui/modals/keyboard_shortcuts.slint:136
 msgid "Enter / Space"
-msgstr ""
+msgstr "Enter / Space"
 
 #: ui/modals/keyboard_shortcuts.slint:136
 msgid "Open sidebar item"
-msgstr ""
+msgstr "Eintrag in der Seitenleiste öffnen"
 
 #: ui/modals/keyboard_shortcuts.slint:137
 msgid "Ctrl + /"
-msgstr ""
+msgstr "Ctrl + /"
 
 #: ui/modals/keyboard_shortcuts.slint:137
 msgid "Show this dialog"
-msgstr ""
+msgstr "Diesen Dialog anzeigen"
 
 #: ui/modals/keyboard_shortcuts.slint:138
 msgid "Escape"
-msgstr ""
+msgstr "Escape"
 
 #: ui/modals/keyboard_shortcuts.slint:138
 msgid "Close modal or panel"
-msgstr ""
+msgstr "Dialog oder Bereich schließen"
 
 #: ui/modals/keyboard_shortcuts.slint:150
 msgid "Enter"
-msgstr ""
+msgstr "Enter"
 
 #: ui/modals/keyboard_shortcuts.slint:150
 msgid "Send"
-msgstr ""
+msgstr "Senden"
 
 #: ui/modals/keyboard_shortcuts.slint:151
 msgid "Shift + Enter"
-msgstr ""
+msgstr "Shift + Enter"
 
 #: ui/modals/keyboard_shortcuts.slint:151
 msgid "New line"
-msgstr ""
+msgstr "Neue Zeile"
 
 #: ui/modals/keyboard_shortcuts.slint:152
 msgid "Ctrl + B / Ctrl + I"
-msgstr ""
+msgstr "Ctrl + B / Ctrl + I"
 
 #: ui/modals/keyboard_shortcuts.slint:152
 msgid "Bold / italic"
-msgstr ""
+msgstr "Fett / kursiv"
 
 #: ui/modals/keyboard_shortcuts.slint:153
 msgid "Ctrl + Shift + X / M"
-msgstr ""
+msgstr "Ctrl + Shift + X / M"
 
 #: ui/modals/keyboard_shortcuts.slint:153
 msgid "Strikethrough / code"
-msgstr ""
+msgstr "Durchgestrichen / Code"
 
 #: ui/modals/keyboard_shortcuts.slint:154
 msgid "↑ (empty message box)"
-msgstr ""
+msgstr "↑ (leeres Nachrichtenfeld)"
 
 #: ui/modals/keyboard_shortcuts.slint:154
 msgid "Edit your last message"
-msgstr ""
+msgstr "Letzte Nachricht bearbeiten"
 
 #: ui/modals/keyboard_shortcuts.slint:155
 msgid "Cancel edit or reply"
-msgstr ""
+msgstr "Bearbeitung oder Antwort abbrechen"
 
 #: ui/modals/licenses.slint:21 ui/settings/about_settings.slint:68
 msgid "Open-source licenses"
-msgstr ""
+msgstr "Open-Source-Lizenzen"
 
 #: ui/modals/link_device_approve.slint:49
 msgid "Link a new device"
-msgstr ""
+msgstr "Neues Gerät verknüpfen"
 
 #: ui/modals/link_device_approve.slint:72
 msgid ""
 "Scan the QR code on your new device, or paste its link. You'll be asked to "
 "confirm with your password or PIN to authorize."
 msgstr ""
+"Scanne den QR-Code auf deinem neuen Gerät oder füge dessen Link ein. Zur "
+"Bestätigung wirst du nach Passwort oder PIN gefragt."
 
 #: ui/modals/link_device_approve.slint:73
 msgid ""
 "Paste the link from your new device. You'll be asked to confirm with your "
 "password or PIN to authorize."
 msgstr ""
+"Füge den Link von deinem neuen Gerät ein. Zur Bestätigung wirst du nach "
+"Passwort oder PIN gefragt."
 
 #: ui/modals/link_device_approve.slint:87
 msgid "chatter://link?uuid=…"
-msgstr ""
+msgstr "chatter://link?uuid=…"
 
 #: ui/modals/link_device_approve.slint:104
 msgid "About to link:"
-msgstr ""
+msgstr "Wird verknüpft:"
 
 #: ui/modals/link_device_approve.slint:109
 msgid "Unnamed device"
-msgstr ""
+msgstr "Unbenanntes Gerät"
 
 #: ui/modals/link_device_approve.slint:116
 msgid "Server: {}"
-msgstr ""
+msgstr "Server: {}"
 
 #: ui/modals/link_device_approve.slint:132
 msgid "Verify this code matches the new device:"
-msgstr ""
+msgstr "Prüfe, ob dieser Code zum neuen Gerät passt:"
 
 #: ui/modals/link_device_approve.slint:147
 msgid "Password or PIN"
-msgstr ""
+msgstr "Passwort oder PIN"
 
 #: ui/modals/link_device_approve.slint:186
 msgid "Authorize"
-msgstr ""
+msgstr "Freigeben"
 
 #: ui/modals/message_info.slint:12
 msgid "Message info"
-msgstr ""
+msgstr "Nachrichteninfo"
 
 #: ui/modals/pinned_messages.slint:58
 msgid "Long-press a message and choose Pin"
-msgstr ""
+msgstr "Nachricht lang drücken und Anheften wählen"
 
 #: ui/modals/pinned_messages.slint:58
 msgid "Right-click a message and choose Pin"
-msgstr ""
+msgstr "Nachricht rechtsklicken und Anheften wählen"
 
 #: ui/modals/profile_action_tiles.slint:28
 msgid "Unmute conversation"
-msgstr ""
+msgstr "Unterhaltung nicht mehr stumm"
 
 #: ui/modals/profile_action_tiles.slint:28
 msgid "Mute conversation"
-msgstr ""
+msgstr "Unterhaltung stummschalten"
 
 #: ui/modals/profile_action_tiles.slint:29
 msgid "More"
-msgstr ""
+msgstr "Mehr"
 
 #: ui/modals/profile_action_tiles.slint:39
 msgid "Call"
-msgstr ""
+msgstr "Anrufen"
 
 #: ui/modals/profile_info_card.slint:57 ui/settings/settings_screen.slint:283
 msgid "About"
-msgstr ""
+msgstr "Über"
 
 #: ui/modals/profile_info_card.slint:83 ui/pages/account_recovery.slint:112
 #: ui/pages/register.slint:373
 msgid "Username"
-msgstr ""
+msgstr "Benutzername"
 
 #: ui/modals/profile_info_card.slint:95
 msgid "Show username QR code"
-msgstr ""
+msgstr "QR-Code des Benutzernamens zeigen"
 
 #: ui/modals/profile_info_card.slint:199
 msgid "Reset link"
-msgstr ""
+msgstr "Link zurücksetzen"
 
 #: ui/modals/profile_safety_number.slint:23
 msgid "Verified, safety number"
-msgstr ""
+msgstr "Verifiziert, Sicherheitsnummer"
 
 #: ui/modals/profile_safety_number.slint:23
 msgid "Not verified, safety number"
-msgstr ""
+msgstr "Nicht verifiziert, Sicherheitsnummer"
 
 #: ui/modals/profile_safety_number.slint:54
 msgid "✓ Verified"
-msgstr ""
+msgstr "✓ Verifiziert"
 
 #: ui/modals/profile_safety_number.slint:54
 msgid "Not verified · Safety number"
-msgstr ""
+msgstr "Nicht verifiziert · Sicherheitsnummer"
 
 #: ui/modals/profile_safety_number.slint:85
 msgid ""
 "Compare this number with your contact to verify end-to-end encryption. If "
 "the numbers match, your conversation is secure."
 msgstr ""
+"Vergleiche diese Nummer mit deinem Kontakt, um die Ende-zu-Ende-"
+"Verschlüsselung zu prüfen. Wenn die Nummern übereinstimmen, ist eure "
+"Unterhaltung sicher."
 
 #: ui/modals/profile_safety_number.slint:127
 msgid "Updating verification…"
-msgstr ""
+msgstr "Verifizierung wird aktualisiert…"
 
 #: ui/modals/profile_safety_number.slint:127
 msgid "Clear verification"
-msgstr ""
+msgstr "Verifizierung aufheben"
 
 #: ui/modals/profile_safety_number.slint:127
 msgid "Mark as verified"
-msgstr ""
+msgstr "Als verifiziert markieren"
 
 #: ui/modals/profile_status_picker.slint:21
 msgid "Automatic"
-msgstr ""
+msgstr "Automatisch"
 
 #: ui/modals/profile_status_picker.slint:21
 msgid "Online while active, away after 5 minutes idle"
-msgstr ""
+msgstr "Online, solange du aktiv bist, nach 5 Minuten Leerlauf abwesend"
 
 #: ui/modals/profile_status_picker.slint:22 ui/modals/user_profile.slint:197
 msgid "Online"
-msgstr ""
+msgstr "Online"
 
 #: ui/modals/profile_status_picker.slint:22
 msgid "Always shown as online"
-msgstr ""
+msgstr "Immer als online angezeigt"
 
 #: ui/modals/profile_status_picker.slint:23 ui/modals/user_profile.slint:199
 msgid "Away"
-msgstr ""
+msgstr "Abwesend"
 
 #: ui/modals/profile_status_picker.slint:23
 msgid "Shown as away"
-msgstr ""
+msgstr "Als abwesend angezeigt"
 
 #: ui/modals/profile_status_picker.slint:24 ui/modals/user_profile.slint:201
 msgid "Do not disturb"
-msgstr ""
+msgstr "Nicht stören"
 
 #: ui/modals/profile_status_picker.slint:24
 msgid "Mutes message notifications"
-msgstr ""
+msgstr "Schaltet Nachrichtenbenachrichtigungen stumm"
 
 #: ui/modals/profile_status_picker.slint:25
 msgid "Invisible"
-msgstr ""
+msgstr "Unsichtbar"
 
 #: ui/modals/profile_status_picker.slint:25
 msgid "Appear offline to everyone"
-msgstr ""
+msgstr "Für alle als offline erscheinen"
 
 #: ui/modals/profile_status_picker.slint:48
 msgid "Status: {}"
-msgstr ""
+msgstr "Status: {}"
 
 #: ui/modals/profile_status_picker.slint:73
 msgid "Status"
-msgstr ""
+msgstr "Status"
 
 #: ui/modals/recovery_codes.slint:85
 msgid "Save your recovery codes"
-msgstr ""
+msgstr "Sichere deine Wiederherstellungscodes"
 
 #: ui/modals/recovery_codes.slint:95
 msgid ""
 "These codes can recover your account if you forget your password and PIN. "
 "Save them somewhere safe. They will not be shown again."
 msgstr ""
+"Mit diesen Codes kannst du dein Konto wiederherstellen, wenn du Passwort und "
+"PIN vergisst. Bewahre sie sicher auf. Sie werden nicht erneut angezeigt."
 
 #: ui/modals/recovery_codes.slint:175
 msgid "Copy all"
-msgstr ""
+msgstr "Alle kopieren"
 
 #: ui/modals/recovery_codes.slint:200 ui/modals/recovery_codes.slint:204
 msgid "I have saved my recovery codes"
-msgstr ""
+msgstr "Ich habe meine Wiederherstellungscodes gespeichert"
 
 #: ui/modals/recovery_codes.slint:219 ui/pages/register.slint:386
 #: ui/pages/register.slint:543
 msgid "Continue"
-msgstr ""
+msgstr "Weiter"
 
 #: ui/modals/sealed_sender_intro.slint:80
 msgid "Sealed sender: private by default"
-msgstr ""
+msgstr "Versiegelter Absender: standardmäßig privat"
 
 #: ui/modals/sealed_sender_intro.slint:90
 msgid ""
 "Chatter delivers your messages without the server learning who you are "
 "talking to. Your messages are always sent this way — nothing to turn on."
 msgstr ""
+"Chatter stellt deine Nachrichten zu, ohne dass der Server erfährt, mit wem "
+"du sprichst. Deine Nachrichten werden immer so gesendet — nichts zum "
+"Einschalten."
 
 #: ui/modals/sealed_sender_intro.slint:99
 msgid ""
 "This is privacy from the server. It is not anonymity from the person you "
 "message — they still see who you are."
 msgstr ""
+"Das ist Privatsphäre gegenüber dem Server. Gegenüber der Person, der du "
+"schreibst, bist du nicht anonym — sie sieht weiterhin, wer du bist."
 
 #: ui/modals/sealed_sender_intro.slint:110
 msgid "Who can message you this way?"
-msgstr ""
+msgstr "Wer darf dir so schreiben?"
 
 #: ui/modals/sealed_sender_intro.slint:132
 msgid "Allow sealed messages from anyone"
-msgstr ""
+msgstr "Versiegelte Nachrichten von jedem zulassen"
 
 #: ui/modals/sealed_sender_intro.slint:149
 msgid ""
 "Off (recommended): only your contacts can reach you this way. On: anyone "
 "can. You can change this later in Settings."
 msgstr ""
+"Aus (empfohlen): Nur deine Kontakte erreichen dich so. An: Jeder. Du kannst "
+"das später in den Einstellungen ändern."
 
 #: ui/modals/sealed_sender_intro.slint:159
 msgid "Got it"
-msgstr ""
+msgstr "Verstanden"
 
 #: ui/modals/sessions.slint:63
 msgid "Active sessions"
-msgstr ""
+msgstr "Aktive Sitzungen"
 
 #: ui/modals/sessions.slint:99
 msgid "Updating sessions..."
-msgstr ""
+msgstr "Sitzungen werden aktualisiert..."
 
 #: ui/modals/sessions.slint:108
 msgid "{n} active session"
 msgid_plural "{n} active sessions"
-msgstr[0] ""
-msgstr[1] ""
+msgstr[0] "{n} aktive Sitzung"
+msgstr[1] "{n} aktive Sitzungen"
 
 #: ui/modals/sessions.slint:108
 msgid "Sessions not loaded"
-msgstr ""
+msgstr "Sitzungen nicht geladen"
 
 #: ui/modals/sessions.slint:116 ui/modals/sessions.slint:125
 msgid "Link new device"
-msgstr ""
+msgstr "Neues Gerät verknüpfen"
 
 #: ui/modals/sessions.slint:153 ui/settings/devices_settings.slint:231
 msgid "New device"
-msgstr ""
+msgstr "Neues Gerät"
 
 #: ui/modals/sessions.slint:161
 msgid "Approved, waiting for it to finish linking (until {})"
-msgstr ""
+msgstr "Genehmigt, wartet auf den Abschluss der Verknüpfung (bis {})"
 
 #: ui/modals/sessions.slint:193
 msgid "No active sessions found"
-msgstr ""
+msgstr "Keine aktiven Sitzungen gefunden"
 
 #: ui/modals/sessions.slint:209
 msgid "Loading sessions..."
-msgstr ""
+msgstr "Sitzungen werden geladen..."
 
 #: ui/modals/sessions.slint:284 ui/settings/devices_settings.slint:170
 msgid "This device"
-msgstr ""
+msgstr "Dieses Gerät"
 
 #: ui/modals/sessions.slint:313 ui/settings/devices_settings.slint:176
 msgid "Active now"
-msgstr ""
+msgstr "Gerade aktiv"
 
 #: ui/modals/sessions.slint:313 ui/settings/devices_settings.slint:176
 msgid "Last active: {}"
-msgstr ""
+msgstr "Zuletzt aktiv: {}"
 
 #: ui/modals/sessions.slint:320
 msgid "Since: {}"
-msgstr ""
+msgstr "Seit: {}"
 
 #: ui/modals/sessions.slint:327 ui/settings/devices_settings.slint:187
 msgid "Revoke this device? It must be linked again."
-msgstr ""
+msgstr "Dieses Gerät widerrufen? Es muss erneut verknüpft werden."
 
 #: ui/modals/sessions.slint:339 ui/settings/devices_settings.slint:199
 msgid "Confirm"
-msgstr ""
+msgstr "Bestätigen"
 
 #: ui/modals/sessions.slint:373
 msgid "Revoke all other sessions"
-msgstr ""
+msgstr "Alle anderen Sitzungen widerrufen"
 
 #: ui/modals/sessions.slint:386
 msgid ""
@@ -4338,671 +4466,716 @@ msgid_plural ""
 "Sign out all {n} other linked devices? They must be linked again to use this "
 "account."
 msgstr[0] ""
+"Das andere verknüpfte Gerät abmelden? Es muss erneut verknüpft werden, um "
+"dieses Konto zu nutzen."
 msgstr[1] ""
+"Alle {n} anderen verknüpften Geräte abmelden? Sie müssen erneut verknüpft "
+"werden, um dieses Konto zu nutzen."
 
 #: ui/modals/sessions.slint:403
 msgid "Revoke all"
-msgstr ""
+msgstr "Alle widerrufen"
 
 #: ui/modals/user_profile.slint:203
 msgid "Offline"
-msgstr ""
+msgstr "Offline"
 
 #: ui/modals/user_profile.slint:365
 msgid "Verified — show safety number"
-msgstr ""
+msgstr "Verifiziert — Sicherheitsnummer anzeigen"
 
 #: ui/modals/user_profile.slint:471
 msgid "Safety number"
-msgstr ""
+msgstr "Sicherheitsnummer"
 
 #: ui/modals/user_profile.slint:502
 msgid "Disappearing messages: {}"
-msgstr ""
+msgstr "Verschwindende Nachrichten: {}"
 
 #: ui/modals/user_profile.slint:567
 msgid "You blocked this person."
-msgstr ""
+msgstr "Du hast diese Person blockiert."
 
 #: ui/modals/user_profile.slint:574
 msgid "Open blocked"
-msgstr ""
+msgstr "Blockierte öffnen"
 
 #: ui/modals/user_profile.slint:620 ui/sidebar/create_menu.slint:175
 msgid "Add friend"
-msgstr ""
+msgstr "Freund hinzufügen"
 
 #: ui/modals/user_profile.slint:635
 msgid "Retry shared content"
-msgstr ""
+msgstr "Geteilte Inhalte erneut laden"
 
 #: ui/modals/user_profile.slint:684
 msgid "Share this contact"
-msgstr ""
+msgstr "Diesen Kontakt teilen"
 
 #: ui/modals/user_profile.slint:686 ui/modals/user_profile.slint:820
 msgid "Edit contact"
-msgstr ""
+msgstr "Kontakt bearbeiten"
 
 #: ui/modals/user_profile.slint:688 ui/modals/user_profile.slint:768
 msgid "Delete contact"
-msgstr ""
+msgstr "Kontakt löschen"
 
 #: ui/modals/user_profile.slint:691
 msgid "Unblock user"
-msgstr ""
+msgstr "Nutzer entblocken"
 
 #: ui/modals/user_profile.slint:691
 msgid "Block user"
-msgstr ""
+msgstr "Nutzer blockieren"
 
 #: ui/modals/user_profile.slint:708
 msgid "Load earlier"
-msgstr ""
+msgstr "Frühere laden"
 
 #: ui/modals/user_profile.slint:720 ui/server_records/screen.slint:218
 msgid "Load more"
-msgstr ""
+msgstr "Mehr laden"
 
 #: ui/modals/user_profile.slint:731
 msgid "Nothing shared yet."
-msgstr ""
+msgstr "Noch nichts geteilt."
 
 #: ui/modals/user_profile.slint:741
 msgid "Delete {}?"
-msgstr ""
+msgstr "{} löschen?"
 
 #: ui/modals/user_profile.slint:751
 msgid "They'll be removed from your friends. Your chat history stays."
-msgstr ""
+msgstr "Die Person wird aus deinen Freunden entfernt. Dein Chatverlauf bleibt."
 
 #: ui/modals/user_profile.slint:781
 msgid "Block {}?"
-msgstr ""
+msgstr "{} blockieren?"
 
 #: ui/modals/user_profile.slint:791
 msgid ""
 "Blocked people can't call or message you. You can unblock them from their "
 "profile or Contacts › Blocked."
 msgstr ""
+"Blockierte Personen können dich nicht anrufen oder dir schreiben. Du kannst "
+"sie über ihr Profil oder Kontakte › Blockiert entblocken."
 
 #: ui/modals/user_profile.slint:826
 msgid "Contact name"
-msgstr ""
+msgstr "Kontaktname"
 
 #: ui/modals/user_profile.slint:830
 msgid "Reset"
-msgstr ""
+msgstr "Zurücksetzen"
 
 #: ui/modals/user_profile.slint:838
 msgid "Unblock {}?"
-msgstr ""
+msgstr "{} entblocken?"
 
 #: ui/modals/user_profile.slint:845
 msgid "They will be able to call and message you again."
-msgstr ""
+msgstr "Die Person kann dich wieder anrufen und dir schreiben."
 
 #: ui/pages/account_recovery.slint:89
 msgid "Account recovery"
-msgstr ""
+msgstr "Kontowiederherstellung"
 
 #: ui/pages/account_recovery.slint:97
 msgid "Enter a recovery code to reset your password and PIN"
 msgstr ""
+"Gib einen Wiederherstellungscode ein, um Passwort und PIN zurückzusetzen"
 
 #: ui/pages/account_recovery.slint:118
 msgid "Enter your username"
-msgstr ""
+msgstr "Gib deinen Benutzernamen ein"
 
 #: ui/pages/account_recovery.slint:122
 msgid "Username is required"
-msgstr ""
+msgstr "Benutzername ist erforderlich"
 
 #: ui/pages/account_recovery.slint:131
 msgid "Recovery code"
-msgstr ""
+msgstr "Wiederherstellungscode"
 
 #: ui/pages/account_recovery.slint:137
 msgid "26 letters and digits 2–9. Spaces and hyphens are OK."
 msgstr ""
+"26 Buchstaben und Ziffern 2–9. Leerzeichen und Bindestriche sind in Ordnung."
 
 #: ui/pages/account_recovery.slint:143
 msgid "Enter your recovery code"
-msgstr ""
+msgstr "Gib deinen Wiederherstellungscode ein"
 
 #: ui/pages/account_recovery.slint:148
 msgid "Recovery code is required"
-msgstr ""
+msgstr "Wiederherstellungscode ist erforderlich"
 
 #: ui/pages/account_recovery.slint:160 ui/pages/account_recovery.slint:166
 msgid "New password"
-msgstr ""
+msgstr "Neues Passwort"
 
 #: ui/pages/account_recovery.slint:171
 msgid "Password is required"
-msgstr ""
+msgstr "Passwort ist erforderlich"
 
 #: ui/pages/account_recovery.slint:179 ui/pages/account_recovery.slint:185
 msgid "Confirm password"
-msgstr ""
+msgstr "Passwort bestätigen"
 
 #: ui/pages/account_recovery.slint:192
 msgid "Please confirm your password"
-msgstr ""
+msgstr "Bitte bestätige dein Passwort"
 
 #: ui/pages/account_recovery.slint:194 ui/pages/register.slint:457
 msgid "Passwords do not match"
-msgstr ""
+msgstr "Passwörter stimmen nicht überein"
 
 #: ui/pages/account_recovery.slint:208
 msgid "New recovery PIN"
-msgstr ""
+msgstr "Neue Wiederherstellungs-PIN"
 
 #: ui/pages/account_recovery.slint:214
 msgid "Use at least 8 characters; keep it somewhere safe."
-msgstr ""
+msgstr "Mindestens 8 Zeichen; bewahre sie sicher auf."
 
 #: ui/pages/account_recovery.slint:220
 msgid "PIN (8+ characters)"
-msgstr ""
+msgstr "PIN (mindestens 8 Zeichen)"
 
 #: ui/pages/account_recovery.slint:225
 msgid "PIN is required (8+ characters)"
-msgstr ""
+msgstr "PIN ist erforderlich (mindestens 8 Zeichen)"
 
 #: ui/pages/account_recovery.slint:271
 msgid "Recover account"
-msgstr ""
+msgstr "Konto wiederherstellen"
 
 #: ui/pages/account_recovery.slint:290 ui/pages/link_device.slint:198
 msgid "Back to login"
-msgstr ""
+msgstr "Zurück zur Anmeldung"
 
 #: ui/pages/link_device.slint:18
 msgid "Waiting for your other device…"
-msgstr ""
+msgstr "Warten auf dein anderes Gerät…"
 
 #: ui/pages/link_device.slint:71
 msgid "Link this device"
-msgstr ""
+msgstr "Dieses Gerät verknüpfen"
 
 #: ui/pages/link_device.slint:79
 msgid ""
 "On your already-signed-in device, open Settings › Linked devices › Manage "
 "devices › Link new device, then scan this code."
 msgstr ""
+"Öffne auf deinem bereits angemeldeten Gerät Einstellungen › Verknüpfte "
+"Geräte › Geräte verwalten › Neues Gerät verknüpfen und scanne dann diesen "
+"Code."
 
 #: ui/pages/link_device.slint:87
 msgid ""
 "This device still holds another account's keys. Linking a different account "
 "will fail. Sign in to that account instead, or clear this app's data first."
 msgstr ""
+"Dieses Gerät hat noch die Schlüssel eines anderen Kontos. Die Verknüpfung "
+"eines anderen Kontos schlägt fehl. Melde dich stattdessen bei diesem Konto "
+"an oder lösche zuerst die App-Daten."
 
 #: ui/pages/link_device.slint:113
 msgid "Preparing your secure link…"
-msgstr ""
+msgstr "Sicherer Link wird vorbereitet…"
 
 #: ui/pages/link_device.slint:113
 msgid "Your QR code will appear here"
-msgstr ""
+msgstr "Dein QR-Code erscheint hier"
 
 #: ui/pages/link_device.slint:130
 msgid "Can't scan? Copy and paste this link into the other device:"
 msgstr ""
+"Scannen klappt nicht? Kopiere diesen Link und füge ihn auf dem anderen Gerät "
+"ein:"
 
 #: ui/pages/link_device.slint:188
 msgid "Generate QR"
-msgstr ""
+msgstr "QR erzeugen"
 
 #: ui/pages/login.slint:123
 msgid "Sign in to continue"
-msgstr ""
+msgstr "Zum Fortfahren anmelden"
 
 #: ui/pages/login.slint:142 ui/pages/register.slint:407
 msgid "Password"
-msgstr ""
+msgstr "Passwort"
 
 #: ui/pages/login.slint:162
 msgid ""
 "Your account PIN. Needed on a new device to restore your encryption keys."
 msgstr ""
+"Deine Konto-PIN. Auf einem neuen Gerät nötig, um deine Schlüssel "
+"wiederherzustellen."
 
 #: ui/pages/login.slint:171
 msgid "Server URL"
-msgstr ""
+msgstr "Server-URL"
 
 #: ui/pages/login.slint:180
 msgid "Localhost"
-msgstr ""
+msgstr "Localhost"
 
 #: ui/pages/login.slint:188
 msgid "LAN"
-msgstr ""
+msgstr "LAN"
 
 #: ui/pages/login.slint:214
 msgid "Verifying this sign-in on your device… this can take a few seconds."
 msgstr ""
+"Diese Anmeldung wird auf deinem Gerät geprüft… das kann ein paar Sekunden "
+"dauern."
 
 #: ui/pages/login.slint:227
 msgid ""
 "Starting over gives this device new encryption keys. Your old messages stay "
 "unreadable, and each of your contacts will be asked to verify you again."
 msgstr ""
+"Neu anfangen gibt diesem Gerät neue Schlüssel. Deine alten Nachrichten "
+"bleiben unlesbar, und jeder deiner Kontakte wird gebeten, dich erneut zu "
+"verifizieren."
 
 #: ui/pages/login.slint:234
 msgid "Start over with new keys"
-msgstr ""
+msgstr "Mit neuen Schlüsseln neu anfangen"
 
 #: ui/pages/login.slint:253
 msgid "Forgot password?"
-msgstr ""
+msgstr "Passwort vergessen?"
 
 #: ui/pages/login.slint:291
 msgid "Don't have an account?"
-msgstr ""
+msgstr "Noch kein Konto?"
 
 #: ui/pages/login.slint:299
 msgid "Register"
-msgstr ""
+msgstr "Registrieren"
 
 #: ui/pages/login.slint:319
 msgid "Link to an existing account on another device"
-msgstr ""
+msgstr "Mit einem bestehenden Konto auf einem anderen Gerät verknüpfen"
 
 #: ui/pages/register.slint:117 ui/pages/register.slint:602
 msgid "Create account"
-msgstr ""
+msgstr "Konto erstellen"
 
 #: ui/pages/register.slint:126
 msgid "Step {0} of {1}"
-msgstr ""
+msgstr "Schritt {0} von {1}"
 
 #: ui/pages/register.slint:214
 msgid "Set up your profile"
-msgstr ""
+msgstr "Profil einrichten"
 
 #: ui/pages/register.slint:245
 msgid "Previous avatar"
-msgstr ""
+msgstr "Vorheriger Avatar"
 
 #: ui/pages/register.slint:269
 msgid "Upload your own photo"
-msgstr ""
+msgstr "Eigenes Foto hochladen"
 
 #: ui/pages/register.slint:320
 msgid "Next avatar"
-msgstr ""
+msgstr "Nächster Avatar"
 
 #: ui/pages/register.slint:398
 msgid "Secure your account"
-msgstr ""
+msgstr "Konto sichern"
 
 #: ui/pages/register.slint:420
 msgid "Password strength: Weak"
-msgstr ""
+msgstr "Passwortstärke: Schwach"
 
 #: ui/pages/register.slint:421
 msgid "Password strength: Fair"
-msgstr ""
+msgstr "Passwortstärke: Mittel"
 
 #: ui/pages/register.slint:422
 msgid "Password strength: Good"
-msgstr ""
+msgstr "Passwortstärke: Gut"
 
 #: ui/pages/register.slint:422
 msgid "Password strength: Strong"
-msgstr ""
+msgstr "Passwortstärke: Stark"
 
 #: ui/pages/register.slint:440
 msgid "Weak"
-msgstr ""
+msgstr "Schwach"
 
 #: ui/pages/register.slint:441
 msgid "Fair"
-msgstr ""
+msgstr "Mittel"
 
 #: ui/pages/register.slint:442
 msgid "Good"
-msgstr ""
+msgstr "Gut"
 
 #: ui/pages/register.slint:442
 msgid "Strong"
-msgstr ""
+msgstr "Stark"
 
 #: ui/pages/register.slint:474
 msgid "Create recovery PIN"
-msgstr ""
+msgstr "Wiederherstellungs-PIN erstellen"
 
 #: ui/pages/register.slint:482
 msgid ""
 "Your PIN protects your encryption key backup. You'll need it to recover "
 "messages if you lose this device."
 msgstr ""
+"Deine PIN schützt die Sicherung deiner Schlüssel. Du brauchst sie, um "
+"Nachrichten wiederherzustellen, wenn du dieses Gerät verlierst."
 
 #: ui/pages/register.slint:495
 msgid "Create a PIN (8+ characters)"
-msgstr ""
+msgstr "PIN erstellen (mindestens 8 Zeichen)"
 
 #: ui/pages/register.slint:513
 msgid "PIN strength: Weak"
-msgstr ""
+msgstr "PIN-Stärke: Schwach"
 
 #: ui/pages/register.slint:514
 msgid "PIN strength: Fair"
-msgstr ""
+msgstr "PIN-Stärke: Mittel"
 
 #: ui/pages/register.slint:514
 msgid "PIN strength: Strong"
-msgstr ""
+msgstr "PIN-Stärke: Stark"
 
 #: ui/pages/register.slint:538 ui/settings/account_settings.slint:381
 msgid "PINs do not match"
-msgstr ""
+msgstr "PINs stimmen nicht überein"
 
 #: ui/pages/register.slint:555
 msgid "Finalize registration"
-msgstr ""
+msgstr "Registrierung abschließen"
 
 #: ui/pages/register.slint:565 ui/pages/register.slint:571
 msgid "Direct server URL"
-msgstr ""
+msgstr "Direkte Server-URL"
 
 #: ui/pages/register.slint:586
 msgid ""
 "Shield is on: registration goes over Tor to the configured onion service."
 msgstr ""
+"Shield ist an: Die Registrierung läuft über Tor zum eingestellten Onion-"
+"Dienst."
 
 #: ui/pages/register.slint:617
 msgid "Already have an account?"
-msgstr ""
+msgstr "Schon ein Konto?"
 
 #: ui/pages/welcome.slint:53
 msgid "Welcome to Chatter!"
-msgstr ""
+msgstr "Willkommen bei Chatter!"
 
 #: ui/pages/welcome.slint:65
 msgid "Hi {}, your account is ready."
-msgstr ""
+msgstr "Hallo {}, dein Konto ist bereit."
 
 #: ui/pages/welcome.slint:93
 msgid "All messages are end-to-end encrypted"
-msgstr ""
+msgstr "Alle Nachrichten sind Ende-zu-Ende-verschlüsselt"
 
 #: ui/pages/welcome.slint:106
 msgid "Get started"
-msgstr ""
+msgstr "Loslegen"
 
 #: ui/pages/welcome.slint:130 ui/pages/welcome.slint:163
 msgid "Add friends"
-msgstr ""
+msgstr "Freunde hinzufügen"
 
 #: ui/pages/welcome.slint:131 ui/pages/welcome.slint:171
 msgid "Find people you know on Chatter"
-msgstr ""
+msgstr "Finde Leute, die du auf Chatter kennst"
 
 #: ui/pages/welcome.slint:202 ui/pages/welcome.slint:235
 #: ui/sidebar/sidebar.slint:768
 msgid "Browse channels"
-msgstr ""
+msgstr "Kanäle entdecken"
 
 #: ui/pages/welcome.slint:203 ui/pages/welcome.slint:243
 msgid "Join public conversations"
-msgstr ""
+msgstr "Öffentlichen Unterhaltungen beitreten"
 
 #: ui/pages/welcome.slint:274
 msgid "Continue to Chatter"
-msgstr ""
+msgstr "Weiter zu Chatter"
 
 #: ui/server_records/screen.slint:47 ui/settings/account_menu.slint:216
 msgid "Notification inbox"
-msgstr ""
+msgstr "Benachrichtigungen"
 
 #: ui/server_records/screen.slint:47
 msgid "Channel integrations"
-msgstr ""
+msgstr "Kanal-Integrationen"
 
 #: ui/server_records/screen.slint:47
 msgid "Channel call history"
-msgstr ""
+msgstr "Kanal-Anrufverlauf"
 
 #: ui/server_records/screen.slint:66
 msgid ""
 "Install your configured integrations in this channel, or remove an installed "
 "integration."
 msgstr ""
+"Installiere deine eingerichteten Integrationen in diesem Kanal oder entferne "
+"eine installierte Integration."
 
 #: ui/server_records/screen.slint:71
 msgid ""
 "Call records from this channel’s server. Private call history stays in Calls."
 msgstr ""
+"Anrufeinträge vom Server dieses Kanals. Der private Anrufverlauf bleibt "
+"unter Anrufe."
 
 #: ui/server_records/screen.slint:96
 msgid "You're all caught up"
-msgstr ""
+msgstr "Du bist auf dem Laufenden"
 
 #: ui/server_records/screen.slint:96
 msgid "No integrations yet"
-msgstr ""
+msgstr "Noch keine Integrationen"
 
 #: ui/server_records/screen.slint:241
 msgid "Mark read"
-msgstr ""
+msgstr "Als gelesen markieren"
 
 #: ui/settings/about_settings.slint:16
 msgid "About Chatter"
-msgstr ""
+msgstr "Über Chatter"
 
 #: ui/settings/about_settings.slint:32
 msgid "Version"
-msgstr ""
+msgstr "Version"
 
 #: ui/settings/about_settings.slint:39
 msgid "Checking…"
-msgstr ""
+msgstr "Prüfen…"
 
 #: ui/settings/about_settings.slint:39
 msgid "Check for updates"
-msgstr ""
+msgstr "Nach Updates suchen"
 
 #: ui/settings/about_settings.slint:44
 msgid "Update available — {}"
-msgstr ""
+msgstr "Update verfügbar — {}"
 
 #: ui/settings/about_settings.slint:69
 msgid "View third-party licenses and notices in Chatter."
-msgstr ""
+msgstr "Lizenzen und Hinweise Dritter in Chatter ansehen."
 
 #: ui/settings/about_settings.slint:79
 msgid ""
 "Privacy: Your settings control read receipts, notification previews, and "
 "whether AI requests leave this device."
 msgstr ""
+"Datenschutz: Deine Einstellungen steuern Lesebestätigungen, "
+"Benachrichtigungsvorschauen und ob AI-Anfragen dieses Gerät verlassen."
 
 #: ui/settings/account_menu.slint:198
 msgid "My profile"
-msgstr ""
+msgstr "Mein Profil"
 
 #: ui/settings/account_menu.slint:229 ui/settings/settings_screen.slint:264
 #: ui/sidebar/sidebar_footer.slint:340
 msgid "Settings"
-msgstr ""
+msgstr "Einstellungen"
 
 #: ui/settings/account_menu.slint:236 ui/settings/account_menu.slint:251
 msgid "Night mode"
-msgstr ""
+msgstr "Nachtmodus"
 
 #: ui/settings/account_settings.slint:66 ui/settings/settings_screen.slint:276
 msgid "Account"
-msgstr ""
+msgstr "Konto"
 
 #: ui/settings/account_settings.slint:143
 msgid "Security"
-msgstr ""
+msgstr "Sicherheit"
 
 #: ui/settings/account_settings.slint:167
 msgid "Choose a strong, unique password for your account."
-msgstr ""
+msgstr "Wähle ein starkes, eigenes Passwort für dein Konto."
 
 #: ui/settings/account_settings.slint:184
 msgid "Current password"
-msgstr ""
+msgstr "Aktuelles Passwort"
 
 #: ui/settings/account_settings.slint:204
 msgid "Confirm new password"
-msgstr ""
+msgstr "Neues Passwort bestätigen"
 
 #: ui/settings/account_settings.slint:262
 msgid "Recovery codes"
-msgstr ""
+msgstr "Wiederherstellungscodes"
 
 #: ui/settings/account_settings.slint:263
 msgid "Lost or used up your codes? Get a new set."
-msgstr ""
+msgstr "Codes verloren oder aufgebraucht? Hol dir einen neuen Satz."
 
 #: ui/settings/account_settings.slint:266
 msgid "Regenerate"
-msgstr ""
+msgstr "Neu erzeugen"
 
 #: ui/settings/account_settings.slint:281
 msgid ""
 "Your current recovery codes stop working and a new set is shown once. Enter "
 "your password to confirm."
 msgstr ""
+"Deine aktuellen Wiederherstellungscodes werden ungültig und ein neuer Satz "
+"wird einmal angezeigt. Gib dein Passwort zur Bestätigung ein."
 
 #: ui/settings/account_settings.slint:340
 msgid "Backup PIN"
-msgstr ""
+msgstr "Sicherungs-PIN"
 
 #: ui/settings/account_settings.slint:341
 msgid "Your PIN secures your encrypted key backup."
-msgstr ""
+msgstr "Deine PIN schützt die verschlüsselte Schlüsselsicherung."
 
 #: ui/settings/account_settings.slint:358
 msgid "Current PIN"
-msgstr ""
+msgstr "Aktuelle PIN"
 
 #: ui/settings/account_settings.slint:368
 msgid "New PIN (8+ characters)"
-msgstr ""
+msgstr "Neue PIN (mindestens 8 Zeichen)"
 
 #: ui/settings/account_settings.slint:376
 msgid "Confirm new PIN"
-msgstr ""
+msgstr "Neue PIN bestätigen"
 
 #: ui/settings/account_settings.slint:448
 msgid "Key backup"
-msgstr ""
+msgstr "Schlüsselsicherung"
 
 #: ui/settings/account_settings.slint:449
 msgid "Status: Backed up"
-msgstr ""
+msgstr "Status: Gesichert"
 
 #: ui/settings/account_settings.slint:449
 msgid "Status: Not backed up"
-msgstr ""
+msgstr "Status: Nicht gesichert"
 
 #: ui/settings/account_settings.slint:449
 msgid "Status: Unknown"
-msgstr ""
+msgstr "Status: Unbekannt"
 
 #: ui/settings/account_settings.slint:467
 msgid "Enter your PIN to retry backup"
-msgstr ""
+msgstr "Gib deine PIN ein, um die Sicherung erneut zu versuchen"
 
 #: ui/settings/account_settings.slint:533
 msgid "Message backup"
-msgstr ""
+msgstr "Nachrichtensicherung"
 
 #: ui/settings/account_settings.slint:534
 msgid ""
 "Encrypted message history, conversations, and contacts. File backups need a "
 "passphrase; server backups need your PIN."
 msgstr ""
+"Verschlüsselter Nachrichtenverlauf, Unterhaltungen und Kontakte. "
+"Dateisicherungen brauchen eine Passphrase, Serversicherungen deine PIN."
 
 #: ui/settings/account_settings.slint:540
 msgid "File backup passphrase"
-msgstr ""
+msgstr "Passphrase für die Dateisicherung"
 
 #: ui/settings/account_settings.slint:548
 msgid "Enter a backup passphrase to enable file export and restore."
 msgstr ""
+"Gib eine Sicherungspassphrase ein, um den Export und die Wiederherstellung "
+"von Dateien zu aktivieren."
 
 #: ui/settings/account_settings.slint:559
 msgid "Export to file…"
-msgstr ""
+msgstr "In Datei exportieren…"
 
 #: ui/settings/account_settings.slint:570
 msgid "Restore from file…"
-msgstr ""
+msgstr "Aus Datei wiederherstellen…"
 
 #: ui/settings/account_settings.slint:581
 msgid "PIN (for server backup)"
-msgstr ""
+msgstr "PIN (für die Serversicherung)"
 
 #: ui/settings/account_settings.slint:589
 msgid "Enter your PIN to enable server backup and restore."
 msgstr ""
+"Gib deine PIN ein, um Sicherung und Wiederherstellung auf dem Server zu "
+"aktivieren."
 
 #: ui/settings/account_settings.slint:600
 msgid "Back up to server"
-msgstr ""
+msgstr "Auf dem Server sichern"
 
 #: ui/settings/account_settings.slint:611
 msgid "Restore from server"
-msgstr ""
+msgstr "Vom Server wiederherstellen"
 
 #: ui/settings/account_settings.slint:623
 msgid "Working on message backup…"
-msgstr ""
+msgstr "Nachrichtensicherung läuft…"
 
 #: ui/settings/account_settings.slint:660
 msgid "Session on this device"
-msgstr ""
+msgstr "Sitzung auf diesem Gerät"
 
 #: ui/settings/account_settings.slint:667
 msgid "Sign out of your account on this device."
-msgstr ""
+msgstr "Melde dein Konto auf diesem Gerät ab."
 
 #: ui/settings/account_settings.slint:675
 msgid "Log out"
-msgstr ""
+msgstr "Abmelden"
 
 #: ui/settings/account_settings.slint:702
 msgid "Log out of this device"
-msgstr ""
+msgstr "Von diesem Gerät abmelden"
 
 #. section header a few rows up.
 #: ui/settings/account_settings.slint:727
 msgid "This account"
-msgstr ""
+msgstr "Dieses Konto"
 
 #: ui/settings/account_settings.slint:734
 msgid ""
 "Permanently delete your account and all associated data. This action cannot "
 "be undone."
 msgstr ""
+"Lösche dein Konto und alle zugehörigen Daten dauerhaft. Das kann nicht "
+"rückgängig gemacht werden."
 
 #: ui/settings/account_settings.slint:745
 msgid "Delete account"
-msgstr ""
+msgstr "Konto löschen"
 
 #: ui/settings/account_settings.slint:776
 msgid ""
 "This permanently deletes your account and all associated data. This cannot "
 "be undone. Enter your password to confirm."
 msgstr ""
+"Das löscht dein Konto und alle zugehörigen Daten dauerhaft. Das kann nicht "
+"rückgängig gemacht werden. Gib dein Passwort zur Bestätigung ein."
 
 #: ui/settings/account_settings.slint:808
 msgid "Delete forever"
-msgstr ""
+msgstr "Endgültig löschen"
 
 #: ui/settings/ai_settings.slint:28 ui/settings/settings_screen.slint:282
 msgid "Remote AI"
-msgstr ""
+msgstr "Entfernte AI"
 
 #: ui/settings/ai_settings.slint:46 ui/settings/ai_settings.slint:54
 msgid "Use cloud AI"
-msgstr ""
+msgstr "Cloud-AI nutzen"
 
 #: ui/settings/ai_settings.slint:61
 msgid ""
@@ -5010,594 +5183,635 @@ msgid ""
 "provider. Existing local AI history stays on this device. Direct and secret "
 "messages are never sent to a cloud provider."
 msgstr ""
+"Sende Eingaben und erlaubten entfernten Unterhaltungsverlauf an den "
+"gewählten Anbieter. Vorhandener lokaler AI-Verlauf bleibt auf diesem Gerät. "
+"Direkt- und Geheimnachrichten gehen nie an einen Cloud-Anbieter."
 
 #: ui/settings/ai_settings.slint:82
 msgid "My API key"
-msgstr ""
+msgstr "Mein API-Schlüssel"
 
 #: ui/settings/ai_settings.slint:92
 msgid "Buy tokens"
-msgstr ""
+msgstr "Tokens kaufen"
 
 #: ui/settings/ai_settings.slint:105
 msgid "Model (blank for the default)"
-msgstr ""
+msgstr "Modell (leer für die Vorgabe)"
 
 #: ui/settings/ai_settings.slint:112
 msgid "Save model"
-msgstr ""
+msgstr "Modell speichern"
 
 #: ui/settings/ai_settings.slint:125
 msgid ""
 "Your key is stored on this device only. Prompts go straight to the provider "
 "— our servers never see them."
 msgstr ""
+"Dein Schlüssel liegt nur auf diesem Gerät. Eingaben gehen direkt an den "
+"Anbieter — unsere Server sehen sie nie."
 
 #: ui/settings/ai_settings.slint:132
 msgid "API key saved — enter a new one to replace it"
-msgstr ""
+msgstr "API-Schlüssel gespeichert — gib einen neuen ein, um ihn zu ersetzen"
 
 #: ui/settings/ai_settings.slint:132
 msgid "Anthropic API key"
-msgstr ""
+msgstr "Anthropic-API-Schlüssel"
 
 #: ui/settings/ai_settings.slint:141
 msgid "Save key"
-msgstr ""
+msgstr "Schlüssel speichern"
 
 #: ui/settings/ai_settings.slint:157
 msgid ""
 "No API key needed. Prompts are sent through our servers, which see them in "
 "order to meter usage."
 msgstr ""
+"Kein API-Schlüssel nötig. Eingaben laufen über unsere Server, die sie sehen, "
+"um die Nutzung zu zählen."
 
 #: ui/settings/ai_settings.slint:173
 msgid "Refresh balance"
-msgstr ""
+msgstr "Kontostand aktualisieren"
 
 #: ui/settings/ai_settings.slint:193
 msgid "Assistant memory"
-msgstr ""
+msgstr "Assistenten-Gedächtnis"
 
 #: ui/settings/appearance_settings.slint:19
 #: ui/settings/settings_screen.slint:614
 msgid "Appearance"
-msgstr ""
+msgstr "Darstellung"
 
 #: ui/settings/appearance_settings.slint:41
 msgid "Theme"
-msgstr ""
+msgstr "Design"
 
 #: ui/settings/appearance_settings.slint:48
 msgid "System"
-msgstr ""
+msgstr "System"
 
 #: ui/settings/appearance_settings.slint:48
 msgid "Match this device's light or dark setting"
-msgstr ""
+msgstr "Hell- oder Dunkel-Einstellung dieses Geräts übernehmen"
 
 #: ui/settings/appearance_settings.slint:49
 msgid "Light"
-msgstr ""
+msgstr "Hell"
 
 #: ui/settings/appearance_settings.slint:50
 msgid "Dark"
+msgstr "Dunkel"
+
+#: ui/settings/appearance_settings.slint:145
+msgid "Language"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:144
+#: ui/settings/appearance_settings.slint:209
+msgid "Match this device's language"
+msgstr ""
+
+#: ui/settings/appearance_settings.slint:244
 msgid "Text size"
-msgstr ""
+msgstr "Textgröße"
 
-#: ui/settings/appearance_settings.slint:151
+#: ui/settings/appearance_settings.slint:251
 msgid "Small"
-msgstr ""
+msgstr "Klein"
 
-#: ui/settings/appearance_settings.slint:152
+#: ui/settings/appearance_settings.slint:252
 msgid "Match this device's font size"
-msgstr ""
-
-#: ui/settings/appearance_settings.slint:153
-msgid "Large"
-msgstr ""
-
-#: ui/settings/appearance_settings.slint:241
-msgid "Glass effects"
-msgstr ""
+msgstr "Schriftgröße dieses Geräts übernehmen"
 
 #: ui/settings/appearance_settings.slint:253
+msgid "Large"
+msgstr "Groß"
+
+#: ui/settings/appearance_settings.slint:341
+msgid "Glass effects"
+msgstr "Glaseffekte"
+
+#: ui/settings/appearance_settings.slint:353
 msgid ""
 "Translucent navigation and controls. Turn off for a simpler appearance and "
 "better performance."
 msgstr ""
+"Durchscheinende Navigation und Bedienelemente. Ausschalten für ein "
+"schlichteres Aussehen und bessere Leistung."
 
-#: ui/settings/appearance_settings.slint:270
+#: ui/settings/appearance_settings.slint:370
 msgid "Reduce animations"
-msgstr ""
+msgstr "Animationen reduzieren"
 
-#: ui/settings/appearance_settings.slint:282
+#: ui/settings/appearance_settings.slint:382
 msgid ""
 "Menus, sheets and switches change without motion; loading shimmer, typing "
 "dots and the ringing pulse hold still."
 msgstr ""
+"Menüs, Einblendungen und Schalter wechseln ohne Bewegung; Lade-Schimmer, "
+"Tipp-Punkte und der Klingelpuls bleiben still."
 
-#: ui/settings/appearance_settings.slint:299
+#: ui/settings/appearance_settings.slint:399
 msgid "Animation speed"
-msgstr ""
+msgstr "Animationsgeschwindigkeit"
 
-#: ui/settings/appearance_settings.slint:305
+#: ui/settings/appearance_settings.slint:405
 msgid "How quickly menus and transitions move"
-msgstr ""
+msgstr "Wie schnell Menüs und Übergänge sich bewegen"
 
-#: ui/settings/appearance_settings.slint:325
+#: ui/settings/appearance_settings.slint:425
 msgid "Animation speed {}"
-msgstr ""
+msgstr "Animationsgeschwindigkeit {}"
 
-#: ui/settings/appearance_settings.slint:375
+#: ui/settings/appearance_settings.slint:475
 msgid "Message spacing"
-msgstr ""
+msgstr "Nachrichtenabstand"
 
-#: ui/settings/appearance_settings.slint:382
+#: ui/settings/appearance_settings.slint:482
 msgid "Comfortable"
-msgstr ""
+msgstr "Locker"
 
-#: ui/settings/appearance_settings.slint:383
+#: ui/settings/appearance_settings.slint:483
 msgid "Compact"
-msgstr ""
+msgstr "Kompakt"
 
-#: ui/settings/appearance_settings.slint:383
+#: ui/settings/appearance_settings.slint:483
 msgid "Fit more messages and conversations on screen"
-msgstr ""
+msgstr "Mehr Nachrichten und Unterhaltungen auf dem Bildschirm"
 
-#: ui/settings/appearance_settings.slint:481
+#: ui/settings/appearance_settings.slint:581
 msgid "Search shortcut"
-msgstr ""
+msgstr "Suchtaste"
 
-#: ui/settings/appearance_settings.slint:488
+#: ui/settings/appearance_settings.slint:588
 msgid "Which keys open search"
-msgstr ""
+msgstr "Welche Tasten die Suche öffnen"
 
-#: ui/settings/appearance_settings.slint:501
+#: ui/settings/appearance_settings.slint:601
 msgid "Ctrl+K"
-msgstr ""
+msgstr "Ctrl+K"
 
-#: ui/settings/appearance_settings.slint:502
+#: ui/settings/appearance_settings.slint:602
 msgid "Ctrl+F"
-msgstr ""
+msgstr "Ctrl+F"
 
-#: ui/settings/appearance_settings.slint:503
+#: ui/settings/appearance_settings.slint:603
 msgid "Both"
-msgstr ""
+msgstr "Beide"
 
-#: ui/settings/appearance_settings.slint:507
+#: ui/settings/appearance_settings.slint:607
 msgid "Search shortcut {}"
-msgstr ""
+msgstr "Suchtaste {}"
 
 #: ui/settings/devices_settings.slint:32 ui/settings/settings_screen.slint:279
 msgid "Linked devices"
-msgstr ""
+msgstr "Verknüpfte Geräte"
 
 #: ui/settings/devices_settings.slint:62
 msgid "Devices"
-msgstr ""
+msgstr "Geräte"
 
 #: ui/settings/devices_settings.slint:89
 msgid ""
 "Phones and computers signed in to your account. Link a new device or sign "
 "one out."
 msgstr ""
+"Telefone und Computer, die bei deinem Konto angemeldet sind. Verknüpfe ein "
+"neues Gerät oder melde eines ab."
 
 #: ui/settings/devices_settings.slint:98
 msgid "Manage devices"
-msgstr ""
+msgstr "Geräte verwalten"
 
 #: ui/settings/devices_settings.slint:118
 msgid "Loading devices…"
-msgstr ""
+msgstr "Geräte werden geladen…"
 
 #: ui/settings/devices_settings.slint:130
 msgid "No active devices found"
-msgstr ""
+msgstr "Keine aktiven Geräte gefunden"
 
 #: ui/settings/devices_settings.slint:182
 msgid "Linked: {}"
-msgstr ""
+msgstr "Verknüpft: {}"
 
 #: ui/settings/devices_settings.slint:237
 msgid "Approved, waiting to finish linking (until {})"
-msgstr ""
+msgstr "Genehmigt, Verknüpfung wird noch abgeschlossen (bis {})"
 
 #: ui/settings/encryption_settings.slint:21
 #: ui/settings/settings_screen.slint:615
 msgid "Encryption"
-msgstr ""
+msgstr "Verschlüsselung"
 
 #: ui/settings/encryption_settings.slint:29
 msgid "Your messages are protected with Signal Protocol end-to-end encryption"
 msgstr ""
+"Deine Nachrichten sind mit der Ende-zu-Ende-Verschlüsselung des Signal-"
+"Protokolls geschützt"
 
 #. lives on the contact's profile.
 #: ui/settings/encryption_settings.slint:55
 msgid "Your identity key"
-msgstr ""
+msgstr "Dein Identitätsschlüssel"
 
 #: ui/settings/encryption_settings.slint:72
 msgid "No fingerprint available"
-msgstr ""
+msgstr "Kein Fingerabdruck verfügbar"
 
 #: ui/settings/encryption_settings.slint:88
 msgid "To verify a contact, compare safety numbers from their profile"
 msgstr ""
+"Um einen Kontakt zu verifizieren, vergleiche die Sicherheitsnummern aus dem "
+"Profil"
 
 #: ui/settings/encryption_settings.slint:130
 msgid "Allow sealed sender from anyone"
-msgstr ""
+msgstr "Versiegelten Absender von jedem zulassen"
 
 #: ui/settings/encryption_settings.slint:145
 msgid ""
 "Let people who aren't your contacts send you sealed messages. The server "
 "still can't see who sent them."
 msgstr ""
+"Lass Personen, die nicht in deinen Kontakten sind, dir versiegelte "
+"Nachrichten schicken. Der Server sieht weiterhin nicht, wer sie gesendet hat."
 
 #: ui/settings/notifications_settings.slint:41
 msgid "Account push notifications"
-msgstr ""
+msgstr "Push-Benachrichtigungen für das Konto"
 
 #: ui/settings/notifications_settings.slint:55
 msgid ""
 "Allow server push notifications for all devices on this account. Device "
 "notification settings still apply."
 msgstr ""
+"Server-Push für alle Geräte dieses Kontos erlauben. Die "
+"Benachrichtigungseinstellungen des Geräts gelten weiterhin."
 
 #: ui/settings/notifications_settings.slint:62
 msgid "Saving or loading notification preferences…"
-msgstr ""
+msgstr "Benachrichtigungseinstellungen werden gespeichert oder geladen…"
 
 #: ui/settings/notifications_settings.slint:101
 msgid "Notification content"
-msgstr ""
+msgstr "Inhalt der Benachrichtigung"
 
 #: ui/settings/notifications_settings.slint:109
 msgid "What message notifications show on this device"
-msgstr ""
+msgstr "Was Nachrichtenbenachrichtigungen auf diesem Gerät zeigen"
 
 #: ui/settings/notifications_settings.slint:116
 msgid "Name and message"
-msgstr ""
+msgstr "Name und Nachricht"
 
 #: ui/settings/notifications_settings.slint:117
 msgid "Name only"
-msgstr ""
+msgstr "Nur Name"
 
 #: ui/settings/notifications_settings.slint:118
 msgid "No name or content"
-msgstr ""
+msgstr "Kein Name, kein Inhalt"
 
 #: ui/settings/notifications_settings.slint:198
 msgid "Sound and vibration"
-msgstr ""
+msgstr "Ton und Vibration"
 
 #: ui/settings/notifications_settings.slint:217
 msgid "Opens this device's settings for message notifications"
 msgstr ""
+"Öffnet die Einstellungen dieses Geräts für Nachrichtenbenachrichtigungen"
 
 #: ui/settings/notifications_settings.slint:255
 msgid "Notification sound"
-msgstr ""
+msgstr "Benachrichtigungston"
 
 #: ui/settings/notifications_settings.slint:267
 msgid "Play a sound when a message notification arrives"
-msgstr ""
+msgstr "Ton abspielen, wenn eine Nachrichtenbenachrichtigung ankommt"
 
 #: ui/settings/privacy_settings.slint:36 ui/settings/settings_screen.slint:277
 msgid "Privacy"
-msgstr ""
+msgstr "Datenschutz"
 
 #: ui/settings/privacy_settings.slint:43
 msgid "Control what information you share with others"
-msgstr ""
+msgstr "Lege fest, welche Informationen du mit anderen teilst"
 
 #: ui/settings/privacy_settings.slint:65
 msgid "Who can see my photo and name"
-msgstr ""
+msgstr "Wer mein Foto und meinen Namen sehen kann"
 
 #: ui/settings/privacy_settings.slint:73
 msgid ""
 "Everyone else sees your initials. Narrowing this gives your profile a new "
 "key, so people who could see it before can't."
 msgstr ""
+"Alle anderen sehen deine Initialen. Wenn du das einschränkst, bekommt dein "
+"Profil einen neuen Schlüssel, und wer es vorher sehen konnte, kann es nicht "
+"mehr."
 
 #: ui/settings/privacy_settings.slint:80
 msgid "Everyone"
-msgstr ""
+msgstr "Alle"
 
 #: ui/settings/privacy_settings.slint:81
 msgid "My contacts"
-msgstr ""
+msgstr "Meine Kontakte"
 
 #: ui/settings/privacy_settings.slint:82
 msgid "Nobody"
-msgstr ""
+msgstr "Niemand"
 
 #: ui/settings/privacy_settings.slint:143
 msgid "Enter your PIN to change this"
-msgstr ""
+msgstr "Gib deine PIN ein, um das zu ändern"
 
 #: ui/settings/privacy_settings.slint:213
 msgid "Shield"
-msgstr ""
+msgstr "Shield"
 
 #: ui/settings/privacy_settings.slint:229
 msgid ""
 "Hide channels and Saved messages, send DMs through anonymous mailboxes, and "
 "route traffic over Tor. Turning it on asks for your PIN."
 msgstr ""
+"Blendet Kanäle und gespeicherte Nachrichten aus, schickt Direktnachrichten "
+"über anonyme Briefkästen und leitet den Verkehr über Tor. Beim Einschalten "
+"wird nach deiner PIN gefragt."
 
 #: ui/settings/privacy_settings.slint:230
 msgid ""
 "Hide channels and Saved messages and send DMs through anonymous mailboxes. "
 "Turning it on asks for your PIN."
 msgstr ""
+"Blendet Kanäle und gespeicherte Nachrichten aus und schickt "
+"Direktnachrichten über anonyme Briefkästen. Beim Einschalten wird nach "
+"deiner PIN gefragt."
 
 #: ui/settings/privacy_settings.slint:254
 msgid "Who can find me by my username"
-msgstr ""
+msgstr "Wer mich über meinen Benutzernamen finden kann"
 
 #: ui/settings/privacy_settings.slint:262
 msgid "Anyone who types your exact username can find you"
-msgstr ""
+msgstr "Wer deinen Benutzernamen genau eingibt, kann dich finden"
 
 #: ui/settings/privacy_settings.slint:263
 msgid "Only people with your friend code or username link can find you"
 msgstr ""
+"Nur Personen mit deinem Freundescode oder Benutzernamen-Link können dich "
+"finden"
 
 #: ui/settings/privacy_settings.slint:358
 msgid "Read receipts"
-msgstr ""
+msgstr "Lesebestätigungen"
 
 #: ui/settings/privacy_settings.slint:373
 msgid "Let others know when you've read their messages"
-msgstr ""
+msgstr "Andere sehen, wenn du ihre Nachrichten gelesen hast"
 
 #: ui/settings/privacy_settings.slint:396
 msgid "Typing indicators"
-msgstr ""
+msgstr "Tipp-Indikatoren"
 
 #: ui/settings/privacy_settings.slint:411
 msgid "Show when you're typing a message"
-msgstr ""
+msgstr "Zeigen, wenn du eine Nachricht schreibst"
 
 #: ui/sidebar/channel_list_item.slint:238 ui/sidebar/dm_list_item.slint:238
 msgid "Pinned"
-msgstr ""
+msgstr "Angeheftet"
 
 #: ui/sidebar/channel_list_item.slint:262 ui/sidebar/dm_list_item.slint:260
 msgid "typing"
-msgstr ""
+msgstr "schreibt"
 
 #: ui/sidebar/channel_list_item.slint:279 ui/sidebar/dm_list_item.slint:273
 msgid "Draft:"
-msgstr ""
+msgstr "Entwurf:"
 
 #: ui/sidebar/chat_list.slint:126
 msgid "Unpin conversation"
-msgstr ""
+msgstr "Unterhaltung nicht mehr anheften"
 
 #: ui/sidebar/chat_list.slint:126
 msgid "Pin conversation"
-msgstr ""
+msgstr "Unterhaltung anheften"
 
 #: ui/sidebar/chat_list.slint:154
 msgid "More conversation actions"
-msgstr ""
+msgstr "Weitere Unterhaltungsaktionen"
 
 #: ui/sidebar/create_menu.slint:94 ui/sidebar/create_menu.slint:151
 msgid "New chat"
-msgstr ""
+msgstr "Neuer Chat"
 
 #: ui/sidebar/create_menu.slint:164
 msgid "Search contacts"
-msgstr ""
+msgstr "Kontakte suchen"
 
 #: ui/sidebar/create_menu.slint:180
 msgid "No contacts match “{}”"
-msgstr ""
+msgstr "Keine Kontakte passen zu „{}“"
 
 #: ui/sidebar/create_menu.slint:180
 msgid "No friends yet. Add one from Contacts."
-msgstr ""
+msgstr "Noch keine Freunde. Füge unter Kontakte einen hinzu."
 
 #: ui/sidebar/custom_section_list.slint:52
 msgid "Expanded section. Press Shift+F10 or Menu for section options."
-msgstr ""
+msgstr "Bereich ausgeklappt. Shift+F10 oder Menu für Bereichsoptionen."
 
 #: ui/sidebar/custom_section_list.slint:52
 msgid "Collapsed section. Press Shift+F10 or Menu for section options."
-msgstr ""
+msgstr "Bereich eingeklappt. Shift+F10 oder Menu für Bereichsoptionen."
 
 #: ui/sidebar/section_context_menu.slint:223
 msgid "Move up"
-msgstr ""
+msgstr "Nach oben"
 
 #: ui/sidebar/section_context_menu.slint:241
 msgid "Move down"
-msgstr ""
+msgstr "Nach unten"
 
 #: ui/sidebar/section_context_menu.slint:259
 msgid "Sort by"
-msgstr ""
+msgstr "Sortieren nach"
 
 #: ui/sidebar/section_context_menu.slint:294
 msgid "Unread first"
-msgstr ""
+msgstr "Ungelesene zuerst"
 
 #: ui/sidebar/section_context_menu.slint:311
 msgid "Name (A–Z)"
-msgstr ""
+msgstr "Name (A–Z)"
 
 #: ui/sidebar/section_context_menu.slint:351
 msgid "Remove section"
-msgstr ""
+msgstr "Bereich entfernen"
 
 #: ui/sidebar/section_context_menu.slint:588
 msgid "Pin to top"
-msgstr ""
+msgstr "Oben anheften"
 
 #: ui/sidebar/section_context_menu.slint:621
 msgid "Mute…"
-msgstr ""
+msgstr "Stumm…"
 
 #: ui/sidebar/section_context_menu.slint:635
 msgid "For 1 hour"
-msgstr ""
+msgstr "Für 1 Stunde"
 
 #: ui/sidebar/section_context_menu.slint:636
 msgid "For 8 hours"
-msgstr ""
+msgstr "Für 8 Stunden"
 
 #: ui/sidebar/section_context_menu.slint:637
 msgid "For 1 day"
-msgstr ""
+msgstr "Für 1 Tag"
 
 #: ui/sidebar/section_context_menu.slint:638
 msgid "Always"
-msgstr ""
+msgstr "Immer"
 
 #: ui/sidebar/section_context_menu.slint:665
 msgid "Mark as read"
-msgstr ""
+msgstr "Als gelesen markieren"
 
 #: ui/sidebar/section_context_menu.slint:665
 msgid "Mark as unread"
-msgstr ""
+msgstr "Als ungelesen markieren"
 
 #: ui/sidebar/section_context_menu.slint:688
 msgid "Move to section"
-msgstr ""
+msgstr "In Bereich verschieben"
 
 #: ui/sidebar/section_context_menu.slint:733
 msgid "New section…"
-msgstr ""
+msgstr "Neuer Bereich…"
 
 #. Not destructive: the chat goes back to the main list.
 #: ui/sidebar/section_context_menu.slint:751
 msgid "Remove from section"
-msgstr ""
+msgstr "Aus Bereich entfernen"
 
 #: ui/sidebar/section_context_menu.slint:791
 msgid "Yes, delete for both"
-msgstr ""
+msgstr "Ja, für beide löschen"
 
 #: ui/sidebar/section_context_menu.slint:791
 msgid "Yes, delete chat"
-msgstr ""
+msgstr "Ja, Chat löschen"
 
 #: ui/sidebar/section_context_menu.slint:842
 msgid "Leave this group? It is removed from this device."
-msgstr ""
+msgstr "Diese Gruppe verlassen? Sie wird von diesem Gerät entfernt."
 
 #: ui/sidebar/section_context_menu.slint:843
 msgid "Leave this channel? You won't get new messages."
-msgstr ""
+msgstr "Diesen Kanal verlassen? Du bekommst keine neuen Nachrichten."
 
 #: ui/sidebar/sidebar.slint:65 ui/sidebar/sidebar.slint:539
 #: ui/sidebar/sidebar.slint:552
 msgid "Add contact"
-msgstr ""
+msgstr "Kontakt hinzufügen"
 
 #. "Archived Chats" bar; its chevron is the way back.
 #: ui/sidebar/sidebar.slint:69 ui/sidebar/sidebar.slint:397
 msgid "Archived chats"
-msgstr ""
+msgstr "Archivierte Chats"
 
 #: ui/sidebar/sidebar.slint:70 ui/sidebar/sidebar.slint:397
 msgid "Back to chats"
-msgstr ""
+msgstr "Zurück zu Chats"
 
 #. "Archived Chats" bar; its chevron is the way back.
 #: ui/sidebar/sidebar.slint:428
 msgid "Archived"
-msgstr ""
+msgstr "Archiviert"
 
 #: ui/sidebar/sidebar.slint:448
 msgid "No archived chats"
-msgstr ""
+msgstr "Keine archivierten Chats"
 
 #: ui/sidebar/sidebar.slint:569
 msgid "Calls, {} missed"
-msgstr ""
+msgstr "Anrufe, {} verpasst"
 
 #: ui/sidebar/sidebar.slint:758
 msgid "No conversations"
-msgstr ""
+msgstr "Keine Unterhaltungen"
 
 #: ui/sidebar/sidebar.slint:920
 msgid "Conversations"
-msgstr ""
+msgstr "Unterhaltungen"
 
 #: ui/sidebar/sidebar.slint:968
 msgid "New mesh conversation"
-msgstr ""
+msgstr "Neue Mesh-Unterhaltung"
 
 #: ui/sidebar/sidebar_footer.slint:147
 msgid "New activity"
-msgstr ""
+msgstr "Neue Aktivität"
 
 #: ui/sidebar/sidebar_footer.slint:179 ui/sidebar/sidebar_footer.slint:364
 msgid "Collapse sidebar"
-msgstr ""
+msgstr "Seitenleiste einklappen"
 
 #: ui/sidebar/sidebar_footer.slint:197
 msgid "Anon mode (active) - tap to disable"
-msgstr ""
+msgstr "Anon-Modus (aktiv) - zum Ausschalten tippen"
 
 #: ui/sidebar/sidebar_footer.slint:197 ui/sidebar/sidebar_footer.slint:200
 msgid "Anon mode"
-msgstr ""
+msgstr "Anon-Modus"
 
 #: ui/sidebar/sidebar_footer.slint:364 ui/sidebar/sidebar_footer.slint:366
 msgid "Expand sidebar"
-msgstr ""
+msgstr "Seitenleiste ausklappen"
 
 #: ui/sidebar/sidebar_header.slint:109
 msgid "Shield off - tap to turn on"
-msgstr ""
+msgstr "Shield aus - zum Einschalten tippen"
 
 #: ui/sidebar/update_banner.slint:30
 msgid "Ready to restart"
-msgstr ""
+msgstr "Bereit zum Neustart"
 
 #: ui/sidebar/update_banner.slint:30
 msgid "Confirm system install"
-msgstr ""
+msgstr "Systeminstallation bestätigen"
 
 #: ui/sidebar/update_banner.slint:30
 msgid "Update failed"
-msgstr ""
+msgstr "Update fehlgeschlagen"
 
 #: ui/sidebar/update_banner.slint:32
 msgid "Cellular download?"
-msgstr ""
+msgstr "Download über Mobilfunk?"
 
 #: ui/sidebar/update_banner.slint:40
 msgid "Update in Play Store"
-msgstr ""
+msgstr "Im Play Store aktualisieren"
 
 #: ui/sidebar/update_banner.slint:40
 msgid "Restart"
-msgstr ""
+msgstr "Neu starten"
 
 #: ui/sidebar/update_banner.slint:40
 msgid "Download now"
-msgstr ""
+msgstr "Jetzt laden"
 
 #: ui/sidebar/update_banner.slint:40
 msgid "Update"
-msgstr ""
+msgstr "Aktualisieren"
 
 #: ui/startup_error.slint:8 ui/startup_error.slint:29
 msgid "Chatter can't start"
-msgstr ""
+msgstr "Chatter kann nicht starten"
 
 #: ui/startup_error.slint:44
 msgid "Hide details"
-msgstr ""
+msgstr "Details ausblenden"

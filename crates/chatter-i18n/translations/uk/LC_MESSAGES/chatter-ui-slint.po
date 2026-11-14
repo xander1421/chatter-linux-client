@@ -1,7 +1,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: chatter\n"
-"POT-Creation-Date: 2026-11-14 19:40+0000\n"
+"POT-Creation-Date: 2026-11-14 20:32+0000\n"
 "Language: uk\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -11,146 +11,146 @@ msgstr ""
 
 #: ui/activity/activity_bell.slint:66 ui/sidebar/sidebar_footer.slint:134
 msgid "Activity, {} unread"
-msgstr ""
+msgstr "Активність, {} непрочитаних"
 
 #: ui/activity/activity_bell.slint:66 ui/activity/activity_sheet.slint:116
 #: ui/sidebar/sidebar_footer.slint:134 ui/sidebar/sidebar_footer.slint:287
 msgid "Activity"
-msgstr ""
+msgstr "Активність"
 
 #: ui/activity/activity_global.slint:15 ui/activity/activity_sheet.slint:105
 #: ui/mesh/mesh_setup_sheet.slint:122
 msgid "Off"
-msgstr ""
+msgstr "Вимкнено"
 
 #: ui/activity/activity_global.slint:16
 msgid "Never"
-msgstr ""
+msgstr "Ніколи"
 
 #: ui/activity/activity_global.slint:17 ui/activity/activity_sheet.slint:184
 msgid "Unknown"
-msgstr ""
+msgstr "Невідомо"
 
 #: ui/activity/activity_sheet.slint:18 ui/activity/activity_sheet.slint:162
 msgid "Server"
-msgstr ""
+msgstr "Сервер"
 
 #: ui/activity/activity_sheet.slint:18 ui/activity/activity_sheet.slint:100
 msgid "Unreachable — messages will send later"
-msgstr ""
+msgstr "Недоступний — повідомлення надішлються пізніше"
 
 #: ui/activity/activity_sheet.slint:101
 msgid "Reconnecting (attempt {})"
-msgstr ""
+msgstr "Повторне з’єднання (спроба {})"
 
 #: ui/activity/activity_sheet.slint:102
 msgid "Connecting…"
-msgstr ""
+msgstr "З’єднання…"
 
 #: ui/activity/activity_sheet.slint:103 ui/activity/activity_sheet.slint:178
 msgid "Connected"
-msgstr ""
+msgstr "Підключено"
 
 #: ui/activity/activity_sheet.slint:103
 msgid "Disconnected"
-msgstr ""
+msgstr "Відключено"
 
 #: ui/activity/activity_sheet.slint:104 ui/activity/activity_sheet.slint:107
 msgid "Unavailable"
-msgstr ""
+msgstr "Недоступно"
 
 #: ui/activity/activity_sheet.slint:106 ui/mesh/mesh_list.slint:15
 msgid "Bluetooth off"
-msgstr ""
+msgstr "Bluetooth вимкнено"
 
 #: ui/activity/activity_sheet.slint:109 ui/mesh/mesh_list.slint:18
 msgid "Radio unavailable · {n} relay"
 msgid_plural "Radio unavailable · {n} relays"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "Радіо недоступне · {n} реле"
+msgstr[1] "Радіо недоступне · {n} реле"
+msgstr[2] "Радіо недоступне · {n} реле"
 
 #: ui/activity/activity_sheet.slint:110
 msgid "On · {0} nearby · {n} relay"
 msgid_plural "On · {0} nearby · {n} relays"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "Увімкнено · {0} поруч · {n} реле"
+msgstr[1] "Увімкнено · {0} поруч · {n} реле"
+msgstr[2] "Увімкнено · {0} поруч · {n} реле"
 
 #: ui/activity/activity_sheet.slint:129
 msgid "Close activity"
-msgstr ""
+msgstr "Закрити активність"
 
 #: ui/activity/activity_sheet.slint:132 ui/mesh/mesh_peer_sheet.slint:72
 msgid "Done"
-msgstr ""
+msgstr "Готово"
 
 #: ui/activity/activity_sheet.slint:141 ui/activity/activity_sheet.slint:145
 msgid "Mark all read"
-msgstr ""
+msgstr "Прочитати все"
 
 #: ui/activity/activity_sheet.slint:166
 msgid "Server host"
-msgstr ""
+msgstr "Хост сервера"
 
 #: ui/activity/activity_sheet.slint:168
 msgid "Connected since"
-msgstr ""
+msgstr "Підключено з"
 
 #: ui/activity/activity_sheet.slint:168
 msgid "Last connected"
-msgstr ""
+msgstr "Востаннє"
 
 #: ui/activity/activity_sheet.slint:170
 msgid "Push"
-msgstr ""
+msgstr "Push"
 
 #: ui/activity/activity_sheet.slint:173 ui/mesh/mesh_list.slint:44
 #: ui/mesh/mesh_setup_sheet.slint:120 ui/sidebar/sidebar_footer.slint:264
 msgid "Mesh"
-msgstr ""
+msgstr "Mesh"
 
 #: ui/activity/activity_sheet.slint:177
 msgid "Shield / Tor"
-msgstr ""
+msgstr "Shield / Tor"
 
 #: ui/activity/activity_sheet.slint:179
 msgid "Bootstrapping {}"
-msgstr ""
+msgstr "Запуск {}"
 
 #: ui/activity/activity_sheet.slint:180
 msgid "Failed"
-msgstr ""
+msgstr "Помилка"
 
 #: ui/activity/activity_sheet.slint:183
 msgid "App version"
-msgstr ""
+msgstr "Версія застосунку"
 
 #: ui/activity/activity_sheet.slint:187 ui/sidebar/update_banner.slint:30
 msgid "Update available"
-msgstr ""
+msgstr "Доступне оновлення"
 
 #: ui/activity/activity_sheet.slint:196
 msgid "Loading activity…"
-msgstr ""
+msgstr "Завантаження активності…"
 
 #: ui/activity/activity_sheet.slint:202
 msgid "Could not load activity."
-msgstr ""
+msgstr "Не вдалося завантажити активність."
 
 #: ui/activity/activity_sheet.slint:203 ui/calls/call_history_screen.slint:299
 #: ui/components/gif_picker.slint:269 ui/modals/friends_requests_tab.slint:58
 #: ui/settings/account_settings.slint:453 ui/startup_error.slint:43
 msgid "Retry"
-msgstr ""
+msgstr "Повторити"
 
 #: ui/activity/activity_sheet.slint:215
 msgid "No activity yet"
-msgstr ""
+msgstr "Поки немає активності"
 
 #: ui/activity/activity_sheet.slint:217
 msgid "Mentions, replies, and updates will appear here."
-msgstr ""
+msgstr "Тут з’являться згадки, відповіді та оновлення."
 
 #: ui/anon_mode/shield_network_banner.slint:16
 msgid ""
@@ -158,129 +158,137 @@ msgid ""
 "messages are still end-to-end encrypted and routed through anonymous "
 "mailboxes."
 msgstr ""
+"Shield зараз не може приховати ваше розташування в мережі (Tor недоступний). "
+"Повідомлення й далі наскрізно зашифровані та йдуть через анонімні скриньки."
 
 #: ui/anon_mode/shield_onboarding.slint:30
 msgid "Shield unavailable"
-msgstr ""
+msgstr "Shield недоступний"
 
 #: ui/anon_mode/shield_onboarding.slint:31
 msgid "Shield on"
-msgstr ""
+msgstr "Shield увімкнено"
 
 #: ui/anon_mode/shield_onboarding.slint:31
 msgid "Shield off"
-msgstr ""
+msgstr "Shield вимкнено"
 
 #: ui/anon_mode/shield_onboarding.slint:42
 msgid "Shield unavailable: this build has no Tor onion service"
-msgstr ""
+msgstr "Shield недоступний: у цій збірці немає onion-служби Tor"
 
 #: ui/anon_mode/shield_onboarding.slint:43 ui/sidebar/sidebar_header.slint:109
 msgid "Shield on - tap to turn off"
-msgstr ""
+msgstr "Shield увімкнено — торкніться, щоб вимкнути"
 
 #: ui/anon_mode/shield_onboarding.slint:43
 msgid "Shield off - tap to connect over Tor"
-msgstr ""
+msgstr "Shield вимкнено — торкніться, щоб підключитися через Tor"
 
 #: ui/anon_mode/shield_onboarding.slint:79
 msgid ""
 "You'll connect over Tor to the server's onion service, so it never sees your "
 "IP address. The first connection can take up to a minute."
 msgstr ""
+"Ви підключитеся через Tor до onion-служби сервера, тож він не побачить вашу "
+"IP-адресу. Перше з’єднання може тривати до хвилини."
 
 #. the taskbar and window switcher show while the window is in the back.
 #: ui/app.slint:76
 msgid "Chatter ({})"
-msgstr ""
+msgstr "Chatter ({})"
 
 #. the taskbar and window switcher show while the window is in the back.
 #: ui/app.slint:76 ui/pages/account_recovery.slint:80 ui/pages/login.slint:115
 msgid "Chatter"
-msgstr ""
+msgstr "Chatter"
 
 #. ========== Loading page properties ==========
 #: ui/app_auth_flow.slint:10 ui/pages/loading.slint:10
 msgid "Loading..."
-msgstr ""
+msgstr "Завантаження..."
 
 #: ui/app_auth_flow.slint:58
 msgid "Generate a QR to begin."
-msgstr ""
+msgstr "Згенеруйте QR, щоб почати."
 
 #. Properties
 #: ui/app_chat_pane.slint:58 ui/chat/chat_layout.slint:194
 msgid "Type a message..."
-msgstr ""
+msgstr "Напишіть повідомлення..."
 
 #: ui/app_lock.slint:59
 msgid "Chatter is locked"
-msgstr ""
+msgstr "Chatter заблоковано"
 
 #: ui/app_lock.slint:69
 msgid "Enter your app lock PIN"
-msgstr ""
+msgstr "Введіть PIN блокування"
 
 #: ui/app_lock.slint:82 ui/modals/anon_mode_pin.slint:74
 #: ui/settings/privacy_settings.slint:150
 msgid "PIN"
-msgstr ""
+msgstr "PIN"
 
 #: ui/app_lock.slint:96
 msgid "Unlock"
-msgstr ""
+msgstr "Розблокувати"
 
 #: ui/app_lock.slint:130
 msgid "App lock"
-msgstr ""
+msgstr "Блокування застосунку"
 
 #: ui/app_lock.slint:138
 msgid ""
 "On. Chatter asks for your PIN when it opens and after it has been in the "
 "background. Notifications show no sender or text while locked."
 msgstr ""
+"Увімкнено. Chatter запитує PIN, коли відкривається і після перебування у "
+"фоні. Поки заблоковано, сповіщення не показують ні відправника, ні тексту."
 
 #: ui/app_lock.slint:139
 msgid ""
 "Ask for a PIN whenever Chatter opens. This PIN stays on this device and is "
 "separate from your account PIN."
 msgstr ""
+"Запитувати PIN щоразу, коли Chatter відкривається. Цей PIN лишається на "
+"цьому пристрої й окремий від PIN облікового запису."
 
 #: ui/app_lock.slint:145
 msgid "New PIN (6 or more characters)"
-msgstr ""
+msgstr "Новий PIN (щонайменше 6 символів)"
 
 #: ui/app_lock.slint:151 ui/pages/register.slint:533
 msgid "Confirm PIN"
-msgstr ""
+msgstr "Підтвердьте PIN"
 
 #: ui/app_lock.slint:157
 msgid "Turn on app lock"
-msgstr ""
+msgstr "Увімкнути блокування"
 
 #: ui/app_lock.slint:169
 msgid "Lock after leaving Chatter"
-msgstr ""
+msgstr "Блокувати після виходу з Chatter"
 
 #: ui/app_lock.slint:175
 msgid "Immediately"
-msgstr ""
+msgstr "Одразу"
 
 #: ui/app_lock.slint:176
 msgid "After 1 minute"
-msgstr ""
+msgstr "Через 1 хвилину"
 
 #: ui/app_lock.slint:177
 msgid "After 5 minutes"
-msgstr ""
+msgstr "Через 5 хвилин"
 
 #: ui/app_lock.slint:178
 msgid "After 30 minutes"
-msgstr ""
+msgstr "Через 30 хвилин"
 
 #: ui/app_lock.slint:226 ui/app_lock.slint:239
 msgid "Duress PIN"
-msgstr ""
+msgstr "PIN примусу"
 
 #: ui/app_lock.slint:234
 msgid ""
@@ -288,6 +296,10 @@ msgid ""
 "keeps on this device — keys, messages, attachments, mesh data — and Chatter "
 "starts as if newly installed. Your account stays on the server."
 msgstr ""
+"Установлено. Якщо ввести його на екрані блокування, Chatter назавжди зітре "
+"все, що зберігає на цьому пристрої — ключі, повідомлення, вкладення, дані "
+"Mesh — і запуститься як щойно встановлений. Обліковий запис на сервері "
+"залишиться."
 
 #: ui/app_lock.slint:235
 msgid ""
@@ -296,297 +308,308 @@ msgid ""
 "Your account stays on the server. It must differ from your lock PIN and your "
 "account PIN."
 msgstr ""
+"Необов’язково. Другий PIN: якщо ввести його на екрані блокування, Chatter "
+"назавжди зітре все, що зберігає на цьому пристрої, і запуститься як щойно "
+"встановлений. Обліковий запис на сервері залишиться. Він має відрізнятися "
+"від PIN блокування та PIN облікового запису."
 
 #: ui/app_lock.slint:245
 msgid "Confirm duress PIN"
-msgstr ""
+msgstr "Підтвердьте PIN примусу"
 
 #: ui/app_lock.slint:252
 msgid "Current app lock PIN"
-msgstr ""
+msgstr "Поточний PIN блокування"
 
 #: ui/app_lock.slint:261
 msgid "Set duress PIN"
-msgstr ""
+msgstr "Установити PIN примусу"
 
 #: ui/app_lock.slint:270
 msgid "Remove duress PIN"
-msgstr ""
+msgstr "Видалити PIN примусу"
 
 #: ui/app_lock.slint:277
 msgid "Turn off app lock"
-msgstr ""
+msgstr "Вимкнути блокування"
 
 #. ── Properties: User profile ──
 #: ui/app_sidebar_pane.slint:14 ui/sidebar/dm_list_item.slint:19
 msgid "User"
-msgstr ""
+msgstr "Користувач"
 
 #: ui/app_top_overlays.slint:101
 msgid "Microphone + output (linked)"
-msgstr ""
+msgstr "Мікрофон і вихід (разом)"
 
 #: ui/app_top_overlays.slint:102 ui/calls/call_controls.slint:57
 msgid "Select microphone"
-msgstr ""
+msgstr "Виберіть мікрофон"
 
 #: ui/app_top_overlays.slint:103
 msgid "Select speaker"
-msgstr ""
+msgstr "Виберіть динамік"
 
 #: ui/app_top_overlays.slint:103
 msgid "Select screen to share"
-msgstr ""
+msgstr "Виберіть екран для показу"
 
 #: ui/calls/active_call_view.slint:123 ui/calls/active_call_view.slint:183
 msgid "You"
-msgstr ""
+msgstr "Ви"
 
 #: ui/calls/active_call_view.slint:198
 msgid "Switch camera"
-msgstr ""
+msgstr "Змінити камеру"
 
 #: ui/calls/active_call_view.slint:298
 msgid "Call information"
-msgstr ""
+msgstr "Про дзвінок"
 
 #: ui/calls/active_call_view.slint:305
 msgid "Call duration"
-msgstr ""
+msgstr "Тривалість дзвінка"
 
 #: ui/calls/active_call_view.slint:307 ui/calls/return_to_call_bar.slint:117
 msgid "Calling…"
-msgstr ""
+msgstr "Дзвінок…"
 
 #: ui/calls/active_call_view.slint:315
 msgid "Call participants"
-msgstr ""
+msgstr "Учасники дзвінка"
 
 #: ui/calls/active_call_view.slint:327
 msgid "Exit full screen"
-msgstr ""
+msgstr "Вийти з повноекранного режиму"
 
 #: ui/calls/active_call_view.slint:327
 msgid "Full screen"
-msgstr ""
+msgstr "На весь екран"
 
 #: ui/calls/active_call_view.slint:336
 msgid "Call participants grid"
-msgstr ""
+msgstr "Сітка учасників дзвінка"
 
 #: ui/calls/active_call_view.slint:415
 msgid "Unmute {} for you"
-msgstr ""
+msgstr "Увімкнути звук {} для вас"
 
 #: ui/calls/active_call_view.slint:416
 msgid "Mute {} for you"
-msgstr ""
+msgstr "Вимкнути звук {} для вас"
 
 #: ui/calls/active_call_view.slint:429
 msgid "Resume {}'s video for you"
-msgstr ""
+msgstr "Поновити відео {} для вас"
 
 #: ui/calls/active_call_view.slint:430
 msgid "Pause {}'s video for you"
-msgstr ""
+msgstr "Призупинити відео {} для вас"
 
 #: ui/calls/active_call_view.slint:470
 msgid "Sharing your screen"
-msgstr ""
+msgstr "Ви показуєте екран"
 
 #: ui/calls/active_call_view.slint:485
 msgid "Stop screen sharing"
-msgstr ""
+msgstr "Зупинити показ екрана"
 
 #: ui/calls/active_call_view.slint:492
 msgid "Stop"
-msgstr ""
+msgstr "Зупинити"
 
 #: ui/calls/active_call_view.slint:515
 msgid "Show all call participants"
-msgstr ""
+msgstr "Показати всіх учасників"
 
 #: ui/calls/active_call_view.slint:549
 msgid "Pin {}"
-msgstr ""
+msgstr "Закріпити {}"
 
 #: ui/calls/active_call_view.slint:589
 msgid "Call verification"
-msgstr ""
+msgstr "Перевірка дзвінка"
 
 #: ui/calls/active_call_view.slint:590
 msgid "Compare these four emojis with everyone in the call."
-msgstr ""
+msgstr "Порівняйте ці чотири емодзі з усіма учасниками дзвінка."
 
 #: ui/calls/active_call_view.slint:596
 msgid "Call verification emoji 1: {}"
-msgstr ""
+msgstr "Емодзі перевірки дзвінка 1: {}"
 
 #: ui/calls/active_call_view.slint:597
 msgid "Call verification emoji 2: {}"
-msgstr ""
+msgstr "Емодзі перевірки дзвінка 2: {}"
 
 #: ui/calls/active_call_view.slint:598
 msgid "Call verification emoji 3: {}"
-msgstr ""
+msgstr "Емодзі перевірки дзвінка 3: {}"
 
 #: ui/calls/active_call_view.slint:599
 msgid "Call verification emoji 4: {}"
-msgstr ""
+msgstr "Емодзі перевірки дзвінка 4: {}"
 
 #: ui/calls/active_call_view.slint:603
 msgid "Call key version {}"
-msgstr ""
+msgstr "Версія ключа дзвінка {}"
 
 #: ui/calls/active_call_view.slint:613
 msgid "Call verification pending"
-msgstr ""
+msgstr "Очікується перевірка дзвінка"
 
 #: ui/calls/active_call_view.slint:614
 msgid "Verification pending"
-msgstr ""
+msgstr "Очікується перевірка"
 
 #: ui/calls/call_controls.slint:57
 msgid "Select microphone, linked audio route"
-msgstr ""
+msgstr "Виберіть мікрофон, зв’язаний звуковий маршрут"
 
 #: ui/calls/call_controls.slint:65 ui/calls/return_to_call_bar.slint:129
 msgid "Unmute microphone"
-msgstr ""
+msgstr "Увімкнути мікрофон"
 
 #: ui/calls/call_controls.slint:65 ui/calls/return_to_call_bar.slint:129
 msgid "Mute microphone"
-msgstr ""
+msgstr "Вимкнути мікрофон"
 
 #: ui/calls/call_controls.slint:76
 msgid "Select output, linked audio route"
-msgstr ""
+msgstr "Виберіть вихід, зв’язаний звуковий маршрут"
 
 #: ui/calls/call_controls.slint:76
 msgid "Select output"
-msgstr ""
+msgstr "Виберіть вихід"
 
 #: ui/calls/call_controls.slint:84
 msgid "Toggle speaker"
-msgstr ""
+msgstr "Гучний зв’язок"
 
 #: ui/calls/call_controls.slint:84
 msgid "Select audio output"
-msgstr ""
+msgstr "Виберіть аудіовихід"
 
 #: ui/calls/call_controls.slint:101 ui/calls/return_to_call_bar.slint:136
 msgid "Turn camera off"
-msgstr ""
+msgstr "Вимкнути камеру"
 
 #: ui/calls/call_controls.slint:101 ui/calls/return_to_call_bar.slint:136
 msgid "Turn camera on"
-msgstr ""
+msgstr "Увімкнути камеру"
 
 #: ui/calls/call_controls.slint:113
 msgid "Stop sharing screen"
-msgstr ""
+msgstr "Зупинити показ екрана"
 
 #: ui/calls/call_controls.slint:113 ui/calls/device_picker.slint:248
 msgid "Share screen"
-msgstr ""
+msgstr "Показати екран"
 
 #: ui/calls/call_controls.slint:123 ui/calls/return_to_call_bar.slint:142
 msgid "End call"
-msgstr ""
+msgstr "Завершити"
 
 #: ui/calls/call_history_screen.slint:118 ui/sidebar/sidebar.slint:66
 #: ui/sidebar/sidebar.slint:578
 msgid "Calls"
-msgstr ""
+msgstr "Дзвінки"
 
 #: ui/calls/call_history_screen.slint:162 ui/chat/selection_bar.slint:76
 msgid "Exit selection"
-msgstr ""
+msgstr "Скасувати вибір"
 
 #: ui/calls/call_history_screen.slint:181
 msgid "Deselect all"
-msgstr ""
+msgstr "Зняти вибір"
 
 #: ui/calls/call_history_screen.slint:181 ui/chat/selection_bar.slint:95
 msgid "Select all"
-msgstr ""
+msgstr "Вибрати все"
 
 #: ui/calls/call_history_screen.slint:188 ui/chat/selection_bar.slint:121
 msgid "Delete selected"
-msgstr ""
+msgstr "Видалити вибране"
 
 #. stored and compared). The name a person reads is separate.
 #: ui/calls/call_history_screen.slint:215
 msgid "All"
-msgstr ""
+msgstr "Усі"
 
 #: ui/calls/call_history_screen.slint:216
 msgid "Missed"
-msgstr ""
+msgstr "Пропущені"
 
 #: ui/calls/call_history_screen.slint:258 ui/modals/channel_settings.slint:363
 #: ui/server_records/screen.slint:94
 msgid "Loading…"
-msgstr ""
+msgstr "Завантаження…"
 
 #: ui/calls/call_history_screen.slint:282
 msgid "No missed calls"
-msgstr ""
+msgstr "Немає пропущених"
 
 #: ui/calls/call_history_screen.slint:282 ui/server_records/screen.slint:96
 msgid "No calls yet"
-msgstr ""
+msgstr "Дзвінків ще немає"
 
 #: ui/calls/call_history_screen.slint:289
 msgid "Calls you did not answer show up here."
-msgstr ""
+msgstr "Тут з’являться дзвінки, на які ви не відповіли."
 
 #: ui/calls/call_history_screen.slint:289
 msgid "Use the phone icon in a regular chat or channel."
-msgstr ""
+msgstr "Натисніть значок телефону у звичайному чаті або каналі."
 
 #: ui/calls/call_history_screen.slint:458
 msgid "Select call with {}"
-msgstr ""
+msgstr "Вибрати дзвінок із {}"
 
 #: ui/calls/call_history_screen.slint:491 ui/components/avatar.slint:32
 #: ui/components/avatar.slint:34
 msgid "Avatar for {}"
-msgstr ""
+msgstr "Аватар {}"
 
 #: ui/calls/call_history_screen.slint:576
 msgid "Call {}"
-msgstr ""
+msgstr "Подзвонити {}"
 
 #: ui/calls/call_history_screen.slint:607
 msgid "Video call {}"
-msgstr ""
+msgstr "Відеодзвінок {}"
 
 #: ui/calls/call_history_screen.slint:657
 msgid "Older calls were not checked yet."
-msgstr ""
+msgstr "Старіші дзвінки ще не перевірено."
 
 #: ui/calls/call_history_screen.slint:668
 msgid "Load older calls"
-msgstr ""
+msgstr "Завантажити старіші дзвінки"
 
 #: ui/calls/call_history_screen.slint:698
 msgid "Delete every call in this list from this device? This cannot be undone."
 msgstr ""
+"Видалити всі дзвінки з цього списку на цьому пристрої? Це неможливо "
+"скасувати."
 
 #: ui/calls/call_history_screen.slint:699
 msgid "Delete {n} selected call from this device? This cannot be undone."
 msgid_plural ""
 "Delete {n} selected calls from this device? This cannot be undone."
 msgstr[0] ""
+"Видалити {n} вибраний дзвінок із цього пристрою? Це неможливо скасувати."
 msgstr[1] ""
+"Видалити {n} вибрані дзвінки з цього пристрою? Це неможливо скасувати."
 msgstr[2] ""
+"Видалити {n} вибраних дзвінків із цього пристрою? Це неможливо скасувати."
 
 #: ui/calls/call_history_screen.slint:708
 msgid ""
 "Other people's call history and the call messages in your chats are not "
 "changed. A call in progress is kept."
 msgstr ""
+"Історія дзвінків інших людей і повідомлення про дзвінки у ваших чатах не "
+"змінюються. Поточний дзвінок зберігається."
 
 #: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36
 #: ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113
@@ -597,1175 +620,1185 @@ msgstr ""
 #: ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762
 #: ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
 msgid "Cancel"
-msgstr ""
+msgstr "Скасувати"
 
 #: ui/calls/call_history_screen.slint:728 ui/chat/delete_confirm.slint:80
 #: ui/modals/channel_danger.slint:264 ui/server_records/screen.slint:242
 msgid "Delete"
-msgstr ""
+msgstr "Видалити"
 
 #: ui/calls/call_history_screen.slint:728 ui/modals/jarvis_memory.slint:107
 msgid "Clear history"
-msgstr ""
+msgstr "Очистити історію"
 
 #: ui/calls/call_history_screen.slint:786
 msgid "Select calls"
-msgstr ""
+msgstr "Вибрати дзвінки"
 
 #: ui/calls/call_history_screen.slint:825
 msgid "Clear call history"
-msgstr ""
+msgstr "Очистити історію дзвінків"
 
 #: ui/calls/device_picker.slint:90
 msgid "Select device"
-msgstr ""
+msgstr "Виберіть пристрій"
 
 #: ui/calls/device_picker.slint:185
 msgid ""
 "Microphone and output change together. The check mark shows the active "
 "device."
-msgstr ""
+msgstr "Мікрофон і вихід змінюються разом. Позначка показує активний пристрій."
 
 #: ui/calls/device_picker.slint:199 ui/calls/device_picker.slint:219
 msgid "Default"
-msgstr ""
+msgstr "За замовчуванням"
 
 #: ui/calls/device_picker.slint:204
 msgid "No microphones found"
-msgstr ""
+msgstr "Мікрофонів не знайдено"
 
 #: ui/calls/device_picker.slint:224
 msgid "No speakers found"
-msgstr ""
+msgstr "Динаміків не знайдено"
 
 #: ui/calls/device_picker.slint:240
 msgid "Click below to open the system screen picker"
-msgstr ""
+msgstr "Натисніть нижче, щоб відкрити системний вибір екрана"
 
 #: ui/calls/device_picker.slint:250
 msgid "Opens system dialog to select screen or window"
-msgstr ""
+msgstr "Відкриває системне вікно вибору екрана або вікна"
 
 #: ui/calls/device_picker.slint:261
 msgid "Screens"
-msgstr ""
+msgstr "Екрани"
 
 #: ui/calls/device_picker.slint:272
 msgid "{}x{} (Primary)"
-msgstr ""
+msgstr "{}x{} (основний)"
 
 #: ui/calls/device_picker.slint:273
 msgid "Primary"
-msgstr ""
+msgstr "Основний"
 
 #: ui/calls/device_picker.slint:279
 msgid "Windows"
-msgstr ""
+msgstr "Вікна"
 
 #: ui/calls/device_picker.slint:295
 msgid "No screens or windows found"
-msgstr ""
+msgstr "Екранів або вікон не знайдено"
 
 #: ui/calls/incoming_call_modal.slint:125
 msgid "Join group video call"
-msgstr ""
+msgstr "Приєднатися до групового відеодзвінка"
 
 #: ui/calls/incoming_call_modal.slint:125
 msgid "Join group voice call"
-msgstr ""
+msgstr "Приєднатися до групового голосового дзвінка"
 
 #: ui/calls/incoming_call_modal.slint:126
 msgid "Incoming video call..."
-msgstr ""
+msgstr "Вхідний відеодзвінок..."
 
 #: ui/calls/incoming_call_modal.slint:126
 msgid "Incoming voice call..."
-msgstr ""
+msgstr "Вхідний голосовий дзвінок..."
 
 #: ui/calls/incoming_call_modal.slint:146
 msgid "Accepting will end your current call"
-msgstr ""
+msgstr "Якщо прийняти, поточний дзвінок завершиться"
 
 #: ui/calls/incoming_call_modal.slint:194
 msgid "Decline call"
-msgstr ""
+msgstr "Відхилити дзвінок"
 
 #: ui/calls/incoming_call_modal.slint:233
 msgid "Accept call"
-msgstr ""
+msgstr "Прийняти дзвінок"
 
 #: ui/calls/return_to_call_bar.slint:66
 msgid "Return to call with {}"
-msgstr ""
+msgstr "Повернутися до дзвінка з {}"
 
 #: ui/chat/attach_sheet.slint:92
 msgid "Gallery"
-msgstr ""
+msgstr "Галерея"
 
 #: ui/chat/attach_sheet.slint:99
 msgid "Camera"
-msgstr ""
+msgstr "Камера"
 
 #: ui/chat/attach_sheet.slint:106 ui/chat/message_item.slint:93
 msgid "Video"
-msgstr ""
+msgstr "Відео"
 
 #: ui/chat/attach_sheet.slint:113
 msgid "File"
-msgstr ""
+msgstr "Файл"
 
 #: ui/chat/audio_player.slint:56
 msgid "Retry download"
-msgstr ""
+msgstr "Повторити завантаження"
 
 #: ui/chat/audio_player.slint:57
 msgid "Pause voice message"
-msgstr ""
+msgstr "Призупинити голосове"
 
 #: ui/chat/audio_player.slint:57
 msgid "Play voice message"
-msgstr ""
+msgstr "Відтворити голосове"
 
 #: ui/chat/audio_player.slint:146 ui/chat/message_attachments.slint:324
 #: ui/chat/message_attachments.slint:605
 msgid "Download failed · tap to retry"
-msgstr ""
+msgstr "Не вдалося завантажити · торкніться, щоб повторити"
 
 #: ui/chat/audio_player.slint:146
 msgid "{0} / {1}"
-msgstr ""
+msgstr "{0} / {1}"
 
 #: ui/chat/call_confirm.slint:17
 msgid "Start a video call?"
-msgstr ""
+msgstr "Почати відеодзвінок?"
 
 #: ui/chat/call_confirm.slint:17
 msgid "Start a call?"
-msgstr ""
+msgstr "Почати дзвінок?"
 
 #: ui/chat/call_confirm.slint:26
 msgid "Everyone in {} will be notified."
-msgstr ""
+msgstr "Усі в {} отримають сповіщення."
 
 #: ui/chat/call_confirm.slint:41
 msgid "Start call"
-msgstr ""
+msgstr "Почати дзвінок"
 
 #: ui/chat/chat_header.slint:180 ui/chat/chat_header.slint:520
 #: ui/mesh/mesh_compose_sheet.slint:113
 msgid "Back"
-msgstr ""
+msgstr "Назад"
 
 #: ui/chat/chat_header.slint:335
 msgid "Typing"
-msgstr ""
+msgstr "Друкує"
 
 #: ui/chat/chat_header.slint:385 ui/sidebar/dm_list_item.slint:196
 msgid "Secret chat"
-msgstr ""
+msgstr "Секретний чат"
 
 #: ui/chat/chat_header.slint:441
 msgid "Jarvis is thinking..."
-msgstr ""
+msgstr "Jarvis думає..."
 
 #: ui/chat/chat_header.slint:467
 msgid "Voice call"
-msgstr ""
+msgstr "Голосовий дзвінок"
 
 #: ui/chat/chat_header.slint:490 ui/mesh/mesh_info_sheet.slint:220
 #: ui/modals/invite_member.slint:255
 msgid "Invite"
-msgstr ""
+msgstr "Запросити"
 
 #: ui/chat/chat_header.slint:498 ui/components/modal.slint:55
 msgid "More options"
-msgstr ""
+msgstr "Інші параметри"
 
 #: ui/chat/chat_header.slint:571 ui/mesh/mesh_list_item.slint:34
 msgid "Waiting for a carrier"
-msgstr ""
+msgstr "Чекаємо на носія"
 
 #: ui/chat/chat_header.slint:572
 msgid "Verified ✓"
-msgstr ""
+msgstr "Підтверджено ✓"
 
 #: ui/chat/chat_header.slint:572
 msgid "Not verified ›"
-msgstr ""
+msgstr "Не підтверджено ›"
 
 #: ui/chat/chat_header.slint:573 ui/mesh/mesh_info_sheet.slint:104
 msgid "Private group · invited devices"
-msgstr ""
+msgstr "Приватна група · запрошені пристрої"
 
 #: ui/chat/chat_header.slint:575 ui/mesh/mesh_list.slint:13
 msgid "{n} relay"
 msgid_plural "{n} relays"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "{n} реле"
+msgstr[1] "{n} реле"
+msgstr[2] "{n} реле"
 
 #: ui/chat/chat_header.slint:576
 msgid "{n} nearby"
 msgid_plural "{n} nearby"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "{n} поруч"
+msgstr[1] "{n} поруч"
+msgstr[2] "{n} поруч"
 
 #: ui/chat/chat_header.slint:588
 msgid "Open mesh conversation information"
-msgstr ""
+msgstr "Відкрити відомості про розмову Mesh"
 
 #: ui/chat/chat_header.slint:605
 msgid "Conversation info"
-msgstr ""
+msgstr "Про розмову"
 
 #: ui/chat/chat_header_menu.slint:94 ui/modals/keyboard_shortcuts.slint:130
 msgid "Search in chat"
-msgstr ""
+msgstr "Пошук у чаті"
 
 #: ui/chat/chat_header_menu.slint:95 ui/modals/channel_settings.slint:433
 msgid "Pinned messages"
-msgstr ""
+msgstr "Закріплені повідомлення"
 
 #: ui/chat/chat_header_menu.slint:96 ui/modals/user_profile.slint:469
 msgid "Video call"
-msgstr ""
+msgstr "Відеодзвінок"
 
 #: ui/chat/chat_header_menu.slint:97 ui/mesh/mesh_info_sheet.slint:62
 msgid "Add members"
-msgstr ""
+msgstr "Додати учасників"
 
 #: ui/chat/chat_header_menu.slint:98
 msgid "Conversation settings"
-msgstr ""
+msgstr "Налаштування розмови"
 
 #: ui/chat/chat_header_menu.slint:99 ui/modals/user_profile.slint:470
 msgid "Start secret chat"
-msgstr ""
+msgstr "Почати секретний чат"
 
 #: ui/chat/chat_header_menu.slint:100 ui/chat/secret_timer_modal.slint:14
 #: ui/modals/user_profile.slint:522
 msgid "Disappearing messages"
-msgstr ""
+msgstr "Зникаючі повідомлення"
 
 #: ui/chat/chat_layout.slint:385
 msgid "Anyone in radio range can read this"
-msgstr ""
+msgstr "Це може прочитати будь-хто в зоні радіо"
 
 #: ui/chat/chat_layout.slint:387
 msgid "Anyone in this cell can read this"
-msgstr ""
+msgstr "Це може прочитати будь-хто в цій комірці"
 
 #: ui/chat/chat_layout.slint:389
 msgid "Invited devices · encrypted over mesh"
-msgstr ""
+msgstr "Запрошені пристрої · зашифровано в Mesh"
 
 #: ui/chat/chat_layout.slint:391
 msgid "Public channel — anyone can read this"
-msgstr ""
+msgstr "Публічний канал — прочитати може будь-хто"
 
 #. so this component never has to know what a geohash cell is.
 #: ui/chat/chat_layout.slint:392 ui/chat/message_list.slint:114
 msgid "Messages are end-to-end encrypted"
-msgstr ""
+msgstr "Повідомлення наскрізно зашифровані"
 
 #: ui/chat/chat_layout.slint:538
 msgid "Call in progress · {n} participant"
 msgid_plural "Call in progress · {n} participants"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "Триває дзвінок · {n} учасник"
+msgstr[1] "Триває дзвінок · {n} учасники"
+msgstr[2] "Триває дзвінок · {n} учасників"
 
 #: ui/chat/chat_layout.slint:539
 msgid "Call in progress"
-msgstr ""
+msgstr "Триває дзвінок"
 
 #: ui/chat/chat_layout.slint:544 ui/chat/chat_layout.slint:660
 #: ui/mesh/mesh_compose_sheet.slint:127 ui/mesh/mesh_list.slint:118
 #: ui/modals/create_channel.slint:191
 msgid "Join"
-msgstr ""
+msgstr "Приєднатися"
 
 #: ui/chat/chat_layout.slint:655 ui/mesh/mesh_peer_sheet.slint:273
 #: ui/modals/friends_blocked_tab.slint:132
 msgid "Unblock"
-msgstr ""
+msgstr "Розблокувати"
 
 #: ui/chat/chat_layout.slint:670 ui/mesh/mesh_list.slint:108
 #: ui/modals/friends_requests_tab.slint:177
 msgid "Decline"
-msgstr ""
+msgstr "Відхилити"
 
 #: ui/chat/chat_layout.slint:677 ui/modals/friends_requests_tab.slint:166
 msgid "Accept"
-msgstr ""
+msgstr "Прийняти"
 
 #: ui/chat/chat_layout.slint:879
 msgid "Search GIFs"
-msgstr ""
+msgstr "Пошук GIF"
 
 #: ui/chat/chat_layout.slint:879 ui/components/emoji_picker.slint:137
 msgid "Search emoji"
-msgstr ""
+msgstr "Пошук емодзі"
 
 #: ui/chat/chat_layout.slint:891
 msgid "Search emoji and GIFs"
-msgstr ""
+msgstr "Пошук емодзі та GIF"
 
 #: ui/chat/chat_layout.slint:907 ui/components/emoji_picker.slint:166
 msgid "Clear search"
-msgstr ""
+msgstr "Очистити пошук"
 
 #: ui/chat/chat_layout.slint:965
 msgid "Emoji"
-msgstr ""
+msgstr "Емодзі"
 
 #: ui/chat/chat_layout.slint:965
 msgid "GIFs"
-msgstr ""
+msgstr "GIF"
 
 #: ui/chat/composer_attachment_strip.slint:142
 msgid "Encrypting..."
-msgstr ""
+msgstr "Шифрування..."
 
 #: ui/chat/composer_attachment_strip.slint:161
 msgid "Remove attachment"
-msgstr ""
+msgstr "Вилучити вкладення"
 
 #: ui/chat/composer_attachment_strip.slint:196
 msgid "Add attachment"
-msgstr ""
+msgstr "Додати вкладення"
 
 #: ui/chat/composer_edit_bar.slint:34
 msgid "Editing message"
-msgstr ""
+msgstr "Редагування повідомлення"
 
 #: ui/chat/composer_edit_bar.slint:49
 msgid "Cancel edit"
-msgstr ""
+msgstr "Скасувати редагування"
 
 #: ui/chat/composer_format_toolbar.slint:25
 msgid "Bold"
-msgstr ""
+msgstr "Жирний"
 
 #: ui/chat/composer_format_toolbar.slint:62
 msgid "Italic"
-msgstr ""
+msgstr "Курсив"
 
 #: ui/chat/composer_format_toolbar.slint:99
 msgid "Strikethrough"
-msgstr ""
+msgstr "Закреслення"
 
 #: ui/chat/composer_format_toolbar.slint:144
 msgid "Inline code"
-msgstr ""
+msgstr "Код у рядку"
 
 #: ui/chat/composer_format_toolbar.slint:190
 msgid "Code block"
-msgstr ""
+msgstr "Блок коду"
 
 #: ui/chat/composer_recording_panel.slint:40
 msgid "Cancel voice message"
-msgstr ""
+msgstr "Скасувати голосове"
 
 #: ui/chat/composer_recording_panel.slint:63
 msgid "Send voice message"
-msgstr ""
+msgstr "Надіслати голосове"
 
 #: ui/chat/composer_reply_preview.slint:68
 msgid "Reply to {}"
-msgstr ""
+msgstr "У відповідь {}"
 
 #: ui/chat/composer_reply_preview.slint:92
 msgid "Cancel reply"
-msgstr ""
+msgstr "Скасувати відповідь"
 
 #: ui/chat/delete_confirm.slint:17
 msgid "Delete for both"
-msgstr ""
+msgstr "Видалити в обох"
 
 #: ui/chat/delete_confirm.slint:17
 msgid "Delete for everyone"
-msgstr ""
+msgstr "Видалити для всіх"
 
 #: ui/chat/delete_confirm.slint:32
 msgid "Delete message"
 msgid_plural "Delete {n} messages"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "Видалити повідомлення"
+msgstr[1] "Видалити {n} повідомлення"
+msgstr[2] "Видалити {n} повідомлень"
 
 #: ui/chat/delete_confirm.slint:34
 msgid "Delete for both?"
-msgstr ""
+msgstr "Видалити в обох?"
 
 #: ui/chat/delete_confirm.slint:34
 msgid "Delete for everyone?"
-msgstr ""
+msgstr "Видалити для всіх?"
 
 #: ui/chat/delete_confirm.slint:35
 msgid "Delete message?"
 msgid_plural "Delete {n} messages?"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "Видалити повідомлення?"
+msgstr[1] "Видалити {n} повідомлення?"
+msgstr[2] "Видалити {n} повідомлень?"
 
 #: ui/chat/delete_confirm.slint:45
 msgid "Choose who to delete these messages for."
-msgstr ""
+msgstr "Виберіть, для кого видалити ці повідомлення."
 
 #: ui/chat/delete_confirm.slint:45
 msgid "Choose who to delete this message for."
-msgstr ""
+msgstr "Виберіть, для кого видалити це повідомлення."
 
 #: ui/chat/delete_confirm.slint:46
 msgid "These messages will be deleted for everyone in the chat."
-msgstr ""
+msgstr "Ці повідомлення буде видалено для всіх у чаті."
 
 #: ui/chat/delete_confirm.slint:46
 msgid "This message will be deleted for everyone in the chat."
-msgstr ""
+msgstr "Це повідомлення буде видалено для всіх у чаті."
 
 #: ui/chat/delete_confirm.slint:48
 msgid "These messages will be deleted from your history."
-msgstr ""
+msgstr "Ці повідомлення буде видалено з вашої історії."
 
 #: ui/chat/delete_confirm.slint:49
 msgid "This message will be deleted from your history."
-msgstr ""
+msgstr "Це повідомлення буде видалено з вашої історії."
 
 #: ui/chat/delete_confirm.slint:58 ui/chat/delete_confirm.slint:80
 msgid "Delete for me"
-msgstr ""
+msgstr "Видалити в мене"
 
 #: ui/chat/disappearing_settings.slint:19
 msgid "Selected"
-msgstr ""
+msgstr "Вибрано"
 
 #: ui/chat/disappearing_settings.slint:62
 msgid "Message lifetime"
-msgstr ""
+msgstr "Час життя повідомлення"
 
 #: ui/chat/disappearing_settings.slint:63
 msgid ""
 "Each new message disappears after the selected time once its expiry clock "
 "starts."
 msgstr ""
+"Кожне нове повідомлення зникає за вибраний час, щойно почнеться відлік."
 
 #: ui/chat/disappearing_settings.slint:78
 msgid "How long to enable"
-msgstr ""
+msgstr "На який час увімкнути"
 
 #: ui/chat/disappearing_settings.slint:79
 msgid "Current: {}. The window applies to new messages only."
-msgstr ""
+msgstr "Зараз: {}. Період діє лише для нових повідомлень."
 
 #: ui/chat/disappearing_settings.slint:81
 msgid "5 minutes"
-msgstr ""
+msgstr "5 хвилин"
 
 #: ui/chat/disappearing_settings.slint:89
 msgid "Custom duration in minutes"
-msgstr ""
+msgstr "Свій час у хвилинах"
 
 #: ui/chat/disappearing_settings.slint:94
 msgid "Set duration"
-msgstr ""
+msgstr "Задати час"
 
 #. a new key, and the label should say so.
 #: ui/chat/identity_change_bar.slint:130 ui/chat/identity_change_bar.slint:142
 msgid "Accept new safety number"
-msgstr ""
+msgstr "Прийняти новий номер безпеки"
 
 #: ui/chat/link_confirm.slint:14
 msgid "Open this link?"
-msgstr ""
+msgstr "Відкрити це посилання?"
 
 #: ui/chat/link_confirm.slint:41 ui/components/unified_search.slint:963
 msgid "Open"
-msgstr ""
+msgstr "Відкрити"
 
 #: ui/chat/membership_bar.slint:115
 msgid "Resume sending"
-msgstr ""
+msgstr "Відновити надсилання"
 
 #: ui/chat/membership_bar.slint:127
 msgid "Resume sending in this channel"
-msgstr ""
+msgstr "Відновити надсилання в цьому каналі"
 
 #: ui/chat/membership_bar.slint:150
 msgid "Hide"
-msgstr ""
+msgstr "Сховати"
 
 #: ui/chat/membership_bar.slint:150 ui/server_records/screen.slint:240
 msgid "Details"
-msgstr ""
+msgstr "Деталі"
 
 #: ui/chat/membership_bar.slint:162
 msgid "Hide membership details"
-msgstr ""
+msgstr "Сховати відомості про участь"
 
 #: ui/chat/membership_bar.slint:162
 msgid "Show membership details"
-msgstr ""
+msgstr "Показати відомості про участь"
 
 #: ui/chat/message_actions.slint:66
 msgid "Reply to message"
-msgstr ""
+msgstr "Відповісти на повідомлення"
 
 #: ui/chat/message_actions.slint:75
 msgid "Add reaction"
-msgstr ""
+msgstr "Додати реакцію"
 
 #: ui/chat/message_actions.slint:89 ui/chat/message_context_menu.slint:644
 msgid "Reply in thread"
-msgstr ""
+msgstr "Відповісти в гілці"
 
 #: ui/chat/message_actions.slint:98
 msgid "More message actions"
-msgstr ""
+msgstr "Інші дії з повідомленням"
 
 #: ui/chat/message_attachments.slint:118 ui/chat/message_attachments.slint:288
 msgid "Queued"
-msgstr ""
+msgstr "У черзі"
 
 #: ui/chat/message_attachments.slint:119 ui/chat/message_attachments.slint:289
 msgid "Uploading…"
-msgstr ""
+msgstr "Вивантаження…"
 
 #: ui/chat/message_attachments.slint:120 ui/chat/message_attachments.slint:290
 msgid "Upload failed"
-msgstr ""
+msgstr "Не вдалося вивантажити"
 
 #: ui/chat/message_attachments.slint:121 ui/chat/message_attachments.slint:291
 msgid "Cancelled"
-msgstr ""
+msgstr "Скасовано"
 
 #: ui/chat/message_attachments.slint:122
 msgid "Download failed"
-msgstr ""
+msgstr "Не вдалося завантажити"
 
 #: ui/chat/message_attachments.slint:145 ui/chat/message_attachments.slint:341
 msgid "Open photo {}"
-msgstr ""
+msgstr "Відкрити фото {}"
 
 #: ui/chat/message_attachments.slint:280
 msgid "Uploading {}"
-msgstr ""
+msgstr "Вивантаження {}"
 
 #: ui/chat/message_attachments.slint:280
 msgid "Downloading {}"
-msgstr ""
+msgstr "Завантаження {}"
 
 #: ui/chat/message_attachments.slint:292
 msgid "Downloading..."
-msgstr ""
+msgstr "Завантаження..."
 
 #: ui/chat/message_attachments.slint:552
 msgid "Play video {}"
-msgstr ""
+msgstr "Відтворити відео {}"
 
 #: ui/chat/message_attachments.slint:636
 msgid "Upload progress"
-msgstr ""
+msgstr "Прогрес вивантаження"
 
 #: ui/chat/message_attachments.slint:636
 msgid "Download progress"
-msgstr ""
+msgstr "Прогрес завантаження"
 
 #: ui/chat/message_attachments.slint:655
 msgid "Open file {}"
-msgstr ""
+msgstr "Відкрити файл {}"
 
 #: ui/chat/message_call.slint:54 ui/chat/message_item.slint:527
 msgid "View profile of {}"
-msgstr ""
+msgstr "Переглянути профіль {}"
 
 #: ui/chat/message_call.slint:143
 msgid "Missed video call"
-msgstr ""
+msgstr "Пропущений відеодзвінок"
 
 #: ui/chat/message_call.slint:143
 msgid "Missed call"
-msgstr ""
+msgstr "Пропущений дзвінок"
 
 #: ui/chat/message_call.slint:145
 msgid "Declined video call"
-msgstr ""
+msgstr "Відхилений відеодзвінок"
 
 #: ui/chat/message_call.slint:145
 msgid "Declined call"
-msgstr ""
+msgstr "Відхилений дзвінок"
 
 #: ui/chat/message_call.slint:147
 msgid "Video call started"
-msgstr ""
+msgstr "Відеодзвінок розпочато"
 
 #: ui/chat/message_call.slint:147
 msgid "Call started"
-msgstr ""
+msgstr "Дзвінок розпочато"
 
 #: ui/chat/message_call.slint:149
 msgid "Video call ended"
-msgstr ""
+msgstr "Відеодзвінок завершено"
 
 #: ui/chat/message_call.slint:149
 msgid "Call ended"
-msgstr ""
+msgstr "Дзвінок завершено"
 
 #: ui/chat/message_call.slint:151
 msgid "Outgoing video call"
-msgstr ""
+msgstr "Вихідний відеодзвінок"
 
 #: ui/chat/message_call.slint:151
 msgid "Outgoing call"
-msgstr ""
+msgstr "Вихідний дзвінок"
 
 #: ui/chat/message_call.slint:152
 msgid "Incoming video call"
-msgstr ""
+msgstr "Вхідний відеодзвінок"
 
 #: ui/chat/message_call.slint:152
 msgid "Incoming call"
-msgstr ""
+msgstr "Вхідний дзвінок"
 
 #: ui/chat/message_call.slint:157
 msgid "Outgoing video call started"
-msgstr ""
+msgstr "Вихідний відеодзвінок розпочато"
 
 #: ui/chat/message_call.slint:157
 msgid "Outgoing call started"
-msgstr ""
+msgstr "Вихідний дзвінок розпочато"
 
 #: ui/chat/message_call.slint:158
 msgid "Incoming video call started"
-msgstr ""
+msgstr "Вхідний відеодзвінок розпочато"
 
 #: ui/chat/message_call.slint:158
 msgid "Incoming call started"
-msgstr ""
+msgstr "Вхідний дзвінок розпочато"
 
 #: ui/chat/message_call.slint:161
 msgid "Outgoing video call ended"
-msgstr ""
+msgstr "Вихідний відеодзвінок завершено"
 
 #: ui/chat/message_call.slint:161
 msgid "Outgoing call ended"
-msgstr ""
+msgstr "Вихідний дзвінок завершено"
 
 #: ui/chat/message_call.slint:162
 msgid "Incoming video call ended"
-msgstr ""
+msgstr "Вхідний відеодзвінок завершено"
 
 #: ui/chat/message_call.slint:162
 msgid "Incoming call ended"
-msgstr ""
+msgstr "Вхідний дзвінок завершено"
 
 #: ui/chat/message_call.slint:185
 msgid "Video call icon"
-msgstr ""
+msgstr "Значок відеодзвінка"
 
 #: ui/chat/message_call.slint:185
 msgid "Call icon"
-msgstr ""
+msgstr "Значок дзвінка"
 
 #: ui/chat/message_composer.slint:339
 msgid "Mg"
-msgstr ""
+msgstr "Mg"
 
 #: ui/chat/message_composer.slint:573
 msgid "Show keyboard"
-msgstr ""
+msgstr "Показати клавіатуру"
 
 #: ui/chat/message_composer.slint:573
 msgid "Close picker"
-msgstr ""
+msgstr "Закрити панель"
 
 #: ui/chat/message_composer.slint:573
 msgid "Emoji & GIF picker"
-msgstr ""
+msgstr "Емодзі та GIF"
 
 #. what was typed (Android bridge maps value → text).
 #: ui/chat/message_composer.slint:639
 msgid "Message input"
-msgstr ""
+msgstr "Поле повідомлення"
 
 #: ui/chat/message_composer.slint:747
 msgid "Attach file"
-msgstr ""
+msgstr "Прикріпити файл"
 
 #: ui/chat/message_composer.slint:764
 msgid "Record voice message"
-msgstr ""
+msgstr "Записати голосове"
 
 #: ui/chat/message_composer.slint:796
 msgid "Send message"
-msgstr ""
+msgstr "Надіслати"
 
 #: ui/chat/message_context_menu.slint:70 ui/chat/reaction_picker.slint:144
 msgid "React with {}"
-msgstr ""
+msgstr "Реакція {}"
 
 #: ui/chat/message_context_menu.slint:580
 msgid "More reactions and stickers"
-msgstr ""
+msgstr "Більше реакцій і стікерів"
 
 #: ui/chat/message_context_menu.slint:599
 msgid "Resend"
-msgstr ""
+msgstr "Надіслати знову"
 
 #: ui/chat/message_context_menu.slint:614
 msgid "Reply"
-msgstr ""
+msgstr "Відповісти"
 
 #: ui/chat/message_context_menu.slint:629
 msgid "Edit"
-msgstr ""
+msgstr "Змінити"
 
 #: ui/chat/message_context_menu.slint:659
 msgid "Copy"
-msgstr ""
+msgstr "Копіювати"
 
 #: ui/chat/message_context_menu.slint:674 ui/modals/forward_message.slint:53
 msgid "Forward"
-msgstr ""
+msgstr "Переслати"
 
 #: ui/chat/message_context_menu.slint:691
 msgid "Select"
-msgstr ""
+msgstr "Вибрати"
 
 #: ui/chat/message_context_menu.slint:706
 msgid "Unpin"
-msgstr ""
+msgstr "Відкріпити"
 
 #: ui/chat/message_context_menu.slint:706
 msgid "Pin"
-msgstr ""
+msgstr "Закріпити"
 
 #: ui/chat/message_context_menu.slint:721 ui/components/image_viewer.slint:41
 msgid "Download"
-msgstr ""
+msgstr "Завантажити"
 
 #: ui/chat/message_context_menu.slint:736 ui/modals/channel_settings.slint:199
 msgid "Info"
-msgstr ""
+msgstr "Інфо"
 
 #: ui/chat/message_footer.slint:49
 msgid "Reactions: {}"
-msgstr ""
+msgstr "Реакції: {}"
 
 #: ui/chat/message_footer.slint:73
 msgid "{}, your reaction"
-msgstr ""
+msgstr "{}, ваша реакція"
 
 #: ui/chat/message_footer.slint:134
 msgid "Disappearing message"
-msgstr ""
+msgstr "Зникаюче повідомлення"
 
 #: ui/chat/message_footer.slint:139
 msgid "edited"
-msgstr ""
+msgstr "змінено"
 
 #. packet: there is no recipient ACK.
 #: ui/chat/message_footer.slint:159 ui/chat/message_footer.slint:201
 msgid "queued"
-msgstr ""
+msgstr "у черзі"
 
 #: ui/chat/message_footer.slint:160
 msgid "relayed"
-msgstr ""
+msgstr "на реле"
 
 #: ui/chat/message_footer.slint:161
 msgid "carried"
-msgstr ""
+msgstr "в дорозі"
 
 #: ui/chat/message_footer.slint:162
 msgid "waiting"
-msgstr ""
+msgstr "очікує"
 
 #: ui/chat/message_footer.slint:163
 msgid "not delivered"
-msgstr ""
+msgstr "не доставлено"
 
 #: ui/chat/message_footer.slint:164
 msgid "delivered"
-msgstr ""
+msgstr "доставлено"
 
 #: ui/chat/message_footer.slint:165
 msgid "read"
-msgstr ""
+msgstr "прочитано"
 
 #: ui/chat/message_footer.slint:166
 msgid "broadcast"
-msgstr ""
+msgstr "в ефірі"
 
 #: ui/chat/message_footer.slint:167
 msgid "sent"
-msgstr ""
+msgstr "надіслано"
 
 #: ui/chat/message_footer.slint:173
 msgid "Signal ciphertext queued on this device; no route has accepted it"
 msgstr ""
+"Шифротекст Signal у черзі на цьому пристрої; жоден маршрут його не прийняв"
 
 #: ui/chat/message_footer.slint:175
 msgid ""
 "Sealed Signal ciphertext queued onto a courier link; recipient has not "
 "acknowledged it"
 msgstr ""
+"Запечатаний шифротекст Signal передано на кур’єрський зв’язок; одержувач ще "
+"не підтвердив"
 
 #: ui/chat/message_footer.slint:177
 msgid "Handed to a passing device; may arrive later"
-msgstr ""
+msgstr "Передано пристрою, що проходив повз; може дійти пізніше"
 
 #: ui/chat/message_footer.slint:179
 msgid "Held on this device until something can carry it"
-msgstr ""
+msgstr "Утримується на цьому пристрої, доки хтось зможе його передати"
 
 #: ui/chat/message_footer.slint:181
 msgid "Left the outbox without ever being acknowledged"
-msgstr ""
+msgstr "Вийшло з вихідних і так і не було підтверджене"
 
 #: ui/chat/message_footer.slint:183
 msgid "The peer's device acknowledged it"
-msgstr ""
+msgstr "Пристрій співрозмовника підтвердив отримання"
 
 #: ui/chat/message_footer.slint:185
 msgid "Read by the peer"
-msgstr ""
+msgstr "Прочитано співрозмовником"
 
 #: ui/chat/message_footer.slint:187
 msgid "Put on the air without recipient acknowledgement"
-msgstr ""
+msgstr "Передано в ефір без підтвердження одержувача"
 
 #: ui/chat/message_footer.slint:188
 msgid "Handed to a live link; not yet acknowledged"
-msgstr ""
+msgstr "Передано на живий зв’язок; ще не підтверджено"
 
 #: ui/chat/message_footer.slint:201
 msgid "waiting for Tor"
-msgstr ""
+msgstr "чекає на Tor"
 
 #: ui/chat/message_footer.slint:201
 msgid "sending"
-msgstr ""
+msgstr "надсилається"
 
 #: ui/chat/message_footer.slint:206
 msgid "Queued behind an earlier send; upload has not started"
-msgstr ""
+msgstr "У черзі за ранішим надсиланням; вивантаження ще не почалося"
 
 #: ui/chat/message_footer.slint:206 ui/chat/message_item.slint:659
 msgid "Waiting for Tor"
-msgstr ""
+msgstr "Очікування Tor"
 
 #: ui/chat/message_footer.slint:206 ui/chat/message_item.slint:659
 msgid "Sending"
-msgstr ""
+msgstr "Надсилання"
 
 #: ui/chat/message_footer.slint:216
 msgid "{}. Tap to retry now"
-msgstr ""
+msgstr "{}. Торкніться, щоб повторити зараз"
 
 #: ui/chat/message_footer.slint:226
 msgid "not sent"
-msgstr ""
+msgstr "не надіслано"
 
 #: ui/chat/message_footer.slint:226
 msgid "not sent · {}"
-msgstr ""
+msgstr "не надіслано · {}"
 
 #: ui/chat/message_footer.slint:231
 msgid "Not sent, {}"
-msgstr ""
+msgstr "Не надіслано, {}"
 
 #: ui/chat/message_footer.slint:234
 msgid "not sent · Retry"
-msgstr ""
+msgstr "не надіслано · Повторити"
 
 #: ui/chat/message_footer.slint:234
 msgid "not sent · {} · Retry"
-msgstr ""
+msgstr "не надіслано · {} · Повторити"
 
 #: ui/chat/message_footer.slint:239
 msgid "Not sent, tap to retry"
-msgstr ""
+msgstr "Не надіслано, торкніться, щоб повторити"
 
 #: ui/chat/message_footer.slint:252 ui/chat/message_footer.slint:257
 msgid "Delivery could not be confirmed, tap to retry"
-msgstr ""
+msgstr "Доставку не підтверджено, торкніться, щоб повторити"
 
 #: ui/chat/message_footer.slint:292
 msgid "Delivered"
-msgstr ""
+msgstr "Доставлено"
 
 #: ui/chat/message_footer.slint:293
 msgid "Read"
-msgstr ""
+msgstr "Прочитано"
 
 #: ui/chat/message_footer.slint:293
 msgid "Sent"
-msgstr ""
+msgstr "Надіслано"
 
 #: ui/chat/message_item.slint:91
 msgid "Voice message, {}"
-msgstr ""
+msgstr "Голосове повідомлення, {}"
 
 #: ui/chat/message_item.slint:92
 msgid "Photo"
 msgid_plural "{n} photos"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "Фото"
+msgstr[1] "{n} фото"
+msgstr[2] "{n} фото"
 
 #: ui/chat/message_item.slint:94
 msgid "File {}"
-msgstr ""
+msgstr "Файл {}"
 
 #: ui/chat/message_item.slint:500
 msgid "Message deleted"
-msgstr ""
+msgstr "Повідомлення видалено"
 
 #: ui/chat/message_item.slint:575
 msgid "Your message: {}"
-msgstr ""
+msgstr "Ваше повідомлення: {}"
 
 #: ui/chat/message_item.slint:575
 msgid "{0} says: {1}"
-msgstr ""
+msgstr "{0} каже: {1}"
 
 #: ui/chat/message_item.slint:659
 msgid "Not sent"
-msgstr ""
+msgstr "Не надіслано"
 
 #: ui/chat/message_item.slint:792 ui/sidebar/sidebar_footer.slint:229
 msgid "AI"
-msgstr ""
+msgstr "AI"
 
 #: ui/chat/message_item.slint:821
 msgid "Thread reply"
-msgstr ""
+msgstr "Відповідь у гілці"
 
 #: ui/chat/message_list_overlays.slint:26
 msgid "{n} new message, jump to newest"
 msgid_plural "{n} new messages, jump to newest"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "{n} нове повідомлення, перейти до найновішого"
+msgstr[1] "{n} нові повідомлення, перейти до найновішого"
+msgstr[2] "{n} нових повідомлень, перейти до найновішого"
 
 #: ui/chat/message_list_overlays.slint:27
 msgid "Scroll to bottom"
-msgstr ""
+msgstr "Прокрутити вниз"
 
 #: ui/chat/message_list_overlays.slint:50
 msgid "{n} new message"
 msgid_plural "{n} new messages"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "{n} нове повідомлення"
+msgstr[1] "{n} нові повідомлення"
+msgstr[2] "{n} нових повідомлень"
 
 #: ui/chat/message_list_overlays.slint:94
 msgid "Older messages didn't load"
-msgstr ""
+msgstr "Старіші повідомлення не завантажилися"
 
 #: ui/chat/message_list_overlays.slint:106
 msgid "Retry loading older messages"
-msgstr ""
+msgstr "Повторити завантаження старіших"
 
 #: ui/chat/message_list_states.slint:83
 msgid "Your saved messages"
-msgstr ""
+msgstr "Ваші збережені повідомлення"
 
 #: ui/chat/message_list_states.slint:83
 msgid "No messages yet"
-msgstr ""
+msgstr "Повідомлень ще немає"
 
 #: ui/chat/message_list_states.slint:92
 msgid "Forward messages here or write notes to yourself"
-msgstr ""
+msgstr "Пересилайте сюди повідомлення або пишіть нотатки собі"
 
 #: ui/chat/message_list_states.slint:93
 msgid "Write a message to start the conversation"
-msgstr ""
+msgstr "Напишіть повідомлення, щоб почати розмову"
 
 #: ui/chat/message_quote.slint:46
 msgid "Go to quoted message from {}"
-msgstr ""
+msgstr "Перейти до цитованого повідомлення від {}"
 
 #: ui/chat/message_quote.slint:125
 msgid "GIF"
-msgstr ""
+msgstr "GIF"
 
 #: ui/chat/message_quote.slint:176
 msgid "📎 Attachment"
-msgstr ""
+msgstr "📎 Вкладення"
 
 #: ui/chat/message_quote.slint:176 ui/mesh/mesh_peer_sheet.slint:109
 msgid "Message"
-msgstr ""
+msgstr "Повідомлення"
 
 #: ui/chat/message_quote.slint:184
 msgid "Original message not found"
-msgstr ""
+msgstr "Початкове повідомлення не знайдено"
 
 #: ui/chat/message_row_separators.slint:32
 msgid "Unread messages"
-msgstr ""
+msgstr "Непрочитані повідомлення"
 
 #: ui/chat/message_thread.slint:27
 msgid "Open thread: {}"
-msgstr ""
+msgstr "Відкрити гілку: {}"
 
 #. Computed
 #: ui/chat/pinned_bar.slint:32
 msgid "Pinned message {0} of {1}"
-msgstr ""
+msgstr "Закріплене повідомлення {0} з {1}"
 
 #. Computed
 #: ui/chat/pinned_bar.slint:32
 msgid "Pinned message"
-msgstr ""
+msgstr "Закріплене повідомлення"
 
 #: ui/chat/pinned_bar.slint:77
 msgid "Previous pinned message"
-msgstr ""
+msgstr "Попереднє закріплене"
 
 #: ui/chat/pinned_bar.slint:110
 msgid "Next pinned message"
-msgstr ""
+msgstr "Наступне закріплене"
 
 #: ui/chat/pinned_bar.slint:138 ui/modals/pinned_messages.slint:111
 msgid "Pinned message image"
-msgstr ""
+msgstr "Зображення закріпленого повідомлення"
 
 #: ui/chat/pinned_bar.slint:151
 msgid "Go to pinned message: {}"
-msgstr ""
+msgstr "Перейти до закріпленого: {}"
 
 #: ui/chat/pinned_bar.slint:195
 msgid "All pinned messages"
-msgstr ""
+msgstr "Усі закріплені"
 
 #: ui/chat/secret_timer_modal.slint:20
 msgid ""
 "New messages disappear after this time. Received messages count down after "
 "you read them; your sent messages count down after sending."
 msgstr ""
+"Нові повідомлення зникають за цей час. Отримані відлічують час після "
+"прочитання, а надіслані — після надсилання."
 
 #: ui/chat/secret_timer_modal.slint:26
 msgid "Current: {}"
-msgstr ""
+msgstr "Зараз: {}"
 
 #: ui/chat/selection_bar.slint:103
 msgid "Copy selected"
-msgstr ""
+msgstr "Копіювати вибране"
 
 #: ui/chat/selection_bar.slint:112
 msgid "Forward selected"
-msgstr ""
+msgstr "Переслати вибране"
 
 #: ui/chat/thread_panel.slint:245
 msgid "Thread"
-msgstr ""
+msgstr "Гілка"
 
 #: ui/chat/thread_panel.slint:246 ui/modals/pinned_messages.slint:28
 msgid "{n} pinned message"
 msgid_plural "{n} pinned messages"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "{n} закріплене повідомлення"
+msgstr[1] "{n} закріплені повідомлення"
+msgstr[2] "{n} закріплених повідомлень"
 
 #: ui/chat/thread_panel.slint:308
 msgid "Original message from {0}: {1}"
-msgstr ""
+msgstr "Початкове повідомлення від {0}: {1}"
 
 #: ui/chat/thread_panel.slint:422 ui/modals/pinned_messages.slint:51
 msgid "No pinned messages"
-msgstr ""
+msgstr "Немає закріплених"
 
 #: ui/chat/thread_panel.slint:422
 msgid "No replies yet"
-msgstr ""
+msgstr "Відповідей ще немає"
 
 #: ui/chat/thread_panel.slint:429
 msgid "Be the first to reply!"
-msgstr ""
+msgstr "Відповідайте першими!"
 
 #: ui/chat/thread_panel.slint:448 ui/chat/thread_panel.slint:461
 msgid "Load earlier replies"
-msgstr ""
+msgstr "Завантажити раніші відповіді"
 
 #: ui/chat/thread_panel.slint:727
 msgid "Unpin message"
 msgid_plural "Unpin all {n} messages"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "Відкріпити повідомлення"
+msgstr[1] "Відкріпити всі {n} повідомлення"
+msgstr[2] "Відкріпити всі {n} повідомлень"
 
 #: ui/chat/thread_panel.slint:755
 msgid "Reply in thread..."
-msgstr ""
+msgstr "Відповідь у гілці..."
 
 #. Spoken names, index-aligned with `emojis` (CLDR short names).
 #: ui/chat/types.slint:11
 msgid "thumbs up"
-msgstr ""
+msgstr "великий палець угору"
 
 #. Spoken names, index-aligned with `emojis` (CLDR short names).
 #: ui/chat/types.slint:11
 msgid "red heart"
-msgstr ""
+msgstr "червоне серце"
 
 #. Spoken names, index-aligned with `emojis` (CLDR short names).
 #: ui/chat/types.slint:11
 msgid "face with tears of joy"
-msgstr ""
+msgstr "обличчя зі сльозами радості"
 
 #. Spoken names, index-aligned with `emojis` (CLDR short names).
 #: ui/chat/types.slint:11
 msgid "face with open mouth"
-msgstr ""
+msgstr "обличчя з відкритим ротом"
 
 #. Spoken names, index-aligned with `emojis` (CLDR short names).
 #: ui/chat/types.slint:11
 msgid "crying face"
-msgstr ""
+msgstr "обличчя, що плаче"
 
 #. Spoken names, index-aligned with `emojis` (CLDR short names).
 #: ui/chat/types.slint:11
 msgid "folded hands"
-msgstr ""
+msgstr "складені руки"
 
 #: ui/components/avatar.slint:34
 msgid "Avatar"
-msgstr ""
+msgstr "Аватар"
 
 #: ui/components/avatar_picker.slint:17
 msgid "Choose your avatar"
-msgstr ""
+msgstr "Виберіть аватар"
 
 #: ui/components/code_preview_panel.slint:107
 msgid "Open externally"
-msgstr ""
+msgstr "Відкрити в іншій програмі"
 
 #: ui/components/compose_fab.slint:38 ui/mesh/mesh_compose_sheet.slint:127
 #: ui/modals/create_channel.slint:191 ui/modals/create_section.slint:228
 msgid "Create"
-msgstr ""
+msgstr "Створити"
 
 #: ui/components/connection_banner.slint:110
 msgid "The mesh is not running either, so there is nothing to fall back to."
-msgstr ""
+msgstr "Mesh теж не працює, тож резервного шляху немає."
 
 #: ui/components/connection_banner.slint:117
 msgid ""
 "Mesh is on, but Bluetooth is off and no relay is connected — nothing can "
 "carry a message right now."
 msgstr ""
+"Mesh увімкнено, але Bluetooth вимкнено і жодне реле не підключене — зараз "
+"нікому передати повідомлення."
 
 #: ui/components/connection_banner.slint:118
 msgid ""
 "Mesh is on, but the Bluetooth radio is unavailable and no relay is connected "
 "— nothing can carry a message right now."
 msgstr ""
+"Mesh увімкнено, але радіо Bluetooth недоступне і жодне реле не підключене — "
+"зараз нікому передати повідомлення."
 
 #: ui/components/connection_banner.slint:120
 msgid ""
@@ -1775,8 +1808,14 @@ msgid_plural ""
 "Mesh is on but Bluetooth is off. Only the {n} connected relays can carry, "
 "and relays need internet."
 msgstr[0] ""
+"Mesh увімкнено, але Bluetooth вимкнено. Передавати може лише {n} підключене "
+"реле, а реле потребують інтернету."
 msgstr[1] ""
+"Mesh увімкнено, але Bluetooth вимкнено. Передавати можуть лише {n} "
+"підключені реле, а реле потребують інтернету."
 msgstr[2] ""
+"Mesh увімкнено, але Bluetooth вимкнено. Передавати можуть лише {n} "
+"підключених реле, а реле потребують інтернету."
 
 #: ui/components/connection_banner.slint:121
 msgid ""
@@ -1786,14 +1825,22 @@ msgid_plural ""
 "Mesh is on but the Bluetooth radio is unavailable. Only the {n} connected "
 "relays can carry, and relays need internet."
 msgstr[0] ""
+"Mesh увімкнено, але радіо Bluetooth недоступне. Передавати може лише {n} "
+"підключене реле, а реле потребують інтернету."
 msgstr[1] ""
+"Mesh увімкнено, але радіо Bluetooth недоступне. Передавати можуть лише {n} "
+"підключені реле, а реле потребують інтернету."
 msgstr[2] ""
+"Mesh увімкнено, але радіо Bluetooth недоступне. Передавати можуть лише {n} "
+"підключених реле, а реле потребують інтернету."
 
 #: ui/components/connection_banner.slint:123
 msgid ""
 "Mesh is running over Bluetooth. Nobody is in range yet; what you send waits "
 "to be carried."
 msgstr ""
+"Mesh працює через Bluetooth. Поки нікого в зоні дії; надіслане чекає, доки "
+"його передадуть."
 
 #: ui/components/connection_banner.slint:124
 msgid ""
@@ -1803,1113 +1850,1138 @@ msgid_plural ""
 "Mesh is running over Bluetooth — {n} nearby. Mesh conversations do not need "
 "the server."
 msgstr[0] ""
+"Mesh працює через Bluetooth — {n} поруч. Розмови в Mesh не потребують "
+"сервера."
 msgstr[1] ""
+"Mesh працює через Bluetooth — {n} поруч. Розмови в Mesh не потребують "
+"сервера."
 msgstr[2] ""
+"Mesh працює через Bluetooth — {n} поруч. Розмови в Mesh не потребують "
+"сервера."
 
 #: ui/components/connection_banner.slint:211
 msgid "Tor error — retrying…"
-msgstr ""
+msgstr "Помилка Tor — повтор…"
 
 #: ui/components/connection_banner.slint:211
 msgid "Tor connection error — retrying…"
-msgstr ""
+msgstr "Помилка з’єднання Tor — повтор…"
 
 #: ui/components/connection_banner.slint:212
 msgid "Connecting over Tor…"
-msgstr ""
+msgstr "З’єднання через Tor…"
 
 #: ui/components/connection_banner.slint:215
 msgid "Reconnecting…"
-msgstr ""
+msgstr "Повторне з’єднання…"
 
 #: ui/components/connection_banner.slint:216
 msgid "Reconnecting (attempt {})…"
-msgstr ""
+msgstr "Повторне з’єднання (спроба {})…"
 
 #: ui/components/connection_banner.slint:217
 #: ui/sidebar/sidebar_footer.slint:357
 msgid "Server unreachable"
-msgstr ""
+msgstr "Сервер недоступний"
 
 #: ui/components/connection_banner.slint:217
 msgid "Server unreachable — check your network"
-msgstr ""
+msgstr "Сервер недоступний — перевірте мережу"
 
 #: ui/components/connection_banner.slint:218
 msgid "No server — messages will send later"
-msgstr ""
+msgstr "Немає сервера — повідомлення надішлються пізніше"
 
 #: ui/components/connection_banner.slint:219
 msgid "Server unreachable — messages will send later"
-msgstr ""
+msgstr "Сервер недоступний — повідомлення надішлються пізніше"
 
 #: ui/components/connection_banner.slint:260
 msgid "Dismiss the connection banner"
-msgstr ""
+msgstr "Закрити банер з’єднання"
 
 #: ui/components/dismiss_button.slint:38 ui/server_records/screen.slint:87
 msgid "Close"
-msgstr ""
+msgstr "Закрити"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73 ui/components/gif_picker.slint:181
 msgid "Recent"
-msgstr ""
+msgstr "Нещодавні"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Smileys"
-msgstr ""
+msgstr "Смайли"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73 ui/components/unified_search.slint:815
 msgid "People"
-msgstr ""
+msgstr "Люди"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Animals"
-msgstr ""
+msgstr "Тварини"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Food"
-msgstr ""
+msgstr "Їжа"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Travel"
-msgstr ""
+msgstr "Подорожі"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Activities"
-msgstr ""
+msgstr "Активності"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Objects"
-msgstr ""
+msgstr "Предмети"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Symbols"
-msgstr ""
+msgstr "Символи"
 
 #. is not a name.
 #: ui/components/emoji_picker.slint:73
 msgid "Flags"
-msgstr ""
+msgstr "Прапори"
 
 #: ui/components/emoji_picker.slint:274
 msgid "Default skin tone"
-msgstr ""
+msgstr "Стандартний тон шкіри"
 
 #: ui/components/emoji_picker.slint:274
 msgid "Skin tone {}"
-msgstr ""
+msgstr "Тон шкіри {}"
 
 #: ui/components/emoji_picker.slint:299
 msgid "Search results"
-msgstr ""
+msgstr "Результати пошуку"
 
 #: ui/components/emoji_picker.slint:375
 msgid "No emoji found"
-msgstr ""
+msgstr "Емодзі не знайдено"
 
 #: ui/components/emoji_picker.slint:376
 msgid "Emoji you use show up here"
-msgstr ""
+msgstr "Тут з’являться емодзі, якими ви користуєтеся"
 
 #: ui/components/emoji_picker.slint:377
 msgid "No emoji in this category"
-msgstr ""
+msgstr "У цій категорії немає емодзі"
 
 #: ui/components/gif_picker.slint:41
 msgid "GIF {}, preview unavailable"
-msgstr ""
+msgstr "GIF {}, попередній перегляд недоступний"
 
 #: ui/components/gif_picker.slint:41
 msgid "GIF {}"
-msgstr ""
+msgstr "GIF {}"
 
 #: ui/components/gif_picker.slint:208
 msgid "Loading trending…"
-msgstr ""
+msgstr "Завантаження популярних…"
 
 #: ui/components/gif_picker.slint:208
 msgid "Trending"
-msgstr ""
+msgstr "Популярні"
 
 #: ui/components/gif_picker.slint:252
 msgid "Couldn't load GIFs"
-msgstr ""
+msgstr "Не вдалося завантажити GIF"
 
 #: ui/components/gif_picker.slint:252
 msgid "No GIFs found"
-msgstr ""
+msgstr "GIF не знайдено"
 
 #: ui/components/gif_picker.slint:252
 msgid "No trending GIFs"
-msgstr ""
+msgstr "Немає популярних GIF"
 
 #: ui/components/gif_picker.slint:259
 msgid "The GIF service is unavailable."
-msgstr ""
+msgstr "Служба GIF недоступна."
 
 #: ui/components/gif_picker.slint:259
 msgid "Try a different search term"
-msgstr ""
+msgstr "Спробуйте інший запит"
 
 #: ui/components/gif_picker.slint:259
 msgid "Try again later."
-msgstr ""
+msgstr "Спробуйте пізніше."
 
 #: ui/components/gif_picker.slint:282
 msgid "Powered by Klipy"
-msgstr ""
+msgstr "Працює на Klipy"
 
 #: ui/components/image_viewer.slint:42
 msgid "Copy image"
-msgstr ""
+msgstr "Копіювати зображення"
 
 #: ui/components/image_viewer.slint:43
 msgid "Open downloads"
-msgstr ""
+msgstr "Відкрити завантаження"
 
 #: ui/components/image_viewer.slint:44
 msgid "Previous media"
-msgstr ""
+msgstr "Попереднє медіа"
 
 #: ui/components/image_viewer.slint:46
 msgid "Next media"
-msgstr ""
+msgstr "Наступне медіа"
 
 #: ui/components/input.slint:167
 msgid "Hide password"
-msgstr ""
+msgstr "Сховати пароль"
 
 #: ui/components/input.slint:167
 msgid "Show password"
-msgstr ""
+msgstr "Показати пароль"
 
 #: ui/components/mention_autocomplete.slint:173
 msgid "Notify online members"
-msgstr ""
+msgstr "Сповістити тих, хто в мережі"
 
 #: ui/components/mention_autocomplete.slint:180
 msgid "Notify all members"
-msgstr ""
+msgstr "Сповістити всіх учасників"
 
 #: ui/components/mention_autocomplete.slint:217
 msgid "No suggestions"
-msgstr ""
+msgstr "Немає підказок"
 
 #. genuinely work here, and channels and DMs genuinely do not.
 #: ui/components/mesh_only_bar.slint:54
 msgid ""
 "Not signed in — mesh conversations only. Channels and DMs need an account."
 msgstr ""
+"Ви не ввійшли — доступні лише розмови Mesh. Канали й особисті чати "
+"потребують облікового запису."
 
 #: ui/components/mesh_only_bar.slint:76 ui/components/mesh_only_bar.slint:91
 #: ui/pages/register.slint:619
 msgid "Sign in"
-msgstr ""
+msgstr "Увійти"
 
 #: ui/components/mobile_bottom_nav.slint:216
 #: ui/sidebar/sidebar_footer.slint:103 ui/sidebar/sidebar_footer.slint:249
 msgid "Chats"
-msgstr ""
+msgstr "Чати"
 
 #: ui/components/mobile_bottom_nav.slint:249 ui/modals/friends.slint:146
 msgid "Contacts"
-msgstr ""
+msgstr "Контакти"
 
 #: ui/components/mobile_bottom_nav.slint:259 ui/sidebar/sidebar_footer.slint:78
 msgid "Profile"
-msgstr ""
+msgstr "Профіль"
 
 #: ui/components/modal.slint:109
 msgid "Dialog"
-msgstr ""
+msgstr "Діалог"
 
 #: ui/components/modal.slint:109
 msgid "{} dialog"
-msgstr ""
+msgstr "Діалог {}"
 
 #. never one name for every dialog.
 #: ui/components/modal_container.slint:41
 msgid "Modal dialog"
-msgstr ""
+msgstr "Модальне вікно"
 
 #: ui/components/offline_mesh_notice.slint:80
 msgid "Can't reach the server"
-msgstr ""
+msgstr "Не вдається досягти сервера"
 
 #: ui/components/offline_mesh_notice.slint:90
 msgid ""
 "Creating an account and signing in both need it, so neither will work until "
 "it comes back."
 msgstr ""
+"І створення облікового запису, і вхід потребують його, тож ні те, ні те не "
+"працюватиме, доки він не повернеться."
 
 #: ui/components/offline_mesh_notice.slint:101
 msgid ""
 "The mesh does not. It carries messages between nearby devices over Bluetooth "
 "with no server, no internet and no account — and it is running now."
 msgstr ""
+"Mesh — ні. Він передає повідомлення між пристроями поруч через Bluetooth без "
+"сервера, без інтернету й без облікового запису — і зараз він працює."
 
 #: ui/components/offline_mesh_notice.slint:103
 msgid ""
 "The mesh is not running on this device either, so there is nothing to fall "
 "back to right now."
 msgstr ""
+"На цьому пристрої Mesh теж не працює, тож зараз немає резервного шляху."
 
 #: ui/components/offline_mesh_notice.slint:104
 msgid "This build has no mesh, so there is nothing to fall back to."
-msgstr ""
+msgstr "У цій збірці немає Mesh, тож резервного шляху немає."
 
 #: ui/components/offline_mesh_notice.slint:144
 msgid "Use the mesh without an account"
-msgstr ""
+msgstr "Користуватися Mesh без облікового запису"
 
 #: ui/components/offline_mesh_notice.slint:169
 msgid ""
 "Your channels and DMs stay where they are. Sign in whenever the server is "
 "back."
 msgstr ""
+"Ваші канали й особисті чати залишаться на місці. Увійдіть, коли сервер знову "
+"запрацює."
 
 #: ui/components/pdf_preview_panel.slint:80
 msgid "PDF"
-msgstr ""
+msgstr "PDF"
 
 #: ui/components/pdf_preview_panel.slint:158
 msgid "PDF document"
-msgstr ""
+msgstr "Документ PDF"
 
 #: ui/components/pdf_preview_panel.slint:165
 msgid "View this PDF in another app."
-msgstr ""
+msgstr "Переглянути цей PDF в іншій програмі."
 
 #: ui/components/pdf_preview_panel.slint:174
 msgid "Open PDF"
-msgstr ""
+msgstr "Відкрити PDF"
 
 #: ui/components/pdf_preview_panel.slint:187
 msgid "Loading PDF..."
-msgstr ""
+msgstr "Завантаження PDF..."
 
 #: ui/components/pdf_preview_panel.slint:207
 msgid "Previous page"
-msgstr ""
+msgstr "Попередня сторінка"
 
 #: ui/components/pdf_preview_panel.slint:223
 msgid "Next page"
-msgstr ""
+msgstr "Наступна сторінка"
 
 #: ui/components/unified_search.slint:551
 msgid "Search…"
-msgstr ""
+msgstr "Пошук…"
 
 #: ui/components/unified_search.slint:575
 msgid "Cancel search"
-msgstr ""
+msgstr "Скасувати пошук"
 
 #: ui/components/unified_search.slint:617
 msgid "Messages"
-msgstr ""
+msgstr "Повідомлення"
 
 #: ui/components/unified_search.slint:618
 msgid "Media"
-msgstr ""
+msgstr "Медіа"
 
 #: ui/components/unified_search.slint:619
 msgid "Files"
-msgstr ""
+msgstr "Файли"
 
 #: ui/components/unified_search.slint:620
 msgid "Links"
-msgstr ""
+msgstr "Посилання"
 
 #: ui/components/unified_search.slint:621
 msgid "Voice"
-msgstr ""
+msgstr "Голосові"
 
 #: ui/components/unified_search.slint:654
 msgid "{0} {1}+"
-msgstr ""
+msgstr "{0} {1}+"
 
 #: ui/components/unified_search.slint:654
 msgid "{0} {1}"
-msgstr ""
+msgstr "{0} {1}"
 
 #: ui/components/unified_search.slint:675
 msgid "Sort: relevance"
-msgstr ""
+msgstr "Сортування: релевантність"
 
 #: ui/components/unified_search.slint:675
 msgid "Sort: newest"
-msgstr ""
+msgstr "Сортування: найновіші"
 
 #: ui/components/unified_search.slint:675
 msgid "Sort: oldest"
-msgstr ""
+msgstr "Сортування: найстаріші"
 
 #: ui/components/unified_search.slint:675
 msgid "Sort: largest"
-msgstr ""
+msgstr "Сортування: найбільші"
 
 #: ui/components/unified_search.slint:685
 msgid "Relevance"
-msgstr ""
+msgstr "Релевантність"
 
 #: ui/components/unified_search.slint:685
 msgid "Newest"
-msgstr ""
+msgstr "Найновіші"
 
 #: ui/components/unified_search.slint:685
 msgid "Oldest"
-msgstr ""
+msgstr "Найстаріші"
 
 #: ui/components/unified_search.slint:685
 msgid "Largest"
-msgstr ""
+msgstr "Найбільші"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: any"
-msgstr ""
+msgstr "Дата: будь-коли"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: today"
-msgstr ""
+msgstr "Дата: сьогодні"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: week"
-msgstr ""
+msgstr "Дата: тиждень"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: month"
-msgstr ""
+msgstr "Дата: місяць"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: year"
-msgstr ""
+msgstr "Дата: рік"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: {}"
-msgstr ""
+msgstr "Дата: {}"
 
 #. `choice` is compared to pick the date-filter key. Shown text is separate.
 #: ui/components/unified_search.slint:699
 msgid "Any time"
-msgstr ""
+msgstr "Будь-коли"
 
 #: ui/components/unified_search.slint:699
 msgid "Today"
-msgstr ""
+msgstr "Сьогодні"
 
 #: ui/components/unified_search.slint:699
 msgid "7 days"
-msgstr ""
+msgstr "7 днів"
 
 #: ui/components/unified_search.slint:699
 msgid "30 days"
-msgstr ""
+msgstr "30 днів"
 
 #: ui/components/unified_search.slint:699
 msgid "This year"
-msgstr ""
+msgstr "Цього року"
 
 #: ui/components/unified_search.slint:714
 msgid "Filter by sender"
-msgstr ""
+msgstr "Фільтр за відправником"
 
 #: ui/components/unified_search.slint:714
 msgid "Filter by conversation"
-msgstr ""
+msgstr "Фільтр за розмовою"
 
 #: ui/components/unified_search.slint:723
 msgid "From"
-msgstr ""
+msgstr "Від"
 
 #: ui/components/unified_search.slint:723
 msgid "From: {}"
-msgstr ""
+msgstr "Від: {}"
 
 #: ui/components/unified_search.slint:723
 msgid "In"
-msgstr ""
+msgstr "У чаті"
 
 #: ui/components/unified_search.slint:723
 msgid "In: {}"
-msgstr ""
+msgstr "У чаті: {}"
 
 #: ui/components/unified_search.slint:729
 msgid "Clear sender filter"
-msgstr ""
+msgstr "Скинути фільтр відправника"
 
 #: ui/components/unified_search.slint:729
 msgid "Clear conversation filter"
-msgstr ""
+msgstr "Скинути фільтр розмови"
 
 #: ui/components/unified_search.slint:756
 msgid "Recent searches"
-msgstr ""
+msgstr "Нещодавні пошуки"
 
 #: ui/components/unified_search.slint:758
 msgid "Clear recent searches"
-msgstr ""
+msgstr "Очистити нещодавні пошуки"
 
 #: ui/components/unified_search.slint:765 ui/modals/jarvis_memory.slint:107
 msgid "Clear"
-msgstr ""
+msgstr "Очистити"
 
 #: ui/components/unified_search.slint:771
 msgid "Search for {}"
-msgstr ""
+msgstr "Шукати {}"
 
 #: ui/components/unified_search.slint:783
 msgid "Remove recent search {}"
-msgstr ""
+msgstr "Вилучити нещодавній пошук {}"
 
 #: ui/components/unified_search.slint:799
 msgid "Suggested chats"
-msgstr ""
+msgstr "Пропоновані чати"
 
 #: ui/components/unified_search.slint:826
 msgid "Searching {}…"
-msgstr ""
+msgstr "Пошук {}…"
 
 #: ui/components/unified_search.slint:831
 msgid "No user {}"
-msgstr ""
+msgstr "Немає користувача {}"
 
 #: ui/components/unified_search.slint:849
 msgid "Find {}"
-msgstr ""
+msgstr "Знайти {}"
 
 #: ui/components/unified_search.slint:913
 msgid "Jump to"
-msgstr ""
+msgstr "Перейти"
 
 #: ui/components/unified_search.slint:933
 msgid "Public channels"
-msgstr ""
+msgstr "Публічні канали"
 
 #: ui/components/unified_search.slint:944
 msgid "Open {}"
-msgstr ""
+msgstr "Відкрити {}"
 
 #: ui/components/unified_search.slint:944
 msgid "Join {}"
-msgstr ""
+msgstr "Приєднатися до {}"
 
 #: ui/components/unified_search.slint:974
 msgid "Messages and shared content"
-msgstr ""
+msgstr "Повідомлення та спільний вміст"
 
 #: ui/components/unified_search.slint:975
 msgid "Photos and videos"
-msgstr ""
+msgstr "Фото й відео"
 
 #: ui/components/unified_search.slint:978
 msgid "Voice messages"
-msgstr ""
+msgstr "Голосові повідомлення"
 
 #. `section` is a category key (`to-lowercase()` selects the page).
 #: ui/components/unified_search.slint:1049
 msgid "Show more messages"
-msgstr ""
+msgstr "Більше повідомлень"
 
 #: ui/components/unified_search.slint:1050
 msgid "Show more media"
-msgstr ""
+msgstr "Більше медіа"
 
 #: ui/components/unified_search.slint:1051
 msgid "Show more files"
-msgstr ""
+msgstr "Більше файлів"
 
 #: ui/components/unified_search.slint:1052
 msgid "Show more links"
-msgstr ""
+msgstr "Більше посилань"
 
 #: ui/components/unified_search.slint:1053
 msgid "Show more voice"
-msgstr ""
+msgstr "Більше голосових"
 
 #: ui/components/unified_search.slint:1066
 msgid "Searching this device…"
-msgstr ""
+msgstr "Пошук на цьому пристрої…"
 
 #: ui/components/unified_search.slint:1076
 msgid "No photos or videos yet"
-msgstr ""
+msgstr "Фото й відео ще немає"
 
 #: ui/components/unified_search.slint:1077
 msgid "No files yet"
-msgstr ""
+msgstr "Файлів ще немає"
 
 #: ui/components/unified_search.slint:1078
 msgid "No links yet"
-msgstr ""
+msgstr "Посилань ще немає"
 
 #: ui/components/unified_search.slint:1078
 msgid "No voice messages yet"
-msgstr ""
+msgstr "Голосових повідомлень ще немає"
 
 #: ui/components/unified_search.slint:1085
 msgid "No matches on this device"
-msgstr ""
+msgstr "На цьому пристрої збігів немає"
 
 #: ui/components/unified_search.slint:1115
 msgid "When"
-msgstr ""
+msgstr "Коли"
 
 #: ui/components/unified_search.slint:1160
 msgid "Previous month"
-msgstr ""
+msgstr "Попередній місяць"
 
 #: ui/components/unified_search.slint:1172
 msgid "Next month"
-msgstr ""
+msgstr "Наступний місяць"
 
 #: ui/components/unified_search.slint:1262
 msgid "Tap a start day, then an end day"
-msgstr ""
+msgstr "Торкніться дня початку, потім дня кінця"
 
 #: ui/components/unified_search.slint:1262
 msgid "Start: {} · choose end"
-msgstr ""
+msgstr "Початок: {} · виберіть кінець"
 
 #: ui/components/unified_search.slint:1290
 msgid "From a person"
-msgstr ""
+msgstr "Від людини"
 
 #: ui/components/unified_search.slint:1290
 msgid "In a chat"
-msgstr ""
+msgstr "У чаті"
 
 #: ui/components/unified_search.slint:1296
 msgid "Search people"
-msgstr ""
+msgstr "Пошук людей"
 
 #: ui/components/unified_search.slint:1296
 msgid "Search chats"
-msgstr ""
+msgstr "Пошук чатів"
 
 #: ui/components/unified_search.slint:1343
 msgid "No matches"
-msgstr ""
+msgstr "Немає збігів"
 
 #: ui/components/video_player.slint:153
 msgid "Pause video"
-msgstr ""
+msgstr "Призупинити відео"
 
 #: ui/components/video_player.slint:153
 msgid "Play video"
-msgstr ""
+msgstr "Відтворити відео"
 
 #: ui/components/video_player.slint:167
 msgid "Video position"
-msgstr ""
+msgstr "Позиція відео"
 
 #: ui/components/video_player.slint:226
 msgid "Mute video"
-msgstr ""
+msgstr "Вимкнути звук відео"
 
 #: ui/components/video_player.slint:226
 msgid "Unmute video"
-msgstr ""
+msgstr "Увімкнути звук відео"
 
 #: ui/main_chat_shell.slint:468
 msgid "Select a conversation"
-msgstr ""
+msgstr "Виберіть розмову"
 
 #: ui/mesh/mesh_compose_sheet.slint:92 ui/mesh/mesh_compose_sheet.slint:149
 msgid "New private group"
-msgstr ""
+msgstr "Нова приватна група"
 
 #: ui/mesh/mesh_compose_sheet.slint:93 ui/mesh/mesh_compose_sheet.slint:153
 msgid "Join public channel"
-msgstr ""
+msgstr "Приєднатися до публічного каналу"
 
 #: ui/mesh/mesh_compose_sheet.slint:94 ui/mesh/mesh_compose_sheet.slint:156
 msgid "Join with invite"
-msgstr ""
+msgstr "За запрошенням"
 
 #: ui/mesh/mesh_compose_sheet.slint:95 ui/mesh/mesh_compose_sheet.slint:160
 msgid "Join location cell"
-msgstr ""
+msgstr "Комірка локації"
 
 #: ui/mesh/mesh_compose_sheet.slint:95
 msgid "New"
-msgstr ""
+msgstr "Нове"
 
 #: ui/mesh/mesh_compose_sheet.slint:149
 msgid "Invite only"
-msgstr ""
+msgstr "Лише за запрошенням"
 
 #: ui/mesh/mesh_compose_sheet.slint:153
 msgid "Talk with devices nearby"
-msgstr ""
+msgstr "Розмова з пристроями поруч"
 
 #: ui/mesh/mesh_compose_sheet.slint:156
 msgid "Paste or scan a private invite"
-msgstr ""
+msgstr "Вставте або відскануйте приватне запрошення"
 
 #: ui/mesh/mesh_compose_sheet.slint:160
 msgid "Connect through nearby relays"
-msgstr ""
+msgstr "Зв’язок через реле поруч"
 
 #: ui/mesh/mesh_compose_sheet.slint:170 ui/modals/channel_settings.slint:586
 msgid "Group name"
-msgstr ""
+msgstr "Назва групи"
 
 #: ui/mesh/mesh_compose_sheet.slint:176
 msgid ""
 "Only devices you invite can read it. You can add members after creating it."
 msgstr ""
+"Читати можуть лише запрошені пристрої. Учасників можна додати після "
+"створення."
 
 #: ui/mesh/mesh_compose_sheet.slint:187
 msgid "SEEN NEARBY"
-msgstr ""
+msgstr "БАЧИЛИ ПОРУЧ"
 
 #: ui/mesh/mesh_compose_sheet.slint:204
 msgid "Paste private invite"
-msgstr ""
+msgstr "Вставте приватне запрошення"
 
 #: ui/mesh/mesh_compose_sheet.slint:209 ui/modals/link_device_approve.slint:80
 msgid "Scan QR code"
-msgstr ""
+msgstr "Сканувати QR-код"
 
 #: ui/mesh/mesh_compose_sheet.slint:218
 msgid "Location cell (e.g. u4pruy)"
-msgstr ""
+msgstr "Комірка локації (наприклад, u4pruy)"
 
 #: ui/mesh/mesh_compose_sheet.slint:225
 msgid ""
 "Location cells use geohashes and available relays to connect devices in an "
 "area."
 msgstr ""
+"Комірки локації використовують геохеші та доступні реле, щоб з’єднувати "
+"пристрої в місцевості."
 
 #: ui/mesh/mesh_context_bar.slint:12
 msgid "Mesh is off"
-msgstr ""
+msgstr "Mesh вимкнено"
 
 #: ui/mesh/mesh_context_bar.slint:13 ui/mesh/mesh_setup_sheet.slint:123
 msgid "Bluetooth is off"
-msgstr ""
+msgstr "Bluetooth вимкнено"
 
 #: ui/mesh/mesh_context_bar.slint:15
 msgid "Waiting for the creator to rotate the group key"
-msgstr ""
+msgstr "Очікуємо, доки автор змінить ключ групи"
 
 #: ui/mesh/mesh_context_bar.slint:17
 msgid "No route to this person · waiting for a carrier"
-msgstr ""
+msgstr "Немає маршруту до цієї людини · чекаємо на носія"
 
 #: ui/mesh/mesh_context_bar.slint:57
 msgid "Turn on"
-msgstr ""
+msgstr "Увімкнути"
 
 #: ui/mesh/mesh_context_bar.slint:67
 msgid "Turn on mesh"
-msgstr ""
+msgstr "Увімкнути Mesh"
 
 #: ui/mesh/mesh_context_bar.slint:87
 msgid "Dismiss mesh notice"
-msgstr ""
+msgstr "Закрити сповіщення Mesh"
 
 #: ui/mesh/mesh_global.slint:161
 msgid "Mesh peer · self-asserted name"
-msgstr ""
+msgstr "Вузол Mesh · ім’я, яке назвав сам"
 
 #: ui/mesh/mesh_global.slint:164
 msgid "Noise (bitchat)"
-msgstr ""
+msgstr "Noise (bitchat)"
 
 #: ui/mesh/mesh_info_sheet.slint:57 ui/modals/channel_danger.slint:57
 #: ui/modals/channel_settings.slint:476
 msgid "Leave group"
-msgstr ""
+msgstr "Вийти з групи"
 
 #: ui/mesh/mesh_info_sheet.slint:58
 msgid "Leave cell"
-msgstr ""
+msgstr "Вийти з комірки"
 
 #: ui/mesh/mesh_info_sheet.slint:58 ui/mesh/mesh_list_item.slint:152
 #: ui/modals/channel_danger.slint:111
 msgid "Leave channel"
-msgstr ""
+msgstr "Вийти з каналу"
 
 #: ui/mesh/mesh_info_sheet.slint:63
 msgid "Group info"
-msgstr ""
+msgstr "Про групу"
 
 #: ui/mesh/mesh_info_sheet.slint:64
 msgid "Cell info"
-msgstr ""
+msgstr "Про комірку"
 
 #: ui/mesh/mesh_info_sheet.slint:64
 msgid "Channel info"
-msgstr ""
+msgstr "Про канал"
 
 #: ui/mesh/mesh_info_sheet.slint:105
 msgid "Public cell"
-msgstr ""
+msgstr "Публічна комірка"
 
 #: ui/mesh/mesh_info_sheet.slint:106 ui/modals/invite_member.slint:81
 msgid "Public channel"
-msgstr ""
+msgstr "Публічний канал"
 
 #: ui/mesh/mesh_info_sheet.slint:139
 msgid "View {}"
-msgstr ""
+msgstr "Переглянути {}"
 
 #: ui/mesh/mesh_info_sheet.slint:164
 msgid ""
 "Only invited devices can read this group. Removing someone rotates the key."
 msgstr ""
+"Цю групу можуть читати лише запрошені пристрої. Якщо когось вилучити, ключ "
+"зміниться."
 
 #: ui/mesh/mesh_info_sheet.slint:168
 msgid "Waiting for the creator to rotate the group key. Sending is paused."
-msgstr ""
+msgstr "Очікуємо, доки автор змінить ключ групи. Надсилання призупинено."
 
 #: ui/mesh/mesh_info_sheet.slint:175
 msgid "NEARBY DEVICES"
-msgstr ""
+msgstr "ПРИСТРОЇ ПОРУЧ"
 
 #: ui/mesh/mesh_info_sheet.slint:178
 msgid "No devices nearby yet."
-msgstr ""
+msgstr "Пристроїв поруч ще немає."
 
 #: ui/mesh/mesh_info_sheet.slint:194
 msgid "Nearby"
-msgstr ""
+msgstr "Поруч"
 
 #: ui/mesh/mesh_info_sheet.slint:194
 msgid "Waiting for a route"
-msgstr ""
+msgstr "Очікуємо маршрут"
 
 #: ui/mesh/mesh_info_sheet.slint:199 ui/modals/channel_members.slint:136
 #: ui/modals/invite_member.slint:186
 msgid "Member"
-msgstr ""
+msgstr "Учасник"
 
 #: ui/mesh/mesh_info_sheet.slint:210
 msgid "Invite {} with QR"
-msgstr ""
+msgstr "Запросити {} через QR"
 
 #: ui/mesh/mesh_info_sheet.slint:224
 msgid "Invite {}"
-msgstr ""
+msgstr "Запросити {}"
 
 #: ui/mesh/mesh_info_sheet.slint:239
 msgid ""
 "Invite sends the group key over the encrypted mesh link. QR shows a code the "
 "other person scans."
 msgstr ""
+"Запрошення передає ключ групи зашифрованим зв’язком Mesh. QR показує код, "
+"який інша людина сканує."
 
 #: ui/mesh/mesh_info_sheet.slint:259 ui/mesh/mesh_list_item.slint:138
 #: ui/modals/profile_action_tiles.slint:31
 msgid "Mute"
-msgstr ""
+msgstr "Вимкнути звук"
 
 #: ui/mesh/mesh_info_sheet.slint:263 ui/mesh/mesh_list_item.slint:142
 msgid "Mute channel"
-msgstr ""
+msgstr "Вимкнути звук каналу"
 
 #: ui/mesh/mesh_info_sheet.slint:271
 msgid "{n} relay connected"
 msgid_plural "{n} relays connected"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "Підключено {n} реле"
+msgstr[1] "Підключено {n} реле"
+msgstr[2] "Підключено {n} реле"
 
 #: ui/mesh/mesh_info_sheet.slint:306
 msgid "Remove {}? The group key will rotate."
-msgstr ""
+msgstr "Вилучити {}? Ключ групи зміниться."
 
 #: ui/mesh/mesh_info_sheet.slint:308
 msgid "Reachable members will pause sending until the creator rotates the key."
-msgstr ""
+msgstr "Доступні учасники призупинять надсилання, доки автор не змінить ключ."
 
 #: ui/mesh/mesh_info_sheet.slint:309
 msgid "Leave this mesh conversation?"
-msgstr ""
+msgstr "Вийти з цієї розмови Mesh?"
 
 #: ui/mesh/mesh_info_sheet.slint:315
 msgid "View contact"
-msgstr ""
+msgstr "Переглянути контакт"
 
 #: ui/mesh/mesh_info_sheet.slint:322 ui/modals/channel_members.slint:635
 msgid "Remove"
-msgstr ""
+msgstr "Вилучити"
 
 #: ui/mesh/mesh_list.slint:12
 msgid "{n} device nearby"
 msgid_plural "{n} devices nearby"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "{n} пристрій поруч"
+msgstr[1] "{n} пристрої поруч"
+msgstr[2] "{n} пристроїв поруч"
 
 #: ui/mesh/mesh_list.slint:14
 msgid "Mesh off"
-msgstr ""
+msgstr "Mesh вимкнено"
 
 #: ui/mesh/mesh_list.slint:15
 msgid "Mesh on"
-msgstr ""
+msgstr "Mesh увімкнено"
 
 #: ui/mesh/mesh_list.slint:16
 msgid "Radio off · {n} relay"
 msgid_plural "Radio off · {n} relays"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "Радіо вимкнено · {n} реле"
+msgstr[1] "Радіо вимкнено · {n} реле"
+msgstr[2] "Радіо вимкнено · {n} реле"
 
 #: ui/mesh/mesh_list.slint:17
 msgid "Bluetooth is off · {n} relay"
 msgid_plural "Bluetooth is off · {n} relays"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "Bluetooth вимкнено · {n} реле"
+msgstr[1] "Bluetooth вимкнено · {n} реле"
+msgstr[2] "Bluetooth вимкнено · {n} реле"
 
 #: ui/mesh/mesh_list.slint:35
 msgid "Mesh setup"
-msgstr ""
+msgstr "Налаштування Mesh"
 
 #: ui/mesh/mesh_list.slint:79
 msgid "Mesh radio"
-msgstr ""
+msgstr "Радіо Mesh"
 
 #: ui/mesh/mesh_list.slint:98 ui/mesh/mesh_setup_sheet.slint:93
 msgid "{0} invited you to {1}"
-msgstr ""
+msgstr "{0} запрошує вас до {1}"
 
 #: ui/mesh/mesh_list.slint:111
 msgid "Decline mesh invitation"
-msgstr ""
+msgstr "Відхилити запрошення Mesh"
 
 #: ui/mesh/mesh_list.slint:121
 msgid "Join mesh invitation"
-msgstr ""
+msgstr "Прийняти запрошення Mesh"
 
 #: ui/mesh/mesh_list.slint:134
 msgid "NEARBY"
-msgstr ""
+msgstr "ПОРУЧ"
 
 #: ui/mesh/mesh_list.slint:158
 msgid "Open nearby mesh peer {}"
-msgstr ""
+msgstr "Відкрити вузол Mesh поруч {}"
 
 #: ui/mesh/mesh_list.slint:182
 msgid "No mesh conversations"
-msgstr ""
+msgstr "Немає розмов Mesh"
 
 #: ui/mesh/mesh_list.slint:185
 msgid "Create a group or start a nearby conversation."
-msgstr ""
+msgstr "Створіть групу або почніть розмову з кимось поруч."
 
 #: ui/mesh/mesh_list.slint:190
 msgid "New group"
-msgstr ""
+msgstr "Нова група"
 
 #: ui/mesh/mesh_list.slint:193
 msgid "New mesh group"
-msgstr ""
+msgstr "Нова група Mesh"
 
 #: ui/mesh/mesh_list.slint:203
 msgid "GROUPS"
-msgstr ""
+msgstr "ГРУПИ"
 
 #: ui/mesh/mesh_list.slint:227
 msgid "CHANNELS"
-msgstr ""
+msgstr "КАНАЛИ"
 
 #: ui/mesh/mesh_list.slint:251
 msgid "DIRECT MESSAGES"
-msgstr ""
+msgstr "ОСОБИСТІ ЧАТИ"
 
 #: ui/mesh/mesh_list_item.slint:29
 msgid "Public · {}"
-msgstr ""
+msgstr "Публічно · {}"
 
 #: ui/mesh/mesh_list_item.slint:30
 msgid "Everyone in radio range"
-msgstr ""
+msgstr "Усі в зоні радіо"
 
 #: ui/mesh/mesh_list_item.slint:31
 msgid "Public to nearby listeners"
-msgstr ""
+msgstr "Публічно для слухачів поруч"
 
 #: ui/mesh/mesh_list_item.slint:32
 msgid "Invited devices · encrypted"
-msgstr ""
+msgstr "Запрошені пристрої · зашифровано"
 
 #: ui/mesh/mesh_list_item.slint:33
 msgid "Verified Chatter contact"
-msgstr ""
+msgstr "Підтверджений контакт Chatter"
 
 #: ui/mesh/mesh_list_item.slint:34
 msgid "Encrypted · nearby"
-msgstr ""
+msgstr "Зашифровано · поруч"
 
 #: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
 #: ui/modals/profile_action_tiles.slint:31
 msgid "Unmute"
-msgstr ""
+msgstr "Увімкнути звук"
 
 #: ui/mesh/mesh_list_item.slint:142
 msgid "Unmute channel"
-msgstr ""
+msgstr "Увімкнути звук каналу"
 
 #: ui/mesh/mesh_list_item.slint:149 ui/modals/channel_danger.slint:74
 msgid "Leave"
-msgstr ""
+msgstr "Вийти"
 
 #: ui/mesh/mesh_peer_sheet.slint:59
 msgid "Mesh peer"
-msgstr ""
+msgstr "Вузол Mesh"
 
 #: ui/mesh/mesh_peer_sheet.slint:70
 msgid "Contact"
-msgstr ""
+msgstr "Контакт"
 
 #: ui/mesh/mesh_peer_sheet.slint:102
 msgid "Verified"
-msgstr ""
+msgstr "Підтверджено"
 
 #: ui/mesh/mesh_peer_sheet.slint:116 ui/mesh/mesh_peer_sheet.slint:186
 msgid "Verify"
-msgstr ""
+msgstr "Підтвердити"
 
 #: ui/mesh/mesh_peer_sheet.slint:134
 msgid "Compare these numbers in person with {}."
-msgstr ""
+msgstr "Порівняйте ці числа особисто з {}."
 
 #: ui/mesh/mesh_peer_sheet.slint:142
 msgid "Show my QR code"
-msgstr ""
+msgstr "Показати мій QR-код"
 
 #: ui/mesh/mesh_peer_sheet.slint:146
 msgid "Scan their code"
-msgstr ""
+msgstr "Сканувати код співрозмовника"
 
 #: ui/mesh/mesh_peer_sheet.slint:150
 msgid "Verify known contact"
-msgstr ""
+msgstr "Підтвердити відомий контакт"
 
 #: ui/mesh/mesh_peer_sheet.slint:154
 msgid "Share my Chatter identity"
-msgstr ""
+msgstr "Поділитися моїм ідентифікатором Chatter"
 
 #: ui/mesh/mesh_peer_sheet.slint:160 ui/mesh/mesh_peer_sheet.slint:162
 msgid "Use Signal encryption"
-msgstr ""
+msgstr "Шифрування Signal"
 
 #: ui/mesh/mesh_peer_sheet.slint:183
 msgid "Paste their QR code"
-msgstr ""
+msgstr "Вставте QR-код співрозмовника"
 
 #: ui/mesh/mesh_peer_sheet.slint:191
 msgid "Waiting for encrypted link"
-msgstr ""
+msgstr "Очікуємо зашифрований зв’язок"
 
 #: ui/mesh/mesh_peer_sheet.slint:191
 msgid "Their fingerprint: {}"
-msgstr ""
+msgstr "Відбиток співрозмовника: {}"
 
 #: ui/mesh/mesh_peer_sheet.slint:194
 msgid "Your fingerprint: {}"
-msgstr ""
+msgstr "Ваш відбиток: {}"
 
 #: ui/mesh/mesh_peer_sheet.slint:200
 msgid "ADD TO GROUP"
-msgstr ""
+msgstr "ДОДАТИ ДО ГРУПИ"
 
 #: ui/mesh/mesh_peer_sheet.slint:229
 msgid "Invite to {} with QR"
-msgstr ""
+msgstr "Запросити до {} через QR"
 
 #: ui/mesh/mesh_peer_sheet.slint:243
 msgid "Invite to {}"
-msgstr ""
+msgstr "Запросити до {}"
 
 #: ui/mesh/mesh_peer_sheet.slint:268
 msgid "Remove from {}"
-msgstr ""
+msgstr "Вилучити з {}"
 
 #: ui/mesh/mesh_peer_sheet.slint:273 ui/modals/channel_danger.slint:188
 #: ui/modals/user_profile.slint:808
 msgid "Block"
-msgstr ""
+msgstr "Заблокувати"
 
 #: ui/mesh/mesh_peer_sheet.slint:298
 msgid "Remove {0} from {1}? The group key will rotate."
-msgstr ""
+msgstr "Вилучити {0} з {1}? Ключ групи зміниться."
 
 #: ui/mesh/mesh_peer_sheet.slint:300
 msgid "Remove and rotate key"
-msgstr ""
+msgstr "Вилучити й змінити ключ"
 
 #: ui/mesh/mesh_setup_sheet.slint:62 ui/mesh/mesh_setup_sheet.slint:73
 msgid "Mesh settings"
-msgstr ""
+msgstr "Налаштування Mesh"
 
 #: ui/mesh/mesh_setup_sheet.slint:97
 msgid "Peer names are self-asserted until you verify in person."
-msgstr ""
+msgstr "Імена вузлів вони називають самі, доки ви не підтвердите їх особисто."
 
 #: ui/mesh/mesh_setup_sheet.slint:123
 msgid "Radio unavailable"
-msgstr ""
+msgstr "Радіо недоступне"
 
 #: ui/mesh/mesh_setup_sheet.slint:124
 msgid "On · nobody nearby"
-msgstr ""
+msgstr "Увімкнено · нікого поруч"
 
 #: ui/mesh/mesh_setup_sheet.slint:125
 msgid "On · {n} nearby"
 msgid_plural "On · {n} nearby"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "Увімкнено · {n} поруч"
+msgstr[1] "Увімкнено · {n} поруч"
+msgstr[2] "Увімкнено · {n} поруч"
 
 #: ui/mesh/mesh_setup_sheet.slint:138
 msgid "Nearby devices will appear here when discovered."
-msgstr ""
+msgstr "Тут з’являться пристрої поруч, щойно їх буде знайдено."
 
 #: ui/mesh/mesh_setup_sheet.slint:148
 msgid "Nickname"
-msgstr ""
+msgstr "Псевдонім"
 
 #. "Save", not "Done": the sheet's own Done closes it.
 #: ui/mesh/mesh_setup_sheet.slint:152 ui/modals/create_section.slint:228
 #: ui/settings/account_settings.slint:233
 msgid "Save"
-msgstr ""
+msgstr "Зберегти"
 
 #: ui/mesh/mesh_setup_sheet.slint:158
 msgid "Visible to anyone nearby. Names are self-asserted."
-msgstr ""
+msgstr "Видно всім поруч. Імена називають самі."
 
 #: ui/mesh/mesh_setup_sheet.slint:168
 msgid "Erase Mesh data…"
-msgstr ""
+msgstr "Стерти дані Mesh…"
 
 #: ui/mesh/mesh_setup_sheet.slint:188
 msgid ""
 "Erase this device's mesh identity, messages, carried mail and favourites? "
 "Your Chatter account stays intact. This cannot be undone."
 msgstr ""
+"Стерти ідентичність Mesh, повідомлення, передану пошту та обране на цьому "
+"пристрої? Обліковий запис Chatter залишиться. Це неможливо скасувати."
 
 #: ui/mesh/mesh_setup_sheet.slint:190
 msgid "Erase Mesh data"
-msgstr ""
+msgstr "Стерти дані Mesh"
 
 #: ui/modals/anon_mode_pin.slint:51
 msgid "Enter PIN to enable Shield"
-msgstr ""
+msgstr "Введіть PIN, щоб увімкнути Shield"
 
 #: ui/modals/anon_mode_pin.slint:61
 msgid ""
@@ -2919,1444 +2991,1482 @@ msgid ""
 "reached you will be told. Enter your PIN to enable. On a device checking "
 "online, wrong attempts can delete your key backup."
 msgstr ""
+"Shield ховає ваші канали та збережені повідомлення і показує анонімні "
+"особисті чати. Особисті чати з друзями залишаються, але йдуть через анонімні "
+"скриньки, а не через сервер. Ваше розташування в мережі ховається за Tor — "
+"якщо Tor недоступний, вас попередять. Введіть PIN, щоб увімкнути. На "
+"пристрої з перевіркою онлайн хибні спроби можуть видалити резервну копію "
+"ключів."
 
 #: ui/modals/anon_mode_pin.slint:117
 msgid "Enable"
-msgstr ""
+msgstr "Увімкнути"
 
 #: ui/modals/channel_access.slint:20 ui/modals/channel_settings.slint:199
 msgid "Access"
-msgstr ""
+msgstr "Доступ"
 
 #: ui/modals/channel_access.slint:84
 msgid "Join links"
-msgstr ""
+msgstr "Посилання для входу"
 
 #: ui/modals/channel_access.slint:91
 msgid ""
 "Anyone with a link can join. The link can be copied only now, when it is "
 "created."
 msgstr ""
+"Будь-хто з посиланням може приєднатися. Посилання можна скопіювати лише "
+"зараз, під час створення."
 
 #: ui/modals/channel_access.slint:99 ui/modals/channel_access.slint:103
 msgid "Require approval"
-msgstr ""
+msgstr "Потрібне схвалення"
 
 #: ui/modals/channel_access.slint:110
 msgid "People who use the link wait until an admin lets them in"
-msgstr ""
+msgstr "Хто переходить за посиланням, чекає, доки адмін пустить"
 
 #: ui/modals/channel_access.slint:121 ui/modals/profile_info_card.slint:186
 msgid "Create link"
-msgstr ""
+msgstr "Створити посилання"
 
 #: ui/modals/channel_access.slint:146 ui/modals/profile_info_card.slint:186
 msgid "Copy link"
-msgstr ""
+msgstr "Копіювати посилання"
 
 #: ui/modals/channel_access.slint:167 ui/modals/sessions.slint:339
 msgid "Revoke"
-msgstr ""
+msgstr "Відкликати"
 
 #: ui/modals/channel_access.slint:180
 msgid "No join requests"
-msgstr ""
+msgstr "Немає запитів на вхід"
 
 #: ui/modals/channel_access.slint:180
 msgid "Join requests"
-msgstr ""
+msgstr "Запити на вхід"
 
 #: ui/modals/channel_access.slint:199
 msgid "Approve"
-msgstr ""
+msgstr "Схвалити"
 
 #: ui/modals/channel_access.slint:206
 msgid "Reject"
-msgstr ""
+msgstr "Відхилити"
 
 #: ui/modals/channel_access_choices.slint:18
 msgid "Who can join?"
-msgstr ""
+msgstr "Хто може приєднатися?"
 
 #: ui/modals/channel_access_choices.slint:73
 msgid "Anyone finds and joins. New members see messages from when they join."
 msgstr ""
+"Будь-хто знаходить і входить. Нові учасники бачать повідомлення з моменту "
+"входу."
 
 #: ui/modals/channel_access_choices.slint:90
 msgid "Invite-only"
-msgstr ""
+msgstr "Лише за запрошенням"
 
 #: ui/modals/channel_access_choices.slint:132
 msgid "Hidden from discovery. Invite or password to join."
-msgstr ""
+msgstr "Приховано з пошуку. Щоб увійти, потрібне запрошення або пароль."
 
 #: ui/modals/channel_access_choices.slint:149
 msgid "Anon group"
-msgstr ""
+msgstr "Анонімна група"
 
 #: ui/modals/channel_access_choices.slint:191
 msgid "End-to-end encrypted. Server can't see it exists."
-msgstr ""
+msgstr "Наскрізне шифрування. Сервер не бачить, що вона існує."
 
 #: ui/modals/channel_access_choices.slint:217
 msgid "End-to-end encrypted"
-msgstr ""
+msgstr "Наскрізне шифрування"
 
 #: ui/modals/channel_danger.slint:26 ui/settings/account_settings.slint:635
 msgid "Danger zone"
-msgstr ""
+msgstr "Небезпечна зона"
 
 #: ui/modals/channel_danger.slint:64
 msgid "The group and its messages are removed from this device"
-msgstr ""
+msgstr "Групу та її повідомлення буде вилучено з цього пристрою"
 
 #: ui/modals/channel_danger.slint:64
 msgid "You will lose access to this channel's messages"
-msgstr ""
+msgstr "Ви втратите доступ до повідомлень цього каналу"
 
 #: ui/modals/channel_danger.slint:89
 msgid "Leave {}? You can only come back if a member invites you again."
-msgstr ""
+msgstr "Вийти з {}? Повернутися можна, лише якщо учасник запросить вас знову."
 
 #: ui/modals/channel_danger.slint:90
 msgid ""
 "Leave {}? You won't get new messages, and an invite-only channel cannot be "
 "rejoined on your own."
 msgstr ""
+"Вийти з {}? Нові повідомлення не надходитимуть, а до каналу лише за "
+"запрошенням самостійно не повернутися."
 
 #: ui/modals/channel_danger.slint:133
 msgid "Transfer ownership"
-msgstr ""
+msgstr "Передати власність"
 
 #: ui/modals/channel_danger.slint:140
 msgid "Make another member the owner to leave."
-msgstr ""
+msgstr "Щоб вийти, зробіть власником іншого учасника."
 
 #: ui/modals/channel_danger.slint:140
 msgid "Transfer ownership to leave, or delete the channel."
-msgstr ""
+msgstr "Щоб вийти, передайте власність або видаліть канал."
 
 #: ui/modals/channel_danger.slint:150
 msgid "Transfer…"
-msgstr ""
+msgstr "Передати…"
 
 #: ui/modals/channel_danger.slint:169
 msgid "Unblock group"
-msgstr ""
+msgstr "Розблокувати групу"
 
 #: ui/modals/channel_danger.slint:169
 msgid "Block group"
-msgstr ""
+msgstr "Заблокувати групу"
 
 #: ui/modals/channel_danger.slint:177
 msgid "Messages from this group are being dropped on this device"
-msgstr ""
+msgstr "Повідомлення цієї групи на цьому пристрої відкидаються"
 
 #: ui/modals/channel_danger.slint:178
 msgid "Drop everything this group sends, on this device"
-msgstr ""
+msgstr "Відкидати все, що надсилає ця група, на цьому пристрої"
 
 #: ui/modals/channel_danger.slint:204
 msgid "Unarchive channel"
-msgstr ""
+msgstr "Розархівувати канал"
 
 #: ui/modals/channel_danger.slint:204
 msgid "Archive channel"
-msgstr ""
+msgstr "Архівувати канал"
 
 #: ui/modals/channel_danger.slint:211
 msgid "Make channel active again"
-msgstr ""
+msgstr "Знову зробити канал активним"
 
 #: ui/modals/channel_danger.slint:211
 msgid "Archive to hide from active channels"
-msgstr ""
+msgstr "В архів, щоб сховати з активних каналів"
 
 #: ui/modals/channel_danger.slint:221
 msgid "Unarchive"
-msgstr ""
+msgstr "Розархівувати"
 
 #: ui/modals/channel_danger.slint:221
 msgid "Archive"
-msgstr ""
+msgstr "Архівувати"
 
 #: ui/modals/channel_danger.slint:246 ui/modals/channel_danger.slint:302
 msgid "Delete channel"
-msgstr ""
+msgstr "Видалити канал"
 
 #: ui/modals/channel_danger.slint:254
 msgid "Deletes the channel and all its messages. Can't be undone."
-msgstr ""
+msgstr "Видаляє канал і всі його повідомлення. Скасувати не можна."
 
 #: ui/modals/channel_danger.slint:278
 msgid ""
 "Delete \"{}\" permanently? Every message in it goes with it. This cannot be "
 "undone."
 msgstr ""
+"Видалити «{}» назавжди? Усі повідомлення в ньому зникнуть разом із ним. Це "
+"неможливо скасувати."
 
 #: ui/modals/channel_identity_fields.slint:37
 msgid "Change channel icon"
-msgstr ""
+msgstr "Змінити значок каналу"
 
 #: ui/modals/channel_identity_fields.slint:37
 msgid "Upload channel icon"
-msgstr ""
+msgstr "Завантажити значок каналу"
 
 #: ui/modals/channel_identity_fields.slint:64
 msgid "Change"
-msgstr ""
+msgstr "Змінити"
 
 #: ui/modals/channel_identity_fields.slint:64
 msgid "Upload"
-msgstr ""
+msgstr "Завантажити"
 
 #: ui/modals/channel_identity_fields.slint:83
 #: ui/modals/channel_settings.slint:586
 msgid "Channel name"
-msgstr ""
+msgstr "Назва каналу"
 
 #: ui/modals/channel_identity_fields.slint:88
 msgid "Name is required"
-msgstr ""
+msgstr "Потрібна назва"
 
 #: ui/modals/channel_identity_fields.slint:105
 msgid "Description (optional)"
-msgstr ""
+msgstr "Опис (необов’язково)"
 
 #: ui/modals/channel_members.slint:130
 msgid "Mute 1h"
-msgstr ""
+msgstr "На 1 год"
 
 #: ui/modals/channel_members.slint:131
 msgid "Mute 1 day"
-msgstr ""
+msgstr "На 1 день"
 
 #: ui/modals/channel_members.slint:132
 msgid "Mute until unmuted"
-msgstr ""
+msgstr "Доки не увімкнете"
 
 #: ui/modals/channel_members.slint:137
 msgid "Moderator"
-msgstr ""
+msgstr "Модератор"
 
 #: ui/modals/channel_members.slint:138 ui/modals/create_channel.slint:452
 msgid "Admin"
-msgstr ""
+msgstr "Адмін"
 
 #: ui/modals/channel_members.slint:152 ui/modals/channel_settings.slint:199
 msgid "Members"
-msgstr ""
+msgstr "Учасники"
 
 #: ui/modals/channel_members.slint:173 ui/modals/channel_members.slint:199
 #: ui/modals/invite_private_group.slint:27
 msgid "Invite members"
-msgstr ""
+msgstr "Запросити учасників"
 
 #: ui/modals/channel_members.slint:180 ui/modals/channel_members.slint:206
 msgid "+ Invite"
-msgstr ""
+msgstr "+ Запросити"
 
 #: ui/modals/channel_members.slint:233
 msgid "Loading members…"
-msgstr ""
+msgstr "Завантаження учасників…"
 
 #: ui/modals/channel_members.slint:233
 msgid "No members to show yet"
-msgstr ""
+msgstr "Учасників ще немає"
 
 #: ui/modals/channel_members.slint:317
 msgid "invited"
-msgstr ""
+msgstr "запрошено"
 
 #: ui/modals/channel_members.slint:335
 msgid "muted"
-msgstr ""
+msgstr "без звуку"
 
 #: ui/modals/channel_members.slint:353
 msgid "unverified"
-msgstr ""
+msgstr "не підтверджено"
 
 #: ui/modals/channel_members.slint:392
 msgid "Actions for {}"
-msgstr ""
+msgstr "Дії для {}"
 
 #: ui/modals/channel_members.slint:435 ui/modals/invite_member.slint:186
 msgid "Banned"
-msgstr ""
+msgstr "Забанено"
 
 #: ui/modals/channel_members.slint:469
 msgid "Unban"
-msgstr ""
+msgstr "Розбанити"
 
 #: ui/modals/channel_members.slint:515
 msgid "ROLE"
-msgstr ""
+msgstr "РОЛЬ"
 
 #: ui/modals/channel_members.slint:545
 msgid "MUTE IN CHANNEL"
-msgstr ""
+msgstr "БЕЗ ЗВУКУ В КАНАЛІ"
 
 #: ui/modals/channel_members.slint:565
 msgid "Make owner…"
-msgstr ""
+msgstr "Зробити власником…"
 
 #: ui/modals/channel_members.slint:570
 msgid "Unblock in group"
-msgstr ""
+msgstr "Розблокувати в групі"
 
 #: ui/modals/channel_members.slint:570
 msgid "Block in group"
-msgstr ""
+msgstr "Заблокувати в групі"
 
 #: ui/modals/channel_members.slint:581 ui/modals/channel_members.slint:635
 msgid "Cancel invite"
-msgstr ""
+msgstr "Скасувати запрошення"
 
 #: ui/modals/channel_members.slint:582
 msgid "Remove from group"
-msgstr ""
+msgstr "Вилучити з групи"
 
 #: ui/modals/channel_members.slint:582
 msgid "Remove from channel"
-msgstr ""
+msgstr "Вилучити з каналу"
 
 #: ui/modals/channel_members.slint:588 ui/modals/channel_members.slint:635
 msgid "Ban"
-msgstr ""
+msgstr "Забанити"
 
 #: ui/modals/channel_members.slint:611
 msgid "Ban {}? They will be removed and can't rejoin."
-msgstr ""
+msgstr "Забанити {}? Цю людину буде вилучено, і повернутися вона не зможе."
 
 #: ui/modals/channel_members.slint:613
 msgid "Make {0} the owner of {1}? You'll become an admin."
-msgstr ""
+msgstr "Зробити {0} власником {1}? Ви станете адміном."
 
 #: ui/modals/channel_members.slint:615
 msgid "Cancel {}'s invite?"
-msgstr ""
+msgstr "Скасувати запрошення {}?"
 
 #: ui/modals/channel_members.slint:617
 msgid "Remove {} from this group?"
-msgstr ""
+msgstr "Вилучити {} із цієї групи?"
 
 #: ui/modals/channel_members.slint:618
 msgid "Remove {} from this channel?"
-msgstr ""
+msgstr "Вилучити {} із цього каналу?"
 
 #: ui/modals/channel_members.slint:635
 msgid "Make owner"
-msgstr ""
+msgstr "Зробити власником"
 
 #: ui/modals/channel_notifications.slint:22
 #: ui/settings/settings_screen.slint:612
 msgid "Notifications"
-msgstr ""
+msgstr "Сповіщення"
 
 #: ui/modals/channel_notifications.slint:32
 msgid "Mute group"
-msgstr ""
+msgstr "Вимкнути звук групи"
 
 #: ui/modals/channel_notifications.slint:46
 msgid "You won't receive any notifications from this group"
-msgstr ""
+msgstr "Ви не отримуватимете сповіщень від цієї групи"
 
 #: ui/modals/channel_notifications.slint:46
 msgid "You won't receive any notifications from this channel"
-msgstr ""
+msgstr "Ви не отримуватимете сповіщень від цього каналу"
 
 #: ui/modals/channel_notifications.slint:60
 msgid "When not muted, notify me for:"
-msgstr ""
+msgstr "Коли звук увімкнено, сповіщати про:"
 
 #: ui/modals/channel_notifications.slint:76
 msgid "All messages"
-msgstr ""
+msgstr "Усі повідомлення"
 
 #: ui/modals/channel_notifications.slint:112
 msgid "Get notified for every message"
-msgstr ""
+msgstr "Сповіщення про кожне повідомлення"
 
 #: ui/modals/channel_notifications.slint:135
 msgid "Mentions only"
-msgstr ""
+msgstr "Лише згадки"
 
 #: ui/modals/channel_notifications.slint:171
 msgid "When someone mentions you or everyone"
-msgstr ""
+msgstr "Коли хтось згадує вас або всіх"
 
 #: ui/modals/channel_notifications.slint:194
 msgid "Nothing"
-msgstr ""
+msgstr "Нічого"
 
 #: ui/modals/channel_notifications.slint:230
 msgid "Never notify (still shows unread badge)"
-msgstr ""
+msgstr "Ніколи не сповіщати (позначка непрочитаного лишається)"
 
 #: ui/modals/channel_notifications.slint:251 ui/modals/create_channel.slint:616
 msgid "AI assistant"
-msgstr ""
+msgstr "Асистент AI"
 
 #: ui/modals/channel_notifications.slint:265
 msgid ""
 "Allow remote AI to read this channel when you explicitly ask it something "
 "here. Off by default."
 msgstr ""
+"Дозволити віддаленому AI читати цей канал, коли ви прямо запитуєте його тут. "
+"За замовчуванням вимкнено."
 
 #: ui/modals/channel_settings.slint:150
 msgid "Group settings"
-msgstr ""
+msgstr "Налаштування групи"
 
 #: ui/modals/channel_settings.slint:150
 msgid "Channel settings"
-msgstr ""
+msgstr "Налаштування каналу"
 
 #: ui/modals/channel_settings.slint:199
 msgid "Alerts"
-msgstr ""
+msgstr "Сповіщення"
 
 #: ui/modals/channel_settings.slint:281
 msgid "Discard unsaved changes?"
-msgstr ""
+msgstr "Відхилити незбережені зміни?"
 
 #: ui/modals/channel_settings.slint:289
 msgid "Keep editing"
-msgstr ""
+msgstr "Продовжити редагування"
 
 #: ui/modals/channel_settings.slint:294
 msgid "Discard"
-msgstr ""
+msgstr "Відхилити"
 
 #: ui/modals/channel_settings.slint:326
 msgid "‹ Info • unsaved changes"
-msgstr ""
+msgstr "‹ Інфо • є незбережені зміни"
 
 #: ui/modals/channel_settings.slint:326
 msgid "‹ Info"
-msgstr ""
+msgstr "‹ Інфо"
 
 #: ui/modals/channel_settings.slint:355 ui/modals/channel_settings.slint:513
 msgid "Group icon"
-msgstr ""
+msgstr "Значок групи"
 
 #: ui/modals/channel_settings.slint:355 ui/modals/channel_settings.slint:514
 msgid "Private channel icon"
-msgstr ""
+msgstr "Значок приватного каналу"
 
 #: ui/modals/channel_settings.slint:355 ui/modals/channel_settings.slint:514
 msgid "Channel icon"
-msgstr ""
+msgstr "Значок каналу"
 
 #: ui/modals/channel_settings.slint:363
 msgid "Info unavailable"
-msgstr ""
+msgstr "Інформація недоступна"
 
 #: ui/modals/channel_settings.slint:370 ui/modals/channel_settings.slint:536
 msgid "Created {}"
-msgstr ""
+msgstr "Створено {}"
 
 #: ui/modals/channel_settings.slint:382 ui/modals/channel_settings.slint:489
 msgid "Edit group info"
-msgstr ""
+msgstr "Змінити дані групи"
 
 #: ui/modals/channel_settings.slint:382 ui/modals/channel_settings.slint:489
 msgid "Edit channel info"
-msgstr ""
+msgstr "Змінити дані каналу"
 
 #: ui/modals/channel_settings.slint:389
 msgid "Loading group info…"
-msgstr ""
+msgstr "Завантаження даних групи…"
 
 #: ui/modals/channel_settings.slint:397
 msgid "Add a description so members know what this is for"
-msgstr ""
+msgstr "Додайте опис, щоб учасники розуміли, для чого це"
 
 #: ui/modals/channel_settings.slint:402
 msgid "Unsaved changes to group info"
-msgstr ""
+msgstr "Незбережені зміни даних групи"
 
 #: ui/modals/channel_settings.slint:402
 msgid "Unsaved changes to channel info"
-msgstr ""
+msgstr "Незбережені зміни даних каналу"
 
 #: ui/modals/channel_settings.slint:420
 msgid "Access and invite links"
-msgstr ""
+msgstr "Доступ і посилання-запрошення"
 
 #: ui/modals/channel_settings.slint:427 ui/sidebar/channel_list_item.slint:224
 msgid "Muted"
-msgstr ""
+msgstr "Без звуку"
 
 #: ui/modals/channel_settings.slint:449
 msgid "Call history"
-msgstr ""
+msgstr "Історія дзвінків"
 
 #: ui/modals/channel_settings.slint:455
 msgid "Integrations"
-msgstr ""
+msgstr "Інтеграції"
 
 #: ui/modals/channel_settings.slint:462 ui/modals/channel_settings.slint:475
 msgid "Manage group"
-msgstr ""
+msgstr "Керувати групою"
 
 #: ui/modals/channel_settings.slint:462
 msgid "Manage channel"
-msgstr ""
+msgstr "Керувати каналом"
 
 #: ui/modals/channel_settings.slint:474
 msgid "Leave, archive or delete"
-msgstr ""
+msgstr "Вийти, архівувати або видалити"
 
 #: ui/modals/channel_settings.slint:474
 msgid "Archive or delete"
-msgstr ""
+msgstr "Архівувати або видалити"
 
 #: ui/modals/channel_settings.slint:559
 msgid "Messages disappear after {} (set when the channel was created)"
-msgstr ""
+msgstr "Повідомлення зникають за {} (задано під час створення каналу)"
 
 #: ui/modals/channel_settings.slint:589
 msgid "Name must be at least 3 characters"
-msgstr ""
+msgstr "Назва має містити щонайменше 3 символи"
 
 #: ui/modals/channel_settings.slint:609
 msgid "Description"
-msgstr ""
+msgstr "Опис"
 
 #: ui/modals/channel_settings.slint:618
 msgid "Add a description..."
-msgstr ""
+msgstr "Додайте опис..."
 
 #: ui/modals/channel_settings.slint:627
 msgid "No description"
-msgstr ""
+msgstr "Без опису"
 
 #: ui/modals/channel_settings.slint:641
 msgid "Group photo"
-msgstr ""
+msgstr "Фото групи"
 
 #: ui/modals/channel_settings.slint:659
 msgid "Change photo"
-msgstr ""
+msgstr "Змінити фото"
 
 #: ui/modals/channel_settings.slint:659
 msgid "Change icon"
-msgstr ""
+msgstr "Змінити значок"
 
 #: ui/modals/channel_settings.slint:674 ui/modals/edit_profile.slint:200
 msgid "Save changes"
-msgstr ""
+msgstr "Зберегти зміни"
 
 #: ui/modals/create_channel.slint:86
 msgid "Claude (Anthropic)"
-msgstr ""
+msgstr "Claude (Anthropic)"
 
 #: ui/modals/create_channel.slint:87
 msgid "OpenAI"
-msgstr ""
+msgstr "OpenAI"
 
 #: ui/modals/create_channel.slint:88
 msgid "Hosted Ollama"
-msgstr ""
+msgstr "Ollama на хостингу"
 
 #: ui/modals/create_channel.slint:159 ui/settings/account_menu.slint:214
 #: ui/sidebar/create_menu.slint:170 ui/sidebar/sidebar.slint:727
 msgid "New channel"
-msgstr ""
+msgstr "Новий канал"
 
 #: ui/modals/create_channel.slint:279
 msgid "Password (optional)"
-msgstr ""
+msgstr "Пароль (необов’язково)"
 
 #: ui/modals/create_channel.slint:286
 msgid "Anyone with password joins without invite"
-msgstr ""
+msgstr "Будь-хто з паролем входить без запрошення"
 
 #: ui/modals/create_channel.slint:301
 msgid "Select friends to invite"
-msgstr ""
+msgstr "Виберіть друзів для запрошення"
 
 #: ui/modals/create_channel.slint:325 ui/modals/friends_friends_tab.slint:53
 msgid "No friends yet"
-msgstr ""
+msgstr "Друзів ще немає"
 
 #: ui/modals/create_channel.slint:331
 msgid "Add friends first to create a private group"
-msgstr ""
+msgstr "Спочатку додайте друзів, щоб створити приватну групу"
 
 #: ui/modals/create_channel.slint:445 ui/modals/invite_private_group.slint:148
 msgid "Role for {0}: {1}"
-msgstr ""
+msgstr "Роль для {0}: {1}"
 
 #: ui/modals/create_channel.slint:485
 msgid "Hide more options"
-msgstr ""
+msgstr "Сховати додаткові параметри"
 
 #: ui/modals/create_channel.slint:485
 msgid "Show more options"
-msgstr ""
+msgstr "Показати додаткові параметри"
 
 #: ui/modals/create_channel.slint:541 ui/modals/create_channel.slint:545
 msgid "Auto-delete messages"
-msgstr ""
+msgstr "Автовидалення повідомлень"
 
 #: ui/modals/create_channel.slint:553
 msgid "Messages expire after the chosen time."
-msgstr ""
+msgstr "Повідомлення зникають за вибраний час."
 
 #: ui/modals/create_channel.slint:566
 msgid "After"
-msgstr ""
+msgstr "Після"
 
 #: ui/modals/create_channel.slint:591
 msgid "hours"
-msgstr ""
+msgstr "год"
 
 #: ui/modals/create_channel.slint:612
 msgid "Enable AI assistant"
-msgstr ""
+msgstr "Увімкнути асистента AI"
 
 #: ui/modals/create_channel.slint:624
 msgid "Add an AI bot that replies in this channel."
-msgstr ""
+msgstr "Додати бота AI, який відповідає в цьому каналі."
 
 #: ui/modals/create_channel.slint:691
 msgid "Loading models..."
-msgstr ""
+msgstr "Завантаження моделей..."
 
 #: ui/modals/create_channel.slint:789
 msgid "Create group"
-msgstr ""
+msgstr "Створити групу"
 
 #: ui/modals/create_section.slint:70 ui/sidebar/section_context_menu.slint:335
 msgid "Rename section"
-msgstr ""
+msgstr "Перейменувати розділ"
 
 #: ui/modals/create_section.slint:70 ui/sidebar/create_menu.slint:117
 #: ui/sidebar/sidebar.slint:742
 msgid "New section"
-msgstr ""
+msgstr "Новий розділ"
 
 #: ui/modals/create_section.slint:98
 msgid "Section icon {}"
-msgstr ""
+msgstr "Значок розділу {}"
 
 #: ui/modals/create_section.slint:122
 msgid "Section name"
-msgstr ""
+msgstr "Назва розділу"
 
 #: ui/modals/create_section.slint:169
 msgid "Choose icon {}"
-msgstr ""
+msgstr "Вибрати значок {}"
 
 #: ui/modals/edit_profile.slint:36 ui/modals/user_profile.slint:554
 msgid "Edit profile"
-msgstr ""
+msgstr "Змінити профіль"
 
 #: ui/modals/edit_profile.slint:70
 msgid "Edit profile photo"
-msgstr ""
+msgstr "Змінити фото профілю"
 
 #: ui/modals/edit_profile.slint:101
 msgid "Choose photo"
-msgstr ""
+msgstr "Вибрати фото"
 
 #: ui/modals/edit_profile.slint:106 ui/pages/register.slint:349
 msgid "Remove photo"
-msgstr ""
+msgstr "Видалити фото"
 
 #: ui/modals/edit_profile.slint:125 ui/pages/register.slint:359
 msgid "Display name"
-msgstr ""
+msgstr "Ім’я"
 
 #: ui/modals/edit_profile.slint:131
 msgid "Your name"
-msgstr ""
+msgstr "Ваше ім’я"
 
 #: ui/modals/edit_profile.slint:139
 msgid "Bio"
-msgstr ""
+msgstr "Про себе"
 
 #: ui/modals/forward_message.slint:53
 msgid "Share contact"
-msgstr ""
+msgstr "Поділитися контактом"
 
 #: ui/modals/forward_message.slint:94
 msgid "Forwarding:"
-msgstr ""
+msgstr "Пересилання:"
 
 #: ui/modals/forward_message.slint:113
 msgid "Search channels or people..."
-msgstr ""
+msgstr "Пошук каналів або людей..."
 
 #: ui/modals/forward_message.slint:223
 msgid "Channel"
-msgstr ""
+msgstr "Канал"
 
 #: ui/modals/forward_message.slint:223
 msgid "Group"
-msgstr ""
+msgstr "Група"
 
 #: ui/modals/forward_message.slint:223
 msgid "Secret"
-msgstr ""
+msgstr "Секрет"
 
 #: ui/modals/forward_message.slint:223
 msgid "DM"
-msgstr ""
+msgstr "Особисте"
 
 #: ui/modals/forward_message.slint:285
 msgid "Share"
-msgstr ""
+msgstr "Поділитися"
 
 #: ui/modals/friends.slint:146 ui/sidebar/sidebar.slint:759
 msgid "Add a friend"
-msgstr ""
+msgstr "Додати друга"
 
 #: ui/modals/friends.slint:188 ui/sidebar/sidebar.slint:65
 #: ui/sidebar/sidebar.slint:548
 msgid "Friends"
-msgstr ""
+msgstr "Друзі"
 
 #: ui/modals/friends.slint:189 ui/sidebar/sidebar.slint:67
 #: ui/sidebar/sidebar.slint:677
 msgid "Requests"
-msgstr ""
+msgstr "Запити"
 
 #: ui/modals/friends.slint:190
 msgid "Blocked"
-msgstr ""
+msgstr "Заблоковані"
 
 #: ui/modals/friends_blocked_tab.slint:25
 msgid "{n} blocked user"
 msgid_plural "{n} blocked users"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "{n} заблокований користувач"
+msgstr[1] "{n} заблоковані користувачі"
+msgstr[2] "{n} заблокованих користувачів"
 
 #: ui/modals/friends_blocked_tab.slint:48
 msgid "No blocked users"
-msgstr ""
+msgstr "Немає заблокованих"
 
 #: ui/modals/friends_blocked_tab.slint:55
 msgid "Users you block won't be able to message you"
-msgstr ""
+msgstr "Заблоковані не зможуть писати вам"
 
 #: ui/modals/friends_blocked_tab.slint:113
 msgid "Delete this chat? They stay blocked."
-msgstr ""
+msgstr "Видалити цей чат? Людина лишиться заблокованою."
 
 #: ui/modals/friends_blocked_tab.slint:113
 msgid "Remove from friends and unblock?"
-msgstr ""
+msgstr "Вилучити з друзів і розблокувати?"
 
 #: ui/modals/friends_blocked_tab.slint:120
 msgid "Blocked {}"
-msgstr ""
+msgstr "Заблоковано {}"
 
 #: ui/modals/friends_blocked_tab.slint:146
 msgid "Delete chat"
-msgstr ""
+msgstr "Видалити чат"
 
 #: ui/modals/friends_find_tab.slint:96
 msgid "Scan to start a secret chat with me"
-msgstr ""
+msgstr "Відскануйте, щоб почати зі мною секретний чат"
 
 #: ui/modals/friends_find_tab.slint:96
 msgid "Scan to add me"
-msgstr ""
+msgstr "Відскануйте, щоб додати мене"
 
 #: ui/modals/friends_find_tab.slint:110
 msgid "Share my code"
-msgstr ""
+msgstr "Поділитися моїм кодом"
 
 #: ui/modals/friends_find_tab.slint:118
 msgid "Copy my code"
-msgstr ""
+msgstr "Копіювати мій код"
 
 #: ui/modals/friends_find_tab.slint:126
 msgid "Scan a code"
-msgstr ""
+msgstr "Сканувати код"
 
 #: ui/modals/friends_find_tab.slint:134
 msgid "Paste a code or link"
-msgstr ""
+msgstr "Вставте код або посилання"
 
 #: ui/modals/friends_find_tab.slint:145
 msgid "Paste"
-msgstr ""
+msgstr "Вставити"
 
 #: ui/modals/friends_find_tab.slint:152
 msgid "Add"
-msgstr ""
+msgstr "Додати"
 
 #: ui/modals/friends_friends_tab.slint:27
 msgid "{n} private contact"
 msgid_plural "{n} private contacts"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "{n} приватний контакт"
+msgstr[1] "{n} приватні контакти"
+msgstr[2] "{n} приватних контактів"
 
 #: ui/modals/friends_friends_tab.slint:28
 msgid "{n} Friend"
 msgid_plural "{n} Friends"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "{n} друг"
+msgstr[1] "{n} друзі"
+msgstr[2] "{n} друзів"
 
 #: ui/modals/friends_friends_tab.slint:53
 msgid "No private contacts yet"
-msgstr ""
+msgstr "Приватних контактів ще немає"
 
 #: ui/modals/friends_friends_tab.slint:60
 msgid "Share your private code to start a secret chat"
-msgstr ""
+msgstr "Поділіться приватним кодом, щоб почати секретний чат"
 
 #: ui/modals/friends_friends_tab.slint:60
 msgid "Use the Add friend tab to connect"
-msgstr ""
+msgstr "Щоб зв’язатися, відкрийте вкладку «Додати друга»"
 
 #: ui/modals/friends_friends_tab.slint:200
 msgid "Message {}"
-msgstr ""
+msgstr "Написати {}"
 
 #: ui/modals/friends_request_tabs.slint:64
 msgid "Received ({})"
-msgstr ""
+msgstr "Отримані ({})"
 
 #: ui/modals/friends_request_tabs.slint:106
 msgid "Sent ({})"
-msgstr ""
+msgstr "Надіслані ({})"
 
 #: ui/modals/friends_request_tabs.slint:148
 msgid "Private ({})"
-msgstr ""
+msgstr "Приватні ({})"
 
 #: ui/modals/friends_request_tabs.slint:190
 msgid "Groups ({})"
-msgstr ""
+msgstr "Групи ({})"
 
 #: ui/modals/friends_request_tabs.slint:232
 msgid "Channels ({})"
-msgstr ""
+msgstr "Канали ({})"
 
 #: ui/modals/friends_requests_tab.slint:57
 msgid "Could not refresh requests. Showing the last loaded list."
-msgstr ""
+msgstr "Не вдалося оновити запити. Показано останній завантажений список."
 
 #: ui/modals/friends_requests_tab.slint:84
 msgid "No pending requests"
-msgstr ""
+msgstr "Немає запитів, що очікують"
 
 #: ui/modals/friends_requests_tab.slint:86
 msgid "Friend requests you receive appear here"
-msgstr ""
+msgstr "Тут з’являються отримані запити в друзі"
 
 #: ui/modals/friends_requests_tab.slint:202
 msgid "No outgoing requests"
-msgstr ""
+msgstr "Немає надісланих запитів"
 
 #: ui/modals/friends_requests_tab.slint:204
 msgid "Requests you send appear here until they are answered"
-msgstr ""
+msgstr "Надіслані запити будуть тут, доки на них не відповідять"
 
 #: ui/modals/friends_requests_tab.slint:320
 msgid "No private message requests"
-msgstr ""
+msgstr "Немає приватних запитів на повідомлення"
 
 #: ui/modals/friends_requests_tab.slint:327
 msgid ""
 "Private requests use end-to-end encryption\n"
 "with no server involvement"
 msgstr ""
+"Приватні запити наскрізно зашифровані\n"
+"без участі сервера"
 
 #: ui/modals/friends_requests_tab.slint:408
 msgid "Private · {}"
-msgstr ""
+msgstr "Приватно · {}"
 
 #: ui/modals/friends_requests_tab.slint:408
 msgid "Private"
-msgstr ""
+msgstr "Приватно"
 
 #: ui/modals/friends_requests_tab.slint:484
 msgid "No pending group invites"
-msgstr ""
+msgstr "Немає запрошень у групи"
 
 #: ui/modals/friends_requests_tab.slint:491
 msgid ""
 "Group invites use end-to-end encryption\n"
 "with anonymous mailboxes"
 msgstr ""
+"Запрошення в групи наскрізно зашифровані\n"
+"через анонімні скриньки"
 
 #: ui/modals/friends_requests_tab.slint:558
 msgid "Invited by {}"
-msgstr ""
+msgstr "Запрошення від {}"
 
 #: ui/modals/friends_requests_tab.slint:624
 msgid "No pending channel invites"
-msgstr ""
+msgstr "Немає запрошень у канали"
 
 #: ui/modals/friends_requests_tab.slint:631
 msgid "Channel invitations you receive will appear here"
-msgstr ""
+msgstr "Тут з’являться отримані запрошення в канали"
 
 #: ui/modals/invite_member.slint:69
 msgid "Invite to"
-msgstr ""
+msgstr "Запросити до"
 
 #: ui/modals/invite_member.slint:81
 msgid "Private channel"
-msgstr ""
+msgstr "Приватний канал"
 
 #: ui/modals/invite_member.slint:96
 msgid "Search by name or username..."
-msgstr ""
+msgstr "Пошук за іменем або ім’ям користувача..."
 
 #: ui/modals/invite_member.slint:256
 msgid "Invite {n} user"
 msgid_plural "Invite {n} users"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "Запросити {n} користувача"
+msgstr[1] "Запросити {n} користувачі"
+msgstr[2] "Запросити {n} користувачів"
 
 #: ui/modals/invite_private_group.slint:41
 msgid "Select friends to invite to this group"
-msgstr ""
+msgstr "Виберіть друзів, яких запросити в цю групу"
 
 #: ui/modals/invite_private_group.slint:55
 msgid "No friends available to invite"
-msgstr ""
+msgstr "Немає друзів, яких можна запросити"
 
 #: ui/modals/invite_private_group.slint:223
 msgid "Invite {n} member"
 msgid_plural "Invite {n} members"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "Запросити {n} учасника"
+msgstr[1] "Запросити {n} учасники"
+msgstr[2] "Запросити {n} учасників"
 
 #: ui/modals/jarvis_memory.slint:94
 msgid "Memory"
-msgstr ""
+msgstr "Пам’ять"
 
 #: ui/modals/jarvis_memory.slint:94
 msgid "Jarvis memory"
-msgstr ""
+msgstr "Пам’ять Jarvis"
 
 #: ui/modals/jarvis_memory.slint:108
 msgid "Reload"
-msgstr ""
+msgstr "Перезавантажити"
 
 #: ui/modals/jarvis_memory.slint:108 ui/server_records/screen.slint:57
 msgid "Refresh"
-msgstr ""
+msgstr "Оновити"
 
 #: ui/modals/jarvis_memory.slint:144
 msgid "Facts"
-msgstr ""
+msgstr "Факти"
 
 #: ui/modals/jarvis_memory.slint:150
 msgid ""
 "Nothing yet — chat with Jarvis and durable facts land here automatically."
 msgstr ""
+"Поки нічого — поспілкуйтеся з Jarvis, і стійкі факти з’являться тут самі."
 
 #: ui/modals/jarvis_memory.slint:210
 msgid "Knowledge graph"
-msgstr ""
+msgstr "Граф знань"
 
 #: ui/modals/jarvis_memory.slint:216
 msgid ""
 "No entities yet — Jarvis learns people, projects, and topics from "
 "conversations."
 msgstr ""
+"Сутностей ще немає — Jarvis дізнається про людей, проєкти й теми з розмов."
 
 #: ui/modals/jarvis_memory.slint:318
 msgid "Select an entity to map its connections"
-msgstr ""
+msgstr "Виберіть сутність, щоб побачити її зв’язки"
 
 #: ui/modals/join_channel.slint:111
 msgid "Joined"
-msgstr ""
+msgstr "Приєднано"
 
 #: ui/modals/join_channel_tab.slint:39
 msgid "Search channels, or paste a channel ID or invite link"
-msgstr ""
+msgstr "Шукайте канали або вставте ID каналу чи посилання-запрошення"
 
 #: ui/modals/join_channel_tab.slint:45
 msgid "Name, channel ID or chatter://join/ link"
-msgstr ""
+msgstr "Назва, ID каналу або посилання chatter://join/"
 
 #: ui/modals/join_channel_tab.slint:79
 msgid "Searching..."
-msgstr ""
+msgstr "Пошук..."
 
 #: ui/modals/join_channel_tab.slint:116
 msgid "Invite link"
-msgstr ""
+msgstr "Посилання-запрошення"
 
 #: ui/modals/join_channel_tab.slint:123
 msgid "Press Join to use it. Anyone holding this link can join the channel."
 msgstr ""
+"Натисніть «Приєднатися», щоб скористатися ним. Будь-хто з цим посиланням "
+"може увійти в канал."
 
 #: ui/modals/join_channel_tab.slint:142
 msgid "No channels found"
-msgstr ""
+msgstr "Каналів не знайдено"
 
 #: ui/modals/join_channel_tab.slint:149
 msgid "Try a different search or paste a channel ID"
-msgstr ""
+msgstr "Спробуйте інший запит або вставте ID каналу"
 
 #: ui/modals/join_channel_tab.slint:169
 msgid "Search for public channels"
-msgstr ""
+msgstr "Пошук публічних каналів"
 
 #: ui/modals/join_channel_tab.slint:176
 msgid "Enter a channel name or paste a channel ID to join directly"
-msgstr ""
+msgstr "Введіть назву каналу або вставте ID, щоб увійти одразу"
 
 #: ui/modals/keyboard_shortcuts.slint:72 ui/modals/keyboard_shortcuts.slint:89
 msgid "Keyboard shortcuts"
-msgstr ""
+msgstr "Гарячі клавіші"
 
 #: ui/modals/keyboard_shortcuts.slint:116
 msgid "Navigation"
-msgstr ""
+msgstr "Навігація"
 
 #: ui/modals/keyboard_shortcuts.slint:124 ui/sidebar/sidebar.slint:68
 #: ui/sidebar/sidebar.slint:463 ui/sidebar/sidebar_header.slint:66
 msgid "Search"
-msgstr ""
+msgstr "Пошук"
 
 #: ui/modals/keyboard_shortcuts.slint:125
 msgid "Ctrl + K"
-msgstr ""
+msgstr "Ctrl + K"
 
 #: ui/modals/keyboard_shortcuts.slint:126
 msgid "Ctrl + F"
-msgstr ""
+msgstr "Ctrl + F"
 
 #: ui/modals/keyboard_shortcuts.slint:126
 msgid "Ctrl + K / Ctrl + F"
-msgstr ""
+msgstr "Ctrl + K / Ctrl + F"
 
 #: ui/modals/keyboard_shortcuts.slint:128
 msgid "Open AI chat"
-msgstr ""
+msgstr "Відкрити чат AI"
 
 #: ui/modals/keyboard_shortcuts.slint:128
 msgid "Ctrl + J"
-msgstr ""
+msgstr "Ctrl + J"
 
 #: ui/modals/keyboard_shortcuts.slint:130
 msgid "Ctrl + Shift + F"
-msgstr ""
+msgstr "Ctrl + Shift + F"
 
 #: ui/modals/keyboard_shortcuts.slint:131
 msgid "Ctrl + ,"
-msgstr ""
+msgstr "Ctrl + ,"
 
 #: ui/modals/keyboard_shortcuts.slint:131
 msgid "Open settings"
-msgstr ""
+msgstr "Відкрити налаштування"
 
 #: ui/modals/keyboard_shortcuts.slint:132
 msgid "Alt + ↓ / Ctrl + Tab"
-msgstr ""
+msgstr "Alt + ↓ / Ctrl + Tab"
 
 #: ui/modals/keyboard_shortcuts.slint:132
 msgid "Next chat"
-msgstr ""
+msgstr "Наступний чат"
 
 #: ui/modals/keyboard_shortcuts.slint:133
 msgid "Alt + ↑ / Ctrl + Shift + Tab"
-msgstr ""
+msgstr "Alt + ↑ / Ctrl + Shift + Tab"
 
 #: ui/modals/keyboard_shortcuts.slint:133
 msgid "Previous chat"
-msgstr ""
+msgstr "Попередній чат"
 
 #: ui/modals/keyboard_shortcuts.slint:134
 msgid "Ctrl + 0"
-msgstr ""
+msgstr "Ctrl + 0"
 
 #: ui/modals/keyboard_shortcuts.slint:134 ui/settings/account_menu.slint:201
 #: ui/sidebar/sidebar.slint:480 ui/sidebar/sidebar.slint:493
 msgid "Saved messages"
-msgstr ""
+msgstr "Збережені повідомлення"
 
 #: ui/modals/keyboard_shortcuts.slint:135
 msgid "↑ / ↓, Home / End"
-msgstr ""
+msgstr "↑ / ↓, Home / End"
 
 #: ui/modals/keyboard_shortcuts.slint:135
 msgid "Move in sidebar"
-msgstr ""
+msgstr "Рух бічною панеллю"
 
 #: ui/modals/keyboard_shortcuts.slint:136
 msgid "Enter / Space"
-msgstr ""
+msgstr "Enter / Space"
 
 #: ui/modals/keyboard_shortcuts.slint:136
 msgid "Open sidebar item"
-msgstr ""
+msgstr "Відкрити пункт бічної панелі"
 
 #: ui/modals/keyboard_shortcuts.slint:137
 msgid "Ctrl + /"
-msgstr ""
+msgstr "Ctrl + /"
 
 #: ui/modals/keyboard_shortcuts.slint:137
 msgid "Show this dialog"
-msgstr ""
+msgstr "Показати це вікно"
 
 #: ui/modals/keyboard_shortcuts.slint:138
 msgid "Escape"
-msgstr ""
+msgstr "Escape"
 
 #: ui/modals/keyboard_shortcuts.slint:138
 msgid "Close modal or panel"
-msgstr ""
+msgstr "Закрити вікно або панель"
 
 #: ui/modals/keyboard_shortcuts.slint:150
 msgid "Enter"
-msgstr ""
+msgstr "Enter"
 
 #: ui/modals/keyboard_shortcuts.slint:150
 msgid "Send"
-msgstr ""
+msgstr "Надіслати"
 
 #: ui/modals/keyboard_shortcuts.slint:151
 msgid "Shift + Enter"
-msgstr ""
+msgstr "Shift + Enter"
 
 #: ui/modals/keyboard_shortcuts.slint:151
 msgid "New line"
-msgstr ""
+msgstr "Новий рядок"
 
 #: ui/modals/keyboard_shortcuts.slint:152
 msgid "Ctrl + B / Ctrl + I"
-msgstr ""
+msgstr "Ctrl + B / Ctrl + I"
 
 #: ui/modals/keyboard_shortcuts.slint:152
 msgid "Bold / italic"
-msgstr ""
+msgstr "Жирний / курсив"
 
 #: ui/modals/keyboard_shortcuts.slint:153
 msgid "Ctrl + Shift + X / M"
-msgstr ""
+msgstr "Ctrl + Shift + X / M"
 
 #: ui/modals/keyboard_shortcuts.slint:153
 msgid "Strikethrough / code"
-msgstr ""
+msgstr "Закреслення / код"
 
 #: ui/modals/keyboard_shortcuts.slint:154
 msgid "↑ (empty message box)"
-msgstr ""
+msgstr "↑ (порожнє поле)"
 
 #: ui/modals/keyboard_shortcuts.slint:154
 msgid "Edit your last message"
-msgstr ""
+msgstr "Змінити останнє повідомлення"
 
 #: ui/modals/keyboard_shortcuts.slint:155
 msgid "Cancel edit or reply"
-msgstr ""
+msgstr "Скасувати редагування або відповідь"
 
 #: ui/modals/licenses.slint:21 ui/settings/about_settings.slint:68
 msgid "Open-source licenses"
-msgstr ""
+msgstr "Ліцензії відкритого коду"
 
 #: ui/modals/link_device_approve.slint:49
 msgid "Link a new device"
-msgstr ""
+msgstr "Прив’язати новий пристрій"
 
 #: ui/modals/link_device_approve.slint:72
 msgid ""
 "Scan the QR code on your new device, or paste its link. You'll be asked to "
 "confirm with your password or PIN to authorize."
 msgstr ""
+"Відскануйте QR-код на новому пристрої або вставте його посилання. Щоб "
+"дозволити, потрібно підтвердити паролем або PIN."
 
 #: ui/modals/link_device_approve.slint:73
 msgid ""
 "Paste the link from your new device. You'll be asked to confirm with your "
 "password or PIN to authorize."
 msgstr ""
+"Вставте посилання з нового пристрою. Щоб дозволити, потрібно підтвердити "
+"паролем або PIN."
 
 #: ui/modals/link_device_approve.slint:87
 msgid "chatter://link?uuid=…"
-msgstr ""
+msgstr "chatter://link?uuid=…"
 
 #: ui/modals/link_device_approve.slint:104
 msgid "About to link:"
-msgstr ""
+msgstr "Зараз прив’яжеться:"
 
 #: ui/modals/link_device_approve.slint:109
 msgid "Unnamed device"
-msgstr ""
+msgstr "Пристрій без назви"
 
 #: ui/modals/link_device_approve.slint:116
 msgid "Server: {}"
-msgstr ""
+msgstr "Сервер: {}"
 
 #: ui/modals/link_device_approve.slint:132
 msgid "Verify this code matches the new device:"
-msgstr ""
+msgstr "Перевірте, що цей код збігається з новим пристроєм:"
 
 #: ui/modals/link_device_approve.slint:147
 msgid "Password or PIN"
-msgstr ""
+msgstr "Пароль або PIN"
 
 #: ui/modals/link_device_approve.slint:186
 msgid "Authorize"
-msgstr ""
+msgstr "Дозволити"
 
 #: ui/modals/message_info.slint:12
 msgid "Message info"
-msgstr ""
+msgstr "Про повідомлення"
 
 #: ui/modals/pinned_messages.slint:58
 msgid "Long-press a message and choose Pin"
-msgstr ""
+msgstr "Утримуйте повідомлення й виберіть «Закріпити»"
 
 #: ui/modals/pinned_messages.slint:58
 msgid "Right-click a message and choose Pin"
-msgstr ""
+msgstr "Клацніть правою кнопкою й виберіть «Закріпити»"
 
 #: ui/modals/profile_action_tiles.slint:28
 msgid "Unmute conversation"
-msgstr ""
+msgstr "Увімкнути звук розмови"
 
 #: ui/modals/profile_action_tiles.slint:28
 msgid "Mute conversation"
-msgstr ""
+msgstr "Вимкнути звук розмови"
 
 #: ui/modals/profile_action_tiles.slint:29
 msgid "More"
-msgstr ""
+msgstr "Ще"
 
 #: ui/modals/profile_action_tiles.slint:39
 msgid "Call"
-msgstr ""
+msgstr "Дзвінок"
 
 #: ui/modals/profile_info_card.slint:57 ui/settings/settings_screen.slint:283
 msgid "About"
-msgstr ""
+msgstr "Інформація"
 
 #: ui/modals/profile_info_card.slint:83 ui/pages/account_recovery.slint:112
 #: ui/pages/register.slint:373
 msgid "Username"
-msgstr ""
+msgstr "Ім’я користувача"
 
 #: ui/modals/profile_info_card.slint:95
 msgid "Show username QR code"
-msgstr ""
+msgstr "Показати QR-код імені користувача"
 
 #: ui/modals/profile_info_card.slint:199
 msgid "Reset link"
-msgstr ""
+msgstr "Скинути посилання"
 
 #: ui/modals/profile_safety_number.slint:23
 msgid "Verified, safety number"
-msgstr ""
+msgstr "Підтверджено, номер безпеки"
 
 #: ui/modals/profile_safety_number.slint:23
 msgid "Not verified, safety number"
-msgstr ""
+msgstr "Не підтверджено, номер безпеки"
 
 #: ui/modals/profile_safety_number.slint:54
 msgid "✓ Verified"
-msgstr ""
+msgstr "✓ Підтверджено"
 
 #: ui/modals/profile_safety_number.slint:54
 msgid "Not verified · Safety number"
-msgstr ""
+msgstr "Не підтверджено · Номер безпеки"
 
 #: ui/modals/profile_safety_number.slint:85
 msgid ""
 "Compare this number with your contact to verify end-to-end encryption. If "
 "the numbers match, your conversation is secure."
 msgstr ""
+"Порівняйте це число з контактом, щоб перевірити наскрізне шифрування. Якщо "
+"числа збігаються, розмова захищена."
 
 #: ui/modals/profile_safety_number.slint:127
 msgid "Updating verification…"
-msgstr ""
+msgstr "Оновлення підтвердження…"
 
 #: ui/modals/profile_safety_number.slint:127
 msgid "Clear verification"
-msgstr ""
+msgstr "Скинути підтвердження"
 
 #: ui/modals/profile_safety_number.slint:127
 msgid "Mark as verified"
-msgstr ""
+msgstr "Позначити підтвердженим"
 
 #: ui/modals/profile_status_picker.slint:21
 msgid "Automatic"
-msgstr ""
+msgstr "Автоматично"
 
 #: ui/modals/profile_status_picker.slint:21
 msgid "Online while active, away after 5 minutes idle"
-msgstr ""
+msgstr "У мережі, поки ви активні; не на місці після 5 хвилин без дії"
 
 #: ui/modals/profile_status_picker.slint:22 ui/modals/user_profile.slint:197
 msgid "Online"
-msgstr ""
+msgstr "У мережі"
 
 #: ui/modals/profile_status_picker.slint:22
 msgid "Always shown as online"
-msgstr ""
+msgstr "Завжди показувати в мережі"
 
 #: ui/modals/profile_status_picker.slint:23 ui/modals/user_profile.slint:199
 msgid "Away"
-msgstr ""
+msgstr "Не на місці"
 
 #: ui/modals/profile_status_picker.slint:23
 msgid "Shown as away"
-msgstr ""
+msgstr "Показувати як не на місці"
 
 #: ui/modals/profile_status_picker.slint:24 ui/modals/user_profile.slint:201
 msgid "Do not disturb"
-msgstr ""
+msgstr "Не турбувати"
 
 #: ui/modals/profile_status_picker.slint:24
 msgid "Mutes message notifications"
-msgstr ""
+msgstr "Вимикає сповіщення про повідомлення"
 
 #: ui/modals/profile_status_picker.slint:25
 msgid "Invisible"
-msgstr ""
+msgstr "Невидимий"
 
 #: ui/modals/profile_status_picker.slint:25
 msgid "Appear offline to everyone"
-msgstr ""
+msgstr "Для всіх ви не в мережі"
 
 #: ui/modals/profile_status_picker.slint:48
 msgid "Status: {}"
-msgstr ""
+msgstr "Статус: {}"
 
 #: ui/modals/profile_status_picker.slint:73
 msgid "Status"
-msgstr ""
+msgstr "Статус"
 
 #: ui/modals/recovery_codes.slint:85
 msgid "Save your recovery codes"
-msgstr ""
+msgstr "Збережіть коди відновлення"
 
 #: ui/modals/recovery_codes.slint:95
 msgid ""
 "These codes can recover your account if you forget your password and PIN. "
 "Save them somewhere safe. They will not be shown again."
 msgstr ""
+"Цими кодами можна відновити обліковий запис, якщо ви забудете пароль і PIN. "
+"Збережіть їх у надійному місці. Їх більше не буде показано."
 
 #: ui/modals/recovery_codes.slint:175
 msgid "Copy all"
-msgstr ""
+msgstr "Копіювати все"
 
 #: ui/modals/recovery_codes.slint:200 ui/modals/recovery_codes.slint:204
 msgid "I have saved my recovery codes"
-msgstr ""
+msgstr "Я зберіг(ла) коди відновлення"
 
 #: ui/modals/recovery_codes.slint:219 ui/pages/register.slint:386
 #: ui/pages/register.slint:543
 msgid "Continue"
-msgstr ""
+msgstr "Далі"
 
 #: ui/modals/sealed_sender_intro.slint:80
 msgid "Sealed sender: private by default"
-msgstr ""
+msgstr "Запечатаний відправник: приватно за замовчуванням"
 
 #: ui/modals/sealed_sender_intro.slint:90
 msgid ""
 "Chatter delivers your messages without the server learning who you are "
 "talking to. Your messages are always sent this way — nothing to turn on."
 msgstr ""
+"Chatter доставляє повідомлення так, що сервер не дізнається, з ким ви "
+"спілкуєтеся. Повідомлення завжди йдуть саме так — нічого вмикати не треба."
 
 #: ui/modals/sealed_sender_intro.slint:99
 msgid ""
 "This is privacy from the server. It is not anonymity from the person you "
 "message — they still see who you are."
 msgstr ""
+"Це приватність від сервера. Це не анонімність для людини, якій ви пишете — "
+"вона все одно бачить, хто ви."
 
 #: ui/modals/sealed_sender_intro.slint:110
 msgid "Who can message you this way?"
-msgstr ""
+msgstr "Хто може писати вам у такий спосіб?"
 
 #: ui/modals/sealed_sender_intro.slint:132
 msgid "Allow sealed messages from anyone"
-msgstr ""
+msgstr "Дозволити запечатані повідомлення від будь-кого"
 
 #: ui/modals/sealed_sender_intro.slint:149
 msgid ""
 "Off (recommended): only your contacts can reach you this way. On: anyone "
 "can. You can change this later in Settings."
 msgstr ""
+"Вимкнено (рекомендовано): так вас можуть досягти лише контакти. Увімкнено: "
+"будь-хто. Це можна змінити пізніше в Налаштуваннях."
 
 #: ui/modals/sealed_sender_intro.slint:159
 msgid "Got it"
-msgstr ""
+msgstr "Зрозуміло"
 
 #: ui/modals/sessions.slint:63
 msgid "Active sessions"
-msgstr ""
+msgstr "Активні сеанси"
 
 #: ui/modals/sessions.slint:99
 msgid "Updating sessions..."
-msgstr ""
+msgstr "Оновлення сеансів..."
 
 #: ui/modals/sessions.slint:108
 msgid "{n} active session"
 msgid_plural "{n} active sessions"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "{n} активний сеанс"
+msgstr[1] "{n} активні сеанси"
+msgstr[2] "{n} активних сеансів"
 
 #: ui/modals/sessions.slint:108
 msgid "Sessions not loaded"
-msgstr ""
+msgstr "Сеанси не завантажено"
 
 #: ui/modals/sessions.slint:116 ui/modals/sessions.slint:125
 msgid "Link new device"
-msgstr ""
+msgstr "Прив’язати новий пристрій"
 
 #: ui/modals/sessions.slint:153 ui/settings/devices_settings.slint:231
 msgid "New device"
-msgstr ""
+msgstr "Новий пристрій"
 
 #: ui/modals/sessions.slint:161
 msgid "Approved, waiting for it to finish linking (until {})"
-msgstr ""
+msgstr "Дозволено, очікуємо завершення прив’язування (до {})"
 
 #: ui/modals/sessions.slint:193
 msgid "No active sessions found"
-msgstr ""
+msgstr "Активних сеансів не знайдено"
 
 #: ui/modals/sessions.slint:209
 msgid "Loading sessions..."
-msgstr ""
+msgstr "Завантаження сеансів..."
 
 #: ui/modals/sessions.slint:284 ui/settings/devices_settings.slint:170
 msgid "This device"
-msgstr ""
+msgstr "Цей пристрій"
 
 #: ui/modals/sessions.slint:313 ui/settings/devices_settings.slint:176
 msgid "Active now"
-msgstr ""
+msgstr "Зараз активний"
 
 #: ui/modals/sessions.slint:313 ui/settings/devices_settings.slint:176
 msgid "Last active: {}"
-msgstr ""
+msgstr "Востаннє: {}"
 
 #: ui/modals/sessions.slint:320
 msgid "Since: {}"
-msgstr ""
+msgstr "Від: {}"
 
 #: ui/modals/sessions.slint:327 ui/settings/devices_settings.slint:187
 msgid "Revoke this device? It must be linked again."
-msgstr ""
+msgstr "Відкликати цей пристрій? Його доведеться прив’язати знову."
 
 #: ui/modals/sessions.slint:339 ui/settings/devices_settings.slint:199
 msgid "Confirm"
-msgstr ""
+msgstr "Підтвердити"
 
 #: ui/modals/sessions.slint:373
 msgid "Revoke all other sessions"
-msgstr ""
+msgstr "Відкликати всі інші сеанси"
 
 #: ui/modals/sessions.slint:386
 msgid ""
@@ -4366,672 +4476,711 @@ msgid_plural ""
 "Sign out all {n} other linked devices? They must be linked again to use this "
 "account."
 msgstr[0] ""
+"Вийти з іншого прив’язаного пристрою? Його треба знову прив’язати, щоб "
+"користуватися цим обліковим записом."
 msgstr[1] ""
+"Вийти з усіх {n} інших прив’язаних пристроїв? Їх треба знову прив’язати, щоб "
+"користуватися цим обліковим записом."
 msgstr[2] ""
+"Вийти з усіх {n} інших прив’язаних пристроїв? Їх треба знову прив’язати, щоб "
+"користуватися цим обліковим записом."
 
 #: ui/modals/sessions.slint:403
 msgid "Revoke all"
-msgstr ""
+msgstr "Відкликати всі"
 
 #: ui/modals/user_profile.slint:203
 msgid "Offline"
-msgstr ""
+msgstr "Не в мережі"
 
 #: ui/modals/user_profile.slint:365
 msgid "Verified — show safety number"
-msgstr ""
+msgstr "Підтверджено — показати номер безпеки"
 
 #: ui/modals/user_profile.slint:471
 msgid "Safety number"
-msgstr ""
+msgstr "Номер безпеки"
 
 #: ui/modals/user_profile.slint:502
 msgid "Disappearing messages: {}"
-msgstr ""
+msgstr "Зникаючі повідомлення: {}"
 
 #: ui/modals/user_profile.slint:567
 msgid "You blocked this person."
-msgstr ""
+msgstr "Ви заблокували цю людину."
 
 #: ui/modals/user_profile.slint:574
 msgid "Open blocked"
-msgstr ""
+msgstr "Відкрити заблокованих"
 
 #: ui/modals/user_profile.slint:620 ui/sidebar/create_menu.slint:175
 msgid "Add friend"
-msgstr ""
+msgstr "Додати друга"
 
 #: ui/modals/user_profile.slint:635
 msgid "Retry shared content"
-msgstr ""
+msgstr "Повторити спільний вміст"
 
 #: ui/modals/user_profile.slint:684
 msgid "Share this contact"
-msgstr ""
+msgstr "Поділитися цим контактом"
 
 #: ui/modals/user_profile.slint:686 ui/modals/user_profile.slint:820
 msgid "Edit contact"
-msgstr ""
+msgstr "Змінити контакт"
 
 #: ui/modals/user_profile.slint:688 ui/modals/user_profile.slint:768
 msgid "Delete contact"
-msgstr ""
+msgstr "Видалити контакт"
 
 #: ui/modals/user_profile.slint:691
 msgid "Unblock user"
-msgstr ""
+msgstr "Розблокувати користувача"
 
 #: ui/modals/user_profile.slint:691
 msgid "Block user"
-msgstr ""
+msgstr "Заблокувати користувача"
 
 #: ui/modals/user_profile.slint:708
 msgid "Load earlier"
-msgstr ""
+msgstr "Завантажити раніші"
 
 #: ui/modals/user_profile.slint:720 ui/server_records/screen.slint:218
 msgid "Load more"
-msgstr ""
+msgstr "Завантажити ще"
 
 #: ui/modals/user_profile.slint:731
 msgid "Nothing shared yet."
-msgstr ""
+msgstr "Поки нічим не ділилися."
 
 #: ui/modals/user_profile.slint:741
 msgid "Delete {}?"
-msgstr ""
+msgstr "Видалити {}?"
 
 #: ui/modals/user_profile.slint:751
 msgid "They'll be removed from your friends. Your chat history stays."
-msgstr ""
+msgstr "Людину буде вилучено з друзів. Історія чату залишиться."
 
 #: ui/modals/user_profile.slint:781
 msgid "Block {}?"
-msgstr ""
+msgstr "Заблокувати {}?"
 
 #: ui/modals/user_profile.slint:791
 msgid ""
 "Blocked people can't call or message you. You can unblock them from their "
 "profile or Contacts › Blocked."
 msgstr ""
+"Заблоковані не можуть дзвонити вам чи писати. Розблокувати можна з їхнього "
+"профілю або в Контакти › Заблоковані."
 
 #: ui/modals/user_profile.slint:826
 msgid "Contact name"
-msgstr ""
+msgstr "Ім’я контакту"
 
 #: ui/modals/user_profile.slint:830
 msgid "Reset"
-msgstr ""
+msgstr "Скинути"
 
 #: ui/modals/user_profile.slint:838
 msgid "Unblock {}?"
-msgstr ""
+msgstr "Розблокувати {}?"
 
 #: ui/modals/user_profile.slint:845
 msgid "They will be able to call and message you again."
-msgstr ""
+msgstr "Ця людина знову зможе дзвонити вам і писати."
 
 #: ui/pages/account_recovery.slint:89
 msgid "Account recovery"
-msgstr ""
+msgstr "Відновлення облікового запису"
 
 #: ui/pages/account_recovery.slint:97
 msgid "Enter a recovery code to reset your password and PIN"
-msgstr ""
+msgstr "Введіть код відновлення, щоб скинути пароль і PIN"
 
 #: ui/pages/account_recovery.slint:118
 msgid "Enter your username"
-msgstr ""
+msgstr "Введіть ім’я користувача"
 
 #: ui/pages/account_recovery.slint:122
 msgid "Username is required"
-msgstr ""
+msgstr "Потрібне ім’я користувача"
 
 #: ui/pages/account_recovery.slint:131
 msgid "Recovery code"
-msgstr ""
+msgstr "Код відновлення"
 
 #: ui/pages/account_recovery.slint:137
 msgid "26 letters and digits 2–9. Spaces and hyphens are OK."
-msgstr ""
+msgstr "26 літер і цифри 2–9. Пробіли й дефіси можна."
 
 #: ui/pages/account_recovery.slint:143
 msgid "Enter your recovery code"
-msgstr ""
+msgstr "Введіть код відновлення"
 
 #: ui/pages/account_recovery.slint:148
 msgid "Recovery code is required"
-msgstr ""
+msgstr "Потрібен код відновлення"
 
 #: ui/pages/account_recovery.slint:160 ui/pages/account_recovery.slint:166
 msgid "New password"
-msgstr ""
+msgstr "Новий пароль"
 
 #: ui/pages/account_recovery.slint:171
 msgid "Password is required"
-msgstr ""
+msgstr "Потрібен пароль"
 
 #: ui/pages/account_recovery.slint:179 ui/pages/account_recovery.slint:185
 msgid "Confirm password"
-msgstr ""
+msgstr "Підтвердьте пароль"
 
 #: ui/pages/account_recovery.slint:192
 msgid "Please confirm your password"
-msgstr ""
+msgstr "Підтвердьте пароль, будь ласка"
 
 #: ui/pages/account_recovery.slint:194 ui/pages/register.slint:457
 msgid "Passwords do not match"
-msgstr ""
+msgstr "Паролі не збігаються"
 
 #: ui/pages/account_recovery.slint:208
 msgid "New recovery PIN"
-msgstr ""
+msgstr "Новий PIN відновлення"
 
 #: ui/pages/account_recovery.slint:214
 msgid "Use at least 8 characters; keep it somewhere safe."
-msgstr ""
+msgstr "Щонайменше 8 символів; зберігайте його в надійному місці."
 
 #: ui/pages/account_recovery.slint:220
 msgid "PIN (8+ characters)"
-msgstr ""
+msgstr "PIN (щонайменше 8 символів)"
 
 #: ui/pages/account_recovery.slint:225
 msgid "PIN is required (8+ characters)"
-msgstr ""
+msgstr "Потрібен PIN (щонайменше 8 символів)"
 
 #: ui/pages/account_recovery.slint:271
 msgid "Recover account"
-msgstr ""
+msgstr "Відновити обліковий запис"
 
 #: ui/pages/account_recovery.slint:290 ui/pages/link_device.slint:198
 msgid "Back to login"
-msgstr ""
+msgstr "До входу"
 
 #: ui/pages/link_device.slint:18
 msgid "Waiting for your other device…"
-msgstr ""
+msgstr "Очікуємо інший пристрій…"
 
 #: ui/pages/link_device.slint:71
 msgid "Link this device"
-msgstr ""
+msgstr "Прив’язати цей пристрій"
 
 #: ui/pages/link_device.slint:79
 msgid ""
 "On your already-signed-in device, open Settings › Linked devices › Manage "
 "devices › Link new device, then scan this code."
 msgstr ""
+"На пристрої, де ви вже ввійшли, відкрийте Налаштування › Прив’язані "
+"пристрої › Керувати пристроями › Прив’язати новий пристрій і відскануйте цей "
+"код."
 
 #: ui/pages/link_device.slint:87
 msgid ""
 "This device still holds another account's keys. Linking a different account "
 "will fail. Sign in to that account instead, or clear this app's data first."
 msgstr ""
+"На цьому пристрої досі є ключі іншого облікового запису. Прив’язати інший "
+"обліковий запис не вдасться. Увійдіть у той обліковий запис або спочатку "
+"очистьте дані застосунку."
 
 #: ui/pages/link_device.slint:113
 msgid "Preparing your secure link…"
-msgstr ""
+msgstr "Готуємо захищене посилання…"
 
 #: ui/pages/link_device.slint:113
 msgid "Your QR code will appear here"
-msgstr ""
+msgstr "Тут з’явиться ваш QR-код"
 
 #: ui/pages/link_device.slint:130
 msgid "Can't scan? Copy and paste this link into the other device:"
 msgstr ""
+"Не вдається сканувати? Скопіюйте це посилання і вставте його на іншому "
+"пристрої:"
 
 #: ui/pages/link_device.slint:188
 msgid "Generate QR"
-msgstr ""
+msgstr "Згенерувати QR"
 
 #: ui/pages/login.slint:123
 msgid "Sign in to continue"
-msgstr ""
+msgstr "Увійдіть, щоб продовжити"
 
 #: ui/pages/login.slint:142 ui/pages/register.slint:407
 msgid "Password"
-msgstr ""
+msgstr "Пароль"
 
 #: ui/pages/login.slint:162
 msgid ""
 "Your account PIN. Needed on a new device to restore your encryption keys."
 msgstr ""
+"PIN облікового запису. Потрібен на новому пристрої, щоб відновити ключі "
+"шифрування."
 
 #: ui/pages/login.slint:171
 msgid "Server URL"
-msgstr ""
+msgstr "URL сервера"
 
 #: ui/pages/login.slint:180
 msgid "Localhost"
-msgstr ""
+msgstr "Localhost"
 
 #: ui/pages/login.slint:188
 msgid "LAN"
-msgstr ""
+msgstr "LAN"
 
 #: ui/pages/login.slint:214
 msgid "Verifying this sign-in on your device… this can take a few seconds."
 msgstr ""
+"Перевіряємо цей вхід на вашому пристрої… це може тривати кілька секунд."
 
 #: ui/pages/login.slint:227
 msgid ""
 "Starting over gives this device new encryption keys. Your old messages stay "
 "unreadable, and each of your contacts will be asked to verify you again."
 msgstr ""
+"Якщо почати спочатку, цей пристрій отримає нові ключі шифрування. Старі "
+"повідомлення лишаться нечитабельними, і кожного з ваших контактів попросять "
+"підтвердити вас знову."
 
 #: ui/pages/login.slint:234
 msgid "Start over with new keys"
-msgstr ""
+msgstr "Почати спочатку з новими ключами"
 
 #: ui/pages/login.slint:253
 msgid "Forgot password?"
-msgstr ""
+msgstr "Забули пароль?"
 
 #: ui/pages/login.slint:291
 msgid "Don't have an account?"
-msgstr ""
+msgstr "Немає облікового запису?"
 
 #: ui/pages/login.slint:299
 msgid "Register"
-msgstr ""
+msgstr "Реєстрація"
 
 #: ui/pages/login.slint:319
 msgid "Link to an existing account on another device"
-msgstr ""
+msgstr "Прив’язати до наявного облікового запису на іншому пристрої"
 
 #: ui/pages/register.slint:117 ui/pages/register.slint:602
 msgid "Create account"
-msgstr ""
+msgstr "Створити обліковий запис"
 
 #: ui/pages/register.slint:126
 msgid "Step {0} of {1}"
-msgstr ""
+msgstr "Крок {0} з {1}"
 
 #: ui/pages/register.slint:214
 msgid "Set up your profile"
-msgstr ""
+msgstr "Налаштуйте профіль"
 
 #: ui/pages/register.slint:245
 msgid "Previous avatar"
-msgstr ""
+msgstr "Попередній аватар"
 
 #: ui/pages/register.slint:269
 msgid "Upload your own photo"
-msgstr ""
+msgstr "Завантажте своє фото"
 
 #: ui/pages/register.slint:320
 msgid "Next avatar"
-msgstr ""
+msgstr "Наступний аватар"
 
 #: ui/pages/register.slint:398
 msgid "Secure your account"
-msgstr ""
+msgstr "Захистіть обліковий запис"
 
 #: ui/pages/register.slint:420
 msgid "Password strength: Weak"
-msgstr ""
+msgstr "Надійність пароля: слабка"
 
 #: ui/pages/register.slint:421
 msgid "Password strength: Fair"
-msgstr ""
+msgstr "Надійність пароля: середня"
 
 #: ui/pages/register.slint:422
 msgid "Password strength: Good"
-msgstr ""
+msgstr "Надійність пароля: добра"
 
 #: ui/pages/register.slint:422
 msgid "Password strength: Strong"
-msgstr ""
+msgstr "Надійність пароля: сильна"
 
 #: ui/pages/register.slint:440
 msgid "Weak"
-msgstr ""
+msgstr "Слабкий"
 
 #: ui/pages/register.slint:441
 msgid "Fair"
-msgstr ""
+msgstr "Середній"
 
 #: ui/pages/register.slint:442
 msgid "Good"
-msgstr ""
+msgstr "Добрий"
 
 #: ui/pages/register.slint:442
 msgid "Strong"
-msgstr ""
+msgstr "Сильний"
 
 #: ui/pages/register.slint:474
 msgid "Create recovery PIN"
-msgstr ""
+msgstr "Створіть PIN відновлення"
 
 #: ui/pages/register.slint:482
 msgid ""
 "Your PIN protects your encryption key backup. You'll need it to recover "
 "messages if you lose this device."
 msgstr ""
+"PIN захищає резервну копію ключа шифрування. Він знадобиться, щоб відновити "
+"повідомлення, якщо ви втратите цей пристрій."
 
 #: ui/pages/register.slint:495
 msgid "Create a PIN (8+ characters)"
-msgstr ""
+msgstr "Створіть PIN (щонайменше 8 символів)"
 
 #: ui/pages/register.slint:513
 msgid "PIN strength: Weak"
-msgstr ""
+msgstr "Надійність PIN: слабка"
 
 #: ui/pages/register.slint:514
 msgid "PIN strength: Fair"
-msgstr ""
+msgstr "Надійність PIN: середня"
 
 #: ui/pages/register.slint:514
 msgid "PIN strength: Strong"
-msgstr ""
+msgstr "Надійність PIN: сильна"
 
 #: ui/pages/register.slint:538 ui/settings/account_settings.slint:381
 msgid "PINs do not match"
-msgstr ""
+msgstr "PIN не збігаються"
 
 #: ui/pages/register.slint:555
 msgid "Finalize registration"
-msgstr ""
+msgstr "Завершити реєстрацію"
 
 #: ui/pages/register.slint:565 ui/pages/register.slint:571
 msgid "Direct server URL"
-msgstr ""
+msgstr "Прямий URL сервера"
 
 #: ui/pages/register.slint:586
 msgid ""
 "Shield is on: registration goes over Tor to the configured onion service."
 msgstr ""
+"Shield увімкнено: реєстрація йде через Tor до налаштованої onion-служби."
 
 #: ui/pages/register.slint:617
 msgid "Already have an account?"
-msgstr ""
+msgstr "Уже є обліковий запис?"
 
 #: ui/pages/welcome.slint:53
 msgid "Welcome to Chatter!"
-msgstr ""
+msgstr "Вітаємо в Chatter!"
 
 #: ui/pages/welcome.slint:65
 msgid "Hi {}, your account is ready."
-msgstr ""
+msgstr "Вітаємо, {}, обліковий запис готовий."
 
 #: ui/pages/welcome.slint:93
 msgid "All messages are end-to-end encrypted"
-msgstr ""
+msgstr "Усі повідомлення наскрізно зашифровані"
 
 #: ui/pages/welcome.slint:106
 msgid "Get started"
-msgstr ""
+msgstr "Почати"
 
 #: ui/pages/welcome.slint:130 ui/pages/welcome.slint:163
 msgid "Add friends"
-msgstr ""
+msgstr "Додати друзів"
 
 #: ui/pages/welcome.slint:131 ui/pages/welcome.slint:171
 msgid "Find people you know on Chatter"
-msgstr ""
+msgstr "Знайдіть знайомих у Chatter"
 
 #: ui/pages/welcome.slint:202 ui/pages/welcome.slint:235
 #: ui/sidebar/sidebar.slint:768
 msgid "Browse channels"
-msgstr ""
+msgstr "Переглянути канали"
 
 #: ui/pages/welcome.slint:203 ui/pages/welcome.slint:243
 msgid "Join public conversations"
-msgstr ""
+msgstr "Приєднатися до публічних розмов"
 
 #: ui/pages/welcome.slint:274
 msgid "Continue to Chatter"
-msgstr ""
+msgstr "Перейти до Chatter"
 
 #: ui/server_records/screen.slint:47 ui/settings/account_menu.slint:216
 msgid "Notification inbox"
-msgstr ""
+msgstr "Вхідні сповіщення"
 
 #: ui/server_records/screen.slint:47
 msgid "Channel integrations"
-msgstr ""
+msgstr "Інтеграції каналу"
 
 #: ui/server_records/screen.slint:47
 msgid "Channel call history"
-msgstr ""
+msgstr "Історія дзвінків каналу"
 
 #: ui/server_records/screen.slint:66
 msgid ""
 "Install your configured integrations in this channel, or remove an installed "
 "integration."
 msgstr ""
+"Установіть налаштовані інтеграції в цьому каналі або вилучіть установлену."
 
 #: ui/server_records/screen.slint:71
 msgid ""
 "Call records from this channel’s server. Private call history stays in Calls."
 msgstr ""
+"Записи дзвінків із сервера цього каналу. Приватна історія дзвінків лишається "
+"в Дзвінках."
 
 #: ui/server_records/screen.slint:96
 msgid "You're all caught up"
-msgstr ""
+msgstr "Ви все переглянули"
 
 #: ui/server_records/screen.slint:96
 msgid "No integrations yet"
-msgstr ""
+msgstr "Інтеграцій ще немає"
 
 #: ui/server_records/screen.slint:241
 msgid "Mark read"
-msgstr ""
+msgstr "Прочитати"
 
 #: ui/settings/about_settings.slint:16
 msgid "About Chatter"
-msgstr ""
+msgstr "Про Chatter"
 
 #: ui/settings/about_settings.slint:32
 msgid "Version"
-msgstr ""
+msgstr "Версія"
 
 #: ui/settings/about_settings.slint:39
 msgid "Checking…"
-msgstr ""
+msgstr "Перевірка…"
 
 #: ui/settings/about_settings.slint:39
 msgid "Check for updates"
-msgstr ""
+msgstr "Перевірити оновлення"
 
 #: ui/settings/about_settings.slint:44
 msgid "Update available — {}"
-msgstr ""
+msgstr "Доступне оновлення — {}"
 
 #: ui/settings/about_settings.slint:69
 msgid "View third-party licenses and notices in Chatter."
-msgstr ""
+msgstr "Переглянути ліцензії та повідомлення сторонніх компонентів у Chatter."
 
 #: ui/settings/about_settings.slint:79
 msgid ""
 "Privacy: Your settings control read receipts, notification previews, and "
 "whether AI requests leave this device."
 msgstr ""
+"Конфіденційність: ваші налаштування керують звітами про прочитання, "
+"попереднім переглядом сповіщень і тим, чи запити AI залишають цей пристрій."
 
 #: ui/settings/account_menu.slint:198
 msgid "My profile"
-msgstr ""
+msgstr "Мій профіль"
 
 #: ui/settings/account_menu.slint:229 ui/settings/settings_screen.slint:264
 #: ui/sidebar/sidebar_footer.slint:340
 msgid "Settings"
-msgstr ""
+msgstr "Налаштування"
 
 #: ui/settings/account_menu.slint:236 ui/settings/account_menu.slint:251
 msgid "Night mode"
-msgstr ""
+msgstr "Нічний режим"
 
 #: ui/settings/account_settings.slint:66 ui/settings/settings_screen.slint:276
 msgid "Account"
-msgstr ""
+msgstr "Обліковий запис"
 
 #: ui/settings/account_settings.slint:143
 msgid "Security"
-msgstr ""
+msgstr "Безпека"
 
 #: ui/settings/account_settings.slint:167
 msgid "Choose a strong, unique password for your account."
-msgstr ""
+msgstr "Виберіть надійний унікальний пароль для облікового запису."
 
 #: ui/settings/account_settings.slint:184
 msgid "Current password"
-msgstr ""
+msgstr "Поточний пароль"
 
 #: ui/settings/account_settings.slint:204
 msgid "Confirm new password"
-msgstr ""
+msgstr "Підтвердьте новий пароль"
 
 #: ui/settings/account_settings.slint:262
 msgid "Recovery codes"
-msgstr ""
+msgstr "Коди відновлення"
 
 #: ui/settings/account_settings.slint:263
 msgid "Lost or used up your codes? Get a new set."
-msgstr ""
+msgstr "Коди загублено або використано? Отримайте новий набір."
 
 #: ui/settings/account_settings.slint:266
 msgid "Regenerate"
-msgstr ""
+msgstr "Згенерувати знову"
 
 #: ui/settings/account_settings.slint:281
 msgid ""
 "Your current recovery codes stop working and a new set is shown once. Enter "
 "your password to confirm."
 msgstr ""
+"Поточні коди відновлення перестануть працювати, і новий набір буде показано "
+"один раз. Введіть пароль, щоб підтвердити."
 
 #: ui/settings/account_settings.slint:340
 msgid "Backup PIN"
-msgstr ""
+msgstr "PIN резервної копії"
 
 #: ui/settings/account_settings.slint:341
 msgid "Your PIN secures your encrypted key backup."
-msgstr ""
+msgstr "PIN захищає зашифровану резервну копію ключів."
 
 #: ui/settings/account_settings.slint:358
 msgid "Current PIN"
-msgstr ""
+msgstr "Поточний PIN"
 
 #: ui/settings/account_settings.slint:368
 msgid "New PIN (8+ characters)"
-msgstr ""
+msgstr "Новий PIN (щонайменше 8 символів)"
 
 #: ui/settings/account_settings.slint:376
 msgid "Confirm new PIN"
-msgstr ""
+msgstr "Підтвердьте новий PIN"
 
 #: ui/settings/account_settings.slint:448
 msgid "Key backup"
-msgstr ""
+msgstr "Резервна копія ключів"
 
 #: ui/settings/account_settings.slint:449
 msgid "Status: Backed up"
-msgstr ""
+msgstr "Статус: є резервна копія"
 
 #: ui/settings/account_settings.slint:449
 msgid "Status: Not backed up"
-msgstr ""
+msgstr "Статус: немає резервної копії"
 
 #: ui/settings/account_settings.slint:449
 msgid "Status: Unknown"
-msgstr ""
+msgstr "Статус: невідомо"
 
 #: ui/settings/account_settings.slint:467
 msgid "Enter your PIN to retry backup"
-msgstr ""
+msgstr "Введіть PIN, щоб повторити резервне копіювання"
 
 #: ui/settings/account_settings.slint:533
 msgid "Message backup"
-msgstr ""
+msgstr "Резервна копія повідомлень"
 
 #: ui/settings/account_settings.slint:534
 msgid ""
 "Encrypted message history, conversations, and contacts. File backups need a "
 "passphrase; server backups need your PIN."
 msgstr ""
+"Зашифровані історія повідомлень, розмови та контакти. Для файлу потрібна "
+"парольна фраза, для серверної копії — ваш PIN."
 
 #: ui/settings/account_settings.slint:540
 msgid "File backup passphrase"
-msgstr ""
+msgstr "Парольна фраза файлу"
 
 #: ui/settings/account_settings.slint:548
 msgid "Enter a backup passphrase to enable file export and restore."
-msgstr ""
+msgstr "Введіть парольну фразу, щоб увімкнути експорт і відновлення з файлу."
 
 #: ui/settings/account_settings.slint:559
 msgid "Export to file…"
-msgstr ""
+msgstr "Експортувати у файл…"
 
 #: ui/settings/account_settings.slint:570
 msgid "Restore from file…"
-msgstr ""
+msgstr "Відновити з файлу…"
 
 #: ui/settings/account_settings.slint:581
 msgid "PIN (for server backup)"
-msgstr ""
+msgstr "PIN (для серверної копії)"
 
 #: ui/settings/account_settings.slint:589
 msgid "Enter your PIN to enable server backup and restore."
 msgstr ""
+"Введіть PIN, щоб увімкнути резервне копіювання на сервер і відновлення."
 
 #: ui/settings/account_settings.slint:600
 msgid "Back up to server"
-msgstr ""
+msgstr "Копіювати на сервер"
 
 #: ui/settings/account_settings.slint:611
 msgid "Restore from server"
-msgstr ""
+msgstr "Відновити з сервера"
 
 #: ui/settings/account_settings.slint:623
 msgid "Working on message backup…"
-msgstr ""
+msgstr "Працюємо над резервною копією повідомлень…"
 
 #: ui/settings/account_settings.slint:660
 msgid "Session on this device"
-msgstr ""
+msgstr "Сеанс на цьому пристрої"
 
 #: ui/settings/account_settings.slint:667
 msgid "Sign out of your account on this device."
-msgstr ""
+msgstr "Вийти з облікового запису на цьому пристрої."
 
 #: ui/settings/account_settings.slint:675
 msgid "Log out"
-msgstr ""
+msgstr "Вийти"
 
 #: ui/settings/account_settings.slint:702
 msgid "Log out of this device"
-msgstr ""
+msgstr "Вийти на цьому пристрої"
 
 #. section header a few rows up.
 #: ui/settings/account_settings.slint:727
 msgid "This account"
-msgstr ""
+msgstr "Цей обліковий запис"
 
 #: ui/settings/account_settings.slint:734
 msgid ""
 "Permanently delete your account and all associated data. This action cannot "
 "be undone."
 msgstr ""
+"Назавжди видалити обліковий запис і всі пов’язані дані. Цю дію неможливо "
+"скасувати."
 
 #: ui/settings/account_settings.slint:745
 msgid "Delete account"
-msgstr ""
+msgstr "Видалити обліковий запис"
 
 #: ui/settings/account_settings.slint:776
 msgid ""
 "This permanently deletes your account and all associated data. This cannot "
 "be undone. Enter your password to confirm."
 msgstr ""
+"Це назавжди видаляє обліковий запис і всі пов’язані дані. Скасувати не "
+"можна. Введіть пароль, щоб підтвердити."
 
 #: ui/settings/account_settings.slint:808
 msgid "Delete forever"
-msgstr ""
+msgstr "Видалити назавжди"
 
 #: ui/settings/ai_settings.slint:28 ui/settings/settings_screen.slint:282
 msgid "Remote AI"
-msgstr ""
+msgstr "Віддалений AI"
 
 #: ui/settings/ai_settings.slint:46 ui/settings/ai_settings.slint:54
 msgid "Use cloud AI"
-msgstr ""
+msgstr "Використовувати хмарний AI"
 
 #: ui/settings/ai_settings.slint:61
 msgid ""
@@ -5039,594 +5188,630 @@ msgid ""
 "provider. Existing local AI history stays on this device. Direct and secret "
 "messages are never sent to a cloud provider."
 msgstr ""
+"Надсилати запити й дозволену історію віддалених розмов вибраному "
+"постачальнику. Наявна локальна історія AI лишається на цьому пристрої. "
+"Особисті та секретні повідомлення ніколи не йдуть хмарному постачальнику."
 
 #: ui/settings/ai_settings.slint:82
 msgid "My API key"
-msgstr ""
+msgstr "Мій ключ API"
 
 #: ui/settings/ai_settings.slint:92
 msgid "Buy tokens"
-msgstr ""
+msgstr "Купити токени"
 
 #: ui/settings/ai_settings.slint:105
 msgid "Model (blank for the default)"
-msgstr ""
+msgstr "Модель (порожньо — типова)"
 
 #: ui/settings/ai_settings.slint:112
 msgid "Save model"
-msgstr ""
+msgstr "Зберегти модель"
 
 #: ui/settings/ai_settings.slint:125
 msgid ""
 "Your key is stored on this device only. Prompts go straight to the provider "
 "— our servers never see them."
 msgstr ""
+"Ваш ключ зберігається лише на цьому пристрої. Запити йдуть прямо "
+"постачальнику — наші сервери їх не бачать."
 
 #: ui/settings/ai_settings.slint:132
 msgid "API key saved — enter a new one to replace it"
-msgstr ""
+msgstr "Ключ API збережено — введіть новий, щоб замінити"
 
 #: ui/settings/ai_settings.slint:132
 msgid "Anthropic API key"
-msgstr ""
+msgstr "Ключ API Anthropic"
 
 #: ui/settings/ai_settings.slint:141
 msgid "Save key"
-msgstr ""
+msgstr "Зберегти ключ"
 
 #: ui/settings/ai_settings.slint:157
 msgid ""
 "No API key needed. Prompts are sent through our servers, which see them in "
 "order to meter usage."
 msgstr ""
+"Ключ API не потрібен. Запити йдуть через наші сервери, які бачать їх, щоб "
+"обліковувати використання."
 
 #: ui/settings/ai_settings.slint:173
 msgid "Refresh balance"
-msgstr ""
+msgstr "Оновити баланс"
 
 #: ui/settings/ai_settings.slint:193
 msgid "Assistant memory"
-msgstr ""
+msgstr "Пам’ять асистента"
 
 #: ui/settings/appearance_settings.slint:19
 #: ui/settings/settings_screen.slint:614
 msgid "Appearance"
-msgstr ""
+msgstr "Вигляд"
 
 #: ui/settings/appearance_settings.slint:41
 msgid "Theme"
-msgstr ""
+msgstr "Тема"
 
 #: ui/settings/appearance_settings.slint:48
 msgid "System"
-msgstr ""
+msgstr "Система"
 
 #: ui/settings/appearance_settings.slint:48
 msgid "Match this device's light or dark setting"
-msgstr ""
+msgstr "Як на цьому пристрої: світла або темна тема"
 
 #: ui/settings/appearance_settings.slint:49
 msgid "Light"
-msgstr ""
+msgstr "Світла"
 
 #: ui/settings/appearance_settings.slint:50
 msgid "Dark"
+msgstr "Темна"
+
+#: ui/settings/appearance_settings.slint:145
+msgid "Language"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:144
+#: ui/settings/appearance_settings.slint:209
+msgid "Match this device's language"
+msgstr ""
+
+#: ui/settings/appearance_settings.slint:244
 msgid "Text size"
-msgstr ""
+msgstr "Розмір тексту"
 
-#: ui/settings/appearance_settings.slint:151
+#: ui/settings/appearance_settings.slint:251
 msgid "Small"
-msgstr ""
+msgstr "Малий"
 
-#: ui/settings/appearance_settings.slint:152
+#: ui/settings/appearance_settings.slint:252
 msgid "Match this device's font size"
-msgstr ""
-
-#: ui/settings/appearance_settings.slint:153
-msgid "Large"
-msgstr ""
-
-#: ui/settings/appearance_settings.slint:241
-msgid "Glass effects"
-msgstr ""
+msgstr "Як розмір шрифту на цьому пристрої"
 
 #: ui/settings/appearance_settings.slint:253
+msgid "Large"
+msgstr "Великий"
+
+#: ui/settings/appearance_settings.slint:341
+msgid "Glass effects"
+msgstr "Скляні ефекти"
+
+#: ui/settings/appearance_settings.slint:353
 msgid ""
 "Translucent navigation and controls. Turn off for a simpler appearance and "
 "better performance."
 msgstr ""
+"Напівпрозорі навігація й елементи. Вимкніть для простішого вигляду і кращої "
+"швидкодії."
 
-#: ui/settings/appearance_settings.slint:270
+#: ui/settings/appearance_settings.slint:370
 msgid "Reduce animations"
-msgstr ""
+msgstr "Менше анімації"
 
-#: ui/settings/appearance_settings.slint:282
+#: ui/settings/appearance_settings.slint:382
 msgid ""
 "Menus, sheets and switches change without motion; loading shimmer, typing "
 "dots and the ringing pulse hold still."
 msgstr ""
+"Меню, панелі та перемикачі змінюються без руху; мерехтіння завантаження, "
+"крапки набору й пульс дзвінка завмирають."
 
-#: ui/settings/appearance_settings.slint:299
+#: ui/settings/appearance_settings.slint:399
 msgid "Animation speed"
-msgstr ""
+msgstr "Швидкість анімації"
 
-#: ui/settings/appearance_settings.slint:305
+#: ui/settings/appearance_settings.slint:405
 msgid "How quickly menus and transitions move"
-msgstr ""
+msgstr "Як швидко рухаються меню й переходи"
 
-#: ui/settings/appearance_settings.slint:325
+#: ui/settings/appearance_settings.slint:425
 msgid "Animation speed {}"
-msgstr ""
+msgstr "Швидкість анімації {}"
 
-#: ui/settings/appearance_settings.slint:375
+#: ui/settings/appearance_settings.slint:475
 msgid "Message spacing"
-msgstr ""
+msgstr "Інтервал повідомлень"
 
-#: ui/settings/appearance_settings.slint:382
+#: ui/settings/appearance_settings.slint:482
 msgid "Comfortable"
-msgstr ""
+msgstr "Зручно"
 
-#: ui/settings/appearance_settings.slint:383
+#: ui/settings/appearance_settings.slint:483
 msgid "Compact"
-msgstr ""
+msgstr "Компактно"
 
-#: ui/settings/appearance_settings.slint:383
+#: ui/settings/appearance_settings.slint:483
 msgid "Fit more messages and conversations on screen"
-msgstr ""
+msgstr "Більше повідомлень і розмов на екрані"
 
-#: ui/settings/appearance_settings.slint:481
+#: ui/settings/appearance_settings.slint:581
 msgid "Search shortcut"
-msgstr ""
+msgstr "Скорочення пошуку"
 
-#: ui/settings/appearance_settings.slint:488
+#: ui/settings/appearance_settings.slint:588
 msgid "Which keys open search"
-msgstr ""
+msgstr "Які клавіші відкривають пошук"
 
-#: ui/settings/appearance_settings.slint:501
+#: ui/settings/appearance_settings.slint:601
 msgid "Ctrl+K"
-msgstr ""
+msgstr "Ctrl+K"
 
-#: ui/settings/appearance_settings.slint:502
+#: ui/settings/appearance_settings.slint:602
 msgid "Ctrl+F"
-msgstr ""
+msgstr "Ctrl+F"
 
-#: ui/settings/appearance_settings.slint:503
+#: ui/settings/appearance_settings.slint:603
 msgid "Both"
-msgstr ""
+msgstr "Обидва"
 
-#: ui/settings/appearance_settings.slint:507
+#: ui/settings/appearance_settings.slint:607
 msgid "Search shortcut {}"
-msgstr ""
+msgstr "Скорочення пошуку {}"
 
 #: ui/settings/devices_settings.slint:32 ui/settings/settings_screen.slint:279
 msgid "Linked devices"
-msgstr ""
+msgstr "Прив’язані пристрої"
 
 #: ui/settings/devices_settings.slint:62
 msgid "Devices"
-msgstr ""
+msgstr "Пристрої"
 
 #: ui/settings/devices_settings.slint:89
 msgid ""
 "Phones and computers signed in to your account. Link a new device or sign "
 "one out."
 msgstr ""
+"Телефони й комп’ютери, на яких відкрито ваш обліковий запис. Прив’яжіть "
+"новий пристрій або вийдіть на одному з них."
 
 #: ui/settings/devices_settings.slint:98
 msgid "Manage devices"
-msgstr ""
+msgstr "Керувати пристроями"
 
 #: ui/settings/devices_settings.slint:118
 msgid "Loading devices…"
-msgstr ""
+msgstr "Завантаження пристроїв…"
 
 #: ui/settings/devices_settings.slint:130
 msgid "No active devices found"
-msgstr ""
+msgstr "Активних пристроїв не знайдено"
 
 #: ui/settings/devices_settings.slint:182
 msgid "Linked: {}"
-msgstr ""
+msgstr "Прив’язано: {}"
 
 #: ui/settings/devices_settings.slint:237
 msgid "Approved, waiting to finish linking (until {})"
-msgstr ""
+msgstr "Дозволено, очікуємо завершення прив’язування (до {})"
 
 #: ui/settings/encryption_settings.slint:21
 #: ui/settings/settings_screen.slint:615
 msgid "Encryption"
-msgstr ""
+msgstr "Шифрування"
 
 #: ui/settings/encryption_settings.slint:29
 msgid "Your messages are protected with Signal Protocol end-to-end encryption"
-msgstr ""
+msgstr "Ваші повідомлення захищені наскрізним шифруванням протоколу Signal"
 
 #. lives on the contact's profile.
 #: ui/settings/encryption_settings.slint:55
 msgid "Your identity key"
-msgstr ""
+msgstr "Ваш ключ ідентичності"
 
 #: ui/settings/encryption_settings.slint:72
 msgid "No fingerprint available"
-msgstr ""
+msgstr "Відбиток недоступний"
 
 #: ui/settings/encryption_settings.slint:88
 msgid "To verify a contact, compare safety numbers from their profile"
-msgstr ""
+msgstr "Щоб перевірити контакт, порівняйте номери безпеки в його профілі"
 
 #: ui/settings/encryption_settings.slint:130
 msgid "Allow sealed sender from anyone"
-msgstr ""
+msgstr "Дозволити запечатаного відправника від будь-кого"
 
 #: ui/settings/encryption_settings.slint:145
 msgid ""
 "Let people who aren't your contacts send you sealed messages. The server "
 "still can't see who sent them."
 msgstr ""
+"Дозволити людям, яких немає у ваших контактах, надсилати вам запечатані "
+"повідомлення. Сервер усе одно не бачить, хто їх надіслав."
 
 #: ui/settings/notifications_settings.slint:41
 msgid "Account push notifications"
-msgstr ""
+msgstr "Push-сповіщення облікового запису"
 
 #: ui/settings/notifications_settings.slint:55
 msgid ""
 "Allow server push notifications for all devices on this account. Device "
 "notification settings still apply."
 msgstr ""
+"Дозволити серверні push-сповіщення для всіх пристроїв цього облікового "
+"запису. Налаштування сповіщень пристрою все одно діють."
 
 #: ui/settings/notifications_settings.slint:62
 msgid "Saving or loading notification preferences…"
-msgstr ""
+msgstr "Збереження або завантаження параметрів сповіщень…"
 
 #: ui/settings/notifications_settings.slint:101
 msgid "Notification content"
-msgstr ""
+msgstr "Вміст сповіщень"
 
 #: ui/settings/notifications_settings.slint:109
 msgid "What message notifications show on this device"
-msgstr ""
+msgstr "Що показують сповіщення про повідомлення на цьому пристрої"
 
 #: ui/settings/notifications_settings.slint:116
 msgid "Name and message"
-msgstr ""
+msgstr "Ім’я і повідомлення"
 
 #: ui/settings/notifications_settings.slint:117
 msgid "Name only"
-msgstr ""
+msgstr "Лише ім’я"
 
 #: ui/settings/notifications_settings.slint:118
 msgid "No name or content"
-msgstr ""
+msgstr "Без імені й вмісту"
 
 #: ui/settings/notifications_settings.slint:198
 msgid "Sound and vibration"
-msgstr ""
+msgstr "Звук і вібрація"
 
 #: ui/settings/notifications_settings.slint:217
 msgid "Opens this device's settings for message notifications"
-msgstr ""
+msgstr "Відкриває налаштування сповіщень про повідомлення на цьому пристрої"
 
 #: ui/settings/notifications_settings.slint:255
 msgid "Notification sound"
-msgstr ""
+msgstr "Звук сповіщення"
 
 #: ui/settings/notifications_settings.slint:267
 msgid "Play a sound when a message notification arrives"
-msgstr ""
+msgstr "Відтворювати звук, коли надходить сповіщення про повідомлення"
 
 #: ui/settings/privacy_settings.slint:36 ui/settings/settings_screen.slint:277
 msgid "Privacy"
-msgstr ""
+msgstr "Конфіденційність"
 
 #: ui/settings/privacy_settings.slint:43
 msgid "Control what information you share with others"
-msgstr ""
+msgstr "Керуйте тим, що ви показуєте іншим"
 
 #: ui/settings/privacy_settings.slint:65
 msgid "Who can see my photo and name"
-msgstr ""
+msgstr "Хто бачить моє фото й ім’я"
 
 #: ui/settings/privacy_settings.slint:73
 msgid ""
 "Everyone else sees your initials. Narrowing this gives your profile a new "
 "key, so people who could see it before can't."
 msgstr ""
+"Усі інші бачать ваші ініціали. Якщо звузити доступ, профіль отримає новий "
+"ключ, і ті, хто бачив його раніше, більше не зможуть."
 
 #: ui/settings/privacy_settings.slint:80
 msgid "Everyone"
-msgstr ""
+msgstr "Усі"
 
 #: ui/settings/privacy_settings.slint:81
 msgid "My contacts"
-msgstr ""
+msgstr "Мої контакти"
 
 #: ui/settings/privacy_settings.slint:82
 msgid "Nobody"
-msgstr ""
+msgstr "Ніхто"
 
 #: ui/settings/privacy_settings.slint:143
 msgid "Enter your PIN to change this"
-msgstr ""
+msgstr "Введіть PIN, щоб змінити це"
 
 #: ui/settings/privacy_settings.slint:213
 msgid "Shield"
-msgstr ""
+msgstr "Shield"
 
 #: ui/settings/privacy_settings.slint:229
 msgid ""
 "Hide channels and Saved messages, send DMs through anonymous mailboxes, and "
 "route traffic over Tor. Turning it on asks for your PIN."
 msgstr ""
+"Ховає канали та збережені повідомлення, надсилає особисті чати через "
+"анонімні скриньки й направляє трафік через Tor. Щоб увімкнути, потрібен PIN."
 
 #: ui/settings/privacy_settings.slint:230
 msgid ""
 "Hide channels and Saved messages and send DMs through anonymous mailboxes. "
 "Turning it on asks for your PIN."
 msgstr ""
+"Ховає канали та збережені повідомлення і надсилає особисті чати через "
+"анонімні скриньки. Щоб увімкнути, потрібен PIN."
 
 #: ui/settings/privacy_settings.slint:254
 msgid "Who can find me by my username"
-msgstr ""
+msgstr "Хто може знайти мене за ім’ям користувача"
 
 #: ui/settings/privacy_settings.slint:262
 msgid "Anyone who types your exact username can find you"
-msgstr ""
+msgstr "Вас знайде будь-хто, хто введе точне ім’я користувача"
 
 #: ui/settings/privacy_settings.slint:263
 msgid "Only people with your friend code or username link can find you"
 msgstr ""
+"Вас знайдуть лише ті, у кого є код друга або посилання на ім’я користувача"
 
 #: ui/settings/privacy_settings.slint:358
 msgid "Read receipts"
-msgstr ""
+msgstr "Звіти про прочитання"
 
 #: ui/settings/privacy_settings.slint:373
 msgid "Let others know when you've read their messages"
-msgstr ""
+msgstr "Повідомляти інших, коли ви прочитали їхні повідомлення"
 
 #: ui/settings/privacy_settings.slint:396
 msgid "Typing indicators"
-msgstr ""
+msgstr "Індикатор набору"
 
 #: ui/settings/privacy_settings.slint:411
 msgid "Show when you're typing a message"
-msgstr ""
+msgstr "Показувати, коли ви набираєте повідомлення"
 
 #: ui/sidebar/channel_list_item.slint:238 ui/sidebar/dm_list_item.slint:238
 msgid "Pinned"
-msgstr ""
+msgstr "Закріплено"
 
 #: ui/sidebar/channel_list_item.slint:262 ui/sidebar/dm_list_item.slint:260
 msgid "typing"
-msgstr ""
+msgstr "друкує"
 
 #: ui/sidebar/channel_list_item.slint:279 ui/sidebar/dm_list_item.slint:273
 msgid "Draft:"
-msgstr ""
+msgstr "Чернетка:"
 
 #: ui/sidebar/chat_list.slint:126
 msgid "Unpin conversation"
-msgstr ""
+msgstr "Відкріпити розмову"
 
 #: ui/sidebar/chat_list.slint:126
 msgid "Pin conversation"
-msgstr ""
+msgstr "Закріпити розмову"
 
 #: ui/sidebar/chat_list.slint:154
 msgid "More conversation actions"
-msgstr ""
+msgstr "Інші дії з розмовою"
 
 #: ui/sidebar/create_menu.slint:94 ui/sidebar/create_menu.slint:151
 msgid "New chat"
-msgstr ""
+msgstr "Новий чат"
 
 #: ui/sidebar/create_menu.slint:164
 msgid "Search contacts"
-msgstr ""
+msgstr "Пошук контактів"
 
 #: ui/sidebar/create_menu.slint:180
 msgid "No contacts match “{}”"
-msgstr ""
+msgstr "Немає контактів за запитом «{}»"
 
 #: ui/sidebar/create_menu.slint:180
 msgid "No friends yet. Add one from Contacts."
-msgstr ""
+msgstr "Друзів ще немає. Додайте когось у Контактах."
 
 #: ui/sidebar/custom_section_list.slint:52
 msgid "Expanded section. Press Shift+F10 or Menu for section options."
 msgstr ""
+"Розділ розгорнуто. Натисніть Shift+F10 або Menu, щоб відкрити параметри "
+"розділу."
 
 #: ui/sidebar/custom_section_list.slint:52
 msgid "Collapsed section. Press Shift+F10 or Menu for section options."
 msgstr ""
+"Розділ згорнуто. Натисніть Shift+F10 або Menu, щоб відкрити параметри "
+"розділу."
 
 #: ui/sidebar/section_context_menu.slint:223
 msgid "Move up"
-msgstr ""
+msgstr "Вище"
 
 #: ui/sidebar/section_context_menu.slint:241
 msgid "Move down"
-msgstr ""
+msgstr "Нижче"
 
 #: ui/sidebar/section_context_menu.slint:259
 msgid "Sort by"
-msgstr ""
+msgstr "Сортувати за"
 
 #: ui/sidebar/section_context_menu.slint:294
 msgid "Unread first"
-msgstr ""
+msgstr "Спочатку непрочитані"
 
 #: ui/sidebar/section_context_menu.slint:311
 msgid "Name (A–Z)"
-msgstr ""
+msgstr "Назва (А–Я)"
 
 #: ui/sidebar/section_context_menu.slint:351
 msgid "Remove section"
-msgstr ""
+msgstr "Вилучити розділ"
 
 #: ui/sidebar/section_context_menu.slint:588
 msgid "Pin to top"
-msgstr ""
+msgstr "Закріпити вгорі"
 
 #: ui/sidebar/section_context_menu.slint:621
 msgid "Mute…"
-msgstr ""
+msgstr "Без звуку…"
 
 #: ui/sidebar/section_context_menu.slint:635
 msgid "For 1 hour"
-msgstr ""
+msgstr "На 1 годину"
 
 #: ui/sidebar/section_context_menu.slint:636
 msgid "For 8 hours"
-msgstr ""
+msgstr "На 8 годин"
 
 #: ui/sidebar/section_context_menu.slint:637
 msgid "For 1 day"
-msgstr ""
+msgstr "На 1 день"
 
 #: ui/sidebar/section_context_menu.slint:638
 msgid "Always"
-msgstr ""
+msgstr "Завжди"
 
 #: ui/sidebar/section_context_menu.slint:665
 msgid "Mark as read"
-msgstr ""
+msgstr "Позначити прочитаним"
 
 #: ui/sidebar/section_context_menu.slint:665
 msgid "Mark as unread"
-msgstr ""
+msgstr "Позначити непрочитаним"
 
 #: ui/sidebar/section_context_menu.slint:688
 msgid "Move to section"
-msgstr ""
+msgstr "Перемістити в розділ"
 
 #: ui/sidebar/section_context_menu.slint:733
 msgid "New section…"
-msgstr ""
+msgstr "Новий розділ…"
 
 #. Not destructive: the chat goes back to the main list.
 #: ui/sidebar/section_context_menu.slint:751
 msgid "Remove from section"
-msgstr ""
+msgstr "Вилучити з розділу"
 
 #: ui/sidebar/section_context_menu.slint:791
 msgid "Yes, delete for both"
-msgstr ""
+msgstr "Так, видалити в обох"
 
 #: ui/sidebar/section_context_menu.slint:791
 msgid "Yes, delete chat"
-msgstr ""
+msgstr "Так, видалити чат"
 
 #: ui/sidebar/section_context_menu.slint:842
 msgid "Leave this group? It is removed from this device."
-msgstr ""
+msgstr "Вийти з цієї групи? Її буде вилучено з цього пристрою."
 
 #: ui/sidebar/section_context_menu.slint:843
 msgid "Leave this channel? You won't get new messages."
-msgstr ""
+msgstr "Вийти з цього каналу? Нові повідомлення не надходитимуть."
 
 #: ui/sidebar/sidebar.slint:65 ui/sidebar/sidebar.slint:539
 #: ui/sidebar/sidebar.slint:552
 msgid "Add contact"
-msgstr ""
+msgstr "Додати контакт"
 
 #. "Archived Chats" bar; its chevron is the way back.
 #: ui/sidebar/sidebar.slint:69 ui/sidebar/sidebar.slint:397
 msgid "Archived chats"
-msgstr ""
+msgstr "Архів чатів"
 
 #: ui/sidebar/sidebar.slint:70 ui/sidebar/sidebar.slint:397
 msgid "Back to chats"
-msgstr ""
+msgstr "До чатів"
 
 #. "Archived Chats" bar; its chevron is the way back.
 #: ui/sidebar/sidebar.slint:428
 msgid "Archived"
-msgstr ""
+msgstr "Архів"
 
 #: ui/sidebar/sidebar.slint:448
 msgid "No archived chats"
-msgstr ""
+msgstr "Немає чатів в архіві"
 
 #: ui/sidebar/sidebar.slint:569
 msgid "Calls, {} missed"
-msgstr ""
+msgstr "Дзвінки, {} пропущених"
 
 #: ui/sidebar/sidebar.slint:758
 msgid "No conversations"
-msgstr ""
+msgstr "Немає розмов"
 
 #: ui/sidebar/sidebar.slint:920
 msgid "Conversations"
-msgstr ""
+msgstr "Розмови"
 
 #: ui/sidebar/sidebar.slint:968
 msgid "New mesh conversation"
-msgstr ""
+msgstr "Нова розмова Mesh"
 
 #: ui/sidebar/sidebar_footer.slint:147
 msgid "New activity"
-msgstr ""
+msgstr "Нова активність"
 
 #: ui/sidebar/sidebar_footer.slint:179 ui/sidebar/sidebar_footer.slint:364
 msgid "Collapse sidebar"
-msgstr ""
+msgstr "Згорнути бічну панель"
 
 #: ui/sidebar/sidebar_footer.slint:197
 msgid "Anon mode (active) - tap to disable"
-msgstr ""
+msgstr "Анонімний режим (увімкнено) — торкніться, щоб вимкнути"
 
 #: ui/sidebar/sidebar_footer.slint:197 ui/sidebar/sidebar_footer.slint:200
 msgid "Anon mode"
-msgstr ""
+msgstr "Анонімний режим"
 
 #: ui/sidebar/sidebar_footer.slint:364 ui/sidebar/sidebar_footer.slint:366
 msgid "Expand sidebar"
-msgstr ""
+msgstr "Розгорнути бічну панель"
 
 #: ui/sidebar/sidebar_header.slint:109
 msgid "Shield off - tap to turn on"
-msgstr ""
+msgstr "Shield вимкнено — торкніться, щоб увімкнути"
 
 #: ui/sidebar/update_banner.slint:30
 msgid "Ready to restart"
-msgstr ""
+msgstr "Готово до перезапуску"
 
 #: ui/sidebar/update_banner.slint:30
 msgid "Confirm system install"
-msgstr ""
+msgstr "Підтвердьте встановлення в системі"
 
 #: ui/sidebar/update_banner.slint:30
 msgid "Update failed"
-msgstr ""
+msgstr "Не вдалося оновити"
 
 #: ui/sidebar/update_banner.slint:32
 msgid "Cellular download?"
-msgstr ""
+msgstr "Завантажити через мобільну мережу?"
 
 #: ui/sidebar/update_banner.slint:40
 msgid "Update in Play Store"
-msgstr ""
+msgstr "Оновити в Play Store"
 
 #: ui/sidebar/update_banner.slint:40
 msgid "Restart"
-msgstr ""
+msgstr "Перезапустити"
 
 #: ui/sidebar/update_banner.slint:40
 msgid "Download now"
-msgstr ""
+msgstr "Завантажити зараз"
 
 #: ui/sidebar/update_banner.slint:40
 msgid "Update"
-msgstr ""
+msgstr "Оновити"
 
 #: ui/startup_error.slint:8 ui/startup_error.slint:29
 msgid "Chatter can't start"
-msgstr ""
+msgstr "Chatter не запускається"
 
 #: ui/startup_error.slint:44
 msgid "Hide details"
-msgstr ""
+msgstr "Сховати деталі"

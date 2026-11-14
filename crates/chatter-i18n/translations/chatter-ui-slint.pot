@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
-"POT-Creation-Date: 2026-11-14 19:40+0000\n"
+"POT-Creation-Date: 2026-11-14 20:32+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -5252,6 +5252,7 @@ msgid "Theme"
 msgstr ""
 
 #: ui/settings/appearance_settings.slint:48
+#: ui/settings/appearance_settings.slint:48
 msgid "System"
 msgstr ""
 
@@ -5267,93 +5268,101 @@ msgstr ""
 msgid "Dark"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:144
+#: ui/settings/appearance_settings.slint:145
+msgid "Language"
+msgstr ""
+
+#: ui/settings/appearance_settings.slint:209
+msgid "Match this device's language"
+msgstr ""
+
+#: ui/settings/appearance_settings.slint:244
 msgid "Text size"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:151
+#: ui/settings/appearance_settings.slint:251
 msgid "Small"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:152
+#: ui/settings/appearance_settings.slint:252
 msgid "Match this device's font size"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:153
+#: ui/settings/appearance_settings.slint:253
 msgid "Large"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:241
-#: ui/settings/appearance_settings.slint:241
+#: ui/settings/appearance_settings.slint:341
+#: ui/settings/appearance_settings.slint:341
 msgid "Glass effects"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:253
+#: ui/settings/appearance_settings.slint:353
 msgid ""
 "Translucent navigation and controls. Turn off for a simpler appearance and "
 "better performance."
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:270
-#: ui/settings/appearance_settings.slint:270
+#: ui/settings/appearance_settings.slint:370
+#: ui/settings/appearance_settings.slint:370
 msgid "Reduce animations"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:282
+#: ui/settings/appearance_settings.slint:382
 msgid ""
 "Menus, sheets and switches change without motion; loading shimmer, typing "
 "dots and the ringing pulse hold still."
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:299
+#: ui/settings/appearance_settings.slint:399
 msgid "Animation speed"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:305
+#: ui/settings/appearance_settings.slint:405
 msgid "How quickly menus and transitions move"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:325
+#: ui/settings/appearance_settings.slint:425
 msgid "Animation speed {}"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:375
+#: ui/settings/appearance_settings.slint:475
 msgid "Message spacing"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:382
+#: ui/settings/appearance_settings.slint:482
 msgid "Comfortable"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:383
+#: ui/settings/appearance_settings.slint:483
 msgid "Compact"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:383
+#: ui/settings/appearance_settings.slint:483
 msgid "Fit more messages and conversations on screen"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:481
+#: ui/settings/appearance_settings.slint:581
 msgid "Search shortcut"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:488
+#: ui/settings/appearance_settings.slint:588
 msgid "Which keys open search"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:501
+#: ui/settings/appearance_settings.slint:601
 msgid "Ctrl+K"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:502
+#: ui/settings/appearance_settings.slint:602
 msgid "Ctrl+F"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:503
+#: ui/settings/appearance_settings.slint:603
 msgid "Both"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:507
+#: ui/settings/appearance_settings.slint:607
 msgid "Search shortcut {}"
 msgstr ""
 
