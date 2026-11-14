@@ -241,21 +241,22 @@ impl Message {
             self.conversation_type.is_one_to_one_dm(),
         );
         actions.resend &= self.can_retry_send();
-        // A channel's call record is written by each client; the server has
-        // no such message, so anything that names it to the server is refused
-        // (a reply or thread: "reply parent must exist in this channel"). It
-        // can still be selected and deleted here. A 1:1 call record has an id
-        // both peers share and keeps its actions.
-        if matches!(self.content, MessageContent::Call(_))
-            && self.conversation_type == ConversationType::Channel
-        {
+        // A call record is an information point, not a message (owner,
+        // 2026-11-14): no reply, thread, reaction, pin, forward, edit or
+        // info. In a channel it exists only on each client, so the server
+        // refused a reply to it ("reply parent must exist in this channel")
+        // and it cannot be deleted for everyone either; a 1:1 record has an
+        // id both peers share and keeps delete-for-everyone.
+        if matches!(self.content, MessageContent::Call(_)) {
             actions.reply = false;
             actions.react = false;
             actions.edit = false;
             actions.pin = false;
             actions.forward = false;
-            actions.delete_for_everyone = false;
             actions.info = false;
+            if self.conversation_type == ConversationType::Channel {
+                actions.delete_for_everyone = false;
+            }
         }
         actions
     }
