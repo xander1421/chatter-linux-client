@@ -36,6 +36,8 @@ export component AppThreadPanel inherits Rectangle {
         mobile: root.is-small-screen;
         composer-enter-sends: root.composer-enter-sends;
         touch: root.touch;
+        pinned-mode: ChatPane.thread-pinned-mode;
+        unpin-all => { ChatPane.pinned-unpin-all(); }
         root-message-id: ChatPane.thread-root-message-id;
         root-sender-name: ChatPane.thread-root-sender-name;
         root-content-preview: ChatPane.thread-root-content-preview;

@@ -48,6 +48,12 @@ pub(super) fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterCl
     window
         .global::<crate::ChatPane>()
         .on_pinned_show_clicked(move || {
+            // The chat-style page (side panel); private groups keep the list.
+            if let Some(w) = weak_window.upgrade() {
+                if crate::bin_ui::features::thread::open_pinned_panel(&w, &ui_ctx_show) {
+                    return;
+                }
+            }
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx_show.clone();
             let conversation = ui_ctx.active_conversation();
@@ -104,6 +110,30 @@ pub(super) fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterCl
                 });
             });
         });
+    // "Unpin all": the same toggle the message menu runs, once per pinned row
+    // of the page, then the page closes. A pin this account may not remove
+    // stays pinned (the toggle logs the refusal).
+    let weak_window = window.as_weak();
+    window
+        .global::<crate::ChatPane>()
+        .on_pinned_unpin_all(move || {
+            let Some(w) = weak_window.upgrade() else { return };
+            let pane = w.global::<crate::ChatPane>();
+            if !pane.get_thread_pinned_mode() {
+                return;
+            }
+            let targets: Vec<_> = pane
+                .get_thread_replies()
+                .iter()
+                .filter(|row| row.is_pinned)
+                .map(|row| (row.sender_id.clone(), row.timestamp_ns.clone()))
+                .collect();
+            for (sender_id, timestamp_ns) in targets {
+                pane.invoke_pin_message(sender_id, timestamp_ns);
+            }
+            pane.invoke_close_thread_clicked();
+        });
+
     let weak_window = window.as_weak();
     let ui_ctx_selected = ui_ctx.clone();
     window

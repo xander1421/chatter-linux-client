@@ -303,6 +303,60 @@ pub(crate) fn render_thread_attachments(w: &MainWindow, attachments: &[chatter_c
     w.global::<crate::ChatPane>().set_thread_pending_attachments(ModelRc::new(VecModel::from(rows)));
 }
 
+/// Show every pinned message of the open chat in the side panel, as the chat
+/// renders them (bubbles, date separators), oldest first. Returns false when
+/// the pins cannot be read as stored messages (private groups keep their own
+/// store), so the caller can fall back to the plain list.
+pub(crate) fn open_pinned_panel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) -> bool {
+    use chatter_core::state::ActiveConversation;
+    let conversation = ui_ctx.active_conversation();
+    if matches!(conversation, ActiveConversation::AnonGroup(_)) {
+        return false;
+    }
+    // A thread that was open gives the panel up first, as closing it would.
+    window.global::<crate::ChatPane>().invoke_close_thread_clicked();
+    let ids = ui_ctx.chat_snapshot().pinned.pinned_message_ids;
+    let mut messages: Vec<Message> = ids
+        .iter()
+        .filter_map(|id| ui_ctx.get_message_local(id))
+        .collect();
+    messages.sort_by_key(|message| message.sent_at);
+    let owner = HistoryOwner::capture(ui_ctx, conversation);
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    tokio::spawn(async move {
+        let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+        let display =
+            crate::bin_ui::converters::prepare_rows(ui_ctx.message_rows(&messages), true, generation)
+                .await;
+        let current_user_id = ui_ctx
+            .session_current_user_id()
+            .map(|id| id.to_string())
+            .unwrap_or_default();
+        let _ = slint::invoke_from_event_loop(move || {
+            if !owner.is_current() {
+                return;
+            }
+            let Some(w) = weak.upgrade() else { return };
+            let rows: Vec<_> = display
+                .iter()
+                .map(|d| d.to_slint_with_user(&current_user_id))
+                .collect();
+            let model = VecModel::from(rows);
+            recompute_channel_continuations(&model);
+            let pane = w.global::<crate::ChatPane>();
+            pane.set_thread_root_message_id(SharedString::default());
+            pane.set_thread_reply_count(0);
+            pane.set_thread_loading(false);
+            pane.set_thread_replies(ModelRc::new(model));
+            pane.set_thread_pinned_mode(true);
+            pane.set_thread_panel_visible(true);
+            request_thread_tail(&w);
+        });
+    });
+    true
+}
+
 fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let client = ui_ctx.clone();
@@ -318,6 +372,7 @@ fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 // The text stays with its thread; root first, so the text
                 // change's autosave has no thread to overwrite it under.
                 crate::bin_ui::features::composer::autosave_thread_draft(&w, &client);
+                w.global::<crate::ChatPane>().set_thread_pinned_mode(false);
                 w.global::<crate::ChatPane>()
                     .set_thread_root_message_id(SharedString::default());
                 w.global::<crate::ChatPane>()
@@ -899,6 +954,7 @@ pub fn load_thread_data(
                         .as_str()
                         != root_id;
                     crate::bin_ui::features::composer::autosave_thread_draft(&w, &ctx);
+                    w.global::<crate::ChatPane>().set_thread_pinned_mode(false);
                     w.global::<crate::ChatPane>().set_thread_panel_visible(true);
                     w.global::<crate::ChatPane>()
                         .set_thread_root_message_id(root_id.into());

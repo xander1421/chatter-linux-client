@@ -118,6 +118,7 @@ pub(crate) fn close_open_conversation(w: &MainWindow, ui_ctx: &Arc<ChatterClient
         w.global::<crate::ChatPane>()
             .set_thread_composer_text("".into());
         w.global::<crate::ChatPane>().set_thread_panel_visible(false);
+        w.global::<crate::ChatPane>().set_thread_pinned_mode(false);
         w.global::<crate::ChatPane>()
             .set_thread_replies(slint::ModelRc::new(slint::VecModel::default()));
     }

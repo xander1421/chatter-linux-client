@@ -178,7 +178,7 @@ export component MainChatShell inherits Rectangle {
             // a narrower row (the 800px default window with the sidebar open)
             // gives the thread the whole row instead, as phones do.
             property <bool> thread-covers-chat: ChatPane.thread-panel-visible
-                && (root.is-small-screen || self.width < 720px);
+                && (ChatPane.thread-pinned-mode || root.is-small-screen || self.width < 720px);
             property <length> thread-panel-w: !ChatPane.thread-panel-visible ? 0px
                 : self.thread-covers-chat ? self.width
                 : 320px;

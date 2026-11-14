@@ -272,6 +272,10 @@ export global ChatPane {
     callback pinned-go-to-message();
     // ========== Thread panel state ==========
     in property <bool> thread-panel-visible: false;
+    // The side panel showing every pinned message of the open chat instead
+    // of a thread (same list, no root strip, no composer).
+    in property <bool> thread-pinned-mode: false;
+    callback pinned-unpin-all();
     in property <string> thread-root-message-id: "";
     in property <string> thread-root-sender-name: "";
     in property <string> thread-root-content-preview: "";

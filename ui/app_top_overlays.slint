@@ -23,9 +23,15 @@ import { SectionContextMenu, SectionHeaderContextMenu } from "sidebar/section_co
 
 // Call, media and message-action surfaces above the modal stack.
 export component AppTopOverlays inherits Rectangle {
+    // A composer that is hidden or not laid out yet reports top 0 (its
+    // `changed` never fired); taking that as the limit gave the reaction
+    // picker zero height: an empty, see-through popup. An unknown top is the
+    // window's bottom instead.
+    property <length> main-composer-top: ChatPane.mention-composer-top > 0px ? ChatPane.mention-composer-top : root.height;
+    property <length> thread-composer-top: ChatPane.thread-composer-top > 0px ? ChatPane.thread-composer-top : root.height;
     property <length> popup-bottom-limit: (ChatPane.thread-panel-visible
-        ? min(ChatPane.thread-composer-top, ChatPane.mention-composer-top)
-        : ChatPane.mention-composer-top) - root.safe-area-top;
+        ? min(root.thread-composer-top, root.main-composer-top)
+        : root.main-composer-top) - root.safe-area-top;
     in property <string> active-modal;
     in property <length> context-menu-anchor-bottom;
     in property <length> context-menu-anchor-left;
