@@ -16,7 +16,7 @@ export component AppearanceSettings inherits VerticalLayout {
 
     // Section header
     Text {
-        text: "Appearance";
+        text: @tr("Appearance");
         color: Colors.text-primary;
         font-size: Typography.xl;
         font-weight: Typography.semibold;
@@ -38,7 +38,7 @@ export component AppearanceSettings inherits VerticalLayout {
             spacing: Spacing.sm;
 
             Text {
-                text: "Theme";
+                text: @tr("Theme");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
@@ -141,7 +141,7 @@ export component AppearanceSettings inherits VerticalLayout {
             spacing: Spacing.sm;
 
             Text {
-                text: "Text size";
+                text: @tr("Text size");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
@@ -238,19 +238,19 @@ export component AppearanceSettings inherits VerticalLayout {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
-            accessible-text: "Glass effects";
+            accessible-text: @tr("Glass effects");
             checked <=> Appearance.glass-effects;
             toggled(value) => { Appearance.glass-effects-changed(value); }
 
             Text {
-                text: "Glass effects";
+                text: @tr("Glass effects");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
             }
             Text {
                 width: glass-effects-row.label-width;
-                text: "Translucent navigation and controls. Turn off for a simpler appearance and better performance.";
+                text: @tr("Translucent navigation and controls. Turn off for a simpler appearance and better performance.");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -267,19 +267,19 @@ export component AppearanceSettings inherits VerticalLayout {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
-            accessible-text: "Reduce animations";
+            accessible-text: @tr("Reduce animations");
             checked <=> Appearance.reduce-motion;
             toggled(value) => { Appearance.reduce-motion-changed(value); }
 
             Text {
-                text: "Reduce animations";
+                text: @tr("Reduce animations");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
             }
             Text {
                 width: reduce-motion-row.label-width;
-                text: "Menus, sheets and switches change without motion; loading shimmer, typing dots and the ringing pulse hold still.";
+                text: @tr("Menus, sheets and switches change without motion; loading shimmer, typing dots and the ringing pulse hold still.");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -296,13 +296,13 @@ export component AppearanceSettings inherits VerticalLayout {
             spacing: Spacing.sm;
 
             Text {
-                text: "Animation speed";
+                text: @tr("Animation speed");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
             }
             Text {
-                text: "How quickly menus and transitions move";
+                text: @tr("How quickly menus and transitions move");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
             }
@@ -372,7 +372,7 @@ export component AppearanceSettings inherits VerticalLayout {
             spacing: Spacing.sm;
 
             Text {
-                text: "Message spacing";
+                text: @tr("Message spacing");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
@@ -478,14 +478,14 @@ export component AppearanceSettings inherits VerticalLayout {
                 spacing: Spacing.sm;
 
                 Text {
-                    text: "Search shortcut";
+                    text: @tr("Search shortcut");
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     font-weight: Typography.medium;
                 }
 
                 Text {
-                    text: "Which keys open search";
+                    text: @tr("Which keys open search");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     wrap: word-wrap;

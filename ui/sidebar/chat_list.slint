@@ -123,7 +123,7 @@ export component ChatRow inherits Rectangle {
         border-radius: Spacing.radius-md;
         background: Colors.surface-control-hover;
         accessible-role: button;
-        accessible-label: root.data.is-pinned ? "Unpin conversation" : "Pin conversation";
+        accessible-label: root.data.is-pinned ? @tr("Unpin conversation") : @tr("Pin conversation");
         accessible-action-default => {
             root.pin-requested(!root.data.is-pinned);
             root.swipe-offset = 0px;
@@ -151,7 +151,7 @@ export component ChatRow inherits Rectangle {
         border-radius: Spacing.radius-md;
         background: Colors.primary;
         accessible-role: button;
-        accessible-label: "More conversation actions";
+        accessible-label: @tr("More conversation actions");
         accessible-action-default => {
             root.context-menu-requested(self.absolute-position.x, self.absolute-position.y);
             root.swipe-offset = 0px;

@@ -77,7 +77,7 @@ export component PdfPreviewPanel inherits Rectangle {
                         border-radius: Spacing.radius-sm;
 
                         pdf-text := Text {
-                            text: "PDF";
+                            text: @tr("PDF");
                             color: Colors.error;
                             font-size: Typography.xs;
                             font-weight: Typography.semibold;
@@ -103,7 +103,7 @@ export component PdfPreviewPanel inherits Rectangle {
                     // Open external button
                     HeaderButton {
                         icon: Icons.link;
-                        label: "Open externally";
+                        label: @tr("Open externally");
                         clicked => { root.open-external-clicked(); }
                     }
 
@@ -155,14 +155,14 @@ export component PdfPreviewPanel inherits Rectangle {
                 spacing: Spacing.md;
                 padding: Spacing.xl;
                 Text {
-                    text: "PDF document";
+                    text: @tr("PDF document");
                     color: Colors.text-primary;
                     font-size: Typography.base;
                     font-weight: Typography.semibold;
                     horizontal-alignment: center;
                 }
                 Text {
-                    text: "View this PDF in another app.";
+                    text: @tr("View this PDF in another app.");
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
@@ -171,7 +171,7 @@ export component PdfPreviewPanel inherits Rectangle {
                 HorizontalLayout {
                     alignment: center;
                     Button {
-                        text: "Open PDF";
+                        text: @tr("Open PDF");
                         clicked => { root.open-external-clicked(); }
                     }
                 }
@@ -184,7 +184,7 @@ export component PdfPreviewPanel inherits Rectangle {
                 padding: Spacing.xl;
 
                 Text {
-                    text: "Loading PDF...";
+                    text: @tr("Loading PDF...");
                     color: Colors.text-muted;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
@@ -204,7 +204,7 @@ export component PdfPreviewPanel inherits Rectangle {
                 // Previous page button
                 HeaderButton {
                     icon: Icons.chevron-left;
-                    label: "Previous page";
+                    label: @tr("Previous page");
                     enabled: root.can-prev;
                     clicked => { root.page-prev-clicked(); }
                 }
@@ -220,7 +220,7 @@ export component PdfPreviewPanel inherits Rectangle {
                 // Next page button
                 HeaderButton {
                     icon: Icons.chevron-right;
-                    label: "Next page";
+                    label: @tr("Next page");
                     enabled: root.can-next;
                     clicked => { root.page-next-clicked(); }
                 }

@@ -68,7 +68,7 @@ export component LinkDevicePage inherits Rectangle {
                     }
 
                     Text {
-                        text: "Link this device";
+                        text: @tr("Link this device");
                         color: Colors.primary;
                         font-size: Typography.xxl;
                         font-weight: Typography.bold;
@@ -76,7 +76,7 @@ export component LinkDevicePage inherits Rectangle {
                     }
 
                     Text {
-                        text: "On your already-signed-in device, open Settings › Linked devices › Manage devices › Link new device, then scan this code.";
+                        text: @tr("On your already-signed-in device, open Settings › Linked devices › Manage devices › Link new device, then scan this code.");
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
@@ -84,7 +84,7 @@ export component LinkDevicePage inherits Rectangle {
                     }
 
                     if root.has-local-identity: Text {
-                        text: "This device still holds another account's keys. Linking a different account will fail. Sign in to that account instead, or clear this app's data first.";
+                        text: @tr("This device still holds another account's keys. Linking a different account will fail. Sign in to that account instead, or clear this app's data first.");
                         color: Colors.error;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
@@ -110,7 +110,7 @@ export component LinkDevicePage inherits Rectangle {
                             animate opacity { duration: Materials.motion-standard; easing: Materials.spring; }
                         }
                         Text {
-                            text: root.linking ? "Preparing your secure link…" : "Your QR code will appear here";
+                            text: root.linking ? @tr("Preparing your secure link…") : @tr("Your QR code will appear here");
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             horizontal-alignment: center;
@@ -127,7 +127,7 @@ export component LinkDevicePage inherits Rectangle {
                     if root.link-url != "": VerticalLayout {
                         spacing: Spacing.xs;
                         Text {
-                            text: "Can't scan? Copy and paste this link into the other device:";
+                            text: @tr("Can't scan? Copy and paste this link into the other device:");
                             color: Colors.text-muted;
                             font-size: Typography.xs;
                             wrap: word-wrap;
@@ -151,7 +151,7 @@ export component LinkDevicePage inherits Rectangle {
                             }
                         }
                         Button {
-                            text: "Copy link";
+                            text: @tr("Copy link");
                             variant: "secondary";
                             clicked => { root.copy-link(); }
                         }
@@ -180,12 +180,12 @@ export component LinkDevicePage inherits Rectangle {
                     HorizontalLayout {
                         spacing: Spacing.sm;
                         Button {
-                            text: "Cancel";
+                            text: @tr("Cancel");
                             variant: "secondary";
                             clicked => { root.cancel(); }
                         }
                         Button {
-                            text: "Generate QR";
+                            text: @tr("Generate QR");
                             variant: "primary";
                             disabled: root.linking;
                             clicked => { root.start(); }
@@ -195,7 +195,7 @@ export component LinkDevicePage inherits Rectangle {
                     HorizontalLayout {
                         alignment: center;
                         Text {
-                            text: "Back to login";
+                            text: @tr("Back to login");
                             color: Colors.primary;
                             font-size: Typography.sm;
                             height: Spacing.touch-target-min;

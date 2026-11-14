@@ -81,9 +81,9 @@ export component RequestsTab inherits VerticalLayout {
 
             icon: Icons.user-plus;
 
-            title: "No pending requests";
+            title: @tr("No pending requests");
 
-            hint: "Friend requests you receive appear here";
+            hint: @tr("Friend requests you receive appear here");
 
         }
 
@@ -163,7 +163,7 @@ export component RequestsTab inherits VerticalLayout {
 
                                 Button {
                                     touch: root.mobile-mode;
-                                    text: "Accept";
+                                    text: @tr("Accept");
                                     variant: "primary";
                                     disabled: root.loading;
 
@@ -174,7 +174,7 @@ export component RequestsTab inherits VerticalLayout {
 
                                 Button {
                                     touch: root.mobile-mode;
-                                    text: "Decline";
+                                    text: @tr("Decline");
                                     variant: "ghost";
                                     disabled: root.loading;
 
@@ -199,9 +199,9 @@ export component RequestsTab inherits VerticalLayout {
 
             icon: Icons.user-plus;
 
-            title: "No outgoing requests";
+            title: @tr("No outgoing requests");
 
-            hint: "Requests you send appear here until they are answered";
+            hint: @tr("Requests you send appear here until they are answered");
 
         }
 
@@ -286,7 +286,7 @@ export component RequestsTab inherits VerticalLayout {
 
                                 Button {
                                     touch: root.mobile-mode;
-                                    text: "Cancel";
+                                    text: @tr("Cancel");
                                     variant: "ghost";
                                     disabled: root.loading;
 
@@ -317,14 +317,14 @@ export component RequestsTab inherits VerticalLayout {
             }
 
             Text {
-                text: "No private message requests";
+                text: @tr("No private message requests");
                 color: Colors.text-muted;
                 font-size: Typography.base;
                 horizontal-alignment: center;
             }
 
             Text {
-                text: "Private requests use end-to-end encryption\nwith no server involvement";
+                text: @tr("Private requests use end-to-end encryption\nwith no server involvement");
                 color: Colors.text-muted.with-alpha(0.7);
                 font-size: Typography.sm;
                 horizontal-alignment: center;
@@ -421,7 +421,7 @@ export component RequestsTab inherits VerticalLayout {
 
                                 Button {
                                     touch: root.mobile-mode;
-                                    text: "Accept";
+                                    text: @tr("Accept");
                                     variant: "primary";
                                     disabled: root.loading || root.private-request-decision != "";
                                     loading: root.private-request-decision == request.user-id;
@@ -433,7 +433,7 @@ export component RequestsTab inherits VerticalLayout {
 
                                 Button {
                                     touch: root.mobile-mode;
-                                    text: "Decline";
+                                    text: @tr("Decline");
                                     variant: "ghost";
                                     disabled: root.loading || root.private-request-decision != "";
                                     loading: root.private-request-decision == request.user-id;
@@ -445,7 +445,7 @@ export component RequestsTab inherits VerticalLayout {
 
                                 Button {
                                     touch: root.mobile-mode;
-                                    text: "Block";
+                                    text: @tr("Block");
                                     variant: "danger-ghost";
                                     disabled: root.loading || root.private-request-decision != "";
 
@@ -481,14 +481,14 @@ export component RequestsTab inherits VerticalLayout {
             }
 
             Text {
-                text: "No pending group invites";
+                text: @tr("No pending group invites");
                 color: Colors.text-muted;
                 font-size: Typography.base;
                 horizontal-alignment: center;
             }
 
             Text {
-                text: "Group invites use end-to-end encryption\nwith anonymous mailboxes";
+                text: @tr("Group invites use end-to-end encryption\nwith anonymous mailboxes");
                 color: Colors.text-muted.with-alpha(0.7);
                 font-size: Typography.sm;
                 horizontal-alignment: center;
@@ -577,7 +577,7 @@ export component RequestsTab inherits VerticalLayout {
 
                                 Button {
                                     touch: root.mobile-mode;
-                                    text: "Join";
+                                    text: @tr("Join");
                                     variant: "primary";
                                     disabled: root.loading || root.group-invite-decision != "";
                                     loading: root.group-invite-decision == "join:" + invite.user-id;
@@ -589,7 +589,7 @@ export component RequestsTab inherits VerticalLayout {
 
                                 Button {
                                     touch: root.mobile-mode;
-                                    text: "Decline";
+                                    text: @tr("Decline");
                                     variant: "ghost";
                                     disabled: root.loading || root.group-invite-decision != "";
                                     loading: root.group-invite-decision == "decline:" + invite.user-id;
@@ -621,14 +621,14 @@ export component RequestsTab inherits VerticalLayout {
             }
 
             Text {
-                text: "No pending channel invites";
+                text: @tr("No pending channel invites");
                 color: Colors.text-muted;
                 font-size: Typography.base;
                 horizontal-alignment: center;
             }
 
             Text {
-                text: "Channel invitations you receive will appear here";
+                text: @tr("Channel invitations you receive will appear here");
                 color: Colors.text-muted.with-alpha(0.7);
                 font-size: Typography.sm;
                 horizontal-alignment: center;
@@ -721,7 +721,7 @@ export component RequestsTab inherits VerticalLayout {
 
                                 Button {
                                     touch: root.mobile-mode;
-                                    text: "Join";
+                                    text: @tr("Join");
                                     variant: "primary";
                                     disabled: root.loading;
 
@@ -732,7 +732,7 @@ export component RequestsTab inherits VerticalLayout {
 
                                 Button {
                                     touch: root.mobile-mode;
-                                    text: "Decline";
+                                    text: @tr("Decline");
                                     variant: "ghost";
                                     disabled: root.loading;
 

@@ -34,7 +34,7 @@ export component ChannelIdentityFields inherits HorizontalLayout {
             background: Colors.inset;
             clip: true;
             accessible-role: button;
-            accessible-label: root.has-icon-preview ? "Change channel icon" : "Upload channel icon";
+            accessible-label: root.has-icon-preview ? @tr("Change channel icon") : @tr("Upload channel icon");
             accessible-action-default => { root.pick-channel-icon(); }
             KeyFocus { border-radius: parent.border-radius; activate => { root.pick-channel-icon(); } }
 
@@ -61,7 +61,7 @@ export component ChannelIdentityFields inherits HorizontalLayout {
         }
 
         Text {
-            text: root.has-icon-preview ? "Change" : "Upload";
+            text: root.has-icon-preview ? @tr("Change") : @tr("Upload");
             color: Colors.text-muted;
             font-size: Typography.xs;
             horizontal-alignment: center;
@@ -80,12 +80,12 @@ export component ChannelIdentityFields inherits HorizontalLayout {
         // to Description; Done there (or on a group's name, which
         // has none) puts the keyboard away.
         name-input := Input {
-            placeholder: root.is-private-group ? "Group name" : "Channel name";
+            placeholder: root.is-private-group ? @tr("Group name") : @tr("Channel name");
             text <=> root.channel-name;
             // Touch sheets open without summoning the IME mid-transition.
             init => { if root.focus-on-show { self.focus(); } }
             error: root.error-message != "" && root.channel-name == "";
-            error-message: root.error-message != "" && root.channel-name == "" ? "Name is required" : "";
+            error-message: root.error-message != "" && root.channel-name == "" ? @tr("Name is required") : "";
             accepted => {
                 if root.is-private-group {
                     root.release-focus();
@@ -102,7 +102,7 @@ export component ChannelIdentityFields inherits HorizontalLayout {
             height: root.is-private-group ? 0px : Spacing.button-height;
             property <int> focus-requests: root.description-focus-requests;
             changed focus-requests => { self.focus(); }
-            placeholder: "Description (optional)";
+            placeholder: @tr("Description (optional)");
             text <=> root.channel-description;
             accepted => { root.release-focus(); }
         }

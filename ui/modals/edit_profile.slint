@@ -33,7 +33,7 @@ export component EditProfileModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: "Edit profile";
+        title: @tr("Edit profile");
         modal-width: 440px;
         max-modal-height: 640px;
         fill-height: true;
@@ -67,7 +67,7 @@ export component EditProfileModal inherits Rectangle {
                                 height: 96px;
                                 background: transparent;
                                 accessible-role: button;
-                                accessible-label: "Edit profile photo";
+                                accessible-label: @tr("Edit profile photo");
                                 accessible-action-default => { root.avatar-menu-open = !root.avatar-menu-open; }
                                 // The preview is a 96px circle; without this the ring inherits the
                                 // transparent parent's 0 radius and boxes the round avatar.
@@ -98,12 +98,12 @@ export component EditProfileModal inherits Rectangle {
                             alignment: center;
                             spacing: Spacing.sm;
                             Button {
-                                text: "Choose photo";
+                                text: @tr("Choose photo");
                                 variant: "secondary";
                                 clicked => { root.avatar-menu-open = false; root.change-avatar(); }
                             }
                             if root.has-photo: Button {
-                                text: "Remove photo";
+                                text: @tr("Remove photo");
                                 variant: "secondary";
                                 clicked => { root.avatar-menu-open = false; root.remove-avatar(); }
                             }
@@ -122,13 +122,13 @@ export component EditProfileModal inherits Rectangle {
                     VerticalLayout {
                         spacing: Spacing.xs;
                         Text {
-                            text: "Display name";
+                            text: @tr("Display name");
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                         }
                         Input {
                             text <=> root.display-name;
-                            placeholder: "Your name";
+                            placeholder: @tr("Your name");
                         }
                     }
 
@@ -136,7 +136,7 @@ export component EditProfileModal inherits Rectangle {
                     VerticalLayout {
                         spacing: Spacing.xs;
                         Text {
-                            text: "Bio";
+                            text: @tr("Bio");
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                         }
@@ -191,13 +191,13 @@ export component EditProfileModal inherits Rectangle {
                 alignment: end;
                 
                 Button {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     variant: "ghost";
                     clicked => { root.close(); }
                 }
 
                 Button {
-                    text: "Save changes";
+                    text: @tr("Save changes");
                     variant: "primary";
                     loading: root.loading;
                     disabled: root.loading;

@@ -362,7 +362,7 @@ export component UserProfileModal inherits Rectangle {
                             border-radius: self.width / 2;
                             background: Colors.online;
                             accessible-role: button;
-                            accessible-label: "Verified — show safety number";
+                            accessible-label: @tr("Verified — show safety number");
                             accessible-action-default => {
                                 if root.safety-number == "" { root.view-safety-number(); }
                                 root.show-safety-number = true;
@@ -519,7 +519,7 @@ export component UserProfileModal inherits Rectangle {
                                             spacing: Spacing.xxs;
 
                                             Text {
-                                                text: "Disappearing messages";
+                                                text: @tr("Disappearing messages");
                                                 color: Colors.text-primary;
                                                 font-size: Typography.base;
                                             }
@@ -551,7 +551,7 @@ export component UserProfileModal inherits Rectangle {
                         padding-right: Spacing.md;
 
                         Button {
-                            text: "Edit profile";
+                            text: @tr("Edit profile");
                             variant: "primary";
                             clicked => { root.edit-profile(); }
                         }
@@ -564,14 +564,14 @@ export component UserProfileModal inherits Rectangle {
 
                         Text {
                             width: max(0px, parent.width - parent.padding-left - parent.padding-right);
-                            text: "You blocked this person.";
+                            text: @tr("You blocked this person.");
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             wrap: word-wrap;
                         }
 
                         Button {
-                            text: "Open blocked";
+                            text: @tr("Open blocked");
                             variant: "secondary";
                             clicked => { root.manage-blocked(); }
                         }
@@ -617,7 +617,7 @@ export component UserProfileModal inherits Rectangle {
                         // Core refuses friend requests in Anon Mode (they
                         // reveal the real identity), so the button is not shown.
                         Button {
-                            text: root.loading ? "" : "Add friend";
+                            text: root.loading ? "" : @tr("Add friend");
                             variant: "secondary";
                             horizontal-stretch: 1;
                             loading: root.loading;
@@ -705,7 +705,7 @@ export component UserProfileModal inherits Rectangle {
                         padding-left: Spacing.md; padding-right: Spacing.md;
                         Text { text: root.shared-title; color: Colors.text-primary; font-size: Typography.xl; font-weight: Typography.semibold; }
                         if root.shared-has-previous: Button {
-                            text: "Load earlier";
+                            text: @tr("Load earlier");
                             clicked => { root.shared-load-previous(); }
                         }
                         if root.shared-tab == "photo" || root.shared-tab == "video" || root.shared-tab == "gif": ProfileSharedGrid {
@@ -717,7 +717,7 @@ export component UserProfileModal inherits Rectangle {
                             open-shared-item(message-id, attachment-id, category, selected-url) => { root.open-shared-item(message-id, attachment-id, category, selected-url); }
                         }
                         if root.shared-has-more && !root.shared-loading: Button {
-                            text: "Load more";
+                            text: @tr("Load more");
                             clicked => { root.shared-load-more(); }
                         }
                         if root.shared-loading: Text { text: "Loading…"; color: Colors.text-muted; font-size: Typography.sm; }
@@ -748,7 +748,7 @@ export component UserProfileModal inherits Rectangle {
 
             Text {
                 width: parent.width;
-                text: "They'll be removed from your friends. Your chat history stays.";
+                text: @tr("They'll be removed from your friends. Your chat history stays.");
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
@@ -759,13 +759,13 @@ export component UserProfileModal inherits Rectangle {
                 alignment: end;
 
                 Button {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     variant: "secondary";
                     clicked => { root.confirm-remove = false; }
                 }
 
                 Button {
-                    text: "Delete contact";
+                    text: @tr("Delete contact");
                     variant: "destructive";
                     clicked => {
                         root.confirm-remove = false;
@@ -788,7 +788,7 @@ export component UserProfileModal inherits Rectangle {
 
             Text {
                 width: parent.width;
-                text: "Blocked people can't call or message you. You can unblock them from their profile or Contacts › Blocked.";
+                text: @tr("Blocked people can't call or message you. You can unblock them from their profile or Contacts › Blocked.");
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
@@ -799,13 +799,13 @@ export component UserProfileModal inherits Rectangle {
                 alignment: end;
 
                 Button {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     variant: "secondary";
                     clicked => { root.confirm-block = false; }
                 }
 
                 Button {
-                    text: "Block";
+                    text: @tr("Block");
                     variant: "destructive";
                     clicked => {
                         root.confirm-block = false;
@@ -817,7 +817,7 @@ export component UserProfileModal inherits Rectangle {
     }
     edit-contact-modal := Modal {
         show: root.edit-contact-open;
-        title: "Edit contact";
+        title: @tr("Edit contact");
         modal-width: 400px;
         show-close: false;
         close => { edit-contact-modal.release-focus(); root.edit-contact-open = false; }
@@ -842,7 +842,7 @@ export component UserProfileModal inherits Rectangle {
             spacing: Spacing.md;
             Text {
                 width: parent.width;
-                text: "They will be able to call and message you again."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
+                text: @tr("They will be able to call and message you again."); color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
             HorizontalLayout {
                 spacing: Spacing.sm;
                 Button { text: "Cancel"; variant: "secondary"; clicked => { root.confirm-unblock = false; } }

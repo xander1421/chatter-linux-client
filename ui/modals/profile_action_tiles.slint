@@ -107,7 +107,7 @@ export component ProfileActionTiles inherits HorizontalLayout {
             }
 
             Text {
-                text: act.id == "mute" ? (root.is-muted ? "Unmute" : "Mute") : act.label;
+                text: act.id == "mute" ? (root.is-muted ? @tr("Unmute") : @tr("Mute")) : act.label;
                 color: Colors.text-secondary;
                 font-size: Typography.xs;
                 horizontal-alignment: center;

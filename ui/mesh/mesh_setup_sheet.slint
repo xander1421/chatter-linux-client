@@ -59,7 +59,7 @@ export component MeshSetupSheet inherits Rectangle {
 
     ModalContainer {
         show: root.show-modal;
-        accessible-title: "Mesh settings";
+        accessible-title: @tr("Mesh settings");
         modal-width: 540px;
         max-modal-height: 760px;
         fill-height: true;
@@ -94,7 +94,7 @@ export component MeshSetupSheet inherits Rectangle {
                                     color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.semibold; wrap: word-wrap; }
                                 Text {
                                     width: parent.width;
-                                    text: "Peer names are self-asserted until you verify in person.";
+                                    text: @tr("Peer names are self-asserted until you verify in person.");
                                     color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
                                 HorizontalLayout { spacing: Spacing.sm;
                                     Button { text: "Decline"; variant: "secondary"; touch: root.touch;
@@ -114,7 +114,7 @@ export component MeshSetupSheet inherits Rectangle {
                             VerticalLayout {
                                 ToggleRow {
                                     checked <=> MeshGlobal.mesh-on;
-                                    accessible-text: "Mesh";
+                                    accessible-text: @tr("Mesh");
                                     row-padding: Spacing.md;
                                     label-spacing: Spacing.xs;
                                     Text { text: "Mesh"; color: Colors.text-primary; font-size: Typography.base;
@@ -135,7 +135,7 @@ export component MeshSetupSheet inherits Rectangle {
                         }
                         if MeshGlobal.nearby-peers.length == 0: Text {
                             width: parent.width;
-                            text: "Nearby devices will appear here when discovered.";
+                            text: @tr("Nearby devices will appear here when discovered.");
                             color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap;
                         }
                     }
@@ -155,7 +155,7 @@ export component MeshSetupSheet inherits Rectangle {
                         }
                         Text {
                             width: parent.width;
-                            text: "Visible to anyone nearby. Names are self-asserted.";
+                            text: @tr("Visible to anyone nearby. Names are self-asserted.");
                             color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
                     }
                     if MeshGlobal.notice != "": Text {
@@ -185,7 +185,7 @@ export component MeshSetupSheet inherits Rectangle {
                 wipe-action := VerticalLayout { padding: Spacing.lg; spacing: Spacing.md;
                     Text {
                         width: parent.width;
-                        text: "Erase this device's mesh identity, messages, carried mail and favourites? Your Chatter account stays intact. This cannot be undone.";
+                        text: @tr("Erase this device's mesh identity, messages, carried mail and favourites? Your Chatter account stays intact. This cannot be undone.");
                         color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; horizontal-alignment: center; }
                     Button { text: "Erase Mesh data"; variant: "destructive"; touch: root.touch;
                         clicked => { root.confirming-wipe = false; MeshGlobal.panic-wipe(); } }

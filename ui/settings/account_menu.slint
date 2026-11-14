@@ -108,7 +108,7 @@ export component AccountMenu inherits Rectangle {
     account-modal := Modal {
         floating-content: root.mobile-mode;
         show: root.show-modal;
-        title: "Profile";
+        title: @tr("Profile");
         modal-width: 360px;
         max-modal-height: 640px;
         full-screen: root.mobile-mode;
@@ -233,7 +233,7 @@ export component AccountMenu inherits Rectangle {
                             Rectangle {
                                 height: Spacing.list-row-height-touch;
                                 accessible-role: switch;
-                                accessible-label: "Night mode";
+                                accessible-label: @tr("Night mode");
                                 accessible-checkable: true;
                                 accessible-checked: Appearance.dark;
                                 accessible-action-default => { root.toggle-night(); }
@@ -248,7 +248,7 @@ export component AccountMenu inherits Rectangle {
                                         Image { source: Icons.moon; width: 24px; height: 24px; colorize: Colors.text-secondary; }
                                     }
                                     Text {
-                                        text: "Night mode";
+                                        text: @tr("Night mode");
                                         // The row's own label says it.
                                         accessible-role: none;
                                         color: Colors.text-primary;

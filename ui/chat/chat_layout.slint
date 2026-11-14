@@ -652,12 +652,12 @@ export component ChatLayout inherits Rectangle {
                         wrap: word-wrap;
                     }
                     if root.is-blocked: Button {
-                        text: "Unblock";
+                        text: @tr("Unblock");
                         variant: "secondary";
                         clicked => { root.unblock-clicked(); }
                     }
                     if root.can-rejoin: Button {
-                        text: "Join";
+                        text: @tr("Join");
                         variant: "primary";
                         clicked => { root.rejoin-clicked(); }
                     }
@@ -667,14 +667,14 @@ export component ChatLayout inherits Rectangle {
                     alignment: center;
                     spacing: Spacing.sm;
                     Button {
-                        text: "Decline";
+                        text: @tr("Decline");
                         variant: "secondary";
                         disabled: root.secret-request-busy;
                         loading: root.secret-request-busy;
                         clicked => { root.secret-request-decline-clicked(); }
                     }
                     Button {
-                        text: "Accept";
+                        text: @tr("Accept");
                         disabled: root.secret-request-busy;
                         loading: root.secret-request-busy;
                         clicked => { root.secret-request-accept-clicked(); }
@@ -876,7 +876,7 @@ export component ChatLayout inherits Rectangle {
                         if drawer-search.text == "" && drawer-search.preedit-text == "": Text {
                             // Sized like the field so it starts where typing does, not centred.
                             width: 100%; height: 100%;
-                            text: root.gif-picker-visible ? "Search GIFs" : "Search emoji";
+                            text: root.gif-picker-visible ? @tr("Search GIFs") : @tr("Search emoji");
                             color: Colors.text-muted;
                             vertical-alignment: center;
                         }
@@ -888,7 +888,7 @@ export component ChatLayout inherits Rectangle {
                             color: Colors.text-primary;
                             single-line: true;
                             vertical-alignment: center;
-                            accessible-label: "Search emoji and GIFs";
+                            accessible-label: @tr("Search emoji and GIFs");
                             changed has-focus => { root.drawer-search-focused = self.has-focus; }
                             edited => {
                                 if root.gif-picker-visible { root.gif-search = self.text; root.gif-search-changed(self.text); }
@@ -904,7 +904,7 @@ export component ChatLayout inherits Rectangle {
                         background: clear-touch.pressed ? Materials.pressed
                             : clear-touch.has-hover ? Materials.hover : transparent;
                         accessible-role: button;
-                        accessible-label: "Clear search";
+                        accessible-label: @tr("Clear search");
                         accessible-action-default => { picker-drawer.clear-search(); }
                         Image {
                             source: Icons.x;

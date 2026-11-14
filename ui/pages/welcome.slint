@@ -50,7 +50,7 @@ export component WelcomePage inherits Rectangle {
             width: 100%;
             height: Typography.xxxl * 1.5;
             Text {
-                text: "Welcome to Chatter!";
+                text: @tr("Welcome to Chatter!");
                 color: Colors.primary;
                 font-size: Typography.xxxl;
                 font-weight: Typography.bold;
@@ -90,7 +90,7 @@ export component WelcomePage inherits Rectangle {
                 }
 
                 Text {
-                    text: "All messages are end-to-end encrypted";
+                    text: @tr("All messages are end-to-end encrypted");
                     color: Colors.success;
                     font-size: Typography.sm;
                     font-weight: Typography.medium;
@@ -103,7 +103,7 @@ export component WelcomePage inherits Rectangle {
 
         // Getting started cards
         Text {
-            text: "Get started";
+            text: @tr("Get started");
             color: Colors.text-primary;
             font-size: Typography.lg;
             font-weight: Typography.semibold;
@@ -127,8 +127,8 @@ export component WelcomePage inherits Rectangle {
                     animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                     animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
                     accessible-role: button;
-                    accessible-label: "Add friends";
-                    accessible-description: "Find people you know on Chatter";
+                    accessible-label: @tr("Add friends");
+                    accessible-description: @tr("Find people you know on Chatter");
                     accessible-action-default => { root.add-friends(); }
                     KeyFocus { border-radius: parent.border-radius; activate => { root.add-friends(); } }
 
@@ -160,7 +160,7 @@ export component WelcomePage inherits Rectangle {
 
                             Text {
                                 accessible-role: none;
-                                text: "Add friends";
+                                text: @tr("Add friends");
                                 color: Colors.text-primary;
                                 font-size: Typography.base;
                                 font-weight: Typography.medium;
@@ -168,7 +168,7 @@ export component WelcomePage inherits Rectangle {
 
                             Text {
                                 accessible-role: none;
-                                text: "Find people you know on Chatter";
+                                text: @tr("Find people you know on Chatter");
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
                             }
@@ -199,8 +199,8 @@ export component WelcomePage inherits Rectangle {
                     animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                     animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
                     accessible-role: button;
-                    accessible-label: "Browse channels";
-                    accessible-description: "Join public conversations";
+                    accessible-label: @tr("Browse channels");
+                    accessible-description: @tr("Join public conversations");
                     accessible-action-default => { root.browse-channels(); }
                     KeyFocus { border-radius: parent.border-radius; activate => { root.browse-channels(); } }
 
@@ -232,7 +232,7 @@ export component WelcomePage inherits Rectangle {
 
                             Text {
                                 accessible-role: none;
-                                text: "Browse channels";
+                                text: @tr("Browse channels");
                                 color: Colors.text-primary;
                                 font-size: Typography.base;
                                 font-weight: Typography.medium;
@@ -240,7 +240,7 @@ export component WelcomePage inherits Rectangle {
 
                             Text {
                                 accessible-role: none;
-                                text: "Join public conversations";
+                                text: @tr("Join public conversations");
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
                             }
@@ -271,7 +271,7 @@ export component WelcomePage inherits Rectangle {
             height: continue-button.height;
 
             continue-button := Button {
-                text: "Continue to Chatter";
+                text: @tr("Continue to Chatter");
                 variant: "primary";
                 clicked => { root.get-started(); }
             }

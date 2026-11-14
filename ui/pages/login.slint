@@ -112,7 +112,7 @@ export component LoginPage inherits Rectangle {
                     }
 
                     Text {
-                        text: "Chatter";
+                        text: @tr("Chatter");
                         color: Colors.primary;
                         font-size: Typography.xxxl;
                         font-weight: Typography.bold;
@@ -120,7 +120,7 @@ export component LoginPage inherits Rectangle {
                     }
 
                     Text {
-                        text: "Sign in to continue";
+                        text: @tr("Sign in to continue");
                         color: Colors.text-secondary;
                         font-size: Typography.base;
                         horizontal-alignment: center;
@@ -128,7 +128,7 @@ export component LoginPage inherits Rectangle {
 
                     // Username
                     Input {
-                        placeholder: "Username";
+                        placeholder: @tr("Username");
                         text <=> root.username;
                         disabled: root.loading;
                         // Enter / Android IME action key advances to the next
@@ -139,7 +139,7 @@ export component LoginPage inherits Rectangle {
 
                     // Password
                     password-field := Input {
-                        placeholder: "Password";
+                        placeholder: @tr("Password");
                         password: true;
                         text <=> root.password;
                         disabled: root.loading;
@@ -151,7 +151,7 @@ export component LoginPage inherits Rectangle {
                         spacing: Spacing.xxs;
 
                         Input {
-                            placeholder: "PIN";
+                            placeholder: @tr("PIN");
                             password: true;
                             text <=> root.pin;
                             disabled: root.loading;
@@ -159,7 +159,7 @@ export component LoginPage inherits Rectangle {
                         }
 
                         Text {
-                            text: "Your account PIN. Needed on a new device to restore your encryption keys.";
+                            text: @tr("Your account PIN. Needed on a new device to restore your encryption keys.");
                             color: Colors.text-muted;
                             font-size: Typography.xxs;
                             wrap: word-wrap;
@@ -168,7 +168,7 @@ export component LoginPage inherits Rectangle {
 
                     // Server URL (always visible — required for connection)
                     Input {
-                        placeholder: "Server URL";
+                        placeholder: @tr("Server URL");
                         text <=> root.server-url;
                         disabled: root.loading;
                     }
@@ -177,7 +177,7 @@ export component LoginPage inherits Rectangle {
                         spacing: Spacing.sm;
 
                         Button {
-                            text: "Localhost";
+                            text: @tr("Localhost");
                             variant: "secondary";
                             horizontal-stretch: 1;
                             disabled: root.loading;
@@ -185,7 +185,7 @@ export component LoginPage inherits Rectangle {
                         }
 
                         Button {
-                            text: "LAN";
+                            text: @tr("LAN");
                             variant: "secondary";
                             horizontal-stretch: 1;
                             disabled: root.loading;
@@ -211,7 +211,7 @@ export component LoginPage inherits Rectangle {
                     }
 
                     if root.loading && root.verifying: Text {
-                        text: "Verifying this sign-in on your device… this can take a few seconds.";
+                        text: @tr("Verifying this sign-in on your device… this can take a few seconds.");
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                         wrap: word-wrap;
@@ -224,14 +224,14 @@ export component LoginPage inherits Rectangle {
                         spacing: Spacing.sm;
 
                         Text {
-                            text: "Starting over gives this device new encryption keys. Your old messages stay unreadable, and each of your contacts will be asked to verify you again.";
+                            text: @tr("Starting over gives this device new encryption keys. Your old messages stay unreadable, and each of your contacts will be asked to verify you again.");
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             wrap: word-wrap;
                         }
 
                         Button {
-                            text: "Start over with new keys";
+                            text: @tr("Start over with new keys");
                             variant: "destructive";
                             disabled: root.loading;
                             clicked => { root.accept-new-identity(); }
@@ -250,7 +250,7 @@ export component LoginPage inherits Rectangle {
                     HorizontalLayout {
                         alignment: end;
                         Text {
-                            text: "Forgot password?";
+                            text: @tr("Forgot password?");
                             color: Colors.primary;
                             font-size: Typography.xs;
                             height: Spacing.touch-target-min;
@@ -274,7 +274,7 @@ export component LoginPage inherits Rectangle {
 
                     // Login button
                     Button {
-                        text: loading ? "" : "Sign in";
+                        text: loading ? "" : @tr("Sign in");
                         variant: "primary";
                         loading: root.loading;
                         disabled: root.loading;
@@ -288,7 +288,7 @@ export component LoginPage inherits Rectangle {
                         spacing: Spacing.xs;
 
                         Text {
-                            text: "Don't have an account?";
+                            text: @tr("Don't have an account?");
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             height: Spacing.touch-target-min;
@@ -296,7 +296,7 @@ export component LoginPage inherits Rectangle {
                         }
 
                         Text {
-                            text: "Register";
+                            text: @tr("Register");
                             color: Colors.primary;
                             font-size: Typography.sm;
                             font-weight: Typography.medium;
@@ -316,7 +316,7 @@ export component LoginPage inherits Rectangle {
                     HorizontalLayout {
                         alignment: center;
                         Text {
-                            text: "Link to an existing account on another device";
+                            text: @tr("Link to an existing account on another device");
                             color: Colors.primary;
                             font-size: Typography.xs;
                             min-height: Spacing.touch-target-min;

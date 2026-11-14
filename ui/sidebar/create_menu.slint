@@ -148,7 +148,7 @@ export component NewChatPicker inherits Rectangle {
     in property <bool> show: true;
     modal := Modal {
         show: root.show;
-        title: "New chat";
+        title: @tr("New chat");
         modal-width: 420px;
         max-modal-height: 640px;
         full-screen: root.mobile-mode;
@@ -161,18 +161,18 @@ export component NewChatPicker inherits Rectangle {
         VerticalLayout {
             spacing: Spacing.sm;
             Input {
-                placeholder: "Search contacts";
+                placeholder: @tr("Search contacts");
                 text <=> root.query;
                 edited(value) => { root.query-changed(value); }
             }
             if !AnonMode.enabled: MenuRow {
                 icon: Icons.megaphone;
-                label: "New channel";
+                label: @tr("New channel");
                 clicked => { modal.release-focus(); root.new-channel(); }
             }
             MenuRow {
                 icon: Icons.user-plus;
-                label: "Add friend";
+                label: @tr("Add friend");
                 clicked => { modal.release-focus(); root.add-friend(); }
             }
 

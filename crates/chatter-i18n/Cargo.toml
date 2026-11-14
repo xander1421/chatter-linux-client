@@ -1,0 +1,11 @@
+[package]
+name = "chatter-i18n"
+version.workspace = true
+edition.workspace = true
+authors = ["xander1421"]
+description = "Chatter's translations: every language other than the English source text"
+license = "GPL-3.0"
+rust-version.workspace = true
+
+[lints]
+workspace = true

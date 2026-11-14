@@ -213,7 +213,7 @@ export component MobileBottomNav inherits Rectangle {
         y: 0;
         width: root.tab-width;
         icon: Icons.message-circle;
-        label: "Chats";
+        label: @tr("Chats");
         active: root.active-tab == "chats";
         badge-count: root.chats-badge;
         clicked => { root.tab-selected("chats"); }
@@ -224,7 +224,7 @@ export component MobileBottomNav inherits Rectangle {
         y: 0;
         width: root.tab-width;
         icon: Icons.radio;
-        label: "Mesh";
+        label: @tr("Mesh");
         active: root.active-tab == "mesh";
         badge-count: root.mesh-badge;
         clicked => { root.tab-selected("mesh"); }
@@ -235,7 +235,7 @@ export component MobileBottomNav inherits Rectangle {
         y: 0;
         width: root.tab-width;
         icon: Icons.phone;
-        label: "Calls";
+        label: @tr("Calls");
         active: root.active-tab == "calls";
         badge-count: root.calls-badge;
         clicked => { root.tab-selected("calls"); }
@@ -246,7 +246,7 @@ export component MobileBottomNav inherits Rectangle {
         y: 0;
         width: root.tab-width;
         icon: Icons.users;
-        label: "Contacts";
+        label: @tr("Contacts");
         active: root.active-tab == "contacts";
         badge-count: root.contacts-badge;
         clicked => { root.tab-selected("contacts"); }
@@ -256,7 +256,7 @@ export component MobileBottomNav inherits Rectangle {
         x: root.side-inset + root.tab-width * (root.mesh-available ? 4 : 3);
         y: 0;
         width: root.tab-width;
-        label: "Profile";
+        label: @tr("Profile");
         avatar: root.user-avatar;
         // No photo (none set, or not loaded yet): the person glyph, not an
         // empty ring (REVIEW-R4 P1-4).

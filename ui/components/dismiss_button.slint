@@ -35,5 +35,5 @@ export component DismissButton inherits HeaderButton {
     // SVG, never a Unicode glyph: "✕" and "×" are missing from the Android
     // font and render as a tofu box.
     icon: root.back ? Icons.chevron-left : Icons.x;
-    label: root.back ? "Back" : "Close";
+    label: root.back ? @tr("Back") : @tr("Close");
 }

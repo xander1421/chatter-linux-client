@@ -548,7 +548,7 @@ export component UnifiedSearch inherits Rectangle {
                         if root.query == "" && search-input.preedit-text == "": search-placeholder := Text {
                             width: 100%;
                             height: 100%;
-                            text: "Search…";
+                            text: @tr("Search…");
                             color: Colors.text-muted;
                             font-size: Typography.sm;
                             vertical-alignment: center;
@@ -617,7 +617,7 @@ export component UnifiedSearch inherits Rectangle {
                         background: tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent;
                         accessible-role: tab;
                         accessible-label: category-name;
-                        accessible-description: root.category == category-name.to-lowercase() ? "Selected" : "";
+                        accessible-description: root.category == category-name.to-lowercase() ? @tr("Selected") : "";
                         accessible-action-default => { root.category = category-name.to-lowercase(); root.selected-index = 0; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
                         border-width: tab-keys.has-focus ? 2px : 0px;
                         border-color: Colors.focus-ring;
@@ -787,7 +787,7 @@ export component UnifiedSearch inherits Rectangle {
             // composed it reads "" over an emptied list; a header with nothing
             // under it is noise.
             if root.query == "" && root.conversations.length > 0: Text {
-                text: "Suggested chats";
+                text: @tr("Suggested chats");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 horizontal-alignment: left;
@@ -803,7 +803,7 @@ export component UnifiedSearch inherits Rectangle {
                 vertical-stretch: 0;
                 alignment: start;
                 Text {
-                    text: "People";
+                    text: @tr("People");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                 }
@@ -901,7 +901,7 @@ export component UnifiedSearch inherits Rectangle {
                     // Jump to (conversations). An empty query is already titled
                     // "Recent conversations" above; two headers stacked there.
                     if (root.category == "all" || root.category == "chats") && root.query != "" && root.conversations.length > 0: Text {
-                        text: "Jump to";
+                        text: @tr("Jump to");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
@@ -921,7 +921,7 @@ export component UnifiedSearch inherits Rectangle {
                     // Public channels — discover and join. Server results; tap
                     // to join (or open, if already a member).
                     if (root.category == "all" || root.category == "chats") && root.discover-channels.length > 0: Text {
-                        text: "Public channels";
+                        text: @tr("Public channels");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
@@ -951,7 +951,7 @@ export component UnifiedSearch inherits Rectangle {
                                     if ch.description != "": Text { text: ch.description; color: Colors.text-muted; font-size: Typography.xs; wrap: no-wrap; overflow: elide; }
                                 }
                                 Text {
-                                    text: ch.joined ? "Open" : "Join";
+                                    text: ch.joined ? @tr("Open") : @tr("Join");
                                     color: Colors.primary;
                                     font-size: Typography.sm;
                                     vertical-alignment: center;
@@ -962,11 +962,11 @@ export component UnifiedSearch inherits Rectangle {
 
                     // Messages (content)
                     if root.category != "all" && root.category != "chats" && root.messages.length > 0: Text {
-                        text: root.category == "all" ? "Messages and shared content"
-                            : root.category == "media" ? "Photos and videos"
-                            : root.category == "files" ? "Files"
-                            : root.category == "links" ? "Links"
-                            : root.category == "voice" ? "Voice messages" : "Messages";
+                        text: root.category == "all" ? @tr("Messages and shared content")
+                            : root.category == "media" ? @tr("Photos and videos")
+                            : root.category == "files" ? @tr("Files")
+                            : root.category == "links" ? @tr("Links")
+                            : root.category == "voice" ? @tr("Voice messages") : @tr("Messages");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
@@ -976,10 +976,10 @@ export component UnifiedSearch inherits Rectangle {
                                 && (j == 0 || root.message-kinds[j] != root.message-kinds[max(0, j - 1)]);
                             if self.section-start: Text {
                                 height: 22px;
-                                text: root.message-kinds[j] == "media" ? "Photos and videos"
-                                    : root.message-kinds[j] == "files" ? "Files"
-                                    : root.message-kinds[j] == "links" ? "Links"
-                                    : root.message-kinds[j] == "voice" ? "Voice messages" : "Messages";
+                                text: root.message-kinds[j] == "media" ? @tr("Photos and videos")
+                                    : root.message-kinds[j] == "files" ? @tr("Files")
+                                    : root.message-kinds[j] == "links" ? @tr("Links")
+                                    : root.message-kinds[j] == "voice" ? @tr("Voice messages") : @tr("Messages");
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
                                 vertical-alignment: center;
@@ -1048,7 +1048,7 @@ export component UnifiedSearch inherits Rectangle {
                     }
 
                     if root.searching: Text {
-                        text: "Searching this device…";
+                        text: @tr("Searching this device…");
                         color: Colors.text-muted;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
@@ -1058,16 +1058,16 @@ export component UnifiedSearch inherits Rectangle {
                     // showing an empty list under the recent searches.
                     if root.query == "" && !root.searching && root.messages.length == 0
                         && (root.category == "media" || root.category == "files" || root.category == "links" || root.category == "voice"): Text {
-                        text: root.category == "media" ? "No photos or videos yet"
-                            : root.category == "files" ? "No files yet"
-                            : root.category == "links" ? "No links yet" : "No voice messages yet";
+                        text: root.category == "media" ? @tr("No photos or videos yet")
+                            : root.category == "files" ? @tr("No files yet")
+                            : root.category == "links" ? @tr("No links yet") : @tr("No voice messages yet");
                         color: Colors.text-muted;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
                     }
 
                     if root.total-count == 0 && root.discover-channels.length == 0 && root.query != "" && !root.searching && !root.query-is-handle: Text {
-                        text: "No matches on this device";
+                        text: @tr("No matches on this device");
                         color: Colors.text-muted;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
@@ -1272,10 +1272,10 @@ export component UnifiedSearch inherits Rectangle {
                     height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
                     background: Colors.inset;
                     accessible-role: text-input;
-                    accessible-label: root.picker-mode == "from" ? "Search people" : "Search chats";
+                    accessible-label: root.picker-mode == "from" ? @tr("Search people") : @tr("Search chats");
                     if root.picker-query == "" && picker-input.preedit-text == "": Text {
                         x: Spacing.md; width: parent.width - 2 * Spacing.md; height: 100%;
-                        text: root.picker-mode == "from" ? "Search people" : "Search chats";
+                        text: root.picker-mode == "from" ? @tr("Search people") : @tr("Search chats");
                         color: Colors.text-muted; font-size: Typography.sm; vertical-alignment: center;
                     }
                     picker-input := TextInput { text <=> root.picker-query; x: Spacing.md; width: parent.width - 2 * Spacing.md; height: 100%; single-line: true; color: Colors.text-primary; font-size: Typography.sm; vertical-alignment: center;

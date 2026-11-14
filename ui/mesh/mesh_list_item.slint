@@ -139,7 +139,7 @@ export component MeshListItem inherits Rectangle {
                 font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
             mute-touch := TouchArea {
                 mouse-cursor: pointer; accessible-role: button;
-                accessible-label: root.muted ? "Unmute channel" : "Mute channel";
+                accessible-label: root.muted ? @tr("Unmute channel") : @tr("Mute channel");
                 clicked => { root.menu-open = false; root.toggle-mute(); }
             }
         }

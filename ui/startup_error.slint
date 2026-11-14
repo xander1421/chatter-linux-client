@@ -5,7 +5,7 @@ import { Button } from "components/button.slint";
 
 // This window must work before the client and its normal UI are initialized.
 export component StartupErrorWindow inherits Window {
-    title: "Chatter can't start";
+    title: @tr("Chatter can't start");
     min-width: 320px;
     min-height: 240px;
     preferred-width: 560px;
@@ -26,7 +26,7 @@ export component StartupErrorWindow inherits Window {
         alignment: center;
 
         Text {
-            text: "Chatter can't start";
+            text: @tr("Chatter can't start");
             color: Colors.text-primary;
             font-size: Typography.xl;
             font-weight: 700;

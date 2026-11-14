@@ -45,14 +45,14 @@ export component BlockedTab inherits VerticalLayout {
             }
 
             Text {
-                text: "No blocked users";
+                text: @tr("No blocked users");
                 color: Colors.text-muted;
                 font-size: Typography.base;
                 horizontal-alignment: center;
             }
 
             Text {
-                text: "Users you block won't be able to message you";
+                text: @tr("Users you block won't be able to message you");
                 color: Colors.text-muted;
                 font-size: Typography.sm;
                 horizontal-alignment: center;
@@ -110,7 +110,7 @@ export component BlockedTab inherits VerticalLayout {
                             }
 
                             if root.confirm-remove-id == user.user-id: Text {
-                                text: user.anon ? "Delete this chat? They stay blocked." : "Remove from friends and unblock?";
+                                text: user.anon ? @tr("Delete this chat? They stay blocked.") : @tr("Remove from friends and unblock?");
                                 color: Colors.text-secondary;
                                 font-size: Typography.xs;
                                 overflow: elide;
@@ -129,7 +129,7 @@ export component BlockedTab inherits VerticalLayout {
 
                             Button {
                                 touch: root.mobile-mode;
-                                text: "Unblock";
+                                text: @tr("Unblock");
                                 variant: "ghost";
                                 disabled: root.loading;
 
@@ -143,7 +143,7 @@ export component BlockedTab inherits VerticalLayout {
                             // blocked chat), and there is none once deleted.
                             if !user.anon || user.anon-chat: Button {
                                 touch: root.mobile-mode;
-                                text: user.anon ? "Delete chat" : "Remove";
+                                text: user.anon ? @tr("Delete chat") : @tr("Remove");
                                 variant: "ghost";
                                 disabled: root.loading;
 
@@ -159,7 +159,7 @@ export component BlockedTab inherits VerticalLayout {
 
                             Button {
                                 touch: root.mobile-mode;
-                                text: "Cancel";
+                                text: @tr("Cancel");
                                 variant: "ghost";
 
                                 clicked => {
@@ -169,7 +169,7 @@ export component BlockedTab inherits VerticalLayout {
 
                             Button {
                                 touch: root.mobile-mode;
-                                text: user.anon ? "Delete" : "Remove";
+                                text: user.anon ? @tr("Delete") : @tr("Remove");
                                 variant: "destructive";
                                 disabled: root.loading;
 

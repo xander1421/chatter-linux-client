@@ -1,0 +1,150 @@
+ui/activity/activity_bell.slint:65: accessible-label: ActivityGlobal.unread-count > 0
+ui/app.slint:76: title: SidebarPane.total-unread-count > 0 ? "Chatter (" + SidebarPane.total-unread-count + ")" : "Chatter";
+ui/calls/active_call_view.slint:317: text: call-data.participant-count + " people";
+ui/calls/active_call_view.slint:414: label: (call-data.participants[tile-indices[maximized-index]].is-audio-muted-locally
+ui/calls/active_call_view.slint:428: label: (call-data.participants[tile-indices[maximized-index]].is-video-paused-locally
+ui/calls/active_call_view.slint:549: accessible-label: "Pin " + participant.display-name;
+ui/calls/active_call_view.slint:603: accessible-label: "Call key version " + call-data.verification-key-version;
+ui/calls/active_call_view.slint:606: text: "key " + call-data.verification-key-version;
+ui/calls/call_history_screen.slint:167: text: root.selected-count == 1 ? "1 selected" : root.selected-count + " selected";
+ui/calls/call_history_screen.slint:458: accessible-label: "Select call with " + row.name;
+ui/calls/call_history_screen.slint:491: accessible-label: "Avatar for " + row.name;
+ui/calls/call_history_screen.slint:576: accessible-label: "Call " + row.name;
+ui/calls/call_history_screen.slint:607: accessible-label: "Video call " + row.name;
+ui/calls/call_history_screen.slint:697: text: !root.confirm-selected
+ui/calls/device_picker.slint:26: accessible-label: name + (is-selected ? ", selected" : "");
+ui/calls/device_picker.slint:271: subtitle: source.width > 0 ? (source.width + "x" + source.height + (source.is-primary ? " (Primary)" : "")) : (source.is-primary ? "Primary" : "");
+ui/calls/incoming_call_modal.slint:133: text: "in " + call-data.channel-name;
+ui/calls/return_to_call_bar.slint:66: accessible-label: "Return to call with " + call-data.title;
+ui/chat/audio_player.slint:146: text: root.is-download-failed ? "Download failed · tap to retry" : (root.is-this-playing ? root.audio-elapsed + " / " + root.duration-display : root.d
+ui/chat/call_confirm.slint:26: text: "Everyone in " + root.channel-name + " will be notified.";
+ui/chat/chat_header.slint:396: text: (root.member-count == 1 ? "1 member" : "\{root.member-count} members")
+ui/chat/chat_header.slint:570: text: MeshGlobal.active-kind == "dm"
+ui/chat/chat_layout.slint:537: text: root.active-channel-call-participants > 0
+ui/chat/composer_reply_preview.slint:68: text: "Reply to " + root.reply-to-sender;
+ui/chat/delete_confirm.slint:32: title: root.choosing ? root.count > 1 ? "Delete " + root.count + " messages" : "Delete message" : root.for-everyone || (root.choosing-in && !root.can-
+ui/chat/message_attachments.slint:118: text: attachment.upload-state == "queued" ? "Queued"
+ui/chat/message_attachments.slint:145: accessible-label: "Open photo " + attachment.filename;
+ui/chat/message_attachments.slint:279: accessible-label: attachment.upload-state == "uploading" || attachment.upload-state == "queued"
+ui/chat/message_attachments.slint:341: accessible-label: "Open photo " + attachment.filename;
+ui/chat/message_attachments.slint:552: accessible-label: "Play video " + attachment.filename;
+ui/chat/message_attachments.slint:655: accessible-label: "Open file " + attachment.filename;
+ui/chat/message_call.slint:54: accessible-label: "View profile of " + root.sender-name;
+ui/chat/message_call.slint:145: text: is-missed ? "Missed " + self.call-noun
+ui/chat/message_call.slint:152: accessible-label: root.call-type == "started" || root.call-type == "ended"
+ui/chat/message_context_menu.slint:70: accessible-label: "React with " + root.name;
+ui/chat/message_footer.slint:49: accessible-label: "Reactions: " + root.reaction-summary;
+ui/chat/message_footer.slint:73: accessible-label: reaction.emoji + (reaction.own ? ", your reaction" : "");
+ui/chat/message_footer.slint:216: accessible-label: root.failure-reason + ". Tap to retry now";
+ui/chat/message_footer.slint:226: text: root.failure-reason == "" ? "not sent" : "not sent \u{b7} " + root.failure-reason;
+ui/chat/message_footer.slint:231: accessible-label: "Not sent, " + root.failure-reason;
+ui/chat/message_footer.slint:234: text: root.failure-reason == "" ? "not sent \u{b7} Retry" : "not sent \u{b7} " + root.failure-reason + " \u{b7} Retry";
+ui/chat/message_item.slint:527: accessible-label: "View profile of " + root.sender-name;
+ui/chat/message_item.slint:575: accessible-label: root.is-own ? "Your message: " + root.spoken-content : root.sender-name + " says: " + root.spoken-content;
+ui/chat/message_list_overlays.slint:25: accessible-label: root.unread-count == 1 ? "1 new message, jump to newest"
+ui/chat/message_list_overlays.slint:50: text: root.unread-count == 1
+ui/chat/message_quote.slint:46: accessible-label: "Go to quoted message from " + root.reply-to-sender-name;
+ui/chat/message_thread.slint:27: accessible-label: "Open thread: " + root.reply-count-text;
+ui/chat/pinned_bar.slint:151: accessible-label: "Go to pinned message: " + root.message-preview;
+ui/chat/reaction_picker.slint:144: accessible-label: "React with " + QuickReactions.names[index];
+ui/chat/secret_timer_modal.slint:26: text: "Current: " + DisappearingGlobal.active-label;
+ui/chat/selection_bar.slint:81: text: root.count == 1 ? "1 selected" : root.count + " selected";
+ui/chat/thread_panel.slint:245: text: !root.pinned-mode ? "Thread"
+ui/chat/thread_panel.slint:309: accessible-label: "Original message from " + root.root-sender-name + ": " + root.root-content-preview;
+ui/chat/thread_panel.slint:728: text: root.replies.length == 1 ? "Unpin message" : "Unpin all " + root.replies.length + " messages";
+ui/components/avatar.slint:32: accessible-label: root.name != "" ? "Avatar for " + root.name
+ui/components/avatar_picker.slint:37: accessible-label: choice.label + " avatar" + (root.selected-index == i ? ", selected" : "");
+ui/components/code_preview_panel.slint:85: text: root.line-count + " lines";
+ui/components/connection_banner.slint:212: text: root.just-reconnected ? "Connected" :
+ui/components/emoji_picker.slint:274: accessible-label: tone-idx == 0 ? "Default skin tone" : "Skin tone " + tone-idx;
+ui/components/gif_picker.slint:41: accessible-label: root.gif.failed ? "GIF " + root.gif.id + ", preview unavailable" : "GIF " + root.gif.id;
+ui/components/mention_autocomplete.slint:102: accessible-label: suggestion.mention-type == "user" ? suggestion.name : suggestion.mention-type == "channel" ? "#" + suggestion.name : "@" + suggestio
+ui/components/mention_autocomplete.slint:164: text: suggestion.mention-type == "user" ? suggestion.name : suggestion.mention-type == "channel" ? "#" + suggestion.name : "@" + suggestion.name;
+ui/components/modal.slint:109: accessible-title: root.title == "" ? "Dialog" : root.title + " dialog";
+ui/components/unified_search.slint:171: accessible-label: root.sender-name + " in " + root.channel-name + ": " + root.content-preview;
+ui/components/unified_search.slint:817: text: "Searching @" + root.person-handle + "…";
+ui/components/unified_search.slint:822: text: "No user @" + root.person-handle;
+ui/components/unified_search.slint:840: accessible-label: "Find @" + root.person-handle;
+ui/components/unified_search.slint:862: text: "Find @" + root.person-handle;
+ui/components/unified_search.slint:935: accessible-label: (ch.joined ? "Open " : "Join ") + ch.name;
+ui/components/unified_search.slint:1044: accessible-label: "Show more " + section.to-lowercase();
+ui/mesh/mesh_info_sheet.slint:139: accessible-label: "View " + member.display-name;
+ui/mesh/mesh_info_sheet.slint:210: accessible-label: "Invite " + peer.name + " with QR";
+ui/mesh/mesh_info_sheet.slint:224: accessible-label: "Invite " + peer.name;
+ui/mesh/mesh_info_sheet.slint:271: text: MeshGlobal.relay-count == 1 ? "1 relay connected" : MeshGlobal.relay-count + " relays connected";
+ui/mesh/mesh_info_sheet.slint:305: text: root.confirm-kind == "member"
+ui/mesh/mesh_list.slint:100: text: MeshGlobal.pending-private-peer + " invited you to " + MeshGlobal.pending-private-name;
+ui/mesh/mesh_list.slint:160: accessible-label: "Open nearby mesh peer " + peer.name;
+ui/mesh/mesh_peer_sheet.slint:134: text: "Compare these numbers in person with " + MeshGlobal.sheet-peer-name + ".";
+ui/mesh/mesh_peer_sheet.slint:229: accessible-label: "Invite to " + channel.name + " with QR";
+ui/mesh/mesh_peer_sheet.slint:243: accessible-label: "Invite to " + channel.name;
+ui/mesh/mesh_peer_sheet.slint:298: text: "Remove " + MeshGlobal.sheet-peer-name + " from " + MeshGlobal.active-title + "? The group key will rotate.";
+ui/mesh/mesh_setup_sheet.slint:93: text: MeshGlobal.pending-private-peer + " invited you to " + MeshGlobal.pending-private-name;
+ui/modals/channel_danger.slint:88: text: root.is-private-group
+ui/modals/channel_danger.slint:278: text: "Delete \"" + root.channel-name + "\" permanently? Every message in it goes with it. This cannot be undone.";
+ui/modals/channel_members.slint:162: text: root.member-count + " total";
+ui/modals/channel_members.slint:392: accessible-label: "Actions for " + member.display-name;
+ui/modals/channel_members.slint:610: text: root.confirm-action == "ban"
+ui/modals/channel_settings.slint:369: text: root.member-summary
+ui/modals/channel_settings.slint:534: text: root.member-summary
+ui/modals/channel_settings.slint:559: text: "Messages disappear after " + DisappearingGlobal.active-label + " (set when the channel was created)";
+ui/modals/create_channel.slint:308: text: "(" + root.selected-friend-count + " selected)";
+ui/modals/create_channel.slint:445: accessible-label: "Role for " + friend.display-name + ": " + role-text.text;
+ui/modals/create_section.slint:98: accessible-label: "Section icon " + root.selected-emoji;
+ui/modals/create_section.slint:169: accessible-label: "Choose icon " + icon;
+ui/modals/friends.slint:202: accessible-label: tab.label + (tab.id == "requests" && (root.received-requests.length > 0) ?
+ui/modals/friends.slint:212: text: tab.label + (tab.id == "requests" && (root.received-requests.length > 0) ?
+ui/modals/friends_blocked_tab.slint:25: text: root.blocked-users.length + (root.blocked-users.length == 1 ? " blocked user" : " blocked users");
+ui/modals/friends_blocked_tab.slint:120: text: "Blocked " + user.blocked-at;
+ui/modals/friends_friends_tab.slint:26: text: root.friends.length + (root.private-mode ? (root.friends.length == 1 ? " private contact" : " private contacts") : (root.friends.length == 1 ? "
+ui/modals/friends_friends_tab.slint:198: accessible-label: "Message " + friend.display-name;
+ui/modals/friends_friends_tab.slint:227: accessible-label: friend.is-anon ? "Message " + friend.display-name : "View profile of " + friend.display-name;
+ui/modals/friends_request_tabs.slint:64: accessible-label: "Received (" + root.received-requests-count + ")";
+ui/modals/friends_request_tabs.slint:79: text: "Received (" + root.received-requests-count + ")";
+ui/modals/friends_request_tabs.slint:106: accessible-label: "Sent (" + root.sent-requests-count + ")";
+ui/modals/friends_request_tabs.slint:121: text: "Sent (" + root.sent-requests-count + ")";
+ui/modals/friends_request_tabs.slint:148: accessible-label: "Private (" + root.private-requests-count + ")";
+ui/modals/friends_request_tabs.slint:163: text: "Private (" + root.private-requests-count + ")";
+ui/modals/friends_request_tabs.slint:190: accessible-label: "Groups (" + root.group-invites-count + ")";
+ui/modals/friends_request_tabs.slint:205: text: "Groups (" + root.group-invites-count + ")";
+ui/modals/friends_request_tabs.slint:232: accessible-label: "Channels (" + root.channel-invites-count + ")";
+ui/modals/friends_request_tabs.slint:247: text: "Channels (" + root.channel-invites-count + ")";
+ui/modals/friends_requests_tab.slint:408: text: "Private" + (request.sent-at != "" ? " · " + request.sent-at : "");
+ui/modals/friends_requests_tab.slint:558: text: "Invited by " + invite.username;
+ui/modals/invite_member.slint:124: accessible-label: user.display-name
+ui/modals/invite_member.slint:254: text: root.loading ? "" :
+ui/modals/invite_private_group.slint:148: accessible-label: "Role for " + friend.display-name + ": " + invite-role-text.text;
+ui/modals/invite_private_group.slint:221: text: root.loading ? "" :
+ui/modals/join_channel.slint:118: text: root.member-count == 1 ? "\u{2022} 1 member"
+ui/modals/link_device_approve.slint:116: text: "Server: " + root.preview-server-url;
+ui/modals/pinned_messages.slint:27: title: root.items.length == 1 ? "1 pinned message"
+ui/modals/pinned_messages.slint:59: text: (root.touch ? "Long-press" : "Right-click") + " a message and choose Pin";
+ui/modals/profile_status_picker.slint:48: accessible-label: "Status: " + root.options[root.current].label;
+ui/modals/sessions.slint:108: text: root.loaded ? root.sessions.length + " active session" + (root.sessions.length != 1 ? "s" : "") : "Sessions not loaded";
+ui/modals/sessions.slint:161: text: "Approved, waiting for it to finish linking (until " + link.expires + ")";
+ui/modals/sessions.slint:304: text: "IP: " + session.ip-address;
+ui/modals/sessions.slint:313: text: session.is-current ? "Active now" : "Last active: " + session.last-used;
+ui/modals/sessions.slint:320: text: "Since: " + session.created-at;
+ui/modals/sessions.slint:386: text: root.revocable-count == 1
+ui/modals/user_profile.slint:502: accessible-label: "Disappearing messages: " + DisappearingGlobal.dm-label;
+ui/modals/user_profile.slint:741: title: "Delete " + root.display-name + "?";
+ui/modals/user_profile.slint:781: title: "Block " + root.display-name + "?";
+ui/modals/user_profile.slint:838: title: "Unblock " + root.display-name + "?";
+ui/pages/register.slint:126: text: "Step \{current-step} of \{total-steps}";
+ui/pages/register.slint:420: accessible-label: "Password strength: " + (root.password-strength == 1 ? "Weak" :
+ui/pages/register.slint:513: accessible-label: "PIN strength: " + (root.visible-pin-strength == 1 ? "Weak" :
+ui/pages/welcome.slint:65: text: "Hi \{root.display-name}, your account is ready.";
+ui/settings/about_settings.slint:33: detail: UpdateGlobal.installed-version + " · Build " + UpdateGlobal.build-code + " · Commit " + UpdateGlobal.build-commit;
+ui/settings/about_settings.slint:44: text: "Update available — " + UpdateGlobal.version;
+ui/settings/account_settings.slint:449: detail: "Status: " + (root.backup-status == "backed_up" ? "Backed up" : root.backup-status == "not_backed_up" ? "Not backed up" : "Unknown");
+ui/settings/appearance_settings.slint:325: accessible-label: "Animation speed " + opt.label;
+ui/settings/appearance_settings.slint:507: accessible-label: "Search shortcut " + opt.label;
+ui/settings/devices_settings.slint:77: text: root.sessions-loaded ? "\{root.session-count}" : "—";
+ui/settings/devices_settings.slint:176: text: session.status-text != "" ? session.status-text : (session.is-current ? "Active now" : "Last active: " + session.last-used);
+ui/settings/devices_settings.slint:182: text: "Linked: " + session.created-at;
+ui/settings/devices_settings.slint:237: text: "Approved, waiting to finish linking (until " + link.expires + ")";
+ui/sidebar/create_menu.slint:180: text: root.query != "" ? "No contacts match “" + root.query + "”" : "No friends yet. Add one from Contacts.";
+ui/sidebar/sidebar.slint:569: accessible-label: root.missed-call-count > 0 ? "Calls, " + root.missed-call-count + " missed" : "Calls";
+ui/sidebar/sidebar.slint:633: accessible-label: root.total-pending-requests == 1 ? "1 request" : root.total-pending-requests + " requests";
+ui/sidebar/sidebar_footer.slint:134: accessible-label: ActivityGlobal.unread-count > 0 ? "Activity, " + ActivityGlobal.unread-count + " unread" : "Activity";
+ui/sidebar/sidebar_footer.slint:287: accessible-label: ActivityGlobal.unread-count > 0 ? "Activity, " + ActivityGlobal.unread-count + " unread" : "Activity";

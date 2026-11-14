@@ -48,14 +48,14 @@ export component FriendsTab inherits VerticalLayout {
             }
 
             Text {
-                text: root.private-mode ? "No private contacts yet" : "No friends yet";
+                text: root.private-mode ? @tr("No private contacts yet") : @tr("No friends yet");
                 color: Colors.text-muted;
                 font-size: Typography.base;
                 horizontal-alignment: center;
             }
 
             Text {
-                text: root.private-mode ? "Share your private code to start a secret chat" : "Use the Add friend tab to connect";
+                text: root.private-mode ? @tr("Share your private code to start a secret chat") : @tr("Use the Add friend tab to connect");
                 color: Colors.text-muted;
                 font-size: Typography.sm;
                 horizontal-alignment: center;

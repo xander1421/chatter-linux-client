@@ -115,7 +115,7 @@ export component CallHistoryScreen inherits Rectangle {
     Modal {
         floating-content: root.mobile-mode;
         show: root.show-modal;
-        title: "Calls";
+        title: @tr("Calls");
         modal-width: 560px;
         max-modal-height: 800px;
         full-screen: root.mobile-mode;
@@ -159,7 +159,7 @@ export component CallHistoryScreen inherits Rectangle {
 
                     DismissButton {
                         touch: root.mobile-mode;
-                        label: "Exit selection";
+                        label: @tr("Exit selection");
                         clicked => { root.end-selection(); }
                     }
 
@@ -178,14 +178,14 @@ export component CallHistoryScreen inherits Rectangle {
                         touch: root.mobile-mode;
                         icon: Icons.check;
                         active: root.rows.length > 0 && root.selected-count == root.rows.length;
-                        label: root.rows.length > 0 && root.selected-count == root.rows.length ? "Deselect all" : "Select all";
+                        label: root.rows.length > 0 && root.selected-count == root.rows.length ? @tr("Deselect all") : @tr("Select all");
                         clicked => { root.select-all(!(root.rows.length > 0 && root.selected-count == root.rows.length)); }
                     }
 
                     HeaderButton {
                         touch: root.mobile-mode;
                         icon: Icons.trash;
-                        label: "Delete selected";
+                        label: @tr("Delete selected");
                         destructive: true;
                         enabled: root.selected-count > 0;
                         clicked => {
@@ -255,7 +255,7 @@ export component CallHistoryScreen inherits Rectangle {
                 vertical-stretch: 1;
 
                 Text {
-                    text: "Loading…";
+                    text: @tr("Loading…");
                     color: Colors.text-muted;
                     font-size: Typography.sm;
                     vertical-alignment: center;
@@ -279,14 +279,14 @@ export component CallHistoryScreen inherits Rectangle {
                 }
 
                 Text {
-                    text: root.active-filter == "missed" ? "No missed calls" : "No calls yet";
+                    text: root.active-filter == "missed" ? @tr("No missed calls") : @tr("No calls yet");
                     color: Colors.text-muted;
                     font-size: Typography.base;
                     horizontal-alignment: center;
                 }
 
                 Text {
-                    text: root.active-filter == "missed" ? "Calls you did not answer show up here." : "Use the phone icon in a regular chat or channel.";
+                    text: root.active-filter == "missed" ? @tr("Calls you did not answer show up here.") : @tr("Use the phone icon in a regular chat or channel.");
                     color: Colors.text-muted;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
@@ -654,7 +654,7 @@ export component CallHistoryScreen inherits Rectangle {
                     padding: Spacing.sm;
 
                     Text {
-                        text: "Older calls were not checked yet.";
+                        text: @tr("Older calls were not checked yet.");
                         color: Colors.text-muted;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
@@ -665,7 +665,7 @@ export component CallHistoryScreen inherits Rectangle {
                         alignment: center;
 
                         Button {
-                            text: "Load older calls";
+                            text: @tr("Load older calls");
                             variant: "secondary";
                             clicked => { root.load-more(); }
                         }
@@ -707,7 +707,7 @@ export component CallHistoryScreen inherits Rectangle {
 
                     // Scope, stated: nothing here reaches another device.
                     Text {
-                        text: "Other people's call history and the call messages in your chats are not changed. A call in progress is kept.";
+                        text: @tr("Other people's call history and the call messages in your chats are not changed. A call in progress is kept.");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         horizontal-alignment: center;
@@ -721,13 +721,13 @@ export component CallHistoryScreen inherits Rectangle {
                         // Cancel first and non-danger: the safe answer is the one
                         // the eye and the thumb land on.
                         Button {
-                            text: "Cancel";
+                            text: @tr("Cancel");
                             variant: "secondary";
                             clicked => { root.show-clear-confirm = false; }
                         }
 
                         Button {
-                            text: root.confirm-selected ? "Delete" : "Clear history";
+                            text: root.confirm-selected ? @tr("Delete") : @tr("Clear history");
                             variant: "destructive";
                             clicked => {
                                 root.show-clear-confirm = false;
@@ -785,7 +785,7 @@ export component CallHistoryScreen inherits Rectangle {
 
                             select-label := Text {
                                 accessible-role: none;
-                                text: "Select calls";
+                                text: @tr("Select calls");
                                 color: Colors.text-primary;
                                 font-size: Typography.base;
                                 horizontal-alignment: center;
@@ -824,7 +824,7 @@ export component CallHistoryScreen inherits Rectangle {
 
                             menu-label := Text {
                                 accessible-role: none;
-                                text: "Clear call history";
+                                text: @tr("Clear call history");
                                 color: Colors.error;
                                 font-size: Typography.base;
                                 horizontal-alignment: center;

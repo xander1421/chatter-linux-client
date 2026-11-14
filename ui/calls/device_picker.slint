@@ -182,7 +182,7 @@ export component DevicePicker inherits Rectangle {
                         spacing: Spacing.xs;
 
                         if root.linked-audio && picker-type != "screen": Text {
-                            text: "Microphone and output change together. The check mark shows the active device.";
+                            text: @tr("Microphone and output change together. The check mark shows the active device.");
                             font-size: Typography.sm;
                             color: Colors.text-secondary;
                             wrap: word-wrap;
@@ -196,12 +196,12 @@ export component DevicePicker inherits Rectangle {
                                 name: device.name;
                                 icon: Icons.mic;
                                 is-selected: device.id == selected-audio-id;
-                                subtitle: device.is-default ? "Default" : "";
+                                subtitle: device.is-default ? @tr("Default") : "";
                                 clicked => { root.audio-selected(device.id); }
                             }
 
                             if audio-devices.length == 0: Text {
-                                text: "No microphones found";
+                                text: @tr("No microphones found");
                                 font-size: Typography.sm;
                                 color: Colors.text-secondary;
                                 horizontal-alignment: center;
@@ -216,12 +216,12 @@ export component DevicePicker inherits Rectangle {
                                 name: device.name;
                                 icon: Icons.volume-2;
                                 is-selected: device.id == selected-audio-output-id;
-                                subtitle: device.is-default ? "Default" : "";
+                                subtitle: device.is-default ? @tr("Default") : "";
                                 clicked => { root.audio-output-selected(device.id); }
                             }
 
                             if audio-output-devices.length == 0: Text {
-                                text: "No speakers found";
+                                text: @tr("No speakers found");
                                 font-size: Typography.sm;
                                 color: Colors.text-secondary;
                                 horizontal-alignment: center;
@@ -237,7 +237,7 @@ export component DevicePicker inherits Rectangle {
                                 spacing: Spacing.md;
 
                                 Text {
-                                    text: "Click below to open the system screen picker";
+                                    text: @tr("Click below to open the system screen picker");
                                     font-size: Typography.sm;
                                     color: Colors.text-secondary;
                                     horizontal-alignment: center;
@@ -247,7 +247,7 @@ export component DevicePicker inherits Rectangle {
                                 DeviceItem {
                                     name: "Share screen";
                                     icon: Icons.monitor;
-                                    subtitle: "Opens system dialog to select screen or window";
+                                    subtitle: @tr("Opens system dialog to select screen or window");
                                     clicked => { root.screen-selected("0"); }
                                 }
                             }
@@ -258,7 +258,7 @@ export component DevicePicker inherits Rectangle {
 
                                 // Section: Monitors
                                 if screen-monitors.length > 0: Text {
-                                    text: "Screens";
+                                    text: @tr("Screens");
                                     font-size: Typography.xs;
                                     font-weight: Typography.semibold;
                                     color: Colors.text-secondary;
@@ -274,7 +274,7 @@ export component DevicePicker inherits Rectangle {
 
                                 // Section: Windows
                                 if screen-windows.length > 0: Text {
-                                    text: "Windows";
+                                    text: @tr("Windows");
                                     font-size: Typography.xs;
                                     font-weight: Typography.semibold;
                                     color: Colors.text-secondary;
@@ -290,7 +290,7 @@ export component DevicePicker inherits Rectangle {
                             }
 
                             if screen-monitors.length == 0 && screen-windows.length == 0: Text {
-                                text: "No screens or windows found";
+                                text: @tr("No screens or windows found");
                                 font-size: Typography.sm;
                                 color: Colors.text-secondary;
                                 horizontal-alignment: center;

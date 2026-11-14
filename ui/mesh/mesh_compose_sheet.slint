@@ -110,7 +110,7 @@ export component MeshComposeSheet inherits Rectangle {
                                 Rectangle {
                     width: 78px; height: Spacing.touch-target-min;
                     accessible-role: button;
-                    accessible-label: root.page == "menu" ? "Cancel" : "Back";
+                    accessible-label: root.page == "menu" ? @tr("Cancel") : @tr("Back");
                     accessible-action-default => { root.go-back(); }
                     HorizontalLayout {
                         alignment: start;
@@ -124,7 +124,7 @@ export component MeshComposeSheet inherits Rectangle {
                 Rectangle {
                     width: 78px; height: Spacing.touch-target-min;
                     accessible-role: button;
-                    accessible-label: root.page == "group" ? "Create" : "Join";
+                    accessible-label: root.page == "group" ? @tr("Create") : @tr("Join");
                     accessible-enabled: root.can-submit;
                     accessible-action-default => { if root.can-submit { root.submit(); } }
                     Text { text: root.page == "menu" ? "" : root.page == "group" ? "Create" : "Join";
@@ -173,7 +173,7 @@ export component MeshComposeSheet inherits Rectangle {
                         }
                         Text {
                             width: parent.width;
-                            text: "Only devices you invite can read it. You can add members after creating it.";
+                            text: @tr("Only devices you invite can read it. You can add members after creating it.");
                             color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; }
                     }
                     if root.page == "channel": VerticalLayout {
@@ -222,7 +222,7 @@ export component MeshComposeSheet inherits Rectangle {
                         }
                         Text {
                             width: parent.width;
-                            text: "Location cells use geohashes and available relays to connect devices in an area.";
+                            text: @tr("Location cells use geohashes and available relays to connect devices in an area.");
                             color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; }
                     }
                     if MeshGlobal.notice != "": Text {

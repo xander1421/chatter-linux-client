@@ -93,7 +93,7 @@ export component MessageHistoryError inherits Rectangle {
         padding-right: Spacing.xs;
         spacing: Spacing.sm;
         Text {
-            text: "Older messages didn't load";
+            text: @tr("Older messages didn't load");
             color: Colors.text-primary;
             font-size: Typography.xs;
             vertical-alignment: center;
@@ -105,11 +105,11 @@ export component MessageHistoryError inherits Rectangle {
             background: retry-touch.pressed ? Materials.pressed
                 : retry-touch.has-hover ? Materials.hover : transparent;
             accessible-role: button;
-            accessible-label: "Retry loading older messages";
+            accessible-label: @tr("Retry loading older messages");
             accessible-action-default => { root.retry(); }
             KeyFocus { border-radius: parent.border-radius; activate => { root.retry(); } }
             retry-label := Text {
-                text: "Retry";
+                text: @tr("Retry");
                 color: Colors.primary;
                 font-size: Typography.xs;
                 font-weight: Typography.semibold;

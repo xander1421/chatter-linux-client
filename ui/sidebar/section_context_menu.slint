@@ -220,7 +220,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
                 escape => { root.close(); }
                 icon: Icons.chevron-right;
                 icon-rotation: -90deg;
-                label: "Move up";
+                label: @tr("Move up");
                 mobile-mode: root.mobile-mode;
                 initial-focus: root.show && !root.mobile-mode;
                 clicked => {
@@ -238,7 +238,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
                 escape => { root.close(); }
                 icon: Icons.chevron-right;
                 icon-rotation: 90deg;
-                label: "Move down";
+                label: @tr("Move down");
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.move-section(root.section-id, 1);
@@ -256,7 +256,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
                 HorizontalLayout {
                     padding-left: Spacing.md;
                     Text {
-                        text: "Sort by";
+                        text: @tr("Sort by");
                         color: Colors.text-muted;
                         font-size: Typography.xs2;
                         font-weight: 600;
@@ -274,7 +274,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.clock;
-                label: "Recent";
+                label: @tr("Recent");
                 mobile-mode: root.mobile-mode;
                 selected: root.section-sort-mode == "recent";
                 clicked => {
@@ -291,7 +291,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.message-circle;
-                label: "Unread first";
+                label: @tr("Unread first");
                 mobile-mode: root.mobile-mode;
                 selected: root.section-sort-mode == "unread";
                 clicked => {
@@ -308,7 +308,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.menu;
-                label: "Name (A–Z)";
+                label: @tr("Name (A–Z)");
                 mobile-mode: root.mobile-mode;
                 selected: root.section-sort-mode == "alphabetical";
                 clicked => {
@@ -332,7 +332,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.edit;
-                label: "Rename section";
+                label: @tr("Rename section");
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.rename-section(root.section-id);
@@ -348,7 +348,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.trash;
-                label: "Remove section";
+                label: @tr("Remove section");
                 destructive: true;
                 mobile-mode: root.mobile-mode;
                 clicked => {
@@ -585,7 +585,7 @@ export component SectionContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.pin;
-                label: root.is-pinned ? "Unpin" : "Pin to top";
+                label: root.is-pinned ? @tr("Unpin") : @tr("Pin to top");
                 mobile-mode: root.mobile-mode;
                 initial-focus: root.show && !root.mobile-mode;
                 clicked => {
@@ -602,7 +602,7 @@ export component SectionContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.folder;
-                label: root.is-archived ? "Unarchive" : "Archive";
+                label: root.is-archived ? @tr("Unarchive") : @tr("Archive");
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.set-archived(root.conversation-id, !root.is-archived);
@@ -618,7 +618,7 @@ export component SectionContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: root.is-muted ? Icons.bell-off : Icons.bell;
-                label: root.is-muted ? "Unmute" : root.timed-mute ? "Mute…" : "Mute";
+                label: root.is-muted ? @tr("Unmute") : root.timed-mute ? @tr("Mute…") : @tr("Mute");
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     if !root.is-muted && root.timed-mute {
@@ -662,7 +662,7 @@ export component SectionContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: root.has-unread ? Icons.check : Icons.message-circle;
-                label: root.has-unread ? "Mark as read" : "Mark as unread";
+                label: root.has-unread ? @tr("Mark as read") : @tr("Mark as unread");
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     if root.has-unread {
@@ -685,7 +685,7 @@ export component SectionContextMenu inherits Rectangle {
                 HorizontalLayout {
                     padding-left: Spacing.md;
                     Text {
-                        text: "Move to section";
+                        text: @tr("Move to section");
                         color: Colors.text-muted;
                         font-size: Typography.xs2;
                         font-weight: 600;
@@ -730,7 +730,7 @@ export component SectionContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.plus;
-                label: "New section…";
+                label: @tr("New section…");
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.create-section-clicked(root.conversation-id, root.conversation-type);
@@ -748,7 +748,7 @@ export component SectionContextMenu inherits Rectangle {
                 escape => { root.close(); }
                 icon: Icons.x;
                 // Not destructive: the chat goes back to the main list.
-                label: "Remove from section";
+                label: @tr("Remove from section");
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.remove-from-section(root.conversation-id);
@@ -769,7 +769,7 @@ export component SectionContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.trash;
-                label: "Delete chat";
+                label: @tr("Delete chat");
                 destructive: true;
                 mobile-mode: root.mobile-mode;
                 clicked => { root.confirm-delete = true; }
@@ -788,7 +788,7 @@ export component SectionContextMenu inherits Rectangle {
                 // messages here?" was clipped to "Delete all messages ...".
                 // A secret chat ends for both sides (Telegram-style).
                 label: root.conversation-type == ConversationKind.anon-dm
-                    ? "Yes, delete for both" : "Yes, delete chat";
+                    ? @tr("Yes, delete for both") : @tr("Yes, delete chat");
                 destructive: true;
                 mobile-mode: root.mobile-mode;
                 clicked => {
@@ -805,7 +805,7 @@ export component SectionContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.x;
-                label: "Cancel";
+                label: @tr("Cancel");
                 mobile-mode: root.mobile-mode;
                 // Cancel ends the whole menu, not just the confirm step.
                 clicked => {
@@ -827,7 +827,7 @@ export component SectionContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.x;
-                label: root.is-group ? "Leave group" : "Leave channel";
+                label: root.is-group ? @tr("Leave group") : @tr("Leave channel");
                 destructive: true;
                 mobile-mode: root.mobile-mode;
                 clicked => { root.confirm-leave = true; }
@@ -839,8 +839,8 @@ export component SectionContextMenu inherits Rectangle {
                 padding-right: Spacing.md;
                 Text {
                     text: root.is-group
-                        ? "Leave this group? It is removed from this device."
-                        : "Leave this channel? You won't get new messages.";
+                        ? @tr("Leave this group? It is removed from this device.")
+                        : @tr("Leave this channel? You won't get new messages.");
                     color: Colors.error;
                     font-size: Typography.xs;
                     wrap: word-wrap;
@@ -856,7 +856,7 @@ export component SectionContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.x;
-                label: "Leave";
+                label: @tr("Leave");
                 destructive: true;
                 mobile-mode: root.mobile-mode;
                 clicked => {
@@ -873,7 +873,7 @@ export component SectionContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.x;
-                label: "Cancel";
+                label: @tr("Cancel");
                 mobile-mode: root.mobile-mode;
                 // Cancel ends the whole menu, not just the confirm step.
                 clicked => {

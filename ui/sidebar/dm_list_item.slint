@@ -193,7 +193,7 @@ export component DMListItem inherits Rectangle {
                         height: 12px;
                         colorize: Colors.success;
                         accessible-role: text;
-                        accessible-label: "Secret chat";
+                        accessible-label: @tr("Secret chat");
                     }
                 }
 
@@ -221,7 +221,7 @@ export component DMListItem inherits Rectangle {
                         height: 12px;
                         colorize: Colors.text-muted;
                         accessible-role: text;
-                        accessible-label: "Muted";
+                        accessible-label: @tr("Muted");
                     }
                 }
 
@@ -235,7 +235,7 @@ export component DMListItem inherits Rectangle {
                         height: 11px;
                         colorize: Colors.text-muted;
                         accessible-role: text;
-                        accessible-label: "Pinned";
+                        accessible-label: @tr("Pinned");
                     }
                 }
             }
@@ -257,7 +257,7 @@ export component DMListItem inherits Rectangle {
                 }
 
                 Text {
-                    text: "typing";
+                    text: @tr("typing");
                     color: Colors.primary;
                     font-size: Typography.xs;
                 }

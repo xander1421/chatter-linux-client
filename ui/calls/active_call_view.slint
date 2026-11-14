@@ -120,7 +120,7 @@ component ParticipantTile inherits Rectangle {
             }
 
             Text {
-                text: is-local ? "You" : participant.display-name;
+                text: is-local ? @tr("You") : participant.display-name;
                 font-size: Typography.sm;
                 color: Colors.text-primary;
                 horizontal-alignment: center;
@@ -180,7 +180,7 @@ component ParticipantTile inherits Rectangle {
 
         name-text := Text {
             x: Spacing.xs;
-            text: is-local ? "You" : participant.display-name;
+            text: is-local ? @tr("You") : participant.display-name;
             font-size: Typography.xs;
             color: Colors.text-primary;
             vertical-alignment: center;
@@ -195,7 +195,7 @@ component ParticipantTile inherits Rectangle {
         height: 44px;
         enabled: root.camera-swap-enabled;
         icon: Icons.rotate-ccw;
-        label: "Switch camera";
+        label: @tr("Switch camera");
         clicked => { root.swap-camera(); }
     }
 }
@@ -295,16 +295,16 @@ export component ActiveCallView inherits Rectangle {
         Rectangle {
             height: root.call-header-height;
             accessible-role: groupbox;
-            accessible-label: "Call information";
+            accessible-label: @tr("Call information");
             HorizontalLayout {
                 padding-left: Spacing.lg;
                 padding-right: Spacing.sm;
                 spacing: Spacing.md;
                 Text {
                     accessible-role: text;
-                    accessible-label: "Call duration";
+                    accessible-label: @tr("Call duration");
                     accessible-value: self.text;
-                    text: root.is-connecting ? "Calling…" : root.format-duration(call-data.duration-seconds);
+                    text: root.is-connecting ? @tr("Calling…") : root.format-duration(call-data.duration-seconds);
                     font-size: Typography.sm;
                     color: Colors.text-secondary;
                     vertical-alignment: center;
@@ -312,7 +312,7 @@ export component ActiveCallView inherits Rectangle {
                 }
                 if call-data.participant-count > 2: Text {
                     accessible-role: text;
-                    accessible-label: "Call participants";
+                    accessible-label: @tr("Call participants");
                     accessible-value: call-data.participant-count;
                     text: call-data.participant-count + " people";
                     font-size: Typography.xs;
@@ -324,7 +324,7 @@ export component ActiveCallView inherits Rectangle {
                 HeaderButton {
                     touch: root.speaker-toggle;
                     icon: fullscreen ? Icons.minimize : Icons.maximize;
-                    label: fullscreen ? "Exit full screen" : "Full screen";
+                    label: fullscreen ? @tr("Exit full screen") : @tr("Full screen");
                     clicked => { root.fullscreen-toggle(); }
                 }
             }
@@ -333,7 +333,7 @@ export component ActiveCallView inherits Rectangle {
         // Video grid area — bounded, tiles scale to fit.
         Rectangle {
             accessible-role: groupbox;
-            accessible-label: "Call participants grid";
+            accessible-label: @tr("Call participants grid");
             vertical-stretch: 1;
             background: transparent;
 
@@ -467,7 +467,7 @@ export component ActiveCallView inherits Rectangle {
                     }
 
                     Text {
-                        text: "Sharing your screen";
+                        text: @tr("Sharing your screen");
                         font-size: Typography.xs;
                         color: Colors.text-primary;
                         vertical-alignment: center;
@@ -482,14 +482,14 @@ export component ActiveCallView inherits Rectangle {
                         // dark, so the label sits on the deeper red step.
                         background: stop-touch.has-hover ? Colors.error-hover.darker(0.2) : Colors.error-hover;
                         accessible-role: button;
-                        accessible-label: "Stop screen sharing";
+                        accessible-label: @tr("Stop screen sharing");
                         accessible-action-default => { root.toggle-screen-share(); }
                         KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-screen-share(); } }
 
                         stop-text := Text {
                             accessible-role: none;
                             x: Spacing.sm;
-                            text: "Stop";
+                            text: @tr("Stop");
                             font-size: Typography.xs;
                             font-weight: Typography.semibold;
                             color: Colors.on-error;
@@ -512,7 +512,7 @@ export component ActiveCallView inherits Rectangle {
                 border-radius: Spacing.radius-md;
                 background: Colors.overlay-heavy;
                 accessible-role: button;
-                accessible-label: "Show all call participants";
+                accessible-label: @tr("Show all call participants");
                 accessible-action-default => { root.roster-open = !root.roster-open; }
                 KeyFocus { border-radius: parent.border-radius; activate => { root.roster-open = !root.roster-open; } }
                 Text {
@@ -586,8 +586,8 @@ export component ActiveCallView inherits Rectangle {
         if call-data.is-encrypted: Rectangle {
             height: root.verification-height;
             accessible-role: groupbox;
-            accessible-label: "Call verification";
-            accessible-description: "Compare these four emojis with everyone in the call.";
+            accessible-label: @tr("Call verification");
+            accessible-description: @tr("Compare these four emojis with everyone in the call.");
             HorizontalLayout {
                 alignment: center;
                 spacing: Spacing.sm;
@@ -610,8 +610,8 @@ export component ActiveCallView inherits Rectangle {
                 }
                 if call-data.verification-emoji-1 == "": Text {
                     accessible-role: text;
-                    accessible-label: "Call verification pending";
-                    text: "Verification pending";
+                    accessible-label: @tr("Call verification pending");
+                    text: @tr("Verification pending");
                     font-size: Typography.xs;
                     color: Colors.text-secondary;
                     vertical-alignment: center;

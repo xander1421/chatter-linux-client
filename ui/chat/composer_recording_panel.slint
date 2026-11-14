@@ -37,7 +37,7 @@ in property <bool> surface-backdrop-paused;
                 HeaderButton {
                     backdrop-paused: root.surface-backdrop-paused;
                     icon: Icons.trash;
-                    label: "Cancel voice message";
+                    label: @tr("Cancel voice message");
                     touch: true;
                     plain: true;
                     destructive: true;
@@ -60,7 +60,7 @@ in property <bool> surface-backdrop-paused;
                 HeaderButton {
                     backdrop-paused: root.surface-backdrop-paused;
                     icon: Icons.send;
-                    label: "Send voice message";
+                    label: @tr("Send voice message");
                     touch: true;
                     plain: true;
                     enabled: !VoiceRecording.busy;

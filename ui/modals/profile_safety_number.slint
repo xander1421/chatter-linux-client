@@ -20,7 +20,7 @@ export component ProfileSafetyNumber inherits VerticalLayout {
         mouse-cursor: pointer;
         height: 32px;
         accessible-role: button;
-        accessible-label: root.is-verified ? "Verified, safety number" : "Not verified, safety number";
+        accessible-label: root.is-verified ? @tr("Verified, safety number") : @tr("Not verified, safety number");
         accessible-action-default => {
             if root.safety-number == "" {
                 root.view-safety-number();
@@ -51,7 +51,7 @@ export component ProfileSafetyNumber inherits VerticalLayout {
 
             Text {
                 accessible-role: none;
-                text: root.is-verified ? "✓ Verified" : "Not verified · Safety number";
+                text: root.is-verified ? @tr("✓ Verified") : @tr("Not verified · Safety number");
                 color: root.is-verified ? Colors.online : Colors.text-muted;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
@@ -82,7 +82,7 @@ export component ProfileSafetyNumber inherits VerticalLayout {
             height: safety-hint.preferred-height;
             safety-hint := VerticalLayout {
                 Text {
-                    text: "Compare this number with your contact to verify end-to-end encryption. If the numbers match, your conversation is secure.";
+                    text: @tr("Compare this number with your contact to verify end-to-end encryption. If the numbers match, your conversation is secure.");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     wrap: word-wrap;
@@ -124,7 +124,7 @@ export component ProfileSafetyNumber inherits VerticalLayout {
         }
 
         Button {
-            text: root.verification-pending ? "Updating verification…" : root.is-verified ? "Clear verification" : "Mark as verified";
+            text: root.verification-pending ? @tr("Updating verification…") : root.is-verified ? @tr("Clear verification") : @tr("Mark as verified");
             variant: root.is-verified ? "secondary" : "primary";
             loading: root.verification-pending;
             height: Spacing.touch-target-min;

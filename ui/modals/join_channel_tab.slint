@@ -36,13 +36,13 @@ export component JoinChannelTab inherits VerticalLayout {
         vertical-stretch: 0;
 
         Text {
-            text: "Search channels, or paste a channel ID or invite link";
+            text: @tr("Search channels, or paste a channel ID or invite link");
             color: Colors.text-secondary;
             font-size: Typography.sm;
         }
 
         search-input := Input {
-            placeholder: "Name, channel ID or chatter://join/ link";
+            placeholder: @tr("Name, channel ID or chatter://join/ link");
             text <=> root.join-search-query;
 
             edited(text) => {
@@ -76,7 +76,7 @@ export component JoinChannelTab inherits VerticalLayout {
             height: 100%;
 
             Text {
-                text: "Searching...";
+                text: @tr("Searching...");
                 color: Colors.text-muted;
                 font-size: Typography.sm;
                 horizontal-alignment: center;
@@ -113,14 +113,14 @@ export component JoinChannelTab inherits VerticalLayout {
                 alignment: center;
 
                 Text {
-                    text: "Invite link";
+                    text: @tr("Invite link");
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
                 }
 
                 Text {
-                    text: "Press Join to use it. Anyone holding this link can join the channel.";
+                    text: @tr("Press Join to use it. Anyone holding this link can join the channel.");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     horizontal-alignment: center;
@@ -139,14 +139,14 @@ export component JoinChannelTab inherits VerticalLayout {
                 alignment: center;
 
                 Text {
-                    text: "No channels found";
+                    text: @tr("No channels found");
                     color: Colors.text-muted;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
                 }
 
                 Text {
-                    text: "Try a different search or paste a channel ID";
+                    text: @tr("Try a different search or paste a channel ID");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     horizontal-alignment: center;
@@ -166,14 +166,14 @@ export component JoinChannelTab inherits VerticalLayout {
                 alignment: center;
 
                 Text {
-                    text: "Search for public channels";
+                    text: @tr("Search for public channels");
                     color: Colors.text-muted;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
                 }
 
                 Text {
-                    text: "Enter a channel name or paste a channel ID to join directly";
+                    text: @tr("Enter a channel name or paste a channel ID to join directly");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     horizontal-alignment: center;
@@ -217,13 +217,13 @@ export component JoinChannelTab inherits VerticalLayout {
         Rectangle { horizontal-stretch: 1; }
 
         Button {
-            text: "Cancel";
+            text: @tr("Cancel");
             variant: "secondary";
             clicked => { root.close(); }
         }
 
         Button {
-            text: root.join-joining ? "" : root.selected-joined ? "Open" : "Join";
+            text: root.join-joining ? "" : root.selected-joined ? @tr("Open") : @tr("Join");
             variant: "primary";
             disabled: root.join-selected-id == "" || root.join-joining;
             loading: root.join-joining;

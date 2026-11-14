@@ -122,7 +122,7 @@ export component MessageQuote inherits Rectangle {
                 border-radius: 3px;
                 background: Colors.action-fill;
                 gif-label := Text {
-                    text: "GIF";
+                    text: @tr("GIF");
                     color: Colors.on-action;
                     font-size: Typography.xxs;
                     font-weight: Typography.semibold;
@@ -173,7 +173,7 @@ export component MessageQuote inherits Rectangle {
             if root.reply-to-category != "audio": Text {
                 text: root.reply-to-preview != ""
                     ? root.reply-to-preview
-                    : (root.reply-to-category != "" ? "📎 Attachment" : "Message");
+                    : (root.reply-to-category != "" ? @tr("📎 Attachment") : @tr("Message"));
                 color: Colors.text-secondary;
                 font-size: Typography.xs;
                 overflow: elide;
@@ -181,7 +181,7 @@ export component MessageQuote inherits Rectangle {
 
             // Signal-Desktop parity: warn when the original is gone.
             if root.reply-to-not-found: Text {
-                text: "Original message not found";
+                text: @tr("Original message not found");
                 color: Colors.warning;
                 font-size: Typography.xs;
                 font-italic: true;

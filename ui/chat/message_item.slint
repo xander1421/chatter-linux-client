@@ -497,7 +497,7 @@ export component MessageItem inherits Rectangle {
             alignment: root.is-own ? end : start;
 
             Text {
-                text: "Message deleted";
+                text: @tr("Message deleted");
                 color: Colors.text-muted;
                 font-size: Typography.sm;
                 font-italic: true;
@@ -656,7 +656,7 @@ export component MessageItem inherits Rectangle {
                             : Appearance.reduce-motion ? Colors.primary
                             : Colors.primary.transparentize(0.8);
                         accessible-role: progress-indicator;
-                        accessible-label: failed ? "Not sent" : root.delivery-status == "waiting-tor" ? "Waiting for Tor" : "Sending";
+                        accessible-label: failed ? @tr("Not sent") : root.delivery-status == "waiting-tor" ? @tr("Waiting for Tor") : @tr("Sending");
 
                         // One sweep per 1.4s; `animation-tick` only ticks while
                         // this element exists, i.e. while a send is pending
@@ -789,7 +789,7 @@ export component MessageItem inherits Rectangle {
 
                                 ai-text := Text {
                                     x: 4px;
-                                    text: "AI";
+                                    text: @tr("AI");
                                     color: Colors.text-primary;
                                     font-size: Typography.xs;
                                     font-weight: Typography.semibold;
@@ -818,7 +818,7 @@ export component MessageItem inherits Rectangle {
                             }
 
                             Text {
-                                text: "Thread reply";
+                                text: @tr("Thread reply");
                                 color: Colors.accent-purple;
                                 font-size: Typography.xs;
                                 font-italic: true;

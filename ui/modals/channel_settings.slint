@@ -147,7 +147,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: root.is-private-group ? "Group settings" : "Channel settings";
+        title: root.is-private-group ? @tr("Group settings") : @tr("Channel settings");
         modal-width: 640px;
         // One fixed card height for every section, the body scrolling inside
         // it: a card that hugged each tab's content changed height and, being
@@ -278,7 +278,7 @@ export component ChannelSettingsModal inherits Rectangle {
                         if root.show-discard-confirm: VerticalLayout {
                             spacing: Spacing.sm;
                             Text {
-                                text: "Discard unsaved changes?";
+                                text: @tr("Discard unsaved changes?");
                                 color: Colors.text-primary;
                                 font-size: Typography.sm;
                                 font-weight: Typography.semibold;
@@ -286,12 +286,12 @@ export component ChannelSettingsModal inherits Rectangle {
                             HorizontalLayout {
                                 spacing: Spacing.sm;
                                 Button {
-                                    text: "Keep editing"; variant: "secondary";
+                                    text: @tr("Keep editing"); variant: "secondary";
                                     height: Spacing.touch-target-min;
                                     clicked => { root.show-discard-confirm = false; root.active-section = "general"; }
                                 }
                                 Button {
-                                    text: "Discard"; variant: "destructive";
+                                    text: @tr("Discard"); variant: "destructive";
                                     height: Spacing.touch-target-min;
                                     clicked => { root.show-discard-confirm = false; root.close(); }
                                 }
@@ -323,7 +323,7 @@ export component ChannelSettingsModal inherits Rectangle {
                         if root.active-section == "general" || root.active-section == "destructive": HorizontalLayout {
                             alignment: start;
                             Button {
-                                text: root.has-edits && root.active-section == "general" ? "‹ Info • unsaved changes" : "‹ Info";
+                                text: root.has-edits && root.active-section == "general" ? @tr("‹ Info • unsaved changes") : @tr("‹ Info");
                                 variant: "ghost";
                                 height: Spacing.touch-target-min;
                                 clicked => { root.active-section = "overview"; }
@@ -352,7 +352,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         Image {
                                             source: root.is-private-group ? Icons.users : root.channel-type == "private" ? Icons.lock : Icons.hash;
                                             width: 36px; height: 36px;
-                                            accessible-label: root.is-private-group ? "Group icon" : root.channel-type == "private" ? "Private channel icon" : "Channel icon";
+                                            accessible-label: root.is-private-group ? @tr("Group icon") : root.channel-type == "private" ? @tr("Private channel icon") : @tr("Channel icon");
                                             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                                             colorize: Colors.text-primary;
                                         }
@@ -360,7 +360,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
                                 Text {
                                     width: parent.width;
-                                    text: root.channel-name == "" ? (root.loading ? "Loading…" : "Info unavailable") : root.channel-name;
+                                    text: root.channel-name == "" ? (root.loading ? @tr("Loading…") : @tr("Info unavailable")) : root.channel-name;
                                     color: Colors.text-primary; font-size: Typography.xl;
                                     font-weight: Typography.semibold; horizontal-alignment: center;
                                     wrap: word-wrap;
@@ -379,7 +379,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         width: 220px;
                                         height: Spacing.touch-target-min;
                                         x: (parent.width - self.width) / 2;
-                                        text: root.is-private-group ? "Edit group info" : "Edit channel info";
+                                        text: root.is-private-group ? @tr("Edit group info") : @tr("Edit channel info");
                                         variant: "secondary";
                                         icon: Icons.edit;
                                         clicked => { root.active-section = "general"; }
@@ -394,12 +394,12 @@ export component ChannelSettingsModal inherits Rectangle {
                             }
                             if root.channel-description == "" && root.can-edit && !root.loading: Text {
                                 width: parent.width;
-                                text: "Add a description so members know what this is for";
+                                text: @tr("Add a description so members know what this is for");
                                 color: Colors.text-secondary; font-size: Typography.sm;
                                 horizontal-alignment: center; wrap: word-wrap;
                             }
                             if root.has-edits: Text {
-                                text: root.is-private-group ? "Unsaved changes to group info" : "Unsaved changes to channel info";
+                                text: root.is-private-group ? @tr("Unsaved changes to group info") : @tr("Unsaved changes to channel info");
                                 color: Colors.warning; font-size: Typography.sm;
                             }
                             if !root.loading: Rectangle {
@@ -424,7 +424,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     SettingsRow {
                                         touch: true;
                                         icon: Icons.bell; title: "Notifications";
-                                        detail: root.is-muted ? "Muted" : root.notification-preference == "mentions" ? "Mentions only" : root.notification-preference == "none" ? "Off" : "All messages";
+                                        detail: root.is-muted ? @tr("Muted") : root.notification-preference == "mentions" ? @tr("Mentions only") : root.notification-preference == "none" ? @tr("Off") : @tr("All messages");
                                         clicked => { root.active-section = "notifications"; }
                                     }
                                     Rectangle { height: 1px; background: Colors.divider; }
@@ -471,9 +471,9 @@ export component ChannelSettingsModal inherits Rectangle {
                                     // Name only what this user can do: a member saw
                                     // "Leave, archive or delete" over a page with Leave.
                                     title: root.can-archive || root.can-delete
-                                        ? (root.can-leave ? "Leave, archive or delete" : "Archive or delete")
-                                        : root.is-private-group && !root.can-leave ? "Manage group"
-                                        : root.is-private-group ? "Leave group" : "Leave channel";
+                                        ? (root.can-leave ? @tr("Leave, archive or delete") : @tr("Archive or delete"))
+                                        : root.is-private-group && !root.can-leave ? @tr("Manage group")
+                                        : root.is-private-group ? @tr("Leave group") : @tr("Leave channel");
                                     destructive: true;
                                     clicked => { root.active-section = "destructive"; }
                                     }
@@ -486,7 +486,7 @@ export component ChannelSettingsModal inherits Rectangle {
                             spacing: Spacing.md;
 
                             Text {
-                                text: root.is-private-group ? "Edit group info" : "Edit channel info";
+                                text: root.is-private-group ? @tr("Edit group info") : @tr("Edit channel info");
                                 color: Colors.text-primary;
                                 font-size: Typography.lg;
                                 font-weight: Typography.semibold;
@@ -510,8 +510,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                             : root.channel-type == "dm" ? Icons.message-circle : Icons.hash;
                                         width: 24px; height: 24px;
                                         colorize: Colors.text-primary;
-                                        accessible-label: root.is-private-group ? "Group icon"
-                                            : root.channel-type == "private" ? "Private channel icon" : "Channel icon";
+                                        accessible-label: root.is-private-group ? @tr("Group icon")
+                                            : root.channel-type == "private" ? @tr("Private channel icon") : @tr("Channel icon");
                                     }
                                 }
 
@@ -574,7 +574,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 spacing: Spacing.xs;
 
                                 Text {
-                                    text: root.is-private-group ? "Group name" : "Channel name";
+                                    text: root.is-private-group ? @tr("Group name") : @tr("Channel name");
                                     color: Colors.text-secondary;
                                     font-size: Typography.sm;
                                     font-weight: Typography.medium;
@@ -583,10 +583,10 @@ export component ChannelSettingsModal inherits Rectangle {
                                 if root.can-edit: Input {
                                     control-height: Spacing.touch-target-min;
                                     text <=> root.channel-name-draft;
-                                    placeholder: root.is-private-group ? "Group name" : "Channel name";
+                                    placeholder: root.is-private-group ? @tr("Group name") : @tr("Channel name");
 
                                     error: root.name-invalid;
-                                    error-message: root.name-invalid ? "Name must be at least 3 characters" : "";
+                                    error-message: root.name-invalid ? @tr("Name must be at least 3 characters") : "";
                                     edited(value) => {
                                         root.clear-error();
                                     }
@@ -606,7 +606,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 spacing: Spacing.xs;
 
                                 Text {
-                                    text: "Description";
+                                    text: @tr("Description");
                                     color: Colors.text-secondary;
                                     font-size: Typography.sm;
                                     font-weight: Typography.medium;
@@ -615,7 +615,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 if root.can-edit: Input {
                                     control-height: Spacing.touch-target-min;
                                     text <=> root.channel-description-draft;
-                                    placeholder: "Add a description...";
+                                    placeholder: @tr("Add a description...");
 
                                     edited(value) => {
                                         root.clear-error();
@@ -624,7 +624,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                 if !root.can-edit: Text {
                                     width: parent.width;
-                                    text: root.channel-description != "" ? root.channel-description : "No description";
+                                    text: root.channel-description != "" ? root.channel-description : @tr("No description");
                                     color: root.channel-description != "" ? Colors.text-primary : Colors.text-muted;
                                     font-size: Typography.base;
                                     font-italic: root.channel-description == "";
@@ -638,7 +638,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 spacing: Spacing.xs;
 
                                 Text {
-                                    text: root.is-private-group ? "Group photo" : "Channel icon";
+                                    text: root.is-private-group ? @tr("Group photo") : @tr("Channel icon");
                                     color: Colors.text-secondary;
                                     font-size: Typography.sm;
                                     font-weight: Typography.medium;
@@ -656,7 +656,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                     Button {
                                         height: Spacing.touch-target-min;
-                                        text: root.is-private-group ? "Change photo" : "Change icon";
+                                        text: root.is-private-group ? @tr("Change photo") : @tr("Change icon");
                                         variant: "secondary";
                                         clicked => {
                                             root.pick-channel-icon();
@@ -671,7 +671,7 @@ export component ChannelSettingsModal inherits Rectangle {
                             if root.can-edit: HorizontalLayout {
                                 alignment: end;
                                 Button {
-                                    text: "Save changes";
+                                    text: @tr("Save changes");
                                     loading: root.saving;
                                     height: Spacing.touch-target-min;
                                     variant: "primary";

@@ -56,7 +56,7 @@ export component MeshPeerSheet inherits Rectangle {
 
     ModalContainer {
         show: root.show-modal;
-        accessible-title: "Mesh peer";
+        accessible-title: @tr("Mesh peer");
         modal-width: 500px;
         max-modal-height: 760px;
         fill-height: true;
@@ -110,7 +110,7 @@ export component MeshPeerSheet inherits Rectangle {
                             disabled: MeshGlobal.sheet-peer-id == "";
                             clicked => { MeshGlobal.open-peer-dm(MeshGlobal.sheet-peer-id); } }
                         PeerAction { icon: MeshGlobal.sheet-peer-muted ? Icons.bell : Icons.bell-off;
-                            caption: MeshGlobal.sheet-peer-muted ? "Unmute" : "Mute";
+                            caption: MeshGlobal.sheet-peer-muted ? @tr("Unmute") : @tr("Mute");
                             disabled: MeshGlobal.sheet-peer-id == "";
                             clicked => { MeshGlobal.toggle-peer-mute(MeshGlobal.sheet-peer-id); } }
                         PeerAction { icon: Icons.shield; caption: "Verify";
@@ -157,7 +157,7 @@ export component MeshPeerSheet inherits Rectangle {
                                 if root.active-dm: Rectangle { height: 1px; background: Colors.divider; }
                                 if root.active-dm: ToggleRow {
                                     checked <=> MeshGlobal.active-signal-enabled;
-                                    accessible-text: "Use Signal encryption";
+                                    accessible-text: @tr("Use Signal encryption");
                                     row-padding: Spacing.md;
                                     Text { text: "Use Signal encryption"; color: Colors.text-primary;
                                         font-size: Typography.base; }

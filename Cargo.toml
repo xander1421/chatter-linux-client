@@ -2,6 +2,7 @@
 members = [
     "crates/chatter-attachment-crypto",
     "crates/chatter-core",
+    "crates/chatter-i18n",
     "crates/chatter-mesh",
     "crates/chatter-mesh-android",
     "crates/chatter-mesh-ble",

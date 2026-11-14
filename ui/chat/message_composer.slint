@@ -336,7 +336,7 @@ export component MessageComposer inherits GlassSurface {
     private property <length> caret-top;
     line-measure := Text {
         visible: false;
-        text: "Mg";
+        text: @tr("Mg");
         font-size: Typography.base;
     }
     // Use the TextInput's actual `preferred-height` (recomputed by Slint's
@@ -570,7 +570,7 @@ export component MessageComposer inherits GlassSurface {
                 // soft keyboard, so there the same click is "close".
                 active: root.picker-open && !root.mobile;
                 icon: root.picker-open && root.mobile ? Icons.keyboard : Icons.smile;
-                label: root.picker-open ? (root.mobile ? "Show keyboard" : "Close picker") : "Emoji & GIF picker";
+                label: root.picker-open ? (root.mobile ? @tr("Show keyboard") : @tr("Close picker")) : @tr("Emoji & GIF picker");
                 clicked => {
                     if !root.picker-open { root.suspend-input(); }
                     if root.picker-open { root.keyboard-requested(); }
@@ -636,7 +636,7 @@ export component MessageComposer inherits GlassSurface {
                     text-input := TextInput {
                         // The field itself is the accessible node: TalkBack reads
                         // what was typed (Android bridge maps value → text).
-                        accessible-label: "Message input";
+                        accessible-label: @tr("Message input");
                         x: 0px;
                         // Centred while the row is at its floor, top-anchored once the
                         // text grows past it — otherwise the first line would sit
@@ -744,7 +744,7 @@ export component MessageComposer inherits GlassSurface {
                 border-radius: self.height / 2;
                 enabled: !root.disabled;
                 icon: Icons.paperclip;
-                label: "Attach file";
+                label: @tr("Attach file");
                 clicked => { root.attachment-clicked(); }
             }
 
@@ -761,7 +761,7 @@ export component MessageComposer inherits GlassSurface {
                     : min(1, max(0, (0.4 - root.lift-layout) / 0.4)))
                     * (root.disabled ? 0.5 : 1);
                 accessible-role: button;
-                accessible-label: "Record voice message";
+                accessible-label: @tr("Record voice message");
                 accessible-enabled: !root.disabled && !root.can-send;
                 accessible-action-default => { if !root.disabled && !root.can-send { root.start-recording(); } }
                 KeyFocus { enabled: !root.disabled && !root.can-send; border-radius: self.height / 2; activate => { root.start-recording(); } }
@@ -793,7 +793,7 @@ export component MessageComposer inherits GlassSurface {
                 opacity: min(1, max(0, (root.lift-layout - 0.45) / 0.55))
                     * (root.disabled ? 0.5 : 1);
                 accessible-role: button;
-                accessible-label: "Send message";
+                accessible-label: @tr("Send message");
                 accessible-action-default => {
                     if (root.is-editing) {
                         root.send-edit(root.edit-message-id, root.outgoing-text);

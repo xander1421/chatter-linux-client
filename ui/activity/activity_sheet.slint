@@ -113,7 +113,7 @@ export component ActivitySheet inherits Rectangle {
 
     ModalContainer {
         show: root.show-modal;
-        accessible-title: "Activity";
+        accessible-title: @tr("Activity");
         modal-width: 540px;
         max-modal-height: 760px;
         fill-height: true;
@@ -193,7 +193,7 @@ export component ActivitySheet inherits Rectangle {
                         Text { text: "ACTIVITY"; color: Colors.text-muted; font-size: Typography.xs;
                             font-weight: Typography.semibold; letter-spacing: 0.4px; }
                         if ActivityGlobal.loading: Text {
-                            text: "Loading activity…"; color: Colors.text-muted;
+                            text: @tr("Loading activity…"); color: Colors.text-muted;
                             font-size: Typography.sm; horizontal-alignment: center;
                             height: 160px; vertical-alignment: center;
                         }

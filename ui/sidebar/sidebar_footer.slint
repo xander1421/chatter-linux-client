@@ -144,7 +144,7 @@ export component SidebarFooter inherits GlassSurface {
                             border-width: 1px; border-color: Colors.surface;
                             background: root.server-unreachable ? Colors.error : Colors.primary;
                             accessible-role: text;
-                            accessible-label: root.server-unreachable ? "Server unreachable" : "New activity";
+                            accessible-label: root.server-unreachable ? @tr("Server unreachable") : @tr("New activity");
                         }
                         bell-touch := TouchArea { clicked => { ActivityUi.open(); } }
                     }
@@ -194,7 +194,7 @@ export component SidebarFooter inherits GlassSurface {
                 // Ungated, like the expanded header shield.
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: AnonMode.enabled ? "Anon mode (active) - tap to disable" : "Anon mode";
+                    tooltip-text: AnonMode.enabled ? @tr("Anon mode (active) - tap to disable") : @tr("Anon mode");
                     tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
                         accessible-role: button; accessible-label: "Anon mode";
@@ -226,7 +226,7 @@ export component SidebarFooter inherits GlassSurface {
                 // profile, Settings, expand.
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: "AI"; tooltip-enabled: true; placement: "right";
+                    tooltip-text: @tr("AI"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
                         accessible-role: button; accessible-label: "AI";
                         accessible-action-default => { root.channel-selected("00000000-0000-0000-0000-000000000000"); }
@@ -244,7 +244,7 @@ export component SidebarFooter inherits GlassSurface {
 
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: "Chats"; tooltip-enabled: true; placement: "right";
+                    tooltip-text: @tr("Chats"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
                         accessible-role: button; accessible-label: "Chats";
                         accessible-action-default => { root.tab-selected("chats"); }
@@ -261,7 +261,7 @@ export component SidebarFooter inherits GlassSurface {
 
                 if root.mesh-available: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: "Mesh"; tooltip-enabled: true; placement: "right";
+                    tooltip-text: @tr("Mesh"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
                         accessible-role: button; accessible-label: "Mesh";
                         accessible-action-default => { root.tab-selected("mesh"); }
@@ -281,7 +281,7 @@ export component SidebarFooter inherits GlassSurface {
                 // Activity, as in the expanded footer: the rail had no way in.
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: "Activity"; tooltip-enabled: true; placement: "right";
+                    tooltip-text: @tr("Activity"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
                         accessible-role: button;
                         accessible-label: ActivityGlobal.unread-count > 0 ? "Activity, " + ActivityGlobal.unread-count + " unread" : "Activity";
@@ -354,14 +354,14 @@ export component SidebarFooter inherits GlassSurface {
                             border-width: 1px; border-color: Colors.surface;
                             background: Colors.error;
                             accessible-role: text;
-                            accessible-label: "Server unreachable";
+                            accessible-label: @tr("Server unreachable");
                         }
                         TouchArea { clicked => { root.settings-clicked(); } }
                     } }
                 }
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: root.collapsed ? "Expand sidebar" : "Collapse sidebar"; tooltip-enabled: true; placement: "right";
+                    tooltip-text: root.collapsed ? @tr("Expand sidebar") : @tr("Collapse sidebar"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
                         accessible-role: button; accessible-label: "Expand sidebar";
                         accessible-action-default => { root.toggle-collapsed(); }

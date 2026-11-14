@@ -50,7 +50,7 @@ export component ForwardMessageModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: root.contact-share ? "Share contact" : "Forward";
+        title: root.contact-share ? @tr("Share contact") : @tr("Forward");
         modal-width: 480px;
         // The list takes the spare height and the buttons stay pinned: sized
         // to content, preview + search + a 300px list overran the 600px cap
@@ -91,7 +91,7 @@ export component ForwardMessageModal inherits Rectangle {
                     padding: Spacing.md;
 
                     Text {
-                        text: "Forwarding:";
+                        text: @tr("Forwarding:");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         font-weight: Typography.medium;
@@ -110,7 +110,7 @@ export component ForwardMessageModal inherits Rectangle {
             // Search input. The narrowing happens in core — this only reports
             // what was typed; the modal never filters `targets` itself.
             Input {
-                placeholder: "Search channels or people...";
+                placeholder: @tr("Search channels or people...");
                 text <=> root.search-text;
                 edited(query) => {
                     root.search-changed(query);
@@ -220,7 +220,7 @@ export component ForwardMessageModal inherits Rectangle {
 
                                         type-text := Text {
                                             x: Spacing.sm;
-                                            text: target.target-type == "channel" ? "Channel" : target.target-type == "group" || target.target-type == "anon_group" ? "Group" : target.is-anonymous ? "Secret" : "DM";
+                                            text: target.target-type == "channel" ? @tr("Channel") : target.target-type == "group" || target.target-type == "anon_group" ? @tr("Group") : target.is-anonymous ? @tr("Secret") : @tr("DM");
                                             color: target.target-type == "channel" || target.target-type == "group" || target.target-type == "anon_group" ? Colors.primary : Colors.success;
                                             font-size: Typography.xs;
                                             font-weight: Typography.medium;
@@ -272,7 +272,7 @@ export component ForwardMessageModal inherits Rectangle {
 
                 // Cancel button
                 Button {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     variant: "secondary";
 
                     clicked => {
@@ -282,7 +282,7 @@ export component ForwardMessageModal inherits Rectangle {
 
                 // Confirm button
                 Button {
-                    text: root.loading ? "" : root.contact-share ? "Share" : "Forward";
+                    text: root.loading ? "" : root.contact-share ? @tr("Share") : @tr("Forward");
                     variant: "primary";
                     disabled: root.selected-target-id == "" || root.loading;
                     loading: root.loading;

@@ -221,7 +221,7 @@ export component ChannelListItem inherits Rectangle {
                         height: 12px;
                         colorize: Colors.text-muted;
                         accessible-role: text;
-                        accessible-label: "Muted";
+                        accessible-label: @tr("Muted");
                     }
                 }
 
@@ -235,7 +235,7 @@ export component ChannelListItem inherits Rectangle {
                         height: 12px;
                         colorize: Colors.text-muted;
                         accessible-role: text;
-                        accessible-label: "Pinned";
+                        accessible-label: @tr("Pinned");
                     }
                 }
             }
@@ -259,7 +259,7 @@ export component ChannelListItem inherits Rectangle {
                 }
 
                 Text {
-                    text: root.typing-text != "" ? root.typing-text : "typing";
+                    text: root.typing-text != "" ? root.typing-text : @tr("typing");
                     color: Colors.primary;
                     font-size: Typography.xs;
                     // "Alpha is typing…" elides; at its natural width it

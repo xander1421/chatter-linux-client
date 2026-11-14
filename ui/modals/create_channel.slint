@@ -156,7 +156,7 @@ export component CreateChannelModal inherits Rectangle {
 
     modal := Modal {
         show: root.show-modal;
-        title: "New channel";
+        title: @tr("New channel");
         modal-width: 620px;
         max-modal-height: 720px;
         // Keep one sheet size as the Create/Join indicator travels. Both tabs
@@ -276,14 +276,14 @@ export component CreateChannelModal inherits Rectangle {
                 spacing: Spacing.xs;
 
                 Text {
-                    text: "Password (optional)";
+                    text: @tr("Password (optional)");
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     font-weight: Typography.medium;
                 }
 
                 Input {
-                    placeholder: "Anyone with password joins without invite";
+                    placeholder: @tr("Anyone with password joins without invite");
                     text <=> root.password;
                 }
             }
@@ -298,7 +298,7 @@ export component CreateChannelModal inherits Rectangle {
                     spacing: Spacing.sm;
 
                     Text {
-                        text: "Select friends to invite";
+                        text: @tr("Select friends to invite");
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                         font-weight: Typography.medium;
@@ -322,13 +322,13 @@ export component CreateChannelModal inherits Rectangle {
                     if root.available-friends.length == 0: VerticalLayout {
                         alignment: center;
                         Text {
-                            text: "No friends yet";
+                            text: @tr("No friends yet");
                             color: Colors.text-muted;
                             font-size: Typography.sm;
                             horizontal-alignment: center;
                         }
                         Text {
-                            text: "Add friends first to create a private group";
+                            text: @tr("Add friends first to create a private group");
                             color: Colors.text-muted;
                             font-size: Typography.xs;
                             horizontal-alignment: center;
@@ -449,7 +449,7 @@ export component CreateChannelModal inherits Rectangle {
 
                                             role-text := Text {
                                                 accessible-role: none;
-                                                text: friend.role == "admin" ? "Admin" : "Member";
+                                                text: friend.role == "admin" ? @tr("Admin") : @tr("Member");
                                                 color: friend.role == "admin" ? Colors.warning : Colors.text-secondary;
                                                 font-size: Typography.xs;
                                                 font-weight: Typography.medium;
@@ -482,7 +482,7 @@ export component CreateChannelModal inherits Rectangle {
                     height: Spacing.button-height;
                     background: transparent;
                     accessible-role: button;
-                    accessible-label: root.more-options-expanded ? "Hide more options" : "Show more options";
+                    accessible-label: root.more-options-expanded ? @tr("Hide more options") : @tr("Show more options");
                     accessible-action-default => { root.more-options-expanded = !root.more-options-expanded; }
                     KeyFocus { border-radius: parent.border-radius; activate => { root.more-options-expanded = !root.more-options-expanded; } }
 
@@ -512,7 +512,7 @@ export component CreateChannelModal inherits Rectangle {
 
                         Text {
                             accessible-role: none;
-                            text: "More options";
+                            text: @tr("More options");
                             wrap: no-wrap;
                             horizontal-stretch: 0;
                             color: Colors.text-secondary;
@@ -538,11 +538,11 @@ export component CreateChannelModal inherits Rectangle {
 
                         ephemeral-row := ToggleRow {
                             checked <=> root.use-ephemeral;
-                            accessible-text: "Auto-delete messages";
+                            accessible-text: @tr("Auto-delete messages");
 
                             Text {
                                 width: ephemeral-row.label-width;
-                                text: "Auto-delete messages";
+                                text: @tr("Auto-delete messages");
                                 color: Colors.text-primary;
                                 font-size: Typography.sm;
                                 font-weight: Typography.medium;
@@ -550,7 +550,7 @@ export component CreateChannelModal inherits Rectangle {
                             }
                             Text {
                                 width: ephemeral-row.label-width;
-                                text: "Messages expire after the chosen time.";
+                                text: @tr("Messages expire after the chosen time.");
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
                                 wrap: word-wrap;
@@ -563,7 +563,7 @@ export component CreateChannelModal inherits Rectangle {
                             alignment: start;
 
                             Text {
-                                text: "After";
+                                text: @tr("After");
                                 color: Colors.text-secondary;
                                 font-size: Typography.xs;
                                 vertical-alignment: center;
@@ -588,7 +588,7 @@ export component CreateChannelModal inherits Rectangle {
                             }
 
                             Text {
-                                text: "hours";
+                                text: @tr("hours");
                                 color: Colors.text-secondary;
                                 font-size: Typography.xs;
                                 vertical-alignment: center;
@@ -609,11 +609,11 @@ export component CreateChannelModal inherits Rectangle {
 
                         ai-row := ToggleRow {
                             checked <=> root.use-ai;
-                            accessible-text: "Enable AI assistant";
+                            accessible-text: @tr("Enable AI assistant");
 
                             Text {
                                 width: ai-row.label-width;
-                                text: "AI assistant";
+                                text: @tr("AI assistant");
                                 color: Colors.text-primary;
                                 font-size: Typography.sm;
                                 font-weight: Typography.medium;
@@ -621,7 +621,7 @@ export component CreateChannelModal inherits Rectangle {
                             }
                             Text {
                                 width: ai-row.label-width;
-                                text: "Add an AI bot that replies in this channel.";
+                                text: @tr("Add an AI bot that replies in this channel.");
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
                                 wrap: word-wrap;
@@ -688,7 +688,7 @@ export component CreateChannelModal inherits Rectangle {
                                 spacing: Spacing.xs;
 
                                 if root.ai-models-loading: Text {
-                                    text: "Loading models...";
+                                    text: @tr("Loading models...");
                                     color: Colors.text-muted;
                                     font-size: Typography.xs;
                                 }
@@ -703,7 +703,7 @@ export component CreateChannelModal inherits Rectangle {
                                         wrap: word-wrap;
                                     }
                                     Button {
-                                        text: "Retry";
+                                        text: @tr("Retry");
                                         variant: "secondary";
                                         clicked => { root.provider-selected(root.ai-provider); }
                                     }
@@ -779,14 +779,14 @@ export component CreateChannelModal inherits Rectangle {
                 Rectangle { horizontal-stretch: 1; }
 
                 Button {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     variant: "secondary";
                     clicked => { root.close(); }
                 }
 
                 // Private-group: uses dedicated callback + requires selected friends
                 if root.is-private-group: Button {
-                    text: root.loading ? "" : "Create group";
+                    text: root.loading ? "" : @tr("Create group");
                     variant: "primary";
                     disabled: identity.composed-name == "" || root.selected-friend-count == 0 || root.loading;
                     loading: root.loading;
@@ -799,7 +799,7 @@ export component CreateChannelModal inherits Rectangle {
 
                 // Regular channel (open/invite): derive template string from state
                 if !root.is-private-group: Button {
-                    text: root.loading ? "" : "Create";
+                    text: root.loading ? "" : @tr("Create");
                     variant: "primary";
                     disabled: identity.composed-name == "" || root.loading || (root.use-ai && (root.ai-provider == "" || root.ai-model == ""));
                     loading: root.loading;

@@ -182,7 +182,7 @@ export component PrivateGroupListItem inherits Rectangle {
                         height: 12px;
                         colorize: Colors.text-muted;
                         accessible-role: text;
-                        accessible-label: "Muted";
+                        accessible-label: @tr("Muted");
                     }
                 }
 
@@ -204,7 +204,7 @@ export component PrivateGroupListItem inherits Rectangle {
                 }
 
                 Text {
-                    text: root.typing-text != "" ? root.typing-text : "typing";
+                    text: root.typing-text != "" ? root.typing-text : @tr("typing");
                     color: accent-color;
                     font-size: Typography.xs;
                     min-width: 0px;

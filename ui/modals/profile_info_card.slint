@@ -54,7 +54,7 @@ export component ProfileInfoCard inherits HorizontalLayout {
                 }
 
                 Text {
-                    text: "About";
+                    text: @tr("About");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                 }
@@ -80,7 +80,7 @@ export component ProfileInfoCard inherits HorizontalLayout {
                     }
 
                     Text {
-                        text: "Username";
+                        text: @tr("Username");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
@@ -92,7 +92,7 @@ export component ProfileInfoCard inherits HorizontalLayout {
                     border-radius: Spacing.radius-sm;
                     background: qr-touch.has-hover ? Colors.surface-hover : transparent;
                     accessible-role: button;
-                    accessible-label: "Show username QR code";
+                    accessible-label: @tr("Show username QR code");
                     accessible-action-default => {
                         root.show-share-qr = !root.show-share-qr;
                         if root.share-link == "" { root.generate-share-link(); }
@@ -183,7 +183,7 @@ export component ProfileInfoCard inherits HorizontalLayout {
                     spacing: Spacing.sm;
 
                     Button {
-                        text: root.share-link == "" ? "Create link" : "Copy link";
+                        text: root.share-link == "" ? @tr("Create link") : @tr("Copy link");
                         variant: "secondary";
                         horizontal-stretch: 1;
                         clicked => {
@@ -196,7 +196,7 @@ export component ProfileInfoCard inherits HorizontalLayout {
                     }
 
                     if root.share-link != "": Button {
-                        text: "Reset link";
+                        text: @tr("Reset link");
                         variant: "secondary";
                         horizontal-stretch: 1;
                         clicked => { root.reset-share-link(); }

@@ -259,7 +259,7 @@ export component ConnectionBanner inherits Rectangle {
                     clicked => { root.dismissed(); }
                 }
                 accessible-role: button;
-                accessible-label: "Dismiss the connection banner";
+                accessible-label: @tr("Dismiss the connection banner");
                 accessible-action-default => { root.dismissed(); }
                 KeyFocus { border-radius: parent.border-radius; activate => { root.dismissed(); } }
             }

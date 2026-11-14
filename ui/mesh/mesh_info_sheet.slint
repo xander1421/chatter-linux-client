@@ -59,9 +59,9 @@ export component MeshInfoSheet inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: root.adding-members ? "Add members"
-            : MeshGlobal.active-kind == "private-channel" ? "Group info"
-            : MeshGlobal.active-kind == "geohash" ? "Cell info" : "Channel info";
+        title: root.adding-members ? @tr("Add members")
+            : MeshGlobal.active-kind == "private-channel" ? @tr("Group info")
+            : MeshGlobal.active-kind == "geohash" ? @tr("Cell info") : @tr("Channel info");
         modal-width: 500px;
         max-modal-height: 760px;
         fill-height: true;
@@ -101,9 +101,9 @@ export component MeshInfoSheet inherits Rectangle {
                     Text { text: MeshGlobal.active-title; color: Colors.text-primary;
                         font-size: Typography.xl; font-weight: 600; horizontal-alignment: center; }
                     Text {
-                        text: MeshGlobal.active-kind == "private-channel" ? "Private group · invited devices"
-                            : MeshGlobal.active-kind == "geohash" ? "Public cell"
-                            : "Public channel";
+                        text: MeshGlobal.active-kind == "private-channel" ? @tr("Private group · invited devices")
+                            : MeshGlobal.active-kind == "geohash" ? @tr("Public cell")
+                            : @tr("Public channel");
                         color: Colors.text-muted; font-size: Typography.sm;
                         horizontal-alignment: center;
                     }
@@ -156,16 +156,16 @@ export component MeshInfoSheet inherits Rectangle {
                         }
                     }
                     if MeshGlobal.private-can-manage: InfoActionRow {
-                        title: "Add members";
+                        title: @tr("Add members");
                         clicked => { root.adding-members = true; MeshGlobal.private-invite-visible = false; }
                     }
                     Text {
                         width: parent.width;
-                        text: "Only invited devices can read this group. Removing someone rotates the key.";
+                        text: @tr("Only invited devices can read this group. Removing someone rotates the key.");
                         color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
                     if MeshGlobal.private-rekey-pending: Text {
                         width: parent.width;
-                        text: "Waiting for the creator to rotate the group key. Sending is paused.";
+                        text: @tr("Waiting for the creator to rotate the group key. Sending is paused.");
                         color: Colors.warning; font-size: Typography.sm; wrap: word-wrap;
                     }
                 }
@@ -175,7 +175,7 @@ export component MeshInfoSheet inherits Rectangle {
                     Text { text: "NEARBY DEVICES"; color: Colors.text-muted;
                         font-size: Typography.xs; font-weight: 600; letter-spacing: 0.4px; }
                     if MeshGlobal.nearby-peers.length == 0: Text {
-                        text: "No devices nearby yet."; color: Colors.text-muted; font-size: Typography.sm;
+                        text: @tr("No devices nearby yet."); color: Colors.text-muted; font-size: Typography.sm;
                     }
                     if MeshGlobal.nearby-peers.length > 0: Rectangle {
                         border-radius: Spacing.radius-md;
@@ -236,7 +236,7 @@ export component MeshInfoSheet inherits Rectangle {
                     }
                     Text {
                         width: parent.width;
-                        text: "Invite sends the group key over the encrypted mesh link. QR shows a code the other person scans.";
+                        text: @tr("Invite sends the group key over the encrypted mesh link. QR shows a code the other person scans.");
                         color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
                     if MeshGlobal.private-invite-visible: Rectangle {
                         height: 260px; border-radius: Spacing.radius-md; background: Colors.surface-section;
@@ -260,7 +260,7 @@ export component MeshInfoSheet inherits Rectangle {
                                 vertical-alignment: center; horizontal-stretch: 1; }
                             NeoActionToggle {
                                 checked: row.muted;
-                                accessible-text: "Mute channel";
+                                accessible-text: @tr("Mute channel");
                                 toggled(value) => { MeshGlobal.toggle-channel-mute(MeshGlobal.active-scope); }
                             }
                         }
@@ -312,14 +312,14 @@ export component MeshInfoSheet inherits Rectangle {
                             vertical-alignment: center; horizontal-stretch: 1;
                         }
                         if root.confirm-kind == "member": InfoActionRow {
-                            title: "View contact"; centered: true;
+                            title: @tr("View contact"); centered: true;
                             clicked => {
                                 root.confirm-kind = "";
                                 MeshGlobal.open-peer(root.selected-member-id);
                             }
                         }
                         InfoActionRow {
-                            title: root.confirm-kind == "member" ? "Remove" : root.leave-label;
+                            title: root.confirm-kind == "member" ? @tr("Remove") : root.leave-label;
                             destructive: true; centered: true;
                             clicked => {
                                 if root.confirm-kind == "member" {

@@ -82,7 +82,7 @@ export component RecoveryCodesModal inherits Rectangle {
 
                 // Title
                 Text {
-                    text: "Save your recovery codes";
+                    text: @tr("Save your recovery codes");
                     color: Colors.text-primary;
                     font-size: Typography.xl;
                     font-weight: Typography.semibold;
@@ -92,7 +92,7 @@ export component RecoveryCodesModal inherits Rectangle {
                 // Subtitle
                 Text {
                     width: max(0px, parent.width - parent.padding * 2);
-                    text: "These codes can recover your account if you forget your password and PIN. Save them somewhere safe. They will not be shown again.";
+                    text: @tr("These codes can recover your account if you forget your password and PIN. Save them somewhere safe. They will not be shown again.");
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
@@ -172,7 +172,7 @@ export component RecoveryCodesModal inherits Rectangle {
                     alignment: center;
 
                     Button {
-                        text: "Copy all";
+                        text: @tr("Copy all");
                         variant: "secondary";
                         disabled: !root.show-modal;
                         clicked => { root.copy-all(); }
@@ -197,11 +197,11 @@ export component RecoveryCodesModal inherits Rectangle {
                             Checkbox {
                                 enabled: root.show-modal;
                                 checked <=> root.saved-confirmed;
-                                label: "I have saved my recovery codes";
+                                label: @tr("I have saved my recovery codes");
                             }
                         }
                         Text {
-                            text: "I have saved my recovery codes";
+                            text: @tr("I have saved my recovery codes");
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             vertical-alignment: center;
@@ -216,7 +216,7 @@ export component RecoveryCodesModal inherits Rectangle {
 
                 // Continue button (disabled until checkbox checked)
                 Button {
-                    text: "Continue";
+                    text: @tr("Continue");
                     variant: "primary";
                     disabled: !root.saved-confirmed || !root.show-modal;
                     clicked => { root.confirmed(); }

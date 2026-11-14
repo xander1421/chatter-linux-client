@@ -114,7 +114,7 @@ export component ReturnToCallBar inherits GlassSurface {
                     overflow: elide;
                 }
                 Text {
-                    text: root.is-connecting ? "Calling…" : root.format-duration(call-data.duration-seconds);
+                    text: root.is-connecting ? @tr("Calling…") : root.format-duration(call-data.duration-seconds);
                     font-size: Typography.sm;
                     color: Colors.text-primary;
                 }
@@ -126,20 +126,20 @@ export component ReturnToCallBar inherits GlassSurface {
             spacing: Spacing.md;
             IconAction {
                 icon: root.is-muted ? Icons.mic-off : Icons.mic;
-                label: root.is-muted ? "Unmute microphone" : "Mute microphone";
+                label: root.is-muted ? @tr("Unmute microphone") : @tr("Mute microphone");
                 active: root.is-muted;
                 clicked => { root.toggle-mute(); }
             }
             IconAction {
                 enabled: root.call-data.is-connected;
                 icon: root.is-video-enabled ? Icons.video : Icons.video-off;
-                label: root.is-video-enabled ? "Turn camera off" : "Turn camera on";
+                label: root.is-video-enabled ? @tr("Turn camera off") : @tr("Turn camera on");
                 active: root.is-video-enabled;
                 clicked => { root.toggle-video(); }
             }
             IconAction {
                 icon: Icons.phone-off;
-                label: "End call";
+                label: @tr("End call");
                 destructive: true;
                 clicked => { root.end-call(); }
             }

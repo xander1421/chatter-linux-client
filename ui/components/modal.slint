@@ -52,7 +52,7 @@ component ModalHeader inherits GlassSurface {
         if root.show-more: HeaderButton {
             touch: root.full-screen;
             icon: Icons.more-vertical;
-            label: "More options";
+            label: @tr("More options");
             clicked => { root.more-clicked(); }
         }
 

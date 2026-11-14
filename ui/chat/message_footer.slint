@@ -131,12 +131,12 @@ export component MessageFooter inherits HorizontalLayout {
                 height: 11px;
                 colorize: root.overlay-media ? #ffffff : Colors.text-muted;
                 accessible-role: text;
-                accessible-label: "Disappearing message";
+                accessible-label: @tr("Disappearing message");
             }
 
             // "edited" before the time on both sides (Signal's order).
             if root.is-edited: Text {
-                text: "edited";
+                text: @tr("edited");
                 color: root.overlay-media ? #ffffff : Colors.text-muted;
                 font-size: Typography.xs;
                 font-italic: true;
@@ -156,33 +156,33 @@ export component MessageFooter inherits HorizontalLayout {
                 // "sent" is not reused for a radio
                 // broadcast, including a private channel
                 // packet: there is no recipient ACK.
-                text: root.delivery-status == "queued" ? "queued"
-                    : root.delivery-status == "relayed" ? "relayed"
-                    : root.delivery-status == "carried" ? "carried"
-                    : root.delivery-status == "waiting" ? "waiting"
-                    : root.delivery-status == "undelivered" ? "not delivered"
-                    : root.delivery-status == "delivered" ? "delivered"
-                    : root.delivery-status == "read" ? "read"
-                    : root.delivery-status == "broadcast" ? "broadcast"
-                    : "sent";
+                text: root.delivery-status == "queued" ? @tr("queued")
+                    : root.delivery-status == "relayed" ? @tr("relayed")
+                    : root.delivery-status == "carried" ? @tr("carried")
+                    : root.delivery-status == "waiting" ? @tr("waiting")
+                    : root.delivery-status == "undelivered" ? @tr("not delivered")
+                    : root.delivery-status == "delivered" ? @tr("delivered")
+                    : root.delivery-status == "read" ? @tr("read")
+                    : root.delivery-status == "broadcast" ? @tr("broadcast")
+                    : @tr("sent");
                 color: root.overlay-media ? #ffffff : root.delivery-status == "undelivered" ? Colors.text-secondary : Colors.text-muted;
                 font-size: Typography.xs;
                 font-italic: true;
                 accessible-role: text;
                 accessible-label: root.delivery-status == "queued"
-                        ? "Signal ciphertext queued on this device; no route has accepted it"
+                        ? @tr("Signal ciphertext queued on this device; no route has accepted it")
                     : root.delivery-status == "relayed"
-                        ? "Sealed Signal ciphertext queued onto a courier link; recipient has not acknowledged it"
+                        ? @tr("Sealed Signal ciphertext queued onto a courier link; recipient has not acknowledged it")
                     : root.delivery-status == "carried"
-                        ? "Handed to a passing device; may arrive later"
+                        ? @tr("Handed to a passing device; may arrive later")
                     : root.delivery-status == "waiting"
-                        ? "Held on this device until something can carry it"
+                        ? @tr("Held on this device until something can carry it")
                     : root.delivery-status == "undelivered"
-                        ? "Left the outbox without ever being acknowledged"
+                        ? @tr("Left the outbox without ever being acknowledged")
                     : root.delivery-status == "delivered"
-                        ? "The peer's device acknowledged it"
+                        ? @tr("The peer's device acknowledged it")
                     : root.delivery-status == "read"
-                        ? "Read by the peer"
+                        ? @tr("Read by the peer")
                     : root.delivery-status == "broadcast"
                         ? "Put on the air without recipient acknowledgement"
                     : "Handed to a live link; not yet acknowledged";
@@ -198,12 +198,12 @@ export component MessageFooter inherits HorizontalLayout {
             // neither has reached the server, and "failed"
             // must never read as delivered.
             if root.is-own && !root.mesh-delivery && (root.delivery-status == "sending" || root.delivery-status == "waiting-tor" || root.delivery-status == "upload-queued"): Text {
-                text: root.delivery-status == "upload-queued" ? "queued" : root.delivery-status == "waiting-tor" ? "waiting for Tor" : "sending";
+                text: root.delivery-status == "upload-queued" ? @tr("queued") : root.delivery-status == "waiting-tor" ? @tr("waiting for Tor") : @tr("sending");
                 color: root.overlay-media ? #ffffff : Colors.text-muted;
                 font-size: Typography.xs;
                 font-italic: true;
                 accessible-role: text;
-                accessible-label: root.delivery-status == "upload-queued" ? "Queued behind an earlier send; upload has not started" : root.delivery-status == "waiting-tor" ? "Waiting for Tor" : "Sending";
+                accessible-label: root.delivery-status == "upload-queued" ? @tr("Queued behind an earlier send; upload has not started") : root.delivery-status == "waiting-tor" ? @tr("Waiting for Tor") : @tr("Sending");
             }
 
             if root.is-own && !root.mesh-delivery && root.delivery-status == "parked": Text {
@@ -236,7 +236,7 @@ export component MessageFooter inherits HorizontalLayout {
                 font-size: Typography.xs;
                 font-italic: true;
                 accessible-role: button;
-                accessible-label: "Not sent, tap to retry";
+                accessible-label: @tr("Not sent, tap to retry");
                 accessible-action-default => { root.message-clicked(root.message-id); }
 
                 TouchArea {
@@ -249,12 +249,12 @@ export component MessageFooter inherits HorizontalLayout {
             // server answered: it may well have arrived.
             // Core retries the retained sealed bytes without re-encryption.
             if root.is-own && !root.mesh-delivery && root.delivery-status == "unconfirmed": TooltipArea {
-                tooltip-text: "Delivery could not be confirmed, tap to retry";
+                tooltip-text: @tr("Delivery could not be confirmed, tap to retry");
                 placement: "top";
                 width: root.mobile ? Spacing.touch-target-min : 26px;
                 height: root.mobile ? Spacing.touch-target-min : 12px;
                 accessible-role: button;
-                accessible-label: "Delivery could not be confirmed, tap to retry";
+                accessible-label: @tr("Delivery could not be confirmed, tap to retry");
                 accessible-action-default => { root.message-clicked(root.message-id); }
                 TouchArea {
                     mouse-cursor: pointer;
@@ -289,8 +289,8 @@ export component MessageFooter inherits HorizontalLayout {
                 height: 12px;
                 animate width { duration: Materials.motion-standard; easing: Materials.spring; }
                 accessible-role: text;
-                accessible-label: root.delivery-status == "delivered" ? "Delivered"
-                    : root.delivery-status == "read" ? "Read" : "Sent";
+                accessible-label: root.delivery-status == "delivered" ? @tr("Delivered")
+                    : root.delivery-status == "read" ? @tr("Read") : @tr("Sent");
 
                 // Second tick behind, offset left, so the
                 // pair reads as the usual overlapping ✓✓.

@@ -139,7 +139,7 @@ export component ComposerAttachmentStrip inherits GlassSurface {
                             spacing: Spacing.xs;
 
                             Text {
-                                text: attachment.is-ready ? attachment.size-display : "Encrypting...";
+                                text: attachment.is-ready ? attachment.size-display : @tr("Encrypting...");
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
                                 overflow: elide;
@@ -158,7 +158,7 @@ export component ComposerAttachmentStrip inherits GlassSurface {
                             : remove-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
                         border-radius: Spacing.radius-chrome-inner;
                         accessible-role: button;
-                        accessible-label: "Remove attachment";
+                        accessible-label: @tr("Remove attachment");
                         accessible-action-default => { root.remove-attachment(attachment.id); }
                         KeyFocus { border-radius: parent.border-radius; activate => { root.remove-attachment(attachment.id); } }
 
@@ -193,7 +193,7 @@ export component ComposerAttachmentStrip inherits GlassSurface {
                         : add-more-touch.has-hover ? Materials.hover : Colors.inset;
                     border-radius: Spacing.radius-chrome-inner;
                     accessible-role: button;
-                    accessible-label: "Add attachment";
+                    accessible-label: @tr("Add attachment");
                     accessible-action-default => { if !root.disabled { root.attachment-clicked(); } }
                     KeyFocus { border-radius: parent.border-radius; activate => { if !root.disabled { root.attachment-clicked(); } } }
 

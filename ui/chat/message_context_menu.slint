@@ -577,7 +577,7 @@ export component MessageContextMenu inherits Rectangle {
                         }
                         picker-action := IconAction {
                             icon: Icons.smile;
-                            label: "More reactions and stickers";
+                            label: @tr("More reactions and stickers");
                             // Emoji-sized chip; the 48px touch target stays.
                             visual-size: 32px;
                             clicked => {
@@ -596,7 +596,7 @@ export component MessageContextMenu inherits Rectangle {
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.rotate-ccw;
-                    label: "Resend";
+                    label: @tr("Resend");
                     clicked => {
                         root.retry-clicked(root.message-id);
                         root.close();
@@ -611,7 +611,7 @@ export component MessageContextMenu inherits Rectangle {
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.reply;
-                    label: "Reply";
+                    label: @tr("Reply");
                     clicked => {
                         root.reply-clicked(root.sender-id, root.timestamp-ns);
                         root.close();
@@ -626,7 +626,7 @@ export component MessageContextMenu inherits Rectangle {
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.edit;
-                    label: "Edit";
+                    label: @tr("Edit");
                     clicked => {
                         root.edit-clicked(root.sender-id, root.timestamp-ns);
                         root.close();
@@ -641,7 +641,7 @@ export component MessageContextMenu inherits Rectangle {
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.message-circle;
-                    label: "Reply in thread";
+                    label: @tr("Reply in thread");
                     clicked => {
                         root.thread-clicked(root.message-id);
                         root.close();
@@ -656,7 +656,7 @@ export component MessageContextMenu inherits Rectangle {
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.copy;
-                    label: "Copy";
+                    label: @tr("Copy");
                     clicked => {
                         root.copy-clicked(root.sender-id, root.timestamp-ns);
                         root.close();
@@ -671,7 +671,7 @@ export component MessageContextMenu inherits Rectangle {
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.send;
-                    label: "Forward";
+                    label: @tr("Forward");
                     clicked => {
                         root.forward-clicked(root.sender-id, root.timestamp-ns);
                         root.close();
@@ -688,7 +688,7 @@ export component MessageContextMenu inherits Rectangle {
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.check;
-                    label: "Select";
+                    label: @tr("Select");
                     clicked => {
                         root.select-clicked(root.message-id);
                         root.close();
@@ -703,7 +703,7 @@ export component MessageContextMenu inherits Rectangle {
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.pin;
-                    label: MessageMenuActions.pinned ? "Unpin" : "Pin";
+                    label: MessageMenuActions.pinned ? @tr("Unpin") : @tr("Pin");
                     clicked => {
                         root.pin-clicked(root.sender-id, root.timestamp-ns);
                         root.close();
@@ -718,7 +718,7 @@ export component MessageContextMenu inherits Rectangle {
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.download;
-                    label: "Download";
+                    label: @tr("Download");
                     clicked => {
                         root.download-clicked(root.sender-id, root.timestamp-ns);
                         root.close();
@@ -733,7 +733,7 @@ export component MessageContextMenu inherits Rectangle {
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.clock;
-                    label: "Info";
+                    label: @tr("Info");
                     clicked => {
                         root.info-clicked(root.message-id);
                         root.close();
@@ -748,7 +748,7 @@ export component MessageContextMenu inherits Rectangle {
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.trash;
-                    label: "Delete";
+                    label: @tr("Delete");
                     destructive: true;
                     clicked => {
                         root.delete-clicked(root.sender-id, root.timestamp-ns);

@@ -170,14 +170,14 @@ export component MentionAutocomplete inherits GlassSurface {
 
                             // Type description (for here/all only)
                             if suggestion.mention-type == "here": Text {
-                                text: "Notify online members";
+                                text: @tr("Notify online members");
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
                                 overflow: elide;
                             }
 
                             if suggestion.mention-type == "all": Text {
-                                text: "Notify all members";
+                                text: @tr("Notify all members");
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
                                 overflow: elide;
@@ -214,7 +214,7 @@ export component MentionAutocomplete inherits GlassSurface {
                     height: 40px;
 
                     Text {
-                        text: "No suggestions";
+                        text: @tr("No suggestions");
                         color: Colors.text-muted;
                         font-size: Typography.sm;
                         horizontal-alignment: center;

@@ -74,7 +74,7 @@ export component PinnedBar inherits GlassSurface {
 
                 prev-touch := TouchArea {
                     accessible-role: button;
-                    accessible-label: "Previous pinned message";
+                    accessible-label: @tr("Previous pinned message");
                     accessible-action-default => { root.prev-clicked(); }
                     KeyFocus { activate => { root.prev-clicked(); } }
                     mouse-cursor: pointer;
@@ -107,7 +107,7 @@ export component PinnedBar inherits GlassSurface {
 
                 next-touch := TouchArea {
                     accessible-role: button;
-                    accessible-label: "Next pinned message";
+                    accessible-label: @tr("Next pinned message");
                     accessible-action-default => { root.next-clicked(); }
                     KeyFocus { activate => { root.next-clicked(); } }
                     mouse-cursor: pointer;
@@ -192,7 +192,7 @@ export component PinnedBar inherits GlassSurface {
             animate transform-scale-x { duration: list-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
             animate transform-scale-y { duration: list-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
             accessible-role: button;
-            accessible-label: "All pinned messages";
+            accessible-label: @tr("All pinned messages");
             accessible-action-default => { root.list-clicked(); }
             KeyFocus { border-radius: parent.border-radius; activate => { root.list-clicked(); } }
 

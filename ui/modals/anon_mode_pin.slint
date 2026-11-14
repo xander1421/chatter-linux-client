@@ -48,7 +48,7 @@ export component AnonModePinModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: "Enter PIN to enable Shield";
+        title: @tr("Enter PIN to enable Shield");
         modal-width: 420px;
 
         close => { root.close(); }
@@ -58,7 +58,7 @@ export component AnonModePinModal inherits Rectangle {
 
             Text {
                 width: parent.width;
-                text: "Shield hides your channels and Saved messages and shows your anonymous DMs. Your DMs with friends stay, and are sent through anonymous mailboxes instead of the server. Your network location is hidden behind Tor — if Tor can't be reached you will be told. Enter your PIN to enable. On a device checking online, wrong attempts can delete your key backup.";
+                text: @tr("Shield hides your channels and Saved messages and shows your anonymous DMs. Your DMs with friends stay, and are sent through anonymous mailboxes instead of the server. Your network location is hidden behind Tor — if Tor can't be reached you will be told. Enter your PIN to enable. On a device checking online, wrong attempts can delete your key backup.");
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
@@ -71,7 +71,7 @@ export component AnonModePinModal inherits Rectangle {
                 animate x { duration: Materials.feedback-duration; easing: Materials.spring; }
                 Input {
                     width: 100%;
-                    placeholder: "PIN";
+                    placeholder: @tr("PIN");
                     password: true;
                     text <=> root.pin;
                     disabled: root.verifying;
@@ -108,13 +108,13 @@ export component AnonModePinModal inherits Rectangle {
             HorizontalLayout {
                 spacing: Spacing.sm;
                 Button {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     variant: "secondary";
                     disabled: root.verifying;
                     clicked => { root.close(); }
                 }
                 Button {
-                    text: root.verifying ? "" : "Enable";
+                    text: root.verifying ? "" : @tr("Enable");
                     variant: "primary";
                     loading: root.verifying;
                     disabled: root.verifying || root.pin == "";

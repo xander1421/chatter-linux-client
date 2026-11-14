@@ -69,7 +69,7 @@ export component KeyboardShortcutsDialog inherits Rectangle {
             + sections.preferred-height, parent.height - 48px);
         border-radius: Spacing.radius-sheet;
         accessible-role: groupbox;
-        accessible-description: "Keyboard shortcuts";
+        accessible-description: @tr("Keyboard shortcuts");
 
         TouchArea {} // block click-through
 
@@ -86,7 +86,7 @@ export component KeyboardShortcutsDialog inherits Rectangle {
                 HorizontalLayout {
                     height: Spacing.header-action-box;
                     Text {
-                        text: "Keyboard shortcuts";
+                        text: @tr("Keyboard shortcuts");
                         color: Colors.text-primary;
                         font-size: Typography.lg;
                         font-weight: Typography.semibold;
@@ -113,7 +113,7 @@ export component KeyboardShortcutsDialog inherits Rectangle {
                         spacing: Spacing.md;
                         // Navigation section
                         Text {
-                            text: "Navigation";
+                            text: @tr("Navigation");
                             color: Colors.text-muted;
                             font-size: Typography.xs;
                             font-weight: Typography.semibold;
@@ -140,7 +140,7 @@ export component KeyboardShortcutsDialog inherits Rectangle {
 
                         // Messages section
                         Text {
-                            text: "Messages";
+                            text: @tr("Messages");
                             color: Colors.text-muted;
                             font-size: Typography.xs;
                             font-weight: Typography.semibold;

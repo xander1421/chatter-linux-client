@@ -15,7 +15,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
     spacing: Spacing.xs;
 
     Text {
-        text: "Who can join?";
+        text: @tr("Who can join?");
         color: Colors.text-secondary;
         font-size: Typography.sm;
         font-weight: Typography.medium;
@@ -28,7 +28,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
         Rectangle {
             border-radius: Spacing.radius-md;
             accessible-role: button;
-            accessible-label: "Open";
+            accessible-label: @tr("Open");
             accessible-checkable: true;
             accessible-checked: root.access-mode == "open";
             accessible-action-default => { root.access-mode = "open"; }
@@ -60,7 +60,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
                     }
                     Text {
                         accessible-role: none;
-                        text: "Open";
+                        text: @tr("Open");
                         color: root.access-mode == "open" ? Colors.primary : Colors.text-primary;
                         font-size: Typography.sm;
                         font-weight: Typography.semibold;
@@ -70,7 +70,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
 
                 Text {
                     width: max(0px, parent.width - parent.padding * 2);
-                    text: "Anyone finds and joins. New members see messages from when they join.";
+                    text: @tr("Anyone finds and joins. New members see messages from when they join.");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     wrap: word-wrap;
@@ -87,7 +87,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
         Rectangle {
             border-radius: Spacing.radius-md;
             accessible-role: button;
-            accessible-label: "Invite-only";
+            accessible-label: @tr("Invite-only");
             accessible-checkable: true;
             accessible-checked: root.access-mode == "invite";
             accessible-action-default => { root.access-mode = "invite"; }
@@ -119,7 +119,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
                     }
                     Text {
                         accessible-role: none;
-                        text: "Invite-only";
+                        text: @tr("Invite-only");
                         color: root.access-mode == "invite" ? Colors.primary : Colors.text-primary;
                         font-size: Typography.sm;
                         font-weight: Typography.semibold;
@@ -129,7 +129,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
 
                 Text {
                     width: max(0px, parent.width - parent.padding * 2);
-                    text: "Hidden from discovery. Invite or password to join.";
+                    text: @tr("Hidden from discovery. Invite or password to join.");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     wrap: word-wrap;
@@ -146,7 +146,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
         Rectangle {
             border-radius: Spacing.radius-md;
             accessible-role: button;
-            accessible-label: "Anon group";
+            accessible-label: @tr("Anon group");
             accessible-checkable: true;
             accessible-checked: root.access-mode == "private-group";
             accessible-action-default => { root.access-mode = "private-group"; }
@@ -178,7 +178,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
                     }
                     Text {
                         accessible-role: none;
-                        text: "Anon group";
+                        text: @tr("Anon group");
                         color: root.access-mode == "private-group" ? Colors.group-accent : Colors.text-primary;
                         font-size: Typography.sm;
                         font-weight: Typography.semibold;
@@ -188,7 +188,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
 
                 Text {
                     width: max(0px, parent.width - parent.padding * 2);
-                    text: "End-to-end encrypted. Server can't see it exists.";
+                    text: @tr("End-to-end encrypted. Server can't see it exists.");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     wrap: word-wrap;
@@ -214,7 +214,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
             y: 2px;
         }
         Text {
-            text: "End-to-end encrypted";
+            text: @tr("End-to-end encrypted");
             color: Colors.success;
             font-size: Typography.xs;
         }

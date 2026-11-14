@@ -420,14 +420,14 @@ export component ThreadPanel inherits Rectangle {
                     }
 
                     Text {
-                        text: root.pinned-mode ? "No pinned messages" : "No replies yet";
+                        text: root.pinned-mode ? @tr("No pinned messages") : @tr("No replies yet");
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
                     }
 
                     Text {
-                        text: "Be the first to reply!";
+                        text: @tr("Be the first to reply!");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         horizontal-alignment: center;
@@ -446,7 +446,7 @@ export component ThreadPanel inherits Rectangle {
                 height: Spacing.button-height;
                 width: 100%;
                 accessible-role: button;
-                accessible-label: "Load earlier replies";
+                accessible-label: @tr("Load earlier replies");
                 accessible-action-default => {
                     replies-view.following-tail = false;
                     replies-view.anchor-count = root.replies.length;
@@ -459,7 +459,7 @@ export component ThreadPanel inherits Rectangle {
                 }
                 Text {
                     accessible-role: none;
-                    text: "Load earlier replies";
+                    text: @tr("Load earlier replies");
                     color: more-touch.has-hover ? Colors.text-primary : Colors.primary;
                     font-size: Typography.xs;
                     horizontal-alignment: center;
@@ -753,7 +753,7 @@ export component ThreadPanel inherits Rectangle {
             attachment-restore-serial: root.attachment-restore-serial;
             caret-end-seq: root.composer-caret-end-seq;
             text <=> root.composer-text;
-            placeholder: "Reply in thread...";
+            placeholder: @tr("Reply in thread...");
             pending-attachments: root.pending-attachments;
             is-replying: root.is-replying;
             is-editing <=> root.is-editing;

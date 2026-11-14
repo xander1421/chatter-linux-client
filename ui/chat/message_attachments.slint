@@ -285,11 +285,11 @@ export component MessageAttachments inherits VerticalLayout {
                     spacing: Spacing.sm;
 
                     Text {
-                        text: attachment.upload-state == "queued" ? "Queued"
-                            : attachment.upload-state == "uploading" ? "Uploading…"
-                            : attachment.upload-state == "failed" ? "Upload failed"
-                            : attachment.upload-state == "cancelled" ? "Cancelled"
-                            : "Downloading...";
+                        text: attachment.upload-state == "queued" ? @tr("Queued")
+                            : attachment.upload-state == "uploading" ? @tr("Uploading…")
+                            : attachment.upload-state == "failed" ? @tr("Upload failed")
+                            : attachment.upload-state == "cancelled" ? @tr("Cancelled")
+                            : @tr("Downloading...");
                         color: Colors.text-primary;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
@@ -321,7 +321,7 @@ export component MessageAttachments inherits VerticalLayout {
                 Text {
                     width: parent.width - Spacing.md;
                     height: parent.height;
-                    text: "Download failed · tap to retry";
+                    text: @tr("Download failed · tap to retry");
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
@@ -533,7 +533,7 @@ export component MessageAttachments inherits VerticalLayout {
                 Text {
                     width: parent.width - Spacing.md;
                     height: parent.height;
-                    text: "Download failed · tap to retry";
+                    text: @tr("Download failed · tap to retry");
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
@@ -602,7 +602,7 @@ export component MessageAttachments inherits VerticalLayout {
                         overflow: elide;
                     }
                     Text {
-                        text: attachment.is-download-failed ? "Download failed · tap to retry" : attachment.size-display;
+                        text: attachment.is-download-failed ? @tr("Download failed · tap to retry") : attachment.size-display;
                         color: attachment.is-download-failed ? Colors.primary : Colors.text-muted;
                         font-size: Typography.xs;
                     }
@@ -633,7 +633,7 @@ export component MessageAttachments inherits VerticalLayout {
                 background: Colors.surface-hover;
                 border-radius: 1.5px;
                 accessible-role: progress-indicator;
-                accessible-label: (attachment.upload-state == "uploading" || attachment.upload-state == "queued") ? "Upload progress" : "Download progress";
+                accessible-label: (attachment.upload-state == "uploading" || attachment.upload-state == "queued") ? @tr("Upload progress") : @tr("Download progress");
                 accessible-value: Math.round(attachment.progress * 100) + " percent";
 
                 Rectangle {
