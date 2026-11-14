@@ -273,14 +273,14 @@ export component SettingsScreen inherits Rectangle {
 
                 // Navigation items
                 for item[index] in [
-                    { id: "account", label: "Account", enabled: true },
-                    { id: "privacy", label: "Privacy", enabled: true },
-                    { id: "notifications", label: "Notifications", enabled: true },
-                    { id: "devices", label: "Linked devices", enabled: true },
-                    { id: "appearance", label: "Appearance", enabled: true },
-                    { id: "encryption", label: "Encryption", enabled: true },
-                    { id: "ai", label: "Remote AI", enabled: true },
-                    { id: "about", label: "About", enabled: true }
+                    { id: "account", label: @tr("Account"), enabled: true },
+                    { id: "privacy", label: @tr("Privacy"), enabled: true },
+                    { id: "notifications", label: @tr("Notifications"), enabled: true },
+                    { id: "devices", label: @tr("Linked devices"), enabled: true },
+                    { id: "appearance", label: @tr("Appearance"), enabled: true },
+                    { id: "encryption", label: @tr("Encryption"), enabled: true },
+                    { id: "ai", label: @tr("Remote AI"), enabled: true },
+                    { id: "about", label: @tr("About"), enabled: true }
                 ]: Rectangle {
                     height: root.mobile-platform ? Spacing.touch-target-min : Spacing.button-height;
                     border-radius: Spacing.radius-md;
@@ -607,14 +607,14 @@ export component SettingsScreen inherits Rectangle {
                         spacing: Spacing.xxs;
                         padding: Spacing.xs;
 
-                        account-tab := SectionTab { section: "account"; text: "Account"; active <=> root.active-section; touch: root.mobile-platform; }
-                        privacy-tab := SectionTab { section: "privacy"; text: "Privacy"; active <=> root.active-section; touch: root.mobile-platform; }
-                        notifications-tab := SectionTab { section: "notifications"; text: "Notifications"; active <=> root.active-section; touch: root.mobile-platform; }
-                        devices-tab := SectionTab { section: "devices"; text: "Linked devices"; active <=> root.active-section; touch: root.mobile-platform; }
-                        appearance-tab := SectionTab { section: "appearance"; text: "Appearance"; active <=> root.active-section; touch: root.mobile-platform; }
-                        encryption-tab := SectionTab { section: "encryption"; text: "Encryption"; active <=> root.active-section; touch: root.mobile-platform; }
+                        account-tab := SectionTab { section: "account"; text: @tr("Account"); active <=> root.active-section; touch: root.mobile-platform; }
+                        privacy-tab := SectionTab { section: "privacy"; text: @tr("Privacy"); active <=> root.active-section; touch: root.mobile-platform; }
+                        notifications-tab := SectionTab { section: "notifications"; text: @tr("Notifications"); active <=> root.active-section; touch: root.mobile-platform; }
+                        devices-tab := SectionTab { section: "devices"; text: @tr("Linked devices"); active <=> root.active-section; touch: root.mobile-platform; }
+                        appearance-tab := SectionTab { section: "appearance"; text: @tr("Appearance"); active <=> root.active-section; touch: root.mobile-platform; }
+                        encryption-tab := SectionTab { section: "encryption"; text: @tr("Encryption"); active <=> root.active-section; touch: root.mobile-platform; }
                         ai-tab := SectionTab { section: "ai"; text: "AI"; active <=> root.active-section; touch: root.mobile-platform; }
-                        about-tab := SectionTab { section: "about"; text: "About"; active <=> root.active-section; touch: root.mobile-platform; }
+                        about-tab := SectionTab { section: "about"; text: @tr("About"); active <=> root.active-section; touch: root.mobile-platform; }
                     }
                 }
                 if tabs.viewport-x < 0px: Rectangle {

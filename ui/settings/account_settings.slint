@@ -446,7 +446,7 @@ export component AccountSettings inherits VerticalLayout {
                 touch: root.mobile-platform;
                 icon: Icons.download;
                 title: @tr("Key backup");
-                detail: "Status: " + (root.backup-status == "backed_up" ? "Backed up" : root.backup-status == "not_backed_up" ? "Not backed up" : "Unknown");
+                detail: root.backup-status == "backed_up" ? @tr("Status: Backed up") : root.backup-status == "not_backed_up" ? @tr("Status: Not backed up") : @tr("Status: Unknown");
                 detail-color: root.backup-status == "backed_up" ? Colors.success : root.backup-status == "not_backed_up" ? Colors.warning : Colors.text-secondary;
                 clickable: false;
                 show-chevron: false;

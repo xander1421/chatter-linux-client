@@ -54,8 +54,8 @@ export component RequestsTab inherits VerticalLayout {
 
     if root.read-error: HorizontalLayout {
         spacing: Spacing.sm;
-        Text { text: "Could not refresh requests. Showing the last loaded list."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; horizontal-stretch: 1; vertical-alignment: center; }
-        retry-button := Button { text: "Retry"; clicked => { root.retry(); } }
+        Text { text: @tr("Could not refresh requests. Showing the last loaded list."); color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; horizontal-stretch: 1; vertical-alignment: center; }
+        retry-button := Button { text: @tr("Retry"); clicked => { root.retry(); } }
     }
 
     // Sub-tab bar
@@ -405,7 +405,7 @@ export component RequestsTab inherits VerticalLayout {
                                     }
 
                                     Text {
-                                        text: "Private" + (request.sent-at != "" ? " · " + request.sent-at : "");
+                                        text: request.sent-at != "" ? @tr("Private · {}", request.sent-at) : @tr("Private");
                                         overflow: elide;
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
@@ -555,7 +555,7 @@ export component RequestsTab inherits VerticalLayout {
 
                                     // Inviter info (stored in username field)
                                     if invite.username != "": Text {
-                                        text: "Invited by " + invite.username;
+                                        text: @tr("Invited by {}", invite.username);
                                         overflow: elide;
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;

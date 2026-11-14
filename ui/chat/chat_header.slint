@@ -568,12 +568,12 @@ export component ChatHeader inherits GlassSurface {
                     }
                     Text {
                         text: MeshGlobal.active-kind == "dm"
-                            ? (!MeshGlobal.active-reachable ? "Waiting for a carrier"
-                                : MeshGlobal.active-verified ? "Verified ✓" : "Not verified ›")
-                            : MeshGlobal.active-kind == "private-channel" ? "Private group · invited devices"
+                            ? (!MeshGlobal.active-reachable ? @tr("Waiting for a carrier")
+                                : MeshGlobal.active-verified ? @tr("Verified ✓") : @tr("Not verified ›"))
+                            : MeshGlobal.active-kind == "private-channel" ? @tr("Private group · invited devices")
                             : MeshGlobal.active-kind == "geohash"
-                                ? (MeshGlobal.relay-count == 1 ? "1 relay" : MeshGlobal.relay-count + " relays")
-                                : (MeshGlobal.peer-count == 1 ? "1 nearby" : MeshGlobal.peer-count + " nearby");
+                                ? @tr("{n} relay" | "{n} relays" % MeshGlobal.relay-count)
+                                : @tr("{n} nearby" | "{n} nearby" % MeshGlobal.peer-count);
                         color: MeshGlobal.active-kind == "dm" && MeshGlobal.active-verified ? Colors.success : Colors.text-muted;
                         font-size: Typography.xs;
                         overflow: elide;

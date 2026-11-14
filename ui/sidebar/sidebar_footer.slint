@@ -75,7 +75,7 @@ export component SidebarFooter inherits GlassSurface {
                 // neither a list row nor navigation, and read as leftover.
                 if !false: Rectangle {
                     horizontal-stretch: 1;
-                    accessible-role: button; accessible-label: "Profile";
+                    accessible-role: button; accessible-label: @tr("Profile");
                     accessible-action-default => { root.profile-clicked(); }
                     border-width: profile-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
                     profile-keys := FocusScope { width: 0px; height: 0px;
@@ -100,7 +100,7 @@ export component SidebarFooter inherits GlassSurface {
                     Rectangle {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
                         background: root.active-tab == "chats" ? Colors.row-selected : chats-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button; accessible-label: "Chats";
+                        accessible-role: button; accessible-label: @tr("Chats");
                         accessible-action-default => { root.tab-selected("chats"); }
                         border-width: chats-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
                         chats-keys := FocusScope { width: 0px; height: 0px;
@@ -114,7 +114,7 @@ export component SidebarFooter inherits GlassSurface {
                     Rectangle {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
                         background: root.active-tab == "mesh" ? Colors.row-selected : mesh-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button; accessible-label: "Mesh";
+                        accessible-role: button; accessible-label: @tr("Mesh");
                         accessible-action-default => { root.tab-selected("mesh"); }
                         border-width: mesh-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
                         mesh-keys := FocusScope { width: 0px; height: 0px;
@@ -131,7 +131,7 @@ export component SidebarFooter inherits GlassSurface {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
                         background: bell-touch.has-hover ? Colors.surface-hover : transparent;
                         accessible-role: button;
-                        accessible-label: ActivityGlobal.unread-count > 0 ? "Activity, " + ActivityGlobal.unread-count + " unread" : "Activity";
+                        accessible-label: ActivityGlobal.unread-count > 0 ? @tr("Activity, {} unread", ActivityGlobal.unread-count) : @tr("Activity");
                         accessible-action-default => { ActivityUi.open(); }
                         border-width: bell-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
                         bell-keys := FocusScope { width: 0px; height: 0px;
@@ -154,7 +154,7 @@ export component SidebarFooter inherits GlassSurface {
                     Rectangle {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
                         background: sett-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button; accessible-label: "Settings";
+                        accessible-role: button; accessible-label: @tr("Settings");
                         accessible-action-default => { root.settings-clicked(); }
                         border-width: sett-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
                         sett-keys := FocusScope { width: 0px; height: 0px;
@@ -176,7 +176,7 @@ export component SidebarFooter inherits GlassSurface {
                     Rectangle {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
                         background: collapse-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button; accessible-label: "Collapse sidebar";
+                        accessible-role: button; accessible-label: @tr("Collapse sidebar");
                         accessible-action-default => { root.toggle-collapsed(); }
                         border-width: collapse-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
                         collapse-keys := FocusScope { width: 0px; height: 0px;
@@ -197,7 +197,7 @@ export component SidebarFooter inherits GlassSurface {
                     tooltip-text: AnonMode.enabled ? @tr("Anon mode (active) - tap to disable") : @tr("Anon mode");
                     tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
-                        accessible-role: button; accessible-label: "Anon mode";
+                        accessible-role: button; accessible-label: @tr("Anon mode");
                         accessible-action-default => { root.anon-mode-clicked(); }
                         border-width: rail-anon-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
                         rail-anon-keys := FocusScope { width: 0px; height: 0px;
@@ -246,7 +246,7 @@ export component SidebarFooter inherits GlassSurface {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: @tr("Chats"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
-                        accessible-role: button; accessible-label: "Chats";
+                        accessible-role: button; accessible-label: @tr("Chats");
                         accessible-action-default => { root.tab-selected("chats"); }
                         border-width: rail-chats-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
                         rail-chats-keys := FocusScope { width: 0px; height: 0px;
@@ -263,7 +263,7 @@ export component SidebarFooter inherits GlassSurface {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: @tr("Mesh"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
-                        accessible-role: button; accessible-label: "Mesh";
+                        accessible-role: button; accessible-label: @tr("Mesh");
                         accessible-action-default => { root.tab-selected("mesh"); }
                         border-width: rail-mesh-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
                         rail-mesh-keys := FocusScope { width: 0px; height: 0px;
@@ -284,7 +284,7 @@ export component SidebarFooter inherits GlassSurface {
                     tooltip-text: @tr("Activity"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
                         accessible-role: button;
-                        accessible-label: ActivityGlobal.unread-count > 0 ? "Activity, " + ActivityGlobal.unread-count + " unread" : "Activity";
+                        accessible-label: ActivityGlobal.unread-count > 0 ? @tr("Activity, {} unread", ActivityGlobal.unread-count) : @tr("Activity");
                         accessible-action-default => { ActivityUi.open(); }
                         border-width: rail-bell-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
                         rail-bell-keys := FocusScope { width: 0px; height: 0px;
@@ -323,7 +323,7 @@ export component SidebarFooter inherits GlassSurface {
                 // to the middle of the cluster when the panel collapses.
                 Rectangle {
                     height: root.rail-icon-size;
-                    accessible-role: button; accessible-label: "Profile";
+                    accessible-role: button; accessible-label: @tr("Profile");
                     accessible-action-default => { root.profile-clicked(); }
                     border-width: rail-profile-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
                     rail-profile-keys := FocusScope { width: 0px; height: 0px;
@@ -337,9 +337,9 @@ export component SidebarFooter inherits GlassSurface {
                     }
                 }
                 TooltipArea {
-                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Settings"; tooltip-enabled: true; placement: "right";
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: @tr("Settings"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
-                        accessible-role: button; accessible-label: "Settings";
+                        accessible-role: button; accessible-label: @tr("Settings");
                         accessible-action-default => { root.settings-clicked(); }
                         KeyFocus { border-radius: parent.border-radius; activate => { root.settings-clicked(); } }
                         border-width: rail-settings-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
@@ -363,7 +363,7 @@ export component SidebarFooter inherits GlassSurface {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: root.collapsed ? @tr("Expand sidebar") : @tr("Collapse sidebar"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
-                        accessible-role: button; accessible-label: "Expand sidebar";
+                        accessible-role: button; accessible-label: @tr("Expand sidebar");
                         accessible-action-default => { root.toggle-collapsed(); }
                         KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-collapsed(); } }
                         border-width: rail-expand-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;

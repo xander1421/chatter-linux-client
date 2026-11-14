@@ -212,8 +212,8 @@ export component CallHistoryScreen inherits Rectangle {
                     padding: Spacing.chrome-inset;
 
                     for tab in [
-                        { id: "all", label: "All" },
-                        { id: "missed", label: "Missed" }
+                        { id: "all", label: @tr("All") },
+                        { id: "missed", label: @tr("Missed") }
                     ]: Rectangle {
                         horizontal-stretch: 1;
                         border-radius: Spacing.radius-chrome-inner;
@@ -296,7 +296,7 @@ export component CallHistoryScreen inherits Rectangle {
             if root.error-message != "": VerticalLayout {
                 spacing: Spacing.sm;
                 Text { text: root.error-message; color: Colors.text-muted; horizontal-alignment: center; }
-                Button { text: "Retry"; disabled: root.loading; clicked => { root.retry(); } }
+                Button { text: @tr("Retry"); disabled: root.loading; clicked => { root.retry(); } }
             }
 
             // ── The list ─────────────────────────────────────────────────
@@ -455,7 +455,7 @@ export component CallHistoryScreen inherits Rectangle {
                                         border-color: row.selected ? Colors.action-fill : Colors.text-muted;
                                         background: row.selected ? Colors.action-fill : transparent;
                                         accessible-role: checkbox;
-                                        accessible-label: "Select call with " + row.name;
+                                        accessible-label: @tr("Select call with {}", row.name);
                                         accessible-checkable: true;
                                         accessible-checked: row.selected;
 
@@ -488,7 +488,7 @@ export component CallHistoryScreen inherits Rectangle {
                                         border-radius: self.width / 2;
                                         background: Colors.surface-control;
                                         accessible-role: image;
-                                        accessible-label: "Avatar for " + row.name;
+                                        accessible-label: @tr("Avatar for {}", row.name);
                                         Image {
                                             source: row.private-channel ? Icons.lock : Icons.hash;
                                             width: root.mobile-mode ? 24px : 16px;
@@ -573,7 +573,7 @@ export component CallHistoryScreen inherits Rectangle {
                                         animate transform-scale-x { duration: voice-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                                         animate transform-scale-y { duration: voice-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                                         accessible-role: button;
-                                        accessible-label: "Call " + row.name;
+                                        accessible-label: @tr("Call {}", row.name);
                                         // TalkBack activates through the default action.
                                         accessible-action-default => { root.call-back(row.conversation-id, row.conversation-type, false); }
                                         KeyFocus { border-radius: parent.border-radius; activate => { root.call-back(row.conversation-id, row.conversation-type, false); } }
@@ -604,7 +604,7 @@ export component CallHistoryScreen inherits Rectangle {
                                         animate transform-scale-x { duration: video-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                                         animate transform-scale-y { duration: video-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                                         accessible-role: button;
-                                        accessible-label: "Video call " + row.name;
+                                        accessible-label: @tr("Video call {}", row.name);
                                         accessible-action-default => { root.call-back(row.conversation-id, row.conversation-type, true); }
                                         KeyFocus { border-radius: parent.border-radius; activate => { root.call-back(row.conversation-id, row.conversation-type, true); } }
 
@@ -695,10 +695,8 @@ export component CallHistoryScreen inherits Rectangle {
 
                     Text {
                         text: !root.confirm-selected
-                            ? "Delete every call in this list from this device? This cannot be undone."
-                            : root.selected-count == 1
-                            ? "Delete 1 selected call from this device? This cannot be undone."
-                            : "Delete " + root.selected-count + " selected calls from this device? This cannot be undone.";
+                            ? @tr("Delete every call in this list from this device? This cannot be undone.")
+                            : @tr("Delete {n} selected call from this device? This cannot be undone." | "Delete {n} selected calls from this device? This cannot be undone." % root.selected-count);
                         color: Colors.error;
                         font-size: Typography.sm;
                         horizontal-alignment: center;

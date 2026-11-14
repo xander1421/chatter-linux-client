@@ -40,8 +40,8 @@ export component StartupErrorWindow inherits Window {
             wrap: word-wrap;
             horizontal-alignment: center;
         }
-        Button { text: "Retry"; clicked => { root.retry(); } }
-        Button { text: root.show-details ? "Hide details" : "Details"; variant: "secondary"; clicked => { root.show-details = !root.show-details; } }
+        Button { text: @tr("Retry"); clicked => { root.retry(); } }
+        Button { text: root.show-details ? @tr("Hide details") : @tr("Details"); variant: "secondary"; clicked => { root.show-details = !root.show-details; } }
         if root.show-details: Text {
             text: root.error-details;
             color: Colors.text-muted;

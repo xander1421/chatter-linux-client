@@ -54,8 +54,8 @@ export component MeshInfoSheet inherits Rectangle {
     property <string> selected-member-id: "";
     property <string> selected-member-name: "";
     property <string> confirm-kind: "";
-    property <string> leave-label: MeshGlobal.active-kind == "private-channel" ? "Leave group"
-        : MeshGlobal.active-kind == "geohash" ? "Leave cell" : "Leave channel";
+    property <string> leave-label: MeshGlobal.active-kind == "private-channel" ? @tr("Leave group")
+        : MeshGlobal.active-kind == "geohash" ? @tr("Leave cell") : @tr("Leave channel");
 
     Modal {
         show: root.show-modal;
@@ -136,7 +136,7 @@ export component MeshInfoSheet inherits Rectangle {
                                 member-touch := TouchArea {
                                     mouse-cursor: pointer;
                                     accessible-role: button;
-                                    accessible-label: "View " + member.display-name;
+                                    accessible-label: @tr("View {}", member.display-name);
                                     accessible-action-default => {
                                         if MeshGlobal.private-can-manage {
                                             root.selected-member-id = member.peer-id;
@@ -172,7 +172,7 @@ export component MeshInfoSheet inherits Rectangle {
 
                 if root.adding-members: VerticalLayout {
                     spacing: Spacing.xs;
-                    Text { text: "NEARBY DEVICES"; color: Colors.text-muted;
+                    Text { text: @tr("NEARBY DEVICES"); color: Colors.text-muted;
                         font-size: Typography.xs; font-weight: 600; letter-spacing: 0.4px; }
                     if MeshGlobal.nearby-peers.length == 0: Text {
                         text: @tr("No devices nearby yet."); color: Colors.text-muted; font-size: Typography.sm;
@@ -191,12 +191,12 @@ export component MeshInfoSheet inherits Rectangle {
                                         alignment: center; horizontal-stretch: 1; min-width: 0px;
                                         Text { text: peer.name; color: Colors.text-primary; font-size: Typography.sm;
                                             font-weight: 600; overflow: elide; }
-                                        Text { text: peer.reachable ? "Nearby" : "Waiting for a route";
+                                        Text { text: peer.reachable ? @tr("Nearby") : @tr("Waiting for a route");
                                             color: Colors.text-muted; font-size: Typography.xs; overflow: elide; }
                                     }
                                     if peer.member: VerticalLayout {
                                         alignment: center;
-                                        Text { text: "Member"; color: Colors.text-muted; font-size: Typography.sm; }
+                                        Text { text: @tr("Member"); color: Colors.text-muted; font-size: Typography.sm; }
                                     }
                                     if !peer.member: VerticalLayout {
                                         alignment: center;
@@ -207,7 +207,7 @@ export component MeshInfoSheet inherits Rectangle {
                                                 horizontal-alignment: center; vertical-alignment: center; }
                                             qr-touch := TouchArea {
                                                 mouse-cursor: pointer; accessible-role: button;
-                                                accessible-label: "Invite " + peer.name + " with QR";
+                                                accessible-label: @tr("Invite {} with QR", peer.name);
                                                 clicked => { MeshGlobal.invite-private-channel(MeshGlobal.active-scope, peer.id); }
                                             }
                                         }
@@ -217,11 +217,11 @@ export component MeshInfoSheet inherits Rectangle {
                                         Rectangle {
                                             width: 72px; height: 30px; border-radius: Spacing.radius-full;
                                             background: invite-touch.pressed ? Colors.primary.darker(0.2) : Colors.action-fill;
-                                            Text { text: "Invite"; color: Colors.on-action; font-size: Typography.sm; font-weight: 600;
+                                            Text { text: @tr("Invite"); color: Colors.on-action; font-size: Typography.sm; font-weight: 600;
                                                 horizontal-alignment: center; vertical-alignment: center; }
                                             invite-touch := TouchArea {
                                                 mouse-cursor: pointer; accessible-role: button;
-                                                accessible-label: "Invite " + peer.name;
+                                                accessible-label: @tr("Invite {}", peer.name);
                                                 clicked => { MeshGlobal.invite-private-channel-direct(MeshGlobal.active-scope, peer.id); }
                                             }
                                         }
@@ -256,7 +256,7 @@ export component MeshInfoSheet inherits Rectangle {
                         background: Colors.surface-section;
                         HorizontalLayout {
                             padding-left: Spacing.lg; padding-right: Spacing.lg;
-                            Text { text: "Mute"; color: Colors.text-primary; font-size: Typography.base;
+                            Text { text: @tr("Mute"); color: Colors.text-primary; font-size: Typography.base;
                                 vertical-alignment: center; horizontal-stretch: 1; }
                             NeoActionToggle {
                                 checked: row.muted;
@@ -268,7 +268,7 @@ export component MeshInfoSheet inherits Rectangle {
                 }
 
                 if !root.adding-members && MeshGlobal.active-kind == "geohash": Text {
-                    text: MeshGlobal.relay-count == 1 ? "1 relay connected" : MeshGlobal.relay-count + " relays connected";
+                    text: @tr("{n} relay connected" | "{n} relays connected" % MeshGlobal.relay-count);
                     color: Colors.text-secondary; font-size: Typography.sm;
                 }
 
@@ -303,10 +303,10 @@ export component MeshInfoSheet inherits Rectangle {
                         Text {
                             width: max(0px, parent.width - parent.padding-left);
                             text: root.confirm-kind == "member"
-                                ? "Remove " + root.selected-member-name + "? The group key will rotate."
+                                ? @tr("Remove {}? The group key will rotate.", root.selected-member-name)
                                 : MeshGlobal.active-kind == "private-channel"
-                                    ? "Reachable members will pause sending until the creator rotates the key."
-                                    : "Leave this mesh conversation?";
+                                    ? @tr("Reachable members will pause sending until the creator rotates the key.")
+                                    : @tr("Leave this mesh conversation?");
                             color: Colors.text-muted; font-size: Typography.xs;
                             wrap: word-wrap; horizontal-alignment: center;
                             vertical-alignment: center; horizontal-stretch: 1;
@@ -339,7 +339,7 @@ export component MeshInfoSheet inherits Rectangle {
                         }
                     }
                 }
-                InfoActionRow { title: "Cancel"; centered: true; bold: true; clicked => { root.confirm-kind = ""; } }
+                InfoActionRow { title: @tr("Cancel"); centered: true; bold: true; clicked => { root.confirm-kind = ""; } }
             }
         }
     }

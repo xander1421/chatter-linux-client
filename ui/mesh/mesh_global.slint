@@ -158,10 +158,10 @@ export global MeshGlobal {
     in-out property <string> active-title: "";
     in-out property <string> active-scope: "";
     in-out property <bool> private-rekey-pending: false;
-    in-out property <string> active-binding-label: "Mesh peer · self-asserted name";
+    in-out property <string> active-binding-label: @tr("Mesh peer · self-asserted name");
     // Kept for the Rust reset path while verification lives in the peer sheet.
     in-out property <bool> identity-panel-open: false;
-    in-out property <string> active-protection-label: "Noise (bitchat)";
+    in-out property <string> active-protection-label: @tr("Noise (bitchat)");
     in-out property <bool> active-signal-enabled: false;
     callback toggle-signal-mesh(string);
     in-out property <string> active-comparison-code: "";

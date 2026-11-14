@@ -252,9 +252,8 @@ export component InviteMemberModal inherits Rectangle {
                 // Invite button
                 Button {
                     text: root.loading ? "" :
-                        (root.selected-count == 0 ? "Invite" :
-                         root.selected-count == 1 ? "Invite 1 user" :
-                         "Invite " + root.selected-count + " users");
+                        (root.selected-count == 0 ? @tr("Invite") :
+                         @tr("Invite {n} user" | "Invite {n} users" % root.selected-count));
                     variant: "primary";
                     disabled: root.selected-count == 0 || root.loading;
                     loading: root.loading;

@@ -46,7 +46,7 @@ export component MessageFooter inherits HorizontalLayout {
             // A group: each reaction inside is its own button. As a button it
             // had nothing to do and AT-SPI listed it with no action.
             accessible-role: groupbox;
-            accessible-label: "Reactions: " + root.reaction-summary;
+            accessible-label: @tr("Reactions: {}", root.reaction-summary);
 
             reactions-row := HorizontalLayout {
                 padding-left: Spacing.none;
@@ -70,7 +70,7 @@ export component MessageFooter inherits HorizontalLayout {
                     animate transform-scale-y { duration: reaction-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                     animate background { duration: Materials.motion-quick; easing: Materials.glide; }
                     accessible-role: button;
-                    accessible-label: reaction.emoji + (reaction.own ? ", your reaction" : "");
+                    accessible-label: reaction.own ? @tr("{}, your reaction", reaction.emoji) : reaction.emoji;
                     accessible-action-default => { root.reaction-toggled(root.sender-id, root.timestamp-ns, reaction.emoji); }
 
                     entry := HorizontalLayout {
@@ -184,8 +184,8 @@ export component MessageFooter inherits HorizontalLayout {
                     : root.delivery-status == "read"
                         ? @tr("Read by the peer")
                     : root.delivery-status == "broadcast"
-                        ? "Put on the air without recipient acknowledgement"
-                    : "Handed to a live link; not yet acknowledged";
+                        ? @tr("Put on the air without recipient acknowledgement")
+                    : @tr("Handed to a live link; not yet acknowledged");
             }
 
             // Delivery status checkmarks. SVG, not "✓": the
@@ -213,7 +213,7 @@ export component MessageFooter inherits HorizontalLayout {
                 font-italic: true;
                 wrap: word-wrap;
                 accessible-role: button;
-                accessible-label: root.failure-reason + ". Tap to retry now";
+                accessible-label: @tr("{}. Tap to retry now", root.failure-reason);
                 accessible-action-default => { root.message-clicked(root.message-id); }
                 TouchArea {
                     mouse-cursor: pointer;
@@ -223,15 +223,15 @@ export component MessageFooter inherits HorizontalLayout {
 
             // "not sent" offers Retry only when core says a retry can land.
             if root.is-own && !root.mesh-delivery && root.delivery-status == "failed" && !root.can-retry: Text {
-                text: root.failure-reason == "" ? "not sent" : "not sent \u{b7} " + root.failure-reason;
+                text: root.failure-reason == "" ? @tr("not sent") : @tr("not sent \u{b7} {}", root.failure-reason);
                 color: root.overlay-media ? #ffffff : Colors.error;
                 font-size: Typography.xs;
                 font-italic: true;
                 accessible-role: text;
-                accessible-label: "Not sent, " + root.failure-reason;
+                accessible-label: @tr("Not sent, {}", root.failure-reason);
             }
             if root.is-own && !root.mesh-delivery && root.delivery-status == "failed" && root.can-retry: Text {
-                text: root.failure-reason == "" ? "not sent \u{b7} Retry" : "not sent \u{b7} " + root.failure-reason + " \u{b7} Retry";
+                text: root.failure-reason == "" ? @tr("not sent \u{b7} Retry") : @tr("not sent \u{b7} {} \u{b7} Retry", root.failure-reason);
                 color: root.overlay-media ? #ffffff : Colors.error;
                 font-size: Typography.xs;
                 font-italic: true;

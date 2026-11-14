@@ -411,9 +411,9 @@ export component ActiveCallView inherits Rectangle {
 
                     // Audio mute toggle for this peer.
                     IconAction {
-                        label: (call-data.participants[tile-indices[maximized-index]].is-audio-muted-locally
-                            ? "Unmute " : "Mute ")
-                            + call-data.participants[tile-indices[maximized-index]].display-name + " for you";
+                        label: call-data.participants[tile-indices[maximized-index]].is-audio-muted-locally
+                            ? @tr("Unmute {} for you", call-data.participants[tile-indices[maximized-index]].display-name)
+                            : @tr("Mute {} for you", call-data.participants[tile-indices[maximized-index]].display-name);
                         icon: call-data.participants[tile-indices[maximized-index]].is-audio-muted-locally
                                 ? Icons.mic-off : Icons.mic;
                         active: call-data.participants[tile-indices[maximized-index]].is-audio-muted-locally;
@@ -425,9 +425,9 @@ export component ActiveCallView inherits Rectangle {
 
                     // Video pause toggle for this peer.
                     IconAction {
-                        label: (call-data.participants[tile-indices[maximized-index]].is-video-paused-locally
-                            ? "Resume " : "Pause ")
-                            + call-data.participants[tile-indices[maximized-index]].display-name + "'s video for you";
+                        label: call-data.participants[tile-indices[maximized-index]].is-video-paused-locally
+                            ? @tr("Resume {}'s video for you", call-data.participants[tile-indices[maximized-index]].display-name)
+                            : @tr("Pause {}'s video for you", call-data.participants[tile-indices[maximized-index]].display-name);
                         icon: call-data.participants[tile-indices[maximized-index]].is-video-paused-locally
                                 ? Icons.play : Icons.pause;
                         active: call-data.participants[tile-indices[maximized-index]].is-video-paused-locally;
@@ -546,7 +546,7 @@ export component ActiveCallView inherits Rectangle {
                             height: Spacing.list-row-height-touch;
                             background: participant.user-id == root.pinned-id ? Colors.tint-strong : Colors.surface;
                             accessible-role: button;
-                            accessible-label: "Pin " + participant.display-name;
+                            accessible-label: @tr("Pin {}", participant.display-name);
                             accessible-action-default => {
                                 root.pinned-id = participant.user-id;
                                 root.user-focus = -1;
@@ -593,14 +593,14 @@ export component ActiveCallView inherits Rectangle {
                 spacing: Spacing.sm;
                 if call-data.verification-emoji-1 != "": HorizontalLayout {
                     spacing: Spacing.sm;
-                    Text { accessible-role: text; accessible-label: "Call verification emoji 1: " + call-data.verification-emoji-1; font-family: Typography.font-family-emoji; color: Colors.text-primary; text: call-data.verification-emoji-1; font-size: Typography.lg; vertical-alignment: center; }
-                    Text { accessible-role: text; accessible-label: "Call verification emoji 2: " + call-data.verification-emoji-2; font-family: Typography.font-family-emoji; color: Colors.text-primary; text: call-data.verification-emoji-2; font-size: Typography.lg; vertical-alignment: center; }
-                    Text { accessible-role: text; accessible-label: "Call verification emoji 3: " + call-data.verification-emoji-3; font-family: Typography.font-family-emoji; color: Colors.text-primary; text: call-data.verification-emoji-3; font-size: Typography.lg; vertical-alignment: center; }
-                    Text { accessible-role: text; accessible-label: "Call verification emoji 4: " + call-data.verification-emoji-4; font-family: Typography.font-family-emoji; color: Colors.text-primary; text: call-data.verification-emoji-4; font-size: Typography.lg; vertical-alignment: center; }
+                    Text { accessible-role: text; accessible-label: @tr("Call verification emoji 1: {}", call-data.verification-emoji-1); font-family: Typography.font-family-emoji; color: Colors.text-primary; text: call-data.verification-emoji-1; font-size: Typography.lg; vertical-alignment: center; }
+                    Text { accessible-role: text; accessible-label: @tr("Call verification emoji 2: {}", call-data.verification-emoji-2); font-family: Typography.font-family-emoji; color: Colors.text-primary; text: call-data.verification-emoji-2; font-size: Typography.lg; vertical-alignment: center; }
+                    Text { accessible-role: text; accessible-label: @tr("Call verification emoji 3: {}", call-data.verification-emoji-3); font-family: Typography.font-family-emoji; color: Colors.text-primary; text: call-data.verification-emoji-3; font-size: Typography.lg; vertical-alignment: center; }
+                    Text { accessible-role: text; accessible-label: @tr("Call verification emoji 4: {}", call-data.verification-emoji-4); font-family: Typography.font-family-emoji; color: Colors.text-primary; text: call-data.verification-emoji-4; font-size: Typography.lg; vertical-alignment: center; }
                 }
                 if call-data.verification-emoji-1 != "" && call-data.verification-key-version != "": Text {
                     accessible-role: text;
-                    accessible-label: "Call key version " + call-data.verification-key-version;
+                    accessible-label: @tr("Call key version {}", call-data.verification-key-version);
                     // The key changes as people join and leave; emojis only
                     // match between people on the same key, so say which.
                     text: "key " + call-data.verification-key-version;

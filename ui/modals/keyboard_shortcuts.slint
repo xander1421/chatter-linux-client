@@ -121,21 +121,21 @@ export component KeyboardShortcutsDialog inherits Rectangle {
 
                         // The combo Appearance › Search shortcut leaves bound.
                         ShortcutRow {
-                            action: "Search";
-                            key: root.search-shortcut-pref == "k" ? "Ctrl + K"
-                                : root.search-shortcut-pref == "f" ? "Ctrl + F" : "Ctrl + K / Ctrl + F";
+                            action: @tr("Search");
+                            key: root.search-shortcut-pref == "k" ? @tr("Ctrl + K")
+                                : root.search-shortcut-pref == "f" ? @tr("Ctrl + F") : @tr("Ctrl + K / Ctrl + F");
                         }
-                        if root.ai-enabled: ShortcutRow { action: "Open AI chat"; key: "Ctrl + J"; }
+                        if root.ai-enabled: ShortcutRow { action: @tr("Open AI chat"); key: @tr("Ctrl + J"); }
                         for shortcut in [
-                            { key: "Ctrl + Shift + F", action: "Search in chat" },
-                            { key: "Ctrl + ,", action: "Open settings" },
-                            { key: "Alt + ↓ / Ctrl + Tab", action: "Next chat" },
-                            { key: "Alt + ↑ / Ctrl + Shift + Tab", action: "Previous chat" },
-                            { key: "Ctrl + 0", action: "Saved messages" },
-                            { key: "↑ / ↓, Home / End", action: "Move in sidebar" },
-                            { key: "Enter / Space", action: "Open sidebar item" },
-                            { key: "Ctrl + /", action: "Show this dialog" },
-                            { key: "Escape", action: "Close modal or panel" },
+                            { key: @tr("Ctrl + Shift + F"), action: @tr("Search in chat") },
+                            { key: @tr("Ctrl + ,"), action: @tr("Open settings") },
+                            { key: @tr("Alt + ↓ / Ctrl + Tab"), action: @tr("Next chat") },
+                            { key: @tr("Alt + ↑ / Ctrl + Shift + Tab"), action: @tr("Previous chat") },
+                            { key: @tr("Ctrl + 0"), action: @tr("Saved messages") },
+                            { key: @tr("↑ / ↓, Home / End"), action: @tr("Move in sidebar") },
+                            { key: @tr("Enter / Space"), action: @tr("Open sidebar item") },
+                            { key: @tr("Ctrl + /"), action: @tr("Show this dialog") },
+                            { key: @tr("Escape"), action: @tr("Close modal or panel") },
                         ]: ShortcutRow { action: shortcut.action; key: shortcut.key; }
 
                         // Messages section
@@ -147,12 +147,12 @@ export component KeyboardShortcutsDialog inherits Rectangle {
                         }
 
                         for shortcut in [
-                            { key: "Enter", action: "Send" },
-                            { key: "Shift + Enter", action: "New line" },
-                            { key: "Ctrl + B / Ctrl + I", action: "Bold / italic" },
-                            { key: "Ctrl + Shift + X / M", action: "Strikethrough / code" },
-                            { key: "↑ (empty message box)", action: "Edit your last message" },
-                            { key: "Escape", action: "Cancel edit or reply" },
+                            { key: @tr("Enter"), action: @tr("Send") },
+                            { key: @tr("Shift + Enter"), action: @tr("New line") },
+                            { key: @tr("Ctrl + B / Ctrl + I"), action: @tr("Bold / italic") },
+                            { key: @tr("Ctrl + Shift + X / M"), action: @tr("Strikethrough / code") },
+                            { key: @tr("↑ (empty message box)"), action: @tr("Edit your last message") },
+                            { key: @tr("Escape"), action: @tr("Cancel edit or reply") },
                         ]: ShortcutRow { action: shortcut.action; key: shortcut.key; }
 
                         Rectangle { height: Spacing.xs; }

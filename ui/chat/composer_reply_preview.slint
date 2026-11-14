@@ -65,7 +65,7 @@ export component ComposerReplyPreview inherits GlassSurface {
             spacing: Spacing.xxs;
 
             Text {
-                text: "Reply to " + root.reply-to-sender;
+                text: @tr("Reply to {}", root.reply-to-sender);
                 color: Colors.primary;
                 font-size: Typography.sm;
                 font-weight: 600;

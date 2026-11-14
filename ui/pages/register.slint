@@ -123,7 +123,7 @@ export component RegisterPage inherits Rectangle {
                 }
                 
                 Text {
-                    text: "Step \{current-step} of \{total-steps}";
+                    text: @tr("Step {0} of {1}", current-step, total-steps);
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     vertical-alignment: center;
@@ -417,9 +417,9 @@ export component RegisterPage inherits Rectangle {
                             // Password strength meter (4 segments)
                             if root.password-strength > 0: VerticalLayout {
                                 accessible-role: text;
-                                accessible-label: "Password strength: " + (root.password-strength == 1 ? "Weak" :
-                                    root.password-strength == 2 ? "Fair" :
-                                    root.password-strength == 3 ? "Good" : "Strong");
+                                accessible-label: root.password-strength == 1 ? @tr("Password strength: Weak") :
+                                    root.password-strength == 2 ? @tr("Password strength: Fair") :
+                                    root.password-strength == 3 ? @tr("Password strength: Good") : @tr("Password strength: Strong");
                                 spacing: Spacing.xs;
                                 HorizontalLayout {
                                     spacing: Spacing.xs;
@@ -510,8 +510,8 @@ export component RegisterPage inherits Rectangle {
                             // PIN strength (3 segments: weak/fair/strong)
                             if root.pin-strength > 0: HorizontalLayout {
                                 accessible-role: text;
-                                accessible-label: "PIN strength: " + (root.visible-pin-strength == 1 ? "Weak" :
-                                    root.visible-pin-strength == 2 ? "Fair" : "Strong");
+                                accessible-label: root.visible-pin-strength == 1 ? @tr("PIN strength: Weak") :
+                                    root.visible-pin-strength == 2 ? @tr("PIN strength: Fair") : @tr("PIN strength: Strong");
                                 spacing: Spacing.xs;
                                 height: 8px;
                                 Rectangle {
@@ -614,7 +614,7 @@ export component RegisterPage inherits Rectangle {
                         if current-step == 1: HorizontalLayout {
                             alignment: center;
                             spacing: Spacing.xs;
-                            Text { text: "Already have an account?"; color: Colors.text-secondary; font-size: Typography.sm; }
+                            Text { text: @tr("Already have an account?"); color: Colors.text-secondary; font-size: Typography.sm; }
                             Text {
                                 text: @tr("Sign in");
                                 color: Colors.primary;

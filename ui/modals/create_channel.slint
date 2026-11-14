@@ -83,9 +83,9 @@ export component CreateChannelModal inherits Rectangle {
     in-out property <string> ai-provider: "";
     in-out property <string> ai-model: "";
     in property <[AIProviderOption]> ai-providers: [
-        { id: "claude", name: "Claude (Anthropic)" },
-        { id: "openai", name: "OpenAI" },
-        { id: "ollama", name: "Hosted Ollama" },
+        { id: "claude", name: @tr("Claude (Anthropic)") },
+        { id: "openai", name: @tr("OpenAI") },
+        { id: "ollama", name: @tr("Hosted Ollama") },
     ];
     in property <[AIModelOption]> ai-models: [];
     in property <bool> ai-models-loading: false;
@@ -188,7 +188,7 @@ export component CreateChannelModal inherits Rectangle {
                     animate x { duration: Materials.motion-standard; easing: Materials.glide; }
                 }
 
-                for tab[index] in ["Create", "Join"]: Rectangle {
+                for tab[index] in [@tr("Create"), @tr("Join")]: Rectangle {
                     x: index * tab-track.width / 2;
                     width: tab-track.width / 2;
                     height: tab-track.height;
@@ -442,7 +442,7 @@ export component CreateChannelModal inherits Rectangle {
                                             animate width { duration: Materials.motion-standard; easing: Materials.spring; }
                                             animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
                                             accessible-role: button;
-                                            accessible-label: "Role for " + friend.display-name + ": " + role-text.text;
+                                            accessible-label: @tr("Role for {0}: {1}", friend.display-name, role-text.text);
                                             accessible-enabled: friend.selected;
                                             accessible-action-default => { if friend.selected { root.toggle-friend-role(idx); } }
                                             KeyFocus { border-radius: parent.border-radius; activate => { if friend.selected { root.toggle-friend-role(idx); } } }

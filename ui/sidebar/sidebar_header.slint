@@ -63,7 +63,7 @@ export component SidebarHeader inherits GlassSurface {
                 VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
                     HorizontalLayout { alignment: center; Image { source: Icons.search; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                 }
-                Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                Text { text: @tr("Search"); color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
             }
             search-touch := TouchArea { enabled: !root.search-overlay-open; mouse-cursor: pointer; clicked => { root.search-clicked(); } }
             // Create — New Chat / New Channel / New Section. Two-pane only; a

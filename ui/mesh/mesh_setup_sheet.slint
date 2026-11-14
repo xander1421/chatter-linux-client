@@ -70,9 +70,9 @@ export component MeshSetupSheet inherits Rectangle {
             spacing: Spacing.md;
             HorizontalLayout {
                 height: Spacing.touch-target-min;
-                                Text { text: "Mesh settings"; color: Colors.text-primary; font-size: Typography.lg;
+                                Text { text: @tr("Mesh settings"); color: Colors.text-primary; font-size: Typography.lg;
                     font-weight: Typography.semibold; horizontal-stretch: 1; vertical-alignment: center; }
-                Button { text: "Done"; variant: "ghost"; touch: root.touch; clicked => { root.close(); } }
+                Button { text: @tr("Done"); variant: "ghost"; touch: root.touch; clicked => { root.close(); } }
             }
             Flickable {
                 width: 100%; vertical-stretch: 1;
@@ -90,16 +90,16 @@ export component MeshSetupSheet inherits Rectangle {
                             VerticalLayout { padding: Spacing.md; spacing: Spacing.sm;
                                 Text {
                                     width: parent.width;
-                                    text: MeshGlobal.pending-private-peer + " invited you to " + MeshGlobal.pending-private-name;
+                                    text: @tr("{0} invited you to {1}", MeshGlobal.pending-private-peer, MeshGlobal.pending-private-name);
                                     color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.semibold; wrap: word-wrap; }
                                 Text {
                                     width: parent.width;
                                     text: @tr("Peer names are self-asserted until you verify in person.");
                                     color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
                                 HorizontalLayout { spacing: Spacing.sm;
-                                    Button { text: "Decline"; variant: "secondary"; touch: root.touch;
+                                    Button { text: @tr("Decline"); variant: "secondary"; touch: root.touch;
                                         clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, false); } }
-                                    Button { text: "Join"; variant: "primary"; touch: root.touch;
+                                    Button { text: @tr("Join"); variant: "primary"; touch: root.touch;
                                         clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, true); } }
                                 }
                             }
@@ -117,12 +117,12 @@ export component MeshSetupSheet inherits Rectangle {
                                     accessible-text: @tr("Mesh");
                                     row-padding: Spacing.md;
                                     label-spacing: Spacing.xs;
-                                    Text { text: "Mesh"; color: Colors.text-primary; font-size: Typography.base;
+                                    Text { text: @tr("Mesh"); color: Colors.text-primary; font-size: Typography.base;
                                         font-weight: Typography.semibold; }
-                                    Text { text: !MeshGlobal.mesh-on ? "Off" : !MeshGlobal.radio-running
-                                        ? (MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth is off" : "Radio unavailable")
-                                        : MeshGlobal.peer-count == 0 ? "On · nobody nearby"
-                                        : MeshGlobal.peer-count == 1 ? "On · 1 nearby" : "On · " + MeshGlobal.peer-count + " nearby";
+                                    Text { text: !MeshGlobal.mesh-on ? @tr("Off") : !MeshGlobal.radio-running
+                                        ? (MeshGlobal.radio-down == "bluetooth-off" ? @tr("Bluetooth is off") : @tr("Radio unavailable"))
+                                        : MeshGlobal.peer-count == 0 ? @tr("On · nobody nearby")
+                                        : @tr("On · {n} nearby" | "On · {n} nearby" % MeshGlobal.peer-count);
                                         color: Colors.text-secondary; font-size: Typography.sm; }
                                     toggled(value) => { MeshGlobal.set-mesh-on(value); }
                                 }
@@ -145,11 +145,11 @@ export component MeshSetupSheet inherits Rectangle {
                             font-weight: Typography.semibold; letter-spacing: 0.4px; }
                         Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             HorizontalLayout { padding: Spacing.sm; spacing: Spacing.sm;
-                                Input { placeholder: "Nickname"; text <=> root.name-draft;
+                                Input { placeholder: @tr("Nickname"); text <=> root.name-draft;
                                     control-height: Spacing.touch-target-min; horizontal-stretch: 1;
                                     accepted(value) => { MeshGlobal.set-nickname(value); } }
                                 // "Save", not "Done": the sheet's own Done closes it.
-                                Button { text: "Save"; variant: "ghost"; touch: root.touch;
+                                Button { text: @tr("Save"); variant: "ghost"; touch: root.touch;
                                     clicked => { MeshGlobal.set-nickname(root.name-draft); } }
                             }
                         }
@@ -165,7 +165,7 @@ export component MeshSetupSheet inherits Rectangle {
                     VerticalLayout {
                         spacing: Spacing.sm;
                         Rectangle { height: erase-row.preferred-height; background: Colors.surface-section; border-radius: Spacing.radius-lg;
-                            erase-row := SettingsRow { icon: Icons.trash; title: "Erase Mesh data…"; destructive: true;
+                            erase-row := SettingsRow { icon: Icons.trash; title: @tr("Erase Mesh data…"); destructive: true;
                                 touch: root.touch; show-chevron: false; clicked => { root.confirming-wipe = true; } }
                         }
                     }
@@ -187,14 +187,14 @@ export component MeshSetupSheet inherits Rectangle {
                         width: parent.width;
                         text: @tr("Erase this device's mesh identity, messages, carried mail and favourites? Your Chatter account stays intact. This cannot be undone.");
                         color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; horizontal-alignment: center; }
-                    Button { text: "Erase Mesh data"; variant: "destructive"; touch: root.touch;
+                    Button { text: @tr("Erase Mesh data"); variant: "destructive"; touch: root.touch;
                         clicked => { root.confirming-wipe = false; MeshGlobal.panic-wipe(); } }
                 }
             }
             Rectangle { height: wipe-cancel.preferred-height;
                 background: Colors.surface-section; border-radius: Spacing.radius-lg;
                 wipe-cancel := VerticalLayout { padding: Spacing.sm;
-                    Button { text: "Cancel"; variant: "ghost"; touch: root.touch;
+                    Button { text: @tr("Cancel"); variant: "ghost"; touch: root.touch;
                         clicked => { root.confirming-wipe = false; } }
                 }
             }

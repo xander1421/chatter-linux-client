@@ -632,10 +632,10 @@ export component SectionContextMenu inherits Rectangle {
 
             if root.choose-mute: VerticalLayout {
               for choice[i] in [
-                { label: "For 1 hour", seconds: 3600 },
-                { label: "For 8 hours", seconds: 28800 },
-                { label: "For 1 day", seconds: 86400 },
-                { label: "Always", seconds: 0 },
+                { label: @tr("For 1 hour"), seconds: 3600 },
+                { label: @tr("For 8 hours"), seconds: 28800 },
+                { label: @tr("For 1 day"), seconds: 86400 },
+                { label: @tr("Always"), seconds: 0 },
               ]: MenuItem {
                 nav-index: 3 + i;
                 focused-index: root.focus-index;

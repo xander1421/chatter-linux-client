@@ -29,7 +29,7 @@ export component PinnedBar inherits GlassSurface {
     callback list-clicked();
 
     // Computed
-    property <string> position-text: has-multiple ? "Pinned message \{current-index} of \{total-count}" : "Pinned message";
+    property <string> position-text: has-multiple ? @tr("Pinned message {0} of {1}", current-index, total-count) : @tr("Pinned message");
 
     // One material for the pinned-message chrome.
     height: Spacing.touch-target-min * Appearance.text-grow;
@@ -135,7 +135,7 @@ export component PinnedBar inherits GlassSurface {
                 width: 36px; height: 36px;
                 y: (parent.height - self.height) / 2;
                 border-radius: Spacing.radius-sm; clip: true;
-                Image { accessible-label: "Pinned message image"; source: root.thumbnail; width: 100%; height: 100%; image-fit: cover; }
+                Image { accessible-label: @tr("Pinned message image"); source: root.thumbnail; width: 100%; height: 100%; image-fit: cover; }
             }
             TouchArea { clicked => { root.go-to-message(); } }
         }
@@ -148,7 +148,7 @@ export component PinnedBar inherits GlassSurface {
 
             bar-touch := TouchArea {
                 accessible-role: button;
-                accessible-label: "Go to pinned message: " + root.message-preview;
+                accessible-label: @tr("Go to pinned message: {}", root.message-preview);
                 accessible-action-default => { root.go-to-message(); }
                 KeyFocus { activate => { root.go-to-message(); } }
                 mouse-cursor: pointer;

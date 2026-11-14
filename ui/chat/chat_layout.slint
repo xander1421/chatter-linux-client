@@ -191,7 +191,7 @@ export component ChatLayout inherits Rectangle {
     in-out property <string> composer-text: "";
     out property <bool> composer-composing: composer.composing;
     out property <string> composer-composed-text: composer.composed-text;
-    in property <string> composer-placeholder: "Type a message...";
+    in property <string> composer-placeholder: @tr("Type a message...");
     // Non-empty when the viewer may not post here (muted, removed): the
     // composer is replaced by this text, worded by chatter-core.
     in property <string> composer-notice: "";
@@ -382,14 +382,14 @@ export component ChatLayout inherits Rectangle {
         privacy-line: root.privacy-line-override != ""
             ? root.privacy-line-override
           : MeshGlobal.active-kind == "room"
-            ? "Anyone in radio range can read this"
+            ? @tr("Anyone in radio range can read this")
           : MeshGlobal.active-kind == "geohash"
-            ? "Anyone in this cell can read this"
+            ? @tr("Anyone in this cell can read this")
           : MeshGlobal.active-kind == "private-channel"
-            ? "Invited devices · encrypted over mesh"
+            ? @tr("Invited devices · encrypted over mesh")
           : root.conversation-kind == ConversationKind.channel && !root.private-channel
-            ? "Public channel — anyone can read this"
-            : "Messages are end-to-end encrypted";
+            ? @tr("Public channel — anyone can read this")
+            : @tr("Messages are end-to-end encrypted");
         saved-messages: root.conversation-kind == ConversationKind.saved-messages;
         current-playing-attachment-id: root.current-playing-attachment-id;
         is-media-playing: root.is-media-playing;
@@ -535,13 +535,13 @@ export component ChatLayout inherits Rectangle {
                     // A live call has at least its starter, so a 0 means the
                     // count has not arrived, not an empty call.
                     text: root.active-channel-call-participants > 0
-                        ? "Call in progress · " + (root.active-channel-call-participants == 1 ? "1 participant" : root.active-channel-call-participants + " participants")
-                        : "Call in progress";
+                        ? @tr("Call in progress · {n} participant" | "Call in progress · {n} participants" % root.active-channel-call-participants)
+                        : @tr("Call in progress");
                     color: Colors.text-primary;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                 }
-                Button { text: "Join"; variant: "secondary"; clicked => { root.join-channel-call(); } }
+                Button { text: @tr("Join"); variant: "secondary"; clicked => { root.join-channel-call(); } }
             }
         }
 
@@ -962,7 +962,7 @@ export component ChatLayout inherits Rectangle {
                 y: picker-drawer.tabs-y;
                 width: drawer-search-row.width;
                 height: picker-drawer.control-height;
-                for tab[index] in ["Emoji", "GIFs"]: Rectangle {
+                for tab[index] in [@tr("Emoji"), @tr("GIFs")]: Rectangle {
                     property <bool> current: index == 0 ? root.emoji-picker-visible : root.gif-picker-visible;
                     visible: index == 0 || root.gifs-available;
                     x: index * (parent.width + Spacing.xs) / 2;

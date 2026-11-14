@@ -9,15 +9,13 @@ import { MeshListItem } from "mesh_list_item.slint";
 export component MeshList inherits Rectangle {
     in property <bool> collapsed: false;
     in property <bool> touch: false;
-    property <string> device-count: MeshGlobal.peer-count == 1 ? "1 device nearby"
-        : MeshGlobal.peer-count + " devices nearby";
-    property <string> relay-count: MeshGlobal.relay-count == 1 ? "1 relay"
-        : MeshGlobal.relay-count + " relays";
-    property <string> status-title: !MeshGlobal.mesh-on ? "Mesh off"
-        : MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth off" : "Mesh on";
-    property <string> status-detail: !MeshGlobal.mesh-on ? "Radio off · " + root.relay-count
-        : MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth is off · " + root.relay-count
-        : !MeshGlobal.radio-running ? "Radio unavailable · " + root.relay-count
+    property <string> device-count: @tr("{n} device nearby" | "{n} devices nearby" % MeshGlobal.peer-count);
+    property <string> relay-count: @tr("{n} relay" | "{n} relays" % MeshGlobal.relay-count);
+    property <string> status-title: !MeshGlobal.mesh-on ? @tr("Mesh off")
+        : MeshGlobal.radio-down == "bluetooth-off" ? @tr("Bluetooth off") : @tr("Mesh on");
+    property <string> status-detail: !MeshGlobal.mesh-on ? @tr("Radio off · {n} relay" | "Radio off · {n} relays" % MeshGlobal.relay-count)
+        : MeshGlobal.radio-down == "bluetooth-off" ? @tr("Bluetooth is off · {n} relay" | "Bluetooth is off · {n} relays" % MeshGlobal.relay-count)
+        : !MeshGlobal.radio-running ? @tr("Radio unavailable · {n} relay" | "Radio unavailable · {n} relays" % MeshGlobal.relay-count)
         : root.device-count + " · " + root.relay-count;
 
     height: content.preferred-height;
@@ -34,7 +32,7 @@ export component MeshList inherits Rectangle {
                 colorize: MeshGlobal.mesh-on ? Colors.primary : Colors.text-muted;
             }
             rail-touch := TouchArea {
-                mouse-cursor: pointer; accessible-role: button; accessible-label: "Mesh setup";
+                mouse-cursor: pointer; accessible-role: button; accessible-label: @tr("Mesh setup");
                 clicked => { MeshGlobal.open-setup(); }
             }
         }
@@ -97,7 +95,7 @@ export component MeshList inherits Rectangle {
                     invitation-content := VerticalLayout {
                         padding: Spacing.md; spacing: Spacing.md;
                         Text {
-                            text: MeshGlobal.pending-private-peer + " invited you to " + MeshGlobal.pending-private-name;
+                            text: @tr("{0} invited you to {1}", MeshGlobal.pending-private-peer, MeshGlobal.pending-private-name);
                             color: Colors.text-primary; font-size: Typography.sm;
                             font-weight: Typography.semibold; wrap: word-wrap;
                         }
@@ -107,20 +105,20 @@ export component MeshList inherits Rectangle {
                                 height: Spacing.button-height; horizontal-stretch: 1;
                                 border-radius: Spacing.radius-md;
                                 background: decline-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
-                                Text { text: "Decline"; color: Colors.text-secondary; font-size: Typography.sm;
+                                Text { text: @tr("Decline"); color: Colors.text-secondary; font-size: Typography.sm;
                                     horizontal-alignment: center; vertical-alignment: center; }
                                 decline-touch := TouchArea {
-                                    mouse-cursor: pointer; accessible-role: button; accessible-label: "Decline mesh invitation";
+                                    mouse-cursor: pointer; accessible-role: button; accessible-label: @tr("Decline mesh invitation");
                                     clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, false); }
                                 }
                             }
                             Rectangle {
                                 height: Spacing.button-height; horizontal-stretch: 1;
                                 border-radius: Spacing.radius-md; background: Colors.action-fill;
-                                Text { text: "Join"; color: Colors.on-action; font-size: Typography.sm;
+                                Text { text: @tr("Join"); color: Colors.on-action; font-size: Typography.sm;
                                     font-weight: Typography.semibold; horizontal-alignment: center; vertical-alignment: center; }
                                 TouchArea {
-                                    mouse-cursor: pointer; accessible-role: button; accessible-label: "Join mesh invitation";
+                                    mouse-cursor: pointer; accessible-role: button; accessible-label: @tr("Join mesh invitation");
                                     clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, true); }
                                 }
                             }
@@ -157,7 +155,7 @@ export component MeshList inherits Rectangle {
                                 }
                                 TouchArea {
                                     mouse-cursor: pointer; accessible-role: button;
-                                    accessible-label: "Open nearby mesh peer " + peer.name;
+                                    accessible-label: @tr("Open nearby mesh peer {}", peer.name);
                                     clicked => { MeshGlobal.open-peer(peer.id); }
                                 }
                             } }
@@ -181,7 +179,7 @@ export component MeshList inherits Rectangle {
                         colorize: Colors.primary;
                     }
                 }
-                Text { text: "No mesh conversations"; color: Colors.text-primary;
+                Text { text: @tr("No mesh conversations"); color: Colors.text-primary;
                     font-size: Typography.base; font-weight: Typography.semibold; horizontal-alignment: center; }
                 Text {
                     text: @tr("Create a group or start a nearby conversation.");
@@ -189,10 +187,10 @@ export component MeshList inherits Rectangle {
                 Rectangle {
                     height: Spacing.button-height; border-radius: Spacing.radius-md;
                     background: Colors.action-fill;
-                    Text { text: "New group"; color: Colors.on-action; font-size: Typography.sm;
+                    Text { text: @tr("New group"); color: Colors.on-action; font-size: Typography.sm;
                         font-weight: Typography.semibold; horizontal-alignment: center; vertical-alignment: center; }
                     TouchArea {
-                        mouse-cursor: pointer; accessible-role: button; accessible-label: "New mesh group";
+                        mouse-cursor: pointer; accessible-role: button; accessible-label: @tr("New mesh group");
                         clicked => { MeshGlobal.open-sheet("mesh-compose"); }
                     }
                 }

@@ -51,7 +51,7 @@ export component MessageCall inherits HorizontalLayout {
         source: root.sender-avatar-source;
         fallback-text: root.sender-initials;
         accessible-role: button;
-        accessible-label: "View profile of " + root.sender-name;
+        accessible-label: @tr("View profile of {}", root.sender-name);
         accessible-action-default => {
             if root.selection-mode { root.selection-toggled(root.message-id); }
             else { root.sender-profile-requested(root.sender-id); }
@@ -139,18 +139,27 @@ export component MessageCall inherits HorizontalLayout {
                         }
 
                         call-status := Text {
-                            // "video call" where Signal says it: every label
-                            // names the call's type.
-                            property <string> call-noun: root.call-is-video ? "video call" : "call";
-                            text: is-missed ? "Missed " + self.call-noun
-                                : root.call-type == "declined" ? "Declined " + self.call-noun
-                                : root.call-type == "started" ? (root.call-is-video ? "Video call started" : "Call started")
-                                : root.call-type == "ended" ? (root.call-is-video ? "Video call ended" : "Call ended")
-                                : is-outgoing ? "Outgoing " + self.call-noun : "Incoming " + self.call-noun;
+                            text: is-missed
+                                    ? (root.call-is-video ? @tr("Missed video call") : @tr("Missed call"))
+                                : root.call-type == "declined"
+                                    ? (root.call-is-video ? @tr("Declined video call") : @tr("Declined call"))
+                                : root.call-type == "started"
+                                    ? (root.call-is-video ? @tr("Video call started") : @tr("Call started"))
+                                : root.call-type == "ended"
+                                    ? (root.call-is-video ? @tr("Video call ended") : @tr("Call ended"))
+                                : is-outgoing
+                                    ? (root.call-is-video ? @tr("Outgoing video call") : @tr("Outgoing call"))
+                                    : (root.call-is-video ? @tr("Incoming video call") : @tr("Incoming call"));
                             // Spoken by the call card, which is the button.
                             accessible-role: none;
-                            accessible-label: root.call-type == "started" || root.call-type == "ended"
-                                ? (is-outgoing ? "Outgoing " : "Incoming ") + self.call-noun + " " + root.call-type
+                            accessible-label: root.call-type == "started"
+                                    ? (is-outgoing
+                                        ? (root.call-is-video ? @tr("Outgoing video call started") : @tr("Outgoing call started"))
+                                        : (root.call-is-video ? @tr("Incoming video call started") : @tr("Incoming call started")))
+                                : root.call-type == "ended"
+                                    ? (is-outgoing
+                                        ? (root.call-is-video ? @tr("Outgoing video call ended") : @tr("Outgoing call ended"))
+                                        : (root.call-is-video ? @tr("Incoming video call ended") : @tr("Incoming call ended")))
                                 : self.text;
                             color: is-missed ? Colors.error : Colors.text-primary;
                             font-size: Typography.sm;

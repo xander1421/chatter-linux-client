@@ -18,11 +18,11 @@ export component ProfileStatusPicker inherits VerticalLayout {
     padding-right: Spacing.md;
 
     property <[StatusOption]> options: [
-        { mode: "auto", label: "Automatic", hint: "Online while active, away after 5 minutes idle", dot: Colors.online },
-        { mode: "online", label: "Online", hint: "Always shown as online", dot: Colors.online },
-        { mode: "away", label: "Away", hint: "Shown as away", dot: Colors.away },
-        { mode: "dnd", label: "Do not disturb", hint: "Mutes message notifications", dot: Colors.dnd },
-        { mode: "invisible", label: "Invisible", hint: "Appear offline to everyone", dot: Colors.text-muted },
+        { mode: "auto", label: @tr("Automatic"), hint: @tr("Online while active, away after 5 minutes idle"), dot: Colors.online },
+        { mode: "online", label: @tr("Online"), hint: @tr("Always shown as online"), dot: Colors.online },
+        { mode: "away", label: @tr("Away"), hint: @tr("Shown as away"), dot: Colors.away },
+        { mode: "dnd", label: @tr("Do not disturb"), hint: @tr("Mutes message notifications"), dot: Colors.dnd },
+        { mode: "invisible", label: @tr("Invisible"), hint: @tr("Appear offline to everyone"), dot: Colors.text-muted },
     ];
     property <bool> expanded: false;
     property <int> current: root.status-mode == "online" ? 1 : root.status-mode == "away" ? 2
@@ -45,7 +45,7 @@ export component ProfileStatusPicker inherits VerticalLayout {
                 height: max(Spacing.touch-target-min, summary.preferred-height);
                 background: summary-touch.pressed ? Colors.surface-hover : transparent;
                 accessible-role: button;
-                accessible-label: "Status: " + root.options[root.current].label;
+                accessible-label: @tr("Status: {}", root.options[root.current].label);
                 accessible-expandable: true;
                 accessible-expanded: root.expanded;
                 accessible-action-default => { root.expanded = !root.expanded; }

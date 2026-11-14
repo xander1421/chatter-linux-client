@@ -194,13 +194,13 @@ export component UserProfileModal inherits Rectangle {
     // Helper to get presence label
     pure function presence-label(p: string) -> string {
         if p == "online" {
-            return "Online";
+            return @tr("Online");
         } else if p == "away" {
-            return "Away";
+            return @tr("Away");
         } else if p == "dnd" {
-            return "Do not disturb";
+            return @tr("Do not disturb");
         } else {
-            return "Offline";
+            return @tr("Offline");
         }
     }
 
@@ -466,9 +466,9 @@ export component UserProfileModal inherits Rectangle {
                             border-color: Elevation.card-rim;
                             more-content := VerticalLayout {
                                 padding: Spacing.sm; spacing: Spacing.xs;
-                                if !root.scoped-member && !root.is-anonymous: Button { text: "Video call"; variant: "secondary"; clicked => { root.more-open = false; root.start-call(true); } }
-                                if root.can-start-secret-chat && !root.scoped-member: Button { text: "Start secret chat"; variant: "secondary"; clicked => { root.more-open = false; root.start-secret-chat(); } }
-                                if !root.scoped-member: Button { text: "Safety number"; variant: "secondary"; clicked => { root.more-open = false; root.view-safety-number(); root.show-safety-number = true; } }
+                                if !root.scoped-member && !root.is-anonymous: Button { text: @tr("Video call"); variant: "secondary"; clicked => { root.more-open = false; root.start-call(true); } }
+                                if root.can-start-secret-chat && !root.scoped-member: Button { text: @tr("Start secret chat"); variant: "secondary"; clicked => { root.more-open = false; root.start-secret-chat(); } }
+                                if !root.scoped-member: Button { text: @tr("Safety number"); variant: "secondary"; clicked => { root.more-open = false; root.view-safety-number(); root.show-safety-number = true; } }
                             }
                         }
                     }
@@ -499,7 +499,7 @@ export component UserProfileModal inherits Rectangle {
                                 timer-row := Rectangle {
                                     height: timer-row-layout.preferred-height;
                                     accessible-role: button;
-                                    accessible-label: "Disappearing messages: " + DisappearingGlobal.dm-label;
+                                    accessible-label: @tr("Disappearing messages: {}", DisappearingGlobal.dm-label);
                                     accessible-action-default => { root.timer-picker-open = !root.timer-picker-open; }
                                     KeyFocus { border-radius: parent.border-radius; activate => { root.timer-picker-open = !root.timer-picker-open; } }
 
@@ -632,7 +632,7 @@ export component UserProfileModal inherits Rectangle {
                         Text {
                             width: max(0px, parent.width - parent.padding-left);
                             text: root.shared-error; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
-                        Button { text: "Retry shared content"; clicked => { root.shared-retry(); } }
+                        Button { text: @tr("Retry shared content"); clicked => { root.shared-retry(); } }
                     }
 
                     // Shared categories remain a compact card until one is opened.
@@ -681,14 +681,14 @@ export component UserProfileModal inherits Rectangle {
                             border-width: Elevation.rim-width;
                             border-color: Elevation.card-rim;
                             actions-card := VerticalLayout {
-                                ProfileActionRow { icon: Icons.send; text: "Share this contact"; row-height: root.row-height;
+                                ProfileActionRow { icon: Icons.send; text: @tr("Share this contact"); row-height: root.row-height;
                                     clicked => { root.share-contact(); } }
-                                ProfileActionRow { icon: Icons.edit; text: "Edit contact"; row-height: root.row-height;
+                                ProfileActionRow { icon: Icons.edit; text: @tr("Edit contact"); row-height: root.row-height;
                                     clicked => { root.contact-draft = root.contact-name != "" ? root.contact-name : root.display-name; root.edit-contact-open = true; } }
-                                if root.is-friend: ProfileActionRow { icon: Icons.trash; text: "Delete contact"; row-height: root.row-height;
+                                if root.is-friend: ProfileActionRow { icon: Icons.trash; text: @tr("Delete contact"); row-height: root.row-height;
                                     destructive: true;
                                     clicked => { root.confirm-remove = true; } }
-                                ProfileActionRow { icon: Icons.slash; text: root.is-blocked ? "Unblock user" : "Block user"; row-height: root.row-height;
+                                ProfileActionRow { icon: Icons.slash; text: root.is-blocked ? @tr("Unblock user") : @tr("Block user"); row-height: root.row-height;
                                     destructive: !root.is-blocked;
                                     clicked => { if root.is-blocked { root.confirm-unblock = true; } else { root.confirm-block = true; } } }
                             }
@@ -720,15 +720,15 @@ export component UserProfileModal inherits Rectangle {
                             text: @tr("Load more");
                             clicked => { root.shared-load-more(); }
                         }
-                        if root.shared-loading: Text { text: "Loading…"; color: Colors.text-muted; font-size: Typography.sm; }
+                        if root.shared-loading: Text { text: @tr("Loading…"); color: Colors.text-muted; font-size: Typography.sm; }
                         if root.shared-error != "": VerticalLayout {
                             spacing: Spacing.sm;
                             Text {
                                 width: parent.width;
                                 text: root.shared-error; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
-                            Button { text: "Retry"; clicked => { root.shared-retry(); } }
+                            Button { text: @tr("Retry"); clicked => { root.shared-retry(); } }
                         }
-                        if !root.shared-loading && root.shared-error == "" && root.shared-items.length == 0: Text { text: "Nothing shared yet."; color: Colors.text-muted; font-size: Typography.sm; }
+                        if !root.shared-loading && root.shared-error == "" && root.shared-items.length == 0: Text { text: @tr("Nothing shared yet."); color: Colors.text-muted; font-size: Typography.sm; }
                     }
                 }
             }
@@ -738,7 +738,7 @@ export component UserProfileModal inherits Rectangle {
     // they collided with the Media strip below.
     Modal {
         show: root.confirm-remove && root.is-friend && !root.is-self && !root.is-blocked;
-        title: "Delete " + root.display-name + "?";
+        title: @tr("Delete {}?", root.display-name);
         modal-width: 400px;
         show-close: false;
         close => { root.confirm-remove = false; }
@@ -778,7 +778,7 @@ export component UserProfileModal inherits Rectangle {
 
     Modal {
         show: root.confirm-block && !root.is-self && !root.is-blocked;
-        title: "Block " + root.display-name + "?";
+        title: @tr("Block {}?", root.display-name);
         modal-width: 400px;
         show-close: false;
         close => { root.confirm-block = false; }
@@ -823,19 +823,19 @@ export component UserProfileModal inherits Rectangle {
         close => { edit-contact-modal.release-focus(); root.edit-contact-open = false; }
         VerticalLayout {
             spacing: Spacing.md;
-            Input { text <=> root.contact-draft; placeholder: "Contact name"; control-height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height; }
+            Input { text <=> root.contact-draft; placeholder: @tr("Contact name"); control-height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height; }
             HorizontalLayout {
                 spacing: Spacing.sm;
-                Button { text: "Cancel"; variant: "secondary"; clicked => { edit-contact-modal.release-focus(); root.edit-contact-open = false; } }
-                Button { text: "Reset"; variant: "secondary"; clicked => { edit-contact-modal.release-focus(); root.edit-contact-open = false; root.edit-contact(""); } }
-                Button { text: "Save"; variant: "primary"; clicked => { edit-contact-modal.release-focus(); root.edit-contact-open = false; root.edit-contact(root.contact-draft); } }
+                Button { text: @tr("Cancel"); variant: "secondary"; clicked => { edit-contact-modal.release-focus(); root.edit-contact-open = false; } }
+                Button { text: @tr("Reset"); variant: "secondary"; clicked => { edit-contact-modal.release-focus(); root.edit-contact-open = false; root.edit-contact(""); } }
+                Button { text: @tr("Save"); variant: "primary"; clicked => { edit-contact-modal.release-focus(); root.edit-contact-open = false; root.edit-contact(root.contact-draft); } }
             }
         }
     }
 
     Modal {
         show: root.confirm-unblock && root.is-blocked && !root.is-self;
-        title: "Unblock " + root.display-name + "?";
+        title: @tr("Unblock {}?", root.display-name);
         modal-width: 400px; show-close: false;
         close => { root.confirm-unblock = false; }
         VerticalLayout {
@@ -845,8 +845,8 @@ export component UserProfileModal inherits Rectangle {
                 text: @tr("They will be able to call and message you again."); color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
             HorizontalLayout {
                 spacing: Spacing.sm;
-                Button { text: "Cancel"; variant: "secondary"; clicked => { root.confirm-unblock = false; } }
-                Button { text: "Unblock"; variant: "primary"; clicked => { root.confirm-unblock = false; root.unblock-user(); } }
+                Button { text: @tr("Cancel"); variant: "secondary"; clicked => { root.confirm-unblock = false; } }
+                Button { text: @tr("Unblock"); variant: "primary"; clicked => { root.confirm-unblock = false; root.unblock-user(); } }
             }
         }
     }

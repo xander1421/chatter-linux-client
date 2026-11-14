@@ -77,9 +77,9 @@ export component PrivacySettings inherits VerticalLayout {
             }
 
             for opt in [
-                { key: "everyone", label: "Everyone" },
-                { key: "contacts", label: "My contacts" },
-                { key: "nobody", label: "Nobody" },
+                { key: "everyone", label: @tr("Everyone") },
+                { key: "contacts", label: @tr("My contacts") },
+                { key: "nobody", label: @tr("Nobody") },
             ]: Rectangle {
                 property <bool> selected: (root.profile-visibility-pending != "" ? root.profile-visibility-pending : root.profile-visibility) == opt.key;
                 height: Spacing.touch-target-min;
@@ -267,8 +267,8 @@ export component PrivacySettings inherits VerticalLayout {
             }
 
             for opt in [
-                { discoverable: true, label: "Everyone" },
-                { discoverable: false, label: "Nobody" },
+                { discoverable: true, label: @tr("Everyone") },
+                { discoverable: false, label: @tr("Nobody") },
             ]: Rectangle {
                 property <bool> selected: root.username-discoverable == opt.discoverable;
                 height: Spacing.touch-target-min;

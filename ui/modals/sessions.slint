@@ -96,7 +96,7 @@ export component SessionsModal inherits Rectangle {
                         font-size: Typography.sm;
                         wrap: word-wrap;
                     }
-                    if root.revoking: Text { text: "Updating sessions..."; color: Colors.text-secondary; }
+                    if root.revoking: Text { text: @tr("Updating sessions..."); color: Colors.text-secondary; }
 
                     // Header: count + actions. On a phone the two buttons do not fit
                     // beside the count (they clipped to "Link new devic" and
@@ -105,7 +105,7 @@ export component SessionsModal inherits Rectangle {
                         spacing: Spacing.md;
 
                         Text {
-                            text: root.loaded ? root.sessions.length + " active session" + (root.sessions.length != 1 ? "s" : "") : "Sessions not loaded";
+                            text: root.loaded ? @tr("{n} active session" | "{n} active sessions" % root.sessions.length) : @tr("Sessions not loaded");
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             vertical-alignment: center;
@@ -158,7 +158,7 @@ export component SessionsModal inherits Rectangle {
                                 }
 
                                 Text {
-                                    text: "Approved, waiting for it to finish linking (until " + link.expires + ")";
+                                    text: @tr("Approved, waiting for it to finish linking (until {})", link.expires);
                                     color: Colors.text-muted;
                                     font-size: Typography.xs;
                                     wrap: word-wrap;
@@ -310,14 +310,14 @@ export component SessionsModal inherits Rectangle {
                                             // The server stamps last-active at login, so for
                                             // the device in hand it reads stale; it is in use now.
                                             Text {
-                                                text: session.is-current ? "Active now" : "Last active: " + session.last-used;
+                                                text: session.is-current ? @tr("Active now") : @tr("Last active: {}", session.last-used);
                                                 color: Colors.text-muted;
                                                 font-size: Typography.xs;
                                                 wrap: word-wrap;
                                             }
 
                                             Text {
-                                                text: "Since: " + session.created-at;
+                                                text: @tr("Since: {}", session.created-at);
                                                 color: Colors.text-muted;
                                                 font-size: Typography.xs;
                                                 wrap: word-wrap;
@@ -383,9 +383,7 @@ export component SessionsModal inherits Rectangle {
                 spacing: Spacing.sm;
 
                 Text {
-                    text: root.revocable-count == 1
-                        ? "Sign out the other linked device? It must be linked again to use this account."
-                        : "Sign out all \{root.revocable-count} other linked devices? They must be linked again to use this account.";
+                    text: @tr("Sign out the other linked device? It must be linked again to use this account." | "Sign out all {n} other linked devices? They must be linked again to use this account." % root.revocable-count);
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     wrap: word-wrap;

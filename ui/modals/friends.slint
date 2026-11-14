@@ -185,9 +185,9 @@ export component FriendsModal inherits Rectangle {
                     padding: Spacing.chrome-inset;
 
                     for tab in [
-                        { id: "friends", label: "Friends" },
-                        { id: "requests", label: "Requests" },
-                        { id: "blocked", label: "Blocked" }
+                        { id: "friends", label: @tr("Friends") },
+                        { id: "requests", label: @tr("Requests") },
+                        { id: "blocked", label: @tr("Blocked") }
                     ]: Rectangle {
                         horizontal-stretch: 1;
                         border-radius: Spacing.radius-chrome-inner;

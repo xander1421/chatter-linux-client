@@ -22,7 +22,7 @@ export component BlockedTab inherits VerticalLayout {
 
     // No "0 blocked users" over the empty state saying the same.
     if root.blocked-users.length > 0: Text {
-        text: root.blocked-users.length + (root.blocked-users.length == 1 ? " blocked user" : " blocked users");
+        text: @tr("{n} blocked user" | "{n} blocked users" % root.blocked-users.length);
         color: Colors.text-secondary;
         font-size: Typography.xs;
         font-weight: Typography.medium;
@@ -117,7 +117,7 @@ export component BlockedTab inherits VerticalLayout {
                             }
 
                             if root.confirm-remove-id != user.user-id && user.blocked-at != "": Text {
-                                text: "Blocked " + user.blocked-at;
+                                text: @tr("Blocked {}", user.blocked-at);
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
                             }

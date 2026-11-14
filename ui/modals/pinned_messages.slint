@@ -24,9 +24,8 @@ export component PinnedMessagesModal inherits Rectangle {
         show: root.show-modal;
         // A page of its own, not a floating card (owner, 2026-11-14).
         full-screen: true;
-        title: root.items.length == 1 ? "1 pinned message"
-            : root.items.length > 1 ? root.items.length + " pinned messages"
-            : "Pinned messages";
+        title: root.items.length == 0 ? @tr("Pinned messages")
+            : @tr("{n} pinned message" | "{n} pinned messages" % root.items.length);
         close => { root.close(); }
         VerticalLayout {
             if root.items.length == 0: Rectangle {
@@ -56,7 +55,7 @@ export component PinnedMessagesModal inherits Rectangle {
                     }
                     Text {
                         width: 100%;
-                        text: (root.touch ? "Long-press" : "Right-click") + " a message and choose Pin";
+                        text: root.touch ? @tr("Long-press a message and choose Pin") : @tr("Right-click a message and choose Pin");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         horizontal-alignment: center;
@@ -109,7 +108,7 @@ export component PinnedMessagesModal inherits Rectangle {
                                     width: 72px; height: 72px;
                                     y: (parent.height - self.height) / 2;
                                     border-radius: Spacing.radius-sm; clip: true;
-                                    Image { accessible-label: "Pinned message image"; source: item.thumbnail; width: 100%; height: 100%; image-fit: cover; }
+                                    Image { accessible-label: @tr("Pinned message image"); source: item.thumbnail; width: 100%; height: 100%; image-fit: cover; }
                                 }
                             }
                             VerticalLayout {

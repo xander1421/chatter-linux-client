@@ -95,7 +95,7 @@ export component CreateSectionModal inherits Rectangle {
                     animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                     animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
                     accessible-role: button;
-                    accessible-label: "Section icon " + root.selected-emoji;
+                    accessible-label: @tr("Section icon {}", root.selected-emoji);
                     accessible-action-default => { root.picker-open = !root.picker-open; }
                     KeyFocus { border-radius: parent.border-radius; activate => { root.picker-open = !root.picker-open; } }
 
@@ -166,7 +166,7 @@ export component CreateSectionModal inherits Rectangle {
                                 : (icon-touch.pressed ? Materials.pressed : icon-touch.has-hover ? Materials.hover : transparent);
                             transform-scale-x: icon-touch.pressed ? 0.82 : 1;
                             accessible-role: button;
-                            accessible-label: "Choose icon " + icon;
+                            accessible-label: @tr("Choose icon {}", icon);
                             accessible-checkable: true;
                             accessible-checked: icon == root.selected-emoji;
                             accessible-action-default => {

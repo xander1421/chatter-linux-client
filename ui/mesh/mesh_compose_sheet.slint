@@ -89,10 +89,10 @@ export component MeshComposeSheet inherits Rectangle {
         : root.page == "channel" ? root.channel-draft != ""
         : root.page == "invite" ? root.invite-draft != ""
         : root.page == "cell" && root.cell-draft != "";
-    property <string> page-title: root.page == "group" ? "New private group"
-        : root.page == "channel" ? "Join public channel"
-        : root.page == "invite" ? "Join with invite"
-        : root.page == "cell" ? "Join location cell" : "New";
+    property <string> page-title: root.page == "group" ? @tr("New private group")
+        : root.page == "channel" ? @tr("Join public channel")
+        : root.page == "invite" ? @tr("Join with invite")
+        : root.page == "cell" ? @tr("Join location cell") : @tr("New");
 
     ModalContainer {
         show: root.show-modal;
@@ -115,7 +115,7 @@ export component MeshComposeSheet inherits Rectangle {
                     HorizontalLayout {
                         alignment: start;
                         if root.page != "menu": Image { source: Icons.chevron-left; width: Spacing.button-icon; image-fit: contain; colorize: Colors.primary; }
-                        Text { text: root.page == "menu" ? "Cancel" : "Back"; color: Colors.primary; font-size: Typography.base; vertical-alignment: center; }
+                        Text { text: root.page == "menu" ? @tr("Cancel") : @tr("Back"); color: Colors.primary; font-size: Typography.base; vertical-alignment: center; }
                     }
                     TouchArea { mouse-cursor: pointer; clicked => { root.go-back(); } }
                 }
@@ -127,7 +127,7 @@ export component MeshComposeSheet inherits Rectangle {
                     accessible-label: root.page == "group" ? @tr("Create") : @tr("Join");
                     accessible-enabled: root.can-submit;
                     accessible-action-default => { if root.can-submit { root.submit(); } }
-                    Text { text: root.page == "menu" ? "" : root.page == "group" ? "Create" : "Join";
+                    Text { text: root.page == "menu" ? "" : root.page == "group" ? @tr("Create") : @tr("Join");
                         color: root.can-submit ? Colors.primary : Colors.text-muted; font-size: Typography.base;
                         font-weight: Typography.semibold; vertical-alignment: center; horizontal-alignment: right; }
                     TouchArea { enabled: root.can-submit; mouse-cursor: pointer; clicked => { root.submit(); } }
@@ -146,18 +146,18 @@ export component MeshComposeSheet inherits Rectangle {
                         Rectangle {
                             background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             VerticalLayout {
-                                ComposeMenuRow { icon: Icons.lock; title: "New private group"; detail: "Invite only";
+                                ComposeMenuRow { icon: Icons.lock; title: @tr("New private group"); detail: @tr("Invite only");
                                     tint: Colors.group-accent; touch: root.touch;
                                     clicked => { root.page = "group"; } }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                ComposeMenuRow { icon: Icons.hash; title: "Join public channel"; detail: "Talk with devices nearby"; touch: root.touch;
+                                ComposeMenuRow { icon: Icons.hash; title: @tr("Join public channel"); detail: @tr("Talk with devices nearby"); touch: root.touch;
                                     clicked => { root.page = "channel"; } }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                ComposeMenuRow { icon: Icons.link; title: "Join with invite"; detail: "Paste or scan a private invite";
+                                ComposeMenuRow { icon: Icons.link; title: @tr("Join with invite"); detail: @tr("Paste or scan a private invite");
                                     tint: Colors.info; touch: root.touch;
                                     clicked => { root.page = "invite"; } }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                ComposeMenuRow { icon: Icons.radio; title: "Join location cell"; detail: "Connect through nearby relays";
+                                ComposeMenuRow { icon: Icons.radio; title: @tr("Join location cell"); detail: @tr("Connect through nearby relays");
                                     tint: Colors.accent; touch: root.touch;
                                     clicked => { root.page = "cell"; } }
                             }
@@ -167,7 +167,7 @@ export component MeshComposeSheet inherits Rectangle {
                         spacing: Spacing.sm;
                         Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             HorizontalLayout { padding: Spacing.sm; spacing: Spacing.sm;
-                                Input { placeholder: "Group name"; text <=> root.group-draft; control-height: Spacing.touch-target-min;
+                                Input { placeholder: @tr("Group name"); text <=> root.group-draft; control-height: Spacing.touch-target-min;
                                     horizontal-stretch: 1; accepted(value) => { root.submit(); } }
                             }
                         }
@@ -184,7 +184,7 @@ export component MeshComposeSheet inherits Rectangle {
                                     horizontal-stretch: 1; accepted(value) => { root.submit(); } }
                             }
                         }
-                        if MeshGlobal.nearby-channels.length > 0: Text { text: "SEEN NEARBY"; color: Colors.text-muted;
+                        if MeshGlobal.nearby-channels.length > 0: Text { text: @tr("SEEN NEARBY"); color: Colors.text-muted;
                             font-size: Typography.xs; font-weight: Typography.semibold; letter-spacing: 0.4px; }
                         if MeshGlobal.nearby-channels.length > 0: Rectangle {
                             background: Colors.surface-section; border-radius: Spacing.radius-lg;
@@ -201,12 +201,12 @@ export component MeshComposeSheet inherits Rectangle {
                         Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             VerticalLayout {
                                 HorizontalLayout { padding: Spacing.sm;
-                                    Input { placeholder: "Paste private invite"; text <=> root.invite-draft;
+                                    Input { placeholder: @tr("Paste private invite"); text <=> root.invite-draft;
                                         control-height: Spacing.touch-target-min; horizontal-stretch: 1;
                                         accepted(value) => { root.submit(); } }
                                 }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                SettingsRow { icon: Icons.image; title: "Scan QR code"; touch: root.touch;
+                                SettingsRow { icon: Icons.image; title: @tr("Scan QR code"); touch: root.touch;
                                     clicked => { MeshGlobal.open-private-scanner(); } }
                             }
                         }
@@ -215,7 +215,7 @@ export component MeshComposeSheet inherits Rectangle {
                         spacing: Spacing.sm;
                         Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             HorizontalLayout { padding: Spacing.sm;
-                                Input { placeholder: "Location cell (e.g. u4pruy)"; text <=> root.cell-draft;
+                                Input { placeholder: @tr("Location cell (e.g. u4pruy)"); text <=> root.cell-draft;
                                     control-height: Spacing.touch-target-min; horizontal-stretch: 1;
                                     accepted(value) => { root.submit(); } }
                             }

@@ -61,7 +61,7 @@ export component RequestTabs inherits Flickable {
 
             accessible-role: tab;
 
-            accessible-label: "Received (" + root.received-requests-count + ")";
+            accessible-label: @tr("Received ({})", root.received-requests-count);
 
             accessible-item-selected: root.requests-sub-tab == "received";
 
@@ -76,7 +76,7 @@ export component RequestTabs inherits Flickable {
                     vertical-stretch: 1;
 
                     Text {
-                        text: "Received (" + root.received-requests-count + ")";
+                        text: @tr("Received ({})", root.received-requests-count);
                         color: root.requests-sub-tab == "received" ? Colors.text-primary : Colors.text-secondary;
                         font-size: Typography.xs;
                         font-weight: root.requests-sub-tab == "received" ? Typography.semibold : Typography.normal;
@@ -103,7 +103,7 @@ export component RequestTabs inherits Flickable {
 
             accessible-role: tab;
 
-            accessible-label: "Sent (" + root.sent-requests-count + ")";
+            accessible-label: @tr("Sent ({})", root.sent-requests-count);
 
             accessible-item-selected: root.requests-sub-tab == "sent";
 
@@ -118,7 +118,7 @@ export component RequestTabs inherits Flickable {
                     vertical-stretch: 1;
 
                     Text {
-                        text: "Sent (" + root.sent-requests-count + ")";
+                        text: @tr("Sent ({})", root.sent-requests-count);
                         color: root.requests-sub-tab == "sent" ? Colors.text-primary : Colors.text-secondary;
                         font-size: Typography.xs;
                         font-weight: root.requests-sub-tab == "sent" ? Typography.semibold : Typography.normal;
@@ -145,7 +145,7 @@ export component RequestTabs inherits Flickable {
 
             accessible-role: tab;
 
-            accessible-label: "Private (" + root.private-requests-count + ")";
+            accessible-label: @tr("Private ({})", root.private-requests-count);
 
             accessible-item-selected: root.requests-sub-tab == "private";
 
@@ -160,7 +160,7 @@ export component RequestTabs inherits Flickable {
                     vertical-stretch: 1;
 
                     Text {
-                        text: "Private (" + root.private-requests-count + ")";
+                        text: @tr("Private ({})", root.private-requests-count);
                         color: root.requests-sub-tab == "private" ? Colors.text-primary : Colors.text-secondary;
                         font-size: Typography.xs;
                         font-weight: root.requests-sub-tab == "private" ? Typography.semibold : Typography.normal;
@@ -187,7 +187,7 @@ export component RequestTabs inherits Flickable {
 
             accessible-role: tab;
 
-            accessible-label: "Groups (" + root.group-invites-count + ")";
+            accessible-label: @tr("Groups ({})", root.group-invites-count);
 
             accessible-item-selected: root.requests-sub-tab == "groups";
 
@@ -202,7 +202,7 @@ export component RequestTabs inherits Flickable {
                     vertical-stretch: 1;
 
                     Text {
-                        text: "Groups (" + root.group-invites-count + ")";
+                        text: @tr("Groups ({})", root.group-invites-count);
                         color: root.requests-sub-tab == "groups" ? Colors.text-primary : Colors.text-secondary;
                         font-size: Typography.xs;
                         font-weight: root.requests-sub-tab == "groups" ? Typography.semibold : Typography.normal;
@@ -229,7 +229,7 @@ export component RequestTabs inherits Flickable {
 
             accessible-role: tab;
 
-            accessible-label: "Channels (" + root.channel-invites-count + ")";
+            accessible-label: @tr("Channels ({})", root.channel-invites-count);
 
             accessible-item-selected: root.requests-sub-tab == "channels";
 
@@ -244,7 +244,7 @@ export component RequestTabs inherits Flickable {
                     vertical-stretch: 1;
 
                     Text {
-                        text: "Channels (" + root.channel-invites-count + ")";
+                        text: @tr("Channels ({})", root.channel-invites-count);
                         color: root.requests-sub-tab == "channels" ? Colors.text-primary : Colors.text-secondary;
                         font-size: Typography.xs;
                         font-weight: root.requests-sub-tab == "channels" ? Typography.semibold : Typography.normal;

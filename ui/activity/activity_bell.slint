@@ -63,7 +63,7 @@ export component ActivityBell inherits Rectangle {
         mouse-cursor: pointer;
         accessible-role: button;
         accessible-label: ActivityGlobal.unread-count > 0
-            ? "Activity, " + ActivityGlobal.unread-count + " unread" : "Activity";
+            ? @tr("Activity, {} unread", ActivityGlobal.unread-count) : @tr("Activity");
         accessible-action-default => { ActivityUi.open(); }
         clicked => { ActivityUi.open(); }
     }

@@ -113,7 +113,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
                             }
                             if root.preview-server-url != "": Text {
                                 width: max(0px, parent.width - parent.padding * 2);
-                                text: "Server: " + root.preview-server-url;
+                                text: @tr("Server: {}", root.preview-server-url);
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
                                 wrap: word-wrap;

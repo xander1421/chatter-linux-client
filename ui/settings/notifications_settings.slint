@@ -113,9 +113,9 @@ export component NotificationsSettings inherits VerticalLayout {
             }
 
             for opt in [
-                { key: "name_and_message", label: "Name and message" },
-                { key: "name_only", label: "Name only" },
-                { key: "none", label: "No name or content" },
+                { key: "name_and_message", label: @tr("Name and message") },
+                { key: "name_only", label: @tr("Name only") },
+                { key: "none", label: @tr("No name or content") },
             ]: Rectangle {
                 property <bool> selected: root.notification-detail == opt.key;
                 height: Spacing.touch-target-min;

@@ -22,9 +22,9 @@ export component MessageScrollPill inherits GlassSurface {
     backdrop-paused: root.scrolling;
     accessible-role: button;
     accessible-action-default => { root.clicked(); }
-    accessible-label: root.unread-count == 1 ? "1 new message, jump to newest"
-        : root.unread-count > 0 ? root.unread-count + " new messages, jump to newest"
-        : "Scroll to bottom";
+    accessible-label: root.unread-count > 0
+        ? @tr("{n} new message, jump to newest" | "{n} new messages, jump to newest" % root.unread-count)
+        : @tr("Scroll to bottom");
     KeyFocus { enabled: !root.hide-pill; border-radius: parent.border-radius; activate => { root.clicked(); } }
 
     opacity: self.hide-pill ? 0 : 1;
@@ -47,9 +47,7 @@ export component MessageScrollPill inherits GlassSurface {
         spacing: Spacing.sm;
 
         if root.unread-count > 0: Text {
-            text: root.unread-count == 1
-                ? "1 new message"
-                : root.unread-count + " new messages";
+            text: @tr("{n} new message" | "{n} new messages" % root.unread-count);
             // The pill's own label says this; TalkBack read it twice.
             accessible-role: none;
             color: Colors.text-primary;

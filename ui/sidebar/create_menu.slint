@@ -91,7 +91,7 @@ export component CreateMenu inherits Rectangle {
                 padding-top: Spacing.xs;
                 padding-bottom: Spacing.xs;
                 MenuRow {
-                    icon: Icons.message-circle; label: "New chat";
+                    icon: Icons.message-circle; label: @tr("New chat");
                     opacity: root.first-arrived ? 1 : 0;
                     transform-scale-x: root.first-arrived ? 100% : 84%;
                     transform-scale-y: root.first-arrived ? 100% : 84%;
@@ -103,7 +103,7 @@ export component CreateMenu inherits Rectangle {
                 }
                 // Channels do not exist in Shield mode (sidebar.slint hides them).
                 if !AnonMode.enabled: MenuRow {
-                    icon: Icons.megaphone; label: "New channel";
+                    icon: Icons.megaphone; label: @tr("New channel");
                     opacity: root.second-arrived ? 1 : 0;
                     transform-scale-x: root.second-arrived ? 100% : 84%;
                     transform-scale-y: root.second-arrived ? 100% : 84%;
@@ -114,7 +114,7 @@ export component CreateMenu inherits Rectangle {
                     clicked => { if root.show && root.second-arrived { root.new-channel(); } }
                 }
                 MenuRow {
-                    icon: Icons.folder; label: "New section";
+                    icon: Icons.folder; label: @tr("New section");
                     opacity: root.third-arrived ? 1 : 0;
                     transform-scale-x: root.third-arrived ? 100% : 84%;
                     transform-scale-y: root.third-arrived ? 100% : 84%;
@@ -177,7 +177,7 @@ export component NewChatPicker inherits Rectangle {
             }
 
             if root.friends.length == 0: Text {
-                text: root.query != "" ? "No contacts match “" + root.query + "”" : "No friends yet. Add one from Contacts.";
+                text: root.query != "" ? @tr("No contacts match “{}”", root.query) : @tr("No friends yet. Add one from Contacts.");
                 width: parent.width;
                 color: Colors.text-muted;
                 font-size: Typography.base;

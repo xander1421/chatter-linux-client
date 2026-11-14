@@ -43,7 +43,7 @@ export component MessageQuote inherits Rectangle {
     // which carry no TouchArea — fall through here to jump.
     quote-touch := TouchArea {
         accessible-role: button;
-        accessible-label: "Go to quoted message from " + root.reply-to-sender-name;
+        accessible-label: @tr("Go to quoted message from {}", root.reply-to-sender-name);
         accessible-enabled: !root.reply-to-not-found && root.reply-to-message-id != "";
         accessible-action-default => {
             if (!root.reply-to-not-found && root.reply-to-message-id != "") {

@@ -86,8 +86,8 @@ export component ChannelDangerSection inherits VerticalLayout {
         Text {
             width: parent.width;
             text: root.is-private-group
-                ? "Leave " + root.channel-name + "? You can only come back if a member invites you again."
-                : "Leave #" + root.channel-name + "? You won't get new messages, and an invite-only channel cannot be rejoined on your own.";
+                ? @tr("Leave {}? You can only come back if a member invites you again.", root.channel-name)
+                : @tr("Leave {}? You won't get new messages, and an invite-only channel cannot be rejoined on your own.", "#" + root.channel-name);
             color: Colors.error;
             font-size: Typography.sm;
             wrap: word-wrap;
@@ -275,7 +275,7 @@ export component ChannelDangerSection inherits VerticalLayout {
 
         Text {
             width: parent.width;
-            text: "Delete \"" + root.channel-name + "\" permanently? Every message in it goes with it. This cannot be undone.";
+            text: @tr("Delete \"{}\" permanently? Every message in it goes with it. This cannot be undone.", root.channel-name);
             color: Colors.error;
             font-size: Typography.sm;
             wrap: word-wrap;

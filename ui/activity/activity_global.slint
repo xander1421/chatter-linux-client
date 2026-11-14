@@ -12,9 +12,9 @@ export global ActivityGlobal {
     in-out property <bool> loading: true;
     in-out property <bool> read-error: false;
     in-out property <int> unread-count: 0;
-    in-out property <string> push-status: "Off";
-    in-out property <string> last-connected: "Never";
-    in-out property <string> server-host: "Unknown";
+    in-out property <string> push-status: @tr("Off");
+    in-out property <string> last-connected: @tr("Never");
+    in-out property <string> server-host: @tr("Unknown");
     in-out property <string> tor-bootstrap: "";
     callback open-item(string);      // id → navigate + mark read
     callback mark-all-read();

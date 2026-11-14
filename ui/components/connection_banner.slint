@@ -105,25 +105,23 @@ export component ConnectionBanner inherits Rectangle {
     // case where the answer is "nothing" and saying anything else would be a
     // lie. Then Bluetooth off, which is actionable. Then the ordinary states,
     // where the peer count is the whole signal and zero is normal.
-    property <string> radio-down-clause:
-        MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth is off" : "the Bluetooth radio is unavailable";
     property <string> mesh-line:
         !MeshGlobal.running
-            ? "The mesh is not running either, so there is nothing to fall back to."
+            ? @tr("The mesh is not running either, so there is nothing to fall back to.")
       : !MeshGlobal.radio-running
             // Relay counts are stated rather than summarised as "relays work":
             // a cell rides Nostr, which is servers over the internet, so this is
             // the one mesh path that is not actually infrastructure-free.
             ? (MeshGlobal.relay-count == 0
-                ? "Mesh is on, but " + root.radio-down-clause + " and no relay is connected — nothing can carry a message right now."
-              : MeshGlobal.relay-count == 1
-                ? "Mesh is on but " + root.radio-down-clause + ". Only the 1 connected relay can carry, and relays need internet."
-                : "Mesh is on but " + root.radio-down-clause + ". Only the " + MeshGlobal.relay-count + " connected relays can carry, and relays need internet.")
+                ? (MeshGlobal.radio-down == "bluetooth-off"
+                    ? @tr("Mesh is on, but Bluetooth is off and no relay is connected — nothing can carry a message right now.")
+                    : @tr("Mesh is on, but the Bluetooth radio is unavailable and no relay is connected — nothing can carry a message right now."))
+              : MeshGlobal.radio-down == "bluetooth-off"
+                ? @tr("Mesh is on but Bluetooth is off. Only the {n} connected relay can carry, and relays need internet." | "Mesh is on but Bluetooth is off. Only the {n} connected relays can carry, and relays need internet." % MeshGlobal.relay-count)
+                : @tr("Mesh is on but the Bluetooth radio is unavailable. Only the {n} connected relay can carry, and relays need internet." | "Mesh is on but the Bluetooth radio is unavailable. Only the {n} connected relays can carry, and relays need internet." % MeshGlobal.relay-count))
       : MeshGlobal.peer-count == 0
-            ? "Mesh is running over Bluetooth. Nobody is in range yet; what you send waits to be carried."
-      : MeshGlobal.peer-count == 1
-            ? "Mesh is running over Bluetooth — 1 nearby. Mesh conversations do not need the server."
-            : "Mesh is running over Bluetooth — " + MeshGlobal.peer-count + " nearby. Mesh conversations do not need the server.";
+            ? @tr("Mesh is running over Bluetooth. Nobody is in range yet; what you send waits to be carried.")
+            : @tr("Mesh is running over Bluetooth — {n} nearby. Mesh conversations do not need the server." | "Mesh is running over Bluetooth — {n} nearby. Mesh conversations do not need the server." % MeshGlobal.peer-count);
 
     visible: root.should-show || self.height > 0px;
     clip: true;
@@ -209,16 +207,16 @@ export component ConnectionBanner inherits Rectangle {
             // now is sent later — is already visible per-message as a pending
             // tick, so the banner does not have to spend a second line on it.
             Text {
-                text: root.just-reconnected ? "Connected" :
-                      root.tor-error ? (root.tight ? "Tor error — retrying…" : "Tor connection error — retrying…") :
-                      root.tor-connecting ? "Connecting over Tor…" :
-                      connection-state == "connecting" ? "Connecting…" :
+                text: root.just-reconnected ? @tr("Connected") :
+                      root.tor-error ? (root.tight ? @tr("Tor error — retrying…") : @tr("Tor connection error — retrying…")) :
+                      root.tor-connecting ? @tr("Connecting over Tor…") :
+                      connection-state == "connecting" ? @tr("Connecting…") :
                       connection-state == "reconnecting" ? (root.tight
-                          ? "Reconnecting…"
-                          : "Reconnecting" + (reconnect-attempt > 0 ? " (attempt " + reconnect-attempt + ")…" : "…")) :
-                      connection-state == "failed" ? (root.tight ? "Server unreachable" : "Server unreachable — check your network") :
-                      root.tight ? "No server — messages will send later"
-                                 : "Server unreachable — messages will send later";
+                          ? @tr("Reconnecting…")
+                          : (reconnect-attempt > 0 ? @tr("Reconnecting (attempt {})…", reconnect-attempt) : @tr("Reconnecting…"))) :
+                      connection-state == "failed" ? (root.tight ? @tr("Server unreachable") : @tr("Server unreachable — check your network")) :
+                      root.tight ? @tr("No server — messages will send later")
+                                 : @tr("Server unreachable — messages will send later");
                 color: root.banner-color;
                 font-size: Typography.xs;
                 font-weight: Typography.medium;

@@ -23,7 +23,7 @@ export component CallConfirm inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
-                text: "Everyone in " + root.channel-name + " will be notified.";
+                text: @tr("Everyone in {} will be notified.", root.channel-name);
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
                 wrap: word-wrap;

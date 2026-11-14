@@ -38,7 +38,7 @@ export component ModalContainer inherits Rectangle {
     in property <length> bottom-inset: 0px;
     // What a screen reader announces: the dialog's title ("Calls dialog"),
     // never one name for every dialog.
-    in property <string> accessible-title: "Modal dialog";
+    in property <string> accessible-title: @tr("Modal dialog");
 
     callback close();
     property <bool> phone-sheet: !root.full-screen && root.width < 520px;

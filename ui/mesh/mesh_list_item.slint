@@ -26,12 +26,12 @@ export component MeshListItem inherits Rectangle {
     callback toggle-mute();
     property <bool> menu-open: false;
 
-    property <string> secondary: root.kind == "geohash" ? "Public · " + root.scope
-        : root.kind == "room" ? "Everyone in radio range"
-        : root.kind == "channel" ? "Public to nearby listeners"
-        : root.kind == "private-channel" ? "Invited devices · encrypted"
-        : root.binding-label == "Verified Chatter contact" ? "Verified Chatter contact"
-        : root.reachable ? "Encrypted · nearby" : "Waiting for a carrier";
+    property <string> secondary: root.kind == "geohash" ? @tr("Public · {}", root.scope)
+        : root.kind == "room" ? @tr("Everyone in radio range")
+        : root.kind == "channel" ? @tr("Public to nearby listeners")
+        : root.kind == "private-channel" ? @tr("Invited devices · encrypted")
+        : root.binding-label == "Verified Chatter contact" ? @tr("Verified Chatter contact")
+        : root.reachable ? @tr("Encrypted · nearby") : @tr("Waiting for a carrier");
     property <image> glyph: root.kind == "private-channel" ? Icons.lock
         : root.kind == "geohash" || root.kind == "channel" ? Icons.hash
         : root.kind == "dm" ? Icons.user : Icons.radio;
@@ -135,7 +135,7 @@ export component MeshListItem inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1; border-radius: Spacing.radius-md;
             background: mute-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
-            Text { text: root.muted ? "Unmute" : "Mute"; color: Colors.primary;
+            Text { text: root.muted ? @tr("Unmute") : @tr("Mute"); color: Colors.primary;
                 font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
             mute-touch := TouchArea {
                 mouse-cursor: pointer; accessible-role: button;
@@ -146,10 +146,10 @@ export component MeshListItem inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1; border-radius: Spacing.radius-md;
             background: leave-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
-            Text { text: "Leave"; color: Colors.danger; font-size: Typography.sm;
+            Text { text: @tr("Leave"); color: Colors.danger; font-size: Typography.sm;
                 horizontal-alignment: center; vertical-alignment: center; }
             leave-touch := TouchArea {
-                mouse-cursor: pointer; accessible-role: button; accessible-label: "Leave channel";
+                mouse-cursor: pointer; accessible-role: button; accessible-label: @tr("Leave channel");
                 clicked => { root.menu-open = false; root.leave(); }
             }
         }

@@ -9,12 +9,12 @@ export component MeshContextBar inherits Rectangle {
     property <bool> can-turn-on: !MeshGlobal.mesh-on;
     property <string> message:
         MeshGlobal.notice != "" ? MeshGlobal.notice
-      : !MeshGlobal.mesh-on ? "Mesh is off"
-      : MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth is off"
+      : !MeshGlobal.mesh-on ? @tr("Mesh is off")
+      : MeshGlobal.radio-down == "bluetooth-off" ? @tr("Bluetooth is off")
       : MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-rekey-pending
-            ? "Waiting for the creator to rotate the group key"
+            ? @tr("Waiting for the creator to rotate the group key")
       : MeshGlobal.active-kind == "dm" && !MeshGlobal.active-reachable
-            ? "No route to this person · waiting for a carrier"
+            ? @tr("No route to this person · waiting for a carrier")
       : "";
     height: 40px;
     background: Colors.surface;

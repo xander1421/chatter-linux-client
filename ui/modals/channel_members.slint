@@ -127,15 +127,15 @@ export component ChannelMembersSection inherits Rectangle {
 
     // The members menu's mute choices.
     private property <[{label: string, minutes: int}]> mute-options: [
-        { label: "Mute 1h", minutes: 60 },
-        { label: "Mute 1 day", minutes: 1440 },
-        { label: "Mute until unmuted", minutes: 0 },
+        { label: @tr("Mute 1h"), minutes: 60 },
+        { label: @tr("Mute 1 day"), minutes: 1440 },
+        { label: @tr("Mute until unmuted"), minutes: 0 },
     ];
     // The assignable roles (ownership moves only by transfer), with labels.
     private property <[{role: string, label: string}]> role-options: [
-        { role: "member", label: "Member" },
-        { role: "moderator", label: "Moderator" },
-        { role: "admin", label: "Admin" },
+        { role: "member", label: @tr("Member") },
+        { role: "moderator", label: @tr("Moderator") },
+        { role: "admin", label: @tr("Admin") },
     ];
 
     members-layout := VerticalLayout {
@@ -389,7 +389,7 @@ export component ChannelMembersSection inherits Rectangle {
                     animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
                     animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     accessible-role: button;
-                    accessible-label: "Actions for " + member.display-name;
+                    accessible-label: @tr("Actions for {}", member.display-name);
                     accessible-action-default => {
                         root.menu-member = member;
                         root.role-picker-user = root.role-picker-user == member.user-id ? "" : member.user-id;
@@ -608,12 +608,14 @@ export component ChannelMembersSection inherits Rectangle {
                 Text {
                     width: confirm-content.width;
                     text: root.confirm-action == "ban"
-                        ? "Ban " + root.menu-member.display-name + "? They will be removed and can't rejoin."
+                        ? @tr("Ban {}? They will be removed and can't rejoin.", root.menu-member.display-name)
                         : root.confirm-action == "owner"
-                        ? "Make " + root.menu-member.display-name + " the owner of " + (root.is-private-group ? "" : "#") + root.channel-name + "? You'll become an admin."
+                        ? @tr("Make {0} the owner of {1}? You'll become an admin.", root.menu-member.display-name, (root.is-private-group ? "" : "#") + root.channel-name)
                         : root.menu-member.invited && root.is-private-group
-                        ? "Cancel " + root.menu-member.display-name + "'s invite?"
-                        : "Remove " + root.menu-member.display-name + (root.is-private-group ? " from this group?" : " from this channel?");
+                        ? @tr("Cancel {}'s invite?", root.menu-member.display-name)
+                        : root.is-private-group
+                        ? @tr("Remove {} from this group?", root.menu-member.display-name)
+                        : @tr("Remove {} from this channel?", root.menu-member.display-name);
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     wrap: word-wrap;

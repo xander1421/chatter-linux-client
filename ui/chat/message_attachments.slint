@@ -115,11 +115,11 @@ export component MessageAttachments inherits VerticalLayout {
                 width: 100%; height: 100%; background: Colors.overlay;
                 Text {
                     width: 100%; height: 100%;
-                    text: attachment.upload-state == "queued" ? "Queued"
-                        : attachment.upload-state == "uploading" ? "Uploading…"
-                        : attachment.upload-state == "failed" ? "Upload failed"
-                        : attachment.upload-state == "cancelled" ? "Cancelled"
-                        : attachment.is-download-failed ? "Download failed"
+                    text: attachment.upload-state == "queued" ? @tr("Queued")
+                        : attachment.upload-state == "uploading" ? @tr("Uploading…")
+                        : attachment.upload-state == "failed" ? @tr("Upload failed")
+                        : attachment.upload-state == "cancelled" ? @tr("Cancelled")
+                        : attachment.is-download-failed ? @tr("Download failed")
                         : Math.round(attachment.progress * 100) + "%";
                     color: Colors.text-primary; font-size: Typography.sm;
                     horizontal-alignment: center; vertical-alignment: center;
@@ -142,7 +142,7 @@ export component MessageAttachments inherits VerticalLayout {
                 gesture-ended(cancelled) => { root.end-swipe(cancelled); }
                 // Without these TalkBack had no way to open a photo.
                 accessible-role: button;
-                accessible-label: "Open photo " + attachment.filename;
+                accessible-label: @tr("Open photo {}", attachment.filename);
                 accessible-action-default => {
                     root.open-image(attachment.id,
                         self.absolute-position.x, self.absolute-position.y,
@@ -277,7 +277,7 @@ export component MessageAttachments inherits VerticalLayout {
                 background: Colors.overlay;
                 accessible-role: progress-indicator;
                 accessible-label: attachment.upload-state == "uploading" || attachment.upload-state == "queued"
-                    ? "Uploading " + attachment.filename : "Downloading " + attachment.filename;
+                    ? @tr("Uploading {}", attachment.filename) : @tr("Downloading {}", attachment.filename);
                 accessible-value: Math.round(attachment.progress * 100) + " percent";
 
                 VerticalLayout {
@@ -338,7 +338,7 @@ export component MessageAttachments inherits VerticalLayout {
                 gesture-ended(cancelled) => { root.end-swipe(cancelled); }
                 // Without these TalkBack had no way to open a photo.
                 accessible-role: button;
-                accessible-label: "Open photo " + attachment.filename;
+                accessible-label: @tr("Open photo {}", attachment.filename);
                 accessible-action-default => {
                     root.open-image(attachment.id,
                         self.absolute-position.x, self.absolute-position.y,
@@ -549,7 +549,7 @@ export component MessageAttachments inherits VerticalLayout {
                 gesture-moved(x, y) => { root.move-swipe(x, y); }
                 gesture-ended(cancelled) => { root.end-swipe(cancelled); }
                 accessible-role: button;
-                accessible-label: "Play video " + attachment.filename;
+                accessible-label: @tr("Play video {}", attachment.filename);
                 accessible-action-default => { root.open-other-attachment(attachment.id); }
                 clicked => {
                     if (self.hold-fired || root.swipe-active) { return; }
@@ -652,7 +652,7 @@ export component MessageAttachments inherits VerticalLayout {
                 gesture-moved(x, y) => { root.move-swipe(x, y); }
                 gesture-ended(cancelled) => { root.end-swipe(cancelled); }
                 accessible-role: button;
-                accessible-label: "Open file " + attachment.filename;
+                accessible-label: @tr("Open file {}", attachment.filename);
                 accessible-action-default => { root.open-other-attachment(attachment.id); }
                 clicked => {
                     if (self.hold-fired || root.swipe-active) { return; }

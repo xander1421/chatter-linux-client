@@ -45,9 +45,9 @@ export component AppearanceSettings inherits VerticalLayout {
             }
 
             for opt in [
-                { key: "system", label: "System", hint: "Match this device's light or dark setting" },
-                { key: "light", label: "Light", hint: "" },
-                { key: "dark", label: "Dark", hint: "" },
+                { key: "system", label: @tr("System"), hint: @tr("Match this device's light or dark setting") },
+                { key: "light", label: @tr("Light"), hint: "" },
+                { key: "dark", label: @tr("Dark"), hint: "" },
             ]: Rectangle {
                 property <bool> selected: Appearance.theme == opt.key;
                 min-height: Spacing.touch-target-min;
@@ -148,10 +148,10 @@ export component AppearanceSettings inherits VerticalLayout {
             }
 
             for opt in [
-                { key: "small", label: "Small", hint: "" },
-                { key: "default", label: "Default", hint: "Match this device's font size" },
-                { key: "large", label: "Large", hint: "" },
-                { key: "largest", label: "Largest", hint: "" },
+                { key: "small", label: @tr("Small"), hint: "" },
+                { key: "default", label: @tr("Default"), hint: @tr("Match this device's font size") },
+                { key: "large", label: @tr("Large"), hint: "" },
+                { key: "largest", label: @tr("Largest"), hint: "" },
             ]: Rectangle {
                 property <bool> selected: Appearance.text-size == opt.key;
                 min-height: Spacing.touch-target-min;
@@ -322,7 +322,7 @@ export component AppearanceSettings inherits VerticalLayout {
                     border-radius: Spacing.radius-md;
                     background: selected ? Colors.action-fill : Colors.surface-hover;
                     accessible-role: button;
-                    accessible-label: "Animation speed " + opt.label;
+                    accessible-label: @tr("Animation speed {}", opt.label);
                     accessible-checkable: true;
                     accessible-checked: selected;
                     accessible-action-default => {
@@ -379,8 +379,8 @@ export component AppearanceSettings inherits VerticalLayout {
             }
 
             for opt in [
-                { key: "comfortable", label: "Comfortable", hint: "" },
-                { key: "compact", label: "Compact", hint: "Fit more messages and conversations on screen" },
+                { key: "comfortable", label: @tr("Comfortable"), hint: "" },
+                { key: "compact", label: @tr("Compact"), hint: @tr("Fit more messages and conversations on screen") },
             ]: Rectangle {
                 property <bool> selected: Appearance.density == opt.key;
                 min-height: Spacing.touch-target-min;
@@ -498,13 +498,13 @@ export component AppearanceSettings inherits VerticalLayout {
                 alignment: center;
 
                 for opt[idx] in [
-                    { key: "k", label: "Ctrl+K" },
-                    { key: "f", label: "Ctrl+F" },
-                    { key: "both", label: "Both" },
+                    { key: "k", label: @tr("Ctrl+K") },
+                    { key: "f", label: @tr("Ctrl+F") },
+                    { key: "both", label: @tr("Both") },
                 ]: Rectangle {
                     property <bool> selected: root.search-shortcut == opt.key;
                     accessible-role: button;
-                    accessible-label: "Search shortcut " + opt.label;
+                    accessible-label: @tr("Search shortcut {}", opt.label);
                     accessible-checkable: true;
                     accessible-checked: selected;
                     accessible-action-default => {

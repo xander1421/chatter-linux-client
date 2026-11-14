@@ -14,7 +14,7 @@ export component DeleteConfirm inherits Rectangle {
     // Confirm the chosen remote or local scope for one or several messages.
     in property <bool> for-everyone: false;
     in property <bool> is-dm: false;
-    property <string> remote-label: root.is-dm ? "Delete for both" : "Delete for everyone";
+    property <string> remote-label: root.is-dm ? @tr("Delete for both") : @tr("Delete for everyone");
 
     in property <bool> choosing-in: false;
     in property <bool> can-delete-everyone: false;
@@ -29,8 +29,10 @@ export component DeleteConfirm inherits Rectangle {
 
     Modal {
         show: root.count > 0;
-        title: root.choosing ? root.count > 1 ? "Delete " + root.count + " messages" : "Delete message" : root.for-everyone || (root.choosing-in && !root.can-delete-me) ? root.remote-label + "?"
-            : root.count > 1 ? "Delete " + root.count + " messages?" : "Delete message?";
+        title: root.choosing ? @tr("Delete message" | "Delete {n} messages" % root.count)
+            : root.for-everyone || (root.choosing-in && !root.can-delete-me)
+                ? (root.is-dm ? @tr("Delete for both?") : @tr("Delete for everyone?"))
+                : @tr("Delete message?" | "Delete {n} messages?" % root.count);
         modal-width: 400px;
         show-close: false;
 

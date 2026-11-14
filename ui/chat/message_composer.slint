@@ -144,7 +144,7 @@ export component MessageComposer inherits GlassSurface {
         VoiceRecording.start();
     }
     // Properties
-    in property <string> placeholder: "Type a message...";
+    in property <string> placeholder: @tr("Type a message...");
     in-out property <string> text: "";
     in property <bool> disabled: false;
     in property <[PendingAttachmentData]> pending-attachments: [];

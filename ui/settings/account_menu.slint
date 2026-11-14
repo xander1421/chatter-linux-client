@@ -195,10 +195,10 @@ export component AccountMenu inherits Rectangle {
                         border-width: root.mobile-mode ? Elevation.rim-width : 0px;
                         border-color: Elevation.card-rim;
                         profile-group := VerticalLayout {
-                            MenuRow { icon: Icons.user; label: "My profile"; clicked => { root.my-profile(); } }
+                            MenuRow { icon: Icons.user; label: @tr("My profile"); clicked => { root.my-profile(); } }
                             // Shield mode has no Saved Messages or channels.
                             if !AnonMode.enabled: MenuDivider { }
-                            if !AnonMode.enabled: MenuRow { icon: Icons.bookmark; label: "Saved messages"; clicked => { root.saved-messages(); } }
+                            if !AnonMode.enabled: MenuRow { icon: Icons.bookmark; label: @tr("Saved messages"); clicked => { root.saved-messages(); } }
                         }
                     }
                     Rectangle {
@@ -211,9 +211,9 @@ export component AccountMenu inherits Rectangle {
                         border-width: root.mobile-mode ? Elevation.rim-width : 0px;
                         border-color: Elevation.card-rim;
                         activity-group := VerticalLayout {
-                            if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: "New channel"; clicked => { root.new-channel(); } }
+                            if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: @tr("New channel"); clicked => { root.new-channel(); } }
                             if !AnonMode.enabled: MenuDivider { }
-                            MenuRow { icon: Icons.bell; label: "Notification inbox"; clicked => { root.notifications(); } }
+                            MenuRow { icon: Icons.bell; label: @tr("Notification inbox"); clicked => { root.notifications(); } }
                         }
                     }
                     Rectangle {
@@ -226,7 +226,7 @@ export component AccountMenu inherits Rectangle {
                         border-width: root.mobile-mode ? Elevation.rim-width : 0px;
                         border-color: Elevation.card-rim;
                         settings-group := VerticalLayout {
-                            MenuRow { icon: Icons.settings; label: "Settings"; clicked => { root.settings(); } }
+                            MenuRow { icon: Icons.settings; label: @tr("Settings"); clicked => { root.settings(); } }
                             MenuDivider { }
                             // The switch reflects the active palette; the row handles taps
                             // so the Toggle's checked binding stays attached to it.

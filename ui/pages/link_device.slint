@@ -15,7 +15,7 @@ export component LinkDevicePage inherits Rectangle {
     // Inputs from binding
     in property <image> qr-image;
     in property <string> link-url: "";
-    in property <string> status-text: "Waiting for your other device…";
+    in property <string> status-text: @tr("Waiting for your other device…");
     in property <string> error: "";
     in property <bool> linking: false;
     in property <bool> has-local-identity: false;

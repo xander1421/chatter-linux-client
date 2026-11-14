@@ -27,9 +27,9 @@ export component UpdateBanner inherits GlassSurface {
         spacing: Spacing.sm;
         VerticalLayout {
             alignment: center;
-            Text { text: UpdateGlobal.state == "ready" ? "Ready to restart" : UpdateGlobal.state == "installing" ? "Confirm system install" : UpdateGlobal.state == "error" ? "Update failed" : "Update available";
+            Text { text: UpdateGlobal.state == "ready" ? @tr("Ready to restart") : UpdateGlobal.state == "installing" ? @tr("Confirm system install") : UpdateGlobal.state == "error" ? @tr("Update failed") : @tr("Update available");
                 color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; }
-            Text { text: UpdateGlobal.state == "downloading" ? UpdateGlobal.progress : UpdateGlobal.state == "confirm-cellular" ? "Cellular download?" : UpdateGlobal.state == "error" ? UpdateGlobal.error : UpdateGlobal.version;
+            Text { text: UpdateGlobal.state == "downloading" ? UpdateGlobal.progress : UpdateGlobal.state == "confirm-cellular" ? @tr("Cellular download?") : UpdateGlobal.state == "error" ? UpdateGlobal.error : UpdateGlobal.version;
                 color: UpdateGlobal.state == "error" ? Colors.error : Colors.text-secondary;
                 font-size: Typography.xs; wrap: word-wrap; }
         }
@@ -37,7 +37,7 @@ export component UpdateBanner inherits GlassSurface {
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
-            Button { text: UpdateGlobal.state == "error" ? "Retry" : UpdateGlobal.play-distribution ? "Update in Play Store" : UpdateGlobal.state == "ready" ? "Restart" : UpdateGlobal.state == "confirm-cellular" ? "Download now" : "Update";
+            Button { text: UpdateGlobal.state == "error" ? @tr("Retry") : UpdateGlobal.play-distribution ? @tr("Update in Play Store") : UpdateGlobal.state == "ready" ? @tr("Restart") : UpdateGlobal.state == "confirm-cellular" ? @tr("Download now") : @tr("Update");
                 disabled: UpdateGlobal.state == "downloading" || UpdateGlobal.state == "installing";
                 clicked => { UpdateGlobal.update(); }
             }

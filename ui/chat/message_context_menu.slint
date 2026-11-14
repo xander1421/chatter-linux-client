@@ -67,7 +67,7 @@ component QuickReaction inherits Rectangle {
     border-width: keys.has-focus ? Spacing.stroke : 0px;
     border-color: Colors.primary;
     accessible-role: button;
-    accessible-label: "React with " + root.name;
+    accessible-label: @tr("React with {}", root.name);
     accessible-action-default => { root.clicked(); }
 
     // Items are created with the menu already shown, so `changed` alone never fires.

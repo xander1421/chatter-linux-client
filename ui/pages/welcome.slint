@@ -62,7 +62,7 @@ export component WelcomePage inherits Rectangle {
         }
 
         Text {
-            text: "Hi \{root.display-name}, your account is ready.";
+            text: @tr("Hi {}, your account is ready.", root.display-name);
             color: Colors.text-secondary;
             font-size: Typography.lg;
             horizontal-alignment: center;

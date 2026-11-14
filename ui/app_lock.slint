@@ -172,10 +172,10 @@ export component AppLockSettings inherits Card {
             }
 
             for opt in [
-                { key: "immediate", label: "Immediately" },
-                { key: "one_minute", label: "After 1 minute" },
-                { key: "five_minutes", label: "After 5 minutes" },
-                { key: "thirty_minutes", label: "After 30 minutes" },
+                { key: "immediate", label: @tr("Immediately") },
+                { key: "one_minute", label: @tr("After 1 minute") },
+                { key: "five_minutes", label: @tr("After 5 minutes") },
+                { key: "thirty_minutes", label: @tr("After 30 minutes") },
             ]: Rectangle {
                 property <bool> selected: AppLockPane.timeout == opt.key;
                 height: Spacing.touch-target-min;

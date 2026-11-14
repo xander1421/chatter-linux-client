@@ -87,7 +87,7 @@ export component DevicePicker inherits Rectangle {
     accessible-role: groupbox;
     accessible-id: root.show ? "modal-overlay" : "";
     in property <bool> show: false;
-    in property <string> title: "Select device";
+    in property <string> title: @tr("Select device");
     in property <string> picker-type: "audio"; // "audio", "audio_output", "screen"
 
     // Audio input devices (microphones)
@@ -245,7 +245,7 @@ export component DevicePicker inherits Rectangle {
                                 }
 
                                 DeviceItem {
-                                    name: "Share screen";
+                                    name: @tr("Share screen");
                                     icon: Icons.monitor;
                                     subtitle: @tr("Opens system dialog to select screen or window");
                                     clicked => { root.screen-selected("0"); }
@@ -268,7 +268,9 @@ export component DevicePicker inherits Rectangle {
                                     name: source.name;
                                     icon: Icons.monitor;
                                     is-selected: source.id == selected-screen-id;
-                                    subtitle: source.width > 0 ? (source.width + "x" + source.height + (source.is-primary ? " (Primary)" : "")) : (source.is-primary ? "Primary" : "");
+                                    subtitle: source.width > 0
+                                        ? (source.is-primary ? @tr("{}x{} (Primary)", source.width, source.height) : source.width + "x" + source.height)
+                                        : (source.is-primary ? @tr("Primary") : "");
                                     clicked => { root.screen-selected(source.id); }
                                 }
 

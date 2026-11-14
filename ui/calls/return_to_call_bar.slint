@@ -63,7 +63,7 @@ export component ReturnToCallBar inherits GlassSurface {
     border-radius: Spacing.radius-lg;
 
     accessible-role: button;
-    accessible-label: "Return to call with " + call-data.title;
+    accessible-label: @tr("Return to call with {}", call-data.title);
     accessible-action-default => { root.clicked(); }
 
     return-touch := TouchArea {

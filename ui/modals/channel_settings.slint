@@ -196,7 +196,7 @@ export component ChannelSettingsModal inherits Rectangle {
                         animate width { duration: Materials.motion-standard; easing: Materials.glide; }
                     }
 
-                    for tab[index] in root.has-access-pane ? ["Info", "Members", "Access", "Alerts"] : ["Info", "Members", "Alerts"]: Rectangle {
+                    for tab[index] in root.has-access-pane ? [@tr("Info"), @tr("Members"), @tr("Access"), @tr("Alerts")] : [@tr("Info"), @tr("Members"), @tr("Alerts")]: Rectangle {
                         x: index * settings-tabs.width / settings-tabs.tab-count;
                         width: settings-tabs.width / settings-tabs.tab-count;
                         height: settings-tabs.height;
@@ -367,7 +367,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
                                 Text {
                                     text: root.member-summary
-                                        + (root.created-at != "" ? (root.member-summary != "" ? " • " : "") + "Created " + root.created-at : "");
+                                        + (root.created-at != "" ? (root.member-summary != "" ? " • " : "") + @tr("Created {}", root.created-at) : "");
                                     color: Colors.text-secondary; font-size: Typography.sm;
                                     horizontal-alignment: center;
                                 }
@@ -386,7 +386,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     }
                                 }
                             }
-                            if root.loading: Text { text: "Loading group info…"; color: Colors.text-secondary; font-size: Typography.sm; }
+                            if root.loading: Text { text: @tr("Loading group info…"); color: Colors.text-secondary; font-size: Typography.sm; }
                             if root.channel-description != "": Text {
                                 width: parent.width;
                                 text: root.channel-description; color: Colors.text-secondary;
@@ -410,27 +410,27 @@ export component ChannelSettingsModal inherits Rectangle {
                                     padding-right: Spacing.xs;
                                     if root.can-manage-members || root.members.length > 0: SettingsRow {
                                         touch: true;
-                                        icon: Icons.users; title: "Members";
+                                        icon: Icons.users; title: @tr("Members");
                                         detail: root.member-summary;
                                         clicked => { root.active-section = "members"; }
                                     }
                                     if root.can-manage-members || root.members.length > 0: Rectangle { height: 1px; background: Colors.divider; }
                                     if root.has-access-pane: SettingsRow {
                                         touch: true;
-                                        icon: Icons.link; title: "Access and invite links";
+                                        icon: Icons.link; title: @tr("Access and invite links");
                                         clicked => { root.active-section = "access"; }
                                     }
                                     if root.has-access-pane: Rectangle { height: 1px; background: Colors.divider; }
                                     SettingsRow {
                                         touch: true;
-                                        icon: Icons.bell; title: "Notifications";
+                                        icon: Icons.bell; title: @tr("Notifications");
                                         detail: root.is-muted ? @tr("Muted") : root.notification-preference == "mentions" ? @tr("Mentions only") : root.notification-preference == "none" ? @tr("Off") : @tr("All messages");
                                         clicked => { root.active-section = "notifications"; }
                                     }
                                     Rectangle { height: 1px; background: Colors.divider; }
                                     SettingsRow {
                                         touch: true;
-                                        icon: Icons.pin; title: "Pinned messages";
+                                        icon: Icons.pin; title: @tr("Pinned messages");
                                         clicked => { root.pinned-messages(); }
                                     }
                                     if !root.is-private-group: Rectangle { height: 1px; background: Colors.divider; }
@@ -438,7 +438,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     // a value row, no chevron, not an action.
                                     if !root.is-private-group: SettingsRow {
                                         touch: true;
-                                        icon: Icons.clock; title: "Disappearing messages";
+                                        icon: Icons.clock; title: @tr("Disappearing messages");
                                         detail: DisappearingGlobal.active-label;
                                         clickable: false;
                                         show-chevron: false;
@@ -446,20 +446,20 @@ export component ChannelSettingsModal inherits Rectangle {
                                     if !root.is-private-group && root.channel-type != "dm": Rectangle { height: 1px; background: Colors.divider; }
                                     if !root.is-private-group && root.channel-type != "dm": SettingsRow {
                                         touch: true;
-                                        icon: Icons.phone; title: "Call history";
+                                        icon: Icons.phone; title: @tr("Call history");
                                         clicked => { root.server-calls(); }
                                     }
                                     if root.is-owner && !root.is-private-group: Rectangle { height: 1px; background: Colors.divider; }
                                     if root.is-owner && !root.is-private-group: SettingsRow {
                                         touch: true;
-                                        icon: Icons.settings; title: "Integrations";
+                                        icon: Icons.settings; title: @tr("Integrations");
                                         clicked => { root.integrations(); }
                                     }
                                 }
                             }
                             if root.can-archive || root.can-delete || root.can-leave || root.is-private-group: VerticalLayout {
                                 spacing: Spacing.sm;
-                                Text { text: root.is-private-group ? "Manage group" : "Manage channel"; color: Colors.text-secondary;
+                                Text { text: root.is-private-group ? @tr("Manage group") : @tr("Manage channel"); color: Colors.text-secondary;
                                     font-size: Typography.sm; font-weight: Typography.medium; }
                                 Rectangle {
                                     height: manage-row.preferred-height;
@@ -533,7 +533,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         // and "0 members" contradicted the header.
                                         text: root.member-summary
                                             + (root.member-summary != "" && root.created-at != "" ? " • " : "")
-                                            + (root.created-at == "" ? "" : "Created " + root.created-at);
+                                            + (root.created-at == "" ? "" : @tr("Created {}", root.created-at));
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
@@ -556,7 +556,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 Text {
                                     width: max(0px, parent.width - 16px - parent.spacing);
                                     horizontal-stretch: 1;
-                                    text: "Messages disappear after " + DisappearingGlobal.active-label + " (set when the channel was created)";
+                                    text: @tr("Messages disappear after {} (set when the channel was created)", DisappearingGlobal.active-label);
                                     color: Colors.text-secondary;
                                     font-size: Typography.xs;
                                     wrap: word-wrap;

@@ -173,13 +173,13 @@ export component DevicesSettings inherits VerticalLayout {
                         }
                     }
                     Text {
-                        text: session.status-text != "" ? session.status-text : (session.is-current ? "Active now" : "Last active: " + session.last-used);
+                        text: session.status-text != "" ? session.status-text : (session.is-current ? @tr("Active now") : @tr("Last active: {}", session.last-used));
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         wrap: word-wrap;
                     }
                     Text {
-                        text: "Linked: " + session.created-at;
+                        text: @tr("Linked: {}", session.created-at);
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
@@ -234,7 +234,7 @@ export component DevicesSettings inherits VerticalLayout {
                         font-weight: Typography.medium;
                     }
                     Text {
-                        text: "Approved, waiting to finish linking (until " + link.expires + ")";
+                        text: @tr("Approved, waiting to finish linking (until {})", link.expires);
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         wrap: word-wrap;
