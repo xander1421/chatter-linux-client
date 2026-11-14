@@ -530,10 +530,10 @@ export component ChatLayout inherits Rectangle {
                 padding-right: Spacing.md;
                 spacing: Spacing.sm;
                 Text {
-                    // The server does not fill in the participant count
-                    // (always 0), so a 0 is "unknown", not "empty".
+                    // A live call has at least its starter, so a 0 means the
+                    // count has not arrived, not an empty call.
                     text: root.active-channel-call-participants > 0
-                        ? "Call in progress · " + root.active-channel-call-participants + " participants"
+                        ? "Call in progress · " + (root.active-channel-call-participants == 1 ? "1 participant" : root.active-channel-call-participants + " participants")
                         : "Call in progress";
                     color: Colors.text-primary;
                     vertical-alignment: center;
