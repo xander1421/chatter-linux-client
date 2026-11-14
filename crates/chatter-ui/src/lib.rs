@@ -1251,6 +1251,8 @@ fn dev_auto_register(
 /// Phase 2: Sync event loop (runs OUTSIDE block_on — rt.enter() keeps reactor accessible).
 /// Slint owns the thread. Tokio worker threads handle async I/O.
 fn app_run(state: AppState) {
+    #[cfg(target_vendor = "apple")]
+    state.window.global::<Typography>().set_font_family_emoji("Apple Color Emoji".into());
     // macOS: the native NSWindow only exists once the platform window has
     // actually been created, which needs at least one event-loop iteration
     // after the window is shown (see platform::macos's docs) — in practice a

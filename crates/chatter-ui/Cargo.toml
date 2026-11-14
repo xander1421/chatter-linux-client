@@ -168,7 +168,7 @@ webrtc-sys-build = "=0.3.18"
 [features]
 # `onion` is default: secret chats (anonymous DMs/groups) ride Tor only, and a
 # build without it would have none (owner decision 2026-10-10).
-default = ["desktop", "jarvis", "onion"]
+default = ["desktop", "onion"]
 # Emit Slint element metadata for the headless UI query suites.
 ui-test-debug = ["chatter-ui-slint/ui-test-debug"]
 # The bitchat mesh. Off by default while the radio stack is unproven against a
@@ -201,6 +201,7 @@ desktop-gstreamer = [
     "dep:gstreamer-gl-egl", "dep:glutin_egl_sys", "chatter-core/desktop-gstreamer",
 ]
 local-ai = ["chatter-core/local-ai"]
+# Future-release assistant; opt-in only until desktop/mobile support is ready.
 jarvis = ["chatter-core/jarvis"]
 # The create-channel "AI assistant" template. OFF by default: nothing on that
 # path can supply the provider API key the server requires unconditionally

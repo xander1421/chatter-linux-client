@@ -39,7 +39,7 @@ fn saved_lookup_menu_and_local_delete_preserve_colliding_channel_and_dm() {
     let menu = stored_message_menu(&saved, true, now);
     assert!(menu.actions.copy && menu.actions.select && menu.actions.delete_for_me);
     assert!(!menu.actions.delete_for_everyone && !menu.actions.resend);
-    assert!(menu.actions.edit && menu.actions.pin && !menu.actions.react);
+    assert!(menu.actions.edit && menu.actions.pin && menu.actions.react);
     assert!(!menu.pinned);
     assert!(require_remote_message_kind(&saved.conversation_type).is_err());
     // Exactly the write `pin_saved_message` makes: the pin columns at the
@@ -266,4 +266,74 @@ fn saved_edit_rewrites_only_the_body_and_keeps_a_concurrent_pin() {
     assert!(!stored_message_menu(&failed, true, now).actions.edit);
     assert!(edited_saved_record(&failed, own, "x").is_err());
     assert!(edited_saved_record(&collider, own, "x").is_err());
+}
+
+#[test]
+fn saved_reactions_persist_replace_and_remove_without_touching_colliding_scopes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("saved-reactions.db");
+    let db = Arc::new(Database::open(&path, "test-password").unwrap());
+    db.run_migrations().unwrap();
+    let repo = MessageRepository::new(db);
+    let own = UserId::new();
+    let id = ChannelId::from(own);
+    let now = crate::util::time::TimestampNanos::now().as_u64();
+    let scope = ReactionScope::new(id, ConversationType::SavedMessages);
+    let mut rows = Vec::new();
+    for kind in [ConversationType::SavedMessages, ConversationType::Channel, ConversationType::ServerDm] {
+        let mut row = Message::new_text(id, kind, Some(own), "note".into(), now);
+        row.delivery_status = "delivered".into();
+        repo.insert(&row).unwrap();
+        rows.push(row);
+    }
+    let react = |emoji: &str, remove| super::reactions::persist_saved_reaction(
+        &repo, &scope, own, &own, now, emoji, remove,
+    );
+    react("👍", false).unwrap();
+    assert_eq!(scoped_stored_message(&repo, &scope, &own, now).unwrap().current_user_reactions, vec!["👍"]);
+    react("❤️", false).unwrap();
+    let stored = scoped_stored_message(&repo, &scope, &own, now).unwrap();
+    assert_eq!(stored.current_user_reactions, vec!["❤️"]);
+    assert_eq!(stored.reaction_counts.len(), 1);
+    for row in &rows[1..] {
+        let untouched = repo.get(&row.id).unwrap().unwrap();
+        assert!(untouched.current_user_reactions.is_empty() && untouched.reaction_counts.is_empty());
+    }
+    // A fresh database handle sees the same persisted projection.
+    let reopened = MessageRepository::new(Arc::new(Database::open(&path, "test-password").unwrap()));
+    assert_eq!(scoped_stored_message(&reopened, &scope, &own, now).unwrap().current_user_reactions, vec!["❤️"]);
+    react("❤️", true).unwrap();
+    let stored = scoped_stored_message(&repo, &scope, &own, now).unwrap();
+    assert!(stored.current_user_reactions.is_empty() && stored.reaction_counts.is_empty());
+    assert!(super::reactions::persist_saved_reaction(&repo, &scope, UserId::new(), &own, now, "👍", false).is_err());
+    assert!(super::reactions::persist_saved_reaction(&repo, &scope, own, &UserId::new(), now, "👍", false).is_err());
+    assert!(super::reactions::persist_saved_reaction(&repo, &ReactionScope::of(&rows[1]), own, &own, now, "👍", false).is_err());
+    assert!(react("", false).is_err());
+    repo.delete(&rows[0].id).unwrap();
+    assert!(react("👍", false).is_err());
+}
+
+#[tokio::test]
+async fn saved_reaction_handle_resolves_saved_scope_and_toggles_without_transport() {
+    let (client, _dir) = super::tests::test_client();
+    let own = UserId::new();
+    let id = ChannelId::from(own);
+    client.auth_state().set_logged_in(own, 1, "reaction fixture".into());
+    let channel = Channel::new(id, "Saved Messages".into(), ChannelType::SavedMessages, own);
+    client.channels().channel_repo.insert(&channel).unwrap();
+    let now = crate::util::time::TimestampNanos::now().as_u64();
+    for kind in [ConversationType::SavedMessages, ConversationType::Channel, ConversationType::ServerDm] {
+        let mut row = Message::new_text(id, kind, Some(own), "note".into(), now);
+        row.delivery_status = "delivered".into();
+        client.messages().message_repo.insert(&row).unwrap();
+    }
+    let handle = client.conversation(ActiveConversation::Channel(id));
+    let snapshot = handle.reaction_snapshot(&own, now).unwrap().unwrap();
+    assert_eq!(snapshot.scope.kind, ConversationType::SavedMessages);
+    assert!(handle.toggle_reaction("👍", &own, now).await.unwrap());
+    assert_eq!(handle.reaction_snapshot(&own, now).unwrap().unwrap().own_emojis, vec!["👍"]);
+    assert!(!handle.toggle_reaction("👍", &own, now).await.unwrap());
+    assert!(handle.reaction_snapshot(&own, now).unwrap().unwrap().own_emojis.is_empty());
+    let foreign = ReactionScope::new(id, ConversationType::Channel);
+    assert!(handle.toggle_reaction_for_scope(&foreign, "👍", &own, now).await.is_err());
 }

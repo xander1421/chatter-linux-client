@@ -1017,6 +1017,22 @@ fn message_react_edit_pin_actions_are_wired() {
 // ============================================================================
 
 #[test]
+fn link_device_copy_preserves_verification_code() {
+    let (rt, _tmp, client, w) = wired_offline();
+    chatter_ui::init_rt_handle(rt.handle().clone());
+    chatter_ui::bin_ui::features::auth::link_device::wire_link_device(&w, &client);
+    w.set_current_view("link-device".into());
+    let status = "Verification code: 123456\nCheck your other device shows the same code, then approve there.";
+    let url = "chatter://link?uuid=offline-test";
+    w.global::<chatter_ui::AuthFlow>().set_link_device_status(status.into());
+    w.global::<chatter_ui::AuthFlow>().set_link_device_url(url.into());
+    w.global::<chatter_ui::AuthFlow>().invoke_link_device_copy();
+    assert_eq!(w.global::<chatter_ui::AuthFlow>().get_link_device_status().as_str(), status);
+    assert_eq!(chatter_ui::platform::clipboard::test_clipboard_text().as_deref(), Some(url));
+    assert_eq!(w.get_toast_message().as_str(), "Link copied to clipboard.");
+}
+
+#[test]
 fn link_device_page_start_and_cancel_are_wired() {
     let (rt, _tmp, client, w) = wired_offline();
     chatter_ui::init_rt_handle(rt.handle().clone());
@@ -1458,6 +1474,7 @@ fn cloud_preference_does_not_override_the_dm_policy() {
 /// The per-conversation AI switch must actually gate a Jarvis turn, not just
 /// sit in settings. Before this, `conv.ai.enabled.<id>` was written by the UI
 /// and never read at ask time — a channel with AI off would still answer.
+#[cfg(feature = "jarvis")]
 #[test]
 fn jarvis_ask_is_gated_by_the_per_conversation_switch() {
     use chatter_core::domain::jarvis::JarvisContext;
@@ -1490,6 +1507,7 @@ fn jarvis_ask_is_gated_by_the_per_conversation_switch() {
 
 /// The dedicated AI channel is exempt — requiring it to be switched on would
 /// be circular, since it exists only to talk to the model.
+#[cfg(feature = "jarvis")]
 #[test]
 fn the_dedicated_ai_channel_needs_no_opt_in() {
     use chatter_core::client::jarvis_channel_id;

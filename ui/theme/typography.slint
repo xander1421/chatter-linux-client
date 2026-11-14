@@ -35,7 +35,9 @@ export global Typography {
     // Emoji-only Text elements pin this so color glyphs win. Without it,
     // fontconfig fallback can pick a monochrome symbol font (e.g. Font Awesome
     // covers U+1F600+) and emoji render as white outlines.
-    out property <string> font-family-emoji: "Noto Color Emoji";
+    // CoreText does not render the bundled CBDT/CBLC font on macOS;
+    // native startup selects Apple Color Emoji there.
+    in-out property <string> font-family-emoji: "Noto Color Emoji";
 
     // Font sizes. Every step is drawn at `Appearance.text-scale` (Settings ›
     // Appearance › Text size), so the whole scale moves together.

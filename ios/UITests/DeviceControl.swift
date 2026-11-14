@@ -100,7 +100,17 @@ final class DeviceControl: XCTestCase {
     }
 
     private func capture(_ name: String) {
-        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        let screenshot = XCUIScreen.main.screenshot()
+        // Opt-in bridge for a peer-device exchange while this test keeps the
+        // app foregrounded. devicectl can copy the runner's Documents file
+        // before the xcresult bundle is finalized. No accessibility values
+        // or credentials are included beyond the visible screen itself.
+        if ProcessInfo.processInfo.environment["CHATTER_LIVE_SCREENSHOT"] == "1" {
+            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            try? screenshot.pngRepresentation.write(
+                to: documents.appendingPathComponent("chatter-screen.png"), options: .atomic)
+        }
+        let shot = XCTAttachment(screenshot: screenshot)
         shot.name = name
         shot.lifetime = .keepAlways
         add(shot)

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use i_slint_backend_winit::{EventResult, WinitWindowAccessor};
 use slint::ComponentHandle;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, MouseButton, WindowEvent};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::state::ActiveConversation;
@@ -34,6 +34,16 @@ pub(crate) fn wire_drag_drop(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window.window().on_winit_window_event(move |_win, event| {
         match event {
+            WindowEvent::MouseInput { state, button: MouseButton::Back | MouseButton::Forward, .. } => {
+                // Both edges are consumed; navigate once per physical click.
+                if *state == ElementState::Pressed {
+                    if let Some(w) = weak.upgrade() {
+                        w.invoke_mouse_navigation(matches!(event,
+                            WindowEvent::MouseInput { button: MouseButton::Forward, .. }));
+                    }
+                }
+                EventResult::PreventDefault
+            }
             WindowEvent::Focused(focused) => {
                 let _rt = crate::rt_handle().enter();
                 if !*focused {

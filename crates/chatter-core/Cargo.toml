@@ -337,7 +337,7 @@ name = "attachment_decrypt"
 harness = false
 
 [features]
-default = ["desktop-system", "desktop-media", "jarvis"]
+default = ["desktop-system", "desktop-media"]
 # Select the DEVELOPMENT sealed-sender trust root (config.rs) instead of the
 # production one. Its private key is committed in plaintext at
 # deploy/vault/init-and-unseal.sh, so a build with this feature trusts sender

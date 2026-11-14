@@ -731,6 +731,7 @@ pub async fn handle_domain_event(
             let ui_ctx = ui_ctx.clone();
             crate::run_ui!(window, |w| {
                 w.global::<crate::CallView>().set_missed_call_count(missed);
+                #[cfg(feature = "call-ui")]
                 crate::bin_ui::features::calls::history::refresh_in_place(&w, &ui_ctx);
             });
         }

@@ -17,9 +17,8 @@ use raw_window_handle::HasWindowHandle;
 /// standard macOS unified-toolbar row. Fixed by AppKit: it doesn't change
 /// with window size or Retina scaling.
 ///
-/// App content is drawn *under* this band, not below it; the value exists so
-/// the panel that happens to be at the top-left can keep its own content out
-/// of the traffic lights' way when it is too narrow to do that horizontally.
+/// The root layout reserves this band plus a small gap for all routes, so
+/// native window controls never overlap app controls or page headings.
 pub const TITLEBAR_HEIGHT: f32 = 28.0;
 
 /// Leading width the three traffic lights occupy, in logical points: a 20pt
@@ -96,9 +95,14 @@ pub fn prepare_bundled_gstreamer() {
         Err(_) => plugins,
     };
     tracing::info!(path = %path.display(), "using bundled GStreamer plugins");
+    let scanner = macos_dir.join("../Helpers/gst-plugin-scanner");
     // Safe: runs once at process startup, before any thread that might read the
     // environment is spawned. set_var is unsafe as of the 2024 edition.
     unsafe {
         std::env::set_var("GST_PLUGIN_SYSTEM_PATH", &path);
+        if std::env::var_os("GST_PLUGIN_SCANNER").is_none() && scanner.is_file() {
+            std::env::set_var("GST_PLUGIN_SCANNER", &scanner);
+            tracing::info!(path = %scanner.display(), "using bundled GStreamer plugin scanner");
+        }
     }
 }

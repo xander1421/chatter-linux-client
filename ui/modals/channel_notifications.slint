@@ -1,3 +1,4 @@
+import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
@@ -246,7 +247,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
     }
 
     // Private groups cannot use remote AI.
-    if !root.is-private-group: ai-row := ToggleRow {
+    if JarvisGlobal.enabled && !root.is-private-group: ai-row := ToggleRow {
         checked <=> root.ai-enabled;
         accessible-text: "AI assistant";
         toggled(value) => {

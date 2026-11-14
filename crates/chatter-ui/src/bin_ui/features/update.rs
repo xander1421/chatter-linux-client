@@ -30,6 +30,19 @@ async fn check(client: Arc<ChatterClient>, weak: Weak<MainWindow>, manual: bool,
         }
         return;
     }
+    if !matches!(update::platform(), "android" | "linux") {
+        if manual {
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    let global = window.global::<UpdateGlobal>();
+                    global.set_state("idle".into());
+                    global.set_error("".into());
+                    global.set_notice("In-app updates are not available for this platform yet".into());
+                }
+            });
+        }
+        return;
+    }
     tracing::info!(manual, "update check started");
     if manual {
         let loading = weak.clone();

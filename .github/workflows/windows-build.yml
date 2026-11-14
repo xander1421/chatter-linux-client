@@ -191,7 +191,7 @@ jobs:
           echo "LIBSQLITE3_FLAGS=-DNOCRYPT" >> $env:GITHUB_ENV
           Write-Host "SQLCipher -> BoringSSL: $stage\lib\libcrypto.lib  inc=$($bsslInc.FullName)"
 
-      - name: Build release client (desktop and jarvis)
+      - name: Build release client (desktop)
         env:
           RUSTC_WRAPPER: ""
           CHATTER_SERVER_URL: ${{ vars.CHATTER_SERVER_URL }}
@@ -205,7 +205,7 @@ jobs:
           CHATTER_NTFY_URL: ${{ vars.CHATTER_NTFY_URL }}
           CHATTER_ONION_ADDR: ${{ vars.CHATTER_ONION_ADDR }}
           # Keep target CRT/linker settings from .cargo/config.toml.
-        run: cargo build --locked --release -p chatter-ui --no-default-features --features desktop,jarvis
+        run: cargo build --locked --release -p chatter-ui --no-default-features --features desktop
 
       - name: Bundle release artifact
         shell: pwsh

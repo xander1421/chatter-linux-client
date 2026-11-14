@@ -127,69 +127,49 @@ fn wire_cancel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 fn wire_copy(window: &MainWindow) {
     let weak = window.as_weak();
+    window.global::<crate::AuthFlow>().on_link_device_copy(move || {
+        let Some(w) = weak.upgrade() else { return };
+        let url = w.global::<crate::AuthFlow>().get_link_device_url().to_string();
+        if url.is_empty() { return; }
 
-    window
-        .global::<crate::AuthFlow>()
-        .on_link_device_copy(move || {
-            let Some(w) = weak.upgrade() else { return };
-            let url = w
-                .global::<crate::AuthFlow>()
-                .get_link_device_url()
-                .to_string();
-            if url.is_empty() {
-                return;
-            }
-
-            #[cfg(target_os = "android")]
-            {
-                let message =
-                    match crate::platform::android::clipboard::set_text("Device link", &url) {
-                        Ok(()) => "Link copied to clipboard.",
-                        Err(_) => "Unable to copy link. Please try again.",
-                    };
-                w.global::<crate::AuthFlow>()
-                    .set_link_device_status(message.into());
-            }
-            #[cfg(target_os = "ios")]
-            w.global::<crate::AuthFlow>()
-                .set_link_device_status("Clipboard copy is unavailable on this device.".into());
-
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        #[cfg(any(target_os = "android", target_os = "ios", feature = "ui-test-debug"))]
+        {
+            let copied = crate::platform::clipboard::set_text("Device link", &url, false).is_ok();
+            show_copy_result(&w, &url, copied);
+        }
+        #[cfg(all(not(any(target_os = "android", target_os = "ios")), not(feature = "ui-test-debug")))]
+        {
             let weak = weak.clone();
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             std::thread::spawn(move || {
-                let wayland = std::process::Command::new("wl-copy").arg(&url).status();
-                let result = match wayland {
-                    Ok(status) if status.success() => Ok(status),
-                    _ => std::process::Command::new("xclip")
-                        .args(["-selection", "clipboard"])
-                        .stdin(std::process::Stdio::piped())
-                        .spawn()
-                        .and_then(|mut child| {
-                            use std::io::Write;
-                            if let Some(stdin) = child.stdin.as_mut() {
-                                stdin.write_all(url.as_bytes())?;
-                            }
-                            child.wait()
-                        }),
-                };
-                let copied = result.is_ok_and(|status| status.success());
-                let _ = weak.upgrade_in_event_loop(move |w| {
-                    // A completed old copy must not change a replacement link page.
-                    if w.get_current_view().as_str() != "link-device"
-                        || w.global::<crate::AuthFlow>().get_link_device_url().as_str() != url
-                    {
-                        return;
+                // Retain the X11 clipboard owner after copying. The same native
+                // backend also supports macOS/Windows without wl-copy or xclip.
+                static CLIPBOARD: std::sync::Mutex<Option<arboard::Clipboard>> =
+                    std::sync::Mutex::new(None);
+                let copied = (|| -> Result<(), String> {
+                    let mut clipboard = CLIPBOARD.lock().map_err(|_| "Clipboard unavailable")?;
+                    if clipboard.is_none() {
+                        *clipboard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
                     }
-                    w.global::<crate::AuthFlow>()
-                        .set_link_device_status(if copied {
-                            "Link copied to clipboard.".into()
-                        } else {
-                            "Unable to copy link. Please try again.".into()
-                        });
-                });
+                    clipboard.as_mut().unwrap().set_text(url.clone()).map_err(|e| e.to_string())
+                })().is_ok();
+                let _ = weak.upgrade_in_event_loop(move |w| show_copy_result(&w, &url, copied));
             });
-        });
+        }
+    });
+}
+
+fn show_copy_result(w: &MainWindow, url: &str, copied: bool) {
+    // Copy feedback must not replace the verification code/progress, nor land
+    // on a replacement QR page after a delayed clipboard operation completes.
+    if w.get_current_view().as_str() != "link-device"
+        || w.global::<crate::AuthFlow>().get_link_device_url().as_str() != url {
+        return;
+    }
+    w.set_toast_message(if copied { "Link copied to clipboard." } else {
+        "Unable to copy link. Please try again."
+    }.into());
+    w.set_toast_variant(if copied { "success" } else { "error" }.into());
+    w.set_toast_visible(true);
 }
 
 // ============================================================================

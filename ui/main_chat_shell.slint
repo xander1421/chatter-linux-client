@@ -480,9 +480,11 @@ export component MainChatShell inherits Rectangle {
                 visible: ChatPane.thread-panel-visible;
                 composer-enter-sends: !root.is-mobile-platform || root.width >= 840px;
                 touch: root.is-mobile-platform;
-                x: parent.width - self.width;
+                // Pinned pages share the conversation chrome's desktop gutter.
+                property <length> page-inset: ChatPane.thread-pinned-mode && !root.compact-layout ? Spacing.xs : 0px;
+                x: parent.width - self.width - self.page-inset;
                 y: 0;
-                width: chat-panel-area.thread-panel-w;
+                width: max(0px, chat-panel-area.thread-panel-w - 2 * self.page-inset);
                 height: 100%;
                 context-menu-anchor-bottom <=> root.context-menu-anchor-bottom;
                 context-menu-anchor-left <=> root.context-menu-anchor-left;

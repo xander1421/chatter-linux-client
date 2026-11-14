@@ -436,7 +436,7 @@ export component AppSecondaryModals inherits Rectangle {
     }
 
     // Jarvis memory browser (centered modal over the backdrop)
-    if root.is-presented("jarvis-memory"): Rectangle {
+    if JarvisGlobal.enabled && root.is-presented("jarvis-memory"): Rectangle {
         property <bool> shown: root.active-modal == "jarvis-memory";
         width: root.width;
         height: root.window-height;
@@ -446,7 +446,7 @@ export component AppSecondaryModals inherits Rectangle {
         visible: self.shown || self.opacity > 0;
         TouchArea { enabled: parent.shown; clicked => { ModalHostState.nav-close("jarvis-memory"); } }
     }
-    if root.is-presented("jarvis-memory"): JarvisMemoryModal {
+    if JarvisGlobal.enabled && root.is-presented("jarvis-memory"): JarvisMemoryModal {
         show: root.active-modal == "jarvis-memory";
         width: min(860px, parent.width - 32px);
         height: min(560px, parent.height - 48px);

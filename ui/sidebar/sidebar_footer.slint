@@ -1,3 +1,4 @@
+import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { ActivityUi } from "../activity/activity_bell.slint";
 import { ActivityGlobal } from "../activity/activity_global.slint";
@@ -61,7 +62,7 @@ export component SidebarFooter inherits GlassSurface {
             // panel's own left/right edges and closed a box around the footer.
 
 
-            // Expanded view: Profile + Jarvis + Settings on same row
+            // Expanded view: Profile and Settings on the same row
             // No `alignment` — under any alignment other than stretch, Slint
             // sizes every child to its PREFERRED width and ignores
             // horizontal-stretch, so the display name pushed the icons past the
@@ -224,7 +225,7 @@ export component SidebarFooter inherits GlassSurface {
                 }
                 // Bottom cluster, in order: AI, Chats, Mesh, Activity, then
                 // profile, Settings, expand.
-                TooltipArea {
+                if JarvisGlobal.enabled && JarvisGlobal.opted-in: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: "AI"; tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;

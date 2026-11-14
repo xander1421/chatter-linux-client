@@ -87,6 +87,17 @@ impl WGPUSurface {
             .ok_or_else(|| PlatformError::from("WGPU surface is not compatible with adapter"))?;
 
         let swapchain_capabilities = surface.get_capabilities(adapter);
+        // Skia backdrop filters copy the drawable before sampling it. Metal's
+        // default render-only surface sets CAMetalLayer.framebufferOnly, which
+        // makes those copies invalid and produces magenta glass surfaces.
+        #[cfg(target_vendor = "apple")]
+        if adapter.get_info().backend == wgpu::Backend::Metal {
+            let readable = wgpu::TextureUsages::COPY_SRC;
+            if !swapchain_capabilities.usages.contains(readable) {
+                return Err(PlatformError::from("Metal surface cannot support backdrop copies"));
+            }
+            surface_config.usage |= readable;
+        }
         let swapchain_format = swapchain_capabilities
             .formats
             .iter()

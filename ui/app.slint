@@ -177,19 +177,14 @@ export component MainWindow inherits Window {
     // transparent/unified (platform::macos::apply_unified_titlebar). 0 on
     // every other platform, which is what makes the bindings below no-ops
     // there.
-    // The app does NOT reserve a row for the titlebar: the whole point of the
-    // unified look is that the traffic lights sit *inside* the app's own top
-    // row, level with the sidebar's first row and the conversation header —
-    // one row, the way every native macOS chat app does it. So content runs
-    // to y=0 and the only thing that moves is whatever would otherwise be
-    // drawn beneath the lights themselves.
+    // Keep every page and overlay below the native traffic lights. A shared
+    // inset also covers Settings, auth, search and narrow/collapsed sidebars;
+    // per-header leading offsets missed those routes and squeezed Search.
     in property <length> macos-titlebar-height: 0px;
     in property <length> macos-traffic-lights-width: 0px;
-    // Leading clearance the conversation header has to add for itself: the
-    // sidebar absorbs the traffic lights when it is wide enough, and the rail
-    // (60px) is not. Zero whenever the panel already covers them.
-    property <length> chat-traffic-lights-lead: max(0px, root.macos-traffic-lights-width
-        - (root.sidebar-is-rail ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width));
+    property <length> desktop-top-inset: root.macos-titlebar-height > 0px
+        ? root.macos-titlebar-height + Spacing.sm : 0px;
+    property <length> chat-traffic-lights-lead: 0px;
     // Keyboard is considered open when bottom inset exceeds the nav bar threshold
     property <bool> keyboard-open: safe-area-bottom > 80px;
     // Whether the mobile tab bar is on screen. The full-screen pages that leave
@@ -422,6 +417,12 @@ export component MainWindow inherits Window {
     // when Slint has no focused item. The scope below also routes desktop
     // Back/Escape here. Navigation decisions live in features/back.rs.
     callback back-pressed();
+    callback mouse-navigation(bool); // true = Forward
+    callback navigation-changed();
+    private property <string> navigation-route: root.current-view + ":" + (AppLockPane.locked ? "locked" : "unlocked")
+        + ":" + SidebarPane.active-tab + ":" + root.active-modal
+        + ":" + (ModalHostState.settings-open ? SettingsPane.navigation-section : "");
+    changed navigation-route => { root.navigation-changed(); }
     // Android asks core to recompute capture protection at navigation boundaries.
     callback refresh-screen-protection();
     // The phone's chat pane closed (Back, header back, a bottom tab): nothing
@@ -735,8 +736,8 @@ export component MainWindow inherits Window {
 
         Rectangle {
             width: root.width;
-            height: root.height - root.safe-area-top - root.safe-area-bottom;
-            y: root.safe-area-top;
+            height: max(0px, root.height - root.safe-area-top - root.safe-area-bottom - root.desktop-top-inset);
+            y: root.safe-area-top + root.desktop-top-inset;
 
             AuthPages {
                 width: parent.width;
@@ -792,8 +793,8 @@ export component MainWindow inherits Window {
                 is-mobile-platform : root.is-mobile-platform;
                 is-small-screen : root.is-small-screen;
                 keyboard-open : root.keyboard-open;
-                macos-titlebar-height : root.macos-titlebar-height;
-                macos-traffic-lights-width : root.macos-traffic-lights-width;
+                macos-titlebar-height : 0px;
+                macos-traffic-lights-width : 0px;
                 reply-focus-serial <=> root.reply-focus-serial;
                 return-to-call-height : root.return-to-call-height;
                 safe-area-bottom : root.safe-area-bottom;
@@ -852,9 +853,9 @@ export component MainWindow inherits Window {
             exiting-modal : modal-transitions.exiting-modal;
             fab-y : root.fab-y;
             is-mobile-platform : root.is-mobile-platform;
-            macos-titlebar-height : root.macos-titlebar-height;
+            macos-titlebar-height : 0px;
             presented-modal : modal-transitions.presented-modal;
-            safe-area-top : root.safe-area-top;
+            safe-area-top : root.safe-area-top + root.desktop-top-inset;
             sidebar-is-rail : root.sidebar-is-rail;
             window-height: root.height;
             submit-anon-mode-pin(arg0) => { root.submit-anon-mode-pin(arg0); }
@@ -891,7 +892,7 @@ export component MainWindow inherits Window {
             is-mobile-platform: root.is-mobile-platform;
             presented-modal: modal-transitions.presented-modal;
             reply-focus-serial <=> root.reply-focus-serial;
-            safe-area-top: root.safe-area-top;
+            safe-area-top: root.safe-area-top + root.desktop-top-inset;
             sidebar-menu-collapsed: !root.compact-layout && root.sidebar-is-rail;
             sidebar-menu-width: root.compact-layout ? root.width
                 : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : Spacing.sidebar-width-collapsed)
@@ -950,7 +951,7 @@ export component MainWindow inherits Window {
             z: 20;
             width: root.width;
             height: root.height;
-            safe-area-top: root.safe-area-top;
+            safe-area-top: root.safe-area-top + root.desktop-top-inset;
         }
     }
 

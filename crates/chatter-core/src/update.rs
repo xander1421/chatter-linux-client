@@ -59,7 +59,7 @@ pub fn platform() -> &'static str {
     }
     #[cfg(not(target_os = "android"))]
     {
-        "linux"
+        std::env::consts::OS
     }
 }
 
@@ -352,6 +352,11 @@ pub async fn check_latest(
     data_dir: &Path,
 ) -> Result<Option<UpdateManifest>, String> {
     tracing::info!(platform, channel, installed_code, "update check started");
+    // Native installers and signed release channels currently exist only for
+    // Android and Linux. Never query another OS's executable update channel.
+    if !matches!(platform, "android" | "linux") {
+        return Err(format!("In-app updates are not available for {platform} yet"));
+    }
     if shield_requested && pool.transport_mode() != TransportMode::Onion {
         return Err("Shield requires Tor for update checks".into());
     }

@@ -14,6 +14,7 @@ component GlassMaterial inherits Rectangle {
     in property <color> material-tint;
     in property <int> elevation;
     in property <bool> highlighted;
+    in property <bool> show-edge;
     in property <float> darkening: 1.0;
     in property <bool> opaque;
     // Keep the same optical treatment while the underlying list scrolls.
@@ -79,8 +80,8 @@ component GlassMaterial inherits Rectangle {
     // The one optical edge. Glass effects off: no blur and no shadow, so
     // a floating level keeps a flat lit/ink hairline instead.
     // Opaque chrome keeps the full edge it had drawn for itself.
-    if (root.material-enabled && (Appearance.glass-effects || root.elevation >= 3))
-        || (!root.material-enabled && root.opaque): Rectangle {
+    if root.show-edge && ((root.material-enabled && (Appearance.glass-effects || root.elevation >= 3))
+        || (!root.material-enabled && root.opaque)): Rectangle {
         x: Materials.glass-edge-width / 2;
         y: self.x;
         width: max(0px, root.width - Materials.glass-edge-width);
@@ -106,6 +107,7 @@ export component GlassSurface inherits Rectangle {
     in property <bool> backdrop-paused: false;
     // Light catches the existing optical edge on interactive glass controls.
     in property <bool> highlighted: false;
+    in property <bool> show-edge: true;
     // Scales the chrome backdrop darkening; chat chrome uses Materials.chat-darkening.
     in property <float> darkening: 1.0;
     // With material-enabled false: an opaque fill inside the shared edge
@@ -140,6 +142,7 @@ export component GlassSurface inherits Rectangle {
         material-tint: root.material-tint;
         elevation: root.elevation;
         highlighted: root.highlighted;
+        show-edge: root.show-edge;
         darkening: root.darkening;
         opaque: root.opaque;
     }

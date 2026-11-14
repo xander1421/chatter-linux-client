@@ -25,11 +25,19 @@ APP="$ROOT/target/$PROFILE/Chatter.app"
 [ -x "$BIN" ] || { echo "no binary at $BIN — run: cargo build -p chatter-ui" >&2; exit 1; }
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks" "$APP/Contents/Helpers"
 
 cp "$ROOT/macos/Info.plist" "$APP/Contents/Info.plist"
 cp "$BIN" "$APP/Contents/MacOS/chatter-ui"
 chmod +w "$APP/Contents/MacOS/chatter-ui"
+
+# The scanner is a separate process; it must load the same bundled GLib and
+# GStreamer as the app, rather than the installed Homebrew copies.
+SCANNER="$APP/Contents/Helpers/gst-plugin-scanner"
+SCANNER_SOURCE="$(pkg-config --variable=pluginscannerdir gstreamer-1.0)/gst-plugin-scanner"
+[ -x "$SCANNER_SOURCE" ] || { echo "missing GStreamer plugin scanner: $SCANNER_SOURCE" >&2; exit 1; }
+cp "$SCANNER_SOURCE" "$SCANNER"
+chmod +w "$SCANNER"
 
 # --- icon: build .icns from the PNGs already in assets/ ------------------
 ICONSET="$(mktemp -d)/Chatter.iconset"
@@ -57,7 +65,7 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Chatter.icns" 2>/dev/nul
 FW="$APP/Contents/Frameworks"
 deps() { otool -L "$1" | tail -n +2 | awk '{print $1}' | grep -E '^(/opt/homebrew|/usr/local/(opt|Cellar))' || true; }
 
-queue=$(deps "$APP/Contents/MacOS/chatter-ui")
+queue="$(deps "$APP/Contents/MacOS/chatter-ui") $(deps "$SCANNER")"
 while [ -n "$queue" ]; do
 	next=""
 	for lib in $queue; do
@@ -73,15 +81,18 @@ done
 
 for f in "$FW"/*.dylib; do
 	install_name_tool -id "@rpath/$(basename "$f")" "$f"
+	install_name_tool -add_rpath '@loader_path' "$f" 2>/dev/null || true
 	for dep in $(deps "$f"); do
 		install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$f"
 	done
 done
 
-for dep in $(deps "$APP/Contents/MacOS/chatter-ui"); do
-	install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$APP/Contents/MacOS/chatter-ui"
+for executable in "$APP/Contents/MacOS/chatter-ui" "$SCANNER"; do
+	for dep in $(deps "$executable"); do
+		install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$executable"
+	done
+	install_name_tool -add_rpath '@executable_path/../Frameworks' "$executable" 2>/dev/null || true
 done
-install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/chatter-ui" 2>/dev/null || true
 
 # --- GStreamer plugins: same treatment, or two copies of GLib collide ----
 #
@@ -117,11 +128,14 @@ if [ -d "$SRC_PLUGDIR" ]; then
 			[ -f "$lib" ] || continue
 			cp "$lib" "$FW/$base"
 			chmod +w "$FW/$base"
+			# Queue dependencies before rewriting them to @rpath, which deps()
+			# intentionally excludes from the Homebrew source walk.
+			next="$next $(deps "$FW/$base")"
 			install_name_tool -id "@rpath/$base" "$FW/$base"
+			install_name_tool -add_rpath '@loader_path' "$FW/$base" 2>/dev/null || true
 			for dep in $(deps "$FW/$base"); do
 				install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$FW/$base"
 			done
-			next="$next $(deps "$FW/$base")"
 		done
 		queue="$next"
 	done
@@ -131,7 +145,7 @@ if [ -d "$SRC_PLUGDIR" ]; then
 		for dep in $(deps "$f"); do
 			install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$f" 2>/dev/null || true
 		done
-		install_name_tool -add_rpath "@executable_path/../Frameworks" "$f" 2>/dev/null || true
+		install_name_tool -add_rpath '@loader_path/../../Frameworks' "$f" 2>/dev/null || true
 	done
 else
 	echo "warn: no GStreamer plugin dir at $SRC_PLUGDIR — camera/media will be limited to whatever's statically linked" >&2
@@ -150,7 +164,7 @@ fi
 # loose dylib individually before the deep bundle-level pass covers the rest.
 SIGN_ARGS=(--force --sign -)
 [ -n "$IDENTITY" ] && SIGN_ARGS=(--force --options runtime --sign "$IDENTITY")
-for f in "$FW"/*.dylib "$PLUGDIR"/*.dylib; do
+for f in "$FW"/*.dylib "$PLUGDIR"/*.dylib "$SCANNER"; do
 	[ -f "$f" ] || continue
 	codesign "${SIGN_ARGS[@]}" "$f"
 done
@@ -165,4 +179,6 @@ else
 fi
 
 echo "built $APP"
-otool -L "$APP/Contents/MacOS/chatter-ui" | grep -c homebrew | xargs -I{} echo "remaining /opt/homebrew refs in main binary: {}"
+remaining=$(otool -L "$APP/Contents/MacOS/chatter-ui" | awk '/homebrew/ { count++ } END { print count + 0 }')
+echo "remaining /opt/homebrew refs in main binary: $remaining"
+[ "$remaining" -eq 0 ]

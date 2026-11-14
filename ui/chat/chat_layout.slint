@@ -584,25 +584,32 @@ export component ChatLayout inherits Rectangle {
         }
 
         // Pinned messages bar (Telegram-style, always visible when pinned messages exist)
-        if root.has-pinned-messages: PinnedBar {
-            backdrop-paused: message-list.scrolling;
-            thumbnail: root.pinned-thumbnail;
-            message-preview: root.pinned-message-preview;
-            current-index: root.pinned-current-index;
-            total-count: root.pinned-total-count;
-            has-multiple: root.pinned-total-count > 1;
+        if root.has-pinned-messages && !root.hide-header && !root.mobile: Rectangle {
+            height: Spacing.xs;
+        }
+        if root.has-pinned-messages: HorizontalLayout {
+            padding-left: Spacing.sm;
+            padding-right: Spacing.sm;
+            PinnedBar {
+                backdrop-paused: message-list.scrolling;
+                thumbnail: root.pinned-thumbnail;
+                message-preview: root.pinned-message-preview;
+                current-index: root.pinned-current-index;
+                total-count: root.pinned-total-count;
+                has-multiple: root.pinned-total-count > 1;
 
-            prev-clicked => {
-                root.pinned-prev-clicked();
-            }
-            next-clicked => {
-                root.pinned-next-clicked();
-            }
-            go-to-message => {
-                root.pinned-go-to-message();
-            }
-            list-clicked => {
-                root.pinned-list-clicked();
+                prev-clicked => {
+                    root.pinned-prev-clicked();
+                }
+                next-clicked => {
+                    root.pinned-next-clicked();
+                }
+                go-to-message => {
+                    root.pinned-go-to-message();
+                }
+                list-clicked => {
+                    root.pinned-list-clicked();
+                }
             }
         }
 

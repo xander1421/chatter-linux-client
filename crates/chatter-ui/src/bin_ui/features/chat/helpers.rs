@@ -311,9 +311,8 @@ fn refresh_reaction_snapshot(
             return;
         }
     };
-    // The (author, timestamp_ns) pair is a unique message identity, so at most
-    // one row matches: stop at the hit and skip the thread pass if the main
-    // model already held it. Hoist the key strings out of the per-row loop.
+    // One row matches within each model. A pinned page can show the same
+    // message as the hidden main list, so both retained views need the update.
     let author_key = author.to_string();
     let sent_at_key = snapshot.sent_at.to_string();
     let apply = |model: &dyn Model<Data = crate::MessageItemData>| -> bool {
@@ -337,14 +336,10 @@ fn refresh_reaction_snapshot(
         }
         false
     };
-    let found;
     // Reactions never change grouping inputs. Update the same retained model
     // directly instead of performing any continuation work.
-    found = apply(&window.global::<crate::ChatPane>().get_messages());
-    // The open thread panel keeps its own model; its replies react too.
-    if !found {
-        apply(&window.global::<crate::ChatPane>().get_thread_replies());
-    }
+    apply(&window.global::<crate::ChatPane>().get_messages());
+    apply(&window.global::<crate::ChatPane>().get_thread_replies());
 }
 
 /// Remove a message from the UI model by sender_id + timestamp_ns.
