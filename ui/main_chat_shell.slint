@@ -522,6 +522,7 @@ export component MainChatShell inherits Rectangle {
             width: parent.width;
             height: parent.height;
             is-signed-in: AuthFlow.is-signed-in;
+            chat-covers-screen: root.compact-layout && SidebarPane.mobile-show-chat;
             connection-status: root.connection-status;
             server-unreachable: root.server-unreachable;
             reconnect-attempt: root.connection-reconnect-attempt;
