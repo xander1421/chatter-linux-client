@@ -44,8 +44,6 @@ export component CustomSectionHeader inherits Rectangle {
     in property <bool> keyboard-highlight: false;
 
     callback toggle-expanded();
-    callback rename-clicked();
-    callback delete-clicked();
     callback context-menu-requested(/* x */ length, /* y */ length);
 
     height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
@@ -144,8 +142,8 @@ export component CustomSectionHeader inherits Rectangle {
                     horizontal-stretch: 1;
                 }
 
-                // Aggregate unread badge (hidden when the desktop action buttons show)
-                if root.unread-count > 0 && (root.mobile-mode || !header-hover.has-hover): VerticalLayout {
+                // Aggregate unread badge
+                if root.unread-count > 0: VerticalLayout {
                     alignment: center;
                     Rectangle {
                         width: max(self.height, header-badge-text.preferred-width + 8px);
@@ -167,85 +165,9 @@ export component CustomSectionHeader inherits Rectangle {
             }
         }
 
-        // Section actions stay visible on desktop so keyboard focus can reach
-        // them. There is no hover on a
-        // touch screen, and press-and-hold already opens a menu carrying
-        // Rename and Remove; a 24px button here would be an unhittable
-        // duplicate of a control the user already has.
-        if !root.mobile-mode: HorizontalLayout {
-            spacing: Spacing.xxs;
-            alignment: end;
-
-            // Rename button
-            Rectangle {
-                width: Spacing.button-height;
-                height: Spacing.button-height;
-                border-radius: Spacing.radius-sm;
-                background: rename-touch.has-hover ? Colors.surface-hover : transparent;
-                accessible-role: button;
-                accessible-label: "Rename " + root.name;
-                accessible-action-default => { root.rename-clicked(); }
-                border-width: rename-keys.has-focus ? 2px : 0px;
-                border-color: Colors.focus-ring;
-                rename-keys := FocusScope {
-                    width: 0px; height: 0px;
-                    focus-on-tab-navigation: false;
-                    key-pressed(event) => {
-                        if event.text == Key.Space || event.text == Key.Return { root.rename-clicked(); return accept; }
-                        return reject;
-                    }
-                }
-
-                Image {
-                    source: Icons.edit;
-                    width: 12px;
-                    height: 12px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: Colors.text-muted;
-                }
-
-                rename-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { root.rename-clicked(); }
-                }
-            }
-
-            // Delete button
-            Rectangle {
-                width: Spacing.button-height;
-                height: Spacing.button-height;
-                border-radius: Spacing.radius-sm;
-                background: delete-touch.has-hover ? Colors.surface-hover : transparent;
-                accessible-role: button;
-                accessible-label: "Remove " + root.name;
-                accessible-action-default => { root.delete-clicked(); }
-                border-width: delete-keys.has-focus ? 2px : 0px;
-                border-color: Colors.focus-ring;
-                delete-keys := FocusScope {
-                    width: 0px; height: 0px;
-                    focus-on-tab-navigation: false;
-                    key-pressed(event) => {
-                        if event.text == Key.Space || event.text == Key.Return { root.delete-clicked(); return accept; }
-                        return reject;
-                    }
-                }
-
-                Image {
-                    source: Icons.trash;
-                    width: 12px;
-                    height: 12px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: delete-touch.has-hover ? Colors.error : Colors.text-muted;
-                }
-
-                delete-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { root.delete-clicked(); }
-                }
-            }
-        }
+        // Rename and Remove live in the section menu only (right click,
+        // press-and-hold, Shift+F10 / Menu); the two hover buttons that
+        // duplicated it here were removed.
     }
 
     // Collapsed: show emoji icon only with tooltip

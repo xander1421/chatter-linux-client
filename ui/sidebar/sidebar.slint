@@ -824,8 +824,6 @@ export component Sidebar inherits Rectangle {
                     collapsed: root.collapsed;
                     mobile-mode: root.touch;
                     toggle-expanded => { root.section-toggle-expanded(entry.section.section-id); }
-                    rename-clicked => { root.rename-section-clicked(entry.section.section-id); }
-                    delete-clicked => { root.delete-section-clicked(entry.section.section-id); }
                     context-menu-requested(x, y) => {
                         SidebarPane.section-header-ctx-menu-section-id = entry.section.section-id;
                         SidebarPane.section-header-ctx-menu-x = x;
