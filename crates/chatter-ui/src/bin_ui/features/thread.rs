@@ -926,6 +926,21 @@ pub fn load_thread_data(
                         .set_thread_root_sender_name(sender_name.into());
                     w.global::<crate::ChatPane>()
                         .set_thread_root_content_preview(content_preview.into());
+                    // The root's picture, from its row in the open chat (already
+                    // decoded there); none when the root has no preview.
+                    {
+                        use slint::Model as _;
+                        let pane = w.global::<crate::ChatPane>();
+                        let root_id = root_message_id.to_string();
+                        let thumb = pane
+                            .get_messages()
+                            .iter()
+                            .find(|row| row.message_id.as_str() == root_id)
+                            .and_then(|row| row.attachments.iter().find(|a| a.has_thumbnail))
+                            .map(|a| a.thumbnail);
+                        pane.set_thread_root_has_thumbnail(thumb.is_some());
+                        pane.set_thread_root_thumbnail(thumb.unwrap_or_default());
+                    }
                     w.global::<crate::ChatPane>().set_thread_loading(false);
                     let slint_replies: Vec<_> = display
                         .iter()
