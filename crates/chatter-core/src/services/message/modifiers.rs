@@ -24,6 +24,7 @@ impl MessageService {
             message.edited_at = Some(chrono::Utc::now());
             message.updated_at = chrono::Utc::now();
             self.message_repo.update(&message)?;
+            self.message_repo.refresh_reply_quotes(&message)?;
         }
         Ok(())
     }

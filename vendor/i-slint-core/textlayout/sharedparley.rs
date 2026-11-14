@@ -50,7 +50,25 @@ impl FontContext {
     pub fn register_static_font(&mut self, data: &'static [u8]) {
         let key = (data.as_ptr() as usize, data.len());
         if self.registered_static_fonts.insert(key) {
-            self.inner.collection.register_fonts(fontique::Blob::new(Arc::new(data)), None);
+            let families =
+                self.inner.collection.register_fonts(fontique::Blob::new(Arc::new(data)), None);
+            // Chatter: a bundled colour-emoji font leads the Emoji generic family.
+            // parley sends every VS16 cluster to that family before the element's
+            // own font-family, so without this each platform drew its system set
+            // (Android 10's 2019 Noto, Segoe on Windows) and call-verification
+            // emoji looked different on each device.
+            let emoji: Vec<_> = families
+                .iter()
+                .map(|(id, _)| *id)
+                .filter(|id| {
+                    self.inner.collection.family_name(*id).is_some_and(|n| n.contains("Emoji"))
+                })
+                .collect();
+            if !emoji.is_empty() {
+                self.inner
+                    .collection
+                    .append_generic_families(fontique::GenericFamily::Emoji, emoji.into_iter());
+            }
         }
     }
 
@@ -965,6 +983,22 @@ pub use accessibility::CachedTextInputAccessibilityState;
 mod chatter_tests {
     use alloc::format;
     use super::*;
+    #[test]
+    fn bundled_colour_emoji_leads_the_emoji_generic_family() {
+        let mut ctx = FontContext::new(parley::FontContext {
+            collection: fontique::Collection::new(fontique::CollectionOptions {
+                system_fonts: false,
+                ..Default::default()
+            }),
+            source_cache: Default::default(),
+        });
+        ctx.register_static_font(include_bytes!("../../../assets/fonts/Inter-Regular.ttf"));
+        ctx.register_static_font(include_bytes!("../../../assets/fonts/NotoColorEmoji.ttf"));
+        let first = ctx.collection.generic_families(fontique::GenericFamily::Emoji).next();
+        let name = first.and_then(|id| ctx.collection.family_name(id).map(alloc::string::String::from));
+        assert_eq!(name.as_deref(), Some("Noto Color Emoji"));
+    }
+
     #[test]
     fn elided_rtl_body_keeps_logical_start_after_ltr_label() {
         let mut font_ctx = parley::FontContext {

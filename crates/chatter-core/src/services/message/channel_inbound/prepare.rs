@@ -142,6 +142,14 @@ impl ChannelInbound {
                     return Err(Ingested::Dropped);
                 }
             };
+            // `decrypt_from_group` binds the ciphertext's distribution id to
+            // `group_encrypted.channel_id`; that must be the channel the
+            // membership gate below checks.
+            if group_encrypted.channel_id.parse::<ChannelId>().ok() != Some(channel_id) {
+                tracing::warn!(%channel_id, message_id = %proto_msg.id,
+                    "GroupEncrypted names another channel; dropped");
+                return Err(Ingested::Dropped);
+            }
             // Sender-keys are per (uuid, device); the proto must carry the
             // sender's source device.
             let device_id = proto_msg.author_device_id;

@@ -54,8 +54,10 @@ fn pending_message_id(send: &ComposerSend) -> String {
 /// A decode-then-insert callback would not have that property: it could run
 /// after the removal and leave a "sending" row behind for good.
 ///
-/// Thumbnails reuse the tray's bounded decoded cache. Missing previews remain
-/// placeholders; inserting the pending row never performs IO or decoding.
+/// Thumbnails start from the bounded decoded cache (the tray's small preview,
+/// when it is still there); inserting the pending row never performs IO or
+/// decoding. [`hydrate_pending_previews`] then paints each still image from
+/// its staged bytes at the inline bound, enqueued after this insert.
 pub(crate) fn show_pending_bubble(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
@@ -85,6 +87,7 @@ pub(crate) fn show_pending_bubble(
     let session_revision = send.session_revision;
     let user_id = user_id.to_string();
     let user_name = user_name.to_string();
+    let previews = (weak.clone(), ui_ctx.clone());
     let weak = weak.clone();
     let ui_ctx = ui_ctx.clone();
     // The row's own clock, not 0: the live-receive path orders rows by
@@ -145,6 +148,101 @@ pub(crate) fn show_pending_bubble(
         );
         upsert_message_in_ui(&w, &row, item);
     });
+    hydrate_pending_previews(&previews.0, &previews.1, send);
+}
+
+/// The cached preview at the inline bound, not the tray's 160 px one.
+fn inline_cached(id: &str) -> Option<crate::bin_ui::decode_cache::Pixels> {
+    crate::bin_ui::decode_cache::cached_thumbnail(id, 0)
+        .filter(|p| p.width().max(p.height()) > 160)
+}
+
+/// Paint the pending row's still images from their staged bytes.
+///
+/// The row alone had only what the tray had cached: 160 px, and nothing once
+/// the send took the tray before it decoded, or after an Android pause wiped
+/// the cache. The stored thumbnail exists only when the upload finishes, so
+/// the bubble sat on a placeholder for the whole upload. Each decode runs on
+/// the bounded attachment worker, lands in the cache under the staged id
+/// (where the completed send's row picks it up, see `staged_sources`), and
+/// updates the row only if it is still the pending one.
+fn hydrate_pending_previews(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    send: &ComposerSend,
+) {
+    let row = pending_message_id(send);
+    for attachment in send.inline_preview_files() {
+        let id = attachment.id.to_string();
+        if inline_cached(&id).is_some() {
+            continue;
+        }
+        let path = attachment.path.clone();
+        let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+        let session = crate::bin_ui::features::history_owner::SessionOwner::capture(ui_ctx);
+        let (weak, client, row) = (weak.clone(), ui_ctx.clone(), row.clone());
+        crate::rt_handle().spawn(async move {
+            let worker_session = session.clone();
+            let worker_id = id.clone();
+            let pixels = chatter_core::media::run_attachment_work(move || {
+                if !worker_session.is_current() {
+                    return None;
+                }
+                if let Some(pixels) = inline_cached(&worker_id) {
+                    return Some(pixels);
+                }
+                let image = client.pending_inline_pixels(&path)?;
+                crate::bin_ui::decode_cache::prepared_thumbnail(
+                    &worker_id,
+                    generation,
+                    image::DynamicImage::ImageRgba8(image),
+                )
+            })
+            .await
+            .ok()
+            .flatten();
+            let Some(pixels) = pixels else { return };
+            let _ = slint::invoke_from_event_loop(move || {
+                if !session.is_current() {
+                    return;
+                }
+                let Some(w) = weak.upgrade() else { return };
+                set_pending_thumbnail(&w, &row, &id, pixels);
+            });
+        });
+    }
+}
+
+/// Put `pixels` on tile `id` of the pending row `row`, if that row is still in
+/// the list. A row already replaced or removed is left alone.
+fn set_pending_thumbnail(
+    w: &MainWindow,
+    row: &str,
+    id: &str,
+    pixels: crate::bin_ui::decode_cache::Pixels,
+) {
+    let messages = w.global::<crate::ChatPane>().get_messages();
+    let Some(message) = (0..messages.row_count())
+        .rev()
+        .filter_map(|i| messages.row_data(i))
+        .find(|m| m.message_id.as_str() == row)
+    else {
+        return;
+    };
+    let attachments = message.attachments;
+    for index in 0..attachments.row_count() {
+        let Some(mut attachment) = attachments.row_data(index) else {
+            continue;
+        };
+        if attachment.id.as_str() != id {
+            continue;
+        }
+        attachment.width = pixels.width() as i32;
+        attachment.height = pixels.height() as i32;
+        attachment.thumbnail = slint::Image::from_rgba8(pixels.clone());
+        attachment.has_thumbnail = true;
+        attachments.set_row_data(index, attachment);
+    }
 }
 
 /// Replace the row `pending_id` with `item`, or append `item` when the row is
@@ -1107,6 +1205,27 @@ async fn deliver_inner(
         .iter()
         .map(attachment_to_display_data)
         .collect();
+    // The stored row takes over the pixels the pending row already shows
+    // (decoded from the staged file), so the bubble never drops back to a
+    // placeholder while the stored thumbnail decodes, or if it cannot. The
+    // stored id is cached too, for scroll-back restore.
+    let stored_ids: Vec<_> = ui_result.attachments.iter().map(|a| a.id).collect();
+    for ((_, staged), display) in send_for_delivery
+        .staged_sources(&stored_ids)
+        .into_iter()
+        .zip(attachment_display.iter_mut())
+    {
+        if !send_for_delivery
+            .inline_preview_files()
+            .any(|a| a.id == staged)
+        {
+            continue;
+        }
+        if let Some(pixels) = inline_cached(&staged.to_string()) {
+            crate::bin_ui::decode_cache::put_thumbnail_pixels(&display.id, generation, &pixels);
+            display.thumbnail_pixels = Some(pixels);
+        }
+    }
     let client = ui_ctx.clone();
     let reply_bytes = ui_result.reply_thumbnail_bytes;
     let (mut attachment_display, mut reply_thumbnail_rgba) =

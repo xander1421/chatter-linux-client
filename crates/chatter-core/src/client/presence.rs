@@ -6,6 +6,9 @@ use tokio::sync::Mutex;
 use super::ChatterClient;
 use crate::domain::user::PresenceStatus;
 
+/// Longest one heartbeat refresh may take before the next tick is due.
+const HEARTBEAT_DEADLINE: Duration = Duration::from_secs(60);
+
 #[cfg(test)]
 pub(super) type PresenceTestSend =
     Arc<dyn Fn(PresenceStatus, bool) -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
@@ -137,7 +140,17 @@ impl ChatterClient {
                 if ticks % 4 == 0 {
                     let current = client.presence_controller.state.lock().await.current;
                     if current != PresenceStatus::Offline {
-                        client.refresh_identified_presence(revision).await;
+                        // Bounded: this loop is the only heartbeat. One refresh
+                        // that never returned (the app pool has no request
+                        // deadline) ended every later one, and contacts read
+                        // "last seen N min ago" while the app was open (prod,
+                        // 2026-11-13: no refresh reached the server after a
+                        // restart). Dropping it releases the publication turn.
+                        let _ = tokio::time::timeout(
+                            HEARTBEAT_DEADLINE,
+                            client.refresh_identified_presence(revision),
+                        )
+                        .await;
                     }
                 }
                 // On a phone the app being on screen is the activity: taps and
@@ -335,6 +348,21 @@ impl ChatterClient {
             .as_str()
             .into()
     }
+}
+
+impl ChatterClient {
+    /// Whether this device's manual status is Do not disturb: message,
+    /// reaction and secret-chat-request notifications stay silent. Incoming
+    /// calls still ring (`show_incoming_call` does not read this).
+    pub(crate) fn do_not_disturb(&self) -> bool {
+        mode_silences_message_notifications(self.presence_mode().ok().flatten().as_deref())
+    }
+}
+
+/// The DND gate on message notifications, as a function of the persisted
+/// presence mode (`None` = never set = "auto").
+pub(crate) fn mode_silences_message_notifications(mode: Option<&str>) -> bool {
+    mode.is_some_and(|mode| parse_status(&mode.to_lowercase()) == PresenceStatus::DoNotDisturb)
 }
 
 fn parse_status(status: &str) -> PresenceStatus {

@@ -264,6 +264,12 @@ impl MessageService {
                     continue;
                 }
             };
+            // Bound to the channel whose membership was checked above;
+            // `decrypt_from_group` binds the distribution id to this field.
+            if group_encrypted.channel_id.parse::<ChannelId>().ok() != Some(channel_id) {
+                tracing::warn!(%channel_id, "Retry: GroupEncrypted names another channel; dropping");
+                continue;
+            }
             match self
                 .signal_service
                 .decrypt_from_group(&sender_id, device_id, &group_encrypted)

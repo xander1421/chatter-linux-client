@@ -131,6 +131,15 @@ impl ChannelService {
         check_name_length(trimmed_name)?;
 
         let proto_type = domain_channel_type_to_proto(channel_type);
+        // Encryption follows the access type, never the caller: an open
+        // channel anyone can join is plaintext (server-readable, like the
+        // server's own default), a private one is always end-to-end encrypted.
+        let config = config.map(|mut c| {
+            if matches!(channel_type, ChannelType::Public | ChannelType::Private) {
+                c.require_encryption = channel_type == ChannelType::Private;
+            }
+            c
+        });
         let proto_config = config.as_ref().map(domain_config_to_proto);
         let password = password.filter(|p| !p.is_empty());
 

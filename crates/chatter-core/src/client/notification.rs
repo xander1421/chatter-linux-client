@@ -635,7 +635,9 @@ pub(crate) fn spawn_notification_listener(
                         tracing::warn!(%error, "Failed to mark visible incoming message read");
                     }
                     let (on_screen, muted) = conversation_attention(&client, message);
-                    if !should_notify_message(message, me.as_ref(), on_screen, muted) {
+                    if !should_notify_message(message, me.as_ref(), on_screen, muted)
+                        || client.do_not_disturb()
+                    {
                         continue;
                     }
                     use crate::domain::channel::NotificationPreference;
@@ -685,7 +687,7 @@ pub(crate) fn spawn_notification_listener(
                             *conversation_id,
                         ))
                         .unwrap_or(false);
-                    if on_screen || muted {
+                    if on_screen || muted || client.do_not_disturb() {
                         continue;
                     }
                     // Requests reveal no more than an incoming secret message,
@@ -727,7 +729,7 @@ pub(crate) fn spawn_notification_listener(
                         continue;
                     };
                     let (on_screen, muted) = conversation_attention(&client, &target);
-                    if on_screen || muted || conversation_preference(&client, &target) != crate::domain::channel::NotificationPreference::All {
+                    if on_screen || muted || client.do_not_disturb() || conversation_preference(&client, &target) != crate::domain::channel::NotificationPreference::All {
                         continue;
                     }
                     let _ = notification_service.show_message_notification(

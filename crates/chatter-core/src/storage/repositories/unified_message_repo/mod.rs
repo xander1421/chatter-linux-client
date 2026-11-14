@@ -101,6 +101,7 @@ mod deletion;
 mod pins_read;
 mod reactions;
 mod queries_edits;
+pub(crate) use queries_edits::refresh_reply_quotes_with;
 mod threads_listing;
 mod history_window;
 mod read_delivery;

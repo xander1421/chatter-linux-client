@@ -23,6 +23,17 @@ import { SessionInfo, PendingLinkInfo } from "../modals/sessions.slint";
 
 // Shared model data remains exported through this screen for its callers.
 
+// One compact-mode section chip. Selected = the neutral raised pill every
+// other tab bar uses (bottom nav, Calls, Contacts); teal fill is for actions.
+component SectionTab inherits Button {
+    in property <string> section;
+    in-out property <string> active;
+    hover-enabled: !self.touch;
+    height: Spacing.touch-target-min;
+    variant: self.active == self.section ? "secondary" : "ghost";
+    clicked => { self.active = self.section; }
+}
+
 export component SettingsScreen inherits Rectangle {
     // User profile data
     in property <string> display-name: "";
@@ -553,39 +564,57 @@ export component SettingsScreen inherits Rectangle {
                 tabs := Flickable {
                     width: parent.width;
                     height: parent.height;
-                    viewport-width: tab-layout.preferred-width;
+                    // Room to scroll the last chip's snap position to the left edge.
+                    viewport-width: max(tab-layout.preferred-width,
+                        self.snap(about-tab.x + about-tab.width) + self.width);
                     viewport-height: self.height;
                     animate viewport-x { duration: Materials.motion-standard; easing: Materials.glide; }
 
+                    // Least scroll that shows a chip ending at `end` whole while
+                    // the row starts on a chip's leading edge: a centring scroll
+                    // cut the first visible label ("unt", "Linked d…").
+                    pure function snap(end: length) -> length {
+                        let need = end + Spacing.xs - self.width;
+                        return need <= 0px ? 0px
+                            : need <= privacy-tab.x - Spacing.xs ? privacy-tab.x - Spacing.xs
+                            : need <= notifications-tab.x - Spacing.xs ? notifications-tab.x - Spacing.xs
+                            : need <= devices-tab.x - Spacing.xs ? devices-tab.x - Spacing.xs
+                            : need <= appearance-tab.x - Spacing.xs ? appearance-tab.x - Spacing.xs
+                            : need <= encryption-tab.x - Spacing.xs ? encryption-tab.x - Spacing.xs
+                            : need <= ai-tab.x - Spacing.xs ? ai-tab.x - Spacing.xs
+                            : about-tab.x - Spacing.xs;
+                    }
+                    function reveal-active() {
+                        self.viewport-x = -(self.section == "privacy" ? self.snap(privacy-tab.x + privacy-tab.width)
+                            : self.section == "notifications" ? self.snap(notifications-tab.x + notifications-tab.width)
+                            : self.section == "devices" ? self.snap(devices-tab.x + devices-tab.width)
+                            : self.section == "appearance" ? self.snap(appearance-tab.x + appearance-tab.width)
+                            : self.section == "encryption" ? self.snap(encryption-tab.x + encryption-tab.width)
+                            : self.section == "ai" ? self.snap(ai-tab.x + ai-tab.width)
+                            : self.section == "about" ? self.snap(about-tab.x + about-tab.width) : 0px);
+                    }
+                    property <string> section: root.active-section;
+                    init => { self.reveal-active(); }
+                    changed section => { self.reveal-active(); }
+                    // Re-run on a width change: at init the row may not be laid out yet.
+                    changed width => { self.reveal-active(); }
+
                     tab-layout := HorizontalLayout {
+                        // Own width, not the viewport's: the snap above reads the
+                        // chip positions, and the viewport width reads the snap.
+                        width: self.preferred-width;
+                        alignment: start;
                         spacing: Spacing.xxs;
                         padding: Spacing.xs;
 
-                        for item in [
-                            { id: "account", label: "Account" },
-                            { id: "privacy", label: "Privacy" },
-                            { id: "notifications", label: "Notifications" },
-                            { id: "devices", label: "Linked devices" },
-                            { id: "appearance", label: "Appearance" },
-                            { id: "encryption", label: "Encryption" },
-                            { id: "ai", label: "AI" },
-                            { id: "about", label: "About" }
-                        ]: Button {
-                            touch: root.mobile-platform;
-                            hover-enabled: !root.mobile-platform;
-                            text: item.label;
-                            height: Spacing.touch-target-min;
-                            // Selected tab = the neutral raised pill every other tab bar uses
-                            // (bottom nav, Calls, Contacts); teal fill is for actions.
-                            variant: root.active-section == item.id ? "secondary" : "ghost";
-                            clicked => {
-                                root.active-section = item.id;
-                                // Centre the chosen chip so it is never left
-                                // half off the edge ("Linked d…").
-                                tabs.viewport-x = min(0px, max(tabs.width - tabs.viewport-width,
-                                    (tabs.width - self.width) / 2 - self.x));
-                            }
-                        }
+                        account-tab := SectionTab { section: "account"; text: "Account"; active <=> root.active-section; touch: root.mobile-platform; }
+                        privacy-tab := SectionTab { section: "privacy"; text: "Privacy"; active <=> root.active-section; touch: root.mobile-platform; }
+                        notifications-tab := SectionTab { section: "notifications"; text: "Notifications"; active <=> root.active-section; touch: root.mobile-platform; }
+                        devices-tab := SectionTab { section: "devices"; text: "Linked devices"; active <=> root.active-section; touch: root.mobile-platform; }
+                        appearance-tab := SectionTab { section: "appearance"; text: "Appearance"; active <=> root.active-section; touch: root.mobile-platform; }
+                        encryption-tab := SectionTab { section: "encryption"; text: "Encryption"; active <=> root.active-section; touch: root.mobile-platform; }
+                        ai-tab := SectionTab { section: "ai"; text: "AI"; active <=> root.active-section; touch: root.mobile-platform; }
+                        about-tab := SectionTab { section: "about"; text: "About"; active <=> root.active-section; touch: root.mobile-platform; }
                     }
                 }
                 if tabs.viewport-x < 0px: Rectangle {
@@ -594,7 +623,7 @@ export component SettingsScreen inherits Rectangle {
                     height: parent.height;
                     background: @linear-gradient(90deg, Colors.surface-page 0%, Colors.surface-page.with-alpha(0) 100%);
                 }
-                if tabs.viewport-width + tabs.viewport-x > tabs.width: Rectangle {
+                if tab-layout.preferred-width + tabs.viewport-x > tabs.width: Rectangle {
                     x: parent.width - self.width;
                     width: Spacing.md;
                     height: parent.height;

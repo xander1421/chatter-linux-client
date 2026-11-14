@@ -130,6 +130,69 @@ impl ComposerSend {
             queue_ticket: self.queue_ticket.clone(),
         }).collect()
     }
+
+    /// The staged still images whose own bytes the in-flight bubble paints
+    /// (at most the ten tiles an album shows). GIFs animate through their own
+    /// path, and a pre-uploaded pointer has no staged file to read.
+    pub fn inline_preview_files(&self) -> impl Iterator<Item = &PendingAttachment> {
+        self.attachments
+            .iter()
+            .filter(|a| {
+                a.pointer.is_none()
+                    && a.mime_type.starts_with("image/")
+                    && a.mime_type != "image/gif"
+            })
+            .take(10)
+    }
+
+    /// `(stored, staged)`: the staged file each stored attachment of this send
+    /// was uploaded from, so the sender's bubble keeps the pixels it already
+    /// shows instead of falling back to a placeholder while the stored
+    /// thumbnail decodes. The upload keeps staged order and can only drop
+    /// files (cancelled, or unresolvable afterwards); once any was dropped
+    /// the correspondence is unknown and nothing is paired.
+    pub fn staged_sources(&self, stored: &[AttachmentId]) -> Vec<(AttachmentId, AttachmentId)> {
+        if stored.len() != self.attachments.len() {
+            return Vec::new();
+        }
+        stored
+            .iter()
+            .copied()
+            .zip(self.attachments.iter().map(|a| a.id))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn staged_sources_pair_in_order_only_when_nothing_was_dropped() {
+        let staged = |mime: &str| {
+            PendingAttachment::new(AttachmentId::new(), "f".into(), Default::default(), 1, mime.into())
+        };
+        let send = ComposerSend {
+            attempt_id: uuid::Uuid::new_v4(),
+            session_revision: 0,
+            conversation: ActiveConversation::Channel(ChannelId::new()),
+            text: String::new(),
+            reply: None,
+            attachments: vec![staged("image/jpeg"), staged("image/gif"), staged("video/mp4")],
+            queue_ticket: None,
+        };
+        let stored: Vec<_> = (0..3).map(|_| AttachmentId::new()).collect();
+        let pairs = send.staged_sources(&stored);
+        assert_eq!(pairs.len(), 3);
+        for (i, (s, p)) in pairs.into_iter().enumerate() {
+            assert_eq!((s, p), (stored[i], send.attachments[i].id));
+        }
+        // One upload cancelled: which stored file is which is unknown.
+        assert!(send.staged_sources(&stored[..2]).is_empty());
+        // Only the still image is painted from its staged bytes.
+        let painted: Vec<_> = send.inline_preview_files().map(|a| a.id).collect();
+        assert_eq!(painted, vec![send.attachments[0].id]);
+    }
 }
 
 #[cfg(test)]

@@ -260,7 +260,7 @@ impl ChannelMetadata {
                 .icon
                 .as_deref()
                 .filter(|b| !b.is_empty())
-                .and_then(|bytes| image::load_from_memory(bytes).ok())
+                .and_then(|bytes| chatter_core::media::ImageProcessor::decode_untrusted(bytes).ok())
                 .map(|img| {
                     let rgba = img.to_rgba8();
                     let (width, height) = rgba.dimensions();

@@ -335,12 +335,23 @@ impl Message {
 
         match &self.content {
             // A call or a notice has no body; say what it was.
+            // A channel call's row is one row updated in place from STARTED
+            // to ENDED (`file_channel_call_event`), so it says which, as its
+            // bubble does; "Incoming call" outlived the call it named.
             MessageContent::Call(call) => {
+                let noun = if call.is_video { "video call" } else { "call" };
+                let channel = matches!(self.conversation_type, ConversationType::Channel);
                 let what = match call.call_type {
-                    CallMessageType::Missed => "Missed call",
-                    CallMessageType::Declined => "Declined call",
-                    _ if current_user_id == Some(&call.initiator_id) => "Outgoing call",
-                    _ => "Incoming call",
+                    CallMessageType::Missed => format!("Missed {noun}"),
+                    CallMessageType::Declined => format!("Declined {noun}"),
+                    CallMessageType::Started if channel => {
+                        if call.is_video { "Video call started" } else { "Call started" }.to_string()
+                    }
+                    CallMessageType::Ended if channel => {
+                        if call.is_video { "Video call ended" } else { "Call ended" }.to_string()
+                    }
+                    _ if current_user_id == Some(&call.initiator_id) => format!("Outgoing {noun}"),
+                    _ => format!("Incoming {noun}"),
                 };
                 return format!("{}\u{1F4DE} {}", pin, what);
             }

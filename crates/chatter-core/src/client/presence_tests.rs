@@ -437,3 +437,54 @@ async fn cancelled_initialization_recovers_after_temporary_pause_but_not_retirem
     assert!(client.presence_controller.idle_task.lock().await.is_none());
     assert!(client.presence_controller.peer_task.lock().await.is_none());
 }
+
+#[tokio::test]
+async fn do_not_disturb_gates_message_notifications_only_in_dnd_mode() {
+    assert!(!mode_silences_message_notifications(None));
+    for mode in ["auto", "online", "away", "invisible"] {
+        assert!(!mode_silences_message_notifications(Some(mode)), "{mode}");
+    }
+    assert!(mode_silences_message_notifications(Some("dnd")));
+    assert!(mode_silences_message_notifications(Some("DND")));
+
+    let (client, _dir, _) = fixture();
+    assert!(!client.do_not_disturb());
+    client.set_presence_mode("dnd").unwrap();
+    assert!(client.do_not_disturb());
+    client.set_presence_mode("auto").unwrap();
+    assert!(!client.do_not_disturb());
+}
+
+#[tokio::test(start_paused = true)]
+async fn heartbeat_keeps_manual_away_fresh_past_a_stalled_refresh() {
+    let (client, _dir, _revision) = fixture();
+    client.set_presence_mode("away").unwrap();
+    let events = Arc::new(SyncMutex::new(Vec::new()));
+    let seen = events.clone();
+    hook(
+        &client,
+        Arc::new(move |status, identified| {
+            let first_heartbeat = {
+                let mut seen = seen.lock().unwrap();
+                seen.push((status, identified));
+                identified && seen.iter().filter(|(_, refresh)| *refresh).count() == 1
+            };
+            Box::pin(async move {
+                if first_heartbeat {
+                    // A request that never answers (no pool deadline).
+                    std::future::pending::<()>().await;
+                }
+            })
+        }),
+    );
+    client.initialize_presence().await;
+    // Sixteen minutes on screen with no input, as on the S9/S25.
+    tokio::time::sleep(Duration::from_secs(16 * 60)).await;
+    let events = events.lock().unwrap();
+    assert_eq!(events[0], (PresenceStatus::Away, false), "saved manual Away published");
+    let refreshes: Vec<_> = events.iter().filter(|(_, refresh)| *refresh).collect();
+    assert!(
+        refreshes.len() >= 5 && refreshes.iter().all(|(s, _)| *s == PresenceStatus::Away),
+        "manual Away keeps being refreshed after a stalled one: {events:?}"
+    );
+}

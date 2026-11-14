@@ -92,6 +92,8 @@ pub struct MessageRow {
     pub call_message_type: String, // "started", "ended", "missed", "declined" (raw from domain)
     pub call_initiator_id: String, // User ID of who initiated the call
     pub call_duration: String,     // "1 min 30 s" or empty
+    /// A video call: "Outgoing video call" and the video icon.
+    pub call_is_video: bool,
 }
 
 /// The parts of a row that depend on who is looking at it.
@@ -210,7 +212,7 @@ pub fn message_to_row(
     let reply_count_text = format_count(reply_count, "reply", "replies");
 
     // Extract call information if this is a call message
-    let (is_call, call_message_type, call_initiator_id, call_duration) =
+    let (is_call, call_message_type, call_initiator_id, call_duration, call_is_video) =
         if let MessageContent::Call(call_msg) = &msg.content {
             let msg_type = match call_msg.call_type {
                 CallMessageType::Started => "started",
@@ -224,9 +226,10 @@ pub fn message_to_row(
                 msg_type.to_string(),
                 call_msg.initiator_id.to_string(),
                 duration,
+                call_msg.is_video,
             )
         } else {
-            (false, String::new(), String::new(), String::new())
+            (false, String::new(), String::new(), String::new(), false)
         };
 
     // Extract content and system flag
@@ -305,6 +308,7 @@ pub fn message_to_row(
         call_message_type,
         call_initiator_id,
         call_duration,
+        call_is_video,
     }
 }
 

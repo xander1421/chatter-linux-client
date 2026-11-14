@@ -295,7 +295,11 @@ impl MeshState {
                 .filter(|(_, link_state)| link_state.writable)
                 .count();
             MeshStatus {
-                radio_running: state.radio_running,
+                // Android keeps the runtime started while Bluetooth is off so it
+                // can resume on STATE_ON; a radio with no powered adapter is not
+                // running, and reporting it as such hid "Bluetooth is off"
+                // behind "0 devices nearby".
+                radio_running: state.radio_running && state.adapter_powered,
                 adapter_powered: state.adapter_powered,
                 connected_links,
                 connected_peers: state.peers.connected_count(),
@@ -555,6 +559,21 @@ mod tests {
         assert!(status.radio_running);
         assert_eq!(status.connected_links, 1);
         assert_eq!(status.connected_relays, 2);
+    }
+
+    #[test]
+    fn started_radio_with_bluetooth_off_reads_as_bluetooth_off() {
+        let state = MeshState::new();
+        state.with(|inner| {
+            inner.radio_running = true;
+            inner.adapter_powered = false;
+        });
+        let status = state.status(0);
+        assert!(!status.radio_running);
+        assert_eq!(
+            status.radio_down(),
+            Some(crate::services::mesh::events::RadioDown::BluetoothOff)
+        );
     }
 
     #[test]

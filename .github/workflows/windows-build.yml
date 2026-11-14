@@ -7,7 +7,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write   # attach the Windows bundle to the Release on a tag
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,16 +19,18 @@ jobs:
   build-windows:
     name: Build Windows Client
     runs-on: windows-latest
+    permissions:
+      contents: write   # attach the Windows bundle to the Release on a tag
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master (2026-11-13)
         with:
           toolchain: nightly-2026-10-11
 
       - name: Import MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
           arch: x64
 
@@ -87,21 +89,21 @@ jobs:
           }
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: crt-static-boringssl-v2
           workspaces: ". -> C:/t"
 
       - name: Cache GStreamer install
         id: cache-gstreamer
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: C:\gstreamer
           key: gstreamer-${{ env.GSTREAMER_VERSION }}-msvc-x86_64-v1
 
       - name: Install GStreamer
         if: steps.cache-gstreamer.outputs.cache-hit != 'true'
-        uses: blinemedical/setup-gstreamer@v1
+        uses: blinemedical/setup-gstreamer@8409da62de68441bf51593ad654231778de544e6 # v1.4.0
         with:
           version: ${{ env.GSTREAMER_VERSION }}
 
@@ -138,7 +140,7 @@ jobs:
         run: choco install pkgconfiglite -y
 
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
           version: "25.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -263,7 +265,7 @@ jobs:
           }
 
       - name: Upload Windows build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: chatter-windows-x64
           path: artifact/
@@ -279,7 +281,7 @@ jobs:
 
       - name: Attach to GitHub Release (tag push only)
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ github.ref_name }}
           files: ${{ env.WIN_ZIP }}

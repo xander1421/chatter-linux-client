@@ -7,6 +7,7 @@ import { Avatar } from "../components/avatar.slint";
 
 export component MessageCall inherits HorizontalLayout {
     in property <string> call-duration;
+    in property <bool> call-is-video;
     in property <string> call-type;
     in property <int> hold-tier;
     in property <bool> is-anonymous;
@@ -138,15 +139,18 @@ export component MessageCall inherits HorizontalLayout {
                         }
 
                         call-status := Text {
-                            text: is-missed ? "Missed call"
-                                : root.call-type == "declined" ? "Declined call"
-                                : root.call-type == "started" ? "Call started"
-                                : root.call-type == "ended" ? "Call ended"
-                                : is-outgoing ? "Outgoing call" : "Incoming call";
+                            // "video call" where Signal says it: every label
+                            // names the call's type.
+                            property <string> call-noun: root.call-is-video ? "video call" : "call";
+                            text: is-missed ? "Missed " + self.call-noun
+                                : root.call-type == "declined" ? "Declined " + self.call-noun
+                                : root.call-type == "started" ? (root.call-is-video ? "Video call started" : "Call started")
+                                : root.call-type == "ended" ? (root.call-is-video ? "Video call ended" : "Call ended")
+                                : is-outgoing ? "Outgoing " + self.call-noun : "Incoming " + self.call-noun;
                             // Spoken by the call card, which is the button.
                             accessible-role: none;
                             accessible-label: root.call-type == "started" || root.call-type == "ended"
-                                ? (is-outgoing ? "Outgoing call " : "Incoming call ") + root.call-type
+                                ? (is-outgoing ? "Outgoing " : "Incoming ") + self.call-noun + " " + root.call-type
                                 : self.text;
                             color: is-missed ? Colors.error : Colors.text-primary;
                             font-size: Typography.sm;
@@ -169,7 +173,7 @@ export component MessageCall inherits HorizontalLayout {
 
                     Rectangle {
                         accessible-role: image;
-                        accessible-label: "Call icon";
+                        accessible-label: root.call-is-video ? "Video call icon" : "Call icon";
                         width: 40px;
                         height: 40px;
                         border-radius: 20px;
@@ -178,7 +182,7 @@ export component MessageCall inherits HorizontalLayout {
                         Image {
                             width: 20px;
                             height: 20px;
-                            source: Icons.phone;
+                            source: root.call-is-video ? Icons.video : Icons.phone;
                             colorize: is-missed ? Colors.error : Colors.primary;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;

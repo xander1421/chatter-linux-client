@@ -176,6 +176,9 @@ pub struct ForwardDestination {
     pub id: String,
     pub name: String,
     pub kind: ConversationType,
+    /// An invite-only channel: the picker draws its lock, as the chat list
+    /// does, where a public channel gets '#'. False for every non-channel.
+    pub private_channel: bool,
 }
 
 /// A person the user can invite to a channel, shaped by

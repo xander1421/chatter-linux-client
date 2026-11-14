@@ -495,6 +495,7 @@ impl InboxEventProcessor {
                 call_id,
                 phase,
                 duration_secs,
+                is_video,
                 timestamp,
             } => {
                 // Files the row and tells the UI; a non-member's is dropped there.
@@ -504,6 +505,7 @@ impl InboxEventProcessor {
                     call_id,
                     *phase,
                     *duration_secs,
+                    *is_video,
                     *timestamp,
                 ) {
                     tracing::warn!(error = %e, channel_id = %channel_id, "Channel call event not filed");

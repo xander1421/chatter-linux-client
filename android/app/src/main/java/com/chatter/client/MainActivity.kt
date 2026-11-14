@@ -1271,17 +1271,13 @@ class MainActivity : GameActivity() {
         runOnUiThread { permissionRequest.launch(permissions) }
     }
 
-    /** Explain a refused call permission and give a direct path to app settings. */
+    /** Explain a refused call permission ([permission] is its display name) with a path to app settings. */
     @Suppress("unused")
     fun showCallPermissionDenied(permission: String) {
         runOnUiThread {
-            val label = when (permission) {
-                android.Manifest.permission.CAMERA -> "Camera"
-                android.Manifest.permission.RECORD_AUDIO -> "Microphone"
-                else -> "The required"
-            }
+            // Rust passes the user-facing name ("Microphone", "Camera").
             android.app.AlertDialog.Builder(this)
-                .setMessage("$label permission is needed for calls.")
+                .setMessage("$permission permission is needed for calls.")
                 .setNegativeButton("Close", null)
                 .setPositiveButton("Open app settings") { _, _ ->
                     startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,

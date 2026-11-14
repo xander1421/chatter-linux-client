@@ -224,7 +224,6 @@ pub(crate) fn sender_key_missing_decision(
     envelope_id: &str,
     budget: &crate::inbox::ack_policy::RetryBudget,
 ) -> crate::inbox::ack_policy::AckDecision {
-    use crate::inbox::ack_policy;
     // The policy names this case itself: "the SKDM … may land on a later poll
     // and then the same bytes decrypt". The path emitted `SenderKeyNeeded`,
     // logged "will succeed on retry after SKDM arrives" — and then acked, so
@@ -232,6 +231,70 @@ pub(crate) fn sender_key_missing_decision(
     // arrive. Nothing buffers the ciphertext on this path either;
     // `defer_pending_group_decrypt` is only reached from the channel-history
     // path in `client/channels.rs`.
+    sender_key_retain_decision(
+        channel_id,
+        sender_id,
+        envelope_ts_ns,
+        message_repo,
+        channel_repo,
+        domain_tx,
+        envelope_id,
+        budget,
+        "waiting on the sender key that opens this channel message",
+    )
+}
+
+/// Decide what to do with a channel message the gateway refused because its
+/// sender is not (yet) in our VERIFIED distribution membership.
+///
+/// The gate (`GroupStateGate::admits_content`) raises `Validation`, which
+/// `classify_service` reads as permanent — so the message was marked and
+/// drained on first sight. But a sender missing from our verified state is
+/// most often a member whose join we have not synced yet: the same bytes are
+/// admitted once the membership catches up. Retain it against the retry
+/// budget; a sender who never becomes a member exhausts the budget and gets
+/// the channel's delivery-issue marker, exactly as before, just later.
+///
+/// Only the not-a-member half of the gate comes here. A MUTED member is
+/// refused deliberately; retaining that would deliver the message once the
+/// mute lapses.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sender_key_nonmember_decision(
+    channel_id: ChannelId,
+    sender_id: UserId,
+    envelope_ts_ns: u64,
+    message_repo: &Arc<MessageRepository>,
+    channel_repo: &Arc<ChannelRepository>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    envelope_id: &str,
+    budget: &crate::inbox::ack_policy::RetryBudget,
+) -> crate::inbox::ack_policy::AckDecision {
+    sender_key_retain_decision(
+        channel_id,
+        sender_id,
+        envelope_ts_ns,
+        message_repo,
+        channel_repo,
+        domain_tx,
+        envelope_id,
+        budget,
+        "sender not yet in the verified channel membership",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sender_key_retain_decision(
+    channel_id: ChannelId,
+    sender_id: UserId,
+    envelope_ts_ns: u64,
+    message_repo: &Arc<MessageRepository>,
+    channel_repo: &Arc<ChannelRepository>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    envelope_id: &str,
+    budget: &crate::inbox::ack_policy::RetryBudget,
+    reason: &str,
+) -> crate::inbox::ack_policy::AckDecision {
+    use crate::inbox::ack_policy;
     ack_policy::retain_within_budget(
         channel_marker_target(channel_repo, channel_id, Some(sender_id), envelope_ts_ns),
         message_repo,
@@ -239,8 +302,48 @@ pub(crate) fn sender_key_missing_decision(
         envelope_id,
         budget,
         ack_policy::now_ns(),
-        "waiting on the sender key that opens this channel message",
+        reason,
     )
+}
+
+/// Decide what to do with a channel message that decrypted but whose plaintext
+/// will not parse (no `Content`, an unparseable channel id). Deterministic in
+/// the bytes, so retaining replays it forever: write the delivery-issue marker
+/// into the channel the envelope named, then drain. With no channel there is
+/// nowhere honest to mark, as in [`sender_key_failure_decision`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sender_key_malformed_decision(
+    channel_id: Option<ChannelId>,
+    sender_id: UserId,
+    envelope_ts_ns: u64,
+    reason: &str,
+    message_repo: &Arc<MessageRepository>,
+    channel_repo: &Arc<ChannelRepository>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    envelope_id: &str,
+    budget: &crate::inbox::ack_policy::RetryBudget,
+) -> crate::inbox::ack_policy::AckDecision {
+    use crate::inbox::ack_policy::{self, AckDecision};
+    let Some(channel_id) = channel_id else {
+        tracing::warn!(
+            sender_id = %sender_id,
+            reason,
+            "[INBOX_SK] malformed plaintext on an envelope whose channel could not be \
+             recovered — draining it with no marker"
+        );
+        budget.forget(envelope_id);
+        return AckDecision::Ack;
+    };
+    let decision = ack_policy::decide_after_malformed(
+        reason,
+        channel_marker_target(channel_repo, channel_id, Some(sender_id), envelope_ts_ns),
+        message_repo,
+        domain_tx,
+    );
+    if decision == AckDecision::Ack {
+        budget.forget(envelope_id);
+    }
+    decision
 }
 
 /// Why an ECIES init envelope could not be opened.
@@ -326,4 +429,61 @@ fn system_dm_marker(
         _ => FailureMarker::DeliveryIssue,
     };
     ack_policy::marker_message(ack_policy::dm_target(peer_id, envelope_ts_ns), marker)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::message::{ConversationType, MessageContent, SystemMessage};
+    use crate::inbox::ack_policy::{AckDecision, RetryBudget};
+
+    /// A sender outside our verified membership is retained (its join may not
+    /// have synced yet) with nothing written; a plaintext that will never parse
+    /// leaves the delivery-issue marker in the channel before it is drained.
+    #[test]
+    fn channel_nonmember_is_retained_and_malformed_is_marked_before_ack() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = Arc::new(
+            crate::storage::Database::open(&dir.path().join("t.db"), "test_passphrase").unwrap(),
+        );
+        db.run_migrations().unwrap();
+        let messages = Arc::new(MessageRepository::new(db.clone()));
+        let channels = Arc::new(ChannelRepository::new(db));
+        let channel = ChannelId::new();
+        let sender = UserId::new();
+        let ts = 1_777_000_000_000_000_000;
+        let budget = RetryBudget::new();
+        let system_rows = || -> Vec<SystemMessage> {
+            messages
+                .list_for_conversation(&channel, &ConversationType::Channel, None, 50)
+                .unwrap()
+                .into_iter()
+                .filter_map(|m| match m.content {
+                    MessageContent::System(s) => Some(s),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let d = sender_key_nonmember_decision(
+            channel, sender, ts, &messages, &channels, None, "env-nm", &budget,
+        );
+        assert_eq!(d, AckDecision::Retain, "membership may be lagging a join");
+        assert!(system_rows().is_empty(), "nothing lost yet, nothing to mark");
+        assert_eq!(budget.tracked(), 1, "the retain counts against the budget");
+
+        let d = sender_key_malformed_decision(
+            Some(channel),
+            sender,
+            ts,
+            "Invalid channel ID",
+            &messages,
+            &channels,
+            None,
+            "env-bad",
+            &budget,
+        );
+        assert_eq!(d, AckDecision::Ack);
+        assert_eq!(system_rows(), vec![SystemMessage::DeliveryIssue]);
+    }
 }

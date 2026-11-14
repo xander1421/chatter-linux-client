@@ -279,7 +279,7 @@ fn request_shared_page(
                 .map(|item| {
                     let (title, subtitle, is_video) =
                         chatter_core::ui::format::shared_content_lines(item);
-                    let thumbnail = image::load_from_memory(&item.thumbnail)
+                    let thumbnail = chatter_core::media::ImageProcessor::decode_untrusted(&item.thumbnail)
                         .ok()
                         .map(|image| {
                             let rgba = image.thumbnail(SHARED_TILE_PX, SHARED_TILE_PX).to_rgba8();

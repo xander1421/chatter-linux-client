@@ -493,7 +493,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .as_ref()
                 .and_then(|p| p.avatar_bytes.as_ref())
                 .and_then(|b| {
-                    image::load_from_memory(b).ok().map(|img| {
+                    chatter_core::media::ImageProcessor::decode_untrusted(b).ok().map(|img| {
                         let rgba = img.to_rgba8();
                         let (aw, ah) = rgba.dimensions();
                         (aw, ah, rgba.into_raw())

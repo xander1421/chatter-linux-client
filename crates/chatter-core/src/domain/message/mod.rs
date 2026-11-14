@@ -343,6 +343,28 @@ mod tests {
             call(me, CallMessageType::Declined).sidebar_preview(Some(&me), None, None),
             "\u{1F4DE} Declined call"
         );
+        // A channel call's one row goes STARTED -> ENDED; the row says which,
+        // never a stale "Incoming call" after the call is over.
+        let channel_call = |call_type: CallMessageType, is_video: bool| {
+            let mut m = call(them, call_type);
+            m.conversation_type = ConversationType::Channel;
+            if let MessageContent::Call(c) = &mut m.content {
+                c.is_video = is_video;
+            }
+            m
+        };
+        for (call_type, is_video, expected) in [
+            (CallMessageType::Started, false, "Call started"),
+            (CallMessageType::Started, true, "Video call started"),
+            (CallMessageType::Ended, false, "Call ended"),
+            (CallMessageType::Ended, true, "Video call ended"),
+            (CallMessageType::Missed, true, "Missed video call"),
+        ] {
+            assert_eq!(
+                channel_call(call_type, is_video).sidebar_preview(Some(&me), None, None),
+                format!("\u{1F4DE} {expected}")
+            );
+        }
     }
 
     #[test]

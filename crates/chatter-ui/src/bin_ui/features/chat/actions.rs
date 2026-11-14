@@ -256,6 +256,7 @@ fn forward_targets(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, query: &str) -> 
             id: d.id.into(),
             name: d.name.into(),
             target_type: d.kind.as_str().into(),
+            private_channel: d.private_channel,
         }).collect();
     }
     let Some(sources) = forward_sources(w) else {
@@ -275,6 +276,7 @@ fn forward_targets(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, query: &str) -> 
             id: d.id.into(),
             name: d.name.into(),
             target_type: d.kind.as_str().into(),
+            private_channel: d.private_channel,
         })
         .collect()
 }

@@ -113,6 +113,7 @@ export struct MessageItemData {
     is-call: bool,            // Whether this is a call event message
     call-type: string,        // Channel phases: "started"/"ended"; otherwise "outgoing"/"incoming"/"missed"/"declined". Direction is is-own.
     call-duration: string,    // Formatted duration "1 min 30 s" or empty for missed
+    call-is-video: bool,      // A video call: "video call" label and icon
     // Message grouping (set by Rust when preparing message list)
     show-date-separator: bool,     // Show date separator bar before this message
     date-separator-text: string,   // "Today", "Yesterday", "March 25, 2026"

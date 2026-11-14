@@ -5,7 +5,8 @@
 
 use crate::domain::ids::{ChannelId, UserId};
 use crate::error::ServiceError;
-use chatter_proto::content_v1::content;
+use chatter_proto::content_v1::{GroupEncrypted, content};
+use prost::Message as _;
 
 use super::{DecryptResult, MessageGateway, RouteResult};
 
@@ -153,8 +154,18 @@ impl MessageGateway {
                         if let Some(content::Content::GroupMailboxAddress(announcement)) =
                             content.content
                         {
-                            // Parse channel_id from announcement
-                            if let Ok(channel_id) = announcement.channel_id.parse::<ChannelId>() {
+                            // The announcement must name the channel whose
+                            // sender key (and membership gate) it came under.
+                            let outer = GroupEncrypted::decode(encrypted_data.ciphertext.as_slice())
+                                .ok()
+                                .and_then(|ge| ge.channel_id.parse::<ChannelId>().ok());
+                            let named = announcement.channel_id.parse::<ChannelId>().ok();
+                            if named.is_none() || named != outer {
+                                return Err(ServiceError::Validation(
+                                    "mailbox announcement names another channel".into(),
+                                ));
+                            }
+                            if let Some(channel_id) = named {
                                 tracing::info!(
                                     sender_id = %sender_id,
                                     channel_id = %channel_id,

@@ -22,7 +22,9 @@ use crate::inbox::state::InboxStats;
 use crate::mailbox::group::GroupCoordinator;
 use crate::network::validation::{MessageValidationPipeline, PipelineResult};
 use chatter_proto::chat_v1::{DeviceMessage, EncryptedData, SealedSenderMessage};
-use chatter_proto::content_v1::{Content, DataMessage, content};
+use chatter_proto::content_v1::{Content, content};
+#[cfg(test)]
+use chatter_proto::content_v1::DataMessage;
 use chatter_proto::mailbox_v1::EnvelopeType;
 use crate::services::gateway::{MessageGateway, RouteResult, SealedSenderResult};
 use crate::storage::repositories::ephemeral_repo::EphemeralRepository;
@@ -44,7 +46,8 @@ pub use route::process_device_message;
 pub(super) use failure::desync_marker_target;
 pub(crate) use failure::{
     EciesInitFailure, blocked_sender_decision, device_failure_decision, ecies_init_decision,
-    sender_key_failure_decision, sender_key_missing_decision,
+    sender_key_failure_decision, sender_key_malformed_decision, sender_key_missing_decision,
+    sender_key_nonmember_decision,
 };
 
 use control::{dispatch_secret_chat_bootstrap, persist_exact_saved_delete_before_ack};

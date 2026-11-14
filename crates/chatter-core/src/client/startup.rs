@@ -558,13 +558,15 @@ impl ChatterClient {
         // ── Presence ────────────────────────────────────────────────
         // Start without blocking the first screen, but keep the handle so
         // shutdown can stop and join the publication before sending Offline.
+        // The full policy, not a bare Online: it applies the saved manual
+        // status and starts the two-minute heartbeat. The UI used to start
+        // that only after `load_initial_data`'s network awaits, so a session
+        // whose initial load stalled published Online once and never again,
+        // and contacts expired it (`PRESENCE_STALE_SECS`). The UI's later
+        // call restarts the same task and republishes nothing unchanged.
         let h_presence = {
             let client = self.clone();
-            tokio::spawn(async move {
-                client
-                    .set_presence(crate::domain::user::PresenceStatus::Online)
-                    .await;
-            })
+            tokio::spawn(async move { client.initialize_presence().await })
         };
         self.touch_activity();
 

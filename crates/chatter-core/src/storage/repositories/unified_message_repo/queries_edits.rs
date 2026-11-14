@@ -338,6 +338,18 @@ impl UnifiedMessageRepository {
                 sent_at as i64,
             ],
         )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM messages WHERE conversation_id = ?1 AND conversation_type = ?2 AND sent_at = ?3",
+            message_columns("messages")
+        ))?;
+        let mut edited = stmt.query(params![
+            conversation_id.to_string(),
+            conversation_type.as_str(),
+            sent_at as i64,
+        ])?;
+        for parent in collect_messages(&mut edited)? {
+            refresh_reply_quotes_with(&conn, &parent)?;
+        }
         Ok(rows > 0)
     }
 
@@ -365,4 +377,45 @@ impl UnifiedMessageRepository {
         Ok(rows > 0)
     }
 
+
+    /// Show `parent`'s current body in every stored reply quoting it, after
+    /// an edit (Signal shows the quoted message as it is now when it is
+    /// held). Same reply match as [`Self::redact_expired_reply_quotes`]: the
+    /// parent's id, or the timestamp-derived id an anonymous reply carries.
+    pub fn refresh_reply_quotes(&self, parent: &Message) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        refresh_reply_quotes_with(&conn, parent)
+    }
+}
+
+/// [`UnifiedMessageRepository::refresh_reply_quotes`] on the caller's
+/// connection, so an edit's transaction updates its quotes with it.
+pub(crate) fn refresh_reply_quotes_with(
+    conn: &rusqlite::Connection,
+    parent: &Message,
+) -> Result<(), StorageError> {
+    let Some(text) = parent.as_text().filter(|t| !t.is_empty()) else {
+        return Ok(());
+    };
+    let preview = crate::services::gateway::shared::truncate_preview(text);
+    let synthetic = MessageId::from_timestamp(parent.sent_at);
+    conn.execute(
+        "UPDATE messages SET
+            reply_to_text = ?1,
+            content_json = CASE
+                WHEN json_valid(content_json)
+                     AND json_type(content_json, '$.quote') = 'object'
+                THEN json_set(content_json, '$.quote.preview', ?1)
+                ELSE content_json END
+         WHERE reply_to = ?2
+            OR (reply_to = ?3 AND reply_to_author_id = ?4 AND conversation_id = ?5)",
+        params![
+            preview,
+            parent.id.to_string(),
+            synthetic.to_string(),
+            parent.sender_id.map(|id| id.to_string()),
+            parent.conversation_id.to_string(),
+        ],
+    )?;
+    Ok(())
 }

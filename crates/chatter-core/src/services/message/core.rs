@@ -283,8 +283,10 @@ impl MessageService {
             group_state.as_ref().map(|state| state.state_hash.to_vec()),
         )?;
         // A private channel goes out anonymously to every member device
-        // (group_send.rs); only a public channel still posts to the server.
-        let proto_message = if group_state.is_some() {
+        // (group_send.rs). A public channel posts to the server, encrypted
+        // (sender keys, so `group_state` is set) or not: the server issues
+        // group send endorsements for private channels only.
+        let proto_message = if self.is_private_channel(channel_id) {
             self.submit_group_request(&request).await?
         } else {
             message_client.send_prepared_message(request).await?

@@ -50,6 +50,7 @@ impl MessageService {
         call_id: &str,
         phase: ChannelCallPhase,
         duration_secs: u32,
+        is_video: bool,
         sent_at: u64,
     ) -> Result<Option<Message>, MessageError> {
         let call: uuid::Uuid = call_id
@@ -81,6 +82,7 @@ impl MessageService {
                 .unwrap_or_else(chrono::Utc::now);
             call_message.call_type = CallMessageType::Ended;
             call_message.ended_at = Some(at);
+            call_message.is_video |= is_video;
             call_message.duration = (duration_secs > 0)
                 .then(|| chrono::Duration::seconds(i64::from(duration_secs)));
             self.message_repo.update(&row)?;
@@ -118,6 +120,7 @@ impl MessageService {
             duration: (duration_secs > 0)
                 .then(|| chrono::Duration::seconds(i64::from(duration_secs))),
             participant_count: 0,
+            is_video,
         });
 
         if !self.store_message_local_once(&row)? {
@@ -141,7 +144,7 @@ impl MessageService {
     ) -> Result<(), MessageError> {
         let me = self.current_user_id()?;
         let now = crate::util::time::TimestampNanos::now().as_u64();
-        self.file_channel_call_event(channel, &me, call_id, phase, duration_secs, now)?;
+        self.file_channel_call_event(channel, &me, call_id, phase, duration_secs, is_video, now)?;
         self.send_control(
             channel,
             call_event_content(channel, call_id, phase, duration_secs, is_video, now),
@@ -262,6 +265,7 @@ mod tests {
                 &call,
                 ChannelCallPhase::Started,
                 0,
+                true,
                 10,
             )
             .unwrap()
@@ -278,6 +282,7 @@ mod tests {
                 &call,
                 ChannelCallPhase::Started,
                 0,
+                false,
                 11
             )
             .unwrap()
@@ -286,11 +291,13 @@ mod tests {
 
         // We were the last out: our ENDED keeps Carol as the caller.
         let ended = svc
-            .file_channel_call_event(&f.channel, &f.me, &call, ChannelCallPhase::Ended, 95, 20)
+            .file_channel_call_event(&f.channel, &f.me, &call, ChannelCallPhase::Ended, 95, false, 20)
             .unwrap()
             .expect("ENDED updates the STARTED row");
         assert_eq!(call_of(&ended).call_type, CallMessageType::Ended);
         assert_eq!(call_of(&ended).initiator_id, f.carol);
+        assert!(call_of(&started).is_video, "a video call's row says so");
+        assert!(call_of(&ended).is_video, "ENDED keeps the call's type");
         assert_eq!(ended.id, started.id);
         assert_eq!(ended.sent_at, started.sent_at);
         assert_eq!(ended.sender_id, started.sender_id);
@@ -321,13 +328,14 @@ mod tests {
                 &call,
                 ChannelCallPhase::Ended,
                 90,
+                false,
                 21
             )
             .unwrap()
             .is_none()
         );
         assert!(svc
-            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Started, 0, 22)
+            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Started, 0, false, 22)
             .unwrap()
             .is_none());
     }
@@ -338,17 +346,17 @@ mod tests {
         let svc = f.client.messages();
         let call = uuid::Uuid::new_v4().to_string();
         let ended = svc
-            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Ended, 37, 20)
+            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Ended, 37, false, 20)
             .unwrap()
             .expect("ENDED files a row when STARTED was missed");
         assert_eq!(call_of(&ended).call_type, CallMessageType::Ended);
         assert!(call_of(&ended).started_at.is_none());
         assert!(svc
-            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Started, 0, 10)
+            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Started, 0, false, 10)
             .unwrap()
             .is_none());
         assert!(svc
-            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Ended, 37, 20)
+            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Ended, 37, false, 20)
             .unwrap()
             .is_none());
         assert!(svc
@@ -374,7 +382,7 @@ mod tests {
         let call = uuid::Uuid::new_v4().to_string();
         for phase in [ChannelCallPhase::Started, ChannelCallPhase::Ended] {
             assert!(
-                svc.file_channel_call_event(&f.channel, &outsider, &call, phase, 5, 10)
+                svc.file_channel_call_event(&f.channel, &outsider, &call, phase, 5, false, 10)
                     .unwrap()
                     .is_none()
             );
@@ -397,6 +405,7 @@ mod tests {
                 "not-a-uuid",
                 ChannelCallPhase::Started,
                 0,
+                false,
                 10
             )
             .is_err()
@@ -429,8 +438,10 @@ mod tests {
                 call_id,
                 phase,
                 duration_secs,
+                is_video,
                 timestamp,
             } => {
+                assert!(is_video, "the call's type survives the dispatch");
                 assert_eq!((channel_id, sender_id), (channel, sender));
                 assert_eq!(call_id, call);
                 assert_eq!(phase, ChannelCallPhase::Ended);

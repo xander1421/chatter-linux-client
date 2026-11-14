@@ -55,6 +55,9 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let ui_ctx = ctx_for_accept.clone();
             let revision = ui_ctx.auth_snapshot().session_revision;
             dismiss_incoming(revision, &call_id_str);
+            if let Some(w) = weak.upgrade() {
+                load_presented_incoming(&w, &ui_ctx, revision, &call_id_str);
+            }
 
             let replaces_active = weak
                 .upgrade()
@@ -76,7 +79,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Swap the modal for the call view now; the accept flow repaints
             // it with the real call on success.
             if let Some(w) = weak.upgrade() {
-                show_answering(&w);
+                show_answering(&w, &call_id_str);
                 w.global::<crate::CallView>()
                     .set_incoming_call_visible(false);
                 w.global::<crate::CallView>()
@@ -430,8 +433,12 @@ fn render_accepted_call(
 /// and until now all of it rendered as the chat list, which read as the call
 /// having been dropped. `render_accepted_call` overwrites this with the real
 /// call; a failure takes it down (`fail_call`).
-fn show_answering(w: &MainWindow) {
-    let incoming = w.global::<crate::CallView>().get_incoming_call_data();
+fn show_answering(w: &MainWindow, call_id: &str) {
+    // The tapped call id is the authority: the accept result repaints only a
+    // view showing its own id. Stale modal data (another call) shows no caller.
+    let incoming = Some(w.global::<crate::CallView>().get_incoming_call_data())
+        .filter(|data| data.call_id.as_str() == call_id)
+        .unwrap_or_default();
     let is_video = incoming.is_video_call;
     let my_display_name = w.global::<crate::SidebarPane>().get_user_display_name();
     let participant = |user_id: slint::SharedString,
@@ -463,7 +470,7 @@ fn show_answering(w: &MainWindow) {
     );
     w.global::<crate::CallView>()
         .set_active_call_data(ActiveCallData {
-            call_id: incoming.call_id.clone(),
+            call_id: call_id.into(),
             channel_id: "".into(),
             title: incoming.caller_name.clone(),
             is_video_call: is_video,
@@ -664,28 +671,107 @@ fn reconcile_incoming_modal(
                     .set_incoming_call_replaces_active(*replaces_active);
                 return;
             }
-            let peer_id_str = peer_id.to_string();
-            let avatar_bytes = ui_ctx.resolve_call_participant(&peer_id_str).avatar_bytes;
-            super::super::auth::initial_data::show_incoming_call(
+            paint_incoming(
                 &w,
+                &ui_ctx,
                 call.as_str(),
-                &peer_id_str,
+                *kind,
+                peer_id,
                 peer_name,
-                if *is_video { "video" } else { "voice" },
+                *is_video,
                 *is_identity_verified,
                 identity_warning,
-                avatar_bytes.as_deref(),
+                channel_context.as_deref(),
+                *replaces_active,
             );
-            if *kind == OrchestratedCallKind::GroupChannel {
-                let mut data = w.global::<crate::CallView>().get_incoming_call_data();
-                data.channel_name = channel_context.clone().unwrap_or_default().into();
-                w.global::<crate::CallView>().set_incoming_call_data(data);
-            }
-            w.global::<crate::CallView>()
-                .set_incoming_call_replaces_active(*replaces_active);
             #[cfg(target_os = "android")]
             prompt_incoming_permissions(&w, &ui_ctx, revision, call.as_str(), *is_video);
         });
+    });
+}
+
+/// Fill the incoming-call modal's data (and show it) from one presentation.
+#[allow(clippy::too_many_arguments)]
+fn paint_incoming(
+    w: &MainWindow,
+    ui_ctx: &ChatterClient,
+    call: &str,
+    kind: OrchestratedCallKind,
+    peer_id: &chatter_core::domain::ids::UserId,
+    peer_name: &str,
+    is_video: bool,
+    is_identity_verified: bool,
+    identity_warning: &str,
+    channel_context: Option<&str>,
+    replaces_active: bool,
+) {
+    let peer_id_str = peer_id.to_string();
+    let avatar_bytes = ui_ctx.resolve_call_participant(&peer_id_str).avatar_bytes;
+    super::super::auth::initial_data::show_incoming_call(
+        w,
+        call,
+        &peer_id_str,
+        peer_name,
+        if is_video { "video" } else { "voice" },
+        is_identity_verified,
+        identity_warning,
+        avatar_bytes.as_deref(),
+    );
+    if kind == OrchestratedCallKind::GroupChannel {
+        let mut data = w.global::<crate::CallView>().get_incoming_call_data();
+        data.channel_name = channel_context.unwrap_or_default().into();
+        w.global::<crate::CallView>().set_incoming_call_data(data);
+    }
+    w.global::<crate::CallView>()
+        .set_incoming_call_replaces_active(replaces_active);
+}
+
+/// A notification Accept can run before the modal was ever painted: on a cold
+/// start MainActivity's CALL_ACCEPT is queued until the window registers
+/// (`call_actions::register_main_window`), and that queued tap reaches the
+/// event loop ahead of the orchestrator subscriber's first reconcile. The modal
+/// data is then empty, the answering view gets call id "", and the accept
+/// result — which only repaints the view showing its own call id — is dropped,
+/// leaving "Calling..." forever. Load this call's presentation from core first.
+fn load_presented_incoming(w: &MainWindow, ui_ctx: &ChatterClient, revision: u64, call_id: &str) {
+    if w.global::<crate::CallView>().get_incoming_call_data().call_id.as_str() == call_id {
+        return;
+    }
+    let Some(state) = ui_ctx.incoming_call_presentation_state() else { return };
+    state.with_snapshot(|snapshot| {
+        if snapshot.session_revision != Some(revision) {
+            return;
+        }
+        let Some(CallOrchestratorEvent::IncomingPresented {
+            call,
+            kind,
+            peer_id,
+            peer_name,
+            is_video,
+            is_identity_verified,
+            identity_warning,
+            channel_context,
+            replaces_active,
+            ..
+        }) = snapshot.presentations.iter().rev().find(|event| {
+            matches!(event, CallOrchestratorEvent::IncomingPresented { call, .. } if call.as_str() == call_id)
+        })
+        else {
+            return;
+        };
+        paint_incoming(
+            w,
+            ui_ctx,
+            call.as_str(),
+            *kind,
+            peer_id,
+            peer_name,
+            *is_video,
+            *is_identity_verified,
+            identity_warning,
+            channel_context.as_deref(),
+            *replaces_active,
+        );
     });
 }
 
@@ -713,7 +799,12 @@ fn prompt_incoming_permissions(
         if is_video {
             requested.push(permissions::CAMERA);
         }
-        permissions::ensure(&requested).await;
+        // Ringing in the background, Android blocks this dialog and cancels
+        // it when Accept brings the app forward. That is no refusal: leave
+        // the call ringing and let Accept ask again in the foreground.
+        if permissions::ensure_answered(&requested).await.is_none() {
+            return;
+        }
         let Some((message, name)) = denied_call_permission(is_video) else {
             return;
         };

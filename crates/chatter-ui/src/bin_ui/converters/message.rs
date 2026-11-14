@@ -299,6 +299,7 @@ impl MessageDisplayData {
             is_call: self.row.is_call,
             call_type: viewer.call_type.into(),
             call_duration: self.row.call_duration.clone().into(),
+            call_is_video: self.row.call_is_video,
             date_separator_text: self.row.day_label.clone().into(),
             ..Default::default()
         }

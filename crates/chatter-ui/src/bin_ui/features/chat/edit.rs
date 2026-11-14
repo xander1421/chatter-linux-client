@@ -526,6 +526,22 @@ pub fn apply_message_edit_in_conversation(
                 break;
             }
         }
+        // Replies quoting it show its current text, as core now stores it
+        // (`refresh_reply_quotes`).
+        let quote = chatter_core::ui::truncate_preview(new_text);
+        for i in 0..model.row_count() {
+            let Some(mut row) = model.row_data(i) else {
+                continue;
+            };
+            if !quote.is_empty()
+                && row.is_reply
+                && row.reply_to_message_id.as_str() == pin_id
+                && row.reply_to_preview.as_str() != quote
+            {
+                row.reply_to_preview = quote.as_str().into();
+                model.set_row_data(i, row);
+            }
+        }
     }
     let preview =
         crate::bin_ui::features::auth::inbox::utils::generate_preview_from_ui_message(&preview_row);

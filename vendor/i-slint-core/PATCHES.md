@@ -120,3 +120,13 @@ the final cursor update; previously callback-backed forms kept their old draft.
 `crates/chatter-ui/tests/ui_edit_text_replacement.rs` exercises Android-style
 whole-field snapshots against callback-backed and linked fields, masked inputs,
 multiline text, deletion, clearing and Unicode.
+
+Bundled colour emoji (2026-11-13): `textlayout/sharedparley.rs`
+`FontContext::register_static_font` appends any registered family whose name
+contains "Emoji" to fontique's `GenericFamily::Emoji`. Registered generics are
+consulted before the system ones, and parley's VS16 path
+(`vendor/parley/src/shape/mod.rs`) asks the Emoji generic before the element's
+`font-family`, so the bundled `assets/fonts/NotoColorEmoji.ttf` now draws
+emoji on every platform instead of each OS's own set (call-verification emoji
+looked different between devices). Test:
+`cargo test --manifest-path vendor/i-slint-core/Cargo.toml --features shared-parley,std --lib chatter_tests`.

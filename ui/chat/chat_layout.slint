@@ -530,7 +530,11 @@ export component ChatLayout inherits Rectangle {
                 padding-right: Spacing.md;
                 spacing: Spacing.sm;
                 Text {
-                    text: "Call in progress · " + root.active-channel-call-participants + " participants";
+                    // The server does not fill in the participant count
+                    // (always 0), so a 0 is "unknown", not "empty".
+                    text: root.active-channel-call-participants > 0
+                        ? "Call in progress · " + root.active-channel-call-participants + " participants"
+                        : "Call in progress";
                     color: Colors.text-primary;
                     vertical-alignment: center;
                     horizontal-stretch: 1;

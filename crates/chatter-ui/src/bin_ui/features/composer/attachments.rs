@@ -38,9 +38,24 @@ pub(crate) async fn process_and_add_file(
     revision: u64,
     weak: &Weak<MainWindow>,
 ) -> Result<(), String> {
-    chat_state
+    if let Err(e) = chat_state
         .prepare_pending_file(file_path, staged_size, conversation, revision)
-        .await?;
+        .await
+    {
+        // Every picker/drop/paste path only logs the error; say it here once.
+        if e.ends_with(" is empty") {
+            let weak = weak.clone();
+            let message = format!("Can't attach {e}");
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_toast_message(message.into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                }
+            });
+        }
+        return Err(e);
+    }
 
     // The caller renders once it has staged its whole batch: rendering here,
     // per file, rebuilt the tray model N times for N dropped/picked files

@@ -2124,6 +2124,7 @@ fn forward_message_confirm_is_wired_to_core() {
         id: peer.into(),
         name: "Test Peer".into(),
         target_type: "dm".into(),
+        private_channel: false,
     }];
     w.global::<chatter_ui::ModalHostState>()
         .set_forward_targets(ModelRc::new(VecModel::from(targets)));

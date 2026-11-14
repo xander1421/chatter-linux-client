@@ -537,7 +537,9 @@ impl MessageService {
         }
         crate::services::gateway::submission::mark_submission_started()?;
         let proto = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-            if prepared.state_hash.is_some() {
+            // Only a private channel goes out anonymously; an encrypted
+            // public channel also carries a state hash but posts to the server.
+            if self.is_private_channel(&row.conversation_id) {
                 self.submit_group_request(&request).await
             } else {
                 Ok(self.message_client().send_prepared_message(request).await?)

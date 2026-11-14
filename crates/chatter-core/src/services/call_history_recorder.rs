@@ -341,6 +341,7 @@ pub(super) fn dm_call_bubble(entry: &CallHistoryEntry, me: UserId) -> Option<Mes
             .filter(|s| *s > 0)
             .map(chrono::Duration::seconds),
         participant_count: 2,
+        is_video: entry.has_video,
     });
     Some(bubble)
 }
@@ -446,6 +447,24 @@ mod dm_call_bubble_tests {
             kind(CallDirection::Outgoing, CallResult::Declined),
             CallMessageType::Declined
         );
+    }
+
+    /// A video call's bubble says so on both sides, through to the chat row
+    /// the UI renders ("Outgoing video call" + video icon); a voice call's
+    /// does not.
+    #[test]
+    fn a_video_call_files_a_video_bubble_on_both_sides() {
+        let (me, peer) = (UserId::new(), UserId::new());
+        for direction in [CallDirection::Outgoing, CallDirection::Incoming] {
+            for has_video in [true, false] {
+                let mut r = row(peer, direction, CallResult::Completed, Some(21));
+                r.has_video = has_video;
+                let bubble = dm_call_bubble(&r, me).expect("dm bubble");
+                assert_eq!(call(&bubble).is_video, has_video, "{direction:?}");
+                let ui_row = crate::ui::message_row::message_to_row(&bubble, "Peer", &[], None);
+                assert_eq!(ui_row.call_is_video, has_video, "{direction:?}");
+            }
+        }
     }
 
     #[test]

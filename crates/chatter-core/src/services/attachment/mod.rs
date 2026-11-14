@@ -663,7 +663,7 @@ impl AttachmentService {
         }
 
         // Decode thumbnail to RGBA
-        match image::load_from_memory(thumbnail_bytes) {
+        match crate::media::ImageProcessor::decode_untrusted(thumbnail_bytes) {
             Ok(img) => {
                 let rgba = img.to_rgba8();
                 let (width, height) = rgba.dimensions();

@@ -80,6 +80,7 @@ export component MessageItem inherits Rectangle {
     callback sender-profile-requested(string);
     in property <string> call-type: "";
     in property <string> call-duration: "";
+    in property <bool> call-is-video: false;
 
     // Attachments
     in property <bool> has-attachments: false;
@@ -460,6 +461,7 @@ export component MessageItem inherits Rectangle {
         // Call message (card style, aligned based on direction)
         if root.is-call: MessageCall {
             call-duration: root.call-duration;
+            call-is-video: root.call-is-video;
             call-type: root.call-type;
             hold-tier: root.hold-tier;
             is-anonymous: root.is-anonymous;

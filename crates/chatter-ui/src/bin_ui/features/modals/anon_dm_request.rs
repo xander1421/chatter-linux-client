@@ -119,7 +119,7 @@ fn spawn_request_stream(
                             if bytes.is_empty() {
                                 return None;
                             }
-                            image::load_from_memory(bytes).ok().map(|img| {
+                            chatter_core::media::ImageProcessor::decode_untrusted(bytes).ok().map(|img| {
                                 let rgba = img.to_rgba8();
                                 let (w, h) = rgba.dimensions();
                                 (rgba.into_raw(), w, h)
@@ -269,7 +269,7 @@ fn spawn_request_stream(
                     let avatar_bytes = ui_ctx.anon_dm_avatar_for_peer(&sender_id, sender_avatar);
                     let avatar_pixels: Option<(Vec<u8>, u32, u32)> =
                         avatar_bytes.as_ref().and_then(|bytes| {
-                            image::load_from_memory(bytes).ok().map(|img| {
+                            chatter_core::media::ImageProcessor::decode_untrusted(bytes).ok().map(|img| {
                                 let rgba = img.to_rgba8();
                                 let (w, h) = rgba.dimensions();
                                 (rgba.into_raw(), w, h)

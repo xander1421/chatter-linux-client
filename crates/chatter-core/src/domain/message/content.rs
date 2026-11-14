@@ -154,6 +154,10 @@ pub struct CallMessage {
     pub ended_at: Option<DateTime<Utc>>,
     pub duration: Option<Duration>,
     pub participant_count: u32,
+    /// A video call (Signal's "Outgoing video call"): the bubble's label and
+    /// icon. From the call's own type — the history row's `has_video` for a
+    /// 1:1 call, the `CallEvent`'s `is_video` for a channel call.
+    pub is_video: bool,
 }
 
 impl CallMessage {
@@ -169,6 +173,7 @@ impl CallMessage {
             ended_at: None,
             duration: None,
             participant_count: 1,
+            is_video: false,
         }
     }
 

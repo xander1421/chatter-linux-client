@@ -172,6 +172,10 @@ mod transport_switch_tests {
     async fn push_decision_follows_live_atomic_not_stale_param() {
         let (client, _dir) = build_test_client();
         client.anon_mode.store(false, Ordering::Release);
+        // No remembered URL: a build-time CHATTER_NTFY_URL would otherwise
+        // make the rebuild restart push (replacing this listener), which is
+        // the exit-restore path, not the one under test.
+        *client.push_url.lock() = None;
         let (tx, mut rx) = tokio::sync::broadcast::channel::<()>(1);
         *client.push_shutdown.lock() = Some(tx);
 
@@ -1024,6 +1028,7 @@ mod unread_badge_tests {
             ended_at: None,
             duration: None,
             participant_count: 2,
+            is_video: false,
         });
         client.messages().store_message_local(&call).expect("store");
         assert_eq!(client.unread_conversation_count(), 0);

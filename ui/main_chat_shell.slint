@@ -89,6 +89,18 @@ export component MainChatShell inherits Rectangle {
         && !ChatPane.selection-mode && !ChatPane.thread-panel-visible;
     background: transparent;
 
+    // Leaving or ending our call drops the channel's "Call in progress"
+    // banner at once: it was polled during the call and showed the call we
+    // just hung up until the next 20 s poll. Not re-fetched here: the server
+    // may not have closed the call yet. The next poll restores it if others
+    // are still in the call.
+    private property <bool> in-call: CallView.active-call-visible;
+    changed in-call => {
+        if !self.in-call {
+            CallView.active-channel-call-id = "";
+        }
+    }
+
         VerticalLayout {
             width: 100%;
             height: parent.height;

@@ -918,6 +918,16 @@ fn display_image_from_buffer(
             }
             Err(e) => {
                 tracing::error!("Failed to load image from memory: {:?}", e);
+                // Never leave the viewer on "Decrypting..." forever.
+                show_attachment_error(&weak, request, "Image can't be opened");
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        if super::media_viewer::is_current(request) {
+                            w.global::<crate::ChatPane>().set_image_viewer_visible(false);
+                        }
+                    }
+                });
             }
         }
     }

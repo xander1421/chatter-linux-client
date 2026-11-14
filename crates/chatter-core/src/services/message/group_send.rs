@@ -50,6 +50,12 @@ impl TokenCache {
             .map(|c| c.token.clone())
     }
 
+    fn forget(&self, channel_id: &ChannelId) {
+        if let Ok(mut map) = self.0.lock() {
+            map.remove(channel_id);
+        }
+    }
+
     fn put(&self, channel_id: &ChannelId, state_hash: StateHash, expiration: u64, token: Vec<u8>) {
         if let Ok(mut map) = self.0.lock() {
             map.insert(*channel_id, Cached { state_hash, expiration, token });
@@ -97,6 +103,12 @@ impl MessageService {
             .get_group_send_endorsements(&channel_id.to_string())
             .await?;
         if resp.revision != verified.state.revision {
+            // The server issued for a newer membership: record it as a peer
+            // ahead so the sync below actually fetches the changes (a bare
+            // sync only acts on a revision some receive path recorded).
+            if resp.revision > verified.state.revision {
+                self.group_gate().cross_check(channel_id, false, resp.revision, &[]);
+            }
             self.sync_channel_state_if_behind(channel_id);
             return Err(MessageError::Network(NetworkError::Unavailable));
         }
@@ -157,7 +169,15 @@ impl MessageService {
                 .grpc_pool
                 .anonymous_message_client()
                 .send_group_message(&request.channel_id, token.clone(), sealed, &request.client_request_id)
-                .await?;
+                .await;
+            // The server refuses every unverifiable send the same way (a
+            // token for a membership that has since changed included): drop
+            // the cached token so the retry fetches endorsements for the
+            // current state, which also starts a catch-up when we are behind.
+            if resp.is_err() {
+                self.group_send_tokens.forget(&channel_id);
+            }
+            let resp = resp?;
             if resp.success {
                 return Ok(self.sent_group_message(request, resp.server_timestamp)?);
             }

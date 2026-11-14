@@ -44,7 +44,6 @@ export global MessageMenuActions {
 // pointer path alone left every quick reaction invisible to TalkBack.
 component QuickReaction inherits Rectangle {
     in property <string> emoji;
-    in property <string> short-name;
     in property <bool> shown: false;
     in property <int> stagger-index: 0;
     // The emoji's spoken name; the glyph alone is not a name.
@@ -109,26 +108,11 @@ component QuickReaction inherits Rectangle {
         // bundled UI font has no emoji coverage, which is what turns bare
         // dingbats into tofu boxes elsewhere in this tree.
         font-family: Typography.font-family-emoji;
-        // The emoji face draws past its line box; keep it clear of the label.
-        font-size: 20px;
+        font-size: 24px;
         horizontal-alignment: center;
         vertical-alignment: center;
-        y: 2px;
         width: 100%;
-        height: 28px;
-    }
-
-    // Color emoji is unavailable to some software renderers. Keep the action
-    // identifiable there, while the full emoji remains visible on device.
-    Text {
-        text: root.short-name;
-        color: Colors.text-secondary;
-        font-size: 10px;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        y: 32px;
-        width: 100%;
-        height: 14px;
+        height: 100%;
     }
 
     touch := TouchArea {
@@ -382,6 +366,7 @@ export component MessageContextMenu inherits Rectangle {
             is-call: root.preview-message.is-call;
             call-type: root.preview-message.call-type;
             call-duration: root.preview-message.call-duration;
+            call-is-video: root.preview-message.call-is-video;
             has-attachments: root.preview-message.has-attachments;
             attachment-count: root.preview-message.attachment-count;
             attachments: root.preview-message.attachments;
@@ -493,7 +478,10 @@ export component MessageContextMenu inherits Rectangle {
                         : (self.has-bubble-anchor ? root.anchor-bottom : root.position-y) + Spacing.sm,
                         self.bottom-limit - self.height))) + self.entrance-offset,
                 self.bottom-limit - self.height));
-        width: min(304px, parent.width - 2 * Spacing.md);
+        // Wide enough for all six quick reactions plus the picker button
+        // (6 x 48 + gaps + 48 + padding = 376) on a standard phone; narrower
+        // windows still scroll the emoji row.
+        width: min(380px, parent.width - 2 * Spacing.md);
         height: !root.preview-mobile ? self.desktop-height
             : max(0px, min(self.menu-h, self.cramped-bubble
                 ? self.bottom-limit - self.top-limit - Spacing.touch-target-min
@@ -549,7 +537,6 @@ export component MessageContextMenu inherits Rectangle {
                                 focused(item-index, top, item-height) => { root.focus-index = item-index; }
                                 navigate(from, direction) => { root.move-focus(from, direction); }
                                 emoji: emoji;
-                                short-name: ["Like", "Love", "Haha", "Wow", "Sad", "Thanks"][index];
                                 shown: root.show;
                                 stagger-index: index;
                                 name: QuickReactions.names[index];
@@ -590,6 +577,8 @@ export component MessageContextMenu inherits Rectangle {
                         picker-action := IconAction {
                             icon: Icons.smile;
                             label: "More reactions and stickers";
+                            // Emoji-sized chip; the 48px touch target stays.
+                            visual-size: 32px;
                             clicked => {
                                 root.more-reactions-clicked(root.sender-id, root.timestamp-ns);
                                 root.close();

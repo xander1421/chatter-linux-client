@@ -601,7 +601,9 @@ export component ActiveCallView inherits Rectangle {
                 if call-data.verification-emoji-1 != "" && call-data.verification-key-version != "": Text {
                     accessible-role: text;
                     accessible-label: "Call key version " + call-data.verification-key-version;
-                    text: "v" + call-data.verification-key-version;
+                    // The key changes as people join and leave; emojis only
+                    // match between people on the same key, so say which.
+                    text: "key " + call-data.verification-key-version;
                     font-size: Typography.xs;
                     color: Colors.text-muted;
                     vertical-alignment: center;

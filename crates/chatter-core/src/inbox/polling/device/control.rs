@@ -441,6 +441,7 @@ pub fn dispatch_control_content(
                         call_id: ev.call_id,
                         phase,
                         duration_secs: ev.duration_secs,
+                        is_video: ev.is_video,
                         timestamp: if ev.timestamp > 0 {
                             ev.timestamp
                         } else {

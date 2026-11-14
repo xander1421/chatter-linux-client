@@ -164,7 +164,7 @@ pub(super) async fn handle_friend_requests_updated(
 /// Decode raw avatar image bytes → RGBA (width, height, pixels) for building a
 /// `slint::Image` on the UI thread. `None` if the bytes don't decode.
 fn decode_avatar_rgba(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
-    let img = image::load_from_memory(bytes).ok()?;
+    let img = chatter_core::media::ImageProcessor::decode_untrusted(bytes).ok()?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
     Some((w, h, rgba.into_raw()))

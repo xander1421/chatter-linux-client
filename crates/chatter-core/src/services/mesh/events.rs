@@ -128,7 +128,7 @@ pub struct MeshPeer {
 /// Which transports are live.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct MeshStatus {
-    /// The radio is started.
+    /// The radio is started and its adapter is powered.
     pub radio_running: bool,
     /// The Bluetooth adapter is powered.
     pub adapter_powered: bool,

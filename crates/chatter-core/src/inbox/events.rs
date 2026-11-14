@@ -281,6 +281,8 @@ pub enum InboxEvent {
         phase: crate::services::message::ChannelCallPhase,
         /// Ended only: seconds the call ran.
         duration_secs: u32,
+        /// A video call: the row reads "video call".
+        is_video: bool,
         /// Sender's timestamp, else the server's (epoch nanos).
         timestamp: u64,
     },

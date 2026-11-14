@@ -61,9 +61,10 @@ pub(super) async fn process_sender_key_message(
                 plaintext_len = plaintext.len(),
                 "[INBOX_SK] Successfully decrypted, processing DataMessage"
             );
-            if !process_decrypted_data_message(
+            match process_decrypted_data_message(
                 msg,
                 &plaintext,
+                channel_id,
                 sender_id,
                 event_tx,
                 stats,
@@ -72,10 +73,30 @@ pub(super) async fn process_sender_key_message(
                 ephemeral_repo,
                 domain_tx,
             ) {
-                PENDING_SENDER_KEY
-                    .lock()
-                    .insert(msg.message_guid.clone(), PendingSenderKey::Data(plaintext));
-                return AckDecision::Retain;
+                DataOutcome::Handled => {}
+                DataOutcome::StoreFailed => {
+                    PENDING_SENDER_KEY
+                        .lock()
+                        .insert(msg.message_guid.clone(), PendingSenderKey::Data(plaintext));
+                    return AckDecision::Retain;
+                }
+                DataOutcome::Malformed(reason) => {
+                    let decision = sender_key_malformed_decision(
+                        channel_id,
+                        *sender_id,
+                        msg.server_timestamp,
+                        &reason,
+                        message_repo,
+                        channel_repo,
+                        domain_tx,
+                        &msg.message_guid,
+                        retry_budget,
+                    );
+                    if decision.should_ack() {
+                        PENDING_SENDER_KEY.lock().remove(&msg.message_guid);
+                    }
+                    return decision;
+                }
             }
         }
         Ok(RouteResult::ControlContent(plaintext)) => {
@@ -92,6 +113,20 @@ pub(super) async fn process_sender_key_message(
             ) {
                 Ok(content_proto) => {
                     if let Some(inner) = content_proto.content {
+                        if let Err(reason) = bound_to_channel(&inner, channel_id) {
+                            stats.write().messages_failed += 1;
+                            return sender_key_malformed_decision(
+                                channel_id,
+                                *sender_id,
+                                msg.server_timestamp,
+                                &reason,
+                                message_repo,
+                                channel_repo,
+                                domain_tx,
+                                &msg.message_guid,
+                                retry_budget,
+                            );
+                        }
                         if let Err(error) = persist_exact_saved_delete_before_ack(
                             &inner,
                             *sender_id,
@@ -160,6 +195,17 @@ pub(super) async fn process_sender_key_message(
                         error: format!("Failed to parse Content: {}", e),
                     });
                     stats.write().messages_failed += 1;
+                    return sender_key_malformed_decision(
+                        channel_id,
+                        *sender_id,
+                        msg.server_timestamp,
+                        &format!("Failed to parse Content: {e}"),
+                        message_repo,
+                        channel_repo,
+                        domain_tx,
+                        &msg.message_guid,
+                        retry_budget,
+                    );
                 }
             }
         }
@@ -238,6 +284,26 @@ pub(super) async fn process_sender_key_message(
                 error: e.to_string(),
             });
             stats.write().messages_failed += 1;
+            // The gate refuses a sender outside our VERIFIED membership before
+            // decrypting. That is usually a join we have not synced yet, so
+            // the same bytes are admitted later: retain, not mark-and-drain.
+            // `admits` (not `admits_content`) so a muted member stays refused.
+            if let Some(channel_id) = channel_id
+                && matches!(e, ServiceError::Validation(_))
+                && !crate::services::message::GroupStateGate::new(&message_gateway.settings_repo)
+                    .admits(&channel_id, sender_id)
+            {
+                return sender_key_nonmember_decision(
+                    channel_id,
+                    *sender_id,
+                    msg.server_timestamp,
+                    message_repo,
+                    channel_repo,
+                    domain_tx,
+                    &msg.message_guid,
+                    retry_budget,
+                );
+            }
             return sender_key_failure_decision(
                 channel_id,
                 *sender_id,
@@ -258,10 +324,68 @@ pub(super) async fn process_sender_key_message(
     AckDecision::Ack
 }
 
+/// The inner `Content` of a decrypted sender-key plaintext.
+fn sender_key_content(plaintext: &[u8]) -> Result<content::Content, String> {
+    chatter_proto::protovalidate::decode_inbound_content(plaintext, "device_sender_key_data")
+        .map_err(|e| e.to_string())?
+        .content
+        .ok_or_else(|| "empty Content".to_string())
+}
+
+/// The channel a `Content` names, if it names one.
+fn content_channel(inner: &content::Content) -> Option<&str> {
+    match inner {
+        content::Content::DataMessage(dm) => Some(&dm.channel_id),
+        content::Content::Typing(typing) => Some(&typing.channel_id),
+        content::Content::Receipt(receipt) => Some(&receipt.channel_id),
+        content::Content::Pin(pin) => Some(&pin.channel_id),
+        content::Content::Edit(edit) => edit.data_message.as_ref().map(|dm| dm.channel_id.as_str()),
+        // Channel reactions encode the channel as "channel:{id}:{author}"
+        // (control.rs `parse_channel_reaction_author`).
+        content::Content::Reaction(reaction) => reaction
+            .target_author_aci
+            .strip_prefix("channel:")
+            .and_then(|rest| rest.split_once(':'))
+            .map(|(channel, _)| channel),
+        content::Content::CallEvent(event) => Some(&event.channel_id),
+        content::Content::GroupCallSignal(signal) => Some(&signal.channel_id),
+        content::Content::GroupMailboxAddress(address) => Some(&address.channel_id),
+        _ => None,
+    }
+}
+
+/// A sender-key plaintext speaks only for the channel whose key decrypted it
+/// (the envelope's `GroupEncrypted.channel_id`, bound to the ciphertext's
+/// distribution id by `SignalService::decrypt_from_group`, and the channel
+/// the membership gate checked). Content naming another channel — or none,
+/// which would land as a DM or sync event — is refused, or a member of one
+/// channel writes into another past its kick, ban or mute.
+fn bound_to_channel(inner: &content::Content, outer: Option<ChannelId>) -> Result<(), String> {
+    let named = content_channel(inner).and_then(|c| c.parse::<ChannelId>().ok());
+    match (named, outer) {
+        (Some(named), Some(outer)) if named == outer => Ok(()),
+        _ => Err("sender-key content names a channel other than its envelope's".into()),
+    }
+}
+
+/// What became of a decrypted sender-key plaintext.
+#[derive(Debug)]
+enum DataOutcome {
+    /// Stored, deduplicated, or dispatched as control content.
+    Handled,
+    /// Our storage failed — retry the cached plaintext on redelivery.
+    StoreFailed,
+    /// The plaintext will never parse; the caller marks the channel and drains.
+    Malformed(String),
+}
+
 /// Process a decrypted DataMessage.
+#[allow(clippy::too_many_arguments)]
 fn process_decrypted_data_message(
     msg: &DeviceMessage,
     plaintext: &[u8],
+    // The envelope's channel: the one whose sender key decrypted `plaintext`.
+    outer_channel: Option<ChannelId>,
     sender_id: &UserId,
     event_tx: &broadcast::Sender<InboxEvent>,
     stats: &Arc<RwLock<InboxStats>>,
@@ -269,7 +393,7 @@ fn process_decrypted_data_message(
     channel_repo: &Arc<ChannelRepository>,
     ephemeral_repo: &Arc<EphemeralRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
-) -> bool {
+) -> DataOutcome {
     tracing::debug!(
         message_guid = %msg.message_guid,
         sender_id = %sender_id,
@@ -277,10 +401,43 @@ fn process_decrypted_data_message(
         "[INBOX_DM] Decoding DataMessage from plaintext"
     );
 
-    match chatter_proto::protovalidate::decode_inbound::<DataMessage>(
-        plaintext,
-        "device_sender_key_data",
-    ) {
+    // The sender encrypts a padded `Content` (MessageService prepare), not a
+    // bare DataMessage; decoding it as DataMessage failed on every message
+    // and acked it unseen. Anything but a DataMessage is control content.
+    let decoded = match sender_key_content(plaintext) {
+        Ok(content_proto) if bound_to_channel(&content_proto, outer_channel).is_err() => {
+            tracing::warn!(
+                message_id = %msg.message_guid,
+                sender_id = %sender_id,
+                "Sender-key content names another channel than its envelope; refused"
+            );
+            let _ = event_tx.send(InboxEvent::MessageFailed {
+                message_id: msg.message_guid.clone(),
+                error: "sender-key content names another channel".into(),
+            });
+            stats.write().messages_failed += 1;
+            return DataOutcome::Malformed(
+                "sender-key content names a channel other than its envelope's".into(),
+            );
+        }
+        Ok(content_proto) => match content_proto {
+            content::Content::DataMessage(dm) => Ok(dm),
+            inner => {
+                dispatch_control_content(
+                    inner,
+                    sender_id,
+                    msg.source_device_id,
+                    &msg.message_guid,
+                    msg.server_timestamp,
+                    event_tx,
+                    stats,
+                );
+                return DataOutcome::Handled;
+            }
+        },
+        Err(e) => Err(e),
+    };
+    match decoded {
         Ok(data_message) => {
             tracing::debug!(
                 message_guid = %msg.message_guid,
@@ -304,7 +461,7 @@ fn process_decrypted_data_message(
                         error: format!("Invalid channel ID: {}", e),
                     });
                     stats.write().messages_failed += 1;
-                    return true;
+                    return DataOutcome::Malformed(format!("Invalid channel ID: {e}"));
                 }
             };
 
@@ -440,7 +597,7 @@ fn process_decrypted_data_message(
                         error = %e,
                         "Failed to store channel message"
                     );
-                    return false;
+                    return DataOutcome::StoreFailed;
                 }
             }
         }
@@ -455,7 +612,150 @@ fn process_decrypted_data_message(
                 error: format!("Failed to parse DataMessage: {}", e),
             });
             stats.write().messages_failed += 1;
+            return DataOutcome::Malformed(format!("Failed to parse DataMessage: {e}"));
         }
     }
-    true
+    DataOutcome::Handled
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost::Message;
+
+    /// The plaintext a channel send encrypts is a padded `Content`
+    /// (MessageService prepare); the receiver must read the DataMessage out of
+    /// it. Decoding it as a bare DataMessage dropped every private-channel
+    /// message.
+    #[test]
+    fn channel_send_plaintext_yields_its_data_message() {
+        let channel = ChannelId::new();
+        let dm = DataMessage {
+            body: "priv from S25".into(),
+            timestamp: 1_763_070_000_000,
+            channel_id: channel.to_string(),
+            ..Default::default()
+        };
+        let mut wrap = chatter_proto::content_v1::Content {
+            timestamp: dm.timestamp,
+            content: Some(content::Content::DataMessage(dm)),
+            ..Default::default()
+        };
+        crate::services::message::MessageService::pad_content_to_bucket(&mut wrap);
+        let plaintext = wrap.encode_to_vec();
+
+        assert!(
+            chatter_proto::protovalidate::decode_inbound::<DataMessage>(&plaintext, "t").is_err(),
+            "the old bare-DataMessage decode must not accept a Content"
+        );
+        match sender_key_content(&plaintext).expect("decodes") {
+            content::Content::DataMessage(got) => {
+                assert_eq!(got.body, "priv from S25");
+                assert_eq!(got.channel_id, channel.to_string());
+            }
+            other => panic!("expected DataMessage, got {other:?}"),
+        }
+    }
+
+    fn padded(inner: content::Content) -> Vec<u8> {
+        let mut wrap = chatter_proto::content_v1::Content {
+            timestamp: 1_763_070_000_000,
+            content: Some(inner),
+            ..Default::default()
+        };
+        crate::services::message::MessageService::pad_content_to_bucket(&mut wrap);
+        wrap.encode_to_vec()
+    }
+
+    /// A member of channel A sends an envelope for A whose DataMessage names
+    /// B: it must not land in B (or anywhere) — it is malformed for A.
+    #[test]
+    fn data_message_naming_another_channel_is_refused() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = Arc::new(
+            crate::storage::Database::open(&dir.path().join("t.db"), "test_passphrase").unwrap(),
+        );
+        db.run_migrations().unwrap();
+        let messages = Arc::new(MessageRepository::new(db.clone()));
+        let channels = Arc::new(ChannelRepository::new(db.clone()));
+        let ephemeral = Arc::new(EphemeralRepository::new(db));
+        let (event_tx, _rx) = broadcast::channel(16);
+        let stats = Arc::new(RwLock::new(InboxStats::default()));
+        let (a, b, sender) = (ChannelId::new(), ChannelId::new(), UserId::new());
+        let data = |channel: ChannelId| {
+            padded(content::Content::DataMessage(DataMessage {
+                body: "injected".into(),
+                timestamp: 1_763_070_000_000,
+                channel_id: channel.to_string(),
+                ..Default::default()
+            }))
+        };
+        let msg = DeviceMessage {
+            message_guid: MessageId::new().to_string(),
+            server_timestamp: 1,
+            ..Default::default()
+        };
+        let count = |channel: &ChannelId| {
+            messages
+                .list_for_conversation(
+                    channel,
+                    &crate::domain::message::ConversationType::Channel,
+                    None,
+                    50,
+                )
+                .unwrap()
+                .len()
+        };
+
+        let outcome = process_decrypted_data_message(
+            &msg, &data(b), Some(a), &sender, &event_tx, &stats, &messages, &channels,
+            &ephemeral, None,
+        );
+        assert!(matches!(outcome, DataOutcome::Malformed(_)), "{outcome:?}");
+        assert_eq!(count(&b), 0, "nothing written into the named channel");
+        assert_eq!(count(&a), 0);
+
+        // No envelope channel recovered: refused too.
+        let outcome = process_decrypted_data_message(
+            &msg, &data(a), None, &sender, &event_tx, &stats, &messages, &channels, &ephemeral,
+            None,
+        );
+        assert!(matches!(outcome, DataOutcome::Malformed(_)));
+
+        // The bound case still stores.
+        let outcome = process_decrypted_data_message(
+            &msg, &data(a), Some(a), &sender, &event_tx, &stats, &messages, &channels,
+            &ephemeral, None,
+        );
+        assert!(matches!(outcome, DataOutcome::Handled), "{outcome:?}");
+        assert_eq!(count(&a), 1);
+    }
+
+    /// Control content over a sender key is held to the same channel, and
+    /// content naming no channel (a DM or sync event) is refused outright.
+    #[test]
+    fn control_content_is_bound_to_the_envelope_channel() {
+        use chatter_proto::content_v1::{Reaction, TypingMessage};
+        let (a, b) = (ChannelId::new(), ChannelId::new());
+        let typing = |channel_id: String| {
+            content::Content::Typing(TypingMessage {
+                channel_id,
+                ..Default::default()
+            })
+        };
+        assert!(bound_to_channel(&typing(a.to_string()), Some(a)).is_ok());
+        assert!(bound_to_channel(&typing(b.to_string()), Some(a)).is_err());
+        assert!(bound_to_channel(&typing(String::new()), Some(a)).is_err());
+        let reaction = |aci: String| {
+            content::Content::Reaction(Reaction {
+                emoji: "x".into(),
+                target_author_aci: aci,
+                ..Default::default()
+            })
+        };
+        let author = UserId::new();
+        assert!(bound_to_channel(&reaction(format!("channel:{a}:{author}")), Some(a)).is_ok());
+        assert!(bound_to_channel(&reaction(format!("channel:{b}:{author}")), Some(a)).is_err());
+        assert!(bound_to_channel(&reaction(author.to_string()), Some(a)).is_err());
+    }
 }

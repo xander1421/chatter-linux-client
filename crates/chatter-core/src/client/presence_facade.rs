@@ -122,14 +122,19 @@ impl ChatterClient {
             }
         }
         let proto = crate::services::presence_service::domain_presence_to_proto(presence);
-        if let Err(e) = self
-            .services
-            .grpc_pool
-            .user_client()
-            .update_presence(proto)
-            .await
+        // The app's pool has no request deadline (it carries streams), and this
+        // call runs while holding the publication turn every presence producer
+        // queues on: unbounded, one stalled request froze presence for good.
+        let mut client = self.services.grpc_pool.user_client();
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            client.update_presence(proto),
+        )
+        .await
         {
-            tracing::warn!("Failed to publish identified presence to server: {}", e);
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!("Failed to publish identified presence to server: {}", e),
+            Err(_) => tracing::warn!("Publishing identified presence timed out"),
         }
     }
 
@@ -177,7 +182,13 @@ impl ChatterClient {
         let identified = self.send_identified_presence(presence);
         // Both sends belong to this publication future. Canceling it drops
         // every in-flight send before shutdown publishes Offline.
-        tokio::join!(futures::future::join_all(sends), identified);
+        // Anon-DM sends go through the mailbox (often over Tor); bound them
+        // too, so a stuck one cannot hold the publication turn indefinitely.
+        let anon = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            futures::future::join_all(sends),
+        );
+        let _ = tokio::join!(anon, identified);
 
         // Our own presence never comes back to us on the user-events stream —
         // the server fans it out to our friends, not to the sender. Emit it

@@ -195,6 +195,7 @@ impl MessageModifierRepository {
         let content = serde_json::to_string(&message.content).map_err(|e| StorageError::InvalidData(e.to_string()))?;
         tx.execute("UPDATE messages SET content_json=?1, is_edited=1, edited_at=?2, updated_at=?3, content_type=?5 WHERE id=?4",
             params![content, edited_at.to_rfc3339(), message.updated_at.to_rfc3339(), message.id.to_string(), if matches!(message.content, MessageContent::Mixed(_)) { 6 } else { 0 }])?;
+        super::unified_message_repo::refresh_reply_quotes_with(&tx, &message)?;
         if let Some(session) = session { session.check()?; }
         tx.commit()?;
         Ok(Some(message))
@@ -805,6 +806,27 @@ mod tests {
             stored.edited_at,
             Some(chrono::DateTime::from_timestamp_nanos(300))
         );
+    }
+
+    #[test]
+    fn an_edit_updates_the_quote_of_a_reply_to_it() {
+        let (_dir, modifiers, messages) = repos();
+        let peer = UserId::new();
+        let parent = dm(peer, "hello", 100);
+        assert!(messages.insert_or_ignore(&parent).unwrap());
+        let mut reply = dm(UserId::new(), "hi back", 150);
+        reply.conversation_id = parent.conversation_id;
+        reply.reply_to = Some(parent.id);
+        reply.reply_to_author_id = Some(peer);
+        reply.reply_to_text = Some("hello".into());
+        assert!(messages.insert_or_ignore(&reply).unwrap());
+
+        let edited = modifiers
+            .apply_received_edit(&messages, &peer, Some(ChannelId::from(peer)), 100, "hello EDITED", 200, 0)
+            .unwrap();
+        assert!(edited.is_some(), "edit applied");
+        let quoted = messages.get(&reply.id).unwrap().expect("reply stored");
+        assert_eq!(quoted.reply_to_text.as_deref(), Some("hello EDITED"));
     }
 
     #[test]

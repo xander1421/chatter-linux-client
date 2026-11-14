@@ -243,110 +243,125 @@ impl AttachmentService {
             "Attachment encrypted (streaming)"
         );
 
+        // The thumbnail sidecar (a separate small CDN object, so the attachment
+        // pointer stays tiny and fits every transport's cap) does not depend on
+        // the main object: upload it alongside rather than after, so the send,
+        // and the receiver's preview, waits for one transfer instead of two.
+        let thumbnail_upload = async {
+            match &media_meta.thumbnail {
+                Some(t) => self.upload_thumbnail_sidecar(t).await.unwrap_or_default(),
+                None => Default::default(),
+            }
+        };
         // Route large ciphertexts through multipart (parallel part PUTs direct to
         // RustFS); small ones keep the single-PUT path. Both arms converge on a
         // confirmed `cdn_key`, which feeds the shared persist/build tail below.
-        let cdn_key = if encrypt_result.ciphertext_size > MULTIPART_THRESHOLD {
-            self.upload_multipart_to_cdn(temp_file.path(), encrypt_result.ciphertext_size)
-                .await?
-        } else {
-            // Get presigned upload URL
-            let mut file_client = self.file_client()?;
-            let mint_start = std::time::Instant::now();
-            let upload_response = file_client
-                .get_attachment_upload_url(encrypt_result.ciphertext_size)
-                .await
-                .map_err(|e| {
-                    AttachmentError::NetworkError(format!("Failed to get upload URL: {}", e))
-                })?;
-            if self.secret_chat {
-                tracing::info!(
-                    elapsed_ms = mint_start.elapsed().as_millis(),
-                    "secret attachment upload: URL minted"
-                );
-            }
-
-            let cdn_key = upload_response.cdn_key;
-            let upload_url = upload_response.upload_url;
-
-            tracing::debug!("Got presigned URL, streaming encrypted content");
-
-            let upload_start = std::time::Instant::now();
-
-            // Anon mode: tunnel the PUT over Tor. The Tor client takes an
-            // in-memory body, so read the ciphertext (bounded by the ≤100 MiB
-            // single-PUT threshold) into memory rather than streaming the file.
-            #[cfg(feature = "onion")]
-            let sent = if self.cdn_over_tor()? {
-                let bytes = tokio::fs::read(temp_file.path()).await.map_err(|e| {
-                    AttachmentError::FileError(format!("Failed to read temp file: {}", e))
-                })?;
-                let (status, _etag) = self
-                    .cdn_http_put(&upload_url, bytes, "application/octet-stream")
-                    .await?;
-                Some(status)
+        let main_upload = async {
+            Ok::<_, AttachmentError>(if encrypt_result.ciphertext_size > MULTIPART_THRESHOLD {
+                self.upload_multipart_to_cdn(temp_file.path(), encrypt_result.ciphertext_size)
+                    .await?
             } else {
-                None
-            };
-            #[cfg(not(feature = "onion"))]
-            let sent: Option<u16> = if self.cdn_over_tor()? {
-                return Err(super::no_tor());
-            } else {
-                None
-            };
-
-            let status = if let Some(status) = sent {
-                status
-            } else {
-                // Direct: stream the encrypted temp file to PUT (O(CHUNK_SIZE) memory).
-                let encrypted_file =
-                    tokio::fs::File::open(temp_file.path()).await.map_err(|e| {
-                        AttachmentError::FileError(format!("Failed to open temp file: {}", e))
-                    })?;
-                let stream = tokio_util::io::ReaderStream::new(encrypted_file);
-                let body = reqwest::Body::wrap_stream(stream);
-                let response = super::cdn_client()?
-                    .put(&upload_url)
-                    .header("Content-Type", "application/octet-stream")
-                    .header("Content-Length", encrypt_result.ciphertext_size)
-                    .body(body)
-                    .send()
+                // Get presigned upload URL
+                let mut file_client = self.file_client()?;
+                let mint_start = std::time::Instant::now();
+                let upload_response = file_client
+                    .get_attachment_upload_url(encrypt_result.ciphertext_size)
                     .await
                     .map_err(|e| {
-                        AttachmentError::NetworkError(format!(
-                            "HTTP upload failed: {}",
-                            e.without_url()
-                        ))
+                        AttachmentError::NetworkError(format!("Failed to get upload URL: {}", e))
                     })?;
-                response.status().as_u16()
-            };
+                if self.secret_chat {
+                    tracing::info!(
+                        elapsed_ms = mint_start.elapsed().as_millis(),
+                        "secret attachment upload: URL minted"
+                    );
+                }
 
-            if !(200..300).contains(&status) {
-                return Err(AttachmentError::NetworkError(format!(
-                    "CDN upload failed with status: {}",
+                let cdn_key = upload_response.cdn_key;
+                let upload_url = upload_response.upload_url;
+
+                tracing::debug!("Got presigned URL, streaming encrypted content");
+
+                let upload_start = std::time::Instant::now();
+
+                // Anon mode: tunnel the PUT over Tor. The Tor client takes an
+                // in-memory body, so read the ciphertext (bounded by the ≤100 MiB
+                // single-PUT threshold) into memory rather than streaming the file.
+                #[cfg(feature = "onion")]
+                let sent = if self.cdn_over_tor()? {
+                    let bytes = tokio::fs::read(temp_file.path()).await.map_err(|e| {
+                        AttachmentError::FileError(format!("Failed to read temp file: {}", e))
+                    })?;
+                    let (status, _etag) = self
+                        .cdn_http_put(&upload_url, bytes, "application/octet-stream")
+                        .await?;
+                    Some(status)
+                } else {
+                    None
+                };
+                #[cfg(not(feature = "onion"))]
+                let sent: Option<u16> = if self.cdn_over_tor()? {
+                    return Err(super::no_tor());
+                } else {
+                    None
+                };
+
+                let status = if let Some(status) = sent {
                     status
-                )));
-            }
+                } else {
+                    // Direct: stream the encrypted temp file to PUT (O(CHUNK_SIZE) memory).
+                    let encrypted_file =
+                        tokio::fs::File::open(temp_file.path()).await.map_err(|e| {
+                            AttachmentError::FileError(format!("Failed to open temp file: {}", e))
+                        })?;
+                    let stream = tokio_util::io::ReaderStream::new(encrypted_file);
+                    let body = reqwest::Body::wrap_stream(stream);
+                    let response = super::cdn_client()?
+                        .put(&upload_url)
+                        .header("Content-Type", "application/octet-stream")
+                        .header("Content-Length", encrypt_result.ciphertext_size)
+                        .body(body)
+                        .send()
+                        .await
+                        .map_err(|e| {
+                            AttachmentError::NetworkError(format!(
+                                "HTTP upload failed: {}",
+                                e.without_url()
+                            ))
+                        })?;
+                    response.status().as_u16()
+                };
 
-            tracing::info!(elapsed = ?upload_start.elapsed(), "CDN upload complete");
+                if !(200..300).contains(&status) {
+                    return Err(AttachmentError::NetworkError(format!(
+                        "CDN upload failed with status: {}",
+                        status
+                    )));
+                }
 
-            // Confirm upload with server
-            let confirm_start = std::time::Instant::now();
-            file_client
-                .confirm_attachment_upload(&cdn_key)
-                .await
-                .map_err(|e| {
-                    AttachmentError::NetworkError(format!("Failed to confirm upload: {}", e))
-                })?;
-            if self.secret_chat {
-                tracing::info!(
-                    elapsed_ms = confirm_start.elapsed().as_millis(),
-                    "secret attachment upload: confirmed"
-                );
-            }
+                tracing::info!(elapsed = ?upload_start.elapsed(), "CDN upload complete");
 
-            cdn_key
+                // Confirm upload with server
+                let confirm_start = std::time::Instant::now();
+                file_client
+                    .confirm_attachment_upload(&cdn_key)
+                    .await
+                    .map_err(|e| {
+                        AttachmentError::NetworkError(format!("Failed to confirm upload: {}", e))
+                    })?;
+                if self.secret_chat {
+                    tracing::info!(
+                        elapsed_ms = confirm_start.elapsed().as_millis(),
+                        "secret attachment upload: confirmed"
+                    );
+                }
+
+                cdn_key
+            })
         };
+        let (cdn_key, (thumb_cdn_key, thumb_key, thumb_digest, thumb_pt_size)) =
+            tokio::join!(main_upload, thumbnail_upload);
+        let cdn_key = cdn_key?;
 
         // Generate deterministic attachment ID from cdn_key
         let attachment_id = AttachmentId::from_cdn_key(&cdn_key);
@@ -361,13 +376,6 @@ impl AttachmentService {
             "Persisted encrypted content to {}",
             permanent_path.display()
         );
-
-        // Upload the thumbnail as a separate small CDN object (sidecar) so the
-        // attachment pointer stays tiny and fits every transport's cap.
-        let (thumb_cdn_key, thumb_key, thumb_digest, thumb_pt_size) = match &media_meta.thumbnail {
-            Some(t) => self.upload_thumbnail_sidecar(t).await.unwrap_or_default(),
-            None => Default::default(),
-        };
 
         // Build metadata
         let domain_metadata = FileMetadata {

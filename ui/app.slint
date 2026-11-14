@@ -211,7 +211,9 @@ export component MainWindow inherits Window {
     property <bool> fab-visible: root.bottom-nav-visible
         && (SidebarPane.active-tab == "chats" || SidebarPane.active-tab == "contacts")
         && root.active-modal == "none" && !SearchPane.unified-search-open && !ChatPane.selection-mode
-        && !ModalHostState.friends-show-add;
+        // The add-friend screen lives on Contacts; its flag outlives a tab
+        // switch, so it must not hide the Chats button.
+        && !(SidebarPane.active-tab == "contacts" && ModalHostState.friends-show-add);
     // Its top edge: above the dock and, during a call, the return-to-call
     // bar stacked on it — the same strip the main column reserves for them.
     // In the main content layer's coordinates (it and the dock both live

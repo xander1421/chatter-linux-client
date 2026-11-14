@@ -435,7 +435,8 @@ pub(crate) fn test_credential_store() -> std::sync::Arc<keyring::CredentialStore
 mod tests {
     /// A desktop dependency must not switch shared blocking zbus to Tokio:
     /// keyring/notification calls from async app code would nest runtimes.
-    #[cfg(target_os = "linux")]
+    /// Only the desktop keyring store pulls in zbus's blocking API.
+    #[cfg(all(target_os = "linux", feature = "desktop-system"))]
     #[tokio::test]
     async fn blocking_dbus_inside_async_runtime_reports_connection_error() {
         // A unique absent socket avoids the user's bus, keyring and prompts.
