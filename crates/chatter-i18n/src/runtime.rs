@@ -48,6 +48,11 @@ fn catalog(index: usize) -> &'static Catalog {
     PARSED[index].get_or_init(|| parse(CATALOGS[index]))
 }
 
+/// Catalog key of `text` in `context` (gettext's own separator); bare text without one.
+fn key(context: &str, text: &str) -> String {
+    if context.is_empty() { text.to_owned() } else { format!("{context}\u{4}{text}") }
+}
+
 /// The text between a line's first and last quote, unescaped.
 fn quoted(line: &str) -> String {
     let inner = line.find('"').zip(line.rfind('"')).map_or("", |(a, b)| if b > a { &line[a + 1..b] } else { "" });
@@ -78,6 +83,7 @@ fn parse(po: &str) -> Catalog {
     }
     let mut catalog = Catalog::new();
     let (mut id, mut forms, mut field) = (String::new(), Vec::<String>::new(), Field::None);
+    let mut context = String::new();
     let mut flush = |id: &mut String, forms: &mut Vec<String>| {
         if !id.is_empty() && forms.iter().all(|form| !form.is_empty()) && !forms.is_empty() {
             catalog.insert(std::mem::take(id), std::mem::take(forms));
@@ -86,9 +92,13 @@ fn parse(po: &str) -> Catalog {
         forms.clear();
     };
     for line in po.lines().map(str::trim) {
-        if line.starts_with("msgid ") {
+        if line.starts_with("msgctxt ") {
             flush(&mut id, &mut forms);
-            id = quoted(line);
+            context = quoted(line);
+            field = Field::None;
+        } else if line.starts_with("msgid ") {
+            flush(&mut id, &mut forms);
+            id = key(&std::mem::take(&mut context), &quoted(line));
             field = Field::Id;
         } else if line.starts_with("msgid_plural ") {
             field = Field::Skip;
@@ -148,6 +158,23 @@ pub fn tr(text: &str) -> String {
     catalog(index).get(text).and_then(|forms| forms.first()).map_or_else(|| text.to_owned(), Clone::clone)
 }
 
+/// [`tr`] for English text that means different things in different places:
+/// `context` names this use ("month abbreviation") and selects its own entry.
+#[must_use]
+pub fn trc(context: &str, text: &str) -> String {
+    let index = CURRENT.load(Ordering::Relaxed);
+    if index == 0 {
+        return text.to_owned();
+    }
+    catalog(index).get(&key(context, text)).and_then(|forms| forms.first()).map_or_else(|| text.to_owned(), Clone::clone)
+}
+
+/// [`trc`], then placeholders filled as in [`trf`].
+#[must_use]
+pub fn trfc(context: &str, text: &str, args: &[&dyn Display]) -> String {
+    fill(&trc(context, text), args)
+}
+
 /// [`tr`], then each `{}` replaced in order by `args` (and `{0}`, `{1}` by position).
 #[must_use]
 pub fn trf(text: &str, args: &[&dyn Display]) -> String {
@@ -199,6 +226,9 @@ mod tests {
         assert_eq!(catalog["Long text"], ["Text lung"]);
         assert_eq!(catalog["{n} file"].len(), 3);
         assert!(!catalog.contains_key("Empty"));
+        let catalog = parse("msgctxt \"month abbreviation\"\nmsgid \"May\"\nmsgstr \"mai\"\n\nmsgid \"May\"\nmsgstr \"Mai\"\n");
+        assert_eq!(catalog[&key("month abbreviation", "May")], ["mai"]);
+        assert_eq!(catalog["May"], ["Mai"]);
     }
 
     #[test]

@@ -169,7 +169,7 @@ fn month_abbr(month: u32) -> String {
         2 => chatter_i18n::tr("Feb"),
         3 => chatter_i18n::tr("Mar"),
         4 => chatter_i18n::tr("Apr"),
-        5 => chatter_i18n::tr("May"),
+        5 => chatter_i18n::trc("month abbreviation", "May"),
         6 => chatter_i18n::tr("Jun"),
         7 => chatter_i18n::tr("Jul"),
         8 => chatter_i18n::tr("Aug"),
@@ -217,7 +217,7 @@ fn wire_calendar(window: &MainWindow) {
                         label: date.day().to_string().into(),
                         in_month: date.month() == current.month(),
                         is_today: date == today,
-                        short: chatter_i18n::trf("{} {}", &[&date.day(), &month_abbr(date.month())])
+                        short: chatter_i18n::trfc("day month", "{0} {1}", &[&date.day(), &month_abbr(date.month())])
                             .into(),
                     }
                 })

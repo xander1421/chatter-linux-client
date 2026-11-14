@@ -6,7 +6,7 @@ Usage: tools/i18n/extract_rust.py > crates/chatter-i18n/translations/chatter-rus
 import pathlib, re, sys
 
 LIT = r'"((?:[^"\\]|\\.)*)"'
-CALL = re.compile(r'\btr(n|f)?\(\s*' + LIT + r'(?:\s*,\s*' + LIT + r')?', re.S)
+CALL = re.compile(r'\btr(n|fc|f|c)?\(\s*' + LIT + r'(?:\s*,\s*' + LIT + r')?', re.S)
 entries = {}  # (msgid, plural) -> [locations]
 for root in ("crates/chatter-ui/src", "crates/chatter-core/src"):
     for path in sorted(pathlib.Path(root).rglob("*.rs")):
@@ -20,13 +20,18 @@ for root in ("crates/chatter-ui/src", "crates/chatter-core/src"):
                 # Rust escapes -> text -> gettext escapes.
                 s = re.sub(r"\\(.)", lambda e: {"n": "\n", "t": "\t"}.get(e.group(1), e.group(1)), s)
                 return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\t", "\\t")
-            key = (clean(msgid), clean(second) if kind == "n" and second is not None else None)
+            context = None
+            if kind in ("c", "fc"):
+                context, msgid, second = msgid, second, None
+            key = (clean(msgid), clean(second) if kind == "n" and second is not None else None, context)
             line = text.count("\n", 0, m.start()) + 1
             entries.setdefault(key, []).append(f"{path}:{line}")
 
 out = ['msgid ""', 'msgstr ""', '"Content-Type: text/plain; charset=UTF-8\\n"', ""]
-for (msgid, plural), where in sorted(entries.items(), key=lambda e: e[1][0]):
+for (msgid, plural, context), where in sorted(entries.items(), key=lambda e: e[1][0]):
     out.append("#: " + " ".join(where))
+    if context:
+        out.append(f'msgctxt "{context}"')
     out.append(f'msgid "{msgid}"')
     if plural is None:
         out.append('msgstr ""')

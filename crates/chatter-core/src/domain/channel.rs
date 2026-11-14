@@ -369,8 +369,9 @@ impl SendBlock {
                 } else {
                     // `%b %d, %H:%M` — zero-padded day, English month abbreviation.
                     use chrono::Datelike;
-                    let when = chatter_i18n::trf(
-                        "{} {}, {}",
+                    let when = chatter_i18n::trfc(
+                        "month day, time",
+                        "{0} {1}, {2}",
                         &[
                             &crate::util::time::month_abbrev(until.month()),
                             &until.format("%d"),

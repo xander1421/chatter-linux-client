@@ -45,7 +45,9 @@ msgstr "Ceva nu a mers bine. Încearcă din nou."
 msgid ""
 "refusing to mint a new identity while the original may still be recoverable: "
 "{}"
-msgstr "nu se creează o identitate nouă cât timp cea originală mai poate fi recuperată: {}"
+msgstr ""
+"nu se creează o identitate nouă cât timp cea originală mai poate fi "
+"recuperată: {}"
 
 #: crates/chatter-core/src/client/auth.rs:827
 msgid "Current PIN is incorrect"
@@ -64,7 +66,10 @@ msgid ""
 "This device has no verified member list for this channel yet, so it does not "
 "know who may receive your messages. Sending resumes once the channel's "
 "signed membership log verifies."
-msgstr "Acest dispozitiv nu are încă o listă verificată de membri pentru acest canal, așa că nu știe cine poate primi mesajele tale. Trimiterea se reia când jurnalul semnat al membrilor canalului este verificat."
+msgstr ""
+"Acest dispozitiv nu are încă o listă verificată de membri pentru acest "
+"canal, așa că nu știe cine poate primi mesajele tale. Trimiterea se reia "
+"când jurnalul semnat al membrilor canalului este verificat."
 
 #: crates/chatter-core/src/client/membership.rs:179
 msgid "Membership could not be verified — sending is paused"
@@ -76,7 +81,12 @@ msgid ""
 "make it, or did not match the list this device holds. It was not applied, "
 "and nobody it named receives your messages. Sending resumes when a later "
 "change verifies. {}"
-msgstr "O modificare a listei de membri a acestui canal nu a fost semnată de cineva care avea voie să o facă, sau nu se potrivea cu lista de pe acest dispozitiv. Nu a fost aplicată, iar nimeni dintre cei numiți nu primește mesajele tale. Trimiterea se reia când o modificare ulterioară este verificată. {}"
+msgstr ""
+"O modificare a listei de membri a acestui canal nu a fost semnată de cineva "
+"care avea voie să o facă, sau nu se potrivea cu lista de pe acest "
+"dispozitiv. Nu a fost aplicată, iar nimeni dintre cei numiți nu primește "
+"mesajele tale. Trimiterea se reia când o modificare ulterioară este "
+"verificată. {}"
 
 #: crates/chatter-core/src/client/membership.rs:190
 msgid "The server is showing members different member lists"
@@ -89,7 +99,13 @@ msgid ""
 "until you resume it. Compare the state code below with another member over a "
 "channel you trust first: resuming sends only to the members this device "
 "verified, and a new mismatch pauses it again. {}"
-msgstr "Un alt membru, sau jurnalul serverului, are o listă de membri diferită la o revizie pe care acest dispozitiv a verificat-o deja. Trimiterea rămâne suspendată pe acest canal până o reiei. Compară mai întâi codul de stare de mai jos cu un alt membru, pe un canal în care ai încredere: dacă reiei, se trimite doar membrilor verificați de acest dispozitiv, iar o nepotrivire nouă suspendă trimiterea din nou. {}"
+msgstr ""
+"Un alt membru, sau jurnalul serverului, are o listă de membri diferită la o "
+"revizie pe care acest dispozitiv a verificat-o deja. Trimiterea rămâne "
+"suspendată pe acest canal până o reiei. Compară mai întâi codul de stare de "
+"mai jos cu un alt membru, pe un canal în care ai încredere: dacă reiei, se "
+"trimite doar membrilor verificați de acest dispozitiv, iar o nepotrivire "
+"nouă suspendă trimiterea din nou. {}"
 
 #: crates/chatter-core/src/client/membership.rs:211
 msgid "Public — anyone can join and read"
@@ -109,7 +125,8 @@ msgstr "Proprietarii și adminii creează și revocă linkuri de intrare."
 
 #: crates/chatter-core/src/client/membership.rs:250
 msgid "Owners, admins and moderators create and revoke join links."
-msgstr "Proprietarii, adminii și moderatorii creează și revocă linkuri de intrare."
+msgstr ""
+"Proprietarii, adminii și moderatorii creează și revocă linkuri de intrare."
 
 #: crates/chatter-core/src/client/membership.rs:252
 msgid "Members create and revoke join links."
@@ -210,24 +227,32 @@ msgstr "Chatter nu a putut termina pornirea."
 msgid ""
 "Local storage initialization failed. Check available space and access to the "
 "app data folder, then retry."
-msgstr "Inițializarea stocării locale a eșuat. Verifică spațiul disponibil și accesul la dosarul de date al aplicației, apoi reîncearcă."
+msgstr ""
+"Inițializarea stocării locale a eșuat. Verifică spațiul disponibil și "
+"accesul la dosarul de date al aplicației, apoi reîncearcă."
 
 #: crates/chatter-core/src/client/mod.rs:386
 msgid ""
 "The system credential store did not provide the database key. Unlock the "
 "credential store, then retry."
-msgstr "Depozitul de credențiale al sistemului nu a furnizat cheia bazei de date. Deblochează depozitul de credențiale, apoi reîncearcă."
+msgstr ""
+"Depozitul de credențiale al sistemului nu a furnizat cheia bazei de date. "
+"Deblochează depozitul de credențiale, apoi reîncearcă."
 
 #: crates/chatter-core/src/client/mod.rs:389
 msgid ""
 "Network setup failed. Check your connection and server settings, then retry."
-msgstr "Configurarea rețelei a eșuat. Verifică conexiunea și setările serverului, apoi reîncearcă."
+msgstr ""
+"Configurarea rețelei a eșuat. Verifică conexiunea și setările serverului, "
+"apoi reîncearcă."
 
 #: crates/chatter-core/src/client/mod.rs:392
 msgid ""
 "An initialization step failed. Retry, or restart the app if the problem "
 "continues."
-msgstr "Un pas de inițializare a eșuat. Reîncearcă sau repornește aplicația dacă problema continuă."
+msgstr ""
+"Un pas de inițializare a eșuat. Reîncearcă sau repornește aplicația dacă "
+"problema continuă."
 
 #: crates/chatter-core/src/client/mod.rs:486
 msgid "Your safety number with {} has changed"
@@ -239,7 +264,11 @@ msgid ""
 "someone is intercepting this conversation. Messages are blocked in both "
 "directions until you accept the new safety number — compare it with them "
 "over a call or in person first."
-msgstr "Cel mai probabil și-a reinstalat aplicația sau a schimbat dispozitivul. Poate însemna și că cineva interceptează conversația. Mesajele sunt blocate în ambele sensuri până accepți noul număr de siguranță — compară-l mai întâi cu persoana, într-un apel sau față în față."
+msgstr ""
+"Cel mai probabil și-a reinstalat aplicația sau a schimbat dispozitivul. "
+"Poate însemna și că cineva interceptează conversația. Mesajele sunt blocate "
+"în ambele sensuri până accepți noul număr de siguranță — compară-l mai întâi "
+"cu persoana, într-un apel sau față în față."
 
 #: crates/chatter-core/src/client/mod.rs:499
 msgid "A safety number in this conversation has changed"
@@ -251,7 +280,11 @@ msgid ""
 "may not be them at all. Messages are blocked in both directions until you "
 "accept the new safety number — confirm it with them over a call or in person "
 "before you do."
-msgstr "Serverul spune că acest mesaj vine de la contactul tău, dar acest lucru nu a fost dovedit, deci s-ar putea să fie de la altcineva. Mesajele sunt blocate în ambele sensuri până accepți noul număr de siguranță — confirmă-l cu persoana respectivă, într-un apel sau față în față, înainte să continui."
+msgstr ""
+"Serverul spune că acest mesaj vine de la contactul tău, dar acest lucru nu a "
+"fost dovedit, deci s-ar putea să fie de la altcineva. Mesajele sunt blocate "
+"în ambele sensuri până accepți noul număr de siguranță — confirmă-l cu "
+"persoana respectivă, într-un apel sau față în față, înainte să continui."
 
 #: crates/chatter-core/src/client/notification.rs:735
 msgid "Reacted {}"
@@ -271,7 +304,7 @@ msgid "{} was just linked to your account."
 msgstr "{} tocmai a fost asociat contului tău."
 
 #: crates/chatter-core/src/client/notification.rs:792
-#: crates/chatter-core/src/services/activity_service.rs:347
+#: crates/chatter-core/src/services/activity_service.rs:348
 msgid "New device linked"
 msgstr "Dispozitiv nou asociat"
 
@@ -336,13 +369,17 @@ msgstr "Acest cod nu este valid."
 
 #: crates/chatter-core/src/client/profile/mod.rs:49
 msgid "That's a username — ask for a friend code or username link."
-msgstr "Acesta este un nume de utilizator — cere un cod de prieten sau linkul numelui de utilizator."
+msgstr ""
+"Acesta este un nume de utilizator — cere un cod de prieten sau linkul "
+"numelui de utilizator."
 
 #: crates/chatter-core/src/client/profile/mod.rs:52
 msgid ""
 "Server-managed friend codes can't be used in Shield mode. Ask for a private "
 "code."
-msgstr "Codurile de prieten gestionate de server nu pot fi folosite în modul Shield. Cere un cod privat."
+msgstr ""
+"Codurile de prieten gestionate de server nu pot fi folosite în modul Shield. "
+"Cere un cod privat."
 
 #: crates/chatter-core/src/client/profile/mod.rs:56
 msgid "Secret chats aren't available on this device."
@@ -360,12 +397,14 @@ msgstr "Conversația secretă nu a putut fi pornită. Încearcă din nou."
 msgid ""
 "This account has no key backup to check the PIN against. Set up your PIN "
 "again."
-msgstr "Acest cont nu are o copie de rezervă a cheilor cu care să verifici PIN-ul. Setează din nou PIN-ul."
+msgstr ""
+"Acest cont nu are o copie de rezervă a cheilor cu care să verifici PIN-ul. "
+"Setează din nou PIN-ul."
 
 #: crates/chatter-core/src/client/search_visible.rs:205
 #: crates/chatter-core/src/client/server_records.rs:75
-#: crates/chatter-core/src/ui/format.rs:91
-#: crates/chatter-core/src/ui/format.rs:133
+#: crates/chatter-core/src/ui/format.rs:92
+#: crates/chatter-core/src/ui/format.rs:134
 msgid "{} · {}"
 msgstr "{} · {}"
 
@@ -453,17 +492,17 @@ msgid "Audio"
 msgstr "Audio"
 
 #: crates/chatter-core/src/domain/attachment.rs:598
-#: crates/chatter-core/src/ui/format.rs:165
+#: crates/chatter-core/src/ui/format.rs:166
 msgid "{} GB"
 msgstr "{} GB"
 
 #: crates/chatter-core/src/domain/attachment.rs:601
-#: crates/chatter-core/src/ui/format.rs:168
+#: crates/chatter-core/src/ui/format.rs:169
 msgid "{} MB"
 msgstr "{} MB"
 
 #: crates/chatter-core/src/domain/attachment.rs:604
-#: crates/chatter-core/src/ui/format.rs:171
+#: crates/chatter-core/src/ui/format.rs:172
 msgid "{} KB"
 msgstr "{} KB"
 
@@ -476,24 +515,27 @@ msgid "You can't send messages in this channel while muted"
 msgstr "Nu poți trimite mesaje pe acest canal cât ești fără drept de scriere"
 
 #: crates/chatter-core/src/domain/channel.rs:360
-#: crates/chatter-core/src/domain/channel.rs:380
+#: crates/chatter-core/src/domain/channel.rs:381
 msgid "You can't send messages in this channel while muted until {}"
-msgstr "Nu poți trimite mesaje pe acest canal: nu ai drept de scriere până la {}"
+msgstr ""
+"Nu poți trimite mesaje pe acest canal: nu ai drept de scriere până la {}"
 
 #: crates/chatter-core/src/domain/channel.rs:365
 msgid "You can't send messages in this channel while muted until tomorrow {}"
-msgstr "Nu poți trimite mesaje pe acest canal: nu ai drept de scriere până mâine la {}"
+msgstr ""
+"Nu poți trimite mesaje pe acest canal: nu ai drept de scriere până mâine la "
+"{}"
 
 #: crates/chatter-core/src/domain/channel.rs:372
-#: crates/chatter-core/src/util/time.rs:76
-msgid "{} {}, {}"
-msgstr "{} {}, {}"
+msgctxt "month day, time"
+msgid "{0} {1}, {2}"
+msgstr "{1} {0}, {2}"
 
-#: crates/chatter-core/src/domain/channel.rs:387
+#: crates/chatter-core/src/domain/channel.rs:388
 msgid "You're no longer a member of this channel"
 msgstr "Nu mai ești membru al acestui canal"
 
-#: crates/chatter-core/src/domain/channel.rs:388
+#: crates/chatter-core/src/domain/channel.rs:389
 msgid "This channel was deleted"
 msgstr "Acest canal a fost șters"
 
@@ -712,7 +754,9 @@ msgstr "{} a șters canalul"
 msgid ""
 "{} sent a message that couldn't be delivered. The secure session has been "
 "reset — ask them to send it again."
-msgstr "{} a trimis un mesaj care nu a putut fi livrat. Sesiunea securizată a fost resetată — roagă persoana să îl trimită din nou."
+msgstr ""
+"{} a trimis un mesaj care nu a putut fi livrat. Sesiunea securizată a fost "
+"resetată — roagă persoana să îl trimită din nou."
 
 #: crates/chatter-core/src/domain/message/system.rs:203
 msgid ""
@@ -720,20 +764,30 @@ msgid ""
 "this means they reinstalled the app, but it can also mean someone is "
 "intercepting this conversation. Messages stay blocked until you accept the "
 "new safety number."
-msgstr "{} și-a schimbat numărul de siguranță, așa că mesajul nu a putut fi citit. De obicei înseamnă că și-a reinstalat aplicația, dar poate însemna și că cineva interceptează conversația. Mesajele rămân blocate până accepți noul număr de siguranță."
+msgstr ""
+"{} și-a schimbat numărul de siguranță, așa că mesajul nu a putut fi citit. "
+"De obicei înseamnă că și-a reinstalat aplicația, dar poate însemna și că "
+"cineva interceptează conversația. Mesajele rămân blocate până accepți noul "
+"număr de siguranță."
 
 #: crates/chatter-core/src/domain/message/system.rs:210
 msgid ""
 "{} may have changed their safety number, so the message could not be read. "
 "The server says it came from them, but nothing proved that. Compare safety "
 "numbers over another channel before you accept."
-msgstr "{} ar putea să-și fi schimbat numărul de siguranță, așa că mesajul nu a putut fi citit. Serverul spune că a venit de la această persoană, dar acest lucru nu a fost dovedit. Compară numerele de siguranță pe alt canal înainte să accepți."
+msgstr ""
+"{} ar putea să-și fi schimbat numărul de siguranță, așa că mesajul nu a "
+"putut fi citit. Serverul spune că a venit de la această persoană, dar acest "
+"lucru nu a fost dovedit. Compară numerele de siguranță pe alt canal înainte "
+"să accepți."
 
 #: crates/chatter-core/src/domain/message/system.rs:216
 msgid ""
 "{} did not get your message \"{}\" — it could not be sent after several "
 "tries. Send it again if it mattered."
-msgstr "{} nu a primit mesajul tău „{}” — nu a putut fi trimis după mai multe încercări. Trimite-l din nou dacă era important."
+msgstr ""
+"{} nu a primit mesajul tău „{}” — nu a putut fi trimis după mai multe "
+"încercări. Trimite-l din nou dacă era important."
 
 #: crates/chatter-core/src/domain/message/system.rs:222
 #: crates/chatter-core/src/ui/message_row.rs:270
@@ -824,7 +878,9 @@ msgstr "a șters canalul"
 msgid ""
 "sent a message that couldn't be delivered. The secure session has been reset "
 "— ask them to send it again."
-msgstr "a trimis un mesaj care nu a putut fi livrat. Sesiunea securizată a fost resetată — roagă persoana să îl trimită din nou."
+msgstr ""
+"a trimis un mesaj care nu a putut fi livrat. Sesiunea securizată a fost "
+"resetată — roagă persoana să îl trimită din nou."
 
 #: crates/chatter-core/src/domain/message/system.rs:275
 msgid ""
@@ -832,20 +888,30 @@ msgid ""
 "this means they reinstalled the app, but it can also mean someone is "
 "intercepting this conversation. Messages stay blocked until you accept the "
 "new safety number."
-msgstr "și-a schimbat numărul de siguranță, așa că mesajul nu a putut fi citit. De obicei înseamnă că și-a reinstalat aplicația, dar poate însemna și că cineva interceptează conversația. Mesajele rămân blocate până accepți noul număr de siguranță."
+msgstr ""
+"și-a schimbat numărul de siguranță, așa că mesajul nu a putut fi citit. De "
+"obicei înseamnă că și-a reinstalat aplicația, dar poate însemna și că cineva "
+"interceptează conversația. Mesajele rămân blocate până accepți noul număr de "
+"siguranță."
 
 #: crates/chatter-core/src/domain/message/system.rs:281
 msgid ""
 "may have changed their safety number, so the message could not be read. The "
 "server says it came from them, but nothing proved that. Compare safety "
 "numbers over another channel before you accept."
-msgstr "ar putea să-și fi schimbat numărul de siguranță, așa că mesajul nu a putut fi citit. Serverul spune că a venit de la această persoană, dar acest lucru nu a fost dovedit. Compară numerele de siguranță pe alt canal înainte să accepți."
+msgstr ""
+"ar putea să-și fi schimbat numărul de siguranță, așa că mesajul nu a putut "
+"fi citit. Serverul spune că a venit de la această persoană, dar acest lucru "
+"nu a fost dovedit. Compară numerele de siguranță pe alt canal înainte să "
+"accepți."
 
 #: crates/chatter-core/src/domain/message/system.rs:287
 msgid ""
 "did not get your message \"{}\" — it could not be sent after several tries. "
 "Send it again if it mattered."
-msgstr "nu a primit mesajul tău „{}” — nu a putut fi trimis după mai multe încercări. Trimite-l din nou dacă era important."
+msgstr ""
+"nu a primit mesajul tău „{}” — nu a putut fi trimis după mai multe "
+"încercări. Trimite-l din nou dacă era important."
 
 #: crates/chatter-core/src/domain/message/system.rs:294
 msgid "turned off disappearing messages"
@@ -867,88 +933,88 @@ msgstr "{}min"
 
 #: crates/chatter-core/src/services/activity_service.rs:126
 #: crates/chatter-core/src/services/server_records.rs:71
-#: crates/chatter-core/src/ui/format.rs:54
+#: crates/chatter-core/src/ui/format.rs:55
 #: crates/chatter-core/src/util/time.rs:93
 #: crates/chatter-core/src/util/time.rs:110
 msgid "Yesterday"
 msgstr "Ieri"
 
-#: crates/chatter-core/src/services/activity_service.rs:138
-#: crates/chatter-core/src/ui/format.rs:52
+#: crates/chatter-core/src/services/activity_service.rs:139
+#: crates/chatter-core/src/ui/format.rs:53
 #: crates/chatter-core/src/util/time.rs:92
 #: crates/chatter-core/src/util/time.rs:108
 msgid "Today"
 msgstr "Azi"
 
-#: crates/chatter-core/src/services/activity_service.rs:138
+#: crates/chatter-core/src/services/activity_service.rs:139
 msgid "Earlier"
 msgstr "Mai devreme"
 
-#: crates/chatter-core/src/services/activity_service.rs:317
+#: crates/chatter-core/src/services/activity_service.rs:318
 #: crates/chatter-core/src/services/notification_service/mod.rs:199
 msgid "Someone"
 msgstr "Cineva"
 
-#: crates/chatter-core/src/services/activity_service.rs:335
+#: crates/chatter-core/src/services/activity_service.rs:336
 msgid "{} reacted to your message"
 msgstr "{} a reacționat la mesajul tău"
 
-#: crates/chatter-core/src/services/activity_service.rs:336
+#: crates/chatter-core/src/services/activity_service.rs:337
 msgid "{} sent you a contact request"
 msgstr "{} ți-a trimis o cerere de contact"
 
-#: crates/chatter-core/src/services/activity_service.rs:337
+#: crates/chatter-core/src/services/activity_service.rs:338
 msgid "{} invited you to {}"
 msgstr "{} te-a invitat în {}"
 
-#: crates/chatter-core/src/services/activity_service.rs:340
+#: crates/chatter-core/src/services/activity_service.rs:341
 msgid "Missed call from {}"
 msgstr "Apel pierdut de la {}"
 
-#: crates/chatter-core/src/services/activity_service.rs:349
+#: crates/chatter-core/src/services/activity_service.rs:350
 msgid "New device linked: {}"
 msgstr "Dispozitiv nou asociat: {}"
 
-#: crates/chatter-core/src/services/activity_service.rs:354
+#: crates/chatter-core/src/services/activity_service.rs:355
 msgid "Can't reach the server"
 msgstr "Serverul nu poate fi contactat"
 
-#: crates/chatter-core/src/services/activity_service.rs:371
+#: crates/chatter-core/src/services/activity_service.rs:372
 msgid "{} mentioned you in #{}"
 msgstr "{} te-a menționat în #{}"
 
-#: crates/chatter-core/src/services/activity_service.rs:374
+#: crates/chatter-core/src/services/activity_service.rs:375
 msgid "{} replied to you in #{}"
 msgstr "{} ți-a răspuns în #{}"
 
-#: crates/chatter-core/src/services/activity_service.rs:377
+#: crates/chatter-core/src/services/activity_service.rs:378
 msgid "{} replied in a thread in #{}"
 msgstr "{} a răspuns într-un fir de discuție în #{}"
 
-#: crates/chatter-core/src/services/activity_service.rs:383
+#: crates/chatter-core/src/services/activity_service.rs:384
 msgid "{} mentioned you"
 msgstr "{} te-a menționat"
 
-#: crates/chatter-core/src/services/activity_service.rs:384
+#: crates/chatter-core/src/services/activity_service.rs:385
 msgid "{} replied to you"
 msgstr "{} ți-a răspuns"
 
-#: crates/chatter-core/src/services/activity_service.rs:385
+#: crates/chatter-core/src/services/activity_service.rs:386
 msgid "{} replied in a thread"
 msgstr "{} a răspuns într-un fir de discuție"
 
-#: crates/chatter-core/src/services/activity_service.rs:402
+#: crates/chatter-core/src/services/activity_service.rs:403
 msgid "Back online after {n} s"
 msgid_plural "Back online after {n} s"
 msgstr[0] "Din nou online după {n} s"
 msgstr[1] "Din nou online după {n} s"
 msgstr[2] "Din nou online după {n} s"
 
-#: crates/chatter-core/src/services/activity_service.rs:409
+#: crates/chatter-core/src/services/activity_service.rs:410
 msgid "Back online after {} min"
 msgstr "Din nou online după {} min"
 
-#: crates/chatter-core/src/services/activity_service.rs:411
+#: crates/chatter-core/src/services/activity_service.rs:412
 msgid "Back online after {}"
 msgstr "Din nou online după {}"
 
@@ -981,7 +1047,10 @@ msgid ""
 "Too many password attempts on this account, so password sign-in is paused "
 "for now. Sign in with a recovery code, or link this device from one that is "
 "already signed in."
-msgstr "Prea multe încercări de parolă pe acest cont, așa că conectarea cu parolă este suspendată deocamdată. Conectează-te cu un cod de recuperare sau asociază acest dispozitiv de pe unul deja conectat."
+msgstr ""
+"Prea multe încercări de parolă pe acest cont, așa că conectarea cu parolă "
+"este suspendată deocamdată. Conectează-te cu un cod de recuperare sau "
+"asociază acest dispozitiv de pe unul deja conectat."
 
 #: crates/chatter-core/src/services/call_notification_bridge.rs:207
 msgid "{} is calling in {}"
@@ -1050,11 +1119,15 @@ msgstr "Livrarea nu este confirmată."
 msgid ""
 "An earlier message has unconfirmed delivery. This new draft has not been "
 "sent."
-msgstr "Un mesaj anterior are livrarea neconfirmată. Această ciornă nouă nu a fost trimisă."
+msgstr ""
+"Un mesaj anterior are livrarea neconfirmată. Această ciornă nouă nu a fost "
+"trimisă."
 
 #: crates/chatter-core/src/services/gateway/shared.rs:238
 msgid "This send attempt was already confirmed. It was not sent again."
-msgstr "Această încercare de trimitere era deja confirmată. Mesajul nu a fost trimis din nou."
+msgstr ""
+"Această încercare de trimitere era deja confirmată. Mesajul nu a fost trimis "
+"din nou."
 
 #: crates/chatter-core/src/services/gateway/shared.rs:241
 msgid "Action not supported for this channel type"
@@ -1070,7 +1143,8 @@ msgstr "Numărul de siguranță s-a schimbat — acceptă-l mai sus ca să trimi
 
 #: crates/chatter-core/src/services/gateway/shared.rs:257
 msgid "Can't verify this contact's security key — not sent"
-msgstr "Cheia de securitate a acestui contact nu poate fi verificată — netrimis"
+msgstr ""
+"Cheia de securitate a acestui contact nu poate fi verificată — netrimis"
 
 #: crates/chatter-core/src/services/gateway/shared.rs:260
 msgid "Conversation is blocked"
@@ -1092,37 +1166,52 @@ msgstr "Trimiterea a eșuat: {}"
 msgid ""
 "This device has no encryption keys. Enter your PIN to restore them from your "
 "backup."
-msgstr "Acest dispozitiv nu are chei de criptare. Introdu PIN-ul ca să le restaurezi din copia de rezervă."
+msgstr ""
+"Acest dispozitiv nu are chei de criptare. Introdu PIN-ul ca să le restaurezi "
+"din copia de rezervă."
 
 #: crates/chatter-core/src/services/key_recovery.rs:85
 msgid "That PIN did not unlock your key backup. Check the PIN and try again."
-msgstr "Acel PIN nu a deblocat copia de rezervă a cheilor. Verifică PIN-ul și încearcă din nou."
+msgstr ""
+"Acel PIN nu a deblocat copia de rezervă a cheilor. Verifică PIN-ul și "
+"încearcă din nou."
 
 #: crates/chatter-core/src/services/key_recovery.rs:88
 msgid ""
 "No key backup was found for this account. Your previous conversations cannot "
 "be recovered. You can start over with new encryption keys — your contacts "
 "will be asked to verify you again."
-msgstr "Nu s-a găsit o copie de rezervă a cheilor pentru acest cont. Conversațiile anterioare nu pot fi recuperate. Poți începe din nou cu chei de criptare noi — contactele tale vor fi rugate să te verifice din nou."
+msgstr ""
+"Nu s-a găsit o copie de rezervă a cheilor pentru acest cont. Conversațiile "
+"anterioare nu pot fi recuperate. Poți începe din nou cu chei de criptare noi "
+"— contactele tale vor fi rugate să te verifice din nou."
 
 #: crates/chatter-core/src/services/key_recovery.rs:91
 msgid ""
 "Your key backup was destroyed after too many incorrect PIN attempts. Your "
 "previous conversations cannot be recovered. You can start over with new "
 "encryption keys — your contacts will be asked to verify you again."
-msgstr "Copia de rezervă a cheilor a fost distrusă după prea multe PIN-uri incorecte. Conversațiile anterioare nu pot fi recuperate. Poți începe din nou cu chei de criptare noi — contactele tale vor fi rugate să te verifice din nou."
+msgstr ""
+"Copia de rezervă a cheilor a fost distrusă după prea multe PIN-uri "
+"incorecte. Conversațiile anterioare nu pot fi recuperate. Poți începe din "
+"nou cu chei de criptare noi — contactele tale vor fi rugate să te verifice "
+"din nou."
 
 #: crates/chatter-core/src/services/key_recovery.rs:94
 msgid ""
 "Too many recovery attempts. Wait before trying your PIN again — your backup "
 "is still intact."
-msgstr "Prea multe încercări de recuperare. Așteaptă înainte să încerci din nou PIN-ul — copia de rezervă este încă intactă."
+msgstr ""
+"Prea multe încercări de recuperare. Așteaptă înainte să încerci din nou PIN-"
+"ul — copia de rezervă este încă intactă."
 
 #: crates/chatter-core/src/services/key_recovery.rs:97
 msgid ""
 "Could not reach the key backup service. Your keys are still safe; try again "
 "when you are online."
-msgstr "Serviciul de copie de rezervă a cheilor nu a putut fi contactat. Cheile tale sunt în siguranță; încearcă din nou când ești online."
+msgstr ""
+"Serviciul de copie de rezervă a cheilor nu a putut fi contactat. Cheile tale "
+"sunt în siguranță; încearcă din nou când ești online."
 
 #: crates/chatter-core/src/services/link_device_service/types.rs:33
 msgid "Wrong password or PIN."
@@ -1130,7 +1219,9 @@ msgstr "Parolă sau PIN greșit."
 
 #: crates/chatter-core/src/services/link_device_service/types.rs:34
 msgid "That isn't a device link. Copy the whole link from the new device."
-msgstr "Acesta nu este un link de asociere a dispozitivului. Copiază linkul întreg de pe dispozitivul nou."
+msgstr ""
+"Acesta nu este un link de asociere a dispozitivului. Copiază linkul întreg "
+"de pe dispozitivul nou."
 
 #: crates/chatter-core/src/services/link_device_service/types.rs:38
 msgid "This link expired. Generate a new QR on the new device."
@@ -1160,7 +1251,9 @@ msgstr "Prea multe încercări de PIN. Așteaptă înainte să încerci din nou"
 msgid ""
 "Your key backup was deleted after too many PIN attempts. Set up your PIN "
 "again"
-msgstr "Copia de rezervă a cheilor a fost ștearsă după prea multe încercări de PIN. Setează din nou PIN-ul"
+msgstr ""
+"Copia de rezervă a cheilor a fost ștearsă după prea multe încercări de PIN. "
+"Setează din nou PIN-ul"
 
 #: crates/chatter-core/src/services/link_device_service/types.rs:87
 msgid "Couldn't check your PIN, try again"
@@ -1233,7 +1326,9 @@ msgstr "{} · participanți: {}"
 msgid ""
 "{} · {} participants\n"
 "{}"
-msgstr "{} · participanți: {}\n{}"
+msgstr ""
+"{} · participanți: {}\n"
+"{}"
 
 #: crates/chatter-core/src/services/server_records.rs:350
 msgid "Call"
@@ -1247,7 +1342,9 @@ msgstr "Acum"
 msgid ""
 "No other devices to sign out. The primary device can't be signed out from "
 "another device."
-msgstr "Nu există alte dispozitive de deconectat. Dispozitivul principal nu poate fi deconectat de pe alt dispozitiv."
+msgstr ""
+"Nu există alte dispozitive de deconectat. Dispozitivul principal nu poate fi "
+"deconectat de pe alt dispozitiv."
 
 #: crates/chatter-core/src/services/session_service.rs:147
 msgid ""
@@ -1256,9 +1353,15 @@ msgid ""
 msgid_plural ""
 "Signed out {n} devices. The primary device can't be signed out from another "
 "device."
-msgstr[0] "Ai deconectat {n} dispozitiv. Dispozitivul principal nu poate fi deconectat de pe alt dispozitiv."
-msgstr[1] "Ai deconectat {n} dispozitive. Dispozitivul principal nu poate fi deconectat de pe alt dispozitiv."
-msgstr[2] "Ai deconectat {n} de dispozitive. Dispozitivul principal nu poate fi deconectat de pe alt dispozitiv."
+msgstr[0] ""
+"Ai deconectat {n} dispozitiv. Dispozitivul principal nu poate fi deconectat "
+"de pe alt dispozitiv."
+msgstr[1] ""
+"Ai deconectat {n} dispozitive. Dispozitivul principal nu poate fi deconectat "
+"de pe alt dispozitiv."
+msgstr[2] ""
+"Ai deconectat {n} de dispozitive. Dispozitivul principal nu poate fi "
+"deconectat de pe alt dispozitiv."
 
 #: crates/chatter-core/src/services/session_service.rs:155
 msgid "No other devices to sign out."
@@ -1275,37 +1378,52 @@ msgstr[2] "Ai deconectat {n} de dispozitive."
 msgid "Could not sign out {n} device. Check your connection and try again."
 msgid_plural ""
 "Could not sign out {n} devices. Check your connection and try again."
-msgstr[0] "Nu s-a putut deconecta {n} dispozitiv. Verifică conexiunea și încearcă din nou."
-msgstr[1] "Nu s-au putut deconecta {n} dispozitive. Verifică conexiunea și încearcă din nou."
-msgstr[2] "Nu s-au putut deconecta {n} de dispozitive. Verifică conexiunea și încearcă din nou."
+msgstr[0] ""
+"Nu s-a putut deconecta {n} dispozitiv. Verifică conexiunea și încearcă din "
+"nou."
+msgstr[1] ""
+"Nu s-au putut deconecta {n} dispozitive. Verifică conexiunea și încearcă din "
+"nou."
+msgstr[2] ""
+"Nu s-au putut deconecta {n} de dispozitive. Verifică conexiunea și încearcă "
+"din nou."
 
 #: crates/chatter-core/src/services/session_service.rs:181
 msgid ""
 "Signed out 1 device. Could not sign out 1 device. Check your connection and "
 "try again."
-msgstr "Ai deconectat 1 dispozitiv. Nu s-a putut deconecta 1 dispozitiv. Verifică conexiunea și încearcă din nou."
+msgstr ""
+"Ai deconectat 1 dispozitiv. Nu s-a putut deconecta 1 dispozitiv. Verifică "
+"conexiunea și încearcă din nou."
 
 #: crates/chatter-core/src/services/session_service.rs:184
 msgid ""
 "Signed out 1 device. Could not sign out {} devices. Check your connection "
 "and try again."
-msgstr "Ai deconectat 1 dispozitiv. Dispozitive care nu au putut fi deconectate: {}. Verifică conexiunea și încearcă din nou."
+msgstr ""
+"Ai deconectat 1 dispozitiv. Dispozitive care nu au putut fi deconectate: {}. "
+"Verifică conexiunea și încearcă din nou."
 
 #: crates/chatter-core/src/services/session_service.rs:188
 msgid ""
 "Signed out {} devices. Could not sign out 1 device. Check your connection "
 "and try again."
-msgstr "Dispozitive deconectate: {}. Nu s-a putut deconecta 1 dispozitiv. Verifică conexiunea și încearcă din nou."
+msgstr ""
+"Dispozitive deconectate: {}. Nu s-a putut deconecta 1 dispozitiv. Verifică "
+"conexiunea și încearcă din nou."
 
 #: crates/chatter-core/src/services/session_service.rs:192
 msgid ""
 "Signed out {} devices. Could not sign out {} devices. Check your connection "
 "and try again."
-msgstr "Dispozitive deconectate: {}. Dispozitive care nu au putut fi deconectate: {}. Verifică conexiunea și încearcă din nou."
+msgstr ""
+"Dispozitive deconectate: {}. Dispozitive care nu au putut fi deconectate: "
+"{}. Verifică conexiunea și încearcă din nou."
 
 #: crates/chatter-core/src/services/session_service.rs:86
 msgid "The device list changed. Reopen it and try again."
-msgstr "Lista de dispozitive s-a schimbat. Deschide-o din nou și încearcă din nou."
+msgstr ""
+"Lista de dispozitive s-a schimbat. Deschide-o din nou și încearcă din nou."
 
 #: crates/chatter-core/src/services/user/mod.rs:215
 #: crates/chatter-core/src/services/user/mod.rs:233
@@ -1326,7 +1444,9 @@ msgstr "Indisponibil în modul anonim."
 
 #: crates/chatter-core/src/services/user/mod.rs:222
 msgid "Looking up people by handle isn't available in Shield mode."
-msgstr "Căutarea persoanelor după numele de utilizator nu este disponibilă în modul Shield."
+msgstr ""
+"Căutarea persoanelor după numele de utilizator nu este disponibilă în modul "
+"Shield."
 
 #: crates/chatter-core/src/services/user/mod.rs:225
 msgid "This user has no registered devices"
@@ -1350,27 +1470,27 @@ msgstr "Deschide {}"
 msgid "Quit"
 msgstr "Ieșire"
 
-#: crates/chatter-core/src/ui/format.rs:123
+#: crates/chatter-core/src/ui/format.rs:124
 msgid "Missed"
 msgstr "Pierdut"
 
-#: crates/chatter-core/src/ui/format.rs:125
+#: crates/chatter-core/src/ui/format.rs:126
 msgid "Declined"
 msgstr "Refuzat"
 
-#: crates/chatter-core/src/ui/format.rs:126
+#: crates/chatter-core/src/ui/format.rs:127
 msgid "Failed"
 msgstr "Eșuat"
 
-#: crates/chatter-core/src/ui/format.rs:127
+#: crates/chatter-core/src/ui/format.rs:128
 msgid "Incoming"
 msgstr "Primit"
 
-#: crates/chatter-core/src/ui/format.rs:128
+#: crates/chatter-core/src/ui/format.rs:129
 msgid "Outgoing"
 msgstr "Efectuat"
 
-#: crates/chatter-core/src/ui/format.rs:173
+#: crates/chatter-core/src/ui/format.rs:174
 msgid "{} B"
 msgstr "{} B"
 
@@ -1382,24 +1502,29 @@ msgstr "acum {} min"
 msgid "Yesterday {}"
 msgstr "Ieri {}"
 
-#: crates/chatter-core/src/ui/format.rs:65
+#: crates/chatter-core/src/ui/format.rs:30
+msgctxt "weekday time"
+msgid "{0} {1}"
+msgstr "{0} {1}"
+
+#: crates/chatter-core/src/ui/format.rs:66
 msgid "away"
 msgstr "absent"
 
-#: crates/chatter-core/src/ui/format.rs:66
+#: crates/chatter-core/src/ui/format.rs:67
 msgid "do not disturb"
 msgstr "nu deranja"
 
-#: crates/chatter-core/src/ui/format.rs:70
+#: crates/chatter-core/src/ui/format.rs:71
 msgid "last seen {}"
 msgstr "ultima activitate: {}"
 
-#: crates/chatter-core/src/ui/format.rs:72
-#: crates/chatter-core/src/ui/format.rs:74
+#: crates/chatter-core/src/ui/format.rs:73
+#: crates/chatter-core/src/ui/format.rs:75
 msgid "last seen recently"
 msgstr "ultima activitate: recent"
 
-#: crates/chatter-core/src/ui/format.rs:86
+#: crates/chatter-core/src/ui/format.rs:87
 msgid "Attachment"
 msgstr "Atașament"
 
@@ -1457,7 +1582,8 @@ msgstr "Mesajul nu poate fi trimis"
 
 #: crates/chatter-core/src/ui/message_row.rs:212
 msgid "Secure channel setup timed out. Tap Retry"
-msgstr "Timpul de configurare a canalului securizat a expirat. Atinge Reîncearcă"
+msgstr ""
+"Timpul de configurare a canalului securizat a expirat. Atinge Reîncearcă"
 
 #: crates/chatter-core/src/ui/message_row.rs:214
 msgid "Waiting for connection"
@@ -1579,6 +1705,16 @@ msgstr "Sâmbătă"
 #: crates/chatter-core/src/util/time.rs:65
 msgid "Sunday"
 msgstr "Duminică"
+
+#: crates/chatter-core/src/util/time.rs:71
+msgctxt "month day"
+msgid "{0} {1}"
+msgstr "{1} {0}"
+
+#: crates/chatter-core/src/util/time.rs:76
+msgctxt "month day, year"
+msgid "{0} {1}, {2}"
+msgstr "{1} {0} {2}"
 
 #: crates/chatter-ui/src/bin_ui/features/activity/mod.rs:19
 msgid "Never"
@@ -1713,7 +1849,7 @@ msgid "📎 Attachment"
 msgstr "📎 Atașament"
 
 #: crates/chatter-ui/src/bin_ui/features/auth/initial_data.rs:146
-#: crates/chatter-core/src/ui/format.rs:64
+#: crates/chatter-core/src/ui/format.rs:65
 msgid "online"
 msgstr "online"
 
@@ -1753,7 +1889,9 @@ msgstr "Se generează codul QR…"
 msgid ""
 "Verification code: {}\n"
 "Check your other device shows the same code, then approve there."
-msgstr "Cod de verificare: {}\nVerifică că celălalt dispozitiv arată același cod, apoi aprobă acolo."
+msgstr ""
+"Cod de verificare: {}\n"
+"Verifică că celălalt dispozitiv arată același cod, apoi aprobă acolo."
 
 #: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:85
 msgid "Approved! Setting up this device…"
@@ -1781,19 +1919,24 @@ msgid ""
 "Account recovered successfully! {} recovery codes remaining. Your previous "
 "PIN-based backup was invalidated by this recovery — set up a new backup from "
 "Settings after signing in. Please sign in with your new credentials."
-msgstr "Cont recuperat. Coduri de recuperare rămase: {}. Copia de rezervă anterioară, bazată pe PIN, a fost invalidată de această recuperare — creează o copie nouă din Setări după ce te conectezi. Conectează-te cu noile date."
+msgstr ""
+"Cont recuperat. Coduri de recuperare rămase: {}. Copia de rezervă "
+"anterioară, bazată pe PIN, a fost invalidată de această recuperare — creează "
+"o copie nouă din Setări după ce te conectezi. Conectează-te cu noile date."
 
 #: crates/chatter-ui/src/bin_ui/features/auth/recovery.rs:50
 msgid ""
 "Account recovered successfully! {} recovery codes remaining. Please sign in "
 "with your new credentials."
-msgstr "Cont recuperat. Coduri de recuperare rămase: {}. Conectează-te cu noile date."
+msgstr ""
+"Cont recuperat. Coduri de recuperare rămase: {}. Conectează-te cu noile date."
 
 #: crates/chatter-ui/src/bin_ui/features/auth/register.rs:271
 msgid ""
 "Connected over Tor. Creating your account (includes a short anti-spam "
 "puzzle)…"
-msgstr "Conectat prin Tor. Se creează contul (include un scurt puzzle anti-spam)…"
+msgstr ""
+"Conectat prin Tor. Se creează contul (include un scurt puzzle anti-spam)…"
 
 #: crates/chatter-ui/src/bin_ui/features/auth/register.rs:91
 msgid "Select avatar"
@@ -1811,7 +1954,9 @@ msgstr "Se conectează prin Tor… prima conexiune poate dura până la un minut
 msgid ""
 "Couldn't reach the server over Tor: {}. Shield is still on; nothing was sent "
 "outside Tor."
-msgstr "Serverul nu a putut fi contactat prin Tor: {}. Shield este în continuare pornit; nu s-a trimis nimic în afara Tor."
+msgstr ""
+"Serverul nu a putut fi contactat prin Tor: {}. Shield este în continuare "
+"pornit; nu s-a trimis nimic în afara Tor."
 
 #: crates/chatter-ui/src/bin_ui/features/auth/shield.rs:72
 msgid "Failed to connect to server: {}"
@@ -1951,7 +2096,7 @@ msgstr "Tu"
 
 #: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:606
 #: crates/chatter-core/src/domain/message/entity.rs:370
-#: crates/chatter-core/src/services/activity_service.rs:342
+#: crates/chatter-core/src/services/activity_service.rs:343
 msgid "Missed call"
 msgstr "Apel pierdut"
 
@@ -1960,7 +2105,7 @@ msgid "Call declined"
 msgstr "Apel refuzat"
 
 #: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:927
-#: crates/chatter-core/src/ui/format.rs:124
+#: crates/chatter-core/src/ui/format.rs:125
 msgid "No answer"
 msgstr "Fără răspuns"
 
@@ -2053,7 +2198,9 @@ msgstr "Introdu un număr întreg de minute, de la 1 la 525600."
 
 #: crates/chatter-ui/src/bin_ui/features/chat/disappearing.rs:297
 msgid "Timer changed here. Your friend receives it with your next message."
-msgstr "Temporizatorul a fost schimbat aici. Prietenul îl primește odată cu următorul mesaj."
+msgstr ""
+"Temporizatorul a fost schimbat aici. Prietenul îl primește odată cu "
+"următorul mesaj."
 
 #: crates/chatter-ui/src/bin_ui/features/chat/disappearing.rs:55
 msgid "Could not announce timer change"
@@ -2074,7 +2221,9 @@ msgstr "Noul număr de siguranță a fost acceptat — poți trimite mesaje din 
 #: crates/chatter-ui/src/bin_ui/features/chat/identity_change.rs:116
 msgid ""
 "Could not accept the new safety number — the conversation is still blocked."
-msgstr "Noul număr de siguranță nu a putut fi acceptat — conversația este încă blocată."
+msgstr ""
+"Noul număr de siguranță nu a putut fi acceptat — conversația este încă "
+"blocată."
 
 #: crates/chatter-ui/src/bin_ui/features/chat/membership.rs:186
 msgid "Link created. Copy it now: it cannot be shown again."
@@ -2106,7 +2255,8 @@ msgstr "Conversația secretă nu a putut fi pornită: {}"
 
 #: crates/chatter-ui/src/bin_ui/features/chat/open/dm.rs:57
 msgid "Could not delete the chat. Check your connection and try again."
-msgstr "Conversația nu a putut fi ștearsă. Verifică conexiunea și încearcă din nou."
+msgstr ""
+"Conversația nu a putut fi ștearsă. Verifică conexiunea și încearcă din nou."
 
 #: crates/chatter-ui/src/bin_ui/features/chat/open/dm.rs:81
 msgid "Private chat"
@@ -2118,7 +2268,9 @@ msgstr "Ai fost scos din grup"
 
 #: crates/chatter-ui/src/bin_ui/features/chat/open/saved_messages.rs:91
 msgid "Couldn't open Saved messages. Check your connection and try again."
-msgstr "Mesajele salvate nu au putut fi deschise. Verifică conexiunea și încearcă din nou."
+msgstr ""
+"Mesajele salvate nu au putut fi deschise. Verifică conexiunea și încearcă "
+"din nou."
 
 #: crates/chatter-ui/src/bin_ui/features/chat/pin.rs:29
 #: crates/chatter-core/src/domain/attachment.rs:475
@@ -2248,7 +2400,8 @@ msgstr "Se decriptează..."
 
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/attachment_view.rs:687
 msgid "Unable to save attachment. Reopen it and try again."
-msgstr "Atașamentul nu a putut fi salvat. Deschide-l din nou și încearcă din nou."
+msgstr ""
+"Atașamentul nu a putut fi salvat. Deschide-l din nou și încearcă din nou."
 
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/attachment_view.rs:944
 msgid "Image can't be opened"
@@ -2272,7 +2425,9 @@ msgstr "Codul nu a putut fi copiat"
 
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/code_preview.rs:89
 msgid "Unable to open this file. Install a text viewer and try again."
-msgstr "Acest fișier nu poate fi deschis. Instalează un vizualizator de text și încearcă din nou."
+msgstr ""
+"Acest fișier nu poate fi deschis. Instalează un vizualizator de text și "
+"încearcă din nou."
 
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/media_viewer.rs:175
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/media_viewer.rs:225
@@ -2372,7 +2527,9 @@ msgstr "Această pagină PDF nu poate fi afișată. Încearcă Deschide extern."
 
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/pdf_preview.rs:45
 msgid "Unable to open PDF. Install a PDF viewer and try Open externally again."
-msgstr "PDF-ul nu poate fi deschis. Instalează un vizualizator PDF și încearcă din nou Deschide extern."
+msgstr ""
+"PDF-ul nu poate fi deschis. Instalează un vizualizator PDF și încearcă din "
+"nou Deschide extern."
 
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/pdf_preview.rs:55
 msgid "PDF content is no longer available. Reopen the attachment."
@@ -2409,7 +2566,9 @@ msgstr "Deschide o conversație înainte să plasezi un fișier în ea."
 #: crates/chatter-ui/src/bin_ui/features/composer/drag_drop.rs:134
 msgid ""
 "Couldn't attach that file. Check that it is still available and try again."
-msgstr "Fișierul nu a putut fi atașat. Verifică că este încă disponibil și încearcă din nou."
+msgstr ""
+"Fișierul nu a putut fi atașat. Verifică că este încă disponibil și încearcă "
+"din nou."
 
 #: crates/chatter-ui/src/bin_ui/features/composer/gif.rs:213
 #: crates/chatter-core/src/client/preview.rs:62
@@ -2421,19 +2580,25 @@ msgstr "GIF"
 msgid ""
 "The GIF was not sent. Your message is back in the composer; the GIF is under "
 "Recent."
-msgstr "GIF-ul nu a fost trimis. Mesajul tău este din nou în câmpul de scriere; GIF-ul este la Recente."
+msgstr ""
+"GIF-ul nu a fost trimis. Mesajul tău este din nou în câmpul de scriere; GIF-"
+"ul este la Recente."
 
 #: crates/chatter-ui/src/bin_ui/features/composer/gif.rs:309
 msgid ""
 "The GIF was not sent. Your message is kept: open its chat again with an "
 "empty composer to get it back."
-msgstr "GIF-ul nu a fost trimis. Mesajul tău este păstrat: deschide din nou conversația cu câmpul de scriere gol ca să îl recuperezi."
+msgstr ""
+"GIF-ul nu a fost trimis. Mesajul tău este păstrat: deschide din nou "
+"conversația cu câmpul de scriere gol ca să îl recuperezi."
 
 #: crates/chatter-ui/src/bin_ui/features/composer/mod.rs:97
 msgid ""
 "Couldn't save drafts on this device. New changes are kept only while the app "
 "is open."
-msgstr "Ciornele nu au putut fi salvate pe acest dispozitiv. Modificările noi sunt păstrate doar cât aplicația este deschisă."
+msgstr ""
+"Ciornele nu au putut fi salvate pe acest dispozitiv. Modificările noi sunt "
+"păstrate doar cât aplicația este deschisă."
 
 #: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:105
 msgid "Allow microphone access to record a voice message"
@@ -2441,7 +2606,9 @@ msgstr "Permite accesul la microfon ca să înregistrezi un mesaj vocal"
 
 #: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:150
 msgid "No microphone found. Connect one to record a voice message."
-msgstr "Nu s-a găsit niciun microfon. Conectează unul ca să înregistrezi un mesaj vocal."
+msgstr ""
+"Nu s-a găsit niciun microfon. Conectează unul ca să înregistrezi un mesaj "
+"vocal."
 
 #: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:154
 msgid "Couldn't record a voice message. Please try again."
@@ -2519,7 +2686,9 @@ msgstr "Trimite prin Mesh"
 msgid ""
 "Files are not sent in private mesh conversations — the file packet is not "
 "encrypted."
-msgstr "Fișierele nu se trimit în conversațiile Mesh private — pachetul fișierului nu este criptat."
+msgstr ""
+"Fișierele nu se trimit în conversațiile Mesh private — pachetul fișierului "
+"nu este criptat."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/attach.rs:94
 #: crates/chatter-ui/src/bin_ui/features/mesh/send.rs:65
@@ -2544,7 +2713,9 @@ msgstr "Mesaj către {} prin Mesh"
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/conversation.rs:98
 msgid "Could not load this mesh conversation. Open it again to retry."
-msgstr "Această conversație Mesh nu a putut fi încărcată. Deschide-o din nou ca să reîncerci."
+msgstr ""
+"Această conversație Mesh nu a putut fi încărcată. Deschide-o din nou ca să "
+"reîncerci."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/core_api.rs:302
 #: crates/chatter-core/src/client/search_visible.rs:332
@@ -2579,7 +2750,9 @@ msgstr "Persoana care a creat grupul a scos acest dispozitiv din grup."
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:1385
 msgid ""
 "Identity key change refused for {}. A new identity appears as a new peer."
-msgstr "Schimbarea cheii de identitate a fost refuzată pentru {}. O identitate nouă apare ca un dispozitiv Mesh nou."
+msgstr ""
+"Schimbarea cheii de identitate a fost refuzată pentru {}. O identitate nouă "
+"apare ca un dispozitiv Mesh nou."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:1399
 msgid "Mesh: {}"
@@ -2603,13 +2776,16 @@ msgstr "Nu s-a putut intra pe canal: {}"
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:315
 msgid "Group created, but it could not be opened. Find it in the Mesh list."
-msgstr "Grupul a fost creat, dar nu a putut fi deschis. Îl găsești în lista Mesh."
+msgstr ""
+"Grupul a fost creat, dar nu a putut fi deschis. Îl găsești în lista Mesh."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:356
 msgid ""
 "Admission requested over Noise. Waiting for the creator to send the channel "
 "key."
-msgstr "Admiterea a fost cerută prin Noise. Se așteaptă ca persoana care a creat canalul să trimită cheia canalului."
+msgstr ""
+"Admiterea a fost cerută prin Noise. Se așteaptă ca persoana care a creat "
+"canalul să trimită cheia canalului."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:408
 msgid "Invitation queued — will deliver when connected."
@@ -2651,7 +2827,9 @@ msgstr "Numele Mesh nu a putut fi setat: {}"
 msgid ""
 "Account proof sent over this peer's encrypted Noise link. They still need to "
 "verify it."
-msgstr "Dovada contului a fost trimisă prin legătura Noise criptată a acestui dispozitiv. Persoana respectivă mai trebuie să o verifice."
+msgstr ""
+"Dovada contului a fost trimisă prin legătura Noise criptată a acestui "
+"dispozitiv. Persoana respectivă mai trebuie să o verifice."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:606
 msgid "Could not show QR: {}"
@@ -2661,7 +2839,9 @@ msgstr "QR-ul nu a putut fi afișat: {}"
 msgid ""
 "Signal mesh enabled. Both people must enable it and exchange live keys "
 "before sending."
-msgstr "Mesh Signal este activat. Ambele persoane trebuie să îl activeze și să schimbe chei live înainte de a trimite."
+msgstr ""
+"Mesh Signal este activat. Ambele persoane trebuie să îl activeze și să "
+"schimbe chei live înainte de a trimite."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:679
 msgid "Noise (bitchat) selected for this mesh conversation."
@@ -2694,7 +2874,9 @@ msgstr "Permisiunile Bluetooth sunt necesare pentru Mesh."
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:857
 msgid ""
 "Turn on Location in Android settings to discover nearby Bluetooth peers."
-msgstr "Pornește Locația în setările Android ca să descoperi dispozitivele Bluetooth din apropiere."
+msgstr ""
+"Pornește Locația în setările Android ca să descoperi dispozitivele Bluetooth "
+"din apropiere."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:87
 msgid "Verified Chatter contact"
@@ -2902,7 +3084,9 @@ msgstr "Invitații trimise"
 
 #: crates/chatter-ui/src/bin_ui/features/modals/create_channel.rs:666
 msgid "Unable to send all invitations. Check the member list before retrying."
-msgstr "Nu toate invitațiile au putut fi trimise. Verifică lista de membri înainte să reîncerci."
+msgstr ""
+"Nu toate invitațiile au putut fi trimise. Verifică lista de membri înainte "
+"să reîncerci."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/forward.rs:133
 msgid "Message forwarded"
@@ -2940,7 +3124,9 @@ msgstr "Cod scanat — atinge Conectează"
 msgid ""
 "Camera access is off. Paste the code instead, or allow the camera for "
 "Chatter in system settings."
-msgstr "Accesul la cameră este oprit. Lipește codul sau permite accesul la cameră pentru Chatter în setările sistemului."
+msgstr ""
+"Accesul la cameră este oprit. Lipește codul sau permite accesul la cameră "
+"pentru Chatter în setările sistemului."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/friends/friend_code.rs:194
 msgid "Clipboard unavailable. Enter the code manually."
@@ -3031,7 +3217,9 @@ msgstr "Cererea privată nu a putut fi refuzată. Încearcă din nou."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/friends/private_requests.rs:245
 msgid "Chat blocked, but the user block failed. Try again from Blocked."
-msgstr "Conversația a fost blocată, dar blocarea utilizatorului a eșuat. Încearcă din nou din Blocați."
+msgstr ""
+"Conversația a fost blocată, dar blocarea utilizatorului a eșuat. Încearcă "
+"din nou din Blocați."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/friends/private_requests.rs:269
 msgid "Could not block the private request. Try again."
@@ -3085,13 +3273,16 @@ msgstr "Dispozitivul nou a fost asociat."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/link_approve.rs:60
 msgid "Chatter uses the camera only to read the QR code on your new device."
-msgstr "Chatter folosește camera doar ca să citească codul QR de pe dispozitivul nou."
+msgstr ""
+"Chatter folosește camera doar ca să citească codul QR de pe dispozitivul nou."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/link_approve.rs:80
 msgid ""
 "Camera access is off. Paste the link instead, or allow the camera for "
 "Chatter in system settings."
-msgstr "Accesul la cameră este oprit. Lipește linkul sau permite accesul la cameră pentru Chatter în setările sistemului."
+msgstr ""
+"Accesul la cameră este oprit. Lipește linkul sau permite accesul la cameră "
+"pentru Chatter în setările sistemului."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/avatar_edit.rs:147
 msgid "Wait for the avatar picker to finish."
@@ -3112,7 +3303,8 @@ msgstr "Acest avatar nu poate fi folosit. Alege o imagine validă, mai mică."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/avatar_edit.rs:210
 msgid "Avatar is too large to share. Choose a smaller image."
-msgstr "Avatarul este prea mare ca să fie distribuit. Alege o imagine mai mică."
+msgstr ""
+"Avatarul este prea mare ca să fie distribuit. Alege o imagine mai mică."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/avatar_edit.rs:241
 msgid "Unable to preview this avatar. Choose another image."
@@ -3136,7 +3328,9 @@ msgstr "Avatarul selectat nu a putut fi procesat."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/contact.rs:18
 msgid "No shareable contact link or handle is available"
-msgstr "Nu există un link de contact sau un nume de utilizator care să poată fi distribuit"
+msgstr ""
+"Nu există un link de contact sau un nume de utilizator care să poată fi "
+"distribuit"
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/contact.rs:37
 msgid "Could not save contact name"
@@ -3199,7 +3393,9 @@ msgstr "Mesaj vocal"
 msgid ""
 "Action timed out; its outcome is uncertain. Review the refreshed devices and "
 "pending links."
-msgstr "Timpul alocat acțiunii a expirat; rezultatul este incert. Verifică lista actualizată de dispozitive și asocierile în așteptare."
+msgstr ""
+"Timpul alocat acțiunii a expirat; rezultatul este incert. Verifică lista "
+"actualizată de dispozitive și asocierile în așteptare."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/sessions.rs:133
 msgid "Could not load sessions: {}"
@@ -3284,7 +3480,9 @@ msgstr "Copia de rezervă de pe server a fost actualizată (înregistrări: {})"
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:213
 msgid "Could not back up messages. Check your connection and PIN, then retry."
-msgstr "Mesajele nu au putut fi salvate în copia de rezervă. Verifică conexiunea și PIN-ul, apoi reîncearcă."
+msgstr ""
+"Mesajele nu au putut fi salvate în copia de rezervă. Verifică conexiunea și "
+"PIN-ul, apoi reîncearcă."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:243
 msgid "Restored {} rows ({} already present or kept locally)"
@@ -3294,11 +3492,15 @@ msgstr "Înregistrări restaurate: {} (deja prezente sau păstrate local: {})"
 msgid ""
 "This backup was made by a newer version of Chatter. Update the app to "
 "restore it."
-msgstr "Această copie de rezervă a fost făcută de o versiune mai nouă de Chatter. Actualizează aplicația ca să o restaurezi."
+msgstr ""
+"Această copie de rezervă a fost făcută de o versiune mai nouă de Chatter. "
+"Actualizează aplicația ca să o restaurezi."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:250
 msgid "Could not restore backup. Check your passphrase or PIN, then retry."
-msgstr "Copia de rezervă nu a putut fi restaurată. Verifică parola pentru copia de rezervă sau PIN-ul, apoi reîncearcă."
+msgstr ""
+"Copia de rezervă nu a putut fi restaurată. Verifică parola pentru copia de "
+"rezervă sau PIN-ul, apoi reîncearcă."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:66
 msgid "Could not prepare the backup file."
@@ -3307,7 +3509,9 @@ msgstr "Fișierul copiei de rezervă nu a putut fi pregătit."
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:79
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:133
 msgid "Could not export backup. Check available storage and retry."
-msgstr "Copia de rezervă nu a putut fi exportată. Verifică spațiul disponibil și reîncearcă."
+msgstr ""
+"Copia de rezervă nu a putut fi exportată. Verifică spațiul disponibil și "
+"reîncearcă."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:89
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:131
@@ -3321,12 +3525,16 @@ msgstr "Fișierul copiei de rezervă nu a putut fi salvat."
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/notifications.rs:87
 msgid ""
 "Could not save notification preferences. Check your connection and retry."
-msgstr "Preferințele de notificare nu au putut fi salvate. Verifică conexiunea și reîncearcă."
+msgstr ""
+"Preferințele de notificare nu au putut fi salvate. Verifică conexiunea și "
+"reîncearcă."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/notifications.rs:91
 msgid ""
 "Could not load notification preferences. Check your connection and retry."
-msgstr "Preferințele de notificare nu au putut fi încărcate. Verifică conexiunea și reîncearcă."
+msgstr ""
+"Preferințele de notificare nu au putut fi încărcate. Verifică conexiunea și "
+"reîncearcă."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/privacy.rs:133
 msgid "Safety number"
@@ -3362,7 +3570,9 @@ msgstr "PIN schimbat"
 
 #: crates/chatter-ui/src/bin_ui/features/navigation.rs:130
 msgid "Could not check this device's saved identity. Try again."
-msgstr "Identitatea salvată a acestui dispozitiv nu a putut fi verificată. Încearcă din nou."
+msgstr ""
+"Identitatea salvată a acestui dispozitiv nu a putut fi verificată. Încearcă "
+"din nou."
 
 #: crates/chatter-ui/src/bin_ui/features/navigation.rs:141
 msgid "Tap \"Generate QR\" to start."
@@ -3370,11 +3580,14 @@ msgstr "Atinge „Generează QR” ca să începi."
 
 #: crates/chatter-ui/src/bin_ui/features/server_records.rs:219
 msgid "Couldn't make that change. Check your connection and try again."
-msgstr "Modificarea nu a putut fi făcută. Verifică conexiunea și încearcă din nou."
+msgstr ""
+"Modificarea nu a putut fi făcută. Verifică conexiunea și încearcă din nou."
 
 #: crates/chatter-ui/src/bin_ui/features/server_records.rs:223
 msgid "Couldn't load records. Check your connection and try again."
-msgstr "Înregistrările nu au putut fi încărcate. Verifică conexiunea și încearcă din nou."
+msgstr ""
+"Înregistrările nu au putut fi încărcate. Verifică conexiunea și încearcă din "
+"nou."
 
 #: crates/chatter-ui/src/bin_ui/features/server_records.rs:50
 msgid "Loading details…"
@@ -3488,11 +3701,15 @@ msgstr "Răspunsul nu a putut fi trimis. Este păstrat în acest fir de discuți
 
 #: crates/chatter-ui/src/bin_ui/features/thread.rs:523
 msgid "Couldn't send your reply. It's saved as this thread's draft."
-msgstr "Răspunsul nu a putut fi trimis. Este salvat ca ciornă a acestui fir de discuție."
+msgstr ""
+"Răspunsul nu a putut fi trimis. Este salvat ca ciornă a acestui fir de "
+"discuție."
 
 #: crates/chatter-ui/src/bin_ui/features/thread.rs:599
 msgid "Your earlier reply that didn't send is back in the box."
-msgstr "Răspunsul tău anterior, care nu a fost trimis, este din nou în câmpul de scriere."
+msgstr ""
+"Răspunsul tău anterior, care nu a fost trimis, este din nou în câmpul de "
+"scriere."
 
 #: crates/chatter-ui/src/bin_ui/features/thread.rs:820
 #: crates/chatter-ui/src/bin_ui/features/thread.rs:850
@@ -3520,8 +3737,6 @@ msgid "April"
 msgstr "Aprilie"
 
 #: crates/chatter-ui/src/bin_ui/features/unified_search.rs:153
-#: crates/chatter-ui/src/bin_ui/features/unified_search.rs:172
-#: crates/chatter-core/src/util/time.rs:29
 msgid "May"
 msgstr "Mai"
 
@@ -3573,6 +3788,12 @@ msgstr "mar."
 msgid "Apr"
 msgstr "apr."
 
+#: crates/chatter-ui/src/bin_ui/features/unified_search.rs:172
+#: crates/chatter-core/src/util/time.rs:29
+msgctxt "month abbreviation"
+msgid "May"
+msgstr "mai"
+
 #: crates/chatter-ui/src/bin_ui/features/unified_search.rs:173
 #: crates/chatter-core/src/util/time.rs:30
 msgid "Jun"
@@ -3614,10 +3835,9 @@ msgstr "{0} {1}"
 
 #: crates/chatter-ui/src/bin_ui/features/unified_search.rs:220
 #: crates/chatter-core/src/services/activity_service.rs:128
-#: crates/chatter-core/src/ui/format.rs:30
-#: crates/chatter-core/src/util/time.rs:71
-msgid "{} {}"
-msgstr "{} {}"
+msgctxt "day month"
+msgid "{0} {1}"
+msgstr "{0} {1}"
 
 #: crates/chatter-ui/src/bin_ui/features/update.rs:171
 msgid "Starting verified update…"
@@ -3665,11 +3885,14 @@ msgstr "MainActivity nu este înregistrată încă"
 
 #: crates/chatter-ui/src/platform/android/activity.rs:67
 msgid "Allow Chatter to install updates, then tap Update again"
-msgstr "Permite aplicației Chatter să instaleze actualizări, apoi atinge din nou Actualizează"
+msgstr ""
+"Permite aplicației Chatter să instaleze actualizări, apoi atinge din nou "
+"Actualizează"
 
 #: crates/chatter-ui/src/platform/android/audio_route.rs:257
 msgid "Could not switch audio route. Using an available device."
-msgstr "Nu s-a putut schimba traseul audio. Se folosește un dispozitiv disponibil."
+msgstr ""
+"Nu s-a putut schimba traseul audio. Se folosește un dispozitiv disponibil."
 
 #: crates/chatter-ui/src/platform/android/media_export.rs:103
 msgid "Media export failed"

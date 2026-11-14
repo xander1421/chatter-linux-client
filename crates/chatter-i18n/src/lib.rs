@@ -13,7 +13,7 @@
 
 mod runtime;
 
-pub use runtime::{set_language, tr, trf, trn};
+pub use runtime::{set_language, tr, trc, trf, trfc, trn};
 
 /// A language the app ships.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

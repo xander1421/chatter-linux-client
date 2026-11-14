@@ -125,8 +125,9 @@ impl ActivityService {
             } else if minutes < 2 * 24 * 60 {
                 chatter_i18n::tr("Yesterday")
             } else {
-                chatter_i18n::trf(
-                    "{} {}",
+                chatter_i18n::trfc(
+                    "day month",
+                    "{0} {1}",
                     &[&created.format("%d"), &crate::util::time::month_abbrev(created.month())],
                 )
             };

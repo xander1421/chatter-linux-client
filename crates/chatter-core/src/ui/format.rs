@@ -27,8 +27,9 @@ pub fn format_timestamp(datetime: DateTime<Utc>) -> String {
         return chatter_i18n::trf("Yesterday {}", &[&local.format("%H:%M")]);
     }
     if diff < Duration::days(7) {
-        return chatter_i18n::trf(
-            "{} {}",
+        return chatter_i18n::trfc(
+            "weekday time",
+            "{0} {1}",
             &[
                 &crate::util::time::weekday_abbrev(local.weekday()),
                 &local.format("%H:%M"),

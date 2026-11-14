@@ -222,7 +222,7 @@ msgstr ""
 msgid "{} was just linked to your account."
 msgstr ""
 
-#: crates/chatter-core/src/client/notification.rs:792 crates/chatter-core/src/services/activity_service.rs:347
+#: crates/chatter-core/src/client/notification.rs:792 crates/chatter-core/src/services/activity_service.rs:348
 msgid "New device linked"
 msgstr ""
 
@@ -306,7 +306,7 @@ msgstr ""
 msgid "This account has no key backup to check the PIN against. Set up your PIN again."
 msgstr ""
 
-#: crates/chatter-core/src/client/search_visible.rs:205 crates/chatter-core/src/client/server_records.rs:75 crates/chatter-core/src/ui/format.rs:91 crates/chatter-core/src/ui/format.rs:133
+#: crates/chatter-core/src/client/search_visible.rs:205 crates/chatter-core/src/client/server_records.rs:75 crates/chatter-core/src/ui/format.rs:92 crates/chatter-core/src/ui/format.rs:134
 msgid "{} · {}"
 msgstr ""
 
@@ -390,15 +390,15 @@ msgstr ""
 msgid "Audio"
 msgstr ""
 
-#: crates/chatter-core/src/domain/attachment.rs:598 crates/chatter-core/src/ui/format.rs:165
+#: crates/chatter-core/src/domain/attachment.rs:598 crates/chatter-core/src/ui/format.rs:166
 msgid "{} GB"
 msgstr ""
 
-#: crates/chatter-core/src/domain/attachment.rs:601 crates/chatter-core/src/ui/format.rs:168
+#: crates/chatter-core/src/domain/attachment.rs:601 crates/chatter-core/src/ui/format.rs:169
 msgid "{} MB"
 msgstr ""
 
-#: crates/chatter-core/src/domain/attachment.rs:604 crates/chatter-core/src/ui/format.rs:171
+#: crates/chatter-core/src/domain/attachment.rs:604 crates/chatter-core/src/ui/format.rs:172
 msgid "{} KB"
 msgstr ""
 
@@ -410,7 +410,7 @@ msgstr ""
 msgid "You can't send messages in this channel while muted"
 msgstr ""
 
-#: crates/chatter-core/src/domain/channel.rs:360 crates/chatter-core/src/domain/channel.rs:380
+#: crates/chatter-core/src/domain/channel.rs:360 crates/chatter-core/src/domain/channel.rs:381
 msgid "You can't send messages in this channel while muted until {}"
 msgstr ""
 
@@ -418,15 +418,16 @@ msgstr ""
 msgid "You can't send messages in this channel while muted until tomorrow {}"
 msgstr ""
 
-#: crates/chatter-core/src/domain/channel.rs:372 crates/chatter-core/src/util/time.rs:76
-msgid "{} {}, {}"
-msgstr ""
-
-#: crates/chatter-core/src/domain/channel.rs:387
-msgid "You're no longer a member of this channel"
+#: crates/chatter-core/src/domain/channel.rs:372
+msgctxt "month day, time"
+msgid "{0} {1}, {2}"
 msgstr ""
 
 #: crates/chatter-core/src/domain/channel.rs:388
+msgid "You're no longer a member of this channel"
+msgstr ""
+
+#: crates/chatter-core/src/domain/channel.rs:389
 msgid "This channel was deleted"
 msgstr ""
 
@@ -764,81 +765,81 @@ msgstr ""
 msgid "{}m"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:126 crates/chatter-core/src/services/server_records.rs:71 crates/chatter-core/src/ui/format.rs:54 crates/chatter-core/src/util/time.rs:93 crates/chatter-core/src/util/time.rs:110
+#: crates/chatter-core/src/services/activity_service.rs:126 crates/chatter-core/src/services/server_records.rs:71 crates/chatter-core/src/ui/format.rs:55 crates/chatter-core/src/util/time.rs:93 crates/chatter-core/src/util/time.rs:110
 msgid "Yesterday"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:138 crates/chatter-core/src/ui/format.rs:52 crates/chatter-core/src/util/time.rs:92 crates/chatter-core/src/util/time.rs:108
+#: crates/chatter-core/src/services/activity_service.rs:139 crates/chatter-core/src/ui/format.rs:53 crates/chatter-core/src/util/time.rs:92 crates/chatter-core/src/util/time.rs:108
 msgid "Today"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:138
+#: crates/chatter-core/src/services/activity_service.rs:139
 msgid "Earlier"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:317 crates/chatter-core/src/services/notification_service/mod.rs:199
+#: crates/chatter-core/src/services/activity_service.rs:318 crates/chatter-core/src/services/notification_service/mod.rs:199
 msgid "Someone"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:335
+#: crates/chatter-core/src/services/activity_service.rs:336
 msgid "{} reacted to your message"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:336
+#: crates/chatter-core/src/services/activity_service.rs:337
 msgid "{} sent you a contact request"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:337
+#: crates/chatter-core/src/services/activity_service.rs:338
 msgid "{} invited you to {}"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:340
+#: crates/chatter-core/src/services/activity_service.rs:341
 msgid "Missed call from {}"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:349
+#: crates/chatter-core/src/services/activity_service.rs:350
 msgid "New device linked: {}"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:354
+#: crates/chatter-core/src/services/activity_service.rs:355
 msgid "Can't reach the server"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:371
+#: crates/chatter-core/src/services/activity_service.rs:372
 msgid "{} mentioned you in #{}"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:374
+#: crates/chatter-core/src/services/activity_service.rs:375
 msgid "{} replied to you in #{}"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:377
+#: crates/chatter-core/src/services/activity_service.rs:378
 msgid "{} replied in a thread in #{}"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:383
+#: crates/chatter-core/src/services/activity_service.rs:384
 msgid "{} mentioned you"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:384
+#: crates/chatter-core/src/services/activity_service.rs:385
 msgid "{} replied to you"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:385
+#: crates/chatter-core/src/services/activity_service.rs:386
 msgid "{} replied in a thread"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:402
+#: crates/chatter-core/src/services/activity_service.rs:403
 msgid "Back online after {n} s"
 msgid_plural "Back online after {n} s"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/chatter-core/src/services/activity_service.rs:409
+#: crates/chatter-core/src/services/activity_service.rs:410
 msgid "Back online after {} min"
 msgstr ""
 
-#: crates/chatter-core/src/services/activity_service.rs:411
+#: crates/chatter-core/src/services/activity_service.rs:412
 msgid "Back online after {}"
 msgstr ""
 
@@ -1188,27 +1189,27 @@ msgstr ""
 msgid "Quit"
 msgstr ""
 
-#: crates/chatter-core/src/ui/format.rs:123
+#: crates/chatter-core/src/ui/format.rs:124
 msgid "Missed"
 msgstr ""
 
-#: crates/chatter-core/src/ui/format.rs:125
+#: crates/chatter-core/src/ui/format.rs:126
 msgid "Declined"
 msgstr ""
 
-#: crates/chatter-core/src/ui/format.rs:126
+#: crates/chatter-core/src/ui/format.rs:127
 msgid "Failed"
 msgstr ""
 
-#: crates/chatter-core/src/ui/format.rs:127
+#: crates/chatter-core/src/ui/format.rs:128
 msgid "Incoming"
 msgstr ""
 
-#: crates/chatter-core/src/ui/format.rs:128
+#: crates/chatter-core/src/ui/format.rs:129
 msgid "Outgoing"
 msgstr ""
 
-#: crates/chatter-core/src/ui/format.rs:173
+#: crates/chatter-core/src/ui/format.rs:174
 msgid "{} B"
 msgstr ""
 
@@ -1220,23 +1221,28 @@ msgstr ""
 msgid "Yesterday {}"
 msgstr ""
 
-#: crates/chatter-core/src/ui/format.rs:65
-msgid "away"
+#: crates/chatter-core/src/ui/format.rs:30
+msgctxt "weekday time"
+msgid "{0} {1}"
 msgstr ""
 
 #: crates/chatter-core/src/ui/format.rs:66
+msgid "away"
+msgstr ""
+
+#: crates/chatter-core/src/ui/format.rs:67
 msgid "do not disturb"
 msgstr ""
 
-#: crates/chatter-core/src/ui/format.rs:70
+#: crates/chatter-core/src/ui/format.rs:71
 msgid "last seen {}"
 msgstr ""
 
-#: crates/chatter-core/src/ui/format.rs:72 crates/chatter-core/src/ui/format.rs:74
+#: crates/chatter-core/src/ui/format.rs:73 crates/chatter-core/src/ui/format.rs:75
 msgid "last seen recently"
 msgstr ""
 
-#: crates/chatter-core/src/ui/format.rs:86
+#: crates/chatter-core/src/ui/format.rs:87
 msgid "Attachment"
 msgstr ""
 
@@ -1410,6 +1416,16 @@ msgstr ""
 msgid "Sunday"
 msgstr ""
 
+#: crates/chatter-core/src/util/time.rs:71
+msgctxt "month day"
+msgid "{0} {1}"
+msgstr ""
+
+#: crates/chatter-core/src/util/time.rs:76
+msgctxt "month day, year"
+msgid "{0} {1}, {2}"
+msgstr ""
+
 #: crates/chatter-ui/src/bin_ui/features/activity/mod.rs:19
 msgid "Never"
 msgstr ""
@@ -1518,7 +1534,7 @@ msgstr ""
 msgid "📎 Attachment"
 msgstr ""
 
-#: crates/chatter-ui/src/bin_ui/features/auth/initial_data.rs:146 crates/chatter-core/src/ui/format.rs:64
+#: crates/chatter-ui/src/bin_ui/features/auth/initial_data.rs:146 crates/chatter-core/src/ui/format.rs:65
 msgid "online"
 msgstr ""
 
@@ -1722,7 +1738,7 @@ msgstr ""
 msgid "You"
 msgstr ""
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:606 crates/chatter-core/src/domain/message/entity.rs:370 crates/chatter-core/src/services/activity_service.rs:342
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:606 crates/chatter-core/src/domain/message/entity.rs:370 crates/chatter-core/src/services/activity_service.rs:343
 msgid "Missed call"
 msgstr ""
 
@@ -1730,7 +1746,7 @@ msgstr ""
 msgid "Call declined"
 msgstr ""
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:927 crates/chatter-core/src/ui/format.rs:124
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:927 crates/chatter-core/src/ui/format.rs:125
 msgid "No answer"
 msgstr ""
 
@@ -3180,7 +3196,7 @@ msgstr ""
 msgid "April"
 msgstr ""
 
-#: crates/chatter-ui/src/bin_ui/features/unified_search.rs:153 crates/chatter-ui/src/bin_ui/features/unified_search.rs:172 crates/chatter-core/src/util/time.rs:29
+#: crates/chatter-ui/src/bin_ui/features/unified_search.rs:153
 msgid "May"
 msgstr ""
 
@@ -3228,6 +3244,11 @@ msgstr ""
 msgid "Apr"
 msgstr ""
 
+#: crates/chatter-ui/src/bin_ui/features/unified_search.rs:172 crates/chatter-core/src/util/time.rs:29
+msgctxt "month abbreviation"
+msgid "May"
+msgstr ""
+
 #: crates/chatter-ui/src/bin_ui/features/unified_search.rs:173 crates/chatter-core/src/util/time.rs:30
 msgid "Jun"
 msgstr ""
@@ -3260,8 +3281,9 @@ msgstr ""
 msgid "{0} {1}"
 msgstr ""
 
-#: crates/chatter-ui/src/bin_ui/features/unified_search.rs:220 crates/chatter-core/src/services/activity_service.rs:128 crates/chatter-core/src/ui/format.rs:30 crates/chatter-core/src/util/time.rs:71
-msgid "{} {}"
+#: crates/chatter-ui/src/bin_ui/features/unified_search.rs:220 crates/chatter-core/src/services/activity_service.rs:128
+msgctxt "day month"
+msgid "{0} {1}"
 msgstr ""
 
 #: crates/chatter-ui/src/bin_ui/features/update.rs:171

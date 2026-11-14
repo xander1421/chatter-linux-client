@@ -26,7 +26,7 @@ pub fn month_abbrev(month: u32) -> String {
         2 => chatter_i18n::tr("Feb"),
         3 => chatter_i18n::tr("Mar"),
         4 => chatter_i18n::tr("Apr"),
-        5 => chatter_i18n::tr("May"),
+        5 => chatter_i18n::trc("month abbreviation", "May"),
         6 => chatter_i18n::tr("Jun"),
         7 => chatter_i18n::tr("Jul"),
         8 => chatter_i18n::tr("Aug"),
@@ -68,12 +68,12 @@ pub fn weekday_name(day: chrono::Weekday) -> String {
 
 /// "%b %-d", for example "Mar 4".
 pub fn format_month_day(month: u32, day: u32) -> String {
-    chatter_i18n::trf("{} {}", &[&month_abbrev(month), &day])
+    chatter_i18n::trfc("month day", "{0} {1}", &[&month_abbrev(month), &day])
 }
 
 /// "%b %-d, %Y", for example "Mar 4, 2025".
 pub fn format_month_day_year(month: u32, day: u32, year: i32) -> String {
-    chatter_i18n::trf("{} {}, {}", &[&month_abbrev(month), &day, &year])
+    chatter_i18n::trfc("month day, year", "{0} {1}, {2}", &[&month_abbrev(month), &day, &year])
 }
 
 /// Local day chip above a message: "Today", "Yesterday", a weekday within the

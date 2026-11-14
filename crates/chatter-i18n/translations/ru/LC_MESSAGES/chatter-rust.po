@@ -64,7 +64,10 @@ msgid ""
 "This device has no verified member list for this channel yet, so it does not "
 "know who may receive your messages. Sending resumes once the channel's "
 "signed membership log verifies."
-msgstr "На этом устройстве ещё нет проверенного списка участников канала, поэтому неизвестно, кто может получить ваши сообщения. Отправка возобновится, когда подписанный журнал участников канала пройдёт проверку."
+msgstr ""
+"На этом устройстве ещё нет проверенного списка участников канала, поэтому "
+"неизвестно, кто может получить ваши сообщения. Отправка возобновится, когда "
+"подписанный журнал участников канала пройдёт проверку."
 
 #: crates/chatter-core/src/client/membership.rs:179
 msgid "Membership could not be verified — sending is paused"
@@ -76,7 +79,11 @@ msgid ""
 "make it, or did not match the list this device holds. It was not applied, "
 "and nobody it named receives your messages. Sending resumes when a later "
 "change verifies. {}"
-msgstr "Изменение списка участников этого канала не подписано тем, кому это разрешено, или не совпало со списком на этом устройстве. Оно не применено, и указанные в нём люди не получат ваши сообщения. Отправка возобновится, когда следующее изменение пройдёт проверку. {}"
+msgstr ""
+"Изменение списка участников этого канала не подписано тем, кому это "
+"разрешено, или не совпало со списком на этом устройстве. Оно не применено, и "
+"указанные в нём люди не получат ваши сообщения. Отправка возобновится, когда "
+"следующее изменение пройдёт проверку. {}"
 
 #: crates/chatter-core/src/client/membership.rs:190
 msgid "The server is showing members different member lists"
@@ -89,7 +96,13 @@ msgid ""
 "until you resume it. Compare the state code below with another member over a "
 "channel you trust first: resuming sends only to the members this device "
 "verified, and a new mismatch pauses it again. {}"
-msgstr "У другого участника или в журнале сервера другой список участников на ревизии, которую это устройство уже проверило. Отправка в этом канале остаётся на паузе, пока вы её не возобновите. Сначала сверьте код состояния ниже с другим участником по надёжному каналу связи: после возобновления сообщения уйдут только тем, кого проверило это устройство, а новое расхождение снова поставит отправку на паузу. {}"
+msgstr ""
+"У другого участника или в журнале сервера другой список участников на "
+"ревизии, которую это устройство уже проверило. Отправка в этом канале "
+"остаётся на паузе, пока вы её не возобновите. Сначала сверьте код состояния "
+"ниже с другим участником по надёжному каналу связи: после возобновления "
+"сообщения уйдут только тем, кого проверило это устройство, а новое "
+"расхождение снова поставит отправку на паузу. {}"
 
 #: crates/chatter-core/src/client/membership.rs:211
 msgid "Public — anyone can join and read"
@@ -97,7 +110,8 @@ msgstr "Публичный — вступить и читать может лю�
 
 #: crates/chatter-core/src/client/membership.rs:237
 msgid "Invite only — people join through an invitation or a join link."
-msgstr "Только по приглашению — вступают по приглашению или по ссылке для входа."
+msgstr ""
+"Только по приглашению — вступают по приглашению или по ссылке для входа."
 
 #: crates/chatter-core/src/client/membership.rs:244
 msgid "Only the owner creates and revokes join links."
@@ -109,7 +123,8 @@ msgstr "Ссылки для входа создают и отзывают вла
 
 #: crates/chatter-core/src/client/membership.rs:250
 msgid "Owners, admins and moderators create and revoke join links."
-msgstr "Ссылки для входа создают и отзывают владельцы, администраторы и модераторы."
+msgstr ""
+"Ссылки для входа создают и отзывают владельцы, администраторы и модераторы."
 
 #: crates/chatter-core/src/client/membership.rs:252
 msgid "Members create and revoke join links."
@@ -210,24 +225,32 @@ msgstr "Chatter не смог завершить запуск."
 msgid ""
 "Local storage initialization failed. Check available space and access to the "
 "app data folder, then retry."
-msgstr "Не удалось подготовить локальное хранилище. Проверьте свободное место и доступ к папке данных приложения, затем повторите."
+msgstr ""
+"Не удалось подготовить локальное хранилище. Проверьте свободное место и "
+"доступ к папке данных приложения, затем повторите."
 
 #: crates/chatter-core/src/client/mod.rs:386
 msgid ""
 "The system credential store did not provide the database key. Unlock the "
 "credential store, then retry."
-msgstr "Системное хранилище учётных данных не выдало ключ базы. Разблокируйте хранилище и повторите."
+msgstr ""
+"Системное хранилище учётных данных не выдало ключ базы. Разблокируйте "
+"хранилище и повторите."
 
 #: crates/chatter-core/src/client/mod.rs:389
 msgid ""
 "Network setup failed. Check your connection and server settings, then retry."
-msgstr "Не удалось настроить сеть. Проверьте подключение и параметры сервера, затем повторите."
+msgstr ""
+"Не удалось настроить сеть. Проверьте подключение и параметры сервера, затем "
+"повторите."
 
 #: crates/chatter-core/src/client/mod.rs:392
 msgid ""
 "An initialization step failed. Retry, or restart the app if the problem "
 "continues."
-msgstr "Один из шагов запуска не выполнен. Повторите или перезапустите приложение, если проблема останется."
+msgstr ""
+"Один из шагов запуска не выполнен. Повторите или перезапустите приложение, "
+"если проблема останется."
 
 #: crates/chatter-core/src/client/mod.rs:486
 msgid "Your safety number with {} has changed"
@@ -239,7 +262,11 @@ msgid ""
 "someone is intercepting this conversation. Messages are blocked in both "
 "directions until you accept the new safety number — compare it with them "
 "over a call or in person first."
-msgstr "Скорее всего, собеседник переустановил приложение или сменил устройство. Так бывает и если кто-то перехватывает этот разговор. Сообщения заблокированы в обе стороны, пока вы не примете новый номер безопасности — сначала сверьте его во время звонка или при личной встрече."
+msgstr ""
+"Скорее всего, собеседник переустановил приложение или сменил устройство. Так "
+"бывает и если кто-то перехватывает этот разговор. Сообщения заблокированы в "
+"обе стороны, пока вы не примете новый номер безопасности — сначала сверьте "
+"его во время звонка или при личной встрече."
 
 #: crates/chatter-core/src/client/mod.rs:499
 msgid "A safety number in this conversation has changed"
@@ -251,7 +278,11 @@ msgid ""
 "may not be them at all. Messages are blocked in both directions until you "
 "accept the new safety number — confirm it with them over a call or in person "
 "before you do."
-msgstr "Сервер утверждает, что это от вашего контакта, но это ничем не подтверждено, так что это может быть кто угодно. Сообщения заблокированы в обе стороны, пока вы не примете новый номер безопасности — сначала сверьте его во время звонка или при встрече."
+msgstr ""
+"Сервер утверждает, что это от вашего контакта, но это ничем не подтверждено, "
+"так что это может быть кто угодно. Сообщения заблокированы в обе стороны, "
+"пока вы не примете новый номер безопасности — сначала сверьте его во время "
+"звонка или при встрече."
 
 #: crates/chatter-core/src/client/notification.rs:735
 msgid "Reacted {}"
@@ -271,7 +302,7 @@ msgid "{} was just linked to your account."
 msgstr "{} только что привязано к вашему аккаунту."
 
 #: crates/chatter-core/src/client/notification.rs:792
-#: crates/chatter-core/src/services/activity_service.rs:347
+#: crates/chatter-core/src/services/activity_service.rs:348
 msgid "New device linked"
 msgstr "Привязано новое устройство"
 
@@ -336,13 +367,16 @@ msgstr "Этот код недействителен."
 
 #: crates/chatter-core/src/client/profile/mod.rs:49
 msgid "That's a username — ask for a friend code or username link."
-msgstr "Это имя пользователя — попросите код друга или ссылку на имя пользователя."
+msgstr ""
+"Это имя пользователя — попросите код друга или ссылку на имя пользователя."
 
 #: crates/chatter-core/src/client/profile/mod.rs:52
 msgid ""
 "Server-managed friend codes can't be used in Shield mode. Ask for a private "
 "code."
-msgstr "Коды друга с сервера нельзя использовать в режиме Shield. Попросите личный код."
+msgstr ""
+"Коды друга с сервера нельзя использовать в режиме Shield. Попросите личный "
+"код."
 
 #: crates/chatter-core/src/client/profile/mod.rs:56
 msgid "Secret chats aren't available on this device."
@@ -360,12 +394,13 @@ msgstr "Не удалось начать секретный чат. Попроб
 msgid ""
 "This account has no key backup to check the PIN against. Set up your PIN "
 "again."
-msgstr "У этого аккаунта нет копии ключей, чтобы сверить PIN. Задайте PIN заново."
+msgstr ""
+"У этого аккаунта нет копии ключей, чтобы сверить PIN. Задайте PIN заново."
 
 #: crates/chatter-core/src/client/search_visible.rs:205
 #: crates/chatter-core/src/client/server_records.rs:75
-#: crates/chatter-core/src/ui/format.rs:91
-#: crates/chatter-core/src/ui/format.rs:133
+#: crates/chatter-core/src/ui/format.rs:92
+#: crates/chatter-core/src/ui/format.rs:134
 msgid "{} · {}"
 msgstr "{} · {}"
 
@@ -453,17 +488,17 @@ msgid "Audio"
 msgstr "Аудио"
 
 #: crates/chatter-core/src/domain/attachment.rs:598
-#: crates/chatter-core/src/ui/format.rs:165
+#: crates/chatter-core/src/ui/format.rs:166
 msgid "{} GB"
 msgstr "{} ГБ"
 
 #: crates/chatter-core/src/domain/attachment.rs:601
-#: crates/chatter-core/src/ui/format.rs:168
+#: crates/chatter-core/src/ui/format.rs:169
 msgid "{} MB"
 msgstr "{} МБ"
 
 #: crates/chatter-core/src/domain/attachment.rs:604
-#: crates/chatter-core/src/ui/format.rs:171
+#: crates/chatter-core/src/ui/format.rs:172
 msgid "{} KB"
 msgstr "{} КБ"
 
@@ -473,10 +508,11 @@ msgstr "{} Б"
 
 #: crates/chatter-core/src/domain/channel.rs:354
 msgid "You can't send messages in this channel while muted"
-msgstr "Вы не можете отправлять сообщения в этот канал, пока вам запрещено писать"
+msgstr ""
+"Вы не можете отправлять сообщения в этот канал, пока вам запрещено писать"
 
 #: crates/chatter-core/src/domain/channel.rs:360
-#: crates/chatter-core/src/domain/channel.rs:380
+#: crates/chatter-core/src/domain/channel.rs:381
 msgid "You can't send messages in this channel while muted until {}"
 msgstr "Вам запрещено писать в этом канале до {}"
 
@@ -485,15 +521,15 @@ msgid "You can't send messages in this channel while muted until tomorrow {}"
 msgstr "Вам запрещено писать в этом канале до {} завтра"
 
 #: crates/chatter-core/src/domain/channel.rs:372
-#: crates/chatter-core/src/util/time.rs:76
-msgid "{} {}, {}"
-msgstr "{} {}, {}"
+msgctxt "month day, time"
+msgid "{0} {1}, {2}"
+msgstr "{1} {0}, {2}"
 
-#: crates/chatter-core/src/domain/channel.rs:387
+#: crates/chatter-core/src/domain/channel.rs:388
 msgid "You're no longer a member of this channel"
 msgstr "Вы больше не в этом канале"
 
-#: crates/chatter-core/src/domain/channel.rs:388
+#: crates/chatter-core/src/domain/channel.rs:389
 msgid "This channel was deleted"
 msgstr "Этот канал удалён"
 
@@ -712,7 +748,9 @@ msgstr "{} удалил(а) канал"
 msgid ""
 "{} sent a message that couldn't be delivered. The secure session has been "
 "reset — ask them to send it again."
-msgstr "{} отправил(а) сообщение, которое не дошло. Защищённый сеанс сброшен — попросите отправить его снова."
+msgstr ""
+"{} отправил(а) сообщение, которое не дошло. Защищённый сеанс сброшен — "
+"попросите отправить его снова."
 
 #: crates/chatter-core/src/domain/message/system.rs:203
 msgid ""
@@ -720,20 +758,30 @@ msgid ""
 "this means they reinstalled the app, but it can also mean someone is "
 "intercepting this conversation. Messages stay blocked until you accept the "
 "new safety number."
-msgstr "{} сменил(а) номер безопасности, поэтому не удалось прочитать сообщение. Обычно это значит, что приложение переустановили, но так бывает и при перехвате переписки. Сообщения остаются заблокированными, пока вы не примете новый номер безопасности."
+msgstr ""
+"{} сменил(а) номер безопасности, поэтому не удалось прочитать сообщение. "
+"Обычно это значит, что приложение переустановили, но так бывает и при "
+"перехвате переписки. Сообщения остаются заблокированными, пока вы не примете "
+"новый номер безопасности."
 
 #: crates/chatter-core/src/domain/message/system.rs:210
 msgid ""
 "{} may have changed their safety number, so the message could not be read. "
 "The server says it came from them, but nothing proved that. Compare safety "
 "numbers over another channel before you accept."
-msgstr "{} мог(ла) сменить номер безопасности, поэтому не удалось прочитать сообщение. Сервер утверждает, что оно от этого человека, но это ничем не подтверждено. Сверьте номера безопасности по другому каналу связи, прежде чем принимать новый номер."
+msgstr ""
+"{} мог(ла) сменить номер безопасности, поэтому не удалось прочитать "
+"сообщение. Сервер утверждает, что оно от этого человека, но это ничем не "
+"подтверждено. Сверьте номера безопасности по другому каналу связи, прежде "
+"чем принимать новый номер."
 
 #: crates/chatter-core/src/domain/message/system.rs:216
 msgid ""
 "{} did not get your message \"{}\" — it could not be sent after several "
 "tries. Send it again if it mattered."
-msgstr "{} не получил(а) ваше сообщение «{}». После нескольких попыток отправить его не удалось. Отправьте снова, если это важно."
+msgstr ""
+"{} не получил(а) ваше сообщение «{}». После нескольких попыток отправить его "
+"не удалось. Отправьте снова, если это важно."
 
 #: crates/chatter-core/src/domain/message/system.rs:222
 #: crates/chatter-core/src/ui/message_row.rs:270
@@ -824,7 +872,9 @@ msgstr "удалил(а) канал"
 msgid ""
 "sent a message that couldn't be delivered. The secure session has been reset "
 "— ask them to send it again."
-msgstr "отправил(а) сообщение, которое не дошло. Защищённый сеанс сброшен — попросите отправить его снова."
+msgstr ""
+"отправил(а) сообщение, которое не дошло. Защищённый сеанс сброшен — "
+"попросите отправить его снова."
 
 #: crates/chatter-core/src/domain/message/system.rs:275
 msgid ""
@@ -832,20 +882,30 @@ msgid ""
 "this means they reinstalled the app, but it can also mean someone is "
 "intercepting this conversation. Messages stay blocked until you accept the "
 "new safety number."
-msgstr "сменил(а) номер безопасности, поэтому не удалось прочитать сообщение. Обычно это значит, что приложение переустановили, но так бывает и при перехвате переписки. Сообщения остаются заблокированными, пока вы не примете новый номер безопасности."
+msgstr ""
+"сменил(а) номер безопасности, поэтому не удалось прочитать сообщение. Обычно "
+"это значит, что приложение переустановили, но так бывает и при перехвате "
+"переписки. Сообщения остаются заблокированными, пока вы не примете новый "
+"номер безопасности."
 
 #: crates/chatter-core/src/domain/message/system.rs:281
 msgid ""
 "may have changed their safety number, so the message could not be read. The "
 "server says it came from them, but nothing proved that. Compare safety "
 "numbers over another channel before you accept."
-msgstr "мог(ла) сменить номер безопасности, поэтому не удалось прочитать сообщение. Сервер утверждает, что оно от этого человека, но это ничем не подтверждено. Сверьте номера безопасности по другому каналу связи, прежде чем принимать новый номер."
+msgstr ""
+"мог(ла) сменить номер безопасности, поэтому не удалось прочитать сообщение. "
+"Сервер утверждает, что оно от этого человека, но это ничем не подтверждено. "
+"Сверьте номера безопасности по другому каналу связи, прежде чем принимать "
+"новый номер."
 
 #: crates/chatter-core/src/domain/message/system.rs:287
 msgid ""
 "did not get your message \"{}\" — it could not be sent after several tries. "
 "Send it again if it mattered."
-msgstr "не получил(а) ваше сообщение «{}». После нескольких попыток отправить его не удалось. Отправьте снова, если это важно."
+msgstr ""
+"не получил(а) ваше сообщение «{}». После нескольких попыток отправить его не "
+"удалось. Отправьте снова, если это важно."
 
 #: crates/chatter-core/src/domain/message/system.rs:294
 msgid "turned off disappearing messages"
@@ -867,88 +927,88 @@ msgstr "{} мин"
 
 #: crates/chatter-core/src/services/activity_service.rs:126
 #: crates/chatter-core/src/services/server_records.rs:71
-#: crates/chatter-core/src/ui/format.rs:54
+#: crates/chatter-core/src/ui/format.rs:55
 #: crates/chatter-core/src/util/time.rs:93
 #: crates/chatter-core/src/util/time.rs:110
 msgid "Yesterday"
 msgstr "Вчера"
 
-#: crates/chatter-core/src/services/activity_service.rs:138
-#: crates/chatter-core/src/ui/format.rs:52
+#: crates/chatter-core/src/services/activity_service.rs:139
+#: crates/chatter-core/src/ui/format.rs:53
 #: crates/chatter-core/src/util/time.rs:92
 #: crates/chatter-core/src/util/time.rs:108
 msgid "Today"
 msgstr "Сегодня"
 
-#: crates/chatter-core/src/services/activity_service.rs:138
+#: crates/chatter-core/src/services/activity_service.rs:139
 msgid "Earlier"
 msgstr "Ранее"
 
-#: crates/chatter-core/src/services/activity_service.rs:317
+#: crates/chatter-core/src/services/activity_service.rs:318
 #: crates/chatter-core/src/services/notification_service/mod.rs:199
 msgid "Someone"
 msgstr "Кто-то"
 
-#: crates/chatter-core/src/services/activity_service.rs:335
+#: crates/chatter-core/src/services/activity_service.rs:336
 msgid "{} reacted to your message"
 msgstr "{} отреагировал(а) на ваше сообщение"
 
-#: crates/chatter-core/src/services/activity_service.rs:336
+#: crates/chatter-core/src/services/activity_service.rs:337
 msgid "{} sent you a contact request"
 msgstr "{} отправил(а) вам запрос на добавление в контакты"
 
-#: crates/chatter-core/src/services/activity_service.rs:337
+#: crates/chatter-core/src/services/activity_service.rs:338
 msgid "{} invited you to {}"
 msgstr "{} приглашает вас в {}"
 
-#: crates/chatter-core/src/services/activity_service.rs:340
+#: crates/chatter-core/src/services/activity_service.rs:341
 msgid "Missed call from {}"
 msgstr "Пропущенный звонок: {}"
 
-#: crates/chatter-core/src/services/activity_service.rs:349
+#: crates/chatter-core/src/services/activity_service.rs:350
 msgid "New device linked: {}"
 msgstr "Привязано новое устройство: {}"
 
-#: crates/chatter-core/src/services/activity_service.rs:354
+#: crates/chatter-core/src/services/activity_service.rs:355
 msgid "Can't reach the server"
 msgstr "Сервер недоступен"
 
-#: crates/chatter-core/src/services/activity_service.rs:371
+#: crates/chatter-core/src/services/activity_service.rs:372
 msgid "{} mentioned you in #{}"
 msgstr "{} упомянул(а) вас в #{}"
 
-#: crates/chatter-core/src/services/activity_service.rs:374
+#: crates/chatter-core/src/services/activity_service.rs:375
 msgid "{} replied to you in #{}"
 msgstr "{} ответил(а) вам в #{}"
 
-#: crates/chatter-core/src/services/activity_service.rs:377
+#: crates/chatter-core/src/services/activity_service.rs:378
 msgid "{} replied in a thread in #{}"
 msgstr "{} ответил(а) в обсуждении #{}"
 
-#: crates/chatter-core/src/services/activity_service.rs:383
+#: crates/chatter-core/src/services/activity_service.rs:384
 msgid "{} mentioned you"
 msgstr "{} упомянул(а) вас"
 
-#: crates/chatter-core/src/services/activity_service.rs:384
+#: crates/chatter-core/src/services/activity_service.rs:385
 msgid "{} replied to you"
 msgstr "{} ответил(а) вам"
 
-#: crates/chatter-core/src/services/activity_service.rs:385
+#: crates/chatter-core/src/services/activity_service.rs:386
 msgid "{} replied in a thread"
 msgstr "{} ответил(а) в обсуждении"
 
-#: crates/chatter-core/src/services/activity_service.rs:402
+#: crates/chatter-core/src/services/activity_service.rs:403
 msgid "Back online after {n} s"
 msgid_plural "Back online after {n} s"
 msgstr[0] "Снова в сети спустя {n} с"
 msgstr[1] "Снова в сети спустя {n} с"
 msgstr[2] "Снова в сети спустя {n} с"
 
-#: crates/chatter-core/src/services/activity_service.rs:409
+#: crates/chatter-core/src/services/activity_service.rs:410
 msgid "Back online after {} min"
 msgstr "Снова в сети спустя {} мин"
 
-#: crates/chatter-core/src/services/activity_service.rs:411
+#: crates/chatter-core/src/services/activity_service.rs:412
 msgid "Back online after {}"
 msgstr "Снова в сети спустя {}"
 
@@ -981,7 +1041,10 @@ msgid ""
 "Too many password attempts on this account, so password sign-in is paused "
 "for now. Sign in with a recovery code, or link this device from one that is "
 "already signed in."
-msgstr "Слишком много попыток ввода пароля для этого аккаунта, поэтому вход по паролю временно приостановлен. Войдите с кодом восстановления или привяжите это устройство с помощью устройства, на котором вы уже вошли."
+msgstr ""
+"Слишком много попыток ввода пароля для этого аккаунта, поэтому вход по "
+"паролю временно приостановлен. Войдите с кодом восстановления или привяжите "
+"это устройство с помощью устройства, на котором вы уже вошли."
 
 #: crates/chatter-core/src/services/call_notification_bridge.rs:207
 msgid "{} is calling in {}"
@@ -1050,7 +1113,8 @@ msgstr "Доставка не подтверждена."
 msgid ""
 "An earlier message has unconfirmed delivery. This new draft has not been "
 "sent."
-msgstr "Доставка предыдущего сообщения не подтверждена. Этот черновик не отправлен."
+msgstr ""
+"Доставка предыдущего сообщения не подтверждена. Этот черновик не отправлен."
 
 #: crates/chatter-core/src/services/gateway/shared.rs:238
 msgid "This send attempt was already confirmed. It was not sent again."
@@ -1092,7 +1156,9 @@ msgstr "Не удалось отправить: {}"
 msgid ""
 "This device has no encryption keys. Enter your PIN to restore them from your "
 "backup."
-msgstr "На этом устройстве нет ключей шифрования. Введите PIN, чтобы восстановить их из копии."
+msgstr ""
+"На этом устройстве нет ключей шифрования. Введите PIN, чтобы восстановить их "
+"из копии."
 
 #: crates/chatter-core/src/services/key_recovery.rs:85
 msgid "That PIN did not unlock your key backup. Check the PIN and try again."
@@ -1103,26 +1169,37 @@ msgid ""
 "No key backup was found for this account. Your previous conversations cannot "
 "be recovered. You can start over with new encryption keys — your contacts "
 "will be asked to verify you again."
-msgstr "Копия ключей для этого аккаунта не найдена. Прежние переписки восстановить нельзя. Можно начать заново с новыми ключами шифрования — вашим контактам потребуется снова проверить ваш номер безопасности."
+msgstr ""
+"Копия ключей для этого аккаунта не найдена. Прежние переписки восстановить "
+"нельзя. Можно начать заново с новыми ключами шифрования — вашим контактам "
+"потребуется снова проверить ваш номер безопасности."
 
 #: crates/chatter-core/src/services/key_recovery.rs:91
 msgid ""
 "Your key backup was destroyed after too many incorrect PIN attempts. Your "
 "previous conversations cannot be recovered. You can start over with new "
 "encryption keys — your contacts will be asked to verify you again."
-msgstr "Копия ключей уничтожена после слишком большого числа попыток ввода неверного PIN. Прежние переписки восстановить нельзя. Можно начать заново с новыми ключами шифрования — вашим контактам потребуется снова проверить ваш номер безопасности."
+msgstr ""
+"Копия ключей уничтожена после слишком большого числа попыток ввода неверного "
+"PIN. Прежние переписки восстановить нельзя. Можно начать заново с новыми "
+"ключами шифрования — вашим контактам потребуется снова проверить ваш номер "
+"безопасности."
 
 #: crates/chatter-core/src/services/key_recovery.rs:94
 msgid ""
 "Too many recovery attempts. Wait before trying your PIN again — your backup "
 "is still intact."
-msgstr "Слишком много попыток восстановления. Подождите, прежде чем снова вводить PIN — копия на месте."
+msgstr ""
+"Слишком много попыток восстановления. Подождите, прежде чем снова вводить "
+"PIN — копия на месте."
 
 #: crates/chatter-core/src/services/key_recovery.rs:97
 msgid ""
 "Could not reach the key backup service. Your keys are still safe; try again "
 "when you are online."
-msgstr "Не удалось связаться со службой резервного копирования ключей. Ключи в безопасности. Попробуйте снова, когда будете в сети."
+msgstr ""
+"Не удалось связаться со службой резервного копирования ключей. Ключи в "
+"безопасности. Попробуйте снова, когда будете в сети."
 
 #: crates/chatter-core/src/services/link_device_service/types.rs:33
 msgid "Wrong password or PIN."
@@ -1130,7 +1207,9 @@ msgstr "Неверный пароль или PIN."
 
 #: crates/chatter-core/src/services/link_device_service/types.rs:34
 msgid "That isn't a device link. Copy the whole link from the new device."
-msgstr "Это не ссылка для привязки устройства. Скопируйте ссылку целиком с нового устройства."
+msgstr ""
+"Это не ссылка для привязки устройства. Скопируйте ссылку целиком с нового "
+"устройства."
 
 #: crates/chatter-core/src/services/link_device_service/types.rs:38
 msgid "This link expired. Generate a new QR on the new device."
@@ -1160,7 +1239,9 @@ msgstr "Слишком много попыток ввода PIN. Подожди�
 msgid ""
 "Your key backup was deleted after too many PIN attempts. Set up your PIN "
 "again"
-msgstr "Копия ключей удалена после слишком большого числа попыток ввода PIN. Задайте PIN заново"
+msgstr ""
+"Копия ключей удалена после слишком большого числа попыток ввода PIN. Задайте "
+"PIN заново"
 
 #: crates/chatter-core/src/services/link_device_service/types.rs:87
 msgid "Couldn't check your PIN, try again"
@@ -1233,7 +1314,9 @@ msgstr "{} · участников: {}"
 msgid ""
 "{} · {} participants\n"
 "{}"
-msgstr "{} · участников: {}\n{}"
+msgstr ""
+"{} · участников: {}\n"
+"{}"
 
 #: crates/chatter-core/src/services/server_records.rs:350
 msgid "Call"
@@ -1247,7 +1330,9 @@ msgstr "Сейчас"
 msgid ""
 "No other devices to sign out. The primary device can't be signed out from "
 "another device."
-msgstr "Нет других устройств для выхода из аккаунта. На основном устройстве нельзя выйти из аккаунта с другого устройства."
+msgstr ""
+"Нет других устройств для выхода из аккаунта. На основном устройстве нельзя "
+"выйти из аккаунта с другого устройства."
 
 #: crates/chatter-core/src/services/session_service.rs:147
 msgid ""
@@ -1256,9 +1341,15 @@ msgid ""
 msgid_plural ""
 "Signed out {n} devices. The primary device can't be signed out from another "
 "device."
-msgstr[0] "Вы вышли на {n} устройстве. На основном устройстве нельзя выйти из аккаунта с другого устройства."
-msgstr[1] "Вы вышли на {n} устройствах. На основном устройстве нельзя выйти из аккаунта с другого устройства."
-msgstr[2] "Вы вышли на {n} устройствах. На основном устройстве нельзя выйти из аккаунта с другого устройства."
+msgstr[0] ""
+"Вы вышли на {n} устройстве. На основном устройстве нельзя выйти из аккаунта "
+"с другого устройства."
+msgstr[1] ""
+"Вы вышли на {n} устройствах. На основном устройстве нельзя выйти из аккаунта "
+"с другого устройства."
+msgstr[2] ""
+"Вы вышли на {n} устройствах. На основном устройстве нельзя выйти из аккаунта "
+"с другого устройства."
 
 #: crates/chatter-core/src/services/session_service.rs:155
 msgid "No other devices to sign out."
@@ -1275,33 +1366,44 @@ msgstr[2] "Вы вышли на {n} устройствах."
 msgid "Could not sign out {n} device. Check your connection and try again."
 msgid_plural ""
 "Could not sign out {n} devices. Check your connection and try again."
-msgstr[0] "Не удалось выйти на {n} устройстве. Проверьте соединение и попробуйте снова."
-msgstr[1] "Не удалось выйти на {n} устройствах. Проверьте соединение и попробуйте снова."
-msgstr[2] "Не удалось выйти на {n} устройствах. Проверьте соединение и попробуйте снова."
+msgstr[0] ""
+"Не удалось выйти на {n} устройстве. Проверьте соединение и попробуйте снова."
+msgstr[1] ""
+"Не удалось выйти на {n} устройствах. Проверьте соединение и попробуйте снова."
+msgstr[2] ""
+"Не удалось выйти на {n} устройствах. Проверьте соединение и попробуйте снова."
 
 #: crates/chatter-core/src/services/session_service.rs:181
 msgid ""
 "Signed out 1 device. Could not sign out 1 device. Check your connection and "
 "try again."
-msgstr "Завершён 1 сеанс. Не завершён 1 сеанс. Проверьте соединение и попробуйте снова."
+msgstr ""
+"Завершён 1 сеанс. Не завершён 1 сеанс. Проверьте соединение и попробуйте "
+"снова."
 
 #: crates/chatter-core/src/services/session_service.rs:184
 msgid ""
 "Signed out 1 device. Could not sign out {} devices. Check your connection "
 "and try again."
-msgstr "Завершён 1 сеанс. Не завершено сеансов: {}. Проверьте соединение и попробуйте снова."
+msgstr ""
+"Завершён 1 сеанс. Не завершено сеансов: {}. Проверьте соединение и "
+"попробуйте снова."
 
 #: crates/chatter-core/src/services/session_service.rs:188
 msgid ""
 "Signed out {} devices. Could not sign out 1 device. Check your connection "
 "and try again."
-msgstr "Завершено сеансов: {}. Не завершён 1 сеанс. Проверьте соединение и попробуйте снова."
+msgstr ""
+"Завершено сеансов: {}. Не завершён 1 сеанс. Проверьте соединение и "
+"попробуйте снова."
 
 #: crates/chatter-core/src/services/session_service.rs:192
 msgid ""
 "Signed out {} devices. Could not sign out {} devices. Check your connection "
 "and try again."
-msgstr "Завершено сеансов: {}. Не завершено: {}. Проверьте соединение и попробуйте снова."
+msgstr ""
+"Завершено сеансов: {}. Не завершено: {}. Проверьте соединение и попробуйте "
+"снова."
 
 #: crates/chatter-core/src/services/session_service.rs:86
 msgid "The device list changed. Reopen it and try again."
@@ -1350,27 +1452,27 @@ msgstr "Открыть {}"
 msgid "Quit"
 msgstr "Выход"
 
-#: crates/chatter-core/src/ui/format.rs:123
+#: crates/chatter-core/src/ui/format.rs:124
 msgid "Missed"
 msgstr "Пропущен"
 
-#: crates/chatter-core/src/ui/format.rs:125
+#: crates/chatter-core/src/ui/format.rs:126
 msgid "Declined"
 msgstr "Отклонён"
 
-#: crates/chatter-core/src/ui/format.rs:126
+#: crates/chatter-core/src/ui/format.rs:127
 msgid "Failed"
 msgstr "Ошибка"
 
-#: crates/chatter-core/src/ui/format.rs:127
+#: crates/chatter-core/src/ui/format.rs:128
 msgid "Incoming"
 msgstr "Входящий"
 
-#: crates/chatter-core/src/ui/format.rs:128
+#: crates/chatter-core/src/ui/format.rs:129
 msgid "Outgoing"
 msgstr "Исходящий"
 
-#: crates/chatter-core/src/ui/format.rs:173
+#: crates/chatter-core/src/ui/format.rs:174
 msgid "{} B"
 msgstr "{} Б"
 
@@ -1382,24 +1484,29 @@ msgstr "{} мин назад"
 msgid "Yesterday {}"
 msgstr "Вчера {}"
 
-#: crates/chatter-core/src/ui/format.rs:65
+#: crates/chatter-core/src/ui/format.rs:30
+msgctxt "weekday time"
+msgid "{0} {1}"
+msgstr "{0} {1}"
+
+#: crates/chatter-core/src/ui/format.rs:66
 msgid "away"
 msgstr "нет на месте"
 
-#: crates/chatter-core/src/ui/format.rs:66
+#: crates/chatter-core/src/ui/format.rs:67
 msgid "do not disturb"
 msgstr "не беспокоить"
 
-#: crates/chatter-core/src/ui/format.rs:70
+#: crates/chatter-core/src/ui/format.rs:71
 msgid "last seen {}"
 msgstr "был(а) {}"
 
-#: crates/chatter-core/src/ui/format.rs:72
-#: crates/chatter-core/src/ui/format.rs:74
+#: crates/chatter-core/src/ui/format.rs:73
+#: crates/chatter-core/src/ui/format.rs:75
 msgid "last seen recently"
 msgstr "был(а) недавно"
 
-#: crates/chatter-core/src/ui/format.rs:86
+#: crates/chatter-core/src/ui/format.rs:87
 msgid "Attachment"
 msgstr "Вложение"
 
@@ -1580,6 +1687,16 @@ msgstr "Суббота"
 msgid "Sunday"
 msgstr "Воскресенье"
 
+#: crates/chatter-core/src/util/time.rs:71
+msgctxt "month day"
+msgid "{0} {1}"
+msgstr "{1} {0}"
+
+#: crates/chatter-core/src/util/time.rs:76
+msgctxt "month day, year"
+msgid "{0} {1}, {2}"
+msgstr "{1} {0} {2}"
+
 #: crates/chatter-ui/src/bin_ui/features/activity/mod.rs:19
 msgid "Never"
 msgstr "Никогда"
@@ -1713,7 +1830,7 @@ msgid "📎 Attachment"
 msgstr "📎 Вложение"
 
 #: crates/chatter-ui/src/bin_ui/features/auth/initial_data.rs:146
-#: crates/chatter-core/src/ui/format.rs:64
+#: crates/chatter-core/src/ui/format.rs:65
 msgid "online"
 msgstr "в сети"
 
@@ -1753,7 +1870,9 @@ msgstr "Создание QR-кода…"
 msgid ""
 "Verification code: {}\n"
 "Check your other device shows the same code, then approve there."
-msgstr "Код проверки: {}\nСверьте его на другом устройстве и подтвердите там."
+msgstr ""
+"Код проверки: {}\n"
+"Сверьте его на другом устройстве и подтвердите там."
 
 #: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:85
 msgid "Approved! Setting up this device…"
@@ -1781,19 +1900,27 @@ msgid ""
 "Account recovered successfully! {} recovery codes remaining. Your previous "
 "PIN-based backup was invalidated by this recovery — set up a new backup from "
 "Settings after signing in. Please sign in with your new credentials."
-msgstr "Аккаунт восстановлен. Осталось кодов восстановления: {}. После этого восстановления прежняя резервная копия, защищённая PIN, стала недействительной. После входа создайте новую копию в настройках. Войдите с новыми учётными данными."
+msgstr ""
+"Аккаунт восстановлен. Осталось кодов восстановления: {}. После этого "
+"восстановления прежняя резервная копия, защищённая PIN, стала "
+"недействительной. После входа создайте новую копию в настройках. Войдите с "
+"новыми учётными данными."
 
 #: crates/chatter-ui/src/bin_ui/features/auth/recovery.rs:50
 msgid ""
 "Account recovered successfully! {} recovery codes remaining. Please sign in "
 "with your new credentials."
-msgstr "Аккаунт восстановлен. Осталось кодов восстановления: {}. Войдите с новыми учётными данными."
+msgstr ""
+"Аккаунт восстановлен. Осталось кодов восстановления: {}. Войдите с новыми "
+"учётными данными."
 
 #: crates/chatter-ui/src/bin_ui/features/auth/register.rs:271
 msgid ""
 "Connected over Tor. Creating your account (includes a short anti-spam "
 "puzzle)…"
-msgstr "Подключение через Tor. Создаём аккаунт (с решением небольшой задачи для защиты от спама)…"
+msgstr ""
+"Подключение через Tor. Создаём аккаунт (с решением небольшой задачи для "
+"защиты от спама)…"
 
 #: crates/chatter-ui/src/bin_ui/features/auth/register.rs:91
 msgid "Select avatar"
@@ -1811,7 +1938,9 @@ msgstr "Подключение через Tor… первое соединени
 msgid ""
 "Couldn't reach the server over Tor: {}. Shield is still on; nothing was sent "
 "outside Tor."
-msgstr "Не удалось связаться с сервером через Tor: {}. Shield по-прежнему включён; за пределы Tor ничего не ушло."
+msgstr ""
+"Не удалось связаться с сервером через Tor: {}. Shield по-прежнему включён; "
+"за пределы Tor ничего не ушло."
 
 #: crates/chatter-ui/src/bin_ui/features/auth/shield.rs:72
 msgid "Failed to connect to server: {}"
@@ -1951,7 +2080,7 @@ msgstr "Вы"
 
 #: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:606
 #: crates/chatter-core/src/domain/message/entity.rs:370
-#: crates/chatter-core/src/services/activity_service.rs:342
+#: crates/chatter-core/src/services/activity_service.rs:343
 msgid "Missed call"
 msgstr "Пропущенный звонок"
 
@@ -1960,7 +2089,7 @@ msgid "Call declined"
 msgstr "Звонок отклонён"
 
 #: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:927
-#: crates/chatter-core/src/ui/format.rs:124
+#: crates/chatter-core/src/ui/format.rs:125
 msgid "No answer"
 msgstr "Нет ответа"
 
@@ -2053,7 +2182,8 @@ msgstr "Введите целое число минут от 1 до 525600."
 
 #: crates/chatter-ui/src/bin_ui/features/chat/disappearing.rs:297
 msgid "Timer changed here. Your friend receives it with your next message."
-msgstr "Таймер изменён здесь. Собеседник получит его вместе со следующим сообщением."
+msgstr ""
+"Таймер изменён здесь. Собеседник получит его вместе со следующим сообщением."
 
 #: crates/chatter-ui/src/bin_ui/features/chat/disappearing.rs:55
 msgid "Could not announce timer change"
@@ -2074,7 +2204,8 @@ msgstr "Новый номер безопасности принят — можн
 #: crates/chatter-ui/src/bin_ui/features/chat/identity_change.rs:116
 msgid ""
 "Could not accept the new safety number — the conversation is still blocked."
-msgstr "Не удалось принять новый номер безопасности — чат по-прежнему заблокирован."
+msgstr ""
+"Не удалось принять новый номер безопасности — чат по-прежнему заблокирован."
 
 #: crates/chatter-ui/src/bin_ui/features/chat/membership.rs:186
 msgid "Link created. Copy it now: it cannot be shown again."
@@ -2118,7 +2249,8 @@ msgstr "Вас исключили из группы"
 
 #: crates/chatter-ui/src/bin_ui/features/chat/open/saved_messages.rs:91
 msgid "Couldn't open Saved messages. Check your connection and try again."
-msgstr "Не удалось открыть «Избранное». Проверьте соединение и попробуйте снова."
+msgstr ""
+"Не удалось открыть «Избранное». Проверьте соединение и попробуйте снова."
 
 #: crates/chatter-ui/src/bin_ui/features/chat/pin.rs:29
 #: crates/chatter-core/src/domain/attachment.rs:475
@@ -2176,7 +2308,8 @@ msgstr[2] "{n} сообщений"
 
 #: crates/chatter-ui/src/bin_ui/features/chat/send_message.rs:1150
 msgid "Earlier delivery is unconfirmed. Your new draft is kept."
-msgstr "Доставка предыдущего сообщения не подтверждена. Новый черновик сохранён."
+msgstr ""
+"Доставка предыдущего сообщения не подтверждена. Новый черновик сохранён."
 
 #: crates/chatter-ui/src/bin_ui/features/chat/send_message.rs:1484
 msgid "Error: {}"
@@ -2272,7 +2405,9 @@ msgstr "Не удалось скопировать код"
 
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/code_preview.rs:89
 msgid "Unable to open this file. Install a text viewer and try again."
-msgstr "Не удалось открыть этот файл. Установите просмотрщик текста и попробуйте снова."
+msgstr ""
+"Не удалось открыть этот файл. Установите просмотрщик текста и попробуйте "
+"снова."
 
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/media_viewer.rs:175
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/media_viewer.rs:225
@@ -2368,11 +2503,15 @@ msgstr "Не удалось показать PDF. Попробуйте «Отк�
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/pdf_preview.rs:305
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/pdf_preview.rs:434
 msgid "Unable to show this PDF page. Try Open externally."
-msgstr "Не удалось показать эту страницу PDF. Попробуйте «Открыть в другом приложении»."
+msgstr ""
+"Не удалось показать эту страницу PDF. Попробуйте «Открыть в другом "
+"приложении»."
 
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/pdf_preview.rs:45
 msgid "Unable to open PDF. Install a PDF viewer and try Open externally again."
-msgstr "Не удалось открыть PDF. Установите просмотрщик PDF и снова попробуйте «Открыть в другом приложении»."
+msgstr ""
+"Не удалось открыть PDF. Установите просмотрщик PDF и снова попробуйте "
+"«Открыть в другом приложении»."
 
 #: crates/chatter-ui/src/bin_ui/features/chat_actions/pdf_preview.rs:55
 msgid "PDF content is no longer available. Reopen the attachment."
@@ -2409,7 +2548,9 @@ msgstr "Сначала откройте чат, затем перетащите 
 #: crates/chatter-ui/src/bin_ui/features/composer/drag_drop.rs:134
 msgid ""
 "Couldn't attach that file. Check that it is still available and try again."
-msgstr "Не удалось прикрепить этот файл. Проверьте, что он на месте, и попробуйте снова."
+msgstr ""
+"Не удалось прикрепить этот файл. Проверьте, что он на месте, и попробуйте "
+"снова."
 
 #: crates/chatter-ui/src/bin_ui/features/composer/gif.rs:213
 #: crates/chatter-core/src/client/preview.rs:62
@@ -2427,13 +2568,17 @@ msgstr "GIF не отправлен. Сообщение снова в поле �
 msgid ""
 "The GIF was not sent. Your message is kept: open its chat again with an "
 "empty composer to get it back."
-msgstr "GIF не отправлен. Сообщение сохранено: откройте этот чат снова с пустым полем ввода, чтобы вернуть его."
+msgstr ""
+"GIF не отправлен. Сообщение сохранено: откройте этот чат снова с пустым "
+"полем ввода, чтобы вернуть его."
 
 #: crates/chatter-ui/src/bin_ui/features/composer/mod.rs:97
 msgid ""
 "Couldn't save drafts on this device. New changes are kept only while the app "
 "is open."
-msgstr "Не удалось сохранить черновики на этом устройстве. Новые правки хранятся, только пока приложение открыто."
+msgstr ""
+"Не удалось сохранить черновики на этом устройстве. Новые правки хранятся, "
+"только пока приложение открыто."
 
 #: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:105
 msgid "Allow microphone access to record a voice message"
@@ -2519,7 +2664,8 @@ msgstr "Отправить через меш"
 msgid ""
 "Files are not sent in private mesh conversations — the file packet is not "
 "encrypted."
-msgstr "В личных меш-чатах файлы не отправляются — пакет с файлом не шифруется."
+msgstr ""
+"В личных меш-чатах файлы не отправляются — пакет с файлом не шифруется."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/attach.rs:94
 #: crates/chatter-ui/src/bin_ui/features/mesh/send.rs:65
@@ -2579,7 +2725,9 @@ msgstr "Создатель исключил это устройство из г�
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:1385
 msgid ""
 "Identity key change refused for {}. A new identity appears as a new peer."
-msgstr "Смена ключа идентификации для {} отклонена. Устройство с новым ключом появится как новый участник."
+msgstr ""
+"Смена ключа идентификации для {} отклонена. Устройство с новым ключом "
+"появится как новый участник."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:1399
 msgid "Mesh: {}"
@@ -2609,7 +2757,8 @@ msgstr "Группа создана, но открыть её не удалос�
 msgid ""
 "Admission requested over Noise. Waiting for the creator to send the channel "
 "key."
-msgstr "Запрос на вход отправлен по Noise. Ждём, пока создатель пришлёт ключ канала."
+msgstr ""
+"Запрос на вход отправлен по Noise. Ждём, пока создатель пришлёт ключ канала."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:408
 msgid "Invitation queued — will deliver when connected."
@@ -2651,7 +2800,9 @@ msgstr "Не удалось задать имя в меше: {}"
 msgid ""
 "Account proof sent over this peer's encrypted Noise link. They still need to "
 "verify it."
-msgstr "Подтверждение аккаунта отправлено этому участнику по зашифрованному соединению Noise. Ему ещё нужно проверить его."
+msgstr ""
+"Подтверждение аккаунта отправлено этому участнику по зашифрованному "
+"соединению Noise. Ему ещё нужно проверить его."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:606
 msgid "Could not show QR: {}"
@@ -2661,7 +2812,9 @@ msgstr "Не удалось показать QR: {}"
 msgid ""
 "Signal mesh enabled. Both people must enable it and exchange live keys "
 "before sending."
-msgstr "Меш Signal включён. Перед отправкой оба собеседника должны включить его и обменяться актуальными ключами."
+msgstr ""
+"Меш Signal включён. Перед отправкой оба собеседника должны включить его и "
+"обменяться актуальными ключами."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:679
 msgid "Noise (bitchat) selected for this mesh conversation."
@@ -2694,7 +2847,9 @@ msgstr "Для меша нужны разрешения Bluetooth."
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:857
 msgid ""
 "Turn on Location in Android settings to discover nearby Bluetooth peers."
-msgstr "Включите геолокацию в настройках Android, чтобы находить участников поблизости по Bluetooth."
+msgstr ""
+"Включите геолокацию в настройках Android, чтобы находить участников "
+"поблизости по Bluetooth."
 
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:87
 msgid "Verified Chatter contact"
@@ -2902,7 +3057,9 @@ msgstr "Приглашения отправлены"
 
 #: crates/chatter-ui/src/bin_ui/features/modals/create_channel.rs:666
 msgid "Unable to send all invitations. Check the member list before retrying."
-msgstr "Не удалось отправить все приглашения. Проверьте список участников перед повтором."
+msgstr ""
+"Не удалось отправить все приглашения. Проверьте список участников перед "
+"повтором."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/forward.rs:133
 msgid "Message forwarded"
@@ -2940,7 +3097,9 @@ msgstr "Код считан — нажмите, чтобы подключить�
 msgid ""
 "Camera access is off. Paste the code instead, or allow the camera for "
 "Chatter in system settings."
-msgstr "Доступ к камере выключен. Вставьте код или разрешите Chatter доступ к камере в настройках системы."
+msgstr ""
+"Доступ к камере выключен. Вставьте код или разрешите Chatter доступ к камере "
+"в настройках системы."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/friends/friend_code.rs:194
 msgid "Clipboard unavailable. Enter the code manually."
@@ -3031,7 +3190,9 @@ msgstr "Не удалось отклонить личный запрос. Поп
 
 #: crates/chatter-ui/src/bin_ui/features/modals/friends/private_requests.rs:245
 msgid "Chat blocked, but the user block failed. Try again from Blocked."
-msgstr "Чат заблокирован, но заблокировать пользователя не удалось. Попробуйте снова в разделе «Заблокированные»."
+msgstr ""
+"Чат заблокирован, но заблокировать пользователя не удалось. Попробуйте снова "
+"в разделе «Заблокированные»."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/friends/private_requests.rs:269
 msgid "Could not block the private request. Try again."
@@ -3085,13 +3246,16 @@ msgstr "Новое устройство привязано."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/link_approve.rs:60
 msgid "Chatter uses the camera only to read the QR code on your new device."
-msgstr "Chatter использует камеру только для считывания QR-кода на новом устройстве."
+msgstr ""
+"Chatter использует камеру только для считывания QR-кода на новом устройстве."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/link_approve.rs:80
 msgid ""
 "Camera access is off. Paste the link instead, or allow the camera for "
 "Chatter in system settings."
-msgstr "Доступ к камере выключен. Вставьте ссылку или разрешите Chatter доступ к камере в настройках системы."
+msgstr ""
+"Доступ к камере выключен. Вставьте ссылку или разрешите Chatter доступ к "
+"камере в настройках системы."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/avatar_edit.rs:147
 msgid "Wait for the avatar picker to finish."
@@ -3108,11 +3272,13 @@ msgstr "Выберите изображение меньше 32 МиБ."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/avatar_edit.rs:198
 msgid "Unable to use this avatar. Choose a valid, smaller image."
-msgstr "Не удалось использовать этот аватар. Выберите другое изображение, поменьше."
+msgstr ""
+"Не удалось использовать этот аватар. Выберите другое изображение, поменьше."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/avatar_edit.rs:210
 msgid "Avatar is too large to share. Choose a smaller image."
-msgstr "Аватар слишком большой, чтобы им поделиться. Выберите изображение поменьше."
+msgstr ""
+"Аватар слишком большой, чтобы им поделиться. Выберите изображение поменьше."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/profile/avatar_edit.rs:241
 msgid "Unable to preview this avatar. Choose another image."
@@ -3199,7 +3365,9 @@ msgstr "Голосовое сообщение"
 msgid ""
 "Action timed out; its outcome is uncertain. Review the refreshed devices and "
 "pending links."
-msgstr "Время ожидания действия истекло, результат неизвестен. Проверьте обновлённый список устройств и запросы на привязку, ожидающие подтверждения."
+msgstr ""
+"Время ожидания действия истекло, результат неизвестен. Проверьте обновлённый "
+"список устройств и запросы на привязку, ожидающие подтверждения."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/sessions.rs:133
 msgid "Could not load sessions: {}"
@@ -3284,7 +3452,9 @@ msgstr "Копия на сервере обновлена (строк: {})"
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:213
 msgid "Could not back up messages. Check your connection and PIN, then retry."
-msgstr "Не удалось создать копию сообщений. Проверьте соединение и PIN, затем повторите."
+msgstr ""
+"Не удалось создать копию сообщений. Проверьте соединение и PIN, затем "
+"повторите."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:243
 msgid "Restored {} rows ({} already present or kept locally)"
@@ -3294,11 +3464,15 @@ msgstr "Восстановлено строк: {} (уже было или ост
 msgid ""
 "This backup was made by a newer version of Chatter. Update the app to "
 "restore it."
-msgstr "Эту копию создала более новая версия Chatter. Обновите приложение, чтобы восстановить её."
+msgstr ""
+"Эту копию создала более новая версия Chatter. Обновите приложение, чтобы "
+"восстановить её."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:250
 msgid "Could not restore backup. Check your passphrase or PIN, then retry."
-msgstr "Не удалось восстановить копию. Проверьте парольную фразу или PIN, затем повторите."
+msgstr ""
+"Не удалось восстановить копию. Проверьте парольную фразу или PIN, затем "
+"повторите."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:66
 msgid "Could not prepare the backup file."
@@ -3307,7 +3481,8 @@ msgstr "Не удалось подготовить файл копии."
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:79
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:133
 msgid "Could not export backup. Check available storage and retry."
-msgstr "Не удалось экспортировать копию. Проверьте свободное место и повторите."
+msgstr ""
+"Не удалось экспортировать копию. Проверьте свободное место и повторите."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:89
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:131
@@ -3321,12 +3496,14 @@ msgstr "Не удалось сохранить файл копии."
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/notifications.rs:87
 msgid ""
 "Could not save notification preferences. Check your connection and retry."
-msgstr "Не удалось сохранить настройки уведомлений. Проверьте соединение и повторите."
+msgstr ""
+"Не удалось сохранить настройки уведомлений. Проверьте соединение и повторите."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/notifications.rs:91
 msgid ""
 "Could not load notification preferences. Check your connection and retry."
-msgstr "Не удалось загрузить настройки уведомлений. Проверьте соединение и повторите."
+msgstr ""
+"Не удалось загрузить настройки уведомлений. Проверьте соединение и повторите."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/privacy.rs:133
 msgid "Safety number"
@@ -3338,7 +3515,8 @@ msgstr "Не удалось сохранить отчёты о прочтени�
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/privacy.rs:335
 msgid "Couldn't save typing indicators. Try again."
-msgstr "Не удалось сохранить настройку индикаторов набора текста. Попробуйте снова."
+msgstr ""
+"Не удалось сохранить настройку индикаторов набора текста. Попробуйте снова."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/privacy.rs:336
 msgid "Couldn't save {}. Try again."
@@ -3362,7 +3540,9 @@ msgstr "PIN изменён"
 
 #: crates/chatter-ui/src/bin_ui/features/navigation.rs:130
 msgid "Could not check this device's saved identity. Try again."
-msgstr "Не удалось проверить сохранённые идентификационные данные этого устройства. Попробуйте снова."
+msgstr ""
+"Не удалось проверить сохранённые идентификационные данные этого устройства. "
+"Попробуйте снова."
 
 #: crates/chatter-ui/src/bin_ui/features/navigation.rs:141
 msgid "Tap \"Generate QR\" to start."
@@ -3520,8 +3700,6 @@ msgid "April"
 msgstr "Апрель"
 
 #: crates/chatter-ui/src/bin_ui/features/unified_search.rs:153
-#: crates/chatter-ui/src/bin_ui/features/unified_search.rs:172
-#: crates/chatter-core/src/util/time.rs:29
 msgid "May"
 msgstr "Май"
 
@@ -3573,6 +3751,12 @@ msgstr "мар"
 msgid "Apr"
 msgstr "апр"
 
+#: crates/chatter-ui/src/bin_ui/features/unified_search.rs:172
+#: crates/chatter-core/src/util/time.rs:29
+msgctxt "month abbreviation"
+msgid "May"
+msgstr "май"
+
 #: crates/chatter-ui/src/bin_ui/features/unified_search.rs:173
 #: crates/chatter-core/src/util/time.rs:30
 msgid "Jun"
@@ -3614,10 +3798,9 @@ msgstr "{0} {1}"
 
 #: crates/chatter-ui/src/bin_ui/features/unified_search.rs:220
 #: crates/chatter-core/src/services/activity_service.rs:128
-#: crates/chatter-core/src/ui/format.rs:30
-#: crates/chatter-core/src/util/time.rs:71
-msgid "{} {}"
-msgstr "{} {}"
+msgctxt "day month"
+msgid "{0} {1}"
+msgstr "{0} {1}"
 
 #: crates/chatter-ui/src/bin_ui/features/update.rs:171
 msgid "Starting verified update…"
@@ -3625,11 +3808,14 @@ msgstr "Запуск проверенного обновления…"
 
 #: crates/chatter-ui/src/bin_ui/features/update.rs:185
 msgid "Could not restart into the verified update"
-msgstr "Не удалось перезапустить приложение для запуска проверенного обновления"
+msgstr ""
+"Не удалось перезапустить приложение для запуска проверенного обновления"
 
 #: crates/chatter-ui/src/bin_ui/features/update.rs:208
 msgid "Large download on cellular. Tap Download now to continue."
-msgstr "Большой объём загрузки по сотовой сети. Нажмите «Скачать сейчас», чтобы продолжить."
+msgstr ""
+"Большой объём загрузки по сотовой сети. Нажмите «Скачать сейчас», чтобы "
+"продолжить."
 
 #: crates/chatter-ui/src/bin_ui/features/update.rs:227
 msgid "Downloading and verifying…"
@@ -3665,7 +3851,8 @@ msgstr "MainActivity ещё не зарегистрирована"
 
 #: crates/chatter-ui/src/platform/android/activity.rs:67
 msgid "Allow Chatter to install updates, then tap Update again"
-msgstr "Разрешите Chatter устанавливать обновления, затем снова нажмите «Обновить»"
+msgstr ""
+"Разрешите Chatter устанавливать обновления, затем снова нажмите «Обновить»"
 
 #: crates/chatter-ui/src/platform/android/audio_route.rs:257
 msgid "Could not switch audio route. Using an available device."
