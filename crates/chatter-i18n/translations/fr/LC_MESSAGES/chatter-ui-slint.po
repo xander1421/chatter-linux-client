@@ -1,7 +1,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: chatter\n"
-"POT-Creation-Date: 2026-11-14 20:32+0000\n"
+"POT-Creation-Date: 2026-11-14 21:22+0000\n"
 "Language: fr\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -84,7 +84,7 @@ msgstr "OK"
 
 #: ui/activity/activity_sheet.slint:141 ui/activity/activity_sheet.slint:145
 msgid "Mark all read"
-msgstr "Tout lire"
+msgstr "Tout marquer comme lu"
 
 #: ui/activity/activity_sheet.slint:166
 msgid "Server host"
@@ -121,7 +121,7 @@ msgstr "Échec"
 
 #: ui/activity/activity_sheet.slint:183
 msgid "App version"
-msgstr "Version de l'app"
+msgstr "Version de l’application"
 
 #: ui/activity/activity_sheet.slint:187 ui/sidebar/update_banner.slint:30
 msgid "Update available"
@@ -155,9 +155,9 @@ msgid ""
 "messages are still end-to-end encrypted and routed through anonymous "
 "mailboxes."
 msgstr ""
-"Shield ne peut pas masquer votre position réseau pour le moment (Tor "
+"Shield ne peut pas masquer votre localisation réseau pour le moment (Tor "
 "indisponible). Vos messages restent chiffrés de bout en bout et passent par "
-"des boîtes anonymes."
+"des boîtes aux lettres anonymes."
 
 #: ui/anon_mode/shield_onboarding.slint:30
 msgid "Shield unavailable"
@@ -209,7 +209,7 @@ msgstr "Chargement..."
 
 #: ui/app_auth_flow.slint:58
 msgid "Generate a QR to begin."
-msgstr "Générez un QR pour commencer."
+msgstr "Générez un code QR pour commencer."
 
 #. Properties
 #: ui/app_chat_pane.slint:58 ui/chat/chat_layout.slint:194
@@ -308,10 +308,11 @@ msgid ""
 "Your account stays on the server. It must differ from your lock PIN and your "
 "account PIN."
 msgstr ""
-"Facultatif. Un second PIN qui, saisi sur l'écran de verrouillage, efface "
-"définitivement tout ce que Chatter conserve sur cet appareil et le remet "
-"comme à la première installation. Votre compte reste sur le serveur. Il doit "
-"être différent du PIN de verrouillage et du PIN du compte."
+"Facultatif. Un second PIN qui, saisi sur l’écran de verrouillage, efface "
+"définitivement tout ce que Chatter conserve sur cet appareil et fait "
+"redémarrer Chatter comme à la première installation. Votre compte reste sur "
+"le serveur. Ce PIN doit être différent de votre PIN de verrouillage et de "
+"votre PIN de compte."
 
 #: ui/app_lock.slint:245
 msgid "Confirm duress PIN"
@@ -452,7 +453,7 @@ msgstr "Émoji de vérification 4 : {}"
 
 #: ui/calls/active_call_view.slint:603
 msgid "Call key version {}"
-msgstr "Version de clé d'appel {}"
+msgstr "Version de la clé d’appel : {}"
 
 #: ui/calls/active_call_view.slint:613
 msgid "Call verification pending"
@@ -464,7 +465,7 @@ msgstr "Vérification en attente"
 
 #: ui/calls/call_controls.slint:57
 msgid "Select microphone, linked audio route"
-msgstr "Choisir le micro, route audio liée"
+msgstr "Choisir le micro, entrée et sortie audio liées"
 
 #: ui/calls/call_controls.slint:65 ui/calls/return_to_call_bar.slint:129
 msgid "Unmute microphone"
@@ -476,7 +477,7 @@ msgstr "Couper le micro"
 
 #: ui/calls/call_controls.slint:76
 msgid "Select output, linked audio route"
-msgstr "Choisir la sortie, route audio liée"
+msgstr "Choisir la sortie, entrée et sortie audio liées"
 
 #: ui/calls/call_controls.slint:76
 msgid "Select output"
@@ -688,7 +689,7 @@ msgstr "Fenêtres"
 
 #: ui/calls/device_picker.slint:295
 msgid "No screens or windows found"
-msgstr "Aucun écran ni fenêtre trouvé"
+msgstr "Aucun écran ni aucune fenêtre trouvés"
 
 #: ui/calls/incoming_call_modal.slint:125
 msgid "Join group video call"
@@ -782,7 +783,7 @@ msgstr "Retour"
 
 #: ui/chat/chat_header.slint:335
 msgid "Typing"
-msgstr "Écrit"
+msgstr "En train d’écrire"
 
 #: ui/chat/chat_header.slint:385 ui/sidebar/dm_list_item.slint:196
 msgid "Secret chat"
@@ -1075,11 +1076,12 @@ msgstr ""
 
 #: ui/chat/disappearing_settings.slint:78
 msgid "How long to enable"
-msgstr "Durée à activer"
+msgstr "Durée d’activation"
 
 #: ui/chat/disappearing_settings.slint:79
 msgid "Current: {}. The window applies to new messages only."
-msgstr "Actuel : {}. La durée ne s'applique qu'aux nouveaux messages."
+msgstr ""
+"Durée actuelle : {}. L’activation ne concerne que les nouveaux messages."
 
 #: ui/chat/disappearing_settings.slint:81
 msgid "5 minutes"
@@ -1124,11 +1126,11 @@ msgstr "Détails"
 
 #: ui/chat/membership_bar.slint:162
 msgid "Hide membership details"
-msgstr "Masquer les détails d'appartenance"
+msgstr "Masquer les détails sur les membres"
 
 #: ui/chat/membership_bar.slint:162
 msgid "Show membership details"
-msgstr "Afficher les détails d'appartenance"
+msgstr "Afficher les détails sur les membres"
 
 #: ui/chat/message_actions.slint:66
 msgid "Reply to message"
@@ -1148,7 +1150,7 @@ msgstr "Plus d'actions"
 
 #: ui/chat/message_attachments.slint:118 ui/chat/message_attachments.slint:288
 msgid "Queued"
-msgstr "En file"
+msgstr "En attente"
 
 #: ui/chat/message_attachments.slint:119 ui/chat/message_attachments.slint:289
 msgid "Uploading…"
@@ -1390,11 +1392,11 @@ msgstr "modifié"
 #. packet: there is no recipient ACK.
 #: ui/chat/message_footer.slint:159 ui/chat/message_footer.slint:201
 msgid "queued"
-msgstr "en file"
+msgstr "en attente"
 
 #: ui/chat/message_footer.slint:160
 msgid "relayed"
-msgstr "au relais"
+msgstr "relayé"
 
 #: ui/chat/message_footer.slint:161
 msgid "carried"
@@ -1427,15 +1429,16 @@ msgstr "envoyé"
 #: ui/chat/message_footer.slint:173
 msgid "Signal ciphertext queued on this device; no route has accepted it"
 msgstr ""
-"Message Signal chiffré en file sur cet appareil ; aucun chemin ne l'a accepté"
+"Message Signal chiffré en attente sur cet appareil ; aucun chemin ne l’a "
+"accepté"
 
 #: ui/chat/message_footer.slint:175
 msgid ""
 "Sealed Signal ciphertext queued onto a courier link; recipient has not "
 "acknowledged it"
 msgstr ""
-"Message Signal scellé mis en file sur un lien coursier ; le destinataire ne "
-"l'a pas encore confirmé"
+"Message Signal chiffré et scellé en attente sur une liaison de transport ; "
+"le destinataire n’en a pas confirmé la réception"
 
 #: ui/chat/message_footer.slint:177
 msgid "Handed to a passing device; may arrive later"
@@ -1447,11 +1450,11 @@ msgstr "Conservé sur cet appareil en attendant un porteur"
 
 #: ui/chat/message_footer.slint:181
 msgid "Left the outbox without ever being acknowledged"
-msgstr "Parti de la boîte d'envoi sans jamais être confirmé"
+msgstr "Sorti de la boîte d’envoi sans confirmation de réception"
 
 #: ui/chat/message_footer.slint:183
 msgid "The peer's device acknowledged it"
-msgstr "L'appareil du correspondant l'a confirmé"
+msgstr "L’appareil du correspondant en a confirmé la réception"
 
 #: ui/chat/message_footer.slint:185
 msgid "Read by the peer"
@@ -1463,7 +1466,7 @@ msgstr "Diffusé sans confirmation du destinataire"
 
 #: ui/chat/message_footer.slint:188
 msgid "Handed to a live link; not yet acknowledged"
-msgstr "Remis à un lien actif ; pas encore confirmé"
+msgstr "Transmis à une liaison active ; réception non encore confirmée"
 
 #: ui/chat/message_footer.slint:201
 msgid "waiting for Tor"
@@ -1475,8 +1478,7 @@ msgstr "envoi"
 
 #: ui/chat/message_footer.slint:206
 msgid "Queued behind an earlier send; upload has not started"
-msgstr ""
-"En file derrière un envoi précédent ; le téléversement n'a pas commencé"
+msgstr "En attente après un envoi précédent ; le transfert n’a pas commencé"
 
 #: ui/chat/message_footer.slint:206 ui/chat/message_item.slint:659
 msgid "Waiting for Tor"
@@ -1566,7 +1568,7 @@ msgstr "AI"
 
 #: ui/chat/message_item.slint:821
 msgid "Thread reply"
-msgstr "Réponse du fil"
+msgstr "Réponse dans le fil"
 
 #: ui/chat/message_list_overlays.slint:26
 msgid "{n} new message, jump to newest"
@@ -1671,12 +1673,13 @@ msgid ""
 "New messages disappear after this time. Received messages count down after "
 "you read them; your sent messages count down after sending."
 msgstr ""
-"Les nouveaux messages disparaissent après ce délai. Les messages reçus "
-"comptent à rebours après lecture ; les vôtres, après l'envoi."
+"Les nouveaux messages disparaissent après ce délai. Le compte à rebours "
+"commence à la lecture pour les messages reçus et à l’envoi pour les messages "
+"que vous envoyez."
 
 #: ui/chat/secret_timer_modal.slint:26
 msgid "Current: {}"
-msgstr "Actuel : {}"
+msgstr "Réglage actuel : {}"
 
 #: ui/chat/selection_bar.slint:103
 msgid "Copy selected"
@@ -1775,7 +1778,9 @@ msgstr "Créer"
 
 #: ui/components/connection_banner.slint:110
 msgid "The mesh is not running either, so there is nothing to fall back to."
-msgstr "Le mesh ne fonctionne pas non plus, il n'y a donc rien en secours."
+msgstr ""
+"Le mesh ne fonctionne pas non plus : aucune solution de secours n’est "
+"disponible."
 
 #: ui/components/connection_banner.slint:117
 msgid ""
@@ -2049,8 +2054,8 @@ msgstr "Aucune suggestion"
 msgid ""
 "Not signed in — mesh conversations only. Channels and DMs need an account."
 msgstr ""
-"Non connecté — discussions mesh uniquement. Les canaux et les MP nécessitent "
-"un compte."
+"Non connecté — discussions mesh uniquement. Les canaux et les messages "
+"privés nécessitent un compte."
 
 #: ui/components/mesh_only_bar.slint:76 ui/components/mesh_only_bar.slint:91
 #: ui/pages/register.slint:619
@@ -2092,29 +2097,31 @@ msgid ""
 "Creating an account and signing in both need it, so neither will work until "
 "it comes back."
 msgstr ""
-"Créer un compte et se connecter en ont tous les deux besoin : ni l'un ni "
-"l'autre ne marchera tant qu'il ne sera pas revenu."
+"La création d’un compte et la connexion nécessitent le serveur. Ces deux "
+"actions seront impossibles tant qu’il sera indisponible."
 
 #: ui/components/offline_mesh_notice.slint:101
 msgid ""
 "The mesh does not. It carries messages between nearby devices over Bluetooth "
 "with no server, no internet and no account — and it is running now."
 msgstr ""
-"Le mesh, non. Il transporte les messages entre appareils proches via "
-"Bluetooth, sans serveur, sans Internet et sans compte — et il fonctionne en "
-"ce moment."
+"Le mesh n’en a pas besoin. Il transmet les messages entre appareils à "
+"proximité via Bluetooth, sans serveur, sans Internet et sans compte — et il "
+"fonctionne actuellement."
 
 #: ui/components/offline_mesh_notice.slint:103
 msgid ""
 "The mesh is not running on this device either, so there is nothing to fall "
 "back to right now."
 msgstr ""
-"Le mesh ne fonctionne pas non plus sur cet appareil, il n'y a donc rien en "
-"secours pour le moment."
+"Le mesh ne fonctionne pas non plus sur cet appareil : aucune solution de "
+"secours n’est disponible pour le moment."
 
 #: ui/components/offline_mesh_notice.slint:104
 msgid "This build has no mesh, so there is nothing to fall back to."
-msgstr "Cette version n'a pas de mesh, il n'y a donc rien en secours."
+msgstr ""
+"Cette version ne prend pas en charge le mesh : aucune solution de secours "
+"n’est disponible."
 
 #: ui/components/offline_mesh_notice.slint:144
 msgid "Use the mesh without an account"
@@ -2125,8 +2132,8 @@ msgid ""
 "Your channels and DMs stay where they are. Sign in whenever the server is "
 "back."
 msgstr ""
-"Vos canaux et vos MP restent en place. Connectez-vous quand le serveur sera "
-"de retour."
+"Vos canaux et vos messages privés sont conservés. Connectez-vous quand le "
+"serveur sera de nouveau disponible."
 
 #: ui/components/pdf_preview_panel.slint:80
 msgid "PDF"
@@ -2226,7 +2233,7 @@ msgstr "Plus volumineux"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: any"
-msgstr "Filtre de date : tout"
+msgstr "Filtre de date : toutes les dates"
 
 #: ui/components/unified_search.slint:692
 msgid "Date filter: today"
@@ -2251,7 +2258,7 @@ msgstr "Filtre de date : {}"
 #. `choice` is compared to pick the date-filter key. Shown text is separate.
 #: ui/components/unified_search.slint:699
 msgid "Any time"
-msgstr "Tout"
+msgstr "Toutes les dates"
 
 #: ui/components/unified_search.slint:699
 msgid "Today"
@@ -2424,7 +2431,7 @@ msgstr "Mois suivant"
 
 #: ui/components/unified_search.slint:1262
 msgid "Tap a start day, then an end day"
-msgstr "Touchez un jour de début, puis un jour de fin"
+msgstr "Sélectionnez une date de début, puis une date de fin"
 
 #: ui/components/unified_search.slint:1262
 msgid "Start: {} · choose end"
@@ -2488,7 +2495,7 @@ msgstr "Rejoindre avec une invitation"
 
 #: ui/mesh/mesh_compose_sheet.slint:95 ui/mesh/mesh_compose_sheet.slint:160
 msgid "Join location cell"
-msgstr "Rejoindre une cellule de lieu"
+msgstr "Rejoindre une cellule géographique"
 
 #: ui/mesh/mesh_compose_sheet.slint:95
 msgid "New"
@@ -2531,19 +2538,19 @@ msgstr "Coller l'invitation privée"
 
 #: ui/mesh/mesh_compose_sheet.slint:209 ui/modals/link_device_approve.slint:80
 msgid "Scan QR code"
-msgstr "Scanner le QR"
+msgstr "Scanner le code QR"
 
 #: ui/mesh/mesh_compose_sheet.slint:218
 msgid "Location cell (e.g. u4pruy)"
-msgstr "Cellule de lieu (p. ex. u4pruy)"
+msgstr "Cellule géographique (p. ex. u4pruy)"
 
 #: ui/mesh/mesh_compose_sheet.slint:225
 msgid ""
 "Location cells use geohashes and available relays to connect devices in an "
 "area."
 msgstr ""
-"Les cellules de lieu utilisent des geohash et les relais disponibles pour "
-"relier les appareils d'une zone."
+"Les cellules géographiques utilisent des geohash et les relais disponibles "
+"pour relier les appareils d’une zone."
 
 #: ui/mesh/mesh_context_bar.slint:12
 msgid "Mesh is off"
@@ -2555,7 +2562,7 @@ msgstr "Bluetooth est désactivé"
 
 #: ui/mesh/mesh_context_bar.slint:15
 msgid "Waiting for the creator to rotate the group key"
-msgstr "En attente que le créateur renouvelle la clé du groupe"
+msgstr "En attente du renouvellement de la clé du groupe par son créateur"
 
 #: ui/mesh/mesh_context_bar.slint:17
 msgid "No route to this person · waiting for a carrier"
@@ -2623,13 +2630,14 @@ msgstr "Voir {}"
 msgid ""
 "Only invited devices can read this group. Removing someone rotates the key."
 msgstr ""
-"Seuls les appareils invités peuvent lire ce groupe. Retirer quelqu'un "
-"renouvelle la clé."
+"Seuls les appareils invités peuvent lire les messages de ce groupe. Le "
+"retrait d’un membre entraîne le renouvellement de la clé."
 
 #: ui/mesh/mesh_info_sheet.slint:168
 msgid "Waiting for the creator to rotate the group key. Sending is paused."
 msgstr ""
-"En attente que le créateur renouvelle la clé du groupe. L'envoi est en pause."
+"En attente du renouvellement de la clé du groupe par son créateur. L’envoi "
+"est suspendu."
 
 #: ui/mesh/mesh_info_sheet.slint:175
 msgid "NEARBY DEVICES"
@@ -2665,8 +2673,8 @@ msgid ""
 "Invite sends the group key over the encrypted mesh link. QR shows a code the "
 "other person scans."
 msgstr ""
-"L'invitation envoie la clé du groupe par le lien mesh chiffré. Le QR affiche "
-"un code que l'autre personne scanne."
+"L’invitation transmet la clé du groupe via la liaison mesh chiffrée. "
+"L’option QR affiche un code à faire scanner par l’autre personne."
 
 #: ui/mesh/mesh_info_sheet.slint:259 ui/mesh/mesh_list_item.slint:138
 #: ui/modals/profile_action_tiles.slint:31
@@ -2749,7 +2757,7 @@ msgstr "Refuser l'invitation mesh"
 
 #: ui/mesh/mesh_list.slint:121
 msgid "Join mesh invitation"
-msgstr "Rejoindre l'invitation mesh"
+msgstr "Accepter l’invitation mesh"
 
 #: ui/mesh/mesh_list.slint:134
 msgid "NEARBY"
@@ -2757,7 +2765,7 @@ msgstr "À PROXIMITÉ"
 
 #: ui/mesh/mesh_list.slint:158
 msgid "Open nearby mesh peer {}"
-msgstr "Ouvrir le pair mesh à proximité {}"
+msgstr "Ouvrir le profil du pair mesh à proximité : {}"
 
 #: ui/mesh/mesh_list.slint:182
 msgid "No mesh conversations"
@@ -2785,7 +2793,7 @@ msgstr "CANAUX"
 
 #: ui/mesh/mesh_list.slint:251
 msgid "DIRECT MESSAGES"
-msgstr "MESSAGES DIRECTS"
+msgstr "MESSAGES PRIVÉS"
 
 #: ui/mesh/mesh_list_item.slint:29
 msgid "Public · {}"
@@ -2812,13 +2820,12 @@ msgid "Encrypted · nearby"
 msgstr "Chiffré · à proximité"
 
 #: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
-#: ui/modals/profile_action_tiles.slint:31
 msgid "Unmute"
-msgstr "Réactiver"
+msgstr "Réactiver le son"
 
 #: ui/mesh/mesh_list_item.slint:142
 msgid "Unmute channel"
-msgstr "Réactiver le canal"
+msgstr "Réactiver le son du canal"
 
 #: ui/mesh/mesh_list_item.slint:149 ui/modals/channel_danger.slint:74
 msgid "Leave"
@@ -2846,7 +2853,7 @@ msgstr "Comparez ces numéros en personne avec {}."
 
 #: ui/mesh/mesh_peer_sheet.slint:142
 msgid "Show my QR code"
-msgstr "Afficher mon QR"
+msgstr "Afficher mon code QR"
 
 #: ui/mesh/mesh_peer_sheet.slint:146
 msgid "Scan their code"
@@ -2866,7 +2873,7 @@ msgstr "Utiliser le chiffrement Signal"
 
 #: ui/mesh/mesh_peer_sheet.slint:183
 msgid "Paste their QR code"
-msgstr "Coller son QR"
+msgstr "Coller son code QR"
 
 #: ui/mesh/mesh_peer_sheet.slint:191
 msgid "Waiting for encrypted link"
@@ -2953,7 +2960,7 @@ msgstr "Visible par toute personne à proximité. Les noms sont autodéclarés."
 
 #: ui/mesh/mesh_setup_sheet.slint:168
 msgid "Erase Mesh data…"
-msgstr "Effacer les données Mesh…"
+msgstr "Effacer les données mesh…"
 
 #: ui/mesh/mesh_setup_sheet.slint:188
 msgid ""
@@ -2966,7 +2973,7 @@ msgstr ""
 
 #: ui/mesh/mesh_setup_sheet.slint:190
 msgid "Erase Mesh data"
-msgstr "Effacer les données Mesh"
+msgstr "Effacer les données mesh"
 
 #: ui/modals/anon_mode_pin.slint:51
 msgid "Enter PIN to enable Shield"
@@ -2980,12 +2987,13 @@ msgid ""
 "reached you will be told. Enter your PIN to enable. On a device checking "
 "online, wrong attempts can delete your key backup."
 msgstr ""
-"Shield masque vos canaux et vos Messages enregistrés, et affiche vos MP "
-"anonymes. Vos MP avec des amis restent, et passent par des boîtes anonymes "
-"au lieu du serveur. Votre position réseau est cachée derrière Tor — si Tor "
-"est injoignable, vous serez prévenu. Saisissez votre PIN pour activer. Sur "
-"un appareil qui vérifie en ligne, de mauvaises tentatives peuvent supprimer "
-"votre sauvegarde de clés."
+"Shield masque vos canaux et vos Messages enregistrés, et affiche vos "
+"messages privés anonymes. Vos messages privés avec vos amis sont conservés "
+"et passent par des boîtes aux lettres anonymes au lieu du serveur. Votre "
+"localisation réseau est masquée par Tor — vous serez averti si Tor est "
+"injoignable. Saisissez votre PIN pour activer Shield. Sur un appareil qui "
+"effectue la vérification en ligne, des tentatives incorrectes peuvent "
+"entraîner la suppression de votre sauvegarde de clés."
 
 #: ui/modals/anon_mode_pin.slint:117
 msgid "Enable"
@@ -3004,8 +3012,8 @@ msgid ""
 "Anyone with a link can join. The link can be copied only now, when it is "
 "created."
 msgstr ""
-"Toute personne qui a le lien peut rejoindre. Le lien ne peut être copié que "
-"maintenant, à sa création."
+"Toute personne disposant du lien peut rejoindre le canal. Le lien ne peut "
+"être copié qu’au moment de sa création."
 
 #: ui/modals/channel_access.slint:99 ui/modals/channel_access.slint:103
 msgid "Require approval"
@@ -3014,7 +3022,7 @@ msgstr "Approbation requise"
 #: ui/modals/channel_access.slint:110
 msgid "People who use the link wait until an admin lets them in"
 msgstr ""
-"Les personnes qui utilisent le lien attendent qu'un admin les laisse entrer"
+"Les personnes qui utilisent le lien doivent attendre l’approbation d’un admin"
 
 #: ui/modals/channel_access.slint:121 ui/modals/profile_info_card.slint:186
 msgid "Create link"
@@ -3030,11 +3038,11 @@ msgstr "Révoquer"
 
 #: ui/modals/channel_access.slint:180
 msgid "No join requests"
-msgstr "Aucune demande"
+msgstr "Aucune demande d’adhésion"
 
 #: ui/modals/channel_access.slint:180
 msgid "Join requests"
-msgstr "Demandes d'entrée"
+msgstr "Demandes d’adhésion"
 
 #: ui/modals/channel_access.slint:199
 msgid "Approve"
@@ -3048,11 +3056,16 @@ msgstr "Refuser"
 msgid "Who can join?"
 msgstr "Qui peut rejoindre ?"
 
+#: ui/modals/channel_access_choices.slint:31
+msgctxt "channel access"
+msgid "Open"
+msgstr "Ouvert"
+
 #: ui/modals/channel_access_choices.slint:73
 msgid "Anyone finds and joins. New members see messages from when they join."
 msgstr ""
-"Tout le monde peut trouver et rejoindre. Les nouveaux membres voient les "
-"messages à partir de leur arrivée."
+"Tout le monde peut trouver le canal et le rejoindre. Les nouveaux membres "
+"voient les messages à partir de leur arrivée."
 
 #: ui/modals/channel_access_choices.slint:90
 msgid "Invite-only"
@@ -3060,7 +3073,9 @@ msgstr "Sur invitation"
 
 #: ui/modals/channel_access_choices.slint:132
 msgid "Hidden from discovery. Invite or password to join."
-msgstr "Masqué de la recherche. Invitation ou mot de passe pour rejoindre."
+msgstr ""
+"Masqué des résultats de recherche. Une invitation ou un mot de passe est "
+"nécessaire pour rejoindre le canal."
 
 #: ui/modals/channel_access_choices.slint:149
 msgid "Anon group"
@@ -3096,8 +3111,8 @@ msgid ""
 "Leave {}? You won't get new messages, and an invite-only channel cannot be "
 "rejoined on your own."
 msgstr ""
-"Quitter {} ? Vous ne recevrez plus de nouveaux messages, et un canal sur "
-"invitation ne peut pas être rejoint seul."
+"Quitter {} ? Vous ne recevrez plus de nouveaux messages. Pour revenir dans "
+"un canal sur invitation, vous devrez être invité à nouveau."
 
 #: ui/modals/channel_danger.slint:133
 msgid "Transfer ownership"
@@ -3168,8 +3183,8 @@ msgid ""
 "Delete \"{}\" permanently? Every message in it goes with it. This cannot be "
 "undone."
 msgstr ""
-"Supprimer « {} » définitivement ? Tous ses messages partent avec. Cette "
-"action est irréversible."
+"Supprimer définitivement « {} » ? Tous ses messages seront également "
+"supprimés. Cette action est irréversible."
 
 #: ui/modals/channel_identity_fields.slint:37
 msgid "Change channel icon"
@@ -3198,7 +3213,7 @@ msgstr "Le nom est obligatoire"
 
 #: ui/modals/channel_identity_fields.slint:105
 msgid "Description (optional)"
-msgstr "Description (facultatif)"
+msgstr "Description (facultative)"
 
 #: ui/modals/channel_members.slint:130
 msgid "Mute 1h"
@@ -3268,6 +3283,11 @@ msgstr "Débannir"
 #: ui/modals/channel_members.slint:515
 msgid "ROLE"
 msgstr "RÔLE"
+
+#: ui/modals/channel_members.slint:537
+msgctxt "member moderation"
+msgid "Unmute"
+msgstr "Retirer la sourdine"
 
 #: ui/modals/channel_members.slint:545
 msgid "MUTE IN CHANNEL"
@@ -3344,7 +3364,7 @@ msgstr "Vous ne recevrez aucune notification de ce canal"
 
 #: ui/modals/channel_notifications.slint:60
 msgid "When not muted, notify me for:"
-msgstr "Sans sourdine, me notifier pour :"
+msgstr "Lorsque la sourdine est désactivée, me notifier pour :"
 
 #: ui/modals/channel_notifications.slint:76
 msgid "All messages"
@@ -3368,7 +3388,7 @@ msgstr "Rien"
 
 #: ui/modals/channel_notifications.slint:230
 msgid "Never notify (still shows unread badge)"
-msgstr "Ne jamais notifier (le badge non lu reste)"
+msgstr "Aucune notification (le badge des messages non lus reste affiché)"
 
 #: ui/modals/channel_notifications.slint:251 ui/modals/create_channel.slint:616
 msgid "AI assistant"
@@ -3549,7 +3569,9 @@ msgstr "Mot de passe (facultatif)"
 
 #: ui/modals/create_channel.slint:286
 msgid "Anyone with password joins without invite"
-msgstr "Toute personne qui a le mot de passe rejoint sans invitation"
+msgstr ""
+"Toute personne disposant du mot de passe peut rejoindre le canal sans "
+"invitation"
 
 #: ui/modals/create_channel.slint:301
 msgid "Select friends to invite"
@@ -3738,7 +3760,7 @@ msgstr "Supprimer la discussion"
 
 #: ui/modals/friends_find_tab.slint:96
 msgid "Scan to start a secret chat with me"
-msgstr "Scannez pour une discussion secrète avec moi"
+msgstr "Scannez pour démarrer une discussion secrète avec moi"
 
 #: ui/modals/friends_find_tab.slint:96
 msgid "Scan to add me"
@@ -3790,7 +3812,7 @@ msgstr "Partagez votre code privé pour démarrer une discussion secrète"
 
 #: ui/modals/friends_friends_tab.slint:60
 msgid "Use the Add friend tab to connect"
-msgstr "Utilisez l'onglet Ajouter un ami pour vous connecter"
+msgstr "Utilisez l’onglet Ajouter un ami pour ajouter des contacts"
 
 #: ui/modals/friends_friends_tab.slint:200
 msgid "Message {}"
@@ -3867,7 +3889,7 @@ msgid ""
 "with anonymous mailboxes"
 msgstr ""
 "Les invitations de groupe sont chiffrées de bout en bout\n"
-"avec des boîtes anonymes"
+"avec des boîtes aux lettres anonymes"
 
 #: ui/modals/friends_requests_tab.slint:558
 msgid "Invited by {}"
@@ -3937,8 +3959,8 @@ msgstr "Faits"
 msgid ""
 "Nothing yet — chat with Jarvis and durable facts land here automatically."
 msgstr ""
-"Rien pour le moment — discutez avec Jarvis et les faits durables "
-"apparaissent ici tout seuls."
+"Rien pour le moment — discutez avec Jarvis et les informations à retenir "
+"apparaîtront ici automatiquement."
 
 #: ui/modals/jarvis_memory.slint:210
 msgid "Knowledge graph"
@@ -3949,8 +3971,8 @@ msgid ""
 "No entities yet — Jarvis learns people, projects, and topics from "
 "conversations."
 msgstr ""
-"Aucune entité pour le moment — Jarvis apprend les personnes, les projets et "
-"les sujets à partir des discussions."
+"Aucune entité pour le moment — Jarvis identifie les personnes, les projets "
+"et les sujets au fil des discussions."
 
 #: ui/modals/jarvis_memory.slint:318
 msgid "Select an entity to map its connections"
@@ -3958,7 +3980,7 @@ msgstr "Sélectionnez une entité pour voir ses liens"
 
 #: ui/modals/join_channel.slint:111
 msgid "Joined"
-msgstr "Rejoint"
+msgstr "Déjà membre"
 
 #: ui/modals/join_channel_tab.slint:39
 msgid "Search channels, or paste a channel ID or invite link"
@@ -4034,7 +4056,7 @@ msgstr "Ctrl + J"
 
 #: ui/modals/keyboard_shortcuts.slint:130
 msgid "Ctrl + Shift + F"
-msgstr "Ctrl + Shift + F"
+msgstr "Ctrl + Maj + F"
 
 #: ui/modals/keyboard_shortcuts.slint:131
 msgid "Ctrl + ,"
@@ -4054,7 +4076,7 @@ msgstr "Discussion suivante"
 
 #: ui/modals/keyboard_shortcuts.slint:133
 msgid "Alt + ↑ / Ctrl + Shift + Tab"
-msgstr "Alt + ↑ / Ctrl + Shift + Tab"
+msgstr "Alt + ↑ / Ctrl + Maj + Tab"
 
 #: ui/modals/keyboard_shortcuts.slint:133
 msgid "Previous chat"
@@ -4071,7 +4093,7 @@ msgstr "Messages enregistrés"
 
 #: ui/modals/keyboard_shortcuts.slint:135
 msgid "↑ / ↓, Home / End"
-msgstr "↑ / ↓, Home / End"
+msgstr "↑ / ↓, Début / Fin"
 
 #: ui/modals/keyboard_shortcuts.slint:135
 msgid "Move in sidebar"
@@ -4079,7 +4101,7 @@ msgstr "Se déplacer dans la barre latérale"
 
 #: ui/modals/keyboard_shortcuts.slint:136
 msgid "Enter / Space"
-msgstr "Enter / Space"
+msgstr "Entrée / Espace"
 
 #: ui/modals/keyboard_shortcuts.slint:136
 msgid "Open sidebar item"
@@ -4095,7 +4117,7 @@ msgstr "Afficher cette fenêtre"
 
 #: ui/modals/keyboard_shortcuts.slint:138
 msgid "Escape"
-msgstr "Escape"
+msgstr "Échap"
 
 #: ui/modals/keyboard_shortcuts.slint:138
 msgid "Close modal or panel"
@@ -4103,7 +4125,7 @@ msgstr "Fermer la fenêtre ou le panneau"
 
 #: ui/modals/keyboard_shortcuts.slint:150
 msgid "Enter"
-msgstr "Enter"
+msgstr "Entrée"
 
 #: ui/modals/keyboard_shortcuts.slint:150
 msgid "Send"
@@ -4111,7 +4133,7 @@ msgstr "Envoyer"
 
 #: ui/modals/keyboard_shortcuts.slint:151
 msgid "Shift + Enter"
-msgstr "Shift + Enter"
+msgstr "Maj + Entrée"
 
 #: ui/modals/keyboard_shortcuts.slint:151
 msgid "New line"
@@ -4127,7 +4149,7 @@ msgstr "Gras / italique"
 
 #: ui/modals/keyboard_shortcuts.slint:153
 msgid "Ctrl + Shift + X / M"
-msgstr "Ctrl + Shift + X / M"
+msgstr "Ctrl + Maj + X / M"
 
 #: ui/modals/keyboard_shortcuts.slint:153
 msgid "Strikethrough / code"
@@ -4158,8 +4180,9 @@ msgid ""
 "Scan the QR code on your new device, or paste its link. You'll be asked to "
 "confirm with your password or PIN to authorize."
 msgstr ""
-"Scannez le QR sur votre nouvel appareil, ou collez son lien. Votre mot de "
-"passe ou votre PIN vous sera demandé pour autoriser."
+"Scannez le code QR affiché sur votre nouvel appareil ou collez son lien. "
+"Votre mot de passe ou votre PIN vous sera demandé pour autoriser "
+"l’association."
 
 #: ui/modals/link_device_approve.slint:73
 msgid ""
@@ -4167,7 +4190,7 @@ msgid ""
 "password or PIN to authorize."
 msgstr ""
 "Collez le lien de votre nouvel appareil. Votre mot de passe ou votre PIN "
-"vous sera demandé pour autoriser."
+"vous sera demandé pour autoriser l’association."
 
 #: ui/modals/link_device_approve.slint:87
 msgid "chatter://link?uuid=…"
@@ -4187,7 +4210,8 @@ msgstr "Serveur : {}"
 
 #: ui/modals/link_device_approve.slint:132
 msgid "Verify this code matches the new device:"
-msgstr "Vérifiez que ce code correspond au nouvel appareil :"
+msgstr ""
+"Vérifiez que ce code est identique à celui affiché sur le nouvel appareil :"
 
 #: ui/modals/link_device_approve.slint:147
 msgid "Password or PIN"
@@ -4211,7 +4235,7 @@ msgstr "Faites un clic droit sur un message et choisissez Épingler"
 
 #: ui/modals/profile_action_tiles.slint:28
 msgid "Unmute conversation"
-msgstr "Réactiver la discussion"
+msgstr "Réactiver le son de la discussion"
 
 #: ui/modals/profile_action_tiles.slint:28
 msgid "Mute conversation"
@@ -4236,7 +4260,7 @@ msgstr "Nom d'utilisateur"
 
 #: ui/modals/profile_info_card.slint:95
 msgid "Show username QR code"
-msgstr "Afficher le QR du nom d'utilisateur"
+msgstr "Afficher le code QR du nom d’utilisateur"
 
 #: ui/modals/profile_info_card.slint:199
 msgid "Reset link"
@@ -4498,7 +4522,7 @@ msgstr "Vous avez bloqué cette personne."
 
 #: ui/modals/user_profile.slint:574
 msgid "Open blocked"
-msgstr "Voir les bloqués"
+msgstr "Voir les contacts bloqués"
 
 #: ui/modals/user_profile.slint:620 ui/sidebar/create_menu.slint:175
 msgid "Add friend"
@@ -4506,7 +4530,7 @@ msgstr "Ajouter un ami"
 
 #: ui/modals/user_profile.slint:635
 msgid "Retry shared content"
-msgstr "Réessayer le contenu partagé"
+msgstr "Réessayer de charger les contenus partagés"
 
 #: ui/modals/user_profile.slint:684
 msgid "Share this contact"
@@ -4689,7 +4713,7 @@ msgstr "Préparation de votre lien sécurisé…"
 
 #: ui/pages/link_device.slint:113
 msgid "Your QR code will appear here"
-msgstr "Votre QR apparaîtra ici"
+msgstr "Votre code QR apparaîtra ici"
 
 #: ui/pages/link_device.slint:130
 msgid "Can't scan? Copy and paste this link into the other device:"
@@ -4698,7 +4722,7 @@ msgstr ""
 
 #: ui/pages/link_device.slint:188
 msgid "Generate QR"
-msgstr "Générer le QR"
+msgstr "Générer le code QR"
 
 #: ui/pages/login.slint:123
 msgid "Sign in to continue"
@@ -4934,8 +4958,8 @@ msgstr ""
 msgid ""
 "Call records from this channel’s server. Private call history stays in Calls."
 msgstr ""
-"Enregistrements d'appels du serveur de ce canal. L'historique privé reste "
-"dans Appels."
+"Historique des appels fourni par le serveur de ce canal. L’historique des "
+"appels privés reste dans Appels."
 
 #: ui/server_records/screen.slint:96
 msgid "You're all caught up"
@@ -4978,8 +5002,9 @@ msgid ""
 "Privacy: Your settings control read receipts, notification previews, and "
 "whether AI requests leave this device."
 msgstr ""
-"Confidentialité : vos paramètres contrôlent les accusés de lecture, l'aperçu "
-"des notifications et si les requêtes AI quittent cet appareil."
+"Confidentialité : vos paramètres déterminent l’envoi des accusés de lecture, "
+"le contenu des aperçus de notifications et la possibilité d’envoyer les "
+"requêtes AI hors de cet appareil."
 
 #: ui/settings/account_menu.slint:198
 msgid "My profile"
@@ -5083,8 +5108,9 @@ msgid ""
 "Encrypted message history, conversations, and contacts. File backups need a "
 "passphrase; server backups need your PIN."
 msgstr ""
-"Historique chiffré des messages, discussions et contacts. Les sauvegardes "
-"fichier demandent une phrase secrète ; les sauvegardes serveur, votre PIN."
+"Sauvegarde chiffrée de l’historique des messages, des discussions et des "
+"contacts. Les sauvegardes dans un fichier nécessitent une phrase secrète ; "
+"celles sur le serveur, votre PIN."
 
 #: ui/settings/account_settings.slint:540
 msgid "File backup passphrase"
@@ -5092,7 +5118,9 @@ msgstr "Phrase secrète de la sauvegarde"
 
 #: ui/settings/account_settings.slint:548
 msgid "Enter a backup passphrase to enable file export and restore."
-msgstr "Saisissez une phrase secrète pour activer l'export et la restauration."
+msgstr ""
+"Saisissez une phrase secrète pour activer l’exportation et la restauration "
+"depuis un fichier."
 
 #: ui/settings/account_settings.slint:559
 msgid "Export to file…"
@@ -5183,9 +5211,9 @@ msgid ""
 "provider. Existing local AI history stays on this device. Direct and secret "
 "messages are never sent to a cloud provider."
 msgstr ""
-"Envoie les requêtes et l'historique autorisé des discussions distantes au "
-"fournisseur choisi. L'historique AI local reste sur cet appareil. Les "
-"messages directs et secrets ne sont jamais envoyés à un fournisseur cloud."
+"Envoie les requêtes et l’historique autorisé des discussions distantes au "
+"fournisseur choisi. L’historique AI local reste sur cet appareil. Les "
+"messages privés et secrets ne sont jamais envoyés à un fournisseur cloud."
 
 #: ui/settings/ai_settings.slint:82
 msgid "My API key"
@@ -5266,11 +5294,11 @@ msgstr "Sombre"
 
 #: ui/settings/appearance_settings.slint:145
 msgid "Language"
-msgstr ""
+msgstr "Langue"
 
 #: ui/settings/appearance_settings.slint:209
 msgid "Match this device's language"
-msgstr ""
+msgstr "Utilise la langue de cet appareil"
 
 #: ui/settings/appearance_settings.slint:244
 msgid "Text size"
@@ -5309,9 +5337,8 @@ msgid ""
 "Menus, sheets and switches change without motion; loading shimmer, typing "
 "dots and the ringing pulse hold still."
 msgstr ""
-"Les menus, feuilles et interrupteurs changent sans mouvement ; le "
-"scintillement de chargement, les points de saisie et la pulsation d'appel "
-"restent immobiles."
+"Les menus, panneaux et interrupteurs changent sans animation ; les effets de "
+"chargement, les points de saisie et les pulsations de sonnerie restent fixes."
 
 #: ui/settings/appearance_settings.slint:399
 msgid "Animation speed"
@@ -5536,16 +5563,17 @@ msgid ""
 "Hide channels and Saved messages, send DMs through anonymous mailboxes, and "
 "route traffic over Tor. Turning it on asks for your PIN."
 msgstr ""
-"Masque les canaux et les Messages enregistrés, envoie les MP via des boîtes "
-"anonymes et fait passer le trafic par Tor. L'activation demande votre PIN."
+"Masque les canaux et les Messages enregistrés, envoie les messages privés "
+"via des boîtes aux lettres anonymes et fait passer le trafic par Tor. "
+"L’activation nécessite votre PIN."
 
 #: ui/settings/privacy_settings.slint:230
 msgid ""
 "Hide channels and Saved messages and send DMs through anonymous mailboxes. "
 "Turning it on asks for your PIN."
 msgstr ""
-"Masque les canaux et les Messages enregistrés et envoie les MP via des "
-"boîtes anonymes. L'activation demande votre PIN."
+"Masque les canaux et les Messages enregistrés et envoie les messages privés "
+"via des boîtes aux lettres anonymes. L’activation nécessite votre PIN."
 
 #: ui/settings/privacy_settings.slint:254
 msgid "Who can find me by my username"
@@ -5580,11 +5608,11 @@ msgstr "Montre quand vous êtes en train d'écrire"
 
 #: ui/sidebar/channel_list_item.slint:238 ui/sidebar/dm_list_item.slint:238
 msgid "Pinned"
-msgstr "Épinglé"
+msgstr "Discussion épinglée"
 
 #: ui/sidebar/channel_list_item.slint:262 ui/sidebar/dm_list_item.slint:260
 msgid "typing"
-msgstr "écrit"
+msgstr "en train d’écrire"
 
 #: ui/sidebar/channel_list_item.slint:279 ui/sidebar/dm_list_item.slint:273
 msgid "Draft:"
@@ -5621,14 +5649,14 @@ msgstr "Pas encore d'amis. Ajoutez-en un depuis Contacts."
 #: ui/sidebar/custom_section_list.slint:52
 msgid "Expanded section. Press Shift+F10 or Menu for section options."
 msgstr ""
-"Section développée. Appuyez sur Shift+F10 ou Menu pour les options de la "
-"section."
+"Section développée. Appuyez sur Maj+F10 ou sur la touche Menu pour afficher "
+"les options de la section."
 
 #: ui/sidebar/custom_section_list.slint:52
 msgid "Collapsed section. Press Shift+F10 or Menu for section options."
 msgstr ""
-"Section réduite. Appuyez sur Shift+F10 ou Menu pour les options de la "
-"section."
+"Section réduite. Appuyez sur Maj+F10 ou sur la touche Menu pour afficher les "
+"options de la section."
 
 #: ui/sidebar/section_context_menu.slint:223
 msgid "Move up"
@@ -5792,7 +5820,7 @@ msgstr "Échec de la mise à jour"
 
 #: ui/sidebar/update_banner.slint:32
 msgid "Cellular download?"
-msgstr "Téléchargement cellulaire ?"
+msgstr "Télécharger via les données mobiles ?"
 
 #: ui/sidebar/update_banner.slint:40
 msgid "Update in Play Store"

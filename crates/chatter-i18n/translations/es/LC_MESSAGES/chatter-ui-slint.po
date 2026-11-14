@@ -1,7 +1,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: chatter\n"
-"POT-Creation-Date: 2026-11-14 20:32+0000\n"
+"POT-Creation-Date: 2026-11-14 21:22+0000\n"
 "Language: es\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -36,7 +36,7 @@ msgstr "Servidor"
 
 #: ui/activity/activity_sheet.slint:18 ui/activity/activity_sheet.slint:100
 msgid "Unreachable — messages will send later"
-msgstr "Sin acceso — los mensajes se enviarán después"
+msgstr "Servidor inaccesible — los mensajes se enviarán después"
 
 #: ui/activity/activity_sheet.slint:101
 msgid "Reconnecting (attempt {})"
@@ -84,11 +84,11 @@ msgstr "Listo"
 
 #: ui/activity/activity_sheet.slint:141 ui/activity/activity_sheet.slint:145
 msgid "Mark all read"
-msgstr "Marcar todo leído"
+msgstr "Marcar todo como leído"
 
 #: ui/activity/activity_sheet.slint:166
 msgid "Server host"
-msgstr "Host"
+msgstr "Dirección del servidor"
 
 #: ui/activity/activity_sheet.slint:168
 msgid "Connected since"
@@ -451,7 +451,7 @@ msgstr "Emoji 4 de verificación de la llamada: {}"
 
 #: ui/calls/active_call_view.slint:603
 msgid "Call key version {}"
-msgstr "Versión de la clave de la llamada {}"
+msgstr "Versión {} de la clave de la llamada"
 
 #: ui/calls/active_call_view.slint:613
 msgid "Call verification pending"
@@ -528,7 +528,7 @@ msgstr "Seleccionar todo"
 
 #: ui/calls/call_history_screen.slint:188 ui/chat/selection_bar.slint:121
 msgid "Delete selected"
-msgstr "Eliminar selección"
+msgstr "Eliminar seleccionados"
 
 #. stored and compared). The name a person reads is separate.
 #: ui/calls/call_history_screen.slint:215
@@ -575,7 +575,7 @@ msgstr "Llamar a {}"
 
 #: ui/calls/call_history_screen.slint:607
 msgid "Video call {}"
-msgstr "Videollamada con {}"
+msgstr "Iniciar videollamada con {}"
 
 #: ui/calls/call_history_screen.slint:657
 msgid "Older calls were not checked yet."
@@ -806,7 +806,7 @@ msgstr "Más opciones"
 
 #: ui/chat/chat_header.slint:571 ui/mesh/mesh_list_item.slint:34
 msgid "Waiting for a carrier"
-msgstr "Esperando un portador"
+msgstr "Esperando un dispositivo de transporte"
 
 #: ui/chat/chat_header.slint:572
 msgid "Verified ✓"
@@ -867,7 +867,7 @@ msgstr "Iniciar chat secreto"
 #: ui/chat/chat_header_menu.slint:100 ui/chat/secret_timer_modal.slint:14
 #: ui/modals/user_profile.slint:522
 msgid "Disappearing messages"
-msgstr "Mensajes que desaparecen"
+msgstr "Mensajes temporales"
 
 #: ui/chat/chat_layout.slint:385
 msgid "Anyone in radio range can read this"
@@ -1069,12 +1069,12 @@ msgid ""
 "Each new message disappears after the selected time once its expiry clock "
 "starts."
 msgstr ""
-"Cada mensaje nuevo desaparece tras el tiempo elegido, cuando empieza su "
-"cuenta atrás."
+"Cada mensaje nuevo desaparece cuando transcurre el tiempo elegido desde el "
+"inicio de su cuenta atrás."
 
 #: ui/chat/disappearing_settings.slint:78
 msgid "How long to enable"
-msgstr "Cuánto tiempo activarlo"
+msgstr "Durante cuánto tiempo activar"
 
 #: ui/chat/disappearing_settings.slint:79
 msgid "Current: {}. The window applies to new messages only."
@@ -1123,11 +1123,11 @@ msgstr "Detalles"
 
 #: ui/chat/membership_bar.slint:162
 msgid "Hide membership details"
-msgstr "Ocultar detalles de membresía"
+msgstr "Ocultar detalles de pertenencia al canal"
 
 #: ui/chat/membership_bar.slint:162
 msgid "Show membership details"
-msgstr "Mostrar detalles de membresía"
+msgstr "Mostrar detalles de pertenencia al canal"
 
 #: ui/chat/message_actions.slint:66
 msgid "Reply to message"
@@ -1380,7 +1380,7 @@ msgstr "{}, tu reacción"
 
 #: ui/chat/message_footer.slint:134
 msgid "Disappearing message"
-msgstr "Mensaje que desaparece"
+msgstr "Mensaje temporal"
 
 #: ui/chat/message_footer.slint:139
 msgid "edited"
@@ -1426,19 +1426,20 @@ msgstr "enviado"
 #: ui/chat/message_footer.slint:173
 msgid "Signal ciphertext queued on this device; no route has accepted it"
 msgstr ""
-"Cifrado de Signal en cola en este dispositivo; ninguna ruta lo ha aceptado"
+"Mensaje cifrado con Signal en cola en este dispositivo; ninguna ruta lo ha "
+"aceptado"
 
 #: ui/chat/message_footer.slint:175
 msgid ""
 "Sealed Signal ciphertext queued onto a courier link; recipient has not "
 "acknowledged it"
 msgstr ""
-"Cifrado de Signal sellado, en cola en un enlace de transporte; el "
-"destinatario no lo ha confirmado"
+"Mensaje cifrado con Signal y sellado, en cola en un enlace de transporte; el "
+"destinatario no ha confirmado la recepción"
 
 #: ui/chat/message_footer.slint:177
 msgid "Handed to a passing device; may arrive later"
-msgstr "Pasado a un dispositivo de paso; puede llegar más tarde"
+msgstr "Entregado a un dispositivo de paso; puede llegar más tarde"
 
 #: ui/chat/message_footer.slint:179
 msgid "Held on this device until something can carry it"
@@ -1450,7 +1451,7 @@ msgstr "Salió de la bandeja de salida sin que nadie lo confirmara"
 
 #: ui/chat/message_footer.slint:183
 msgid "The peer's device acknowledged it"
-msgstr "El dispositivo de la otra persona lo confirmó"
+msgstr "El dispositivo de la otra persona confirmó la recepción"
 
 #: ui/chat/message_footer.slint:185
 msgid "Read by the peer"
@@ -1799,12 +1800,12 @@ msgid_plural ""
 "Mesh is on but Bluetooth is off. Only the {n} connected relays can carry, "
 "and relays need internet."
 msgstr[0] ""
-"La malla está activada, pero Bluetooth está desactivado. Solo el {n} "
-"repetidor conectado puede transportar, y los repetidores necesitan internet."
+"La malla está activada, pero Bluetooth está desactivado. Solo {n} repetidor "
+"conectado puede transportar mensajes, y los repetidores necesitan internet."
 msgstr[1] ""
 "La malla está activada, pero Bluetooth está desactivado. Solo los {n} "
-"repetidores conectados pueden transportar, y los repetidores necesitan "
-"internet."
+"repetidores conectados pueden transportar mensajes, y los repetidores "
+"necesitan internet."
 
 #: ui/components/connection_banner.slint:121
 msgid ""
@@ -1814,13 +1815,13 @@ msgid_plural ""
 "Mesh is on but the Bluetooth radio is unavailable. Only the {n} connected "
 "relays can carry, and relays need internet."
 msgstr[0] ""
-"La malla está activada, pero la radio Bluetooth no está disponible. Solo el "
-"{n} repetidor conectado puede transportar, y los repetidores necesitan "
+"La malla está activada, pero la radio Bluetooth no está disponible. Solo {n} "
+"repetidor conectado puede transportar mensajes, y los repetidores necesitan "
 "internet."
 msgstr[1] ""
 "La malla está activada, pero la radio Bluetooth no está disponible. Solo los "
-"{n} repetidores conectados pueden transportar, y los repetidores necesitan "
-"internet."
+"{n} repetidores conectados pueden transportar mensajes, y los repetidores "
+"necesitan internet."
 
 #: ui/components/connection_banner.slint:123
 msgid ""
@@ -2017,11 +2018,11 @@ msgstr "Abrir descargas"
 
 #: ui/components/image_viewer.slint:44
 msgid "Previous media"
-msgstr "Multimedia anterior"
+msgstr "Contenido multimedia anterior"
 
 #: ui/components/image_viewer.slint:46
 msgid "Next media"
-msgstr "Multimedia siguiente"
+msgstr "Contenido multimedia siguiente"
 
 #: ui/components/input.slint:167
 msgid "Hide password"
@@ -2084,15 +2085,15 @@ msgstr "Diálogo modal"
 
 #: ui/components/offline_mesh_notice.slint:80
 msgid "Can't reach the server"
-msgstr "No se alcanza el servidor"
+msgstr "No se puede conectar con el servidor"
 
 #: ui/components/offline_mesh_notice.slint:90
 msgid ""
 "Creating an account and signing in both need it, so neither will work until "
 "it comes back."
 msgstr ""
-"Crear una cuenta e iniciar sesión lo necesitan, así que ninguna de las dos "
-"funcionará hasta que vuelva."
+"Tanto crear una cuenta como iniciar sesión requieren el servidor. No podrás "
+"hacerlo hasta que vuelva a estar disponible."
 
 #: ui/components/offline_mesh_notice.slint:101
 msgid ""
@@ -2370,7 +2371,7 @@ msgstr "Mostrar más mensajes"
 
 #: ui/components/unified_search.slint:1050
 msgid "Show more media"
-msgstr "Mostrar más multimedia"
+msgstr "Mostrar más fotos y videos"
 
 #: ui/components/unified_search.slint:1051
 msgid "Show more files"
@@ -2382,7 +2383,7 @@ msgstr "Mostrar más enlaces"
 
 #: ui/components/unified_search.slint:1053
 msgid "Show more voice"
-msgstr "Mostrar más voz"
+msgstr "Mostrar más mensajes de voz"
 
 #: ui/components/unified_search.slint:1066
 msgid "Searching this device…"
@@ -2553,11 +2554,11 @@ msgstr "Bluetooth está desactivado"
 
 #: ui/mesh/mesh_context_bar.slint:15
 msgid "Waiting for the creator to rotate the group key"
-msgstr "Esperando a que el creador rote la clave del grupo"
+msgstr "Esperando a que el creador renueve la clave del grupo"
 
 #: ui/mesh/mesh_context_bar.slint:17
 msgid "No route to this person · waiting for a carrier"
-msgstr "Sin ruta hasta esta persona · esperando un portador"
+msgstr "Sin ruta hasta esta persona · esperando un dispositivo de transporte"
 
 #: ui/mesh/mesh_context_bar.slint:57
 msgid "Turn on"
@@ -2573,7 +2574,7 @@ msgstr "Cerrar el aviso de la malla"
 
 #: ui/mesh/mesh_global.slint:161
 msgid "Mesh peer · self-asserted name"
-msgstr "Contacto de la malla · nombre autoafirmado"
+msgstr "Contacto de la malla · nombre sin verificar"
 
 #: ui/mesh/mesh_global.slint:164
 msgid "Noise (bitchat)"
@@ -2621,13 +2622,14 @@ msgstr "Ver {}"
 msgid ""
 "Only invited devices can read this group. Removing someone rotates the key."
 msgstr ""
-"Solo los dispositivos invitados pueden leer este grupo. Quitar a alguien "
-"rota la clave."
+"Solo los dispositivos invitados pueden leer este grupo. Al quitar a alguien, "
+"se renueva la clave."
 
 #: ui/mesh/mesh_info_sheet.slint:168
 msgid "Waiting for the creator to rotate the group key. Sending is paused."
 msgstr ""
-"Esperando a que el creador rote la clave del grupo. El envío está en pausa."
+"Esperando a que el creador renueve la clave del grupo. El envío está en "
+"pausa."
 
 #: ui/mesh/mesh_info_sheet.slint:175
 msgid "NEARBY DEVICES"
@@ -2683,12 +2685,12 @@ msgstr[1] "{n} repetidores conectados"
 
 #: ui/mesh/mesh_info_sheet.slint:306
 msgid "Remove {}? The group key will rotate."
-msgstr "¿Quitar a {}? La clave del grupo rotará."
+msgstr "¿Quitar a {}? Se renovará la clave del grupo."
 
 #: ui/mesh/mesh_info_sheet.slint:308
 msgid "Reachable members will pause sending until the creator rotates the key."
 msgstr ""
-"Quienes estén al alcance pausarán el envío hasta que el creador rote la "
+"Los miembros con conexión pausarán el envío hasta que el creador renueve la "
 "clave."
 
 #: ui/mesh/mesh_info_sheet.slint:309
@@ -2747,7 +2749,7 @@ msgstr "Rechazar invitación de la malla"
 
 #: ui/mesh/mesh_list.slint:121
 msgid "Join mesh invitation"
-msgstr "Unirse a la invitación de la malla"
+msgstr "Aceptar la invitación de la malla"
 
 #: ui/mesh/mesh_list.slint:134
 msgid "NEARBY"
@@ -2810,7 +2812,6 @@ msgid "Encrypted · nearby"
 msgstr "Cifrado · cerca"
 
 #: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
-#: ui/modals/profile_action_tiles.slint:31
 msgid "Unmute"
 msgstr "Dejar de silenciar"
 
@@ -2901,11 +2902,11 @@ msgstr "Bloquear"
 
 #: ui/mesh/mesh_peer_sheet.slint:298
 msgid "Remove {0} from {1}? The group key will rotate."
-msgstr "¿Quitar a {0} de {1}? La clave del grupo rotará."
+msgstr "¿Quitar a {0} de {1}? Se renovará la clave del grupo."
 
 #: ui/mesh/mesh_peer_sheet.slint:300
 msgid "Remove and rotate key"
-msgstr "Quitar y rotar la clave"
+msgstr "Quitar y renovar la clave"
 
 #: ui/mesh/mesh_setup_sheet.slint:62 ui/mesh/mesh_setup_sheet.slint:73
 msgid "Mesh settings"
@@ -2913,7 +2914,9 @@ msgstr "Ajustes de la malla"
 
 #: ui/mesh/mesh_setup_sheet.slint:97
 msgid "Peer names are self-asserted until you verify in person."
-msgstr "Los nombres son autoafirmados hasta que los verifiques en persona."
+msgstr ""
+"Cada persona elige su nombre; no se verifica hasta que lo compruebes en "
+"persona."
 
 #: ui/mesh/mesh_setup_sheet.slint:123
 msgid "Radio unavailable"
@@ -2945,7 +2948,9 @@ msgstr "Guardar"
 
 #: ui/mesh/mesh_setup_sheet.slint:158
 msgid "Visible to anyone nearby. Names are self-asserted."
-msgstr "Visible para cualquiera que esté cerca. Los nombres son autoafirmados."
+msgstr ""
+"Visible para cualquiera que esté cerca. Los nombres los eligen los propios "
+"usuarios."
 
 #: ui/mesh/mesh_setup_sheet.slint:168
 msgid "Erase Mesh data…"
@@ -2980,7 +2985,7 @@ msgstr ""
 "directos anónimos. Tus mensajes directos con amigos se quedan, y se envían "
 "por buzones anónimos en vez del servidor. Tu ubicación de red queda oculta "
 "tras Tor: si no se alcanza Tor, se te avisará. Escribe tu PIN para "
-"activarlo. En un dispositivo que compruebe la conexión, los intentos "
+"activarlo. En un dispositivo que verifique el PIN en línea, los intentos "
 "fallidos pueden borrar la copia de tus claves."
 
 #: ui/modals/anon_mode_pin.slint:117
@@ -3043,6 +3048,11 @@ msgstr "Rechazar"
 msgid "Who can join?"
 msgstr "¿Quién puede unirse?"
 
+#: ui/modals/channel_access_choices.slint:31
+msgctxt "channel access"
+msgid "Open"
+msgstr "Abierto"
+
 #: ui/modals/channel_access_choices.slint:73
 msgid "Anyone finds and joins. New members see messages from when they join."
 msgstr ""
@@ -3090,8 +3100,8 @@ msgid ""
 "Leave {}? You won't get new messages, and an invite-only channel cannot be "
 "rejoined on your own."
 msgstr ""
-"¿Salir de {}? No recibirás mensajes nuevos, y un canal solo con invitación "
-"no se puede volver a abrir por tu cuenta."
+"¿Salir de {}? No recibirás mensajes nuevos y no podrás volver a unirte por "
+"tu cuenta a un canal que requiere invitación."
 
 #: ui/modals/channel_danger.slint:133
 msgid "Transfer ownership"
@@ -3253,15 +3263,20 @@ msgstr "Acciones para {}"
 
 #: ui/modals/channel_members.slint:435 ui/modals/invite_member.slint:186
 msgid "Banned"
-msgstr "Baneado"
+msgstr "Vetado"
 
 #: ui/modals/channel_members.slint:469
 msgid "Unban"
-msgstr "Desbanear"
+msgstr "Quitar veto"
 
 #: ui/modals/channel_members.slint:515
 msgid "ROLE"
 msgstr "ROL"
+
+#: ui/modals/channel_members.slint:537
+msgctxt "member moderation"
+msgid "Unmute"
+msgstr "Dejar de silenciar"
 
 #: ui/modals/channel_members.slint:545
 msgid "MUTE IN CHANNEL"
@@ -3293,11 +3308,11 @@ msgstr "Quitar del canal"
 
 #: ui/modals/channel_members.slint:588 ui/modals/channel_members.slint:635
 msgid "Ban"
-msgstr "Banear"
+msgstr "Vetar"
 
 #: ui/modals/channel_members.slint:611
 msgid "Ban {}? They will be removed and can't rejoin."
-msgstr "¿Banear a {}? Se le expulsará y no podrá volver a entrar."
+msgstr "¿Vetar a {}? Se le expulsará y no podrá volver a entrar."
 
 #: ui/modals/channel_members.slint:613
 msgid "Make {0} the owner of {1}? You'll become an admin."
@@ -3362,7 +3377,7 @@ msgstr "Nada"
 
 #: ui/modals/channel_notifications.slint:230
 msgid "Never notify (still shows unread badge)"
-msgstr "No avisar nunca (el contador de no leídos sigue)"
+msgstr "No avisar nunca (se mantiene el contador de no leídos)"
 
 #: ui/modals/channel_notifications.slint:251 ui/modals/create_channel.slint:616
 msgid "AI assistant"
@@ -3442,7 +3457,7 @@ msgstr "Cargando info del grupo…"
 
 #: ui/modals/channel_settings.slint:397
 msgid "Add a description so members know what this is for"
-msgstr "Añade una descripción para que los miembros sepan de qué va"
+msgstr "Añade una descripción para que los miembros sepan para qué sirve"
 
 #: ui/modals/channel_settings.slint:402
 msgid "Unsaved changes to group info"
@@ -3676,7 +3691,7 @@ msgstr "Secreto"
 
 #: ui/modals/forward_message.slint:223
 msgid "DM"
-msgstr "DM"
+msgstr "MD"
 
 #: ui/modals/forward_message.slint:285
 msgid "Share"
@@ -3716,7 +3731,7 @@ msgstr "Las personas que bloquees no podrán escribirte"
 
 #: ui/modals/friends_blocked_tab.slint:113
 msgid "Delete this chat? They stay blocked."
-msgstr "¿Eliminar este chat? No se desbloquea."
+msgstr "¿Eliminar este chat? La persona seguirá bloqueada."
 
 #: ui/modals/friends_blocked_tab.slint:113
 msgid "Remove from friends and unblock?"
@@ -3932,8 +3947,8 @@ msgstr "Hechos"
 msgid ""
 "Nothing yet — chat with Jarvis and durable facts land here automatically."
 msgstr ""
-"Aún no hay nada. Habla con Jarvis y los hechos que perduren aparecerán aquí "
-"solos."
+"Aún no hay nada. Habla con Jarvis y la información duradera se guardará aquí "
+"automáticamente."
 
 #: ui/modals/jarvis_memory.slint:210
 msgid "Knowledge graph"
@@ -3944,8 +3959,8 @@ msgid ""
 "No entities yet — Jarvis learns people, projects, and topics from "
 "conversations."
 msgstr ""
-"Aún no hay entidades. Jarvis aprende personas, proyectos y temas de las "
-"conversaciones."
+"Aún no hay entidades. Jarvis aprende sobre personas, proyectos y temas a "
+"partir de las conversaciones."
 
 #: ui/modals/jarvis_memory.slint:318
 msgid "Select an entity to map its connections"
@@ -3953,7 +3968,7 @@ msgstr "Elige una entidad para ver sus conexiones"
 
 #: ui/modals/join_channel.slint:111
 msgid "Joined"
-msgstr "Unido"
+msgstr "Ya eres miembro"
 
 #: ui/modals/join_channel_tab.slint:39
 msgid "Search channels, or paste a channel ID or invite link"
@@ -4181,7 +4196,9 @@ msgstr "Servidor: {}"
 
 #: ui/modals/link_device_approve.slint:132
 msgid "Verify this code matches the new device:"
-msgstr "Comprueba que este código coincide con el dispositivo nuevo:"
+msgstr ""
+"Comprueba que este código coincide con el que aparece en el dispositivo "
+"nuevo:"
 
 #: ui/modals/link_device_approve.slint:147
 msgid "Password or PIN"
@@ -4362,8 +4379,8 @@ msgid ""
 "This is privacy from the server. It is not anonymity from the person you "
 "message — they still see who you are."
 msgstr ""
-"Esto es privacidad frente al servidor. No es anonimato frente a quien "
-"escribes: esa persona sigue viendo quién eres."
+"Esto protege tu privacidad frente al servidor. La persona a la que escribes "
+"sigue viendo quién eres."
 
 #: ui/modals/sealed_sender_intro.slint:110
 msgid "Who can message you this way?"
@@ -4378,8 +4395,8 @@ msgid ""
 "Off (recommended): only your contacts can reach you this way. On: anyone "
 "can. You can change this later in Settings."
 msgstr ""
-"Desactivado (recomendado): solo tus contactos pueden llegarte así. Activado: "
-"cualquiera. Puedes cambiarlo después en Ajustes."
+"Desactivado (recomendado): solo tus contactos pueden escribirte así. "
+"Activado: cualquiera. Puedes cambiarlo después en Ajustes."
 
 #: ui/modals/sealed_sender_intro.slint:159
 msgid "Got it"
@@ -4483,7 +4500,7 @@ msgstr "Número de seguridad"
 
 #: ui/modals/user_profile.slint:502
 msgid "Disappearing messages: {}"
-msgstr "Mensajes que desaparecen: {}"
+msgstr "Mensajes temporales: {}"
 
 #: ui/modals/user_profile.slint:567
 msgid "You blocked this person."
@@ -4499,7 +4516,7 @@ msgstr "Añadir amigo"
 
 #: ui/modals/user_profile.slint:635
 msgid "Retry shared content"
-msgstr "Reintentar el contenido compartido"
+msgstr "Reintentar cargar el contenido compartido"
 
 #: ui/modals/user_profile.slint:684
 msgid "Share this contact"
@@ -4866,7 +4883,7 @@ msgstr "¡Te damos la bienvenida a Chatter!"
 
 #: ui/pages/welcome.slint:65
 msgid "Hi {}, your account is ready."
-msgstr "Hola {}, tu cuenta está lista."
+msgstr "Hola, {}: tu cuenta está lista."
 
 #: ui/pages/welcome.slint:93
 msgid "All messages are end-to-end encrypted"
@@ -4895,7 +4912,7 @@ msgstr "Únete a conversaciones públicas"
 
 #: ui/pages/welcome.slint:274
 msgid "Continue to Chatter"
-msgstr "Continuar a Chatter"
+msgstr "Entrar a Chatter"
 
 #: ui/server_records/screen.slint:47 ui/settings/account_menu.slint:216
 msgid "Notification inbox"
@@ -4934,7 +4951,7 @@ msgstr "Aún no hay integraciones"
 
 #: ui/server_records/screen.slint:241
 msgid "Mark read"
-msgstr "Marcar leído"
+msgstr "Marcar como leído"
 
 #: ui/settings/about_settings.slint:16
 msgid "About Chatter"
@@ -5253,11 +5270,11 @@ msgstr "Oscuro"
 
 #: ui/settings/appearance_settings.slint:145
 msgid "Language"
-msgstr ""
+msgstr "Idioma"
 
 #: ui/settings/appearance_settings.slint:209
 msgid "Match this device's language"
-msgstr ""
+msgstr "Usar el idioma de este dispositivo"
 
 #: ui/settings/appearance_settings.slint:244
 msgid "Text size"
@@ -5284,8 +5301,8 @@ msgid ""
 "Translucent navigation and controls. Turn off for a simpler appearance and "
 "better performance."
 msgstr ""
-"Navegación y controles translúcidos. Desactívalo para un aspecto más simple "
-"y mejor rendimiento."
+"Navegación y controles translúcidos. Desactiva esta opción para simplificar "
+"la apariencia y mejorar el rendimiento."
 
 #: ui/settings/appearance_settings.slint:370
 msgid "Reduce animations"
@@ -5385,7 +5402,7 @@ msgstr "Vinculado: {}"
 
 #: ui/settings/devices_settings.slint:237
 msgid "Approved, waiting to finish linking (until {})"
-msgstr "Aprobado, esperando a terminar de vincular (hasta {})"
+msgstr "Aprobado, esperando a que termine de vincularse (hasta {})"
 
 #: ui/settings/encryption_settings.slint:21
 #: ui/settings/settings_screen.slint:615
@@ -5557,7 +5574,7 @@ msgstr "Avisa a los demás cuando hayas leído sus mensajes"
 
 #: ui/settings/privacy_settings.slint:396
 msgid "Typing indicators"
-msgstr "Indicador de escritura"
+msgstr "Indicadores de escritura"
 
 #: ui/settings/privacy_settings.slint:411
 msgid "Show when you're typing a message"
@@ -5767,7 +5784,7 @@ msgstr "Listo para reiniciar"
 
 #: ui/sidebar/update_banner.slint:30
 msgid "Confirm system install"
-msgstr "Confirmar la instalación del sistema"
+msgstr "Confirma la instalación en el sistema"
 
 #: ui/sidebar/update_banner.slint:30
 msgid "Update failed"

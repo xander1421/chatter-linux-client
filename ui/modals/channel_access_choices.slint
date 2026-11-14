@@ -28,7 +28,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
         Rectangle {
             border-radius: Spacing.radius-md;
             accessible-role: button;
-            accessible-label: @tr("Open");
+            accessible-label: @tr("channel access" => "Open");
             accessible-checkable: true;
             accessible-checked: root.access-mode == "open";
             accessible-action-default => { root.access-mode = "open"; }
@@ -60,7 +60,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
                     }
                     Text {
                         accessible-role: none;
-                        text: @tr("Open");
+                        text: @tr("channel access" => "Open");
                         color: root.access-mode == "open" ? Colors.primary : Colors.text-primary;
                         font-size: Typography.sm;
                         font-weight: Typography.semibold;

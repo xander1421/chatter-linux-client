@@ -534,7 +534,7 @@ export component ChannelMembersSection inherits Rectangle {
                     if root.menu-member.can-mute: Rectangle { height: 1px; background: Colors.divider; }
                     if root.menu-member.can-mute && root.menu-member.muted: MemberMenuItem {
                         icon: Icons.volume-2;
-                        label: @tr("Unmute");
+                        label: @tr("member moderation" => "Unmute");
                         clicked => {
                             root.role-picker-user = "";
                             root.set-member-muted(root.menu-member.user-id, false, 0);

@@ -1,7 +1,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: chatter\n"
-"POT-Creation-Date: 2026-11-14 20:32+0000\n"
+"POT-Creation-Date: 2026-11-14 21:22+0000\n"
 "Language: ru\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -87,7 +87,7 @@ msgstr "Готово"
 
 #: ui/activity/activity_sheet.slint:141 ui/activity/activity_sheet.slint:145
 msgid "Mark all read"
-msgstr "Прочитать все"
+msgstr "Отметить всё прочитанным"
 
 #: ui/activity/activity_sheet.slint:166
 msgid "Server host"
@@ -158,9 +158,9 @@ msgid ""
 "messages are still end-to-end encrypted and routed through anonymous "
 "mailboxes."
 msgstr ""
-"Shield сейчас не может скрыть ваше место в сети (Tor недоступен). Ваши "
-"сообщения по-прежнему защищены сквозным шифрованием и идут через анонимные "
-"ящики."
+"Shield сейчас не может скрыть ваше сетевое местоположение (Tor недоступен). "
+"Ваши сообщения по-прежнему защищены сквозным шифрованием и передаются через "
+"анонимные почтовые ящики."
 
 #: ui/anon_mode/shield_onboarding.slint:30
 msgid "Shield unavailable"
@@ -244,8 +244,9 @@ msgid ""
 "On. Chatter asks for your PIN when it opens and after it has been in the "
 "background. Notifications show no sender or text while locked."
 msgstr ""
-"Вкл. Chatter запрашивает PIN при открытии и после того, как побывал в фоне. "
-"Пока приложение заблокировано, в уведомлениях нет отправителя и текста."
+"Вкл. Chatter запрашивает PIN при открытии и при возврате из фонового режима. "
+"Пока приложение заблокировано, уведомления не показывают отправителя и текст "
+"сообщения."
 
 #: ui/app_lock.slint:139
 msgid ""
@@ -340,7 +341,7 @@ msgstr "Пользователь"
 
 #: ui/app_top_overlays.slint:101
 msgid "Microphone + output (linked)"
-msgstr "Микрофон и выход (связаны)"
+msgstr "Микрофон и аудиовыход (связаны)"
 
 #: ui/app_top_overlays.slint:102 ui/calls/call_controls.slint:57
 msgid "Select microphone"
@@ -380,11 +381,11 @@ msgstr "Участники звонка"
 
 #: ui/calls/active_call_view.slint:327
 msgid "Exit full screen"
-msgstr "Выйти из полного экрана"
+msgstr "Выйти из полноэкранного режима"
 
 #: ui/calls/active_call_view.slint:327
 msgid "Full screen"
-msgstr "Полный экран"
+msgstr "На весь экран"
 
 #: ui/calls/active_call_view.slint:336
 msgid "Call participants grid"
@@ -392,19 +393,19 @@ msgstr "Сетка участников звонка"
 
 #: ui/calls/active_call_view.slint:415
 msgid "Unmute {} for you"
-msgstr "Включить звук {} у вас"
+msgstr "Включить у себя звук участника {}"
 
 #: ui/calls/active_call_view.slint:416
 msgid "Mute {} for you"
-msgstr "Выключить звук {} у вас"
+msgstr "Выключить у себя звук участника {}"
 
 #: ui/calls/active_call_view.slint:429
 msgid "Resume {}'s video for you"
-msgstr "Показать видео {} у вас"
+msgstr "Возобновить у себя видео участника {}"
 
 #: ui/calls/active_call_view.slint:430
 msgid "Pause {}'s video for you"
-msgstr "Скрыть видео {} у вас"
+msgstr "Приостановить у себя видео участника {}"
 
 #: ui/calls/active_call_view.slint:470
 msgid "Sharing your screen"
@@ -456,15 +457,15 @@ msgstr "Версия ключа звонка {}"
 
 #: ui/calls/active_call_view.slint:613
 msgid "Call verification pending"
-msgstr "Проверка звонка ещё не готова"
+msgstr "Ожидание проверки звонка"
 
 #: ui/calls/active_call_view.slint:614
 msgid "Verification pending"
-msgstr "Проверка не готова"
+msgstr "Ожидание проверки"
 
 #: ui/calls/call_controls.slint:57
 msgid "Select microphone, linked audio route"
-msgstr "Выбрать микрофон, связанный маршрут звука"
+msgstr "Выбрать микрофон и связанный аудиовыход"
 
 #: ui/calls/call_controls.slint:65 ui/calls/return_to_call_bar.slint:129
 msgid "Unmute microphone"
@@ -476,11 +477,11 @@ msgstr "Выключить микрофон"
 
 #: ui/calls/call_controls.slint:76
 msgid "Select output, linked audio route"
-msgstr "Выбрать выход, связанный маршрут звука"
+msgstr "Выбрать аудиовыход и связанный микрофон"
 
 #: ui/calls/call_controls.slint:76
 msgid "Select output"
-msgstr "Выбрать выход"
+msgstr "Выбрать аудиовыход"
 
 #: ui/calls/call_controls.slint:84
 msgid "Toggle speaker"
@@ -488,7 +489,7 @@ msgstr "Переключить динамик"
 
 #: ui/calls/call_controls.slint:84
 msgid "Select audio output"
-msgstr "Выбрать выход звука"
+msgstr "Выбрать аудиовыход"
 
 #: ui/calls/call_controls.slint:101 ui/calls/return_to_call_bar.slint:136
 msgid "Turn camera off"
@@ -647,7 +648,8 @@ msgid ""
 "Microphone and output change together. The check mark shows the active "
 "device."
 msgstr ""
-"Микрофон и выход переключаются вместе. Галочка отмечает активное устройство."
+"Микрофон и аудиовыход переключаются вместе. Галочкой отмечено активное "
+"устройство."
 
 #: ui/calls/device_picker.slint:199 ui/calls/device_picker.slint:219
 msgid "Default"
@@ -663,7 +665,7 @@ msgstr "Динамики не найдены"
 
 #: ui/calls/device_picker.slint:240
 msgid "Click below to open the system screen picker"
-msgstr "Нажмите ниже, чтобы открыть системный выбор экрана"
+msgstr "Нажмите ниже, чтобы открыть системное окно выбора экрана"
 
 #: ui/calls/device_picker.slint:250
 msgid "Opens system dialog to select screen or window"
@@ -743,7 +745,7 @@ msgstr "Повторить загрузку"
 
 #: ui/chat/audio_player.slint:57
 msgid "Pause voice message"
-msgstr "Пауза голосового"
+msgstr "Приостановить голосовое"
 
 #: ui/chat/audio_player.slint:57
 msgid "Play voice message"
@@ -836,11 +838,11 @@ msgstr[2] "{n} рядом"
 
 #: ui/chat/chat_header.slint:588
 msgid "Open mesh conversation information"
-msgstr "Открыть сведения о меш-разговоре"
+msgstr "Открыть сведения о меш-чате"
 
 #: ui/chat/chat_header.slint:605
 msgid "Conversation info"
-msgstr "О разговоре"
+msgstr "О чате"
 
 #: ui/chat/chat_header_menu.slint:94 ui/modals/keyboard_shortcuts.slint:130
 msgid "Search in chat"
@@ -860,7 +862,7 @@ msgstr "Добавить участников"
 
 #: ui/chat/chat_header_menu.slint:98
 msgid "Conversation settings"
-msgstr "Настройки разговора"
+msgstr "Настройки чата"
 
 #: ui/chat/chat_header_menu.slint:99 ui/modals/user_profile.slint:470
 msgid "Start secret chat"
@@ -873,7 +875,7 @@ msgstr "Исчезающие сообщения"
 
 #: ui/chat/chat_layout.slint:385
 msgid "Anyone in radio range can read this"
-msgstr "Это может прочитать любой в зоне радио"
+msgstr "Это может прочитать любой в зоне действия радиосвязи"
 
 #: ui/chat/chat_layout.slint:387
 msgid "Anyone in this cell can read this"
@@ -881,7 +883,7 @@ msgstr "Это может прочитать любой в этой ячейке
 
 #: ui/chat/chat_layout.slint:389
 msgid "Invited devices · encrypted over mesh"
-msgstr "Приглашённые устройства · шифрование через меш"
+msgstr "Приглашённые устройства · шифрование в меш-сети"
 
 #: ui/chat/chat_layout.slint:391
 msgid "Public channel — anyone can read this"
@@ -965,7 +967,7 @@ msgstr "Редактирование"
 
 #: ui/chat/composer_edit_bar.slint:49
 msgid "Cancel edit"
-msgstr "Отменить правку"
+msgstr "Отменить редактирование"
 
 #: ui/chat/composer_format_toolbar.slint:25
 msgid "Bold"
@@ -1074,7 +1076,7 @@ msgid ""
 "Each new message disappears after the selected time once its expiry clock "
 "starts."
 msgstr ""
-"Каждое новое сообщение исчезает через выбранное время, когда начнётся отсчёт."
+"Каждое новое сообщение исчезает через выбранное время после начала отсчёта."
 
 #: ui/chat/disappearing_settings.slint:78
 msgid "How long to enable"
@@ -1429,27 +1431,29 @@ msgstr "отправлено"
 
 #: ui/chat/message_footer.slint:173
 msgid "Signal ciphertext queued on this device; no route has accepted it"
-msgstr "Шифротекст Signal ждёт на этом устройстве; маршрут его ещё не принял"
+msgstr ""
+"Зашифрованное по протоколу Signal сообщение ожидает отправки на этом "
+"устройстве; ни один маршрут ещё не принял его"
 
 #: ui/chat/message_footer.slint:175
 msgid ""
 "Sealed Signal ciphertext queued onto a courier link; recipient has not "
 "acknowledged it"
 msgstr ""
-"Запечатанный шифротекст Signal передан на связь с курьером; получатель ещё "
-"не подтвердил"
+"Запечатанное сообщение, зашифрованное по протоколу Signal, передано по "
+"каналу связи с курьером; получатель ещё не подтвердил получение"
 
 #: ui/chat/message_footer.slint:177
 msgid "Handed to a passing device; may arrive later"
-msgstr "Передано проходящему устройству; может дойти позже"
+msgstr "Передано устройству поблизости; может быть доставлено позже"
 
 #: ui/chat/message_footer.slint:179
 msgid "Held on this device until something can carry it"
-msgstr "Хранится на этом устройстве, пока его некому донести"
+msgstr "Хранится на этом устройстве, пока не появится возможность его передать"
 
 #: ui/chat/message_footer.slint:181
 msgid "Left the outbox without ever being acknowledged"
-msgstr "Ушло из исходящих и так и не было подтверждено"
+msgstr "Удалено из очереди исходящих без подтверждения доставки"
 
 #: ui/chat/message_footer.slint:183
 msgid "The peer's device acknowledged it"
@@ -1465,7 +1469,7 @@ msgstr "Отправлено в эфир без подтверждения по�
 
 #: ui/chat/message_footer.slint:188
 msgid "Handed to a live link; not yet acknowledged"
-msgstr "Передано по живой связи; подтверждения ещё нет"
+msgstr "Передано по действующему каналу связи; подтверждения ещё нет"
 
 #: ui/chat/message_footer.slint:201
 msgid "waiting for Tor"
@@ -1477,7 +1481,7 @@ msgstr "отправка"
 
 #: ui/chat/message_footer.slint:206
 msgid "Queued behind an earlier send; upload has not started"
-msgstr "Ждёт предыдущую отправку; загрузка ещё не началась"
+msgstr "Ожидает завершения предыдущей отправки; загрузка ещё не началась"
 
 #: ui/chat/message_footer.slint:206 ui/chat/message_item.slint:659
 msgid "Waiting for Tor"
@@ -1675,8 +1679,8 @@ msgid ""
 "New messages disappear after this time. Received messages count down after "
 "you read them; your sent messages count down after sending."
 msgstr ""
-"Новые сообщения исчезают через это время. Входящие отсчитывают срок после "
-"того, как вы их прочитали; ваши исходящие — после отправки."
+"Новые сообщения исчезают через указанное время. Для входящих отсчёт "
+"начинается после прочтения, для исходящих — после отправки."
 
 #: ui/chat/secret_timer_modal.slint:26
 msgid "Current: {}"
@@ -1719,7 +1723,7 @@ msgstr "Напишите первый ответ!"
 
 #: ui/chat/thread_panel.slint:448 ui/chat/thread_panel.slint:461
 msgid "Load earlier replies"
-msgstr "Загрузить ранние ответы"
+msgstr "Загрузить предыдущие ответы"
 
 #: ui/chat/thread_panel.slint:727
 msgid "Unpin message"
@@ -1781,7 +1785,7 @@ msgstr "Создать"
 
 #: ui/components/connection_banner.slint:110
 msgid "The mesh is not running either, so there is nothing to fall back to."
-msgstr "Меш тоже не работает, поэтому запасного пути нет."
+msgstr "Меш-сеть тоже не работает, поэтому резервный способ связи недоступен."
 
 #: ui/components/connection_banner.slint:117
 msgid ""
@@ -1796,8 +1800,8 @@ msgid ""
 "Mesh is on, but the Bluetooth radio is unavailable and no relay is connected "
 "— nothing can carry a message right now."
 msgstr ""
-"Меш включён, но радио Bluetooth недоступно и нет подключённого ретранслятора "
-"— сейчас сообщение некому донести."
+"Меш включён, но радиомодуль Bluetooth недоступен и нет подключённых "
+"ретрансляторов — сейчас передать сообщение некому."
 
 #: ui/components/connection_banner.slint:120
 msgid ""
@@ -1824,22 +1828,22 @@ msgid_plural ""
 "Mesh is on but the Bluetooth radio is unavailable. Only the {n} connected "
 "relays can carry, and relays need internet."
 msgstr[0] ""
-"Меш включён, но радио Bluetooth недоступно. Сообщение может донести только "
-"{n} подключённый ретранслятор, а ретрансляторам нужен интернет."
+"Меш включён, но радиомодуль Bluetooth недоступно. Сообщение может донести "
+"только {n} подключённый ретранслятор, а ретрансляторам нужен интернет."
 msgstr[1] ""
-"Меш включён, но радио Bluetooth недоступно. Сообщение могут донести только "
-"{n} подключённых ретранслятора, а ретрансляторам нужен интернет."
+"Меш включён, но радиомодуль Bluetooth недоступно. Сообщение могут донести "
+"только {n} подключённых ретранслятора, а ретрансляторам нужен интернет."
 msgstr[2] ""
-"Меш включён, но радио Bluetooth недоступно. Сообщение могут донести только "
-"{n} подключённых ретрансляторов, а ретрансляторам нужен интернет."
+"Меш включён, но радиомодуль Bluetooth недоступно. Сообщение могут донести "
+"только {n} подключённых ретрансляторов, а ретрансляторам нужен интернет."
 
 #: ui/components/connection_banner.slint:123
 msgid ""
 "Mesh is running over Bluetooth. Nobody is in range yet; what you send waits "
 "to be carried."
 msgstr ""
-"Меш работает через Bluetooth. Пока никого нет в зоне действия; отправленное "
-"ждёт, пока его донесут."
+"Меш работает через Bluetooth. Пока рядом никого нет; сообщения ожидают "
+"передачи."
 
 #: ui/components/connection_banner.slint:124
 msgid ""
@@ -1849,11 +1853,11 @@ msgid_plural ""
 "Mesh is running over Bluetooth — {n} nearby. Mesh conversations do not need "
 "the server."
 msgstr[0] ""
-"Меш работает через Bluetooth — рядом {n}. Меш-разговорам сервер не нужен."
+"Меш работает через Bluetooth — рядом {n}. Для меш-чатов сервер не нужен."
 msgstr[1] ""
-"Меш работает через Bluetooth — рядом {n}. Меш-разговорам сервер не нужен."
+"Меш работает через Bluetooth — рядом {n}. Для меш-чатов сервер не нужен."
 msgstr[2] ""
-"Меш работает через Bluetooth — рядом {n}. Меш-разговорам сервер не нужен."
+"Меш работает через Bluetooth — рядом {n}. Для меш-чатов сервер не нужен."
 
 #: ui/components/connection_banner.slint:211
 msgid "Tor error — retrying…"
@@ -1894,7 +1898,7 @@ msgstr "Сервер недоступен — сообщения уйдут по
 
 #: ui/components/connection_banner.slint:260
 msgid "Dismiss the connection banner"
-msgstr "Скрыть баннер соединения"
+msgstr "Скрыть уведомление о подключении"
 
 #: ui/components/dismiss_button.slint:38 ui/server_records/screen.slint:87
 msgid "Close"
@@ -2059,8 +2063,8 @@ msgstr "Нет подсказок"
 msgid ""
 "Not signed in — mesh conversations only. Channels and DMs need an account."
 msgstr ""
-"Вы не вошли — доступны только меш-разговоры. Для каналов и личных сообщений "
-"нужен аккаунт."
+"Вы не вошли — доступны только меш-чаты. Для каналов и личных сообщений нужен "
+"аккаунт."
 
 #: ui/components/mesh_only_bar.slint:76 ui/components/mesh_only_bar.slint:91
 #: ui/pages/register.slint:619
@@ -2102,27 +2106,29 @@ msgid ""
 "Creating an account and signing in both need it, so neither will work until "
 "it comes back."
 msgstr ""
-"И создание аккаунта, и вход требуют его, поэтому ни то ни другое не "
-"заработает, пока он не вернётся."
+"Для создания аккаунта и входа нужен сервер. Они будут недоступны, пока связь "
+"с ним не восстановится."
 
 #: ui/components/offline_mesh_notice.slint:101
 msgid ""
 "The mesh does not. It carries messages between nearby devices over Bluetooth "
 "with no server, no internet and no account — and it is running now."
 msgstr ""
-"Мешу он не нужен. Меш переносит сообщения между устройствами рядом по "
-"Bluetooth без сервера, интернета и аккаунта — и сейчас он работает."
+"Меш-сети сервер не нужен. Она передаёт сообщения между устройствами "
+"поблизости по Bluetooth без сервера, интернета и аккаунта — и сейчас "
+"работает."
 
 #: ui/components/offline_mesh_notice.slint:103
 msgid ""
 "The mesh is not running on this device either, so there is nothing to fall "
 "back to right now."
 msgstr ""
-"На этом устройстве меш тоже не работает, поэтому сейчас запасного пути нет."
+"На этом устройстве меш-сеть тоже не работает, поэтому резервный способ связи "
+"сейчас недоступен."
 
 #: ui/components/offline_mesh_notice.slint:104
 msgid "This build has no mesh, so there is nothing to fall back to."
-msgstr "В этой сборке нет меша, поэтому запасного пути нет."
+msgstr "В этой сборке нет меш-сети, поэтому резервный способ связи недоступен."
 
 #: ui/components/offline_mesh_notice.slint:144
 msgid "Use the mesh without an account"
@@ -2190,7 +2196,7 @@ msgstr "Ссылки"
 
 #: ui/components/unified_search.slint:621
 msgid "Voice"
-msgstr "Голос"
+msgstr "Голосовые"
 
 #: ui/components/unified_search.slint:654
 msgid "{0} {1}+"
@@ -2432,15 +2438,15 @@ msgstr "Следующий месяц"
 
 #: ui/components/unified_search.slint:1262
 msgid "Tap a start day, then an end day"
-msgstr "Нажмите день начала, затем день конца"
+msgstr "Выберите дату начала, затем дату окончания"
 
 #: ui/components/unified_search.slint:1262
 msgid "Start: {} · choose end"
-msgstr "Начало: {} · выберите конец"
+msgstr "Начало: {} · выберите окончание"
 
 #: ui/components/unified_search.slint:1290
 msgid "From a person"
-msgstr "От человека"
+msgstr "От пользователя"
 
 #: ui/components/unified_search.slint:1290
 msgid "In a chat"
@@ -2460,7 +2466,7 @@ msgstr "Ничего не найдено"
 
 #: ui/components/video_player.slint:153
 msgid "Pause video"
-msgstr "Пауза видео"
+msgstr "Приостановить видео"
 
 #: ui/components/video_player.slint:153
 msgid "Play video"
@@ -2468,7 +2474,7 @@ msgstr "Воспроизвести видео"
 
 #: ui/components/video_player.slint:167
 msgid "Video position"
-msgstr "Позиция видео"
+msgstr "Позиция воспроизведения видео"
 
 #: ui/components/video_player.slint:226
 msgid "Mute video"
@@ -2480,7 +2486,7 @@ msgstr "Включить звук видео"
 
 #: ui/main_chat_shell.slint:468
 msgid "Select a conversation"
-msgstr "Выберите разговор"
+msgstr "Выберите чат"
 
 #: ui/mesh/mesh_compose_sheet.slint:92 ui/mesh/mesh_compose_sheet.slint:149
 msgid "New private group"
@@ -2488,7 +2494,7 @@ msgstr "Новая закрытая группа"
 
 #: ui/mesh/mesh_compose_sheet.slint:93 ui/mesh/mesh_compose_sheet.slint:153
 msgid "Join public channel"
-msgstr "Войти в публичный канал"
+msgstr "Вступить в публичный канал"
 
 #: ui/mesh/mesh_compose_sheet.slint:94 ui/mesh/mesh_compose_sheet.slint:156
 msgid "Join with invite"
@@ -2508,11 +2514,11 @@ msgstr "Только по приглашению"
 
 #: ui/mesh/mesh_compose_sheet.slint:153
 msgid "Talk with devices nearby"
-msgstr "Разговор с устройствами рядом"
+msgstr "Общение с устройствами поблизости"
 
 #: ui/mesh/mesh_compose_sheet.slint:156
 msgid "Paste or scan a private invite"
-msgstr "Вставьте или сканируйте личное приглашение"
+msgstr "Вставьте или отсканируйте личное приглашение"
 
 #: ui/mesh/mesh_compose_sheet.slint:160
 msgid "Connect through nearby relays"
@@ -2531,7 +2537,7 @@ msgstr ""
 
 #: ui/mesh/mesh_compose_sheet.slint:187
 msgid "SEEN NEARBY"
-msgstr "ВИДНЫ РЯДОМ"
+msgstr "ОБНАРУЖЕНЫ РЯДОМ"
 
 #: ui/mesh/mesh_compose_sheet.slint:204
 msgid "Paste private invite"
@@ -2636,7 +2642,7 @@ msgstr ""
 
 #: ui/mesh/mesh_info_sheet.slint:168
 msgid "Waiting for the creator to rotate the group key. Sending is paused."
-msgstr "Ждём, пока создатель сменит ключ группы. Отправка на паузе."
+msgstr "Ожидание смены ключа группы её создателем. Отправка приостановлена."
 
 #: ui/mesh/mesh_info_sheet.slint:175
 msgid "NEARBY DEVICES"
@@ -2652,7 +2658,7 @@ msgstr "Рядом"
 
 #: ui/mesh/mesh_info_sheet.slint:194
 msgid "Waiting for a route"
-msgstr "Ждём маршрут"
+msgstr "Ожидание маршрута"
 
 #: ui/mesh/mesh_info_sheet.slint:199 ui/modals/channel_members.slint:136
 #: ui/modals/invite_member.slint:186
@@ -2672,8 +2678,8 @@ msgid ""
 "Invite sends the group key over the encrypted mesh link. QR shows a code the "
 "other person scans."
 msgstr ""
-"Приглашение передаёт ключ группы по зашифрованной меш-связи. QR показывает "
-"код, который другой человек сканирует."
+"Приглашение передаёт ключ группы по зашифрованному каналу меш-сети. При "
+"выборе QR появится код, который собеседник сможет отсканировать."
 
 #: ui/mesh/mesh_info_sheet.slint:259 ui/mesh/mesh_list_item.slint:138
 #: ui/modals/profile_action_tiles.slint:31
@@ -2698,12 +2704,12 @@ msgstr "Исключить {}? Ключ группы сменится."
 #: ui/mesh/mesh_info_sheet.slint:308
 msgid "Reachable members will pause sending until the creator rotates the key."
 msgstr ""
-"Доступные участники поставят отправку на паузу, пока создатель не сменит "
-"ключ."
+"Участники, с которыми есть связь, приостановят отправку, пока создатель не "
+"сменит ключ."
 
 #: ui/mesh/mesh_info_sheet.slint:309
 msgid "Leave this mesh conversation?"
-msgstr "Выйти из этого меш-разговора?"
+msgstr "Выйти из этого меш-чата?"
 
 #: ui/mesh/mesh_info_sheet.slint:315
 msgid "View contact"
@@ -2748,7 +2754,7 @@ msgstr "Настройка меша"
 
 #: ui/mesh/mesh_list.slint:79
 msgid "Mesh radio"
-msgstr "Радио меша"
+msgstr "Радиомодуль меш-сети"
 
 #: ui/mesh/mesh_list.slint:98 ui/mesh/mesh_setup_sheet.slint:93
 msgid "{0} invited you to {1}"
@@ -2768,15 +2774,15 @@ msgstr "РЯДОМ"
 
 #: ui/mesh/mesh_list.slint:158
 msgid "Open nearby mesh peer {}"
-msgstr "Открыть участника меша рядом {}"
+msgstr "Открыть профиль участника меш-сети поблизости: {}"
 
 #: ui/mesh/mesh_list.slint:182
 msgid "No mesh conversations"
-msgstr "Нет меш-разговоров"
+msgstr "Нет меш-чатов"
 
 #: ui/mesh/mesh_list.slint:185
 msgid "Create a group or start a nearby conversation."
-msgstr "Создайте группу или начните разговор с кем-то рядом."
+msgstr "Создайте группу или начните чат с кем-то поблизости."
 
 #: ui/mesh/mesh_list.slint:190
 msgid "New group"
@@ -2800,15 +2806,15 @@ msgstr "ЛИЧНЫЕ СООБЩЕНИЯ"
 
 #: ui/mesh/mesh_list_item.slint:29
 msgid "Public · {}"
-msgstr "Публичное · {}"
+msgstr "Публичная · {}"
 
 #: ui/mesh/mesh_list_item.slint:30
 msgid "Everyone in radio range"
-msgstr "Все в зоне радио"
+msgstr "Все в зоне действия радиосвязи"
 
 #: ui/mesh/mesh_list_item.slint:31
 msgid "Public to nearby listeners"
-msgstr "Слышно всем рядом"
+msgstr "Доступно всем поблизости"
 
 #: ui/mesh/mesh_list_item.slint:32
 msgid "Invited devices · encrypted"
@@ -2823,7 +2829,6 @@ msgid "Encrypted · nearby"
 msgstr "Шифрование · рядом"
 
 #: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
-#: ui/modals/profile_action_tiles.slint:31
 msgid "Unmute"
 msgstr "Со звуком"
 
@@ -2853,7 +2858,8 @@ msgstr "Сверить"
 
 #: ui/mesh/mesh_peer_sheet.slint:134
 msgid "Compare these numbers in person with {}."
-msgstr "Сверьте эти номера лично с {}."
+msgstr ""
+"При личной встрече сверьте эти числа с числами на устройстве собеседника {}."
 
 #: ui/mesh/mesh_peer_sheet.slint:142
 msgid "Show my QR code"
@@ -2861,7 +2867,7 @@ msgstr "Показать мой QR-код"
 
 #: ui/mesh/mesh_peer_sheet.slint:146
 msgid "Scan their code"
-msgstr "Сканировать его код"
+msgstr "Сканировать код собеседника"
 
 #: ui/mesh/mesh_peer_sheet.slint:150
 msgid "Verify known contact"
@@ -2869,7 +2875,7 @@ msgstr "Сверить известный контакт"
 
 #: ui/mesh/mesh_peer_sheet.slint:154
 msgid "Share my Chatter identity"
-msgstr "Поделиться личностью Chatter"
+msgstr "Поделиться своими данными Chatter"
 
 #: ui/mesh/mesh_peer_sheet.slint:160 ui/mesh/mesh_peer_sheet.slint:162
 msgid "Use Signal encryption"
@@ -2877,15 +2883,15 @@ msgstr "Шифрование Signal"
 
 #: ui/mesh/mesh_peer_sheet.slint:183
 msgid "Paste their QR code"
-msgstr "Вставить его QR-код"
+msgstr "Вставить QR-код собеседника"
 
 #: ui/mesh/mesh_peer_sheet.slint:191
 msgid "Waiting for encrypted link"
-msgstr "Ждём зашифрованную связь"
+msgstr "Ожидание защищённого соединения"
 
 #: ui/mesh/mesh_peer_sheet.slint:191
 msgid "Their fingerprint: {}"
-msgstr "Его отпечаток: {}"
+msgstr "Отпечаток собеседника: {}"
 
 #: ui/mesh/mesh_peer_sheet.slint:194
 msgid "Your fingerprint: {}"
@@ -2926,7 +2932,7 @@ msgstr "Настройки меша"
 
 #: ui/mesh/mesh_setup_sheet.slint:97
 msgid "Peer names are self-asserted until you verify in person."
-msgstr "Имена указывают сами участники, пока вы не сверите их лично."
+msgstr "Участники сами указывают имена. Подтвердите их при личной встрече."
 
 #: ui/mesh/mesh_setup_sheet.slint:123
 msgid "Radio unavailable"
@@ -2945,7 +2951,7 @@ msgstr[2] "Вкл. · {n} рядом"
 
 #: ui/mesh/mesh_setup_sheet.slint:138
 msgid "Nearby devices will appear here when discovered."
-msgstr "Здесь появятся устройства рядом, когда они найдутся."
+msgstr "Здесь будут появляться обнаруженные устройства поблизости."
 
 #: ui/mesh/mesh_setup_sheet.slint:148
 msgid "Nickname"
@@ -2970,8 +2976,9 @@ msgid ""
 "Erase this device's mesh identity, messages, carried mail and favourites? "
 "Your Chatter account stays intact. This cannot be undone."
 msgstr ""
-"Стереть меш-личность этого устройства, сообщения, переносимую почту и "
-"избранное? Аккаунт Chatter не изменится. Это нельзя отменить."
+"Стереть идентификационные данные этого устройства в меш-сети, сообщения, "
+"пересылаемую почту и избранное? Аккаунт Chatter не изменится. Это нельзя "
+"отменить."
 
 #: ui/mesh/mesh_setup_sheet.slint:190
 msgid "Erase Mesh data"
@@ -2989,11 +2996,12 @@ msgid ""
 "reached you will be told. Enter your PIN to enable. On a device checking "
 "online, wrong attempts can delete your key backup."
 msgstr ""
-"Shield скрывает каналы и Избранное и показывает анонимные личные сообщения. "
-"Переписки с друзьями остаются и идут через анонимные ящики, а не через "
-"сервер. Ваше место в сети скрыто за Tor — если до Tor не достучаться, вы об "
-"этом узнаете. Введите PIN, чтобы включить. На устройстве с проверкой в сети "
-"неверные попытки могут удалить резервную копию ключей."
+"Shield скрывает каналы и «Избранное» и показывает анонимные личные "
+"сообщения. Переписки с друзьями сохраняются, а сообщения передаются через "
+"анонимные почтовые ящики вместо сервера. Tor скрывает ваше сетевое "
+"местоположение — если подключиться к Tor не удастся, вы получите "
+"уведомление. Введите PIN для включения. Если устройство проверяет PIN через "
+"интернет, неверные попытки могут привести к удалению резервной копии ключей."
 
 #: ui/modals/anon_mode_pin.slint:117
 msgid "Enable"
@@ -3021,7 +3029,7 @@ msgstr "Нужно одобрение"
 
 #: ui/modals/channel_access.slint:110
 msgid "People who use the link wait until an admin lets them in"
-msgstr "Кто перейдёт по ссылке, ждёт, пока администратор его впустит"
+msgstr "Пользователи, перешедшие по ссылке, ждут одобрения администратора"
 
 #: ui/modals/channel_access.slint:121 ui/modals/profile_info_card.slint:186
 msgid "Create link"
@@ -3055,6 +3063,11 @@ msgstr "Отклонить"
 msgid "Who can join?"
 msgstr "Кто может вступить?"
 
+#: ui/modals/channel_access_choices.slint:31
+msgctxt "channel access"
+msgid "Open"
+msgstr "Открытый"
+
 #: ui/modals/channel_access_choices.slint:73
 msgid "Anyone finds and joins. New members see messages from when they join."
 msgstr ""
@@ -3067,7 +3080,7 @@ msgstr "Только по приглашению"
 
 #: ui/modals/channel_access_choices.slint:132
 msgid "Hidden from discovery. Invite or password to join."
-msgstr "Скрыто из поиска. Чтобы вступить, нужно приглашение или пароль."
+msgstr "Не отображается в поиске. Для вступления нужно приглашение или пароль."
 
 #: ui/modals/channel_access_choices.slint:149
 msgid "Anon group"
@@ -3103,8 +3116,8 @@ msgid ""
 "Leave {}? You won't get new messages, and an invite-only channel cannot be "
 "rejoined on your own."
 msgstr ""
-"Выйти из {}? Новые сообщения приходить не будут, а в канал только по "
-"приглашению самому не вернуться."
+"Выйти из {}? Вы перестанете получать новые сообщения. Если вход в канал "
+"только по приглашению, самостоятельно вернуться не получится."
 
 #: ui/modals/channel_danger.slint:133
 msgid "Transfer ownership"
@@ -3132,11 +3145,11 @@ msgstr "Заблокировать группу"
 
 #: ui/modals/channel_danger.slint:177
 msgid "Messages from this group are being dropped on this device"
-msgstr "Сообщения этой группы на этом устройстве отбрасываются"
+msgstr "Сообщения этой группы не принимаются на этом устройстве"
 
 #: ui/modals/channel_danger.slint:178
 msgid "Drop everything this group sends, on this device"
-msgstr "Отбрасывать всё, что присылает эта группа, на этом устройстве"
+msgstr "Не принимать сообщения этой группы на этом устройстве"
 
 #: ui/modals/channel_danger.slint:204
 msgid "Unarchive channel"
@@ -3152,7 +3165,7 @@ msgstr "Снова показать канал в списке"
 
 #: ui/modals/channel_danger.slint:211
 msgid "Archive to hide from active channels"
-msgstr "В архив, чтобы скрыть из активных каналов"
+msgstr "Скрыть канал из списка активных, переместив в архив"
 
 #: ui/modals/channel_danger.slint:221
 msgid "Unarchive"
@@ -3209,15 +3222,15 @@ msgstr "Описание (необязательно)"
 
 #: ui/modals/channel_members.slint:130
 msgid "Mute 1h"
-msgstr "Без звука на 1 ч"
+msgstr "Запретить писать на 1 ч"
 
 #: ui/modals/channel_members.slint:131
 msgid "Mute 1 day"
-msgstr "Без звука на 1 день"
+msgstr "Запретить писать на 1 день"
 
 #: ui/modals/channel_members.slint:132
 msgid "Mute until unmuted"
-msgstr "Без звука, пока не включите"
+msgstr "Запретить писать бессрочно"
 
 #: ui/modals/channel_members.slint:137
 msgid "Moderator"
@@ -3254,7 +3267,7 @@ msgstr "приглашён"
 
 #: ui/modals/channel_members.slint:335
 msgid "muted"
-msgstr "без звука"
+msgstr "не может писать"
 
 #: ui/modals/channel_members.slint:353
 msgid "unverified"
@@ -3266,19 +3279,24 @@ msgstr "Действия для {}"
 
 #: ui/modals/channel_members.slint:435 ui/modals/invite_member.slint:186
 msgid "Banned"
-msgstr "Забанен"
+msgstr "Вход запрещён"
 
 #: ui/modals/channel_members.slint:469
 msgid "Unban"
-msgstr "Разбанить"
+msgstr "Разрешить вход"
 
 #: ui/modals/channel_members.slint:515
 msgid "ROLE"
 msgstr "РОЛЬ"
 
+#: ui/modals/channel_members.slint:537
+msgctxt "member moderation"
+msgid "Unmute"
+msgstr "Разрешить писать"
+
 #: ui/modals/channel_members.slint:545
 msgid "MUTE IN CHANNEL"
-msgstr "БЕЗ ЗВУКА В КАНАЛЕ"
+msgstr "ЗАПРЕТ ПИСАТЬ В КАНАЛЕ"
 
 #: ui/modals/channel_members.slint:565
 msgid "Make owner…"
@@ -3306,11 +3324,13 @@ msgstr "Исключить из канала"
 
 #: ui/modals/channel_members.slint:588 ui/modals/channel_members.slint:635
 msgid "Ban"
-msgstr "Забанить"
+msgstr "Запретить вход"
 
 #: ui/modals/channel_members.slint:611
 msgid "Ban {}? They will be removed and can't rejoin."
-msgstr "Забанить {}? Человека исключат, и вернуться он не сможет."
+msgstr ""
+"Запретить вход для {}? Этот пользователь будет исключён и не сможет "
+"вернуться."
 
 #: ui/modals/channel_members.slint:613
 msgid "Make {0} the owner of {1}? You'll become an admin."
@@ -3351,11 +3371,11 @@ msgstr "Уведомления из этого канала приходить �
 
 #: ui/modals/channel_notifications.slint:60
 msgid "When not muted, notify me for:"
-msgstr "Если звук включён, уведомлять о:"
+msgstr "Когда уведомления включены, уведомлять о:"
 
 #: ui/modals/channel_notifications.slint:76
 msgid "All messages"
-msgstr "Всех сообщениях"
+msgstr "Все сообщения"
 
 #: ui/modals/channel_notifications.slint:112
 msgid "Get notified for every message"
@@ -3386,8 +3406,8 @@ msgid ""
 "Allow remote AI to read this channel when you explicitly ask it something "
 "here. Off by default."
 msgstr ""
-"Разрешить облачному AI читать этот канал, когда вы явно спрашиваете его "
-"здесь. По умолчанию выключено."
+"Разрешить облачному AI читать этот канал, когда вы задаёте ему здесь вопрос. "
+"По умолчанию выключено."
 
 #: ui/modals/channel_settings.slint:150
 msgid "Group settings"
@@ -3455,7 +3475,7 @@ msgstr "Загрузка сведений о группе…"
 
 #: ui/modals/channel_settings.slint:397
 msgid "Add a description so members know what this is for"
-msgstr "Добавьте описание, чтобы участники понимали, зачем это"
+msgstr "Добавьте описание, чтобы участники понимали назначение группы"
 
 #: ui/modals/channel_settings.slint:402
 msgid "Unsaved changes to group info"
@@ -3491,11 +3511,11 @@ msgstr "Управление каналом"
 
 #: ui/modals/channel_settings.slint:474
 msgid "Leave, archive or delete"
-msgstr "Выйти, в архив или удалить"
+msgstr "Выйти, архивировать или удалить"
 
 #: ui/modals/channel_settings.slint:474
 msgid "Archive or delete"
-msgstr "В архив или удалить"
+msgstr "Архивировать или удалить"
 
 #: ui/modals/channel_settings.slint:559
 msgid "Messages disappear after {} (set when the channel was created)"
@@ -3596,7 +3616,7 @@ msgstr "Через"
 
 #: ui/modals/create_channel.slint:591
 msgid "hours"
-msgstr "часов"
+msgstr "ч"
 
 #: ui/modals/create_channel.slint:612
 msgid "Enable AI assistant"
@@ -3746,11 +3766,11 @@ msgstr "Удалить чат"
 
 #: ui/modals/friends_find_tab.slint:96
 msgid "Scan to start a secret chat with me"
-msgstr "Сканируйте, чтобы начать со мной секретный чат"
+msgstr "Отсканируйте код, чтобы начать со мной секретный чат"
 
 #: ui/modals/friends_find_tab.slint:96
 msgid "Scan to add me"
-msgstr "Сканируйте, чтобы добавить меня"
+msgstr "Отсканируйте код, чтобы добавить меня"
 
 #: ui/modals/friends_find_tab.slint:110
 msgid "Share my code"
@@ -3876,7 +3896,7 @@ msgid ""
 "with anonymous mailboxes"
 msgstr ""
 "Приглашения в группы защищены сквозным шифрованием\n"
-"через анонимные ящики"
+"через анонимные почтовые ящики"
 
 #: ui/modals/friends_requests_tab.slint:558
 msgid "Invited by {}"
@@ -3948,7 +3968,8 @@ msgstr "Факты"
 msgid ""
 "Nothing yet — chat with Jarvis and durable facts land here automatically."
 msgstr ""
-"Пока пусто — поговорите с Jarvis, и устойчивые факты появятся здесь сами."
+"Пока пусто — общайтесь с Jarvis, и он автоматически сохранит здесь факты, "
+"которые нужно запомнить."
 
 #: ui/modals/jarvis_memory.slint:210
 msgid "Knowledge graph"
@@ -3959,7 +3980,7 @@ msgid ""
 "No entities yet — Jarvis learns people, projects, and topics from "
 "conversations."
 msgstr ""
-"Пока нет сущностей — Jarvis узнаёт людей, проекты и темы из разговоров."
+"Пока нет сущностей — Jarvis узнаёт о людях, проектах и темах из переписки."
 
 #: ui/modals/jarvis_memory.slint:318
 msgid "Select an entity to map its connections"
@@ -3975,7 +3996,7 @@ msgstr "Ищите каналы или вставьте ID канала либо
 
 #: ui/modals/join_channel_tab.slint:45
 msgid "Name, channel ID or chatter://join/ link"
-msgstr "Имя, ID канала или ссылка chatter://join/"
+msgstr "Название, ID канала или ссылка chatter://join/"
 
 #: ui/modals/join_channel_tab.slint:79
 msgid "Searching..."
@@ -4005,7 +4026,7 @@ msgstr "Поиск публичных каналов"
 
 #: ui/modals/join_channel_tab.slint:176
 msgid "Enter a channel name or paste a channel ID to join directly"
-msgstr "Введите имя канала или вставьте ID, чтобы вступить сразу"
+msgstr "Введите название канала или вставьте его ID, чтобы сразу вступить"
 
 #: ui/modals/keyboard_shortcuts.slint:72 ui/modals/keyboard_shortcuts.slint:89
 msgid "Keyboard shortcuts"
@@ -4151,7 +4172,7 @@ msgstr "Изменить последнее сообщение"
 
 #: ui/modals/keyboard_shortcuts.slint:155
 msgid "Cancel edit or reply"
-msgstr "Отменить правку или ответ"
+msgstr "Отменить редактирование или ответ"
 
 #: ui/modals/licenses.slint:21 ui/settings/about_settings.slint:68
 msgid "Open-source licenses"
@@ -4166,7 +4187,7 @@ msgid ""
 "Scan the QR code on your new device, or paste its link. You'll be asked to "
 "confirm with your password or PIN to authorize."
 msgstr ""
-"Сканируйте QR-код на новом устройстве или вставьте его ссылку. Для "
+"Отсканируйте QR-код на новом устройстве или вставьте ссылку с него. Для "
 "подтверждения понадобятся пароль или PIN."
 
 #: ui/modals/link_device_approve.slint:73
@@ -4195,7 +4216,7 @@ msgstr "Сервер: {}"
 
 #: ui/modals/link_device_approve.slint:132
 msgid "Verify this code matches the new device:"
-msgstr "Проверьте, что этот код совпадает с новым устройством:"
+msgstr "Убедитесь, что этот код совпадает с кодом на новом устройстве:"
 
 #: ui/modals/link_device_approve.slint:147
 msgid "Password or PIN"
@@ -4271,8 +4292,8 @@ msgid ""
 "Compare this number with your contact to verify end-to-end encryption. If "
 "the numbers match, your conversation is secure."
 msgstr ""
-"Сравните этот номер с контактом, чтобы проверить сквозное шифрование. Если "
-"номера совпадают, разговор защищён."
+"Сверьте этот номер с номером у собеседника, чтобы проверить сквозное "
+"шифрование. Если номера совпадают, ваша переписка защищена."
 
 #: ui/modals/profile_safety_number.slint:127
 msgid "Updating verification…"
@@ -4284,7 +4305,7 @@ msgstr "Сбросить проверку"
 
 #: ui/modals/profile_safety_number.slint:127
 msgid "Mark as verified"
-msgstr "Отметить проверенным"
+msgstr "Отметить как проверенный"
 
 #: ui/modals/profile_status_picker.slint:21
 msgid "Automatic"
@@ -4343,8 +4364,8 @@ msgid ""
 "These codes can recover your account if you forget your password and PIN. "
 "Save them somewhere safe. They will not be shown again."
 msgstr ""
-"Этими кодами можно восстановить аккаунт, если вы забудете пароль и PIN. "
-"Сохраните их в надёжном месте. Больше они не покажутся."
+"Эти коды помогут восстановить аккаунт, если вы забудете пароль и PIN. "
+"Сохраните их в надёжном месте. Они больше не будут показаны."
 
 #: ui/modals/recovery_codes.slint:175
 msgid "Copy all"
@@ -4385,7 +4406,7 @@ msgstr "Кто может писать вам так?"
 
 #: ui/modals/sealed_sender_intro.slint:132
 msgid "Allow sealed messages from anyone"
-msgstr "Принимать скрытые сообщения от кого угодно"
+msgstr "Принимать сообщения со скрытым отправителем от всех"
 
 #: ui/modals/sealed_sender_intro.slint:149
 msgid ""
@@ -4393,7 +4414,7 @@ msgid ""
 "can. You can change this later in Settings."
 msgstr ""
 "Выкл. (рекомендуется): так могут писать только ваши контакты. Вкл.: может "
-"кто угодно. Позже это можно изменить в Настройках."
+"писать кто угодно. Позже это можно изменить в настройках."
 
 #: ui/modals/sealed_sender_intro.slint:159
 msgid "Got it"
@@ -4456,7 +4477,7 @@ msgstr "С: {}"
 
 #: ui/modals/sessions.slint:327 ui/settings/devices_settings.slint:187
 msgid "Revoke this device? It must be linked again."
-msgstr "Отозвать это устройство? Его нужно будет привязать заново."
+msgstr "Завершить сеанс на этом устройстве? Его нужно будет привязать заново."
 
 #: ui/modals/sessions.slint:339 ui/settings/devices_settings.slint:199
 msgid "Confirm"
@@ -4517,7 +4538,7 @@ msgstr "Добавить в друзья"
 
 #: ui/modals/user_profile.slint:635
 msgid "Retry shared content"
-msgstr "Повторить загрузку общего"
+msgstr "Повторить загрузку общих материалов"
 
 #: ui/modals/user_profile.slint:684
 msgid "Share this contact"
@@ -4609,7 +4630,7 @@ msgstr "Код восстановления"
 
 #: ui/pages/account_recovery.slint:137
 msgid "26 letters and digits 2–9. Spaces and hyphens are OK."
-msgstr "26 букв и цифры 2–9. Пробелы и дефисы можно."
+msgstr "26 символов: буквы и цифры 2–9. Допускаются пробелы и дефисы."
 
 #: ui/pages/account_recovery.slint:143
 msgid "Enter your recovery code"
@@ -4676,9 +4697,9 @@ msgid ""
 "On your already-signed-in device, open Settings › Linked devices › Manage "
 "devices › Link new device, then scan this code."
 msgstr ""
-"На устройстве, где вы уже вошли, откройте Настройки › Привязанные "
-"устройства › Управление устройствами › Привязать новое устройство и "
-"сканируйте этот код."
+"На устройстве, где вы уже вошли, откройте «Настройки» › «Привязанные "
+"устройства» › «Управление устройствами» › «Привязать новое устройство» и "
+"отсканируйте этот код."
 
 #: ui/pages/link_device.slint:87
 msgid ""
@@ -4742,9 +4763,9 @@ msgid ""
 "Starting over gives this device new encryption keys. Your old messages stay "
 "unreadable, and each of your contacts will be asked to verify you again."
 msgstr ""
-"Если начать заново, у этого устройства будут новые ключи шифрования. Старые "
-"сообщения останутся нечитаемыми, и каждому контакту нужно будет проверить "
-"вас снова."
+"Если начать заново, устройство получит новые ключи шифрования. Старые "
+"сообщения останутся недоступными для чтения, а вашим контактам будет "
+"предложено снова проверить вашу личность."
 
 #: ui/pages/login.slint:234
 msgid "Start over with new keys"
@@ -4796,19 +4817,19 @@ msgstr "Защитите аккаунт"
 
 #: ui/pages/register.slint:420
 msgid "Password strength: Weak"
-msgstr "Надёжность пароля: слабый"
+msgstr "Надёжность пароля: низкая"
 
 #: ui/pages/register.slint:421
 msgid "Password strength: Fair"
-msgstr "Надёжность пароля: средний"
+msgstr "Надёжность пароля: средняя"
 
 #: ui/pages/register.slint:422
 msgid "Password strength: Good"
-msgstr "Надёжность пароля: хороший"
+msgstr "Надёжность пароля: высокая"
 
 #: ui/pages/register.slint:422
 msgid "Password strength: Strong"
-msgstr "Надёжность пароля: надёжный"
+msgstr "Надёжность пароля: очень высокая"
 
 #: ui/pages/register.slint:440
 msgid "Weak"
@@ -4844,15 +4865,15 @@ msgstr "Создайте PIN (от 8 символов)"
 
 #: ui/pages/register.slint:513
 msgid "PIN strength: Weak"
-msgstr "Надёжность PIN: слабый"
+msgstr "Надёжность PIN: низкая"
 
 #: ui/pages/register.slint:514
 msgid "PIN strength: Fair"
-msgstr "Надёжность PIN: средний"
+msgstr "Надёжность PIN: средняя"
 
 #: ui/pages/register.slint:514
 msgid "PIN strength: Strong"
-msgstr "Надёжность PIN: надёжный"
+msgstr "Надёжность PIN: высокая"
 
 #: ui/pages/register.slint:538 ui/settings/account_settings.slint:381
 msgid "PINs do not match"
@@ -4907,7 +4928,7 @@ msgstr "Смотреть каналы"
 
 #: ui/pages/welcome.slint:203 ui/pages/welcome.slint:243
 msgid "Join public conversations"
-msgstr "Вступайте в публичные разговоры"
+msgstr "Участвуйте в публичных чатах"
 
 #: ui/pages/welcome.slint:274
 msgid "Continue to Chatter"
@@ -4950,7 +4971,7 @@ msgstr "Пока нет интеграций"
 
 #: ui/server_records/screen.slint:241
 msgid "Mark read"
-msgstr "Прочитать"
+msgstr "Отметить прочитанным"
 
 #: ui/settings/about_settings.slint:16
 msgid "About Chatter"
@@ -5034,8 +5055,8 @@ msgid ""
 "Your current recovery codes stop working and a new set is shown once. Enter "
 "your password to confirm."
 msgstr ""
-"Текущие коды восстановления перестанут работать, новый набор покажется один "
-"раз. Введите пароль для подтверждения."
+"Текущие коды восстановления перестанут работать. Новый набор будет показан "
+"только один раз. Введите пароль для подтверждения."
 
 #: ui/settings/account_settings.slint:340
 msgid "Backup PIN"
@@ -5086,8 +5107,8 @@ msgid ""
 "Encrypted message history, conversations, and contacts. File backups need a "
 "passphrase; server backups need your PIN."
 msgstr ""
-"Зашифрованная история сообщений, разговоры и контакты. Для копии в файл "
-"нужна парольная фраза, для копии на сервере — ваш PIN."
+"Зашифрованная история сообщений, чаты и контакты. Для резервной копии в "
+"файле нужна парольная фраза, для копии на сервере — ваш PIN."
 
 #: ui/settings/account_settings.slint:540
 msgid "File backup passphrase"
@@ -5184,9 +5205,9 @@ msgid ""
 "provider. Existing local AI history stays on this device. Direct and secret "
 "messages are never sent to a cloud provider."
 msgstr ""
-"Отправлять запросы и разрешённую историю удалённых разговоров выбранному "
-"провайдеру. Уже сохранённая локальная история AI остаётся на этом "
-"устройстве. Личные и секретные сообщения в облако не отправляются."
+"Отправлять запросы и разрешённую историю серверных чатов выбранному "
+"провайдеру. Существующая локальная история AI остаётся на этом устройстве. "
+"Личные и секретные сообщения никогда не отправляются облачному провайдеру."
 
 #: ui/settings/ai_settings.slint:82
 msgid "My API key"
@@ -5255,7 +5276,7 @@ msgstr "Как в системе"
 
 #: ui/settings/appearance_settings.slint:48
 msgid "Match this device's light or dark setting"
-msgstr "Как светлая или тёмная тема на этом устройстве"
+msgstr "Использовать светлую или тёмную тему устройства"
 
 #: ui/settings/appearance_settings.slint:49
 msgid "Light"
@@ -5267,11 +5288,11 @@ msgstr "Тёмная"
 
 #: ui/settings/appearance_settings.slint:145
 msgid "Language"
-msgstr ""
+msgstr "Язык"
 
 #: ui/settings/appearance_settings.slint:209
 msgid "Match this device's language"
-msgstr ""
+msgstr "Использовать язык устройства"
 
 #: ui/settings/appearance_settings.slint:244
 msgid "Text size"
@@ -5283,7 +5304,7 @@ msgstr "Мелкий"
 
 #: ui/settings/appearance_settings.slint:252
 msgid "Match this device's font size"
-msgstr "Как размер шрифта на этом устройстве"
+msgstr "Использовать размер шрифта устройства"
 
 #: ui/settings/appearance_settings.slint:253
 msgid "Large"
@@ -5298,8 +5319,8 @@ msgid ""
 "Translucent navigation and controls. Turn off for a simpler appearance and "
 "better performance."
 msgstr ""
-"Полупрозрачные панели и кнопки. Выключите, чтобы вид был проще, а работа "
-"быстрее."
+"Полупрозрачные панели и элементы управления. Отключите для более простого "
+"оформления и лучшей производительности."
 
 #: ui/settings/appearance_settings.slint:370
 msgid "Reduce animations"
@@ -5310,8 +5331,8 @@ msgid ""
 "Menus, sheets and switches change without motion; loading shimmer, typing "
 "dots and the ringing pulse hold still."
 msgstr ""
-"Меню, панели и переключатели меняются без движения; мерцание загрузки, точки "
-"набора и пульс звонка замирают."
+"Меню, панели и переключатели меняют состояние без анимации. Мерцание при "
+"загрузке, точки индикатора набора текста и пульсация при звонке отключены."
 
 #: ui/settings/appearance_settings.slint:399
 msgid "Animation speed"
@@ -5319,7 +5340,7 @@ msgstr "Скорость анимации"
 
 #: ui/settings/appearance_settings.slint:405
 msgid "How quickly menus and transitions move"
-msgstr "Как быстро двигаются меню и переходы"
+msgstr "Скорость анимации меню и переходов"
 
 #: ui/settings/appearance_settings.slint:425
 msgid "Animation speed {}"
@@ -5327,7 +5348,7 @@ msgstr "Скорость анимации {}"
 
 #: ui/settings/appearance_settings.slint:475
 msgid "Message spacing"
-msgstr "Интервал сообщений"
+msgstr "Интервал между сообщениями"
 
 #: ui/settings/appearance_settings.slint:482
 msgid "Comfortable"
@@ -5421,19 +5442,21 @@ msgstr "Отпечаток недоступен"
 
 #: ui/settings/encryption_settings.slint:88
 msgid "To verify a contact, compare safety numbers from their profile"
-msgstr "Чтобы проверить контакт, сравните номера безопасности в профиле"
+msgstr ""
+"Чтобы проверить контакт, сверьте номера безопасности в его профиле и на "
+"устройстве собеседника"
 
 #: ui/settings/encryption_settings.slint:130
 msgid "Allow sealed sender from anyone"
-msgstr "Скрытый отправитель от кого угодно"
+msgstr "Разрешить скрытого отправителя для всех"
 
 #: ui/settings/encryption_settings.slint:145
 msgid ""
 "Let people who aren't your contacts send you sealed messages. The server "
 "still can't see who sent them."
 msgstr ""
-"Люди не из контактов смогут присылать вам скрытые сообщения. Сервер по-"
-"прежнему не видит, кто их отправил."
+"Разрешить людям не из ваших контактов присылать сообщения со скрытым "
+"отправителем. Сервер по-прежнему не видит, кто их отправил."
 
 #: ui/settings/notifications_settings.slint:41
 msgid "Account push notifications"
@@ -5504,8 +5527,8 @@ msgid ""
 "Everyone else sees your initials. Narrowing this gives your profile a new "
 "key, so people who could see it before can't."
 msgstr ""
-"Остальные видят ваши инициалы. Если сузить доступ, у профиля появится новый "
-"ключ, и те, кто видел его раньше, больше не смогут."
+"Остальные видят ваши инициалы. При ограничении доступа ключ профиля "
+"меняется, и люди, потерявшие доступ, больше не смогут видеть ваше фото и имя."
 
 #: ui/settings/privacy_settings.slint:80
 msgid "Everyone"
@@ -5532,16 +5555,16 @@ msgid ""
 "Hide channels and Saved messages, send DMs through anonymous mailboxes, and "
 "route traffic over Tor. Turning it on asks for your PIN."
 msgstr ""
-"Скрыть каналы и Избранное, отправлять личные сообщения через анонимные ящики "
-"и пускать трафик через Tor. При включении нужен PIN."
+"Скрыть каналы и «Избранное», отправлять личные сообщения через анонимные "
+"почтовые ящики и направлять трафик через Tor. Для включения нужен PIN."
 
 #: ui/settings/privacy_settings.slint:230
 msgid ""
 "Hide channels and Saved messages and send DMs through anonymous mailboxes. "
 "Turning it on asks for your PIN."
 msgstr ""
-"Скрыть каналы и Избранное и отправлять личные сообщения через анонимные "
-"ящики. При включении нужен PIN."
+"Скрыть каналы и «Избранное» и отправлять личные сообщения через анонимные "
+"почтовые ящики. Для включения нужен PIN."
 
 #: ui/settings/privacy_settings.slint:254
 msgid "Who can find me by my username"
@@ -5672,11 +5695,11 @@ msgstr "Всегда"
 
 #: ui/sidebar/section_context_menu.slint:665
 msgid "Mark as read"
-msgstr "Прочитать"
+msgstr "Отметить прочитанным"
 
 #: ui/sidebar/section_context_menu.slint:665
 msgid "Mark as unread"
-msgstr "Не прочитано"
+msgstr "Отметить непрочитанным"
 
 #: ui/sidebar/section_context_menu.slint:688
 msgid "Move to section"
@@ -5736,15 +5759,15 @@ msgstr "Звонки, пропущено {}"
 
 #: ui/sidebar/sidebar.slint:758
 msgid "No conversations"
-msgstr "Нет разговоров"
+msgstr "Нет чатов"
 
 #: ui/sidebar/sidebar.slint:920
 msgid "Conversations"
-msgstr "Разговоры"
+msgstr "Чаты"
 
 #: ui/sidebar/sidebar.slint:968
 msgid "New mesh conversation"
-msgstr "Новый меш-разговор"
+msgstr "Новый меш-чат"
 
 #: ui/sidebar/sidebar_footer.slint:147
 msgid "New activity"
@@ -5776,7 +5799,7 @@ msgstr "Можно перезапустить"
 
 #: ui/sidebar/update_banner.slint:30
 msgid "Confirm system install"
-msgstr "Подтвердите установку системой"
+msgstr "Подтвердите установку в системном окне"
 
 #: ui/sidebar/update_banner.slint:30
 msgid "Update failed"

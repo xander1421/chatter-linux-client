@@ -1,7 +1,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: chatter\n"
-"POT-Creation-Date: 2026-11-14 20:32+0000\n"
+"POT-Creation-Date: 2026-11-14 21:22+0000\n"
 "Language: uk\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -11,7 +11,7 @@ msgstr ""
 
 #: ui/activity/activity_bell.slint:66 ui/sidebar/sidebar_footer.slint:134
 msgid "Activity, {} unread"
-msgstr "Активність, {} непрочитаних"
+msgstr "Активність, непрочитаних: {}"
 
 #: ui/activity/activity_bell.slint:66 ui/activity/activity_sheet.slint:116
 #: ui/sidebar/sidebar_footer.slint:134 ui/sidebar/sidebar_footer.slint:287
@@ -37,7 +37,7 @@ msgstr "Сервер"
 
 #: ui/activity/activity_sheet.slint:18 ui/activity/activity_sheet.slint:100
 msgid "Unreachable — messages will send later"
-msgstr "Недоступний — повідомлення надішлються пізніше"
+msgstr "Недоступний — повідомлення буде надіслано пізніше"
 
 #: ui/activity/activity_sheet.slint:101
 msgid "Reconnecting (attempt {})"
@@ -66,16 +66,16 @@ msgstr "Bluetooth вимкнено"
 #: ui/activity/activity_sheet.slint:109 ui/mesh/mesh_list.slint:18
 msgid "Radio unavailable · {n} relay"
 msgid_plural "Radio unavailable · {n} relays"
-msgstr[0] "Радіо недоступне · {n} реле"
-msgstr[1] "Радіо недоступне · {n} реле"
-msgstr[2] "Радіо недоступне · {n} реле"
+msgstr[0] "Радіо недоступне · {n} ретранслятор"
+msgstr[1] "Радіо недоступне · {n} ретранслятори"
+msgstr[2] "Радіо недоступне · {n} ретрансляторів"
 
 #: ui/activity/activity_sheet.slint:110
 msgid "On · {0} nearby · {n} relay"
 msgid_plural "On · {0} nearby · {n} relays"
-msgstr[0] "Увімкнено · {0} поруч · {n} реле"
-msgstr[1] "Увімкнено · {0} поруч · {n} реле"
-msgstr[2] "Увімкнено · {0} поруч · {n} реле"
+msgstr[0] "Увімкнено · {0} поруч · {n} ретранслятор"
+msgstr[1] "Увімкнено · {0} поруч · {n} ретранслятори"
+msgstr[2] "Увімкнено · {0} поруч · {n} ретрансляторів"
 
 #: ui/activity/activity_sheet.slint:129
 msgid "Close activity"
@@ -87,7 +87,7 @@ msgstr "Готово"
 
 #: ui/activity/activity_sheet.slint:141 ui/activity/activity_sheet.slint:145
 msgid "Mark all read"
-msgstr "Прочитати все"
+msgstr "Позначити все прочитаним"
 
 #: ui/activity/activity_sheet.slint:166
 msgid "Server host"
@@ -99,7 +99,7 @@ msgstr "Підключено з"
 
 #: ui/activity/activity_sheet.slint:168
 msgid "Last connected"
-msgstr "Востаннє"
+msgstr "Останнє з’єднання"
 
 #: ui/activity/activity_sheet.slint:170
 msgid "Push"
@@ -243,16 +243,17 @@ msgid ""
 "On. Chatter asks for your PIN when it opens and after it has been in the "
 "background. Notifications show no sender or text while locked."
 msgstr ""
-"Увімкнено. Chatter запитує PIN, коли відкривається і після перебування у "
-"фоні. Поки заблоковано, сповіщення не показують ні відправника, ні тексту."
+"Увімкнено. Chatter запитує PIN під час запуску та після повернення з "
+"фонового режиму. Коли застосунок заблоковано, сповіщення не показують ні "
+"відправника, ні тексту."
 
 #: ui/app_lock.slint:139
 msgid ""
 "Ask for a PIN whenever Chatter opens. This PIN stays on this device and is "
 "separate from your account PIN."
 msgstr ""
-"Запитувати PIN щоразу, коли Chatter відкривається. Цей PIN лишається на "
-"цьому пристрої й окремий від PIN облікового запису."
+"Запитувати PIN щоразу під час запуску Chatter. Цей PIN зберігається на цьому "
+"пристрої та відрізняється від PIN облікового запису."
 
 #: ui/app_lock.slint:145
 msgid "New PIN (6 or more characters)"
@@ -288,7 +289,7 @@ msgstr "Через 30 хвилин"
 
 #: ui/app_lock.slint:226 ui/app_lock.slint:239
 msgid "Duress PIN"
-msgstr "PIN примусу"
+msgstr "PIN на випадок примусу"
 
 #: ui/app_lock.slint:234
 msgid ""
@@ -315,7 +316,7 @@ msgstr ""
 
 #: ui/app_lock.slint:245
 msgid "Confirm duress PIN"
-msgstr "Підтвердьте PIN примусу"
+msgstr "Підтвердьте PIN на випадок примусу"
 
 #: ui/app_lock.slint:252
 msgid "Current app lock PIN"
@@ -323,11 +324,11 @@ msgstr "Поточний PIN блокування"
 
 #: ui/app_lock.slint:261
 msgid "Set duress PIN"
-msgstr "Установити PIN примусу"
+msgstr "Установити PIN на випадок примусу"
 
 #: ui/app_lock.slint:270
 msgid "Remove duress PIN"
-msgstr "Видалити PIN примусу"
+msgstr "Видалити PIN на випадок примусу"
 
 #: ui/app_lock.slint:277
 msgid "Turn off app lock"
@@ -340,7 +341,7 @@ msgstr "Користувач"
 
 #: ui/app_top_overlays.slint:101
 msgid "Microphone + output (linked)"
-msgstr "Мікрофон і вихід (разом)"
+msgstr "Мікрофон і аудіовихід (пов’язані)"
 
 #: ui/app_top_overlays.slint:102 ui/calls/call_controls.slint:57
 msgid "Select microphone"
@@ -356,7 +357,7 @@ msgstr "Виберіть екран для показу"
 
 #: ui/calls/active_call_view.slint:123 ui/calls/active_call_view.slint:183
 msgid "You"
-msgstr "Ви"
+msgstr "ви"
 
 #: ui/calls/active_call_view.slint:198
 msgid "Switch camera"
@@ -392,19 +393,19 @@ msgstr "Сітка учасників дзвінка"
 
 #: ui/calls/active_call_view.slint:415
 msgid "Unmute {} for you"
-msgstr "Увімкнути звук {} для вас"
+msgstr "Увімкнути звук від {} лише для вас"
 
 #: ui/calls/active_call_view.slint:416
 msgid "Mute {} for you"
-msgstr "Вимкнути звук {} для вас"
+msgstr "Вимкнути звук від {} лише для вас"
 
 #: ui/calls/active_call_view.slint:429
 msgid "Resume {}'s video for you"
-msgstr "Поновити відео {} для вас"
+msgstr "Відновити відео від {} лише для вас"
 
 #: ui/calls/active_call_view.slint:430
 msgid "Pause {}'s video for you"
-msgstr "Призупинити відео {} для вас"
+msgstr "Призупинити відео від {} лише для вас"
 
 #: ui/calls/active_call_view.slint:470
 msgid "Sharing your screen"
@@ -464,7 +465,7 @@ msgstr "Очікується перевірка"
 
 #: ui/calls/call_controls.slint:57
 msgid "Select microphone, linked audio route"
-msgstr "Виберіть мікрофон, зв’язаний звуковий маршрут"
+msgstr "Виберіть мікрофон, пов’язаний з аудіовиходом"
 
 #: ui/calls/call_controls.slint:65 ui/calls/return_to_call_bar.slint:129
 msgid "Unmute microphone"
@@ -476,11 +477,11 @@ msgstr "Вимкнути мікрофон"
 
 #: ui/calls/call_controls.slint:76
 msgid "Select output, linked audio route"
-msgstr "Виберіть вихід, зв’язаний звуковий маршрут"
+msgstr "Виберіть аудіовихід, пов’язаний із мікрофоном"
 
 #: ui/calls/call_controls.slint:76
 msgid "Select output"
-msgstr "Виберіть вихід"
+msgstr "Виберіть аудіовихід"
 
 #: ui/calls/call_controls.slint:84
 msgid "Toggle speaker"
@@ -572,11 +573,11 @@ msgstr "Аватар {}"
 
 #: ui/calls/call_history_screen.slint:576
 msgid "Call {}"
-msgstr "Подзвонити {}"
+msgstr "Зателефонувати: {}"
 
 #: ui/calls/call_history_screen.slint:607
 msgid "Video call {}"
-msgstr "Відеодзвінок {}"
+msgstr "Відеодзвінок: {}"
 
 #: ui/calls/call_history_screen.slint:657
 msgid "Older calls were not checked yet."
@@ -647,7 +648,8 @@ msgstr "Виберіть пристрій"
 msgid ""
 "Microphone and output change together. The check mark shows the active "
 "device."
-msgstr "Мікрофон і вихід змінюються разом. Позначка показує активний пристрій."
+msgstr ""
+"Мікрофон і аудіовихід змінюються разом. Позначка вказує на активний пристрій."
 
 #: ui/calls/device_picker.slint:199 ui/calls/device_picker.slint:219
 msgid "Default"
@@ -663,7 +665,7 @@ msgstr "Динаміків не знайдено"
 
 #: ui/calls/device_picker.slint:240
 msgid "Click below to open the system screen picker"
-msgstr "Натисніть нижче, щоб відкрити системний вибір екрана"
+msgstr "Натисніть нижче, щоб відкрити системне вікно вибору екрана"
 
 #: ui/calls/device_picker.slint:250
 msgid "Opens system dialog to select screen or window"
@@ -781,7 +783,7 @@ msgstr "Назад"
 
 #: ui/chat/chat_header.slint:335
 msgid "Typing"
-msgstr "Друкує"
+msgstr "Пише"
 
 #: ui/chat/chat_header.slint:385 ui/sidebar/dm_list_item.slint:196
 msgid "Secret chat"
@@ -806,7 +808,7 @@ msgstr "Інші параметри"
 
 #: ui/chat/chat_header.slint:571 ui/mesh/mesh_list_item.slint:34
 msgid "Waiting for a carrier"
-msgstr "Чекаємо на носія"
+msgstr "Очікування пристрою-посередника"
 
 #: ui/chat/chat_header.slint:572
 msgid "Verified ✓"
@@ -823,9 +825,9 @@ msgstr "Приватна група · запрошені пристрої"
 #: ui/chat/chat_header.slint:575 ui/mesh/mesh_list.slint:13
 msgid "{n} relay"
 msgid_plural "{n} relays"
-msgstr[0] "{n} реле"
-msgstr[1] "{n} реле"
-msgstr[2] "{n} реле"
+msgstr[0] "{n} ретранслятор"
+msgstr[1] "{n} ретранслятори"
+msgstr[2] "{n} ретрансляторів"
 
 #: ui/chat/chat_header.slint:576
 msgid "{n} nearby"
@@ -873,7 +875,7 @@ msgstr "Зникаючі повідомлення"
 
 #: ui/chat/chat_layout.slint:385
 msgid "Anyone in radio range can read this"
-msgstr "Це може прочитати будь-хто в зоні радіо"
+msgstr "Це може прочитати будь-хто в зоні радіозв’язку"
 
 #: ui/chat/chat_layout.slint:387
 msgid "Anyone in this cell can read this"
@@ -997,7 +999,7 @@ msgstr "Надіслати голосове"
 
 #: ui/chat/composer_reply_preview.slint:68
 msgid "Reply to {}"
-msgstr "У відповідь {}"
+msgstr "Відповідь на повідомлення від {}"
 
 #: ui/chat/composer_reply_preview.slint:92
 msgid "Cancel reply"
@@ -1067,14 +1069,14 @@ msgstr "Вибрано"
 
 #: ui/chat/disappearing_settings.slint:62
 msgid "Message lifetime"
-msgstr "Час життя повідомлення"
+msgstr "Термін зберігання повідомлення"
 
 #: ui/chat/disappearing_settings.slint:63
 msgid ""
 "Each new message disappears after the selected time once its expiry clock "
 "starts."
 msgstr ""
-"Кожне нове повідомлення зникає за вибраний час, щойно почнеться відлік."
+"Кожне нове повідомлення зникає через вибраний час після початку відліку."
 
 #: ui/chat/disappearing_settings.slint:78
 msgid "How long to enable"
@@ -1090,11 +1092,11 @@ msgstr "5 хвилин"
 
 #: ui/chat/disappearing_settings.slint:89
 msgid "Custom duration in minutes"
-msgstr "Свій час у хвилинах"
+msgstr "Власна тривалість у хвилинах"
 
 #: ui/chat/disappearing_settings.slint:94
 msgid "Set duration"
-msgstr "Задати час"
+msgstr "Установити тривалість"
 
 #. a new key, and the label should say so.
 #: ui/chat/identity_change_bar.slint:130 ui/chat/identity_change_bar.slint:142
@@ -1155,11 +1157,11 @@ msgstr "У черзі"
 
 #: ui/chat/message_attachments.slint:119 ui/chat/message_attachments.slint:289
 msgid "Uploading…"
-msgstr "Вивантаження…"
+msgstr "Надсилання…"
 
 #: ui/chat/message_attachments.slint:120 ui/chat/message_attachments.slint:290
 msgid "Upload failed"
-msgstr "Не вдалося вивантажити"
+msgstr "Не вдалося надіслати"
 
 #: ui/chat/message_attachments.slint:121 ui/chat/message_attachments.slint:291
 msgid "Cancelled"
@@ -1175,7 +1177,7 @@ msgstr "Відкрити фото {}"
 
 #: ui/chat/message_attachments.slint:280
 msgid "Uploading {}"
-msgstr "Вивантаження {}"
+msgstr "Надсилання {}"
 
 #: ui/chat/message_attachments.slint:280
 msgid "Downloading {}"
@@ -1191,11 +1193,11 @@ msgstr "Відтворити відео {}"
 
 #: ui/chat/message_attachments.slint:636
 msgid "Upload progress"
-msgstr "Прогрес вивантаження"
+msgstr "Перебіг надсилання"
 
 #: ui/chat/message_attachments.slint:636
 msgid "Download progress"
-msgstr "Прогрес завантаження"
+msgstr "Перебіг завантаження"
 
 #: ui/chat/message_attachments.slint:655
 msgid "Open file {}"
@@ -1397,11 +1399,11 @@ msgstr "у черзі"
 
 #: ui/chat/message_footer.slint:160
 msgid "relayed"
-msgstr "на реле"
+msgstr "передано посереднику"
 
 #: ui/chat/message_footer.slint:161
 msgid "carried"
-msgstr "в дорозі"
+msgstr "у дорозі"
 
 #: ui/chat/message_footer.slint:162
 msgid "waiting"
@@ -1437,8 +1439,8 @@ msgid ""
 "Sealed Signal ciphertext queued onto a courier link; recipient has not "
 "acknowledged it"
 msgstr ""
-"Запечатаний шифротекст Signal передано на кур’єрський зв’язок; одержувач ще "
-"не підтвердив"
+"Зашифроване повідомлення Signal із прихованим відправником у черзі на "
+"передавання через пристрій-посередник; одержувач ще не підтвердив отримання"
 
 #: ui/chat/message_footer.slint:177
 msgid "Handed to a passing device; may arrive later"
@@ -1446,11 +1448,13 @@ msgstr "Передано пристрою, що проходив повз; мо�
 
 #: ui/chat/message_footer.slint:179
 msgid "Held on this device until something can carry it"
-msgstr "Утримується на цьому пристрої, доки хтось зможе його передати"
+msgstr ""
+"Зберігається на цьому пристрої, доки не з’явиться можливість передати його "
+"далі"
 
 #: ui/chat/message_footer.slint:181
 msgid "Left the outbox without ever being acknowledged"
-msgstr "Вийшло з вихідних і так і не було підтверджене"
+msgstr "Видалено з черги вихідних повідомлень без підтвердження отримання"
 
 #: ui/chat/message_footer.slint:183
 msgid "The peer's device acknowledged it"
@@ -1466,7 +1470,7 @@ msgstr "Передано в ефір без підтвердження одер�
 
 #: ui/chat/message_footer.slint:188
 msgid "Handed to a live link; not yet acknowledged"
-msgstr "Передано на живий зв’язок; ще не підтверджено"
+msgstr "Передано через активне з’єднання; отримання ще не підтверджено"
 
 #: ui/chat/message_footer.slint:201
 msgid "waiting for Tor"
@@ -1478,7 +1482,7 @@ msgstr "надсилається"
 
 #: ui/chat/message_footer.slint:206
 msgid "Queued behind an earlier send; upload has not started"
-msgstr "У черзі за ранішим надсиланням; вивантаження ще не почалося"
+msgstr "У черзі за попереднім повідомленням; надсилання ще не почалося"
 
 #: ui/chat/message_footer.slint:206 ui/chat/message_item.slint:659
 msgid "Waiting for Tor"
@@ -1676,8 +1680,9 @@ msgid ""
 "New messages disappear after this time. Received messages count down after "
 "you read them; your sent messages count down after sending."
 msgstr ""
-"Нові повідомлення зникають за цей час. Отримані відлічують час після "
-"прочитання, а надіслані — після надсилання."
+"Нові повідомлення зникають через указаний час. Для отриманих повідомлень "
+"відлік починається після прочитання, а для надісланих вами — після "
+"надсилання."
 
 #: ui/chat/secret_timer_modal.slint:26
 msgid "Current: {}"
@@ -1789,16 +1794,16 @@ msgid ""
 "Mesh is on, but Bluetooth is off and no relay is connected — nothing can "
 "carry a message right now."
 msgstr ""
-"Mesh увімкнено, але Bluetooth вимкнено і жодне реле не підключене — зараз "
-"нікому передати повідомлення."
+"Mesh увімкнено, але Bluetooth вимкнено і жоден ретранслятор не підключений — "
+"зараз нікому передати повідомлення."
 
 #: ui/components/connection_banner.slint:118
 msgid ""
 "Mesh is on, but the Bluetooth radio is unavailable and no relay is connected "
 "— nothing can carry a message right now."
 msgstr ""
-"Mesh увімкнено, але радіо Bluetooth недоступне і жодне реле не підключене — "
-"зараз нікому передати повідомлення."
+"Mesh увімкнено, але радіо Bluetooth недоступне і жоден ретранслятор не "
+"підключений — зараз нікому передати повідомлення."
 
 #: ui/components/connection_banner.slint:120
 msgid ""
@@ -1808,14 +1813,14 @@ msgid_plural ""
 "Mesh is on but Bluetooth is off. Only the {n} connected relays can carry, "
 "and relays need internet."
 msgstr[0] ""
-"Mesh увімкнено, але Bluetooth вимкнено. Передавати може лише {n} підключене "
-"реле, а реле потребують інтернету."
+"Mesh увімкнено, але Bluetooth вимкнено. Передавати може лише {n} підключений "
+"ретранслятор, а ретранслятори потребують інтернету."
 msgstr[1] ""
 "Mesh увімкнено, але Bluetooth вимкнено. Передавати можуть лише {n} "
-"підключені реле, а реле потребують інтернету."
+"підключені ретранслятори, а ретранслятори потребують інтернету."
 msgstr[2] ""
 "Mesh увімкнено, але Bluetooth вимкнено. Передавати можуть лише {n} "
-"підключених реле, а реле потребують інтернету."
+"підключених ретрансляторів, а ретранслятори потребують інтернету."
 
 #: ui/components/connection_banner.slint:121
 msgid ""
@@ -1826,13 +1831,13 @@ msgid_plural ""
 "relays can carry, and relays need internet."
 msgstr[0] ""
 "Mesh увімкнено, але радіо Bluetooth недоступне. Передавати може лише {n} "
-"підключене реле, а реле потребують інтернету."
+"підключений ретранслятор, а ретранслятори потребують інтернету."
 msgstr[1] ""
 "Mesh увімкнено, але радіо Bluetooth недоступне. Передавати можуть лише {n} "
-"підключені реле, а реле потребують інтернету."
+"підключені ретранслятори, а ретранслятори потребують інтернету."
 msgstr[2] ""
 "Mesh увімкнено, але радіо Bluetooth недоступне. Передавати можуть лише {n} "
-"підключених реле, а реле потребують інтернету."
+"підключених ретрансляторів, а ретранслятори потребують інтернету."
 
 #: ui/components/connection_banner.slint:123
 msgid ""
@@ -1890,11 +1895,11 @@ msgstr "Сервер недоступний — перевірте мережу"
 
 #: ui/components/connection_banner.slint:218
 msgid "No server — messages will send later"
-msgstr "Немає сервера — повідомлення надішлються пізніше"
+msgstr "Немає зв’язку із сервером — повідомлення буде надіслано пізніше"
 
 #: ui/components/connection_banner.slint:219
 msgid "Server unreachable — messages will send later"
-msgstr "Сервер недоступний — повідомлення надішлються пізніше"
+msgstr "Сервер недоступний — повідомлення буде надіслано пізніше"
 
 #: ui/components/connection_banner.slint:260
 msgid "Dismiss the connection banner"
@@ -2099,23 +2104,23 @@ msgstr "Модальне вікно"
 
 #: ui/components/offline_mesh_notice.slint:80
 msgid "Can't reach the server"
-msgstr "Не вдається досягти сервера"
+msgstr "Не вдається з’єднатися із сервером"
 
 #: ui/components/offline_mesh_notice.slint:90
 msgid ""
 "Creating an account and signing in both need it, so neither will work until "
 "it comes back."
 msgstr ""
-"І створення облікового запису, і вхід потребують його, тож ні те, ні те не "
-"працюватиме, доки він не повернеться."
+"Для створення облікового запису та входу потрібен зв’язок із сервером. Ці "
+"дії будуть доступні, коли він знову запрацює."
 
 #: ui/components/offline_mesh_notice.slint:101
 msgid ""
 "The mesh does not. It carries messages between nearby devices over Bluetooth "
 "with no server, no internet and no account — and it is running now."
 msgstr ""
-"Mesh — ні. Він передає повідомлення між пристроями поруч через Bluetooth без "
-"сервера, без інтернету й без облікового запису — і зараз він працює."
+"Для Mesh сервер не потрібен. Він передає повідомлення між пристроями поруч "
+"через Bluetooth без сервера, інтернету й облікового запису — і вже працює."
 
 #: ui/components/offline_mesh_notice.slint:103
 msgid ""
@@ -2436,11 +2441,11 @@ msgstr "Наступний місяць"
 
 #: ui/components/unified_search.slint:1262
 msgid "Tap a start day, then an end day"
-msgstr "Торкніться дня початку, потім дня кінця"
+msgstr "Виберіть початкову дату, а потім кінцеву"
 
 #: ui/components/unified_search.slint:1262
 msgid "Start: {} · choose end"
-msgstr "Початок: {} · виберіть кінець"
+msgstr "Початок: {} · виберіть кінцеву дату"
 
 #: ui/components/unified_search.slint:1290
 msgid "From a person"
@@ -2472,7 +2477,7 @@ msgstr "Відтворити відео"
 
 #: ui/components/video_player.slint:167
 msgid "Video position"
-msgstr "Позиція відео"
+msgstr "Позиція відтворення відео"
 
 #: ui/components/video_player.slint:226
 msgid "Mute video"
@@ -2500,7 +2505,7 @@ msgstr "За запрошенням"
 
 #: ui/mesh/mesh_compose_sheet.slint:95 ui/mesh/mesh_compose_sheet.slint:160
 msgid "Join location cell"
-msgstr "Комірка локації"
+msgstr "Приєднатися до комірки"
 
 #: ui/mesh/mesh_compose_sheet.slint:95
 msgid "New"
@@ -2520,7 +2525,7 @@ msgstr "Вставте або відскануйте приватне запро
 
 #: ui/mesh/mesh_compose_sheet.slint:160
 msgid "Connect through nearby relays"
-msgstr "Зв’язок через реле поруч"
+msgstr "Зв’язок через ретранслятори поруч"
 
 #: ui/mesh/mesh_compose_sheet.slint:170 ui/modals/channel_settings.slint:586
 msgid "Group name"
@@ -2535,7 +2540,7 @@ msgstr ""
 
 #: ui/mesh/mesh_compose_sheet.slint:187
 msgid "SEEN NEARBY"
-msgstr "БАЧИЛИ ПОРУЧ"
+msgstr "ВИЯВЛЕНО ПОРУЧ"
 
 #: ui/mesh/mesh_compose_sheet.slint:204
 msgid "Paste private invite"
@@ -2554,8 +2559,8 @@ msgid ""
 "Location cells use geohashes and available relays to connect devices in an "
 "area."
 msgstr ""
-"Комірки локації використовують геохеші та доступні реле, щоб з’єднувати "
-"пристрої в місцевості."
+"Комірки локації використовують геохеші та доступні ретранслятори, щоб "
+"з’єднувати пристрої в місцевості."
 
 #: ui/mesh/mesh_context_bar.slint:12
 msgid "Mesh is off"
@@ -2587,7 +2592,7 @@ msgstr "Закрити сповіщення Mesh"
 
 #: ui/mesh/mesh_global.slint:161
 msgid "Mesh peer · self-asserted name"
-msgstr "Вузол Mesh · ім’я, яке назвав сам"
+msgstr "Вузол Mesh · непідтверджене ім’я"
 
 #: ui/mesh/mesh_global.slint:164
 msgid "Noise (bitchat)"
@@ -2656,7 +2661,7 @@ msgstr "Поруч"
 
 #: ui/mesh/mesh_info_sheet.slint:194
 msgid "Waiting for a route"
-msgstr "Очікуємо маршрут"
+msgstr "Очікування маршруту"
 
 #: ui/mesh/mesh_info_sheet.slint:199 ui/modals/channel_members.slint:136
 #: ui/modals/invite_member.slint:186
@@ -2676,8 +2681,8 @@ msgid ""
 "Invite sends the group key over the encrypted mesh link. QR shows a code the "
 "other person scans."
 msgstr ""
-"Запрошення передає ключ групи зашифрованим зв’язком Mesh. QR показує код, "
-"який інша людина сканує."
+"Запрошення передає ключ групи через зашифроване з’єднання Mesh. Кнопка QR "
+"показує код, який має відсканувати інша людина."
 
 #: ui/mesh/mesh_info_sheet.slint:259 ui/mesh/mesh_list_item.slint:138
 #: ui/modals/profile_action_tiles.slint:31
@@ -2691,9 +2696,9 @@ msgstr "Вимкнути звук каналу"
 #: ui/mesh/mesh_info_sheet.slint:271
 msgid "{n} relay connected"
 msgid_plural "{n} relays connected"
-msgstr[0] "Підключено {n} реле"
-msgstr[1] "Підключено {n} реле"
-msgstr[2] "Підключено {n} реле"
+msgstr[0] "Підключено {n} ретранслятор"
+msgstr[1] "Підключено {n} ретранслятори"
+msgstr[2] "Підключено {n} ретрансляторів"
 
 #: ui/mesh/mesh_info_sheet.slint:306
 msgid "Remove {}? The group key will rotate."
@@ -2733,16 +2738,16 @@ msgstr "Mesh увімкнено"
 #: ui/mesh/mesh_list.slint:16
 msgid "Radio off · {n} relay"
 msgid_plural "Radio off · {n} relays"
-msgstr[0] "Радіо вимкнено · {n} реле"
-msgstr[1] "Радіо вимкнено · {n} реле"
-msgstr[2] "Радіо вимкнено · {n} реле"
+msgstr[0] "Радіо вимкнено · {n} ретранслятор"
+msgstr[1] "Радіо вимкнено · {n} ретранслятори"
+msgstr[2] "Радіо вимкнено · {n} ретрансляторів"
 
 #: ui/mesh/mesh_list.slint:17
 msgid "Bluetooth is off · {n} relay"
 msgid_plural "Bluetooth is off · {n} relays"
-msgstr[0] "Bluetooth вимкнено · {n} реле"
-msgstr[1] "Bluetooth вимкнено · {n} реле"
-msgstr[2] "Bluetooth вимкнено · {n} реле"
+msgstr[0] "Bluetooth вимкнено · {n} ретранслятор"
+msgstr[1] "Bluetooth вимкнено · {n} ретранслятори"
+msgstr[2] "Bluetooth вимкнено · {n} ретрансляторів"
 
 #: ui/mesh/mesh_list.slint:35
 msgid "Mesh setup"
@@ -2806,11 +2811,11 @@ msgstr "Публічно · {}"
 
 #: ui/mesh/mesh_list_item.slint:30
 msgid "Everyone in radio range"
-msgstr "Усі в зоні радіо"
+msgstr "Усі в зоні радіозв’язку"
 
 #: ui/mesh/mesh_list_item.slint:31
 msgid "Public to nearby listeners"
-msgstr "Публічно для слухачів поруч"
+msgstr "Доступно всім у зоні дії"
 
 #: ui/mesh/mesh_list_item.slint:32
 msgid "Invited devices · encrypted"
@@ -2825,7 +2830,6 @@ msgid "Encrypted · nearby"
 msgstr "Зашифровано · поруч"
 
 #: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
-#: ui/modals/profile_action_tiles.slint:31
 msgid "Unmute"
 msgstr "Увімкнути звук"
 
@@ -2883,7 +2887,7 @@ msgstr "Вставте QR-код співрозмовника"
 
 #: ui/mesh/mesh_peer_sheet.slint:191
 msgid "Waiting for encrypted link"
-msgstr "Очікуємо зашифрований зв’язок"
+msgstr "Очікування зашифрованого з’єднання"
 
 #: ui/mesh/mesh_peer_sheet.slint:191
 msgid "Their fingerprint: {}"
@@ -2928,7 +2932,9 @@ msgstr "Налаштування Mesh"
 
 #: ui/mesh/mesh_setup_sheet.slint:97
 msgid "Peer names are self-asserted until you verify in person."
-msgstr "Імена вузлів вони називають самі, доки ви не підтвердите їх особисто."
+msgstr ""
+"Імена вузлів указують самі користувачі. Вони не підтверджені, доки ви не "
+"перевірите їх особисто."
 
 #: ui/mesh/mesh_setup_sheet.slint:123
 msgid "Radio unavailable"
@@ -2961,7 +2967,7 @@ msgstr "Зберегти"
 
 #: ui/mesh/mesh_setup_sheet.slint:158
 msgid "Visible to anyone nearby. Names are self-asserted."
-msgstr "Видно всім поруч. Імена називають самі."
+msgstr "Видно всім поруч. Імена вказують самі користувачі."
 
 #: ui/mesh/mesh_setup_sheet.slint:168
 msgid "Erase Mesh data…"
@@ -2972,8 +2978,9 @@ msgid ""
 "Erase this device's mesh identity, messages, carried mail and favourites? "
 "Your Chatter account stays intact. This cannot be undone."
 msgstr ""
-"Стерти ідентичність Mesh, повідомлення, передану пошту та обране на цьому "
-"пристрої? Обліковий запис Chatter залишиться. Це неможливо скасувати."
+"Стерти ідентифікаційні дані Mesh, повідомлення, пошту для пересилання та "
+"обране на цьому пристрої? Обліковий запис Chatter залишиться. Це неможливо "
+"скасувати."
 
 #: ui/mesh/mesh_setup_sheet.slint:190
 msgid "Erase Mesh data"
@@ -3008,7 +3015,7 @@ msgstr "Доступ"
 
 #: ui/modals/channel_access.slint:84
 msgid "Join links"
-msgstr "Посилання для входу"
+msgstr "Посилання-запрошення"
 
 #: ui/modals/channel_access.slint:91
 msgid ""
@@ -3024,7 +3031,8 @@ msgstr "Потрібне схвалення"
 
 #: ui/modals/channel_access.slint:110
 msgid "People who use the link wait until an admin lets them in"
-msgstr "Хто переходить за посиланням, чекає, доки адмін пустить"
+msgstr ""
+"Люди, які переходять за посиланням, чекають на схвалення адміністратора"
 
 #: ui/modals/channel_access.slint:121 ui/modals/profile_info_card.slint:186
 msgid "Create link"
@@ -3040,11 +3048,11 @@ msgstr "Відкликати"
 
 #: ui/modals/channel_access.slint:180
 msgid "No join requests"
-msgstr "Немає запитів на вхід"
+msgstr "Немає запитів на приєднання"
 
 #: ui/modals/channel_access.slint:180
 msgid "Join requests"
-msgstr "Запити на вхід"
+msgstr "Запити на приєднання"
 
 #: ui/modals/channel_access.slint:199
 msgid "Approve"
@@ -3058,11 +3066,16 @@ msgstr "Відхилити"
 msgid "Who can join?"
 msgstr "Хто може приєднатися?"
 
+#: ui/modals/channel_access_choices.slint:31
+msgctxt "channel access"
+msgid "Open"
+msgstr "Відкритий"
+
 #: ui/modals/channel_access_choices.slint:73
 msgid "Anyone finds and joins. New members see messages from when they join."
 msgstr ""
-"Будь-хто знаходить і входить. Нові учасники бачать повідомлення з моменту "
-"входу."
+"Будь-хто може знайти канал і приєднатися. Нові учасники бачать повідомлення "
+"з моменту приєднання."
 
 #: ui/modals/channel_access_choices.slint:90
 msgid "Invite-only"
@@ -3070,7 +3083,8 @@ msgstr "Лише за запрошенням"
 
 #: ui/modals/channel_access_choices.slint:132
 msgid "Hidden from discovery. Invite or password to join."
-msgstr "Приховано з пошуку. Щоб увійти, потрібне запрошення або пароль."
+msgstr ""
+"Не відображається в пошуку. Для приєднання потрібне запрошення або пароль."
 
 #: ui/modals/channel_access_choices.slint:149
 msgid "Anon group"
@@ -3154,7 +3168,7 @@ msgstr "Знову зробити канал активним"
 
 #: ui/modals/channel_danger.slint:211
 msgid "Archive to hide from active channels"
-msgstr "В архів, щоб сховати з активних каналів"
+msgstr "Архівувати, щоб приховати зі списку активних каналів"
 
 #: ui/modals/channel_danger.slint:221
 msgid "Unarchive"
@@ -3219,7 +3233,7 @@ msgstr "На 1 день"
 
 #: ui/modals/channel_members.slint:132
 msgid "Mute until unmuted"
-msgstr "Доки не увімкнете"
+msgstr "До скасування обмеження"
 
 #: ui/modals/channel_members.slint:137
 msgid "Moderator"
@@ -3227,7 +3241,7 @@ msgstr "Модератор"
 
 #: ui/modals/channel_members.slint:138 ui/modals/create_channel.slint:452
 msgid "Admin"
-msgstr "Адмін"
+msgstr "Адміністратор"
 
 #: ui/modals/channel_members.slint:152 ui/modals/channel_settings.slint:199
 msgid "Members"
@@ -3256,7 +3270,7 @@ msgstr "запрошено"
 
 #: ui/modals/channel_members.slint:335
 msgid "muted"
-msgstr "без звуку"
+msgstr "заборонено писати"
 
 #: ui/modals/channel_members.slint:353
 msgid "unverified"
@@ -3278,9 +3292,14 @@ msgstr "Розбанити"
 msgid "ROLE"
 msgstr "РОЛЬ"
 
+#: ui/modals/channel_members.slint:537
+msgctxt "member moderation"
+msgid "Unmute"
+msgstr "Дозволити писати"
+
 #: ui/modals/channel_members.slint:545
 msgid "MUTE IN CHANNEL"
-msgstr "БЕЗ ЗВУКУ В КАНАЛІ"
+msgstr "ЗАБОРОНИТИ ПИСАТИ В КАНАЛІ"
 
 #: ui/modals/channel_members.slint:565
 msgid "Make owner…"
@@ -3316,7 +3335,7 @@ msgstr "Забанити {}? Цю людину буде вилучено, і п�
 
 #: ui/modals/channel_members.slint:613
 msgid "Make {0} the owner of {1}? You'll become an admin."
-msgstr "Зробити {0} власником {1}? Ви станете адміном."
+msgstr "Зробити {0} власником {1}? Ви станете адміністратором."
 
 #: ui/modals/channel_members.slint:615
 msgid "Cancel {}'s invite?"
@@ -3405,7 +3424,7 @@ msgstr "Сповіщення"
 
 #: ui/modals/channel_settings.slint:281
 msgid "Discard unsaved changes?"
-msgstr "Відхилити незбережені зміни?"
+msgstr "Скасувати незбережені зміни?"
 
 #: ui/modals/channel_settings.slint:289
 msgid "Keep editing"
@@ -3413,7 +3432,7 @@ msgstr "Продовжити редагування"
 
 #: ui/modals/channel_settings.slint:294
 msgid "Discard"
-msgstr "Відхилити"
+msgstr "Скасувати зміни"
 
 #: ui/modals/channel_settings.slint:326
 msgid "‹ Info • unsaved changes"
@@ -3558,7 +3577,7 @@ msgstr "Пароль (необов’язково)"
 
 #: ui/modals/create_channel.slint:286
 msgid "Anyone with password joins without invite"
-msgstr "Будь-хто з паролем входить без запрошення"
+msgstr "Будь-хто з паролем може приєднатися без запрошення"
 
 #: ui/modals/create_channel.slint:301
 msgid "Select friends to invite"
@@ -3594,7 +3613,7 @@ msgstr "Повідомлення зникають за вибраний час."
 
 #: ui/modals/create_channel.slint:566
 msgid "After"
-msgstr "Після"
+msgstr "Через"
 
 #: ui/modals/create_channel.slint:591
 msgid "hours"
@@ -3687,11 +3706,11 @@ msgstr "Група"
 
 #: ui/modals/forward_message.slint:223
 msgid "Secret"
-msgstr "Секрет"
+msgstr "Секретний чат"
 
 #: ui/modals/forward_message.slint:223
 msgid "DM"
-msgstr "Особисте"
+msgstr "Особистий чат"
 
 #: ui/modals/forward_message.slint:285
 msgid "Share"
@@ -3850,7 +3869,7 @@ msgstr "Надіслані запити будуть тут, доки на ни�
 
 #: ui/modals/friends_requests_tab.slint:320
 msgid "No private message requests"
-msgstr "Немає приватних запитів на повідомлення"
+msgstr "Немає запитів на приватне листування"
 
 #: ui/modals/friends_requests_tab.slint:327
 msgid ""
@@ -3877,8 +3896,8 @@ msgid ""
 "Group invites use end-to-end encryption\n"
 "with anonymous mailboxes"
 msgstr ""
-"Запрошення в групи наскрізно зашифровані\n"
-"через анонімні скриньки"
+"Запрошення в групи захищені наскрізним шифруванням\n"
+"і надсилаються через анонімні скриньки"
 
 #: ui/modals/friends_requests_tab.slint:558
 msgid "Invited by {}"
@@ -3908,7 +3927,7 @@ msgstr "Пошук за іменем або ім’ям користувача..
 msgid "Invite {n} user"
 msgid_plural "Invite {n} users"
 msgstr[0] "Запросити {n} користувача"
-msgstr[1] "Запросити {n} користувачі"
+msgstr[1] "Запросити {n} користувачів"
 msgstr[2] "Запросити {n} користувачів"
 
 #: ui/modals/invite_private_group.slint:41
@@ -3923,7 +3942,7 @@ msgstr "Немає друзів, яких можна запросити"
 msgid "Invite {n} member"
 msgid_plural "Invite {n} members"
 msgstr[0] "Запросити {n} учасника"
-msgstr[1] "Запросити {n} учасники"
+msgstr[1] "Запросити {n} учасників"
 msgstr[2] "Запросити {n} учасників"
 
 #: ui/modals/jarvis_memory.slint:94
@@ -3950,7 +3969,8 @@ msgstr "Факти"
 msgid ""
 "Nothing yet — chat with Jarvis and durable facts land here automatically."
 msgstr ""
-"Поки нічого — поспілкуйтеся з Jarvis, і стійкі факти з’являться тут самі."
+"Поки нічого — спілкуйтеся з Jarvis, і він автоматично зберігатиме тут "
+"важливі факти."
 
 #: ui/modals/jarvis_memory.slint:210
 msgid "Knowledge graph"
@@ -3969,7 +3989,7 @@ msgstr "Виберіть сутність, щоб побачити її зв’�
 
 #: ui/modals/join_channel.slint:111
 msgid "Joined"
-msgstr "Приєднано"
+msgstr "Ви в каналі"
 
 #: ui/modals/join_channel_tab.slint:39
 msgid "Search channels, or paste a channel ID or invite link"
@@ -4085,7 +4105,7 @@ msgstr "↑ / ↓, Home / End"
 
 #: ui/modals/keyboard_shortcuts.slint:135
 msgid "Move in sidebar"
-msgstr "Рух бічною панеллю"
+msgstr "Переміщення бічною панеллю"
 
 #: ui/modals/keyboard_shortcuts.slint:136
 msgid "Enter / Space"
@@ -4185,7 +4205,7 @@ msgstr "chatter://link?uuid=…"
 
 #: ui/modals/link_device_approve.slint:104
 msgid "About to link:"
-msgstr "Зараз прив’яжеться:"
+msgstr "Пристрій для прив’язування:"
 
 #: ui/modals/link_device_approve.slint:109
 msgid "Unnamed device"
@@ -4197,7 +4217,7 @@ msgstr "Сервер: {}"
 
 #: ui/modals/link_device_approve.slint:132
 msgid "Verify this code matches the new device:"
-msgstr "Перевірте, що цей код збігається з новим пристроєм:"
+msgstr "Перевірте, чи цей код збігається з кодом на новому пристрої:"
 
 #: ui/modals/link_device_approve.slint:147
 msgid "Password or PIN"
@@ -4233,7 +4253,7 @@ msgstr "Ще"
 
 #: ui/modals/profile_action_tiles.slint:39
 msgid "Call"
-msgstr "Дзвінок"
+msgstr "Зателефонувати"
 
 #: ui/modals/profile_info_card.slint:57 ui/settings/settings_screen.slint:283
 msgid "About"
@@ -4273,8 +4293,8 @@ msgid ""
 "Compare this number with your contact to verify end-to-end encryption. If "
 "the numbers match, your conversation is secure."
 msgstr ""
-"Порівняйте це число з контактом, щоб перевірити наскрізне шифрування. Якщо "
-"числа збігаються, розмова захищена."
+"Порівняйте цей номер із номером у вашого співрозмовника, щоб перевірити "
+"наскрізне шифрування. Якщо номери збігаються, ваша розмова захищена."
 
 #: ui/modals/profile_safety_number.slint:127
 msgid "Updating verification…"
@@ -4294,7 +4314,7 @@ msgstr "Автоматично"
 
 #: ui/modals/profile_status_picker.slint:21
 msgid "Online while active, away after 5 minutes idle"
-msgstr "У мережі, поки ви активні; не на місці після 5 хвилин без дії"
+msgstr "У мережі під час активності; не на місці після 5 хвилин бездіяльності"
 
 #: ui/modals/profile_status_picker.slint:22 ui/modals/user_profile.slint:197
 msgid "Online"
@@ -4310,7 +4330,7 @@ msgstr "Не на місці"
 
 #: ui/modals/profile_status_picker.slint:23
 msgid "Shown as away"
-msgstr "Показувати як не на місці"
+msgstr "Показувати статус «Не на місці»"
 
 #: ui/modals/profile_status_picker.slint:24 ui/modals/user_profile.slint:201
 msgid "Do not disturb"
@@ -4363,7 +4383,7 @@ msgstr "Далі"
 
 #: ui/modals/sealed_sender_intro.slint:80
 msgid "Sealed sender: private by default"
-msgstr "Запечатаний відправник: приватно за замовчуванням"
+msgstr "Прихований відправник: конфіденційність за замовчуванням"
 
 #: ui/modals/sealed_sender_intro.slint:90
 msgid ""
@@ -4387,15 +4407,15 @@ msgstr "Хто може писати вам у такий спосіб?"
 
 #: ui/modals/sealed_sender_intro.slint:132
 msgid "Allow sealed messages from anyone"
-msgstr "Дозволити запечатані повідомлення від будь-кого"
+msgstr "Дозволити повідомлення з прихованим відправником від будь-кого"
 
 #: ui/modals/sealed_sender_intro.slint:149
 msgid ""
 "Off (recommended): only your contacts can reach you this way. On: anyone "
 "can. You can change this later in Settings."
 msgstr ""
-"Вимкнено (рекомендовано): так вас можуть досягти лише контакти. Увімкнено: "
-"будь-хто. Це можна змінити пізніше в Налаштуваннях."
+"Вимкнено (рекомендовано): так вам можуть писати лише ваші контакти. "
+"Увімкнено: будь-хто. Це можна змінити пізніше в налаштуваннях."
 
 #: ui/modals/sealed_sender_intro.slint:159
 msgid "Got it"
@@ -4450,7 +4470,7 @@ msgstr "Зараз активний"
 
 #: ui/modals/sessions.slint:313 ui/settings/devices_settings.slint:176
 msgid "Last active: {}"
-msgstr "Востаннє: {}"
+msgstr "Остання активність: {}"
 
 #: ui/modals/sessions.slint:320
 msgid "Since: {}"
@@ -4458,7 +4478,7 @@ msgstr "Від: {}"
 
 #: ui/modals/sessions.slint:327 ui/settings/devices_settings.slint:187
 msgid "Revoke this device? It must be linked again."
-msgstr "Відкликати цей пристрій? Його доведеться прив’язати знову."
+msgstr "Відкликати доступ цього пристрою? Його доведеться прив’язати знову."
 
 #: ui/modals/sessions.slint:339 ui/settings/devices_settings.slint:199
 msgid "Confirm"
@@ -4519,7 +4539,7 @@ msgstr "Додати друга"
 
 #: ui/modals/user_profile.slint:635
 msgid "Retry shared content"
-msgstr "Повторити спільний вміст"
+msgstr "Повторити завантаження спільного вмісту"
 
 #: ui/modals/user_profile.slint:684
 msgid "Share this contact"
@@ -4570,8 +4590,8 @@ msgid ""
 "Blocked people can't call or message you. You can unblock them from their "
 "profile or Contacts › Blocked."
 msgstr ""
-"Заблоковані не можуть дзвонити вам чи писати. Розблокувати можна з їхнього "
-"профілю або в Контакти › Заблоковані."
+"Заблоковані користувачі не можуть телефонувати вам чи писати. Розблокувати "
+"їх можна в їхньому профілі або в розділі «Контакти › Заблоковані»."
 
 #: ui/modals/user_profile.slint:826
 msgid "Contact name"
@@ -4611,7 +4631,8 @@ msgstr "Код відновлення"
 
 #: ui/pages/account_recovery.slint:137
 msgid "26 letters and digits 2–9. Spaces and hyphens are OK."
-msgstr "26 літер і цифри 2–9. Пробіли й дефіси можна."
+msgstr ""
+"26 символів: літери та цифри 2–9. Можна використовувати пробіли й дефіси."
 
 #: ui/pages/account_recovery.slint:143
 msgid "Enter your recovery code"
@@ -4667,7 +4688,7 @@ msgstr "До входу"
 
 #: ui/pages/link_device.slint:18
 msgid "Waiting for your other device…"
-msgstr "Очікуємо інший пристрій…"
+msgstr "Очікуємо на ваш інший пристрій…"
 
 #: ui/pages/link_device.slint:71
 msgid "Link this device"
@@ -4812,7 +4833,7 @@ msgstr "Надійність пароля: добра"
 
 #: ui/pages/register.slint:422
 msgid "Password strength: Strong"
-msgstr "Надійність пароля: сильна"
+msgstr "Надійність пароля: висока"
 
 #: ui/pages/register.slint:440
 msgid "Weak"
@@ -4828,7 +4849,7 @@ msgstr "Добрий"
 
 #: ui/pages/register.slint:442
 msgid "Strong"
-msgstr "Сильний"
+msgstr "Надійний"
 
 #: ui/pages/register.slint:474
 msgid "Create recovery PIN"
@@ -4856,7 +4877,7 @@ msgstr "Надійність PIN: середня"
 
 #: ui/pages/register.slint:514
 msgid "PIN strength: Strong"
-msgstr "Надійність PIN: сильна"
+msgstr "Надійність PIN: висока"
 
 #: ui/pages/register.slint:538 ui/settings/account_settings.slint:381
 msgid "PINs do not match"
@@ -4953,7 +4974,7 @@ msgstr "Інтеграцій ще немає"
 
 #: ui/server_records/screen.slint:241
 msgid "Mark read"
-msgstr "Прочитати"
+msgstr "Позначити прочитаним"
 
 #: ui/settings/about_settings.slint:16
 msgid "About Chatter"
@@ -5094,11 +5115,13 @@ msgstr ""
 
 #: ui/settings/account_settings.slint:540
 msgid "File backup passphrase"
-msgstr "Парольна фраза файлу"
+msgstr "Парольна фраза резервної копії"
 
 #: ui/settings/account_settings.slint:548
 msgid "Enter a backup passphrase to enable file export and restore."
-msgstr "Введіть парольну фразу, щоб увімкнути експорт і відновлення з файлу."
+msgstr ""
+"Введіть парольну фразу, щоб експортувати резервну копію у файл або відновити "
+"її з файлу."
 
 #: ui/settings/account_settings.slint:559
 msgid "Export to file…"
@@ -5119,7 +5142,7 @@ msgstr ""
 
 #: ui/settings/account_settings.slint:600
 msgid "Back up to server"
-msgstr "Копіювати на сервер"
+msgstr "Створити копію на сервері"
 
 #: ui/settings/account_settings.slint:611
 msgid "Restore from server"
@@ -5127,7 +5150,7 @@ msgstr "Відновити з сервера"
 
 #: ui/settings/account_settings.slint:623
 msgid "Working on message backup…"
-msgstr "Працюємо над резервною копією повідомлень…"
+msgstr "Обробка резервної копії повідомлень…"
 
 #: ui/settings/account_settings.slint:660
 msgid "Session on this device"
@@ -5188,9 +5211,10 @@ msgid ""
 "provider. Existing local AI history stays on this device. Direct and secret "
 "messages are never sent to a cloud provider."
 msgstr ""
-"Надсилати запити й дозволену історію віддалених розмов вибраному "
-"постачальнику. Наявна локальна історія AI лишається на цьому пристрої. "
-"Особисті та секретні повідомлення ніколи не йдуть хмарному постачальнику."
+"Надсилати запити й дозволену історію розмов із віддаленим AI вибраному "
+"постачальнику. Наявна історія розмов із локальним AI залишається на цьому "
+"пристрої. Особисті та секретні повідомлення ніколи не надсилаються хмарному "
+"постачальнику."
 
 #: ui/settings/ai_settings.slint:82
 msgid "My API key"
@@ -5271,11 +5295,11 @@ msgstr "Темна"
 
 #: ui/settings/appearance_settings.slint:145
 msgid "Language"
-msgstr ""
+msgstr "Мова"
 
 #: ui/settings/appearance_settings.slint:209
 msgid "Match this device's language"
-msgstr ""
+msgstr "Використовувати мову пристрою"
 
 #: ui/settings/appearance_settings.slint:244
 msgid "Text size"
@@ -5287,7 +5311,7 @@ msgstr "Малий"
 
 #: ui/settings/appearance_settings.slint:252
 msgid "Match this device's font size"
-msgstr "Як розмір шрифту на цьому пристрої"
+msgstr "Як у налаштуваннях шрифту пристрою"
 
 #: ui/settings/appearance_settings.slint:253
 msgid "Large"
@@ -5302,8 +5326,8 @@ msgid ""
 "Translucent navigation and controls. Turn off for a simpler appearance and "
 "better performance."
 msgstr ""
-"Напівпрозорі навігація й елементи. Вимкніть для простішого вигляду і кращої "
-"швидкодії."
+"Напівпрозорі панелі навігації та елементи керування. Вимкніть для простішого "
+"вигляду й кращої швидкодії."
 
 #: ui/settings/appearance_settings.slint:370
 msgid "Reduce animations"
@@ -5314,8 +5338,8 @@ msgid ""
 "Menus, sheets and switches change without motion; loading shimmer, typing "
 "dots and the ringing pulse hold still."
 msgstr ""
-"Меню, панелі та перемикачі змінюються без руху; мерехтіння завантаження, "
-"крапки набору й пульс дзвінка завмирають."
+"Меню, панелі та перемикачі змінюються без анімації; мерехтіння під час "
+"завантаження, крапки індикатора набору та пульсація дзвінка зупиняються."
 
 #: ui/settings/appearance_settings.slint:399
 msgid "Animation speed"
@@ -5323,7 +5347,7 @@ msgstr "Швидкість анімації"
 
 #: ui/settings/appearance_settings.slint:405
 msgid "How quickly menus and transitions move"
-msgstr "Як швидко рухаються меню й переходи"
+msgstr "Швидкість анімації меню та переходів"
 
 #: ui/settings/appearance_settings.slint:425
 msgid "Animation speed {}"
@@ -5331,7 +5355,7 @@ msgstr "Швидкість анімації {}"
 
 #: ui/settings/appearance_settings.slint:475
 msgid "Message spacing"
-msgstr "Інтервал повідомлень"
+msgstr "Інтервал між повідомленнями"
 
 #: ui/settings/appearance_settings.slint:482
 msgid "Comfortable"
@@ -5347,7 +5371,7 @@ msgstr "Більше повідомлень і розмов на екрані"
 
 #: ui/settings/appearance_settings.slint:581
 msgid "Search shortcut"
-msgstr "Скорочення пошуку"
+msgstr "Клавіші пошуку"
 
 #: ui/settings/appearance_settings.slint:588
 msgid "Which keys open search"
@@ -5367,7 +5391,7 @@ msgstr "Обидва"
 
 #: ui/settings/appearance_settings.slint:607
 msgid "Search shortcut {}"
-msgstr "Скорочення пошуку {}"
+msgstr "Клавіші пошуку {}"
 
 #: ui/settings/devices_settings.slint:32 ui/settings/settings_screen.slint:279
 msgid "Linked devices"
@@ -5429,15 +5453,15 @@ msgstr "Щоб перевірити контакт, порівняйте ном�
 
 #: ui/settings/encryption_settings.slint:130
 msgid "Allow sealed sender from anyone"
-msgstr "Дозволити запечатаного відправника від будь-кого"
+msgstr "Дозволити повідомлення з прихованим відправником від усіх"
 
 #: ui/settings/encryption_settings.slint:145
 msgid ""
 "Let people who aren't your contacts send you sealed messages. The server "
 "still can't see who sent them."
 msgstr ""
-"Дозволити людям, яких немає у ваших контактах, надсилати вам запечатані "
-"повідомлення. Сервер усе одно не бачить, хто їх надіслав."
+"Дозволити людям, яких немає у ваших контактах, надсилати вам повідомлення з "
+"прихованим відправником. Сервер усе одно не бачить, хто їх надіслав."
 
 #: ui/settings/notifications_settings.slint:41
 msgid "Account push notifications"
@@ -5508,8 +5532,8 @@ msgid ""
 "Everyone else sees your initials. Narrowing this gives your profile a new "
 "key, so people who could see it before can't."
 msgstr ""
-"Усі інші бачать ваші ініціали. Якщо звузити доступ, профіль отримає новий "
-"ключ, і ті, хто бачив його раніше, більше не зможуть."
+"Усі інші бачать ваші ініціали. Якщо обмежити доступ, профіль отримає новий "
+"ключ, і ті, кому доступ більше не дозволено, не зможуть його переглядати."
 
 #: ui/settings/privacy_settings.slint:80
 msgid "Everyone"
@@ -5536,16 +5560,17 @@ msgid ""
 "Hide channels and Saved messages, send DMs through anonymous mailboxes, and "
 "route traffic over Tor. Turning it on asks for your PIN."
 msgstr ""
-"Ховає канали та збережені повідомлення, надсилає особисті чати через "
-"анонімні скриньки й направляє трафік через Tor. Щоб увімкнути, потрібен PIN."
+"Приховує канали та збережені повідомлення, надсилає особисті повідомлення "
+"через анонімні скриньки й спрямовує трафік через Tor. Для ввімкнення "
+"потрібен PIN."
 
 #: ui/settings/privacy_settings.slint:230
 msgid ""
 "Hide channels and Saved messages and send DMs through anonymous mailboxes. "
 "Turning it on asks for your PIN."
 msgstr ""
-"Ховає канали та збережені повідомлення і надсилає особисті чати через "
-"анонімні скриньки. Щоб увімкнути, потрібен PIN."
+"Приховує канали та збережені повідомлення і надсилає особисті повідомлення "
+"через анонімні скриньки. Для ввімкнення потрібен PIN."
 
 #: ui/settings/privacy_settings.slint:254
 msgid "Who can find me by my username"
@@ -5570,7 +5595,7 @@ msgstr "Повідомляти інших, коли ви прочитали їх
 
 #: ui/settings/privacy_settings.slint:396
 msgid "Typing indicators"
-msgstr "Індикатор набору"
+msgstr "Індикатори набору"
 
 #: ui/settings/privacy_settings.slint:411
 msgid "Show when you're typing a message"
@@ -5582,7 +5607,7 @@ msgstr "Закріплено"
 
 #: ui/sidebar/channel_list_item.slint:262 ui/sidebar/dm_list_item.slint:260
 msgid "typing"
-msgstr "друкує"
+msgstr "пише"
 
 #: ui/sidebar/channel_list_item.slint:279 ui/sidebar/dm_list_item.slint:273
 msgid "Draft:"
@@ -5614,7 +5639,7 @@ msgstr "Немає контактів за запитом «{}»"
 
 #: ui/sidebar/create_menu.slint:180
 msgid "No friends yet. Add one from Contacts."
-msgstr "Друзів ще немає. Додайте когось у Контактах."
+msgstr "Друзів ще немає. Додайте когось у розділі «Контакти»."
 
 #: ui/sidebar/custom_section_list.slint:52
 msgid "Expanded section. Press Shift+F10 or Menu for section options."
@@ -5738,7 +5763,7 @@ msgstr "Немає чатів в архіві"
 
 #: ui/sidebar/sidebar.slint:569
 msgid "Calls, {} missed"
-msgstr "Дзвінки, {} пропущених"
+msgstr "Дзвінки, пропущених: {}"
 
 #: ui/sidebar/sidebar.slint:758
 msgid "No conversations"

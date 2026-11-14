@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
-"POT-Creation-Date: 2026-11-14 20:32+0000\n"
+"POT-Creation-Date: 2026-11-14 21:22+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -1138,8 +1138,6 @@ msgstr ""
 msgid "Open this link?"
 msgstr ""
 
-#: ui/chat/link_confirm.slint:41 ui/components/unified_search.slint:963
-#: ui/chat/link_confirm.slint:41 ui/components/unified_search.slint:963
 #: ui/chat/link_confirm.slint:41 ui/components/unified_search.slint:963
 #: ui/chat/link_confirm.slint:41 ui/components/unified_search.slint:963
 msgid "Open"
@@ -2856,12 +2854,12 @@ msgid "Encrypted · nearby"
 msgstr ""
 
 #: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
-#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113 ui/modals/profile_action_tiles.slint:31
-#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113 ui/modals/profile_action_tiles.slint:31
-#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113 ui/modals/profile_action_tiles.slint:31
-#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113 ui/modals/profile_action_tiles.slint:31
-#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113 ui/modals/profile_action_tiles.slint:31
-#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113 ui/modals/profile_action_tiles.slint:31
+#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
+#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
+#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
+#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
+#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
+#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
 msgid "Unmute"
 msgstr ""
 
@@ -3088,6 +3086,12 @@ msgstr ""
 msgid "Who can join?"
 msgstr ""
 
+#: ui/modals/channel_access_choices.slint:31
+#: ui/modals/channel_access_choices.slint:31
+msgctxt "channel access"
+msgid "Open"
+msgstr ""
+
 #: ui/modals/channel_access_choices.slint:73
 msgid "Anyone finds and joins. New members see messages from when they join."
 msgstr ""
@@ -3308,6 +3312,11 @@ msgstr ""
 
 #: ui/modals/channel_members.slint:515
 msgid "ROLE"
+msgstr ""
+
+#: ui/modals/channel_members.slint:537
+msgctxt "member moderation"
+msgid "Unmute"
 msgstr ""
 
 #: ui/modals/channel_members.slint:545

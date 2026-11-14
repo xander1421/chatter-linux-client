@@ -1,7 +1,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: chatter\n"
-"POT-Creation-Date: 2026-11-14 20:32+0000\n"
+"POT-Creation-Date: 2026-11-14 21:22+0000\n"
 "Language: ro\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -37,7 +37,7 @@ msgstr "Server"
 
 #: ui/activity/activity_sheet.slint:18 ui/activity/activity_sheet.slint:100
 msgid "Unreachable — messages will send later"
-msgstr "Inaccesibil — mesajele se trimit mai târziu"
+msgstr "Inaccesibil — mesajele vor fi trimise mai târziu"
 
 #: ui/activity/activity_sheet.slint:101
 msgid "Reconnecting (attempt {})"
@@ -87,11 +87,11 @@ msgstr "Gata"
 
 #: ui/activity/activity_sheet.slint:141 ui/activity/activity_sheet.slint:145
 msgid "Mark all read"
-msgstr "Marchează citite"
+msgstr "Marchează tot ca citit"
 
 #: ui/activity/activity_sheet.slint:166
 msgid "Server host"
-msgstr "Gazdă server"
+msgstr "Gazda serverului"
 
 #: ui/activity/activity_sheet.slint:168
 msgid "Connected since"
@@ -210,7 +210,7 @@ msgstr "Se încarcă..."
 
 #: ui/app_auth_flow.slint:58
 msgid "Generate a QR to begin."
-msgstr "Generează un QR ca să începi."
+msgstr "Generează un cod QR ca să începi."
 
 #. Properties
 #: ui/app_chat_pane.slint:58 ui/chat/chat_layout.slint:194
@@ -243,8 +243,9 @@ msgid ""
 "On. Chatter asks for your PIN when it opens and after it has been in the "
 "background. Notifications show no sender or text while locked."
 msgstr ""
-"Pornit. Chatter îți cere PIN-ul când se deschide și după ce a stat în "
-"fundal. Notificările nu arată expeditorul sau textul cât timp e blocat."
+"Activată. Chatter îți cere PIN-ul când se deschide și după ce a stat în "
+"fundal. Notificările nu arată expeditorul sau textul cât timp aplicația este "
+"blocată."
 
 #: ui/app_lock.slint:139
 msgid ""
@@ -339,7 +340,7 @@ msgstr "Utilizator"
 
 #: ui/app_top_overlays.slint:101
 msgid "Microphone + output (linked)"
-msgstr "Microfon + ieșire (legate)"
+msgstr "Microfon + ieșire (asociate)"
 
 #: ui/app_top_overlays.slint:102 ui/calls/call_controls.slint:57
 msgid "Select microphone"
@@ -379,7 +380,7 @@ msgstr "Participanți"
 
 #: ui/calls/active_call_view.slint:327
 msgid "Exit full screen"
-msgstr "Ieși din ecranul complet"
+msgstr "Ieși din modul ecran complet"
 
 #: ui/calls/active_call_view.slint:327
 msgid "Full screen"
@@ -391,19 +392,19 @@ msgstr "Grila participanților"
 
 #: ui/calls/active_call_view.slint:415
 msgid "Unmute {} for you"
-msgstr "Pornește sunetul lui {} pentru tine"
+msgstr "Pornește sunetul pentru {} doar pentru tine"
 
 #: ui/calls/active_call_view.slint:416
 msgid "Mute {} for you"
-msgstr "Oprește sunetul lui {} pentru tine"
+msgstr "Oprește sunetul pentru {} doar pentru tine"
 
 #: ui/calls/active_call_view.slint:429
 msgid "Resume {}'s video for you"
-msgstr "Reia videoul lui {} pentru tine"
+msgstr "Reia imaginea video pentru {} doar pentru tine"
 
 #: ui/calls/active_call_view.slint:430
 msgid "Pause {}'s video for you"
-msgstr "Oprește videoul lui {} pentru tine"
+msgstr "Pune pe pauză imaginea video pentru {} doar pentru tine"
 
 #: ui/calls/active_call_view.slint:470
 msgid "Sharing your screen"
@@ -423,7 +424,7 @@ msgstr "Arată toți participanții"
 
 #: ui/calls/active_call_view.slint:549
 msgid "Pin {}"
-msgstr "Fixează pe {}"
+msgstr "Fixează participantul {}"
 
 #: ui/calls/active_call_view.slint:589
 msgid "Call verification"
@@ -431,7 +432,8 @@ msgstr "Verificare apel"
 
 #: ui/calls/active_call_view.slint:590
 msgid "Compare these four emojis with everyone in the call."
-msgstr "Compară aceste patru emoji cu toți cei din apel."
+msgstr ""
+"Compară aceste patru emoji cu cele ale tuturor participanților la apel."
 
 #: ui/calls/active_call_view.slint:596
 msgid "Call verification emoji 1: {}"
@@ -463,7 +465,7 @@ msgstr "Verificare în așteptare"
 
 #: ui/calls/call_controls.slint:57
 msgid "Select microphone, linked audio route"
-msgstr "Alege microfonul, rută audio legată"
+msgstr "Alege microfonul, traseu audio asociat"
 
 #: ui/calls/call_controls.slint:65 ui/calls/return_to_call_bar.slint:129
 msgid "Unmute microphone"
@@ -475,7 +477,7 @@ msgstr "Oprește microfonul"
 
 #: ui/calls/call_controls.slint:76
 msgid "Select output, linked audio route"
-msgstr "Alege ieșirea, rută audio legată"
+msgstr "Alege ieșirea, traseu audio asociat"
 
 #: ui/calls/call_controls.slint:76
 msgid "Select output"
@@ -571,7 +573,7 @@ msgstr "Avatar pentru {}"
 
 #: ui/calls/call_history_screen.slint:576
 msgid "Call {}"
-msgstr "Apelează pe {}"
+msgstr "Apelează {}"
 
 #: ui/calls/call_history_screen.slint:607
 msgid "Video call {}"
@@ -686,7 +688,7 @@ msgstr "Ferestre"
 
 #: ui/calls/device_picker.slint:295
 msgid "No screens or windows found"
-msgstr "Niciun ecran sau fereastră găsită"
+msgstr "Nu s-au găsit ecrane sau ferestre"
 
 #: ui/calls/incoming_call_modal.slint:125
 msgid "Join group video call"
@@ -784,7 +786,7 @@ msgstr "Scrie"
 
 #: ui/chat/chat_header.slint:385 ui/sidebar/dm_list_item.slint:196
 msgid "Secret chat"
-msgstr "Chat secret"
+msgstr "Conversație secretă"
 
 #: ui/chat/chat_header.slint:441
 msgid "Jarvis is thinking..."
@@ -805,7 +807,7 @@ msgstr "Mai multe opțiuni"
 
 #: ui/chat/chat_header.slint:571 ui/mesh/mesh_list_item.slint:34
 msgid "Waiting for a carrier"
-msgstr "Se așteaptă un purtător"
+msgstr "Se așteaptă un dispozitiv de transport"
 
 #: ui/chat/chat_header.slint:572
 msgid "Verified ✓"
@@ -863,7 +865,7 @@ msgstr "Setări conversație"
 
 #: ui/chat/chat_header_menu.slint:99 ui/modals/user_profile.slint:470
 msgid "Start secret chat"
-msgstr "Începe chat secret"
+msgstr "Începe o conversație secretă"
 
 #: ui/chat/chat_header_menu.slint:100 ui/chat/secret_timer_modal.slint:14
 #: ui/modals/user_profile.slint:522
@@ -872,7 +874,7 @@ msgstr "Mesaje care dispar"
 
 #: ui/chat/chat_layout.slint:385
 msgid "Anyone in radio range can read this"
-msgstr "Oricine din raza radioului poate citi asta"
+msgstr "Oricine din raza de acoperire radio poate citi asta"
 
 #: ui/chat/chat_layout.slint:387
 msgid "Anyone in this cell can read this"
@@ -1066,15 +1068,15 @@ msgstr "Selectat"
 
 #: ui/chat/disappearing_settings.slint:62
 msgid "Message lifetime"
-msgstr "Durata mesajului"
+msgstr "Durata de păstrare a mesajelor"
 
 #: ui/chat/disappearing_settings.slint:63
 msgid ""
 "Each new message disappears after the selected time once its expiry clock "
 "starts."
 msgstr ""
-"Fiecare mesaj nou dispare după timpul ales, odată ce pornește ceasul de "
-"expirare."
+"Fiecare mesaj nou dispare după durata aleasă, calculată din momentul în care "
+"începe numărătoarea inversă."
 
 #: ui/chat/disappearing_settings.slint:78
 msgid "How long to enable"
@@ -1127,11 +1129,11 @@ msgstr "Detalii"
 
 #: ui/chat/membership_bar.slint:162
 msgid "Hide membership details"
-msgstr "Ascunde detaliile de membru"
+msgstr "Ascunde detaliile despre membri"
 
 #: ui/chat/membership_bar.slint:162
 msgid "Show membership details"
-msgstr "Arată detaliile de membru"
+msgstr "Arată detaliile despre membri"
 
 #: ui/chat/message_actions.slint:66
 msgid "Reply to message"
@@ -1143,7 +1145,7 @@ msgstr "Adaugă reacție"
 
 #: ui/chat/message_actions.slint:89 ui/chat/message_context_menu.slint:644
 msgid "Reply in thread"
-msgstr "Răspunde în fir"
+msgstr "Răspunde în firul de discuție"
 
 #: ui/chat/message_actions.slint:98
 msgid "More message actions"
@@ -1255,35 +1257,35 @@ msgstr "Apel primit"
 
 #: ui/chat/message_call.slint:157
 msgid "Outgoing video call started"
-msgstr "Apel video de ieșire început"
+msgstr "Apel video efectuat, început"
 
 #: ui/chat/message_call.slint:157
 msgid "Outgoing call started"
-msgstr "Apel de ieșire început"
+msgstr "Apel efectuat, început"
 
 #: ui/chat/message_call.slint:158
 msgid "Incoming video call started"
-msgstr "Apel video de intrare început"
+msgstr "Apel video primit, început"
 
 #: ui/chat/message_call.slint:158
 msgid "Incoming call started"
-msgstr "Apel de intrare început"
+msgstr "Apel primit, început"
 
 #: ui/chat/message_call.slint:161
 msgid "Outgoing video call ended"
-msgstr "Apel video de ieșire încheiat"
+msgstr "Apel video efectuat, încheiat"
 
 #: ui/chat/message_call.slint:161
 msgid "Outgoing call ended"
-msgstr "Apel de ieșire încheiat"
+msgstr "Apel efectuat, încheiat"
 
 #: ui/chat/message_call.slint:162
 msgid "Incoming video call ended"
-msgstr "Apel video de intrare încheiat"
+msgstr "Apel video primit, încheiat"
 
 #: ui/chat/message_call.slint:162
 msgid "Incoming call ended"
-msgstr "Apel de intrare încheiat"
+msgstr "Apel primit, încheiat"
 
 #: ui/chat/message_call.slint:185
 msgid "Video call icon"
@@ -1446,7 +1448,8 @@ msgstr "Predat unui dispozitiv care trece; poate ajunge mai târziu"
 
 #: ui/chat/message_footer.slint:179
 msgid "Held on this device until something can carry it"
-msgstr "Ținut pe acest dispozitiv până îl poate duce cineva"
+msgstr ""
+"Păstrat pe acest dispozitiv până când un alt dispozitiv îl poate transporta"
 
 #: ui/chat/message_footer.slint:181
 msgid "Left the outbox without ever being acknowledged"
@@ -1462,7 +1465,7 @@ msgstr "Citit de celălalt"
 
 #: ui/chat/message_footer.slint:187
 msgid "Put on the air without recipient acknowledgement"
-msgstr "Pus în eter fără confirmare de la destinatar"
+msgstr "Transmis prin radio fără confirmare de la destinatar"
 
 #: ui/chat/message_footer.slint:188
 msgid "Handed to a live link; not yet acknowledged"
@@ -1570,7 +1573,7 @@ msgstr "AI"
 
 #: ui/chat/message_item.slint:821
 msgid "Thread reply"
-msgstr "Răspuns în fir"
+msgstr "Răspuns în firul de discuție"
 
 #: ui/chat/message_list_overlays.slint:26
 msgid "{n} new message, jump to newest"
@@ -1581,7 +1584,7 @@ msgstr[2] "{n} de mesaje noi, mergi la cel mai recent"
 
 #: ui/chat/message_list_overlays.slint:27
 msgid "Scroll to bottom"
-msgstr "Derulează jos"
+msgstr "Derulează până jos"
 
 #: ui/chat/message_list_overlays.slint:50
 msgid "{n} new message"
@@ -1640,7 +1643,7 @@ msgstr "Mesaje necitite"
 
 #: ui/chat/message_thread.slint:27
 msgid "Open thread: {}"
-msgstr "Deschide firul: {}"
+msgstr "Deschide firul de discuție: {}"
 
 #. Computed
 #: ui/chat/pinned_bar.slint:32
@@ -1677,8 +1680,8 @@ msgid ""
 "New messages disappear after this time. Received messages count down after "
 "you read them; your sent messages count down after sending."
 msgstr ""
-"Mesajele noi dispar după acest timp. Cele primite pornesc numărătoarea după "
-"ce le citești; cele trimise, după trimitere."
+"Mesajele noi dispar după această durată. Pentru cele primite, numărătoarea "
+"inversă începe după ce le citești; pentru cele trimise, după trimitere."
 
 #: ui/chat/secret_timer_modal.slint:26
 msgid "Current: {}"
@@ -1694,7 +1697,7 @@ msgstr "Redirecționează selecția"
 
 #: ui/chat/thread_panel.slint:245
 msgid "Thread"
-msgstr "Fir"
+msgstr "Fir de discuție"
 
 #: ui/chat/thread_panel.slint:246 ui/modals/pinned_messages.slint:28
 msgid "{n} pinned message"
@@ -1727,12 +1730,12 @@ msgstr "Încarcă răspunsuri mai vechi"
 msgid "Unpin message"
 msgid_plural "Unpin all {n} messages"
 msgstr[0] "Anulează fixarea"
-msgstr[1] "Anulează fixarea celor {n} mesaje"
-msgstr[2] "Anulează fixarea celor {n} de mesaje"
+msgstr[1] "Anulează fixarea pentru {n} mesaje"
+msgstr[2] "Anulează fixarea pentru {n} de mesaje"
 
 #: ui/chat/thread_panel.slint:755
 msgid "Reply in thread..."
-msgstr "Răspunde în fir..."
+msgstr "Răspunde în firul de discuție..."
 
 #. Spoken names, index-aligned with `emojis` (CLDR short names).
 #: ui/chat/types.slint:11
@@ -1809,14 +1812,14 @@ msgid_plural ""
 "Mesh is on but Bluetooth is off. Only the {n} connected relays can carry, "
 "and relays need internet."
 msgstr[0] ""
-"Mesh este pornit, dar Bluetooth este oprit. Doar {n} releu conectat poate "
+"Mesh este pornit, dar Bluetooth este oprit. Doar releul conectat ({n}) poate "
 "duce mesaje, iar releele au nevoie de internet."
 msgstr[1] ""
-"Mesh este pornit, dar Bluetooth este oprit. Doar cele {n} relee conectate "
-"pot duce mesaje, iar releele au nevoie de internet."
+"Mesh este pornit, dar Bluetooth este oprit. Doar releele conectate ({n}) pot "
+"duce mesaje, iar releele au nevoie de internet."
 msgstr[2] ""
-"Mesh este pornit, dar Bluetooth este oprit. Doar cele {n} de relee conectate "
-"pot duce mesaje, iar releele au nevoie de internet."
+"Mesh este pornit, dar Bluetooth este oprit. Doar releele conectate ({n}) pot "
+"duce mesaje, iar releele au nevoie de internet."
 
 #: ui/components/connection_banner.slint:121
 msgid ""
@@ -1826,14 +1829,14 @@ msgid_plural ""
 "Mesh is on but the Bluetooth radio is unavailable. Only the {n} connected "
 "relays can carry, and relays need internet."
 msgstr[0] ""
-"Mesh este pornit, dar radioul Bluetooth este indisponibil. Doar {n} releu "
-"conectat poate duce mesaje, iar releele au nevoie de internet."
+"Mesh este pornit, dar radioul Bluetooth este indisponibil. Doar releul "
+"conectat ({n}) poate duce mesaje, iar releele au nevoie de internet."
 msgstr[1] ""
-"Mesh este pornit, dar radioul Bluetooth este indisponibil. Doar cele {n} "
-"relee conectate pot duce mesaje, iar releele au nevoie de internet."
+"Mesh este pornit, dar radioul Bluetooth este indisponibil. Doar releele "
+"conectate ({n}) pot duce mesaje, iar releele au nevoie de internet."
 msgstr[2] ""
-"Mesh este pornit, dar radioul Bluetooth este indisponibil. Doar cele {n} de "
-"relee conectate pot duce mesaje, iar releele au nevoie de internet."
+"Mesh este pornit, dar radioul Bluetooth este indisponibil. Doar releele "
+"conectate ({n}) pot duce mesaje, iar releele au nevoie de internet."
 
 #: ui/components/connection_banner.slint:123
 msgid ""
@@ -1891,15 +1894,15 @@ msgstr "Server inaccesibil — verifică rețeaua"
 
 #: ui/components/connection_banner.slint:218
 msgid "No server — messages will send later"
-msgstr "Niciun server — mesajele se trimit mai târziu"
+msgstr "Server indisponibil — mesajele vor fi trimise mai târziu"
 
 #: ui/components/connection_banner.slint:219
 msgid "Server unreachable — messages will send later"
-msgstr "Server inaccesibil — mesajele se trimit mai târziu"
+msgstr "Server inaccesibil — mesajele vor fi trimise mai târziu"
 
 #: ui/components/connection_banner.slint:260
 msgid "Dismiss the connection banner"
-msgstr "Închide banda de conexiune"
+msgstr "Închide bara de stare a conexiunii"
 
 #: ui/components/dismiss_button.slint:38 ui/server_records/screen.slint:87
 msgid "Close"
@@ -1957,11 +1960,11 @@ msgstr "Steaguri"
 
 #: ui/components/emoji_picker.slint:274
 msgid "Default skin tone"
-msgstr "Ton de piele implicit"
+msgstr "Nuanța implicită a pielii"
 
 #: ui/components/emoji_picker.slint:274
 msgid "Skin tone {}"
-msgstr "Ton de piele {}"
+msgstr "Nuanța pielii {}"
 
 #: ui/components/emoji_picker.slint:299
 msgid "Search results"
@@ -2033,11 +2036,11 @@ msgstr "Deschide descărcările"
 
 #: ui/components/image_viewer.slint:44
 msgid "Previous media"
-msgstr "Media anterioară"
+msgstr "Fișierul media anterior"
 
 #: ui/components/image_viewer.slint:46
 msgid "Next media"
-msgstr "Media următoare"
+msgstr "Fișierul media următor"
 
 #: ui/components/input.slint:167
 msgid "Hide password"
@@ -2107,16 +2110,17 @@ msgid ""
 "Creating an account and signing in both need it, so neither will work until "
 "it comes back."
 msgstr ""
-"Crearea unui cont și conectarea au nevoie de el, așa că niciuna nu merge "
-"până revine."
+"Atât crearea unui cont, cât și conectarea necesită acces la server. Niciuna "
+"nu va funcționa până când acesta nu este din nou disponibil."
 
 #: ui/components/offline_mesh_notice.slint:101
 msgid ""
 "The mesh does not. It carries messages between nearby devices over Bluetooth "
 "with no server, no internet and no account — and it is running now."
 msgstr ""
-"Mesh nu are nevoie de el. Du mesaje între dispozitivele din apropiere prin "
-"Bluetooth, fără server, fără internet și fără cont — și rulează acum."
+"Mesh nu are nevoie de server. Transportă mesaje între dispozitivele din "
+"apropiere prin Bluetooth, fără server, fără internet și fără cont — și "
+"funcționează acum."
 
 #: ui/components/offline_mesh_notice.slint:103
 msgid ""
@@ -2183,7 +2187,7 @@ msgstr "Mesaje"
 
 #: ui/components/unified_search.slint:618
 msgid "Media"
-msgstr "Media"
+msgstr "Fișiere media"
 
 #: ui/components/unified_search.slint:619
 msgid "Files"
@@ -2385,7 +2389,7 @@ msgstr "Arată mai multe mesaje"
 
 #: ui/components/unified_search.slint:1050
 msgid "Show more media"
-msgstr "Arată mai multe media"
+msgstr "Arată mai multe fișiere media"
 
 #: ui/components/unified_search.slint:1051
 msgid "Show more files"
@@ -2405,7 +2409,7 @@ msgstr "Se caută pe acest dispozitiv…"
 
 #: ui/components/unified_search.slint:1076
 msgid "No photos or videos yet"
-msgstr "Nicio poză sau videoclip încă"
+msgstr "Nu există încă poze sau videoclipuri"
 
 #: ui/components/unified_search.slint:1077
 msgid "No files yet"
@@ -2437,7 +2441,7 @@ msgstr "Luna următoare"
 
 #: ui/components/unified_search.slint:1262
 msgid "Tap a start day, then an end day"
-msgstr "Atinge o zi de început, apoi una de sfârșit"
+msgstr "Alege data de început, apoi data de sfârșit"
 
 #: ui/components/unified_search.slint:1262
 msgid "Start: {} · choose end"
@@ -2536,7 +2540,7 @@ msgstr ""
 
 #: ui/mesh/mesh_compose_sheet.slint:187
 msgid "SEEN NEARBY"
-msgstr "VĂZUȚI ÎN APROPIERE"
+msgstr "DETECTATE ÎN APROPIERE"
 
 #: ui/mesh/mesh_compose_sheet.slint:204
 msgid "Paste private invite"
@@ -2568,11 +2572,12 @@ msgstr "Bluetooth este oprit"
 
 #: ui/mesh/mesh_context_bar.slint:15
 msgid "Waiting for the creator to rotate the group key"
-msgstr "Se așteaptă ca creatorul să rotească cheia grupului"
+msgstr "Se așteaptă ca persoana care a creat grupul să schimbe cheia grupului"
 
 #: ui/mesh/mesh_context_bar.slint:17
 msgid "No route to this person · waiting for a carrier"
-msgstr "Nicio rută către această persoană · se așteaptă un purtător"
+msgstr ""
+"Nicio rută către această persoană · se așteaptă un dispozitiv de transport"
 
 #: ui/mesh/mesh_context_bar.slint:57
 msgid "Turn on"
@@ -2636,14 +2641,14 @@ msgstr "Vezi {}"
 msgid ""
 "Only invited devices can read this group. Removing someone rotates the key."
 msgstr ""
-"Doar dispozitivele invitate pot citi acest grup. Dacă elimini pe cineva, "
-"cheia se rotește."
+"Doar dispozitivele invitate pot citi mesajele din acest grup. Eliminarea "
+"unui membru schimbă cheia grupului."
 
 #: ui/mesh/mesh_info_sheet.slint:168
 msgid "Waiting for the creator to rotate the group key. Sending is paused."
 msgstr ""
-"Se așteaptă ca creatorul să rotească cheia grupului. Trimiterea este în "
-"pauză."
+"Se așteaptă ca persoana care a creat grupul să schimbe cheia grupului. "
+"Trimiterea este suspendată."
 
 #: ui/mesh/mesh_info_sheet.slint:175
 msgid "NEARBY DEVICES"
@@ -2679,8 +2684,8 @@ msgid ""
 "Invite sends the group key over the encrypted mesh link. QR shows a code the "
 "other person scans."
 msgstr ""
-"Invitația trimite cheia grupului prin legătura Mesh criptată. QR arată un "
-"cod pe care îl scanează cealaltă persoană."
+"Invitația trimite cheia grupului prin conexiunea Mesh criptată. Opțiunea QR "
+"afișează un cod pe care îl scanează cealaltă persoană."
 
 #: ui/mesh/mesh_info_sheet.slint:259 ui/mesh/mesh_list_item.slint:138
 #: ui/modals/profile_action_tiles.slint:31
@@ -2700,13 +2705,13 @@ msgstr[2] "{n} de relee conectate"
 
 #: ui/mesh/mesh_info_sheet.slint:306
 msgid "Remove {}? The group key will rotate."
-msgstr "Elimini pe {}? Cheia grupului se va roti."
+msgstr "Elimini persoana {}? Cheia grupului se va schimba."
 
 #: ui/mesh/mesh_info_sheet.slint:308
 msgid "Reachable members will pause sending until the creator rotates the key."
 msgstr ""
-"Membrii care pot fi contactați vor opri trimiterea până când creatorul "
-"rotește cheia."
+"Membrii care pot fi contactați nu vor putea trimite mesaje până când "
+"persoana care a creat grupul nu schimbă cheia."
 
 #: ui/mesh/mesh_info_sheet.slint:309
 msgid "Leave this mesh conversation?"
@@ -2775,7 +2780,7 @@ msgstr "ÎN APROPIERE"
 
 #: ui/mesh/mesh_list.slint:158
 msgid "Open nearby mesh peer {}"
-msgstr "Deschide dispozitivul Mesh din apropiere {}"
+msgstr "Deschide profilul dispozitivului Mesh {} din apropiere"
 
 #: ui/mesh/mesh_list.slint:182
 msgid "No mesh conversations"
@@ -2811,7 +2816,7 @@ msgstr "Public · {}"
 
 #: ui/mesh/mesh_list_item.slint:30
 msgid "Everyone in radio range"
-msgstr "Toți cei din raza radioului"
+msgstr "Toți cei din raza de acoperire radio"
 
 #: ui/mesh/mesh_list_item.slint:31
 msgid "Public to nearby listeners"
@@ -2830,7 +2835,6 @@ msgid "Encrypted · nearby"
 msgstr "Criptat · în apropiere"
 
 #: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
-#: ui/modals/profile_action_tiles.slint:31
 msgid "Unmute"
 msgstr "Activează sunetul"
 
@@ -2868,7 +2872,7 @@ msgstr "Arată codul meu QR"
 
 #: ui/mesh/mesh_peer_sheet.slint:146
 msgid "Scan their code"
-msgstr "Scanează codul lor"
+msgstr "Scanează codul celeilalte persoane"
 
 #: ui/mesh/mesh_peer_sheet.slint:150
 msgid "Verify known contact"
@@ -2884,7 +2888,7 @@ msgstr "Folosește criptarea Signal"
 
 #: ui/mesh/mesh_peer_sheet.slint:183
 msgid "Paste their QR code"
-msgstr "Lipește codul lor QR"
+msgstr "Lipește codul QR al celeilalte persoane"
 
 #: ui/mesh/mesh_peer_sheet.slint:191
 msgid "Waiting for encrypted link"
@@ -2892,7 +2896,7 @@ msgstr "Se așteaptă legătura criptată"
 
 #: ui/mesh/mesh_peer_sheet.slint:191
 msgid "Their fingerprint: {}"
-msgstr "Amprenta lor: {}"
+msgstr "Amprenta celeilalte persoane: {}"
 
 #: ui/mesh/mesh_peer_sheet.slint:194
 msgid "Your fingerprint: {}"
@@ -2921,11 +2925,11 @@ msgstr "Blochează"
 
 #: ui/mesh/mesh_peer_sheet.slint:298
 msgid "Remove {0} from {1}? The group key will rotate."
-msgstr "Elimini pe {0} din {1}? Cheia grupului se va roti."
+msgstr "Elimini persoana {0} din {1}? Cheia grupului se va schimba."
 
 #: ui/mesh/mesh_peer_sheet.slint:300
 msgid "Remove and rotate key"
-msgstr "Elimină și rotește cheia"
+msgstr "Elimină și schimbă cheia"
 
 #: ui/mesh/mesh_setup_sheet.slint:62 ui/mesh/mesh_setup_sheet.slint:73
 msgid "Mesh settings"
@@ -3030,7 +3034,7 @@ msgstr "Cere aprobare"
 
 #: ui/modals/channel_access.slint:110
 msgid "People who use the link wait until an admin lets them in"
-msgstr "Cine folosește linkul așteaptă până îl primește un admin"
+msgstr "Cei care folosesc linkul așteaptă aprobarea unui admin"
 
 #: ui/modals/channel_access.slint:121 ui/modals/profile_info_card.slint:186
 msgid "Create link"
@@ -3064,9 +3068,16 @@ msgstr "Respinge"
 msgid "Who can join?"
 msgstr "Cine poate intra?"
 
+#: ui/modals/channel_access_choices.slint:31
+msgctxt "channel access"
+msgid "Open"
+msgstr "Deschis"
+
 #: ui/modals/channel_access_choices.slint:73
 msgid "Anyone finds and joins. New members see messages from when they join."
-msgstr "Oricine găsește și intră. Membrii noi văd mesajele de când intră."
+msgstr ""
+"Oricine poate găsi canalul și poate intra. Membrii noi văd mesajele trimise "
+"după ce intră."
 
 #: ui/modals/channel_access_choices.slint:90
 msgid "Invite-only"
@@ -3074,7 +3085,7 @@ msgstr "Doar cu invitație"
 
 #: ui/modals/channel_access_choices.slint:132
 msgid "Hidden from discovery. Invite or password to join."
-msgstr "Ascuns din căutare. Intri cu invitație sau parolă."
+msgstr "Nu apare în căutare. Intri cu invitație sau parolă."
 
 #: ui/modals/channel_access_choices.slint:149
 msgid "Anon group"
@@ -3215,15 +3226,15 @@ msgstr "Descriere (opțional)"
 
 #: ui/modals/channel_members.slint:130
 msgid "Mute 1h"
-msgstr "Fără sunet 1 oră"
+msgstr "Restricționează 1 oră"
 
 #: ui/modals/channel_members.slint:131
 msgid "Mute 1 day"
-msgstr "Fără sunet 1 zi"
+msgstr "Restricționează 1 zi"
 
 #: ui/modals/channel_members.slint:132
 msgid "Mute until unmuted"
-msgstr "Până reactivezi"
+msgstr "Restricționează nelimitat"
 
 #: ui/modals/channel_members.slint:137
 msgid "Moderator"
@@ -3260,7 +3271,7 @@ msgstr "invitat"
 
 #: ui/modals/channel_members.slint:335
 msgid "muted"
-msgstr "fără sunet"
+msgstr "restricționat"
 
 #: ui/modals/channel_members.slint:353
 msgid "unverified"
@@ -3272,7 +3283,7 @@ msgstr "Acțiuni pentru {}"
 
 #: ui/modals/channel_members.slint:435 ui/modals/invite_member.slint:186
 msgid "Banned"
-msgstr "Interzis"
+msgstr "Acces interzis"
 
 #: ui/modals/channel_members.slint:469
 msgid "Unban"
@@ -3282,9 +3293,14 @@ msgstr "Anulează interdicția"
 msgid "ROLE"
 msgstr "ROL"
 
+#: ui/modals/channel_members.slint:537
+msgctxt "member moderation"
+msgid "Unmute"
+msgstr "Anulează restricția"
+
 #: ui/modals/channel_members.slint:545
 msgid "MUTE IN CHANNEL"
-msgstr "FĂRĂ SUNET ÎN CANAL"
+msgstr "RESTRICȚIONARE ÎN CANAL"
 
 #: ui/modals/channel_members.slint:565
 msgid "Make owner…"
@@ -3312,11 +3328,12 @@ msgstr "Elimină din canal"
 
 #: ui/modals/channel_members.slint:588 ui/modals/channel_members.slint:635
 msgid "Ban"
-msgstr "Interzice"
+msgstr "Interzice accesul"
 
 #: ui/modals/channel_members.slint:611
 msgid "Ban {}? They will be removed and can't rejoin."
-msgstr "Îl interzici pe {}? Va fi eliminat și nu poate reveni."
+msgstr ""
+"Interzici accesul pentru {}? Persoana va fi eliminată și nu va putea reveni."
 
 #: ui/modals/channel_members.slint:613
 msgid "Make {0} the owner of {1}? You'll become an admin."
@@ -3381,7 +3398,7 @@ msgstr "Nimic"
 
 #: ui/modals/channel_notifications.slint:230
 msgid "Never notify (still shows unread badge)"
-msgstr "Nicio notificare (insigna de necitit rămâne)"
+msgstr "Nu trimite notificări (contorul de mesaje necitite rămâne vizibil)"
 
 #: ui/modals/channel_notifications.slint:251 ui/modals/create_channel.slint:616
 msgid "AI assistant"
@@ -3392,8 +3409,8 @@ msgid ""
 "Allow remote AI to read this channel when you explicitly ask it something "
 "here. Off by default."
 msgstr ""
-"Permite AI-ului de la distanță să citească acest canal când îl întrebi "
-"explicit aici. Oprit implicit."
+"Permite asistentului AI de la distanță să citească acest canal când îi "
+"adresezi explicit o întrebare aici. Dezactivat implicit."
 
 #: ui/modals/channel_settings.slint:150
 msgid "Group settings"
@@ -3449,15 +3466,15 @@ msgstr "Creat {}"
 
 #: ui/modals/channel_settings.slint:382 ui/modals/channel_settings.slint:489
 msgid "Edit group info"
-msgstr "Editează info grup"
+msgstr "Editează informațiile grupului"
 
 #: ui/modals/channel_settings.slint:382 ui/modals/channel_settings.slint:489
 msgid "Edit channel info"
-msgstr "Editează info canal"
+msgstr "Editează informațiile canalului"
 
 #: ui/modals/channel_settings.slint:389
 msgid "Loading group info…"
-msgstr "Se încarcă info grup…"
+msgstr "Se încarcă informațiile grupului…"
 
 #: ui/modals/channel_settings.slint:397
 msgid "Add a description so members know what this is for"
@@ -3465,11 +3482,11 @@ msgstr "Adaugă o descriere ca membrii să știe la ce folosește"
 
 #: ui/modals/channel_settings.slint:402
 msgid "Unsaved changes to group info"
-msgstr "Modificări nesalvate la info grup"
+msgstr "Modificări nesalvate ale informațiilor grupului"
 
 #: ui/modals/channel_settings.slint:402
 msgid "Unsaved changes to channel info"
-msgstr "Modificări nesalvate la info canal"
+msgstr "Modificări nesalvate ale informațiilor canalului"
 
 #: ui/modals/channel_settings.slint:420
 msgid "Access and invite links"
@@ -3736,7 +3753,7 @@ msgstr "Utilizatorii pe care îi blochezi nu îți pot scrie"
 
 #: ui/modals/friends_blocked_tab.slint:113
 msgid "Delete this chat? They stay blocked."
-msgstr "Ștergi această conversație? Rămân blocați."
+msgstr "Ștergi această conversație? Persoana rămâne blocată."
 
 #: ui/modals/friends_blocked_tab.slint:113
 msgid "Remove from friends and unblock?"
@@ -3752,7 +3769,7 @@ msgstr "Șterge conversația"
 
 #: ui/modals/friends_find_tab.slint:96
 msgid "Scan to start a secret chat with me"
-msgstr "Scanează ca să începi un chat secret cu mine"
+msgstr "Scanează ca să începi o conversație secretă cu mine"
 
 #: ui/modals/friends_find_tab.slint:96
 msgid "Scan to add me"
@@ -3802,7 +3819,7 @@ msgstr "Niciun contact privat încă"
 
 #: ui/modals/friends_friends_tab.slint:60
 msgid "Share your private code to start a secret chat"
-msgstr "Distribuie codul privat ca să începi un chat secret"
+msgstr "Distribuie codul tău privat ca să începi o conversație secretă"
 
 #: ui/modals/friends_friends_tab.slint:60
 msgid "Use the Add friend tab to connect"
@@ -3955,7 +3972,8 @@ msgstr "Fapte"
 msgid ""
 "Nothing yet — chat with Jarvis and durable facts land here automatically."
 msgstr ""
-"Nimic încă — vorbește cu Jarvis și faptele durabile ajung aici automat."
+"Nimic încă — vorbește cu Jarvis, iar informațiile de reținut sunt salvate "
+"aici automat."
 
 #: ui/modals/jarvis_memory.slint:210
 msgid "Knowledge graph"
@@ -3966,7 +3984,7 @@ msgid ""
 "No entities yet — Jarvis learns people, projects, and topics from "
 "conversations."
 msgstr ""
-"Nicio entitate încă — Jarvis învață persoane, proiecte și subiecte din "
+"Nicio entitate încă — Jarvis află despre persoane, proiecte și subiecte din "
 "conversații."
 
 #: ui/modals/jarvis_memory.slint:318
@@ -4041,7 +4059,7 @@ msgstr "Ctrl + K / Ctrl + F"
 
 #: ui/modals/keyboard_shortcuts.slint:128
 msgid "Open AI chat"
-msgstr "Deschide chatul AI"
+msgstr "Deschide conversația AI"
 
 #: ui/modals/keyboard_shortcuts.slint:128
 msgid "Ctrl + J"
@@ -4202,7 +4220,7 @@ msgstr "Server: {}"
 
 #: ui/modals/link_device_approve.slint:132
 msgid "Verify this code matches the new device:"
-msgstr "Verifică dacă acest cod corespunde dispozitivului nou:"
+msgstr "Verifică dacă acest cod coincide cu cel de pe dispozitivul nou:"
 
 #: ui/modals/link_device_approve.slint:147
 msgid "Password or PIN"
@@ -4238,7 +4256,7 @@ msgstr "Mai mult"
 
 #: ui/modals/profile_action_tiles.slint:39
 msgid "Call"
-msgstr "Apel"
+msgstr "Apelează"
 
 #: ui/modals/profile_info_card.slint:57 ui/settings/settings_screen.slint:283
 msgid "About"
@@ -4278,8 +4296,8 @@ msgid ""
 "Compare this number with your contact to verify end-to-end encryption. If "
 "the numbers match, your conversation is secure."
 msgstr ""
-"Compară acest număr cu contactul tău ca să verifici criptarea integrală. "
-"Dacă numerele coincid, conversația este sigură."
+"Compară acest număr cu cel afișat pe dispozitivul contactului tău pentru a "
+"verifica criptarea integrală. Dacă numerele coincid, conversația este sigură."
 
 #: ui/modals/profile_safety_number.slint:127
 msgid "Updating verification…"
@@ -4350,8 +4368,8 @@ msgid ""
 "These codes can recover your account if you forget your password and PIN. "
 "Save them somewhere safe. They will not be shown again."
 msgstr ""
-"Aceste coduri îți pot recupera contul dacă uiți parola și PIN-ul. Salvează-"
-"le într-un loc sigur. Nu vor mai fi arătate."
+"Cu aceste coduri îți poți recupera contul dacă uiți parola și PIN-ul. "
+"Salvează-le într-un loc sigur. Nu vor mai fi afișate."
 
 #: ui/modals/recovery_codes.slint:175
 msgid "Copy all"
@@ -4368,7 +4386,7 @@ msgstr "Continuă"
 
 #: ui/modals/sealed_sender_intro.slint:80
 msgid "Sealed sender: private by default"
-msgstr "Expeditor sigilat: privat implicit"
+msgstr "Expeditor sigilat: confidențialitate implicită"
 
 #: ui/modals/sealed_sender_intro.slint:90
 msgid ""
@@ -4484,11 +4502,11 @@ msgstr[0] ""
 "Deconectezi celălalt dispozitiv asociat? Trebuie asociat din nou ca să "
 "folosească acest cont."
 msgstr[1] ""
-"Deconectezi toate celelalte {n} dispozitive asociate? Trebuie asociate din "
-"nou ca să folosească acest cont."
+"Deconectezi celelalte dispozitive asociate ({n})? Trebuie asociate din nou "
+"ca să folosească acest cont."
 msgstr[2] ""
-"Deconectezi toate celelalte {n} de dispozitive asociate? Trebuie asociate "
-"din nou ca să folosească acest cont."
+"Deconectezi celelalte dispozitive asociate ({n})? Trebuie asociate din nou "
+"ca să folosească acest cont."
 
 #: ui/modals/sessions.slint:403
 msgid "Revoke all"
@@ -4516,7 +4534,7 @@ msgstr "Ai blocat această persoană."
 
 #: ui/modals/user_profile.slint:574
 msgid "Open blocked"
-msgstr "Deschide blocații"
+msgstr "Vezi persoanele blocate"
 
 #: ui/modals/user_profile.slint:620 ui/sidebar/create_menu.slint:175
 msgid "Add friend"
@@ -4524,7 +4542,7 @@ msgstr "Adaugă prieten"
 
 #: ui/modals/user_profile.slint:635
 msgid "Retry shared content"
-msgstr "Reîncearcă conținutul partajat"
+msgstr "Reîncearcă încărcarea conținutului partajat"
 
 #: ui/modals/user_profile.slint:684
 msgid "Share this contact"
@@ -4548,7 +4566,7 @@ msgstr "Blochează utilizatorul"
 
 #: ui/modals/user_profile.slint:708
 msgid "Load earlier"
-msgstr "Încarcă mai vechi"
+msgstr "Încarcă elementele anterioare"
 
 #: ui/modals/user_profile.slint:720 ui/server_records/screen.slint:218
 msgid "Load more"
@@ -4560,7 +4578,7 @@ msgstr "Nimic partajat încă."
 
 #: ui/modals/user_profile.slint:741
 msgid "Delete {}?"
-msgstr "Ștergi pe {}?"
+msgstr "Ștergi contactul {}?"
 
 #: ui/modals/user_profile.slint:751
 msgid "They'll be removed from your friends. Your chat history stays."
@@ -4568,7 +4586,7 @@ msgstr "Va fi eliminat din prieteni. Istoricul conversației rămâne."
 
 #: ui/modals/user_profile.slint:781
 msgid "Block {}?"
-msgstr "Blochezi pe {}?"
+msgstr "Blochezi persoana {}?"
 
 #: ui/modals/user_profile.slint:791
 msgid ""
@@ -4588,7 +4606,7 @@ msgstr "Resetează"
 
 #: ui/modals/user_profile.slint:838
 msgid "Unblock {}?"
-msgstr "Deblochezi pe {}?"
+msgstr "Deblochezi persoana {}?"
 
 #: ui/modals/user_profile.slint:845
 msgid "They will be able to call and message you again."
@@ -4640,7 +4658,7 @@ msgstr "Confirmă parola"
 
 #: ui/pages/account_recovery.slint:192
 msgid "Please confirm your password"
-msgstr "Te rog confirmă parola"
+msgstr "Confirmă parola"
 
 #: ui/pages/account_recovery.slint:194 ui/pages/register.slint:457
 msgid "Passwords do not match"
@@ -4817,19 +4835,19 @@ msgstr "Puterea parolei: puternică"
 
 #: ui/pages/register.slint:440
 msgid "Weak"
-msgstr "Slab"
+msgstr "Slabă"
 
 #: ui/pages/register.slint:441
 msgid "Fair"
-msgstr "Mediu"
+msgstr "Medie"
 
 #: ui/pages/register.slint:442
 msgid "Good"
-msgstr "Bun"
+msgstr "Bună"
 
 #: ui/pages/register.slint:442
 msgid "Strong"
-msgstr "Puternic"
+msgstr "Puternică"
 
 #: ui/pages/register.slint:474
 msgid "Create recovery PIN"
@@ -4888,7 +4906,7 @@ msgstr "Bine ai venit în Chatter!"
 
 #: ui/pages/welcome.slint:65
 msgid "Hi {}, your account is ready."
-msgstr "Salut {}, contul tău este gata."
+msgstr "Salut, {}! Contul tău este gata."
 
 #: ui/pages/welcome.slint:93
 msgid "All messages are end-to-end encrypted"
@@ -4943,8 +4961,8 @@ msgstr ""
 msgid ""
 "Call records from this channel’s server. Private call history stays in Calls."
 msgstr ""
-"Înregistrările de apeluri de pe serverul acestui canal. Istoricul privat "
-"rămâne la Apeluri."
+"Istoricul apelurilor de pe serverul acestui canal. Istoricul apelurilor "
+"private rămâne în secțiunea Apeluri."
 
 #: ui/server_records/screen.slint:96
 msgid "You're all caught up"
@@ -4956,7 +4974,7 @@ msgstr "Nicio integrare încă"
 
 #: ui/server_records/screen.slint:241
 msgid "Mark read"
-msgstr "Marchează citit"
+msgstr "Marchează ca citit"
 
 #: ui/settings/about_settings.slint:16
 msgid "About Chatter"
@@ -5045,7 +5063,7 @@ msgstr ""
 
 #: ui/settings/account_settings.slint:340
 msgid "Backup PIN"
-msgstr "PIN de backup"
+msgstr "PIN pentru copia de rezervă"
 
 #: ui/settings/account_settings.slint:341
 msgid "Your PIN secures your encrypted key backup."
@@ -5069,11 +5087,11 @@ msgstr "Copie de rezervă a cheilor"
 
 #: ui/settings/account_settings.slint:449
 msgid "Status: Backed up"
-msgstr "Stare: salvat"
+msgstr "Stare: copie de rezervă creată"
 
 #: ui/settings/account_settings.slint:449
 msgid "Status: Not backed up"
-msgstr "Stare: nesalvat"
+msgstr "Stare: fără copie de rezervă"
 
 #: ui/settings/account_settings.slint:449
 msgid "Status: Unknown"
@@ -5081,7 +5099,7 @@ msgstr "Stare: necunoscută"
 
 #: ui/settings/account_settings.slint:467
 msgid "Enter your PIN to retry backup"
-msgstr "Introdu PIN-ul ca să reîncerci copia de rezervă"
+msgstr "Introdu PIN-ul ca să reîncerci crearea copiei de rezervă"
 
 #: ui/settings/account_settings.slint:533
 msgid "Message backup"
@@ -5092,17 +5110,18 @@ msgid ""
 "Encrypted message history, conversations, and contacts. File backups need a "
 "passphrase; server backups need your PIN."
 msgstr ""
-"Istoric de mesaje criptat, conversații și contacte. Backupul în fișier cere "
-"o parolă; backupul pe server cere PIN-ul."
+"Istoricul mesajelor, conversațiile și contactele, în formă criptată. Copiile "
+"de rezervă în fișier necesită o parolă; cele de pe server necesită PIN-ul."
 
 #: ui/settings/account_settings.slint:540
 msgid "File backup passphrase"
-msgstr "Parolă pentru backupul în fișier"
+msgstr "Parolă pentru copia de rezervă în fișier"
 
 #: ui/settings/account_settings.slint:548
 msgid "Enter a backup passphrase to enable file export and restore."
 msgstr ""
-"Introdu o parolă de backup ca să activezi exportul și restaurarea din fișier."
+"Introdu o parolă pentru copia de rezervă ca să activezi exportul și "
+"restaurarea din fișier."
 
 #: ui/settings/account_settings.slint:559
 msgid "Export to file…"
@@ -5114,15 +5133,17 @@ msgstr "Restaurează din fișier…"
 
 #: ui/settings/account_settings.slint:581
 msgid "PIN (for server backup)"
-msgstr "PIN (pentru backup pe server)"
+msgstr "PIN (pentru copia de rezervă pe server)"
 
 #: ui/settings/account_settings.slint:589
 msgid "Enter your PIN to enable server backup and restore."
-msgstr "Introdu PIN-ul ca să activezi backupul și restaurarea pe server."
+msgstr ""
+"Introdu PIN-ul ca să activezi crearea copiilor de rezervă pe server și "
+"restaurarea de pe server."
 
 #: ui/settings/account_settings.slint:600
 msgid "Back up to server"
-msgstr "Fă backup pe server"
+msgstr "Creează o copie pe server"
 
 #: ui/settings/account_settings.slint:611
 msgid "Restore from server"
@@ -5205,7 +5226,7 @@ msgstr "Cumpără tokeni"
 
 #: ui/settings/ai_settings.slint:105
 msgid "Model (blank for the default)"
-msgstr "Model (gol pentru cel implicit)"
+msgstr "Model (lasă gol pentru cel implicit)"
 
 #: ui/settings/ai_settings.slint:112
 msgid "Save model"
@@ -5262,7 +5283,7 @@ msgstr "Sistem"
 
 #: ui/settings/appearance_settings.slint:48
 msgid "Match this device's light or dark setting"
-msgstr "Urmează setarea luminoasă sau întunecată a dispozitivului"
+msgstr "Folosește tema luminoasă sau întunecată a dispozitivului"
 
 #: ui/settings/appearance_settings.slint:49
 msgid "Light"
@@ -5274,11 +5295,11 @@ msgstr "Întunecată"
 
 #: ui/settings/appearance_settings.slint:145
 msgid "Language"
-msgstr ""
+msgstr "Limbă"
 
 #: ui/settings/appearance_settings.slint:209
 msgid "Match this device's language"
-msgstr ""
+msgstr "Folosește limba dispozitivului"
 
 #: ui/settings/appearance_settings.slint:244
 msgid "Text size"
@@ -5290,7 +5311,7 @@ msgstr "Mic"
 
 #: ui/settings/appearance_settings.slint:252
 msgid "Match this device's font size"
-msgstr "Urmează mărimea fontului dispozitivului"
+msgstr "Folosește mărimea fontului dispozitivului"
 
 #: ui/settings/appearance_settings.slint:253
 msgid "Large"
@@ -5317,8 +5338,9 @@ msgid ""
 "Menus, sheets and switches change without motion; loading shimmer, typing "
 "dots and the ringing pulse hold still."
 msgstr ""
-"Meniurile, foile și comutatoarele se schimbă fără mișcare; luciul de "
-"încărcare, punctele de scriere și pulsul de apel rămân nemișcate."
+"Meniurile, panourile și comutatoarele se schimbă fără animații; efectul de "
+"încărcare, punctele care indică scrierea și indicatorul de apel nu se mai "
+"mișcă."
 
 #: ui/settings/appearance_settings.slint:399
 msgid "Animation speed"
@@ -5415,7 +5437,8 @@ msgstr "Criptare"
 
 #: ui/settings/encryption_settings.slint:29
 msgid "Your messages are protected with Signal Protocol end-to-end encryption"
-msgstr "Mesajele tale sunt protejate cu criptare integrală Signal Protocol"
+msgstr ""
+"Mesajele tale sunt protejate prin criptare integrală cu protocolul Signal"
 
 #. lives on the contact's profile.
 #: ui/settings/encryption_settings.slint:55
@@ -5433,7 +5456,7 @@ msgstr ""
 
 #: ui/settings/encryption_settings.slint:130
 msgid "Allow sealed sender from anyone"
-msgstr "Permite expeditor sigilat de la oricine"
+msgstr "Permite mesaje cu expeditor sigilat de la oricine"
 
 #: ui/settings/encryption_settings.slint:145
 msgid ""
@@ -5512,8 +5535,9 @@ msgid ""
 "Everyone else sees your initials. Narrowing this gives your profile a new "
 "key, so people who could see it before can't."
 msgstr ""
-"Ceilalți îți văd inițialele. Dacă restrângi asta, profilul primește o cheie "
-"nouă, așa că cei care îl vedeau înainte nu mai pot."
+"Toți ceilalți îți văd inițialele. Restrângerea accesului generează o cheie "
+"nouă pentru profil, astfel încât persoanele care aveau acces înainte să nu-l "
+"mai poată vedea."
 
 #: ui/settings/privacy_settings.slint:80
 msgid "Everyone"
@@ -5557,7 +5581,7 @@ msgstr "Cine mă poate găsi după numele de utilizator"
 
 #: ui/settings/privacy_settings.slint:262
 msgid "Anyone who types your exact username can find you"
-msgstr "Oricine scrie numele tău exact te poate găsi"
+msgstr "Oricine introduce exact numele tău de utilizator te poate găsi"
 
 #: ui/settings/privacy_settings.slint:263
 msgid "Only people with your friend code or username link can find you"
@@ -5680,11 +5704,11 @@ msgstr "Întotdeauna"
 
 #: ui/sidebar/section_context_menu.slint:665
 msgid "Mark as read"
-msgstr "Marchează ca citit"
+msgstr "Marchează ca citită"
 
 #: ui/sidebar/section_context_menu.slint:665
 msgid "Mark as unread"
-msgstr "Marchează ca necitit"
+msgstr "Marchează ca necitită"
 
 #: ui/sidebar/section_context_menu.slint:688
 msgid "Move to section"
@@ -5784,7 +5808,7 @@ msgstr "Gata de repornire"
 
 #: ui/sidebar/update_banner.slint:30
 msgid "Confirm system install"
-msgstr "Confirmă instalarea din sistem"
+msgstr "Confirmă instalarea în fereastra sistemului"
 
 #: ui/sidebar/update_banner.slint:30
 msgid "Update failed"
