@@ -464,7 +464,9 @@ export component ChatLayout inherits Rectangle {
         // Level-3 chrome floats: on a phone it is inset from the screen edges
         // so its shadow and rim show on all sides and messages visibly pass
         // underneath it (theme/elevation.slint).
-        padding-left: root.mobile ? Spacing.sm : Spacing.none;
+        // Desktop: a hairline gap so the island does not butt against the
+        // sidebar panel beside it (or the window edge on the other side).
+        padding-left: root.mobile ? Spacing.sm : Spacing.xs;
         padding-right: self.padding-left;
         padding-top: root.mobile ? Spacing.xs : Spacing.none;
         spacing: root.mobile ? Spacing.xs : Spacing.none;
@@ -615,7 +617,7 @@ export component ChatLayout inherits Rectangle {
         width: root.width;
         height: self.preferred-height;
         y: root.height - self.height - root.drawer-occupied-height;
-        padding-left: root.mobile ? Spacing.sm : Spacing.none;
+        padding-left: root.mobile ? Spacing.sm : Spacing.xs;
         padding-right: self.padding-left;
         // Floating composer — placed directly in VerticalLayout so its
         // explicit height drives the layout slot. A wrapping plain Rectangle

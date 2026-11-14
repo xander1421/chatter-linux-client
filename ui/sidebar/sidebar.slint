@@ -487,7 +487,17 @@ export component Sidebar inherits Rectangle {
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
                         tooltip-text: "Saved messages"; tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: Icons.bookmark; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
+                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.saved-open ? Colors.row-selected : root.rail-slot-bg; Image { source: Icons.bookmark; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: root.saved-open ? Colors.text-primary : Colors.text-secondary; } } } }
+                    }
+                    // Open in the rail: the same accent pill and filled slot a
+                    // selected conversation gets (channel_list_item.slint).
+                    if root.collapsed && root.saved-open: Rectangle {
+                        x: 0;
+                        y: (parent.height - self.height) / 2;
+                        width: 3px;
+                        height: 20px;
+                        border-radius: Spacing.radius-full;
+                        background: Colors.primary;
                     }
                     saved-touch := TouchArea {
                         pointer-event(event) => {

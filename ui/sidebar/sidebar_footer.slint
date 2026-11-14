@@ -222,9 +222,8 @@ export component SidebarFooter inherits GlassSurface {
                         TouchArea { clicked => { root.anon-mode-clicked(); } }
                     } }
                 }
-                // Bottom cluster, in order: AI, Chats, Mesh, expand, Settings.
-                // The expand chevron lives here rather than in the panel header
-                // so the list destinations stay beside the other shortcuts.
+                // Bottom cluster, in order: AI, Chats, Mesh, Activity, then
+                // profile, Settings, expand.
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: "AI"; tooltip-enabled: true; placement: "right";
@@ -319,23 +318,24 @@ export component SidebarFooter inherits GlassSurface {
                     }
                 }
 
-                TooltipArea {
-                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: root.collapsed ? "Expand sidebar" : "Collapse sidebar"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
-                        accessible-role: button; accessible-label: "Expand sidebar";
-                        accessible-action-default => { root.toggle-collapsed(); }
-                        KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-collapsed(); } }
-                        border-width: rail-expand-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                        rail-expand-keys := FocusScope { width: 0px; height: 0px;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.toggle-collapsed(); return accept; } return reject; }
+                // Same order as the expanded footer (profile … settings,
+                // collapse): the chevron is last in both, so it does not jump
+                // to the middle of the cluster when the panel collapses.
+                Rectangle {
+                    height: root.rail-icon-size;
+                    accessible-role: button; accessible-label: "Profile";
+                    accessible-action-default => { root.profile-clicked(); }
+                    border-width: rail-profile-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                    rail-profile-keys := FocusScope { width: 0px; height: 0px;
+                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.profile-clicked(); return accept; } return reject; }
+                    }
+                    TouchArea { clicked => { root.profile-clicked(); } }
+                    HorizontalLayout { alignment: center;
+                        Avatar { size: 28px; source: root.user-avatar-source; fallback-text: root.user-initials; alt-name: root.user-display-name; show-presence: true;
+                            presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
                         }
-                        height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                        Image { source: root.collapsed ? Icons.chevron-right : Icons.chevron-left; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                        TouchArea { clicked => { root.toggle-collapsed(); } }
-                    } }
+                    }
                 }
-
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Settings"; tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
@@ -359,20 +359,21 @@ export component SidebarFooter inherits GlassSurface {
                         TouchArea { clicked => { root.settings-clicked(); } }
                     } }
                 }
-                Rectangle {
-                    height: root.rail-icon-size;
-                    accessible-role: button; accessible-label: "Profile";
-                    accessible-action-default => { root.profile-clicked(); }
-                    border-width: rail-profile-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                    rail-profile-keys := FocusScope { width: 0px; height: 0px;
-                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.profile-clicked(); return accept; } return reject; }
-                    }
-                    TouchArea { clicked => { root.profile-clicked(); } }
-                    HorizontalLayout { alignment: center;
-                        Avatar { size: 28px; source: root.user-avatar-source; fallback-text: root.user-initials; alt-name: root.user-display-name; show-presence: true;
-                            presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
+                TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: root.collapsed ? "Expand sidebar" : "Collapse sidebar"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button; accessible-label: "Expand sidebar";
+                        accessible-action-default => { root.toggle-collapsed(); }
+                        KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-collapsed(); } }
+                        border-width: rail-expand-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-expand-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.toggle-collapsed(); return accept; } return reject; }
                         }
-                    }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                        Image { source: root.collapsed ? Icons.chevron-right : Icons.chevron-left; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                        TouchArea { clicked => { root.toggle-collapsed(); } }
+                    } }
                 }
 
             }
