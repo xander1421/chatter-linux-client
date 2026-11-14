@@ -205,7 +205,7 @@ export component SidebarFooter inherits GlassSurface {
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                         background: AnonMode.enabled ? Colors.row-selected : root.rail-slot-bg;
-                        Image { source: Icons.shield; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        Image { source: Icons.shield; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: AnonMode.enabled ? Colors.selected-indicator : Colors.text-secondary; }
                         // Tor status dot: green=connected, amber=CONNECTING ONLY,
                         // red=error, muted=off. See the expanded shield above.
@@ -235,7 +235,7 @@ export component SidebarFooter inherits GlassSurface {
                             key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.channel-selected("00000000-0000-0000-0000-000000000000"); return accept; } return reject; }
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                        Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        Image { source: Icons.jarvis; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         // The virtual assistant channel's fixed id is the nil UUID
                         // (chatter-core client/jarvis.rs jarvis_channel_id).
                         TouchArea { clicked => { root.channel-selected("00000000-0000-0000-0000-000000000000"); } }
@@ -254,7 +254,7 @@ export component SidebarFooter inherits GlassSurface {
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                         background: root.active-tab == "chats" ? Colors.row-selected : root.rail-slot-bg;
-                        Image { source: Icons.message-circle; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        Image { source: Icons.message-circle; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         TouchArea { clicked => { root.tab-selected("chats"); } }
                     } }
                 }
@@ -270,7 +270,7 @@ export component SidebarFooter inherits GlassSurface {
                             key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.tab-selected("mesh"); return accept; } return reject; }
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.active-tab == "mesh" ? Colors.row-selected : root.rail-slot-bg;
-                        Image { source: Icons.radio; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        Image { source: Icons.radio; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: !MeshGlobal.radio-running ? Colors.warning
                                 : MeshGlobal.peer-count > 0 ? Colors.primary
                                 : Colors.text-secondary; }
@@ -291,7 +291,7 @@ export component SidebarFooter inherits GlassSurface {
                             key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { ActivityUi.open(); return accept; } return reject; }
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                        Image { source: Icons.bell; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        Image { source: Icons.bell; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         if ActivityGlobal.unread-count > 0: Rectangle {
                             x: parent.width - self.width - 4px; y: 4px;
                             width: 8px; height: 8px; border-radius: 4px;
@@ -331,7 +331,7 @@ export component SidebarFooter inherits GlassSurface {
                     }
                     TouchArea { clicked => { root.profile-clicked(); } }
                     HorizontalLayout { alignment: center;
-                        Avatar { size: 28px; source: root.user-avatar-source; fallback-text: root.user-initials; alt-name: root.user-display-name; show-presence: true;
+                        Avatar { size: 40px; source: root.user-avatar-source; fallback-text: root.user-initials; alt-name: root.user-display-name; show-presence: true;
                             presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
                         }
                     }
@@ -347,7 +347,7 @@ export component SidebarFooter inherits GlassSurface {
                             key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.settings-clicked(); return accept; } return reject; }
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                        Image { source: Icons.settings; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        Image { source: Icons.settings; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         if root.server-unreachable: Rectangle {
                             x: parent.width - self.width - 1px; y: 1px;
                             width: 7px; height: 7px; border-radius: 3.5px;
@@ -371,7 +371,7 @@ export component SidebarFooter inherits GlassSurface {
                             key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.toggle-collapsed(); return accept; } return reject; }
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                        Image { source: root.collapsed ? Icons.chevron-right : Icons.chevron-left; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                        Image { source: root.collapsed ? Icons.chevron-right : Icons.chevron-left; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
                         TouchArea { clicked => { root.toggle-collapsed(); } }
                     } }
                 }

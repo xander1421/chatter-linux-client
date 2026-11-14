@@ -238,7 +238,9 @@ export component Sidebar inherits Rectangle {
     // a hole punched between them, which is the "huge space from Search to
     // Saved" complaint. 56px is the standard list row: same type, same tap
     // target, no cavern.
-    property <length> quick-link-height: (root.touch ? 56px : 34px) * Appearance.text-grow;
+    // Collapsed, a quick link is a rail row like a conversation's (48px) so
+    // every slot in the rail is one size.
+    property <length> quick-link-height: (root.touch ? 56px : root.collapsed ? 48px : 34px) * Appearance.text-grow;
     // The panel's first row, pinned above the scroll. On desktop it takes the
     // shared header height so it and the conversation header beside it read as
     // one row across the seam — and on macOS that is the row the traffic
@@ -275,11 +277,13 @@ export component Sidebar inherits Rectangle {
     property <length> footer-icon-size: root.touch ? 36px : 24px;
     // One size for every button in the collapsed rail's bottom cluster, so the
     // container height below stays in step with them.
-    property <length> rail-icon-size: root.touch ? Spacing.touch-target-min : 32px;
+    property <length> rail-icon-size: root.touch ? Spacing.touch-target-min : 44px;
     // The visual plate inside a rail row. Smaller than the row so adjacent slots
     // do not touch; the row stays the touch target, the slot is what you see.
-    property <length> rail-slot-size: root.touch ? 44px : 32px;
-    property <length> rail-slot-radius: 12px;
+    // 44px everywhere: the conversation rows' collapsed slot
+    // (channel_list_item.slint `slot-size`), so the rail reads as one column.
+    property <length> rail-slot-size: 44px;
+    property <length> rail-slot-radius: Spacing.radius-lg;
     property <brush> rail-slot-bg: Colors.surface-control;
     // Shield, AI, Chats, Activity, Mesh (when compiled), expand, Settings,
     // profile. The Activity bell was added without counting it, so the rail
@@ -457,7 +461,7 @@ export component Sidebar inherits Rectangle {
                     TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
                         tooltip-text: "Search"; tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: Icons.search; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
+                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: Icons.search; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
                     TouchArea { enabled: !root.search-overlay-open; mouse-cursor: pointer; clicked => { root.search-clicked(); } }
                 }
@@ -487,7 +491,7 @@ export component Sidebar inherits Rectangle {
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
                         tooltip-text: "Saved messages"; tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.saved-open ? Colors.row-selected : root.rail-slot-bg; Image { source: Icons.bookmark; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: root.saved-open ? Colors.text-primary : Colors.text-secondary; } } } }
+                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.saved-open ? Colors.row-selected : root.rail-slot-bg; Image { source: Icons.bookmark; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: root.saved-open ? Colors.text-primary : Colors.text-secondary; } } } }
                     }
                     // Open in the rail: the same accent pill and filled slot a
                     // selected conversation gets (channel_list_item.slint).
@@ -546,7 +550,7 @@ export component Sidebar inherits Rectangle {
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
                         tooltip-text: AnonMode.enabled ? "Add contact" : "Friends"; tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
+                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
                     friends-touch := TouchArea { clicked => { root.friends-clicked(); } }
                 }
@@ -596,7 +600,7 @@ export component Sidebar inherits Rectangle {
                         tooltip-text: "Calls"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                            Image { source: Icons.phone; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                            Image { source: Icons.phone; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                             if root.missed-call-count > 0: Rectangle {
                                 x: parent.width - 8px; y: -2px;
                                 width: 12px; height: 12px; border-radius: 6px;
@@ -673,7 +677,7 @@ export component Sidebar inherits Rectangle {
                         tooltip-text: "Requests"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                            Image { source: Icons.user-plus; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                            Image { source: Icons.user-plus; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                             if root.total-pending-requests > 0: Rectangle {
                                 x: parent.width - 8px; y: -2px;
                                 width: 12px; height: 12px; border-radius: 6px;

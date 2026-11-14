@@ -46,7 +46,7 @@ export component CustomSectionHeader inherits Rectangle {
     callback toggle-expanded();
     callback context-menu-requested(/* x */ length, /* y */ length);
 
-    height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
+    height: root.collapsed ? 48px : root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
     accessible-role: list-item;
     accessible-label: root.name;
     accessible-description: root.is-expanded ? "Expanded section. Press Shift+F10 or Menu for section options." : "Collapsed section. Press Shift+F10 or Menu for section options.";
@@ -179,12 +179,21 @@ export component CustomSectionHeader inherits Rectangle {
         tooltip-enabled: true;
         placement: "right";
 
-        HorizontalLayout {
-            alignment: center;
+        // The same 44px slot as every other rail entry.
+        Rectangle {
+            width: 44px;
+            height: 44px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: Spacing.radius-lg;
+            background: Colors.surface-control;
             Text {
+                width: 100%;
+                height: 100%;
                 text: root.icon-emoji;
                 font-family: Typography.font-family-emoji;
-                font-size: Typography.sm;
+                font-size: Typography.lg;
+                horizontal-alignment: center;
                 vertical-alignment: center;
             }
         }
