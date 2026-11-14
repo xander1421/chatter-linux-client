@@ -24,7 +24,9 @@ export component PinnedBar inherits GlassSurface {
     callback prev-clicked();
     callback next-clicked();
     callback go-to-message();
-    callback dismiss-clicked();
+    // Opens the page listing every pinned message. The bar itself cannot
+    // be closed (owner, 2026-11-14): pins stay in view until unpinned.
+    callback list-clicked();
 
     // Computed
     property <string> position-text: has-multiple ? "Pinned message \{current-index} of \{total-count}" : "Pinned message";
@@ -179,34 +181,34 @@ export component PinnedBar inherits GlassSurface {
             }
         }
 
-        // Close/dismiss button on RIGHT — a full 48dp box flush with the edge
+        // All pinned messages, on the RIGHT — a full 48dp box flush with the edge
         Rectangle {
             width: Spacing.touch-target-min;
             height: Spacing.touch-target-min;
-            background: dismiss-touch.pressed ? Materials.pressed : dismiss-touch.has-hover ? Colors.surface-hover : transparent;
+            background: list-touch.pressed ? Materials.pressed : list-touch.has-hover ? Colors.surface-hover : transparent;
             border-radius: Spacing.radius-sm;
-            transform-scale-x: dismiss-touch.pressed ? 90% : 100%;
-            transform-scale-y: dismiss-touch.pressed ? 90% : 100%;
-            animate transform-scale-x { duration: dismiss-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-            animate transform-scale-y { duration: dismiss-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+            transform-scale-x: list-touch.pressed ? 90% : 100%;
+            transform-scale-y: list-touch.pressed ? 90% : 100%;
+            animate transform-scale-x { duration: list-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+            animate transform-scale-y { duration: list-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
             accessible-role: button;
-            accessible-label: "Hide pinned messages";
-            accessible-action-default => { root.dismiss-clicked(); }
-            KeyFocus { border-radius: parent.border-radius; activate => { root.dismiss-clicked(); } }
+            accessible-label: "All pinned messages";
+            accessible-action-default => { root.list-clicked(); }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.list-clicked(); } }
 
             Image {
-                source: Icons.x;
-                width: 16px;
-                height: 16px;
+                source: Icons.pin-list;
+                width: Spacing.button-icon;
+                height: Spacing.button-icon;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                colorize: Colors.text-muted;
+                colorize: Colors.text-secondary;
             }
 
-            dismiss-touch := TouchArea {
+            list-touch := TouchArea {
                 mouse-cursor: pointer;
                 clicked => {
-                    root.dismiss-clicked();
+                    root.list-clicked();
                 }
             }
         }

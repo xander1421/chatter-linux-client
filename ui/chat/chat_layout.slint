@@ -265,7 +265,7 @@ export component ChatLayout inherits Rectangle {
     callback pinned-prev-clicked();
     callback pinned-next-clicked();
     callback pinned-go-to-message();
-    callback pinned-dismiss-clicked();
+    callback pinned-list-clicked();
     callback sender-profile-requested(string);
     in property <image> pinned-thumbnail;
     callback pinned-show-clicked();  // Re-show dismissed pinned bar
@@ -601,8 +601,8 @@ export component ChatLayout inherits Rectangle {
             go-to-message => {
                 root.pinned-go-to-message();
             }
-            dismiss-clicked => {
-                root.pinned-dismiss-clicked();
+            list-clicked => {
+                root.pinned-list-clicked();
             }
         }
 

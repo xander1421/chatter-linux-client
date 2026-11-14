@@ -42,20 +42,6 @@ pub(super) fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterCl
             );
         });
 
-    // Dismiss pinned bar
-    let ui_ctx_dismiss = ui_ctx.clone();
-    let weak_window = window.as_weak();
-
-    window
-        .global::<crate::ChatPane>()
-        .on_pinned_dismiss_clicked(move || {
-            ui_ctx_dismiss.pinned_dismiss();
-            if let Some(w) = weak_window.upgrade() {
-                w.global::<crate::ChatPane>().set_has_pinned_messages(false);
-            }
-            tracing::debug!("Pinned bar dismissed");
-        });
-
     // Header menu opens the complete core-ordered pin list, not just loaded rows.
     let weak_window = window.as_weak();
     let ui_ctx_show = ui_ctx.clone();
