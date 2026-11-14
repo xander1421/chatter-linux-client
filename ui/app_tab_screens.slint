@@ -112,10 +112,11 @@ export component AppTabScreens inherits Rectangle {
     // Friends Modal
     if SidebarPane.active-tab == "contacts": FriendsModal {
         init => {
-            // "find" is no longer a tab; recover any stale value.
+            // "find" is not a tab: it asks for the Add sheet over the
+            // Friends list. The wide layout has no + FAB, so its sidebar
+            // rows and the welcome/new-chat entries open the sheet this way.
+            ModalHostState.friends-show-add = ModalHostState.friends-modal-tab == "find";
             if (ModalHostState.friends-modal-tab == "find") { ModalHostState.friends-modal-tab = "friends"; }
-            // Always land on the Friends list; the + opens the Add sheet.
-            ModalHostState.friends-show-add = false;
         }
         z: -1;
         mobile-mode: root.compact-layout;

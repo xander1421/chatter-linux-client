@@ -146,7 +146,8 @@ export global ModalHostState {
     in property <bool> edit-profile-loading: false;
     in property <string> edit-profile-error: "";
     // Friends modal properties
-    in-out property <string> friends-modal-tab: "find";  // "find", "friends", "requests", "blocked"
+    // "friends", "requests", "blocked"; "find" opens the Add sheet (see FriendsModal init).
+    in-out property <string> friends-modal-tab: "friends";
     in property <[FriendData]> friends-list: [];
     in-out property <string> new-chat-query: "";
     in property <[FriendData]> new-chat-friends: [];

@@ -133,11 +133,18 @@ export component AppSidebarHost inherits Rectangle {
         }
         friends-clicked => {
             // The row says "Friends" (the list) or, in Shield, "Add Contact".
-            ModalHostState.friends-modal-tab = AnonMode.enabled ? "find" : "friends";
+            if (AnonMode.enabled) {
+                // Already open: init will not run again, so show the sheet here.
+                ModalHostState.friends-modal-tab = SidebarPane.active-tab == "contacts" ? "friends" : "find";
+                ModalHostState.friends-show-add = true;
+            } else {
+                ModalHostState.friends-modal-tab = "friends";
+            }
             SidebarPane.active-tab = "contacts";
         }
         add-friend-clicked => {
-            ModalHostState.friends-modal-tab = "find";
+            ModalHostState.friends-modal-tab = SidebarPane.active-tab == "contacts" ? "friends" : "find";
+            ModalHostState.friends-show-add = true;
             SidebarPane.active-tab = "contacts";
         }
         // Wide-layout entry to the Calls screen — the same modal and
