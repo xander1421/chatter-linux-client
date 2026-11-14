@@ -51,13 +51,11 @@ pub(crate) fn consume_and_cancel_call_consent(call_id: &str, action: &str, token
 }
 
 pub(crate) const CHANNEL_ID: &str = "chatter_messages";
-const CHANNEL_NAME: &str = "Messages";
 
 /// Dedicated channel for incoming calls — high importance, ringtone + vibration
 /// + full-screen intent. Separate from messages so calls actually ring (channel
 /// importance, not per-notification priority, drives sound/heads-up on API 26+).
 const CHANNEL_CALLS_ID: &str = "chatter_calls";
-const CHANNEL_CALLS_NAME: &str = "Calls";
 
 const IMPORTANCE_HIGH: i32 = 4;
 
@@ -101,9 +99,11 @@ impl AndroidNotifications {
             let channel_id = env
                 .new_string(CHANNEL_ID)
                 .map_err(|e| SystemError::NotificationInit(format!("channel_id string: {}", e)))?;
-            let channel_name = env.new_string(CHANNEL_NAME).map_err(|e| {
-                SystemError::NotificationInit(format!("channel_name string: {}", e))
-            })?;
+            let channel_name = env
+                .new_string(chatter_i18n::tr("Messages"))
+                .map_err(|e| {
+                    SystemError::NotificationInit(format!("channel_name string: {}", e))
+                })?;
 
             let channel = env
                 .new_object(
@@ -149,7 +149,7 @@ impl AndroidNotifications {
             let context = get_app_context(env)?;
 
             let channel_id = env.new_string(CHANNEL_CALLS_ID).map_err(nerr)?;
-            let channel_name = env.new_string(CHANNEL_CALLS_NAME).map_err(nerr)?;
+            let channel_name = env.new_string(chatter_i18n::tr("Calls")).map_err(nerr)?;
             let channel = env
                 .new_object(
                     jni::jni_str!("android/app/NotificationChannel"),
@@ -310,7 +310,7 @@ impl AndroidNotifications {
                 &builder,
                 CHANNEL_CALLS_ID,
                 IC_CALL,
-                "Incoming call",
+                &chatter_i18n::tr("Incoming call"),
                 None,
             )?;
             // PRIORITY_MAX (2) for heads-up on pre-26; category=call; ongoing so it
@@ -396,12 +396,12 @@ impl AndroidNotifications {
                 call_consent::ACCEPT,
                 &tokens[0],
             )?;
-            let accept = make_action(env, IC_CALL, "Accept", &accept_pi)?;
+            let accept = make_action(env, IC_CALL, &chatter_i18n::tr("Accept"), &accept_pi)?;
             let decline = build_action(
                 env,
                 &context,
                 "com.chatter.client.CALL_DECLINE",
-                "Decline",
+                &chatter_i18n::tr("Decline"),
                 call_id,
                 IC_CLOSE,
                 id.wrapping_mul(2).wrapping_add(1),
@@ -580,7 +580,7 @@ impl AndroidNotifications {
                 &builder,
                 CHANNEL_ID,
                 IC_DIALOG_INFO,
-                "New message",
+                &chatter_i18n::tr("New message"),
                 Some(&public_open),
             )?;
             // pre-API 26 compat priority

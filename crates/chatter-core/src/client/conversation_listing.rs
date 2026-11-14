@@ -342,7 +342,7 @@ impl ChatterClient {
                 row.unverified = unverified;
                 // Our own row reads "You", as in Signal's member list.
                 if is_me {
-                    row.display_name = "You".into();
+                    row.display_name = chatter_i18n::tr("You").into();
                 }
                 row
             })

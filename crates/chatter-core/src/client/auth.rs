@@ -14,16 +14,15 @@ impl ClientError {
     pub fn user_message(&self) -> String {
         match self {
             Self::Auth(e) => e.user_message(),
-            Self::Validation(_) | Self::IdentityRecoveryRequired(_) | Self::CallEnded => {
-                self.to_string()
-            }
+            Self::CallEnded => chatter_i18n::tr("Call ended"),
+            Self::Validation(_) | Self::IdentityRecoveryRequired(_) => self.to_string(),
             Self::Connection(crate::error::NetworkError::Unauthenticated) => {
-                "Wrong password.".to_string()
+                chatter_i18n::tr("Wrong password.")
             }
             Self::Connection(_) | Self::NotConnected => {
-                "Couldn't reach the server. Try again.".to_string()
+                chatter_i18n::tr("Couldn't reach the server. Try again.")
             }
-            _ => "Something went wrong. Try again.".to_string(),
+            _ => chatter_i18n::tr("Something went wrong. Try again."),
         }
     }
 }
@@ -335,10 +334,13 @@ impl ChatterClient {
         need: KeyRecoveryNeed,
     ) -> Result<(), ClientError> {
         if need.is_retryable() {
-            return Err(ClientError::Validation(format!(
-                "refusing to mint a new identity while the original may still be recoverable: {}",
-                need.user_message()
-            )));
+            return Err(ClientError::Validation(
+                chatter_i18n::trf(
+                    "refusing to mint a new identity while the original may still be recoverable: {}",
+                    &[&need.user_message()],
+                )
+                .into(),
+            ));
         }
 
         if self
@@ -821,7 +823,9 @@ impl ChatterClient {
                 identity_keypair.zeroize();
                 profile_key.zeroize();
                 new_reg_lock.zeroize();
-                return Err(ClientError::Validation("Current PIN is incorrect".into()));
+                return Err(ClientError::Validation(
+                    chatter_i18n::tr("Current PIN is incorrect").into(),
+                ));
             }
             _ => result.map(|_| ()),
         };

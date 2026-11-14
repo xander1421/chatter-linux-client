@@ -37,10 +37,10 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
             {
                 let result = crate::platform::android::clipboard::set_text("Code", &content);
                 let (message, variant) = match result {
-                    Ok(()) => (format!("Copied {line_count} lines"), "success"),
+                    Ok(()) => (chatter_i18n::trf("Copied {} lines", &[&line_count]), "success"),
                     Err(error) => {
                         tracing::error!(%error, "Code copy failed");
-                        ("Unable to copy code".to_string(), "error")
+                        (chatter_i18n::tr("Unable to copy code"), "error")
                     }
                 };
                 w.set_toast_message(message.into());
@@ -86,8 +86,10 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
                         }
                         if result.and_then(|session| session.finish()).is_err() {
                             w.set_toast_message(
-                                "Unable to open this file. Install a text viewer and try again."
-                                    .into(),
+                                chatter_i18n::tr(
+                                    "Unable to open this file. Install a text viewer and try again.",
+                                )
+                                .into(),
                             );
                             w.set_toast_variant("error".into());
                             w.set_toast_visible(true);
@@ -95,7 +97,9 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
                     });
                 });
             } else if let Some(w) = weak.upgrade() {
-                w.set_toast_message("Reopen the attachment to view it externally.".into());
+                w.set_toast_message(
+                    chatter_i18n::tr("Reopen the attachment to view it externally.").into(),
+                );
                 w.set_toast_variant("error".into());
                 w.set_toast_visible(true);
             }
@@ -107,7 +111,7 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
                 let data = content.data.clone();
                 tokio::spawn(async move {
                     let config = FilePickerConfig::new()
-                        .with_title("Save code file")
+                        .with_title(chatter_i18n::tr("Save code file"))
                         .with_default_path(
                             dirs::download_dir()
                                 .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))

@@ -349,24 +349,43 @@ impl SendBlock {
     where
         Tz::Offset: std::fmt::Display,
     {
-        const MUTED: &str = "You can't send messages in this channel while muted";
         match self {
-            Self::Muted { until: None } => MUTED.to_string(),
+            Self::Muted { until: None } => {
+                chatter_i18n::tr("You can't send messages in this channel while muted")
+            }
             Self::Muted { until: Some(until) } => {
                 let until = until.with_timezone(&now.timezone());
                 let (day, today) = (until.date_naive(), now.date_naive());
-                let when = if day == today {
-                    until.format("%H:%M").to_string()
+                if day == today {
+                    chatter_i18n::trf(
+                        "You can't send messages in this channel while muted until {}",
+                        &[&until.format("%H:%M")],
+                    )
                 } else if today.succ_opt() == Some(day) {
-                    until.format("tomorrow %H:%M").to_string()
+                    chatter_i18n::trf(
+                        "You can't send messages in this channel while muted until tomorrow {}",
+                        &[&until.format("%H:%M")],
+                    )
                 } else {
-                    until.format("%b %d, %H:%M").to_string()
-                };
-                format!("{MUTED} until {when}")
+                    // `%b %d, %H:%M` — zero-padded day, English month abbreviation.
+                    use chrono::Datelike;
+                    let when = chatter_i18n::trf(
+                        "{} {}, {}",
+                        &[
+                            &crate::util::time::month_abbrev(until.month()),
+                            &until.format("%d"),
+                            &until.format("%H:%M"),
+                        ],
+                    );
+                    chatter_i18n::trf(
+                        "You can't send messages in this channel while muted until {}",
+                        &[&when],
+                    )
+                }
             }
             // Signal's wording, true whether we left or were removed.
-            Self::Removed => "You're no longer a member of this channel".to_string(),
-            Self::Deleted => "This channel was deleted".to_string(),
+            Self::Removed => chatter_i18n::tr("You're no longer a member of this channel"),
+            Self::Deleted => chatter_i18n::tr("This channel was deleted"),
         }
     }
 }

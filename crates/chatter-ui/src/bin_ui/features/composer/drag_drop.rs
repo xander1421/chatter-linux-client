@@ -102,7 +102,7 @@ fn handle_dropped_file(
         || window.global::<crate::SidebarPane>().get_active_tab().as_str() != "chats"
         || window.global::<crate::ChatPane>().get_thread_panel_visible()
     {
-        show_drop_error(weak, "Open a chat to attach a file.");
+        show_drop_error(weak, chatter_i18n::tr("Open a chat to attach a file."));
         return;
     }
 
@@ -111,7 +111,10 @@ fn handle_dropped_file(
     let revision = snapshot.attachment_revision;
     // Check if we have an active conversation
     if matches!(conversation, ActiveConversation::None) {
-        show_drop_error(weak, "Open a conversation before dropping a file.");
+        show_drop_error(
+            weak,
+            chatter_i18n::tr("Open a conversation before dropping a file."),
+        );
         return;
     }
 
@@ -126,13 +129,18 @@ fn handle_dropped_file(
             }
             Err(e) => {
                 tracing::warn!("Dropped file could not be staged: {e}");
-                show_drop_error(&weak, "Couldn't attach that file. Check that it is still available and try again.");
+                show_drop_error(
+                    &weak,
+                    chatter_i18n::tr(
+                        "Couldn't attach that file. Check that it is still available and try again.",
+                    ),
+                );
             }
         }
     });
 }
 
-fn show_drop_error(weak: &slint::Weak<MainWindow>, message: &'static str) {
+fn show_drop_error(weak: &slint::Weak<MainWindow>, message: String) {
     let weak = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(window) = weak.upgrade() {

@@ -54,7 +54,11 @@ pub(super) fn wire_share_link(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                     return;
                 }
                 let copy = move || {
-                    if let Err(e) = crate::platform::clipboard::set_text("Username link", &url, false) {
+                    if let Err(e) = crate::platform::clipboard::set_text(
+                        &chatter_i18n::tr("Username link"),
+                        &url,
+                        false,
+                    ) {
                         tracing::error!("Failed to copy username link: {}", e);
                     }
                 };
@@ -63,7 +67,9 @@ pub(super) fn wire_share_link(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                 #[cfg(not(target_os = "android"))]
                 std::thread::spawn(copy);
                 w.global::<crate::ModalHostState>()
-                    .set_profile_share_status("Link copied to clipboard".into());
+                    .set_profile_share_status(
+                        chatter_i18n::tr("Link copied to clipboard").into(),
+                    );
             }
         });
 }
@@ -91,9 +97,9 @@ fn spawn_create_link(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, 
         match ui_ctx.create_username_link().await {
             Ok(url) => {
                 let status = if rotate {
-                    "Link reset — previously shared links no longer work"
+                    chatter_i18n::tr("Link reset — previously shared links no longer work")
                 } else {
-                    ""
+                    String::new()
                 };
                 let ui_ctx2 = ui_ctx.clone();
                 let _ = slint::invoke_from_event_loop(move || {

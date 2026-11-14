@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Datelike, Local, Utc};
 use rusqlite::{OptionalExtension, params};
 
 use crate::domain::UserId;
@@ -116,17 +116,26 @@ impl ActivityService {
                 .unwrap_or_else(Utc::now).with_timezone(&Local);
             let today = created.date_naive() == now.date_naive();
             let minutes = (now.timestamp_millis() - created_ms).max(0) / 60_000;
-            let time_label = if minutes < 1 { "now".to_owned() }
-                else if minutes < 60 { format!("{minutes}m") }
-                else if today { created.format("%H:%M").to_string() }
-                else if minutes < 2 * 24 * 60 { "Yesterday".to_owned() }
-                else { created.format("%d %b").to_string() };
+            let time_label = if minutes < 1 {
+                chatter_i18n::tr("now")
+            } else if minutes < 60 {
+                chatter_i18n::trf("{}m", &[&minutes])
+            } else if today {
+                created.format("%H:%M").to_string()
+            } else if minutes < 2 * 24 * 60 {
+                chatter_i18n::tr("Yesterday")
+            } else {
+                chatter_i18n::trf(
+                    "{} {}",
+                    &[&created.format("%d"), &crate::util::time::month_abbrev(created.month())],
+                )
+            };
             Ok((ActivityItem {
                 id: row.get(0)?, kind: row.get(1)?, title: String::new(),
                 preview: if show_preview && !matches!(row.get::<_, Option<String>>(8)?.as_deref(), Some("anon_dm" | "anon_group")) {
                     row.get(5)?
                 } else { String::new() },
-                time_label, section: if today { "Today" } else { "Earlier" }.to_owned(),
+                time_label, section: if today { chatter_i18n::tr("Today") } else { chatter_i18n::tr("Earlier") },
                 unread: row.get::<_, i64>(7)? != 0,
             }, row.get::<_, Option<String>>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?))
         })?;
@@ -305,27 +314,101 @@ impl ActivityService {
 fn activity_title(kind: &str, actor_id: Option<&str>, actor_name: &str, detail: &str, names: &HashMap<UserId, String>) -> String {
     let resolved = actor_id.and_then(|id| id.parse::<UserId>().ok())
         .and_then(|id| names.get(&id).map(|name| (id, name)));
-    let name = resolved.as_ref()
-        .filter(|(id, name)| name.as_str() != crate::services::user::friend_display_name_placeholder(id).as_str())
+    let fallback = chatter_i18n::tr("Someone");
+    let name = resolved
+        .as_ref()
+        .filter(|(id, name)| {
+            name.as_str() != crate::services::user::friend_display_name_placeholder(id).as_str()
+        })
         .map(|(_, name)| name.as_str())
-        .or_else(|| (!actor_name.is_empty()).then_some(actor_name)).unwrap_or("Someone");
+        .or_else(|| (!actor_name.is_empty()).then_some(actor_name))
+        .unwrap_or(fallback.as_str());
     match kind {
-        "mention" => format!("{name} mentioned you{detail}"),
-        "reply" => format!("{name} replied to you{detail}"),
-        "thread" => format!("{name} replied in a thread{detail}"),
-        "reaction" => format!("{name} reacted to your message"),
-        "contact-request" => format!("{name} sent you a contact request"),
-        "invite" | "mesh-invite" => format!("{name} invited you to {detail}"),
-        "missed-call" => if actor_id.is_some() || !actor_name.is_empty() {
-            format!("Missed call from {name}")
-        } else { "Missed call".to_owned() },
-        "device-linked" => if detail.is_empty() { "New device linked".to_owned() }
-            else { format!("New device linked: {detail}") },
+        "mention" => activity_in_channel(name, detail, "{} mentioned you", "{} mentioned you in #{}"),
+        "reply" => activity_in_channel(name, detail, "{} replied to you", "{} replied to you in #{}"),
+        "thread" => activity_in_channel(
+            name,
+            detail,
+            "{} replied in a thread",
+            "{} replied in a thread in #{}",
+        ),
+        "reaction" => chatter_i18n::trf("{} reacted to your message", &[&name]),
+        "contact-request" => chatter_i18n::trf("{} sent you a contact request", &[&name]),
+        "invite" | "mesh-invite" => chatter_i18n::trf("{} invited you to {}", &[&name, &detail]),
+        "missed-call" => {
+            if actor_id.is_some() || !actor_name.is_empty() {
+                chatter_i18n::trf("Missed call from {}", &[&name])
+            } else {
+                chatter_i18n::tr("Missed call")
+            }
+        }
+        "device-linked" => {
+            if detail.is_empty() {
+                chatter_i18n::tr("New device linked")
+            } else {
+                chatter_i18n::trf("New device linked: {}", &[&detail])
+            }
+        }
         // One line in a fixed-height row: the longer wording elided to
         // "Server was unreachable for 4 s ..." on a phone.
-        "server" => "Can't reach the server".to_owned(),
-        "server-ok" => format!("Back online after {detail}"),
+        "server" => chatter_i18n::tr("Can't reach the server"),
+        "server-ok" => back_online_after(detail),
         _ => kind.to_owned(),
+    }
+}
+
+/// `detail` is the stored fragment `" in #{channel}"` or empty. A real channel
+/// name is not translated; only the sentence around it is.
+fn activity_in_channel(
+    name: &str,
+    detail: &str,
+    bare: &'static str,
+    in_channel: &'static str,
+) -> String {
+    if let Some(channel) = detail.strip_prefix(" in #") {
+        match in_channel {
+            "{} mentioned you in #{}" => {
+                chatter_i18n::trf("{} mentioned you in #{}", &[&name, &channel])
+            }
+            "{} replied to you in #{}" => {
+                chatter_i18n::trf("{} replied to you in #{}", &[&name, &channel])
+            }
+            "{} replied in a thread in #{}" => {
+                chatter_i18n::trf("{} replied in a thread in #{}", &[&name, &channel])
+            }
+            _ => format!("{name} {detail}"),
+        }
+    } else if detail.is_empty() {
+        match bare {
+            "{} mentioned you" => chatter_i18n::trf("{} mentioned you", &[&name]),
+            "{} replied to you" => chatter_i18n::trf("{} replied to you", &[&name]),
+            "{} replied in a thread" => chatter_i18n::trf("{} replied in a thread", &[&name]),
+            _ => name.to_owned(),
+        }
+    } else {
+        match bare {
+            "{} mentioned you" => format!("{name} mentioned you{detail}"),
+            "{} replied to you" => format!("{name} replied to you{detail}"),
+            "{} replied in a thread" => format!("{name} replied in a thread{detail}"),
+            _ => format!("{name}{detail}"),
+        }
+    }
+}
+
+/// Stored span is `"4 s"` or `"N min"` (written in English). Parse it so the
+/// unit can be translated without rewriting the row.
+fn back_online_after(detail: &str) -> String {
+    if let Some(secs) = detail.strip_suffix(" s").and_then(|n| n.parse::<u64>().ok()) {
+        chatter_i18n::trn(
+            "Back online after {n} s",
+            "Back online after {n} s",
+            secs,
+            &[],
+        )
+    } else if let Some(mins) = detail.strip_suffix(" min") {
+        chatter_i18n::trf("Back online after {} min", &[&mins])
+    } else {
+        chatter_i18n::trf("Back online after {}", &[&detail])
     }
 }
 

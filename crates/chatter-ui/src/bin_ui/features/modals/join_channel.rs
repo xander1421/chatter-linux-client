@@ -163,8 +163,8 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             return;
                         }
 
-                        let error_msg = format!("Search failed: {}", e);
-                        tracing::error!("{}", error_msg);
+                        tracing::error!("Search failed: {}", e);
+                        let error_msg = chatter_i18n::trf("Search failed: {}", &[&e]);
 
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
@@ -243,7 +243,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 if !fence.owns_ui(&w, &ui_ctx) {
                                     super::create_channel::notify_background_success(
                                         &w,
-                                        format!("Joined \"{channel_name}\"."),
+                                        chatter_i18n::trf("Joined \"{}\".", &[&channel_name]),
                                     );
                                     return;
                                 }
@@ -281,7 +281,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             ChannelError::ChannelNotFound(_)
                                 | ChannelError::Network(NetworkError::NotFound(_))
                         ) {
-                            "Channel not found or is private".to_string()
+                            chatter_i18n::tr("Channel not found or is private")
                         } else {
                             e.user_message()
                         };

@@ -82,7 +82,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                                 &w,
                                 &id,
                                 "private-group",
-                                "Private group not found",
+                                &chatter_i18n::tr("Private group not found"),
                             );
                         });
                         return;

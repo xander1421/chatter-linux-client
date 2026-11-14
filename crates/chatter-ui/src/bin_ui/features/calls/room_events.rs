@@ -112,9 +112,11 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             return None;
                         }
                         match (&room_state, recovered) {
-                            (RoomState::Connected { .. }, true) => Some(("Reconnected", "info")),
+                            (RoomState::Connected { .. }, true) => {
+                                Some((chatter_i18n::tr("Reconnected"), "info"))
+                            }
                             (RoomState::Reconnecting { .. } | RoomState::Failed { .. }, false) => {
-                                Some(("Reconnecting…", "info"))
+                                Some((chatter_i18n::tr("Reconnecting…"), "info"))
                             }
                             _ => None,
                         }
@@ -187,7 +189,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 });
                             remotes.push(CallParticipantData {
                                 user_id: screen_id.into(),
-                                display_name: format!("{name} (screen)").into(),
+                                display_name: chatter_i18n::trf("{} (screen)", &[&name]).into(),
                                 initials: initials.into(),
                                 avatar_source: slint::Image::default(),
                                 is_muted: false,

@@ -127,7 +127,10 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // outgoing "Calling…" state there's no room yet.
                     if !ui_ctx.call_is_connected().await {
                         tracing::info!("Video unavailable — call not connected yet");
-                        camera_error(&weak, "Camera is available once the call connects.");
+                        camera_error(
+                            &weak,
+                            &chatter_i18n::tr("Camera is available once the call connects."),
+                        );
                         return;
                     }
                     // Android: a call that started as voice never requested the
@@ -138,7 +141,10 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         use crate::platform::android::permissions;
                         if !permissions::ensure(&[permissions::CAMERA]).await {
                             tracing::info!("CAMERA permission refused — video stays off");
-                            camera_error(&weak, "Camera permission is needed for video calls");
+                            camera_error(
+                                &weak,
+                                &chatter_i18n::tr("Camera permission is needed for video calls"),
+                            );
                             permissions::show_call_permission_denied("Camera");
                             return;
                         }
@@ -150,7 +156,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.global::<crate::CallView>()
                                 .set_call_is_video_enabled(false);
                         }
-                        camera_error(&weak, "Camera unavailable");
+                        camera_error(&weak, &chatter_i18n::tr("Camera unavailable"));
                         return;
                     }
                     tracing::info!("Camera enabled");
@@ -185,7 +191,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             slint::spawn_local(async move {
                 if let Err(e) = ui_ctx.call_swap_camera().await {
                     tracing::error!("Failed to swap camera: {}", e);
-                    camera_error(&weak, "Could not switch camera");
+                    camera_error(&weak, &chatter_i18n::tr("Could not switch camera"));
                 }
             })
             .unwrap();
@@ -253,13 +259,15 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         if !_ui_ctx.call_is_connected().await {
                             camera_error(
                                 &_weak,
-                                "Screen share unavailable until the call connects.",
+                                &chatter_i18n::tr(
+                                    "Screen share unavailable until the call connects.",
+                                ),
                             );
                             return;
                         }
                         if let Err(error) = _ui_ctx.call_publish_screen_share().await {
                             tracing::warn!("Android screen share unavailable: {error}");
-                            camera_error(&_weak, "Screen share unavailable");
+                            camera_error(&_weak, &chatter_i18n::tr("Screen share unavailable"));
                             return;
                         }
                         let local_id = _ui_ctx.session_current_user_id().map(|id| id.to_string());

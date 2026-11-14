@@ -1,8 +1,5 @@
 use super::*;
 
-const REMOVE_FAILED: &str = "Not removed — you are still friends. Try again.";
-const BLOCK_FAILED: &str = "That did not go through. Check your connection and try again.";
-
 /// Say how a relationship change on the profile went: the button flipping
 /// label alone was the only feedback (REVIEW-R4 P1-12). UI thread only.
 fn show_toast(w: &MainWindow, (message, variant): (&str, &str)) {
@@ -64,7 +61,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 };
 
-                let notice = match tokio::time::timeout(
+                let notice: (String, &'static str) = match tokio::time::timeout(
                     crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
                     ui_ctx.send_friend_request(&friend_id, None),
                 )
@@ -75,22 +72,28 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         // Core emits `FriendRequestsUpdated` after send — the
                         // domain-handler dispatcher refreshes the list. No
                         // manual list_friend_requests + reshape here.
-                        ("Friend request sent", "success")
+                        (chatter_i18n::tr("Friend request sent"), "success")
                     }
                     Ok(Err(e)) => {
                         tracing::error!("Failed to send friend request: {}", e);
-                        ("The friend request was not sent. Try again.", "error")
+                        (
+                            chatter_i18n::tr("The friend request was not sent. Try again."),
+                            "error",
+                        )
                     }
                     Err(_) => {
                         tracing::error!("Friend request timed out");
-                        ("The friend request was not sent. Try again.", "error")
+                        (
+                            chatter_i18n::tr("The friend request was not sent. Try again."),
+                            "error",
+                        )
                     }
                 };
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         w.global::<crate::ModalHostState>()
                             .set_profile_loading(false);
-                        show_toast(&w, notice);
+                        show_toast(&w, (&notice.0, notice.1));
                     }
                 });
             });
@@ -169,7 +172,10 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     .set_profile_display_name(display_name.into());
                                 w.global::<crate::ModalHostState>()
                                     .set_profile_initials(initials.into());
-                                show_toast(&w, ("Removed from friends", "success"));
+                                show_toast(
+                                    &w,
+                                    (&chatter_i18n::tr("Removed from friends"), "success"),
+                                );
                                 tracing::info!("Removed friend: {}", friend_id);
                             }
                         });
@@ -180,7 +186,15 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             if let Some(w) = weak.upgrade() {
                                 w.global::<crate::ModalHostState>()
                                     .set_profile_loading(false);
-                                show_toast(&w, (REMOVE_FAILED, "error"));
+                                show_toast(
+                                    &w,
+                                    (
+                                        &chatter_i18n::tr(
+                                            "Not removed — you are still friends. Try again.",
+                                        ),
+                                        "error",
+                                    ),
+                                );
                             }
                         });
                     }
@@ -190,7 +204,15 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             if let Some(w) = weak.upgrade() {
                                 w.global::<crate::ModalHostState>()
                                     .set_profile_loading(false);
-                                show_toast(&w, (REMOVE_FAILED, "error"));
+                                show_toast(
+                                    &w,
+                                    (
+                                        &chatter_i18n::tr(
+                                            "Not removed — you are still friends. Try again.",
+                                        ),
+                                        "error",
+                                    ),
+                                );
                             }
                         });
                     }
@@ -284,7 +306,15 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             if let Some(w) = weak.upgrade() {
                                 w.global::<crate::ModalHostState>()
                                     .set_profile_loading(false);
-                                show_toast(&w, (BLOCK_FAILED, "error"));
+                                show_toast(
+                                    &w,
+                                    (
+                                        &chatter_i18n::tr(
+                                            "That did not go through. Check your connection and try again.",
+                                        ),
+                                        "error",
+                                    ),
+                                );
                             }
                         });
                     }
@@ -307,7 +337,15 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let profile_user_id = state.get_profile_user_id().to_string();
             let Ok(user_id) = profile_user_id.parse::<UserId>() else {
                 tracing::error!("Invalid profile user ID");
-                show_toast(&w, (BLOCK_FAILED, "error"));
+                show_toast(
+                    &w,
+                    (
+                        &chatter_i18n::tr(
+                            "That did not go through. Check your connection and try again.",
+                        ),
+                        "error",
+                    ),
+                );
                 return;
             };
             state.set_profile_loading(true);
@@ -355,7 +393,15 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 {
                                     w.global::<crate::ModalHostState>()
                                         .set_profile_loading(false);
-                                    show_toast(&w, (BLOCK_FAILED, "error"));
+                                    show_toast(
+                                    &w,
+                                    (
+                                        &chatter_i18n::tr(
+                                            "That did not go through. Check your connection and try again.",
+                                        ),
+                                        "error",
+                                    ),
+                                );
                                 }
                             }
                         });

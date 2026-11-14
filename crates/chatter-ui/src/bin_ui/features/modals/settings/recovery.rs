@@ -16,7 +16,7 @@ pub(super) fn wire_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
             if current_pin == new_pin {
                 settings.set_settings_change_pin_error(
-                    "New PIN must be different from current PIN".into(),
+                    chatter_i18n::tr("New PIN must be different from current PIN").into(),
                 );
                 return;
             }
@@ -38,7 +38,7 @@ pub(super) fn wire_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     .set_settings_change_pin_loading(false);
                                 w.global::<crate::SettingsPane>()
                                     .set_settings_change_pin_success(
-                                        "PIN changed successfully".into(),
+                                        chatter_i18n::tr("PIN changed successfully").into(),
                                     );
                                 w.global::<crate::SettingsPane>()
                                     .set_settings_change_pin_current("".into());
@@ -147,7 +147,11 @@ pub(super) fn wire_codes(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             tracing::warn!("Recovery code regeneration failed: {e}");
                             w.global::<crate::SettingsPane>()
                                 .set_settings_recovery_regen_error(
-                                    format!("Couldn't make new codes. {}", e.user_message()).into(),
+                                    chatter_i18n::trf(
+                                        "Couldn't make new codes. {}",
+                                        &[&e.user_message()],
+                                    )
+                                    .into(),
                                 );
                         }
                     }
@@ -217,7 +221,7 @@ pub(super) fn wire_codes(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
 
                         match crate::platform::clipboard::set_text(
-                            "Recovery codes",
+                            &chatter_i18n::tr("Recovery codes"),
                             &all_codes,
                             true,
                         ) {

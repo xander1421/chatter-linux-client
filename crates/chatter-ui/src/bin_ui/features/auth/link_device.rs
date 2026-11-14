@@ -35,7 +35,8 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
             w.global::<crate::AuthFlow>().set_link_device_active(true);
             w.global::<crate::AuthFlow>().set_link_device_error("".into());
-            w.global::<crate::AuthFlow>().set_link_device_status("Generating QR code…".into());
+            w.global::<crate::AuthFlow>()
+                .set_link_device_status(chatter_i18n::tr("Generating QR code…").into());
             w.global::<crate::AuthFlow>().set_link_device_url("".into());
             w.global::<crate::AuthFlow>().set_link_device_qr(slint::Image::default());
         }
@@ -71,12 +72,17 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         });
                     }
                     LinkProgress::WaitingForApproval => {
-                        set_status(&weak, &format!(
-                            "Verification code: {verification_code}\nCheck your other device shows the same code, then approve there."
-                        ));
+                        set_status(
+                            &weak,
+                            &chatter_i18n::trf(
+                                "Verification code: {}\n\
+                                 Check your other device shows the same code, then approve there.",
+                                &[&verification_code],
+                            ),
+                        );
                     }
                     LinkProgress::Approved => {
-                        set_status(&weak, "Approved! Setting up this device…");
+                        set_status(&weak, &chatter_i18n::tr("Approved! Setting up this device…"));
                     }
                     LinkProgress::Linked(_completed) => {
                         finish_linked(&weak, &ui_ctx).await;
@@ -87,7 +93,12 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         return;
                     }
                     LinkProgress::Cancelled => {
-                        set_status(&weak, "This QR code expired or was cancelled. Generate a new one.");
+                        set_status(
+                            &weak,
+                            &chatter_i18n::tr(
+                                "This QR code expired or was cancelled. Generate a new one.",
+                            ),
+                        );
                         let weak_for_view = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak_for_view.upgrade() {
@@ -142,17 +153,18 @@ fn wire_copy(window: &MainWindow) {
 
             #[cfg(target_os = "android")]
             {
-                let message =
-                    match crate::platform::android::clipboard::set_text("Device link", &url) {
-                        Ok(()) => "Link copied to clipboard.",
-                        Err(_) => "Unable to copy link. Please try again.",
-                    };
+                let label = chatter_i18n::tr("Device link");
+                let message = match crate::platform::android::clipboard::set_text(&label, &url) {
+                    Ok(()) => chatter_i18n::tr("Link copied to clipboard."),
+                    Err(_) => chatter_i18n::tr("Unable to copy link. Please try again."),
+                };
                 w.global::<crate::AuthFlow>()
                     .set_link_device_status(message.into());
             }
             #[cfg(target_os = "ios")]
-            w.global::<crate::AuthFlow>()
-                .set_link_device_status("Clipboard copy is unavailable on this device.".into());
+            w.global::<crate::AuthFlow>().set_link_device_status(
+                chatter_i18n::tr("Clipboard copy is unavailable on this device.").into(),
+            );
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             let weak = weak.clone();
@@ -181,12 +193,13 @@ fn wire_copy(window: &MainWindow) {
                     {
                         return;
                     }
-                    w.global::<crate::AuthFlow>()
-                        .set_link_device_status(if copied {
-                            "Link copied to clipboard.".into()
+                    w.global::<crate::AuthFlow>().set_link_device_status(
+                        if copied {
+                            chatter_i18n::tr("Link copied to clipboard.").into()
                         } else {
-                            "Unable to copy link. Please try again.".into()
-                        });
+                            chatter_i18n::tr("Unable to copy link. Please try again.").into()
+                        },
+                    );
                 });
             });
         });
@@ -232,7 +245,7 @@ fn decode_png_to_rgba(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
 /// loads initial data and presence.
 async fn finish_linked(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     if let Err(e) = ui_ctx.start().await {
-        set_error(weak, format!("post-link bring-up failed: {e}"));
+        set_error(weak, chatter_i18n::trf("post-link bring-up failed: {}", &[&e]));
         return;
     }
 

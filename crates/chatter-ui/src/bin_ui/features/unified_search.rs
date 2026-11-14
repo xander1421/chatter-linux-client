@@ -144,6 +144,43 @@ fn wire_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
 }
 
+fn month_name(month: u32) -> String {
+    match month {
+        1 => chatter_i18n::tr("January"),
+        2 => chatter_i18n::tr("February"),
+        3 => chatter_i18n::tr("March"),
+        4 => chatter_i18n::tr("April"),
+        5 => chatter_i18n::tr("May"),
+        6 => chatter_i18n::tr("June"),
+        7 => chatter_i18n::tr("July"),
+        8 => chatter_i18n::tr("August"),
+        9 => chatter_i18n::tr("September"),
+        10 => chatter_i18n::tr("October"),
+        11 => chatter_i18n::tr("November"),
+        12 => chatter_i18n::tr("December"),
+        _ => String::new(),
+    }
+}
+
+/// Chrono's English `%b`: three letters, "Sep" not "Sept".
+fn month_abbr(month: u32) -> String {
+    match month {
+        1 => chatter_i18n::tr("Jan"),
+        2 => chatter_i18n::tr("Feb"),
+        3 => chatter_i18n::tr("Mar"),
+        4 => chatter_i18n::tr("Apr"),
+        5 => chatter_i18n::tr("May"),
+        6 => chatter_i18n::tr("Jun"),
+        7 => chatter_i18n::tr("Jul"),
+        8 => chatter_i18n::tr("Aug"),
+        9 => chatter_i18n::tr("Sep"),
+        10 => chatter_i18n::tr("Oct"),
+        11 => chatter_i18n::tr("Nov"),
+        12 => chatter_i18n::tr("Dec"),
+        _ => String::new(),
+    }
+}
+
 fn wire_calendar(window: &MainWindow) {
     use chrono::Datelike;
     let today = chrono::Local::now().date_naive();
@@ -165,8 +202,10 @@ fn wire_calendar(window: &MainWindow) {
                 };
                 *current = next;
             }
+            let month_label =
+                chatter_i18n::trf("{0} {1}", &[&month_name(current.month()), &current.year()]);
             w.global::<crate::SearchPane>()
-                .set_unified_search_calendar_month(current.format("%B %Y").to_string().into());
+                .set_unified_search_calendar_month(month_label.into());
             let offset = current.weekday().num_days_from_monday() as i64;
             let first = *current - chrono::Duration::days(offset);
             let today = chrono::Local::now().date_naive();
@@ -178,7 +217,8 @@ fn wire_calendar(window: &MainWindow) {
                         label: date.day().to_string().into(),
                         in_month: date.month() == current.month(),
                         is_today: date == today,
-                        short: date.format("%-d %b").to_string().into(),
+                        short: chatter_i18n::trf("{} {}", &[&date.day(), &month_abbr(date.month())])
+                            .into(),
                     }
                 })
                 .collect::<Vec<_>>();

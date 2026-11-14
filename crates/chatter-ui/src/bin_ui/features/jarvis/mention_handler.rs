@@ -77,7 +77,7 @@ pub async fn handle_jarvis_mention(
         }
         Err(e) => {
             tracing::error!("Jarvis error: {}", e);
-            let error_msg = format!("I encountered an error: {}", e);
+            let error_msg = chatter_i18n::trf("I encountered an error: {}", &[&e]);
             ui_ctx.jarvis_state().add_assistant_message(&error_msg);
 
             let query_clone = query.to_string();

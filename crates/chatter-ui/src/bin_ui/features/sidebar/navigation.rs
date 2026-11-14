@@ -249,7 +249,7 @@ pub(crate) fn wire_message_requests_clicked(window: &MainWindow, ui_ctx: &Arc<Ch
                             crate::FriendRequestData {
                                 user_id: dm.id.to_string().into(),
                                 display_name: peer_name.into(),
-                                username: "Private".into(),
+                                username: chatter_i18n::tr("Private").into(),
                                 avatar_source: slint::Image::default(),
                                 has_avatar: false,
                                 sent_at: dm
@@ -303,7 +303,7 @@ pub(crate) fn load_pending_message_requests_count(
                 crate::FriendRequestData {
                     user_id: dm.id.to_string().into(),
                     display_name: peer_name.into(),
-                    username: "Private".into(),
+                    username: chatter_i18n::tr("Private").into(),
                     avatar_source: slint::Image::default(),
                     has_avatar: false,
                     sent_at: dm

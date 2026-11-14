@@ -155,8 +155,9 @@ pub(super) fn handle_group_member_list_received(
                     .as_str()
                     == crate::bin_ui::features::chat::send_message::BOOTSTRAP_PLACEHOLDER
                 {
-                    w.global::<crate::ChatPane>()
-                        .set_composer_placeholder("Type a message...".into());
+                    w.global::<crate::ChatPane>().set_composer_placeholder(
+                        chatter_i18n::tr("Type a message...").into(),
+                    );
                 }
                 tracing::debug!(
                     "Refreshing message list for group {} after member list update",

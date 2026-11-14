@@ -410,7 +410,9 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 #[cfg(target_os = "android")]
                                 crate::platform::android::text_input::restore();
                             }
-                            w.set_toast_message(format!("Edit not saved: {message}").into());
+                            w.set_toast_message(
+                                chatter_i18n::trf("Edit not saved: {}", &[&message]).into(),
+                            );
                             w.set_toast_variant("error".into());
                             w.set_toast_visible(true);
                         }

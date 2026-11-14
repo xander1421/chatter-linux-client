@@ -52,7 +52,7 @@ mod viewer_dimension_tests {
     }
 }
 
-fn show_attachment_error(weak: &slint::Weak<MainWindow>, request: u64, message: &'static str) {
+fn show_attachment_error(weak: &slint::Weak<MainWindow>, request: u64, message: String) {
     let weak = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if !super::media_viewer::is_current(request) {
@@ -110,7 +110,11 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     Some(att) => att,
                     None => {
                         tracing::warn!("Attachment {} not found in local repository", att_id);
-                        show_attachment_error(&weak, request, "Attachment is no longer available");
+                        show_attachment_error(
+                            &weak,
+                            request,
+                            chatter_i18n::tr("Attachment is no longer available"),
+                        );
                         return;
                     }
                 };
@@ -145,13 +149,19 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         show_attachment_error(
                             &weak,
                             request,
-                            "Download is taking longer than expected. Try again.",
+                            chatter_i18n::tr(
+                                "Download is taking longer than expected. Try again.",
+                            ),
                         );
                         return;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     let Some(updated) = ui_ctx.get_attachment(&att_id) else {
-                        show_attachment_error(&weak, request, "Attachment is no longer available");
+                        show_attachment_error(
+                            &weak,
+                            request,
+                            chatter_i18n::tr("Attachment is no longer available"),
+                        );
                         return;
                     };
                     attachment = updated;
@@ -200,7 +210,7 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 show_attachment_error(
                     &weak,
                     request,
-                    "Attachment is unavailable. Try again later.",
+                    chatter_i18n::tr("Attachment is unavailable. Try again later."),
                 );
             });
         });
@@ -427,7 +437,7 @@ fn handle_local_attachment(
                 return;
             }
             let (message, variant) = match result {
-                Ok(()) => ("Saved to Chatter downloads".to_string(), "success"),
+                Ok(()) => (chatter_i18n::tr("Saved to Chatter downloads"), "success"),
                 Err(error) => (error, "error"),
             };
             w.set_toast_message(message.into());
@@ -456,7 +466,7 @@ fn handle_local_attachment(
                     if !super::media_viewer::is_current(request) {
                         return;
                     }
-                    w.set_toast_message("Unable to open attachment".into());
+                    w.set_toast_message(chatter_i18n::tr("Unable to open attachment").into());
                     w.set_toast_variant("error".into());
                     w.set_toast_visible(true);
                 });
@@ -472,8 +482,14 @@ fn handle_local_attachment(
                     return;
                 }
                 let (message, variant) = match result {
-                    Ok(message) => (format!("Too large to preview. {message}"), "success"),
-                    Err(error) => (format!("Too large to preview. {error}"), "error"),
+                    Ok(message) => (
+                        chatter_i18n::trf("Too large to preview. {}", &[&message]),
+                        "success",
+                    ),
+                    Err(error) => (
+                        chatter_i18n::trf("Too large to preview. {}", &[&error]),
+                        "error",
+                    ),
                 };
                 w.set_toast_message(message.into());
                 w.set_toast_variant(variant.into());
@@ -598,16 +614,17 @@ fn show_image_preview(
                 w.global::<crate::ChatPane>().set_image_viewer_source(
                     crate::bin_ui::slint_conversions::rgba_to_slint_image(&rgba, width, height),
                 );
-                w.global::<crate::ChatPane>()
-                    .set_image_viewer_filename(format!("{} (loading...)", preview_filename).into());
+                w.global::<crate::ChatPane>().set_image_viewer_filename(
+                    chatter_i18n::trf("{} (loading...)", &[&preview_filename]).into(),
+                );
                 w.global::<crate::ChatPane>()
                     .set_image_viewer_size(preview_size.into());
             } else {
                 // No preview available
                 w.global::<crate::ChatPane>()
-                    .set_image_viewer_filename("Loading...".into());
+                    .set_image_viewer_filename(chatter_i18n::tr("Loading...").into());
                 w.global::<crate::ChatPane>()
-                    .set_image_viewer_size("Decrypting...".into());
+                    .set_image_viewer_size(chatter_i18n::tr("Decrypting...").into());
             }
             w.global::<crate::ChatPane>().set_image_viewer_visible(true);
         }
@@ -666,7 +683,9 @@ fn display_decrypted_content(
                 if !super::media_viewer::is_current(request) {
                     return;
                 }
-                w.set_toast_message("Unable to save attachment. Reopen it and try again.".into());
+                w.set_toast_message(
+                    chatter_i18n::tr("Unable to save attachment. Reopen it and try again.").into(),
+                );
                 w.set_toast_variant("error".into());
                 w.set_toast_visible(true);
             });
@@ -919,7 +938,11 @@ fn display_image_from_buffer(
             Err(e) => {
                 tracing::error!("Failed to load image from memory: {:?}", e);
                 // Never leave the viewer on "Decrypting..." forever.
-                show_attachment_error(&weak, request, "Image can't be opened");
+                show_attachment_error(
+                    &weak,
+                    request,
+                    chatter_i18n::tr("Image can't be opened"),
+                );
                 let weak = weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
@@ -1169,7 +1192,7 @@ async fn save_file_from_buffer(
     let data = secure_buffer.as_slice().to_vec();
 
     let config = FilePickerConfig::new()
-        .with_title("Save attachment as")
+        .with_title(chatter_i18n::tr("Save attachment as"))
         .with_default_path(
             dirs::download_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
@@ -1362,7 +1385,8 @@ fn handle_download_attachment(
                         );
                         if super::media_viewer::is_current(request) {
                             window.set_toast_message(
-                                "Download failed. Tap the attachment to retry.".into(),
+                                chatter_i18n::tr("Download failed. Tap the attachment to retry.")
+                                    .into(),
                             );
                             window.set_toast_variant("error".into());
                             window.set_toast_visible(true);

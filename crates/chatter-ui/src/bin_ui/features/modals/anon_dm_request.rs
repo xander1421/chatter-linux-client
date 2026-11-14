@@ -152,7 +152,7 @@ fn spawn_request_stream(
                                 avatar_source,
                                 has_avatar,
                                 sent_at: if intro.is_empty() {
-                                    "Just now".into()
+                                    chatter_i18n::tr("Just now").into()
                                 } else {
                                     intro.into()
                                 },
@@ -258,7 +258,7 @@ fn spawn_request_stream(
                         .contact_name(&sender_id)
                         .unwrap_or_else(|| sender_name.clone());
                     let intro = if intro_message.is_empty() {
-                        "Private contact request".to_string()
+                        chatter_i18n::tr("Private contact request")
                     } else {
                         intro_message.clone()
                     };

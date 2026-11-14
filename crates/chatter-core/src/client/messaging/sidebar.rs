@@ -139,17 +139,21 @@ impl ChatterClient {
             label.as_deref(),
             sender_name.as_deref(),
         );
-        // A notice is worded to follow its actor ("left the channel"), as the
-        // message list renders it; alone in a preview it named nobody.
-        if matches!(
-            message.content,
-            crate::domain::message::MessageContent::System(_)
-        ) {
-            return plain_sidebar_preview(&format!(
-                "{} {}",
-                sender_name.unwrap_or_default(),
-                preview
-            ));
+        // A notice is one sentence ("Alice joined the channel"). A pin sits
+        // between the actor and the predicate in English; if a translation
+        // moves the name, the marker stays in front of the whole sentence.
+        if let crate::domain::message::MessageContent::System(system) = &message.content {
+            let actor = sender_name.unwrap_or_default();
+            let sentence = system.notice_line(&actor, &message.conversation_type);
+            let line = if message.is_pinned {
+                match sentence.strip_prefix(actor.as_str()) {
+                    Some(rest) => format!("{actor} \u{1F4CC}{rest}"),
+                    None => format!("\u{1F4CC} {sentence}"),
+                }
+            } else {
+                sentence
+            };
+            return plain_sidebar_preview(&line);
         }
         if label.is_some() {
             // Metadata labels are already plain text; filenames are not Markdown.
@@ -331,10 +335,18 @@ impl ChatterClient {
                     let (preview, at) = self.sidebar_activity(latest);
                     if dm.status == crate::domain::anon_dm::AnonDmStatus::Pending {
                         if dm.initiated_by_us {
-                            row.last_message = if preview.is_empty() { "Waiting for response...".to_string() } else { preview };
+                            row.last_message = if preview.is_empty() {
+                                chatter_i18n::tr("Waiting for response...")
+                            } else {
+                                preview
+                            };
                             row.label = crate::ui::sidebar_data::ChatRowLabel::OutgoingSecretRequest;
                         } else {
-                            row.last_message = if preview.is_empty() { "Message request".to_string() } else { preview };
+                            row.last_message = if preview.is_empty() {
+                                chatter_i18n::tr("Message request")
+                            } else {
+                                preview
+                            };
                             row.unread_count = row.unread_count.max(1);
                             row.label = crate::ui::sidebar_data::ChatRowLabel::IncomingSecretRequest;
                         }
@@ -598,11 +610,14 @@ impl ChatterClient {
             let peer_name = self.anon_dm_peer_name(&dm);
             let latest = projection.latest.get(&(dm.id.to_string(), ConversationType::AnonDm)).cloned();
             let last_message = if superseded_peers.contains(&dm.peer_id) {
-                format!("{} started a new secret chat — Accept / Decline", peer_name)
+                chatter_i18n::trf(
+                    "{} started a new secret chat — Accept / Decline",
+                    &[&peer_name],
+                )
             } else {
                 match &latest {
                     Some(msg) => self.message_sidebar_preview(msg),
-                    None => "Message request".to_string(),
+                    None => chatter_i18n::tr("Message request"),
                 }
             };
             out.push(ChatRowSendData {
@@ -659,14 +674,14 @@ impl ChatterClient {
                         .as_text()
                         .filter(|t| !t.is_empty())
                         .map(|t| {
-                            plain_sidebar_preview(&crate::domain::message::format_preview_body(
-                                "You: ", t, Some(50),
-                            ))
+                            let isolated =
+                                crate::domain::message::format_preview_body("", t, Some(50));
+                            plain_sidebar_preview(&chatter_i18n::trf("You: {}", &[&isolated]))
                         })
-                        .unwrap_or_else(|| "Message request sent".to_string());
+                        .unwrap_or_else(|| chatter_i18n::tr("Message request sent"));
                     (preview, Some(msg.created_at))
                 }
-                None => ("Waiting for response...".to_string(), Some(dm.created_at)),
+                None => (chatter_i18n::tr("Waiting for response..."), Some(dm.created_at)),
             };
             out.push(ChatRowSendData {
                 user_id: dm.peer_id.to_string(),
@@ -743,7 +758,7 @@ impl ChatterClient {
                 super::plain_sidebar_preview(&crate::domain::message::format_preview_body("", text, Some(100)))
             };
             row.draft_preview = body.clone();
-            row.last_message = format!("Draft: {body}");
+            row.last_message = chatter_i18n::trf("Draft: {}", &[&body]);
         }
     }
 
@@ -910,7 +925,7 @@ fn plain_attachment_album_label(
     }
     let label = metadata.sidebar_preview_label();
     if extra > 0 {
-        Some(format!("{label} +{extra}"))
+        Some(chatter_i18n::trf("{} +{}", &[&label, &extra]))
     } else {
         Some(label)
     }

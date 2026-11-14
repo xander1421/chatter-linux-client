@@ -118,7 +118,9 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
         match mutation {
             Ok(Ok(summary)) => notice = summary.unwrap_or_default(),
             Ok(Err(e)) => errors.push(e),
-            Err(_) => errors.push("Action timed out; its outcome is uncertain. Review the refreshed devices and pending links.".to_string()),
+            Err(_) => errors.push(chatter_i18n::tr(
+                "Action timed out; its outcome is uncertain. Review the refreshed devices and pending links.",
+            )),
         }
         if !current() {
             return;
@@ -128,11 +130,11 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
         let sessions = match sessions {
             Ok(Ok(rows)) => Some(rows),
             Ok(Err(e)) => {
-                errors.push(format!("Could not load sessions: {e}"));
+                errors.push(chatter_i18n::trf("Could not load sessions: {}", &[&e]));
                 None
             }
             Err(_) => {
-                errors.push("Loading sessions timed out.".to_string());
+                errors.push(chatter_i18n::tr("Loading sessions timed out."));
                 None
             }
         };
@@ -159,11 +161,11 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
                     .collect::<Vec<_>>(),
             ),
             Ok(Err(e)) => {
-                errors.push(format!("Could not load pending links: {e}"));
+                errors.push(chatter_i18n::trf("Could not load pending links: {}", &[&e]));
                 None
             }
             Err(_) => {
-                errors.push("Loading pending links timed out.".to_string());
+                errors.push(chatter_i18n::tr("Loading pending links timed out."));
                 None
             }
         };

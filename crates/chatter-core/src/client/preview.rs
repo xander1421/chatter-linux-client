@@ -33,27 +33,46 @@ pub fn attachment_preview(metadata: &[Option<FileMetadata>]) -> String {
         };
         counts[kind] += 1;
     }
-    let labels = [
-        ("Voice message", "voice messages"),
-        ("Photo", "photos"),
-        ("Video", "videos"),
-        ("GIF", "GIFs"),
-        ("Audio file", "audio files"),
-        ("File", "files"),
-    ];
-    let parts: Vec<_> = counts
-        .iter()
-        .zip(labels)
-        .filter_map(|(&count, (one, many))| match count {
-            0 => None,
-            1 => Some(one.to_string()),
-            _ => Some(format!("{count} {many}")),
-        })
-        .collect();
+    let parts: Vec<_> = [
+        counted_kind(counts[0], "Voice message", "{} voice messages"),
+        counted_kind(counts[1], "Photo", "{} photos"),
+        counted_kind(counts[2], "Video", "{} videos"),
+        counted_kind(counts[3], "GIF", "{} GIFs"),
+        counted_kind(counts[4], "Audio file", "{} audio files"),
+        counted_kind(counts[5], "File", "{} files"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     if parts.is_empty() {
-        "Message".to_string()
+        chatter_i18n::tr("Message")
     } else {
         parts.join(", ")
+    }
+}
+
+/// Singular stays the bare word ("Photo"); two or more keep the count.
+fn counted_kind(count: usize, one: &'static str, many: &'static str) -> Option<String> {
+    match count {
+        0 => None,
+        1 => Some(match one {
+            "Voice message" => chatter_i18n::tr("Voice message"),
+            "Photo" => chatter_i18n::tr("Photo"),
+            "Video" => chatter_i18n::tr("Video"),
+            "GIF" => chatter_i18n::tr("GIF"),
+            "Audio file" => chatter_i18n::tr("Audio file"),
+            "File" => chatter_i18n::tr("File"),
+            _ => one.to_string(),
+        }),
+        n => Some(match many {
+            "{} voice messages" => chatter_i18n::trf("{} voice messages", &[&n]),
+            "{} photos" => chatter_i18n::trf("{} photos", &[&n]),
+            "{} videos" => chatter_i18n::trf("{} videos", &[&n]),
+            "{} GIFs" => chatter_i18n::trf("{} GIFs", &[&n]),
+            "{} audio files" => chatter_i18n::trf("{} audio files", &[&n]),
+            "{} files" => chatter_i18n::trf("{} files", &[&n]),
+            _ => format!("{n} {many}"),
+        }),
     }
 }
 
@@ -69,17 +88,26 @@ pub fn message_action_preview(text: &str, attachments: &[ActionPreviewAttachment
     let image_count = attachments.iter().filter(|a| a.is_image).count();
     let files: Vec<_> = attachments.iter().filter(|a| !a.is_image).collect();
     let mut parts = Vec::new();
-    if image_count == 1 { parts.push("\u{1F4F7} Photo".to_string()); }
-    else if image_count > 1 { parts.push(format!("\u{1F4F7} {image_count} Photos")); }
+    if image_count == 1 {
+        parts.push(chatter_i18n::tr("\u{1F4F7} Photo"));
+    } else if image_count > 1 {
+        parts.push(chatter_i18n::trf("\u{1F4F7} {} Photos", &[&image_count]));
+    }
     if files.len() == 1 {
         let file = files[0];
         let emoji = match file.category.as_str() {
-            "audio" => "\u{1F3B5}", "video" => "\u{1F3AC}",
-            "document" => "\u{1F4C4}", "code" => "\u{1F4DD}",
-            "archive" => "\u{1F4E6}", _ => "\u{1F4CE}",
+            "audio" => "\u{1F3B5}",
+            "video" => "\u{1F3AC}",
+            "document" => "\u{1F4C4}",
+            "code" => "\u{1F4DD}",
+            "archive" => "\u{1F4E6}",
+            _ => "\u{1F4CE}",
         };
+        // Filename is user content; the glyph is the category marker.
         parts.push(format!("{emoji} {}", file.filename));
-    } else if files.len() > 1 { parts.push(format!("\u{1F4CE} {} files", files.len())); }
+    } else if files.len() > 1 {
+        parts.push(chatter_i18n::trf("\u{1F4CE} {} files", &[&files.len()]));
+    }
     let attachment_label = parts.join(", ");
     match (text_preview.is_empty(), attachment_label.is_empty()) {
         (false, false) => format!(

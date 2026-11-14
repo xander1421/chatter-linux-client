@@ -26,7 +26,7 @@ pub fn with_jni_env<T>(body: impl FnOnce(&mut Env<'_>) -> Result<T, String>) -> 
     let ctx = ndk_context::android_context();
     let raw_vm = ctx.vm();
     if raw_vm.is_null() {
-        return Err("Android runtime has no JavaVM".to_owned());
+        return Err(chatter_i18n::tr("Android runtime has no JavaVM"));
     }
     // SAFETY: ndk-context supplies the process VM; null is rejected above.
     let vm = unsafe { JavaVM::from_raw(raw_vm.cast()) };
@@ -37,7 +37,10 @@ pub fn with_jni_env<T>(body: impl FnOnce(&mut Env<'_>) -> Result<T, String>) -> 
 /// The registered `MainActivity`, or an error if `onCreate` hasn't run yet.
 pub fn activity() -> Result<Global<JObject<'static>>, String> {
     let state = ACTIVITY.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let current = state.current.as_ref().ok_or("MainActivity not registered yet")?;
+    let current = state
+        .current
+        .as_ref()
+        .ok_or_else(|| chatter_i18n::tr("MainActivity not registered yet"))?;
     with_jni_env(|env| env.new_global_ref(current).map_err(|error| error.to_string()))
 }
 
@@ -60,7 +63,9 @@ pub fn install_verified_update(path: &str, version_code: i64) -> Result<(), Stri
         }
         match result.and_then(|value| value.z()) {
             Ok(true) => Ok(()),
-            Ok(false) => Err("Allow Chatter to install updates, then tap Update again".into()),
+            Ok(false) => {
+                Err(chatter_i18n::tr("Allow Chatter to install updates, then tap Update again"))
+            }
             Err(error) => Err(error.to_string()),
         }
     })

@@ -102,7 +102,7 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         &ui_ctx_spawn,
                         owner,
                         session_revision,
-                        format!("Could not delete the message: {e}"),
+                        chatter_i18n::trf("Could not delete the message: {}", &[&e]),
                     );
                     return;
                 }
@@ -189,7 +189,7 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                     &ui_ctx_spawn,
                     owner,
                     session_revision,
-                    format!("Could not delete the message for everyone: {e}"),
+                    chatter_i18n::trf("Could not delete the message for everyone: {}", &[&e]),
                 );
                 return;
             }

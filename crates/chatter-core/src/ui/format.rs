@@ -13,10 +13,10 @@ pub fn format_timestamp(datetime: DateTime<Utc>) -> String {
     let now = Local::now();
     let diff = now.signed_duration_since(local);
     if diff < Duration::minutes(1) {
-        return "Just now".to_string();
+        return chatter_i18n::tr("Just now");
     }
     if diff < Duration::hours(1) {
-        return format!("{} min ago", diff.num_minutes());
+        return chatter_i18n::trf("{} min ago", &[&diff.num_minutes()]);
     }
     let today = now.date_naive();
     let msg_date = local.date_naive();
@@ -24,15 +24,21 @@ pub fn format_timestamp(datetime: DateTime<Utc>) -> String {
         return local.format("%H:%M").to_string();
     }
     if msg_date == today - Duration::days(1) {
-        return format!("Yesterday {}", local.format("%H:%M"));
+        return chatter_i18n::trf("Yesterday {}", &[&local.format("%H:%M")]);
     }
     if diff < Duration::days(7) {
-        return local.format("%a %H:%M").to_string();
+        return chatter_i18n::trf(
+            "{} {}",
+            &[
+                &crate::util::time::weekday_abbrev(local.weekday()),
+                &local.format("%H:%M"),
+            ],
+        );
     }
     if local.year() == now.year() {
-        return local.format("%b %-d").to_string();
+        return crate::util::time::format_month_day(local.month(), local.day());
     }
-    local.format("%b %-d, %Y").to_string()
+    crate::util::time::format_month_day_year(local.month(), local.day(), local.year())
 }
 
 /// A linked device's last activity, to the day. The server records it per
@@ -43,27 +49,29 @@ pub fn format_activity_day(datetime: DateTime<Utc>) -> String {
     let day = datetime.date_naive();
     let today = Utc::now().date_naive();
     if day >= today {
-        "Today".to_string()
+        chatter_i18n::tr("Today")
     } else if day == today - Duration::days(1) {
-        "Yesterday".to_string()
+        chatter_i18n::tr("Yesterday")
     } else if day.year() == today.year() {
-        day.format("%b %-d").to_string()
+        crate::util::time::format_month_day(day.month(), day.day())
     } else {
-        day.format("%b %-d, %Y").to_string()
+        crate::util::time::format_month_day_year(day.month(), day.day(), day.year())
     }
 }
 
 pub fn last_seen_label(presence: PresenceStatus, last_seen_at: Option<i64>) -> String {
     match presence {
-        PresenceStatus::Online => "online".to_string(),
-        PresenceStatus::Away => "away".to_string(),
-        PresenceStatus::DoNotDisturb => "do not disturb".to_string(),
+        PresenceStatus::Online => chatter_i18n::tr("online"),
+        PresenceStatus::Away => chatter_i18n::tr("away"),
+        PresenceStatus::DoNotDisturb => chatter_i18n::tr("do not disturb"),
         PresenceStatus::Offline => match last_seen_at {
             Some(secs) => match DateTime::<Utc>::from_timestamp(secs, 0) {
-                Some(dt) => format!("last seen {}", format_timestamp(dt).to_lowercase()),
-                None => "last seen recently".to_string(),
+                Some(dt) => {
+                    chatter_i18n::trf("last seen {}", &[&format_timestamp(dt).to_lowercase()])
+                }
+                None => chatter_i18n::tr("last seen recently"),
             },
-            None => "last seen recently".to_string(),
+            None => chatter_i18n::tr("last seen recently"),
         },
     }
 }
@@ -75,12 +83,12 @@ pub fn shared_content_lines(row: &SharedContentItemData) -> (String, String, boo
         (link_host(&row.source_title), row.source_title.clone())
     } else {
         let name = if row.source_title.is_empty() {
-            "Attachment".to_string()
+            chatter_i18n::tr("Attachment")
         } else {
             row.source_title.clone()
         };
         let size = if row.size_bytes > 0 {
-            format!("{} · {}", format_bytes(row.size_bytes), when)
+            chatter_i18n::trf("{} · {}", &[&format_bytes(row.size_bytes), &when])
         } else {
             when
         };
@@ -112,19 +120,19 @@ pub fn call_detail(
     duration_secs: Option<i64>,
 ) -> String {
     let outcome = match result {
-        Some(CallResult::Missed) if incoming => "Missed",
-        Some(CallResult::Missed) => "No answer",
-        Some(CallResult::Declined) => "Declined",
-        Some(CallResult::Failed) => "Failed",
-        Some(CallResult::Completed) if incoming => "Incoming",
-        Some(CallResult::Completed) => "Outgoing",
-        None => "",
+        Some(CallResult::Missed) if incoming => chatter_i18n::tr("Missed"),
+        Some(CallResult::Missed) => chatter_i18n::tr("No answer"),
+        Some(CallResult::Declined) => chatter_i18n::tr("Declined"),
+        Some(CallResult::Failed) => chatter_i18n::tr("Failed"),
+        Some(CallResult::Completed) if incoming => chatter_i18n::tr("Incoming"),
+        Some(CallResult::Completed) => chatter_i18n::tr("Outgoing"),
+        None => String::new(),
     };
     match duration_secs {
         Some(secs) if secs > 0 && result == Some(CallResult::Completed) => {
-            format!("{} \u{00B7} {}", outcome, format_call_duration(secs))
+            chatter_i18n::trf("{} \u{00B7} {}", &[&outcome, &format_call_duration(secs)])
         }
-        _ => outcome.to_string(),
+        _ => outcome,
     }
 }
 
@@ -153,13 +161,16 @@ pub fn format_file_size(bytes: u64) -> String {
     const GB: u64 = MB * 1024;
 
     if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
+        let n = format!("{:.1}", bytes as f64 / GB as f64);
+        chatter_i18n::trf("{} GB", &[&n])
     } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
+        let n = format!("{:.1}", bytes as f64 / MB as f64);
+        chatter_i18n::trf("{} MB", &[&n])
     } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
+        let n = format!("{:.1}", bytes as f64 / KB as f64);
+        chatter_i18n::trf("{} KB", &[&n])
     } else {
-        format!("{} B", bytes)
+        chatter_i18n::trf("{} B", &[&bytes])
     }
 }
 

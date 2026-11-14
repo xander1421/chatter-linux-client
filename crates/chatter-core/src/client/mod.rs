@@ -365,36 +365,40 @@ pub struct StartupError {
 }
 
 impl StartupError {
-    pub fn message(self) -> &'static str {
+    pub fn message(self) -> String {
         match self.kind {
-            StartupErrorKind::Storage => "Chatter could not open its local data.",
-            StartupErrorKind::Keyring => "Chatter could not unlock its local data.",
-            StartupErrorKind::Network => "Chatter could not set up its network connection.",
-            StartupErrorKind::Other => "Chatter could not finish starting.",
+            StartupErrorKind::Storage => chatter_i18n::tr("Chatter could not open its local data."),
+            StartupErrorKind::Keyring => {
+                chatter_i18n::tr("Chatter could not unlock its local data.")
+            }
+            StartupErrorKind::Network => {
+                chatter_i18n::tr("Chatter could not set up its network connection.")
+            }
+            StartupErrorKind::Other => chatter_i18n::tr("Chatter could not finish starting."),
         }
     }
 
-    pub fn details(self) -> &'static str {
+    pub fn details(self) -> String {
         match self.kind {
-            StartupErrorKind::Storage => {
-                "Local storage initialization failed. Check available space and access to the app data folder, then retry."
-            }
-            StartupErrorKind::Keyring => {
-                "The system credential store did not provide the database key. Unlock the credential store, then retry."
-            }
-            StartupErrorKind::Network => {
-                "Network setup failed. Check your connection and server settings, then retry."
-            }
-            StartupErrorKind::Other => {
-                "An initialization step failed. Retry, or restart the app if the problem continues."
-            }
+            StartupErrorKind::Storage => chatter_i18n::tr(
+                "Local storage initialization failed. Check available space and access to the app data folder, then retry.",
+            ),
+            StartupErrorKind::Keyring => chatter_i18n::tr(
+                "The system credential store did not provide the database key. Unlock the credential store, then retry.",
+            ),
+            StartupErrorKind::Network => chatter_i18n::tr(
+                "Network setup failed. Check your connection and server settings, then retry.",
+            ),
+            StartupErrorKind::Other => chatter_i18n::tr(
+                "An initialization step failed. Retry, or restart the app if the problem continues.",
+            ),
         }
     }
 }
 
 impl std::fmt::Display for StartupError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str((*self).message())
+        f.write_str(&self.message())
     }
 }
 
@@ -479,24 +483,23 @@ impl IdentityChangePrompt {
         if attributed {
             return Self {
                 attributed,
-                title: format!("Your safety number with {peer_display_name} has changed"),
-                detail: "They most likely reinstalled the app or switched devices. It can \
-                         also mean someone is intercepting this conversation. Messages are \
-                         blocked in both directions until you accept the new safety number \
-                         — compare it with them over a call or in person first."
-                    .to_string(),
+                title: chatter_i18n::trf(
+                    "Your safety number with {} has changed",
+                    &[&peer_display_name],
+                ),
+                detail: chatter_i18n::tr(
+                    "They most likely reinstalled the app or switched devices. It can also mean someone is intercepting this conversation. Messages are blocked in both directions until you accept the new safety number — compare it with them over a call or in person first.",
+                ),
             };
         }
         // Unattributed: the ONLY thing that named this peer was the server, so
         // the headline must not state that it was them.
         Self {
             attributed,
-            title: "A safety number in this conversation has changed".to_string(),
-            detail: "The server says this came from your contact, but nothing proved that, \
-                     so it may not be them at all. Messages are blocked in both directions \
-                     until you accept the new safety number — confirm it with them over a \
-                     call or in person before you do."
-                .to_string(),
+            title: chatter_i18n::tr("A safety number in this conversation has changed"),
+            detail: chatter_i18n::tr(
+                "The server says this came from your contact, but nothing proved that, so it may not be them at all. Messages are blocked in both directions until you accept the new safety number — confirm it with them over a call or in person before you do.",
+            ),
         }
     }
 }

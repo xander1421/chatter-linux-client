@@ -73,7 +73,10 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                         Err(error) => {
                             tracing::warn!(%error, "Could not list call audio devices");
-                            picker_error(&w, "Could not list audio devices. Try again.");
+                            picker_error(
+                                &w,
+                                &chatter_i18n::tr("Could not list audio devices. Try again."),
+                            );
                         }
                     }
                 }).unwrap();
@@ -111,7 +114,12 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         if !ui_ctx.call_is_connected().await {
                             tracing::info!("Screen share unavailable — call not connected yet");
                             if let Some(w) = weak.upgrade() {
-                                picker_error(&w, "Screen sharing is available once the call connects.");
+                                picker_error(
+                                    &w,
+                                    &chatter_i18n::tr(
+                                        "Screen sharing is available once the call connects.",
+                                    ),
+                                );
                             }
                             return;
                         }
@@ -149,7 +157,10 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     }
                                     Err(e) => {
                                         tracing::error!("Failed to enumerate screen sources: {}", e);
-                                        picker_error(&w, "Could not list screens. Try again.");
+                                        picker_error(
+                                            &w,
+                                            &chatter_i18n::tr("Could not list screens. Try again."),
+                                        );
                                     }
                                 }
                             });
@@ -185,7 +196,10 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                         if let Err(error) = result {
                             tracing::warn!(%error, "Microphone switch failed");
-                            picker_error(&w, "Could not switch microphones. Try again.");
+                            picker_error(
+                                &w,
+                                &chatter_i18n::tr("Could not switch microphones. Try again."),
+                            );
                         }
                     }
                 })
@@ -217,7 +231,10 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // Failed lookup/build leaves the prior stream and tick intact.
                     if let Err(error) = result {
                         tracing::warn!(%error, "Output switch failed");
-                        picker_error(&w, "Could not switch speakers. Try again.");
+                        picker_error(
+                            &w,
+                            &chatter_i18n::tr("Could not switch speakers. Try again."),
+                        );
                     }
                 })
                 .unwrap();
@@ -247,7 +264,10 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         Err(e) => {
                             tracing::error!("Invalid screen source ID '{}': {}", source_id_str, e);
                             if let Some(w) = weak.upgrade() {
-                                picker_error(&w, "That screen is no longer available.");
+                                picker_error(
+                                    &w,
+                                    &chatter_i18n::tr("That screen is no longer available."),
+                                );
                             }
                             return;
                         }
@@ -262,7 +282,10 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             Err(error) => {
                                 tracing::error!("Failed to enumerate screen sources: {}", error);
                                 if let Some(w) = weak.upgrade() {
-                                    picker_error(&w, "Could not list screens. Try again.");
+                                    picker_error(
+                                        &w,
+                                        &chatter_i18n::tr("Could not list screens. Try again."),
+                                    );
                                 }
                             }
                             Ok(result) => match result {
@@ -273,7 +296,12 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     if let Err(e) = ui_ctx.call_publish_screen_share(source).await {
                                         tracing::error!("Failed to start screen share: {}", e);
                                         if let Some(w) = weak.upgrade() {
-                                            picker_error(&w, "Could not share that screen. Try again.");
+                                            picker_error(
+                                                &w,
+                                                &chatter_i18n::tr(
+                                                    "Could not share that screen. Try again.",
+                                                ),
+                                            );
                                         }
                                     } else {
                                         tracing::info!(
@@ -302,14 +330,22 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                         source_id_display
                                     );
                                     if let Some(w) = weak.upgrade() {
-                                        picker_error(&w, "That screen is no longer available.");
+                                        picker_error(
+                                            &w,
+                                            &chatter_i18n::tr(
+                                                "That screen is no longer available.",
+                                            ),
+                                        );
                                     }
                                 }
                             }
                             Err(e) => {
                                 tracing::error!("Failed to enumerate screen sources: {}", e);
                                 if let Some(w) = weak.upgrade() {
-                                    picker_error(&w, "Could not list screens. Try again.");
+                                    picker_error(
+                                        &w,
+                                        &chatter_i18n::tr("Could not list screens. Try again."),
+                                    );
                                 }
                             }
                             }

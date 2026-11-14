@@ -14,7 +14,9 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         match client.share_contact_text(&peer) {
             Some(text) => crate::bin_ui::features::chat::open_contact_share_modal(&w, &client, text),
             None => {
-                w.set_toast_message("No shareable contact link or handle is available".into());
+                w.set_toast_message(
+                    chatter_i18n::tr("No shareable contact link or handle is available").into(),
+                );
                 w.set_toast_variant("error".into());
                 w.set_toast_visible(true);
             }
@@ -32,7 +34,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let Ok(peer) = state.get_profile_user_id().parse::<UserId>() else { return };
         if let Err(error) = client.set_contact_name(&peer, name.as_str()) {
             tracing::error!(%error, "contact name save failed");
-            w.set_toast_message("Could not save contact name".into());
+            w.set_toast_message(chatter_i18n::tr("Could not save contact name").into());
             w.set_toast_variant("error".into());
             w.set_toast_visible(true);
             return;

@@ -134,11 +134,13 @@ impl ChatterClient {
             let message = if result
                 == crate::services::link_device_service::PinVerification::NotSetUpOnThisDevice
             {
-                "This account has no key backup to check the PIN against. Set up your PIN again."
+                chatter_i18n::tr(
+                    "This account has no key backup to check the PIN against. Set up your PIN again.",
+                )
             } else {
                 result.message()
             };
-            Err(ClientError::Validation(message.into()))
+            Err(ClientError::Validation(message))
         }
     }
 

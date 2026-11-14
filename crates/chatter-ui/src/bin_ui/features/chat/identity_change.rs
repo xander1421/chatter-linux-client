@@ -102,7 +102,8 @@ pub fn wire_accept(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // bar disappearing, which on its own does not distinguish
                     // "accepted" from "the button did nothing".
                     w.set_toast_message(
-                        "New safety number accepted — you can message again".into(),
+                        chatter_i18n::tr("New safety number accepted — you can message again")
+                            .into(),
                     );
                     w.set_toast_variant("success".into());
                     w.set_toast_visible(true);
@@ -112,9 +113,11 @@ pub fn wire_accept(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // The prompt deliberately stays up: the conversation is still
                     // wedged, so removing the only route back would be a lie.
                     w.set_toast_message(
-                        "Could not accept the new safety number — the conversation is still \
-                     blocked."
-                            .into(),
+                        chatter_i18n::tr(
+                            "Could not accept the new safety number — the conversation is still \
+                             blocked.",
+                        )
+                        .into(),
                     );
                     w.set_toast_variant("error".into());
                     w.set_toast_visible(true);

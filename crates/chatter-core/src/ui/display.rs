@@ -96,11 +96,7 @@ impl ChatterClient {
             return None;
         }
         let name = self.message_sender_display_name(&message);
-        let content = format!(
-            "{} {}",
-            name,
-            system.description_for(&message.conversation_type)
-        );
+        let content = system.notice_line(&name, &message.conversation_type);
         Some((name, content))
     }
 
@@ -141,10 +137,10 @@ impl ChatterClient {
                 ) && msg.sender_id.is_some()
                     && msg.sender_id == me
                 {
-                    return "You".to_string();
+                    return chatter_i18n::tr("You");
                 }
                 let Some(id) = msg.sender_id else {
-                    return "Anonymous".to_string();
+                    return chatter_i18n::tr("Anonymous");
                 };
                 if msg.conversation_type == ConversationType::AnonGroup {
                     let group_name = group_names
@@ -189,7 +185,7 @@ impl ChatterClient {
         resolve: impl FnOnce() -> String,
     ) -> String {
         if self.session_current_user_id().as_ref() == Some(author) {
-            "You".to_string()
+            chatter_i18n::tr("You")
         } else {
             resolve()
         }

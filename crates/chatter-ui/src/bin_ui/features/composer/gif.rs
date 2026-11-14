@@ -206,11 +206,11 @@ fn show_gif_pending(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, send: &Composer
         .current_user_id
         .map(|id| id.to_string())
         .unwrap_or_default();
-    let user_name = auth.display_name.unwrap_or_else(|| "Me".to_string());
+    let user_name = auth.display_name.unwrap_or_else(|| chatter_i18n::tr("Me"));
     let mut shown = send.clone();
     shown.attachments.push(PendingAttachment::new(
         AttachmentId::new(),
-        "GIF".to_string(),
+        chatter_i18n::tr("GIF"),
         std::path::PathBuf::new(),
         0,
         "image/gif".to_string(),
@@ -299,12 +299,16 @@ pub fn recover_gif_send(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSe
             restore_composer(w, ui_ctx, send);
             toast(
                 w,
-                "The GIF was not sent. Your message is back in the composer; the GIF is under Recent.",
+                &chatter_i18n::tr(
+                    "The GIF was not sent. Your message is back in the composer; the GIF is under Recent.",
+                ),
             );
         }
         None => toast(
             w,
-            "The GIF was not sent. Your message is kept: open its chat again with an empty composer to get it back.",
+            &chatter_i18n::tr(
+                "The GIF was not sent. Your message is kept: open its chat again with an empty composer to get it back.",
+            ),
         ),
     }
 }

@@ -55,9 +55,9 @@ fn relative_time(timestamp: u64) -> String {
     let now = Local::now();
     let seconds = now.timestamp().max(0).saturating_sub(at.timestamp()) as u64;
     match seconds {
-        0..=59 => "Now".into(),
-        60..=3599 => format!("{}m", seconds / 60),
-        3600..=14399 => format!("{}h", seconds / 3600),
+        0..=59 => chatter_i18n::tr("Now"),
+        60..=3599 => chatter_i18n::trf("{}m", &[&(seconds / 60)]),
+        3600..=14399 => chatter_i18n::trf("{}h", &[&(seconds / 3600)]),
         _ => sidebar_time_at(at, now),
     }
 }
@@ -68,10 +68,12 @@ pub fn sidebar_time_at(at: DateTime<Utc>, now: DateTime<Local>) -> String {
     let days = (now.date_naive() - local.date_naive()).num_days();
     match days {
         ..=0 => local.format("%H:%M").to_string(),
-        1 => "Yesterday".to_string(),
-        2..=6 => local.format("%a").to_string(),
-        _ if local.year() == now.year() => local.format("%b %-d").to_string(),
-        _ => local.format("%b %-d, %Y").to_string(),
+        1 => chatter_i18n::tr("Yesterday"),
+        2..=6 => crate::util::time::weekday_abbrev(local.weekday()),
+        _ if local.year() == now.year() => {
+            crate::util::time::format_month_day(local.month(), local.day())
+        }
+        _ => crate::util::time::format_month_day_year(local.month(), local.day(), local.year()),
     }
 }
 
@@ -115,7 +117,7 @@ fn device_linked_details(body: &str, metadata: &str) -> (String, u32) {
             .and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty())
     });
     let body = match label {
-        Some(label) => format!("{label} was linked to your account."),
+        Some(label) => chatter_i18n::trf("{} was linked to your account.", &[&label]),
         None => body.to_owned(),
     };
     (body, device_id)
@@ -162,11 +164,11 @@ pub async fn page(
                     device_linked_details(&n.body, &n.metadata)
                 } else { (n.body, 0) };
                 let (title, body) = if kind == "friend-accepted" && n.title == "Friend request accepted" {
-                    (body, "Your friend request was accepted".to_owned())
+                    (body, chatter_i18n::tr("Your friend request was accepted"))
                 } else if kind == "friend-accepted" && n.actor_id.is_empty() {
                     if let Some((name, message)) = body.split_once(" · ") {
                         if message == "Your friend request was accepted" {
-                            (name.to_owned(), message.to_owned())
+                            (name.to_owned(), chatter_i18n::tr("Your friend request was accepted"))
                         } else { (n.title, body) }
                     } else { (n.title, body) }
                 } else { (n.title, body) };
@@ -211,11 +213,10 @@ pub async fn page(
                         id: i.id,
                         title: i.name,
                         body: if i.installed_by == user {
-                            "Installed in this channel"
+                            chatter_i18n::tr("Installed in this channel")
                         } else {
-                            "Installed · managed by another owner"
-                        }
-                        .into(),
+                            chatter_i18n::tr("Installed · managed by another owner")
+                        },
                         primary: String::new(),
                         created_at_ns: 0,
                     }
@@ -229,7 +230,7 @@ pub async fn page(
                     .map(|i| RecordRow {
                         id: i.id,
                         title: i.name,
-                        body: "Available from your integrations".into(),
+                        body: chatter_i18n::tr("Available from your integrations"),
                         primary: "Install".into(),
                         secondary: String::new(),
                         created_at_ns: 0,
@@ -258,14 +259,16 @@ pub async fn page(
                     .into_iter()
                     .map(|c| {
                         let status = match chatter_proto::chat_v1::CallStatus::try_from(c.status) {
-                            Ok(chatter_proto::chat_v1::CallStatus::Active) => "Active",
-                            Ok(chatter_proto::chat_v1::CallStatus::Ended) => "Ended",
-                            _ => "Unknown status",
+                            Ok(chatter_proto::chat_v1::CallStatus::Active) => {
+                                chatter_i18n::tr("Active")
+                            }
+                            Ok(chatter_proto::chat_v1::CallStatus::Ended) => chatter_i18n::tr("Ended"),
+                            _ => chatter_i18n::tr("Unknown status"),
                         };
                         RecordRow {
                             id: c.id,
                             title: c.title,
-                            body: status.into(),
+                            body: status,
                             created_at_ns: c.created_at,
                             primary: "Details".into(),
                             ..Default::default()
@@ -308,7 +311,7 @@ pub async fn detail(
             };
             Ok(RecordDetail {
                 title: if notification.title.is_empty() {
-                    "Notification".into()
+                    chatter_i18n::tr("Notification")
                 } else {
                     notification.title
                 },
@@ -320,9 +323,9 @@ pub async fn detail(
         "calls" => {
             let call = pool.call_client().get_call_info(id).await?;
             let status = match chatter_proto::chat_v1::CallStatus::try_from(call.status) {
-                Ok(chatter_proto::chat_v1::CallStatus::Active) => "In progress",
-                Ok(chatter_proto::chat_v1::CallStatus::Ended) => "Ended",
-                _ => "Unknown status",
+                Ok(chatter_proto::chat_v1::CallStatus::Active) => chatter_i18n::tr("In progress"),
+                Ok(chatter_proto::chat_v1::CallStatus::Ended) => chatter_i18n::tr("Ended"),
+                _ => chatter_i18n::tr("Unknown status"),
             };
             let participants = call
                 .participants
@@ -336,14 +339,15 @@ pub async fn detail(
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
+            let count = call.current_participant_count;
             let body = if participants.is_empty() {
-                format!("{status} · {} participants", call.current_participant_count)
+                chatter_i18n::trf("{} · {} participants", &[&status, &count])
             } else {
-                format!("{status} · {} participants\n{participants}", call.current_participant_count)
+                chatter_i18n::trf("{} · {} participants\n{}", &[&status, &count, &participants])
             };
             Ok(RecordDetail {
                 title: if call.title.is_empty() {
-                    "Call".into()
+                    chatter_i18n::tr("Call")
                 } else {
                     call.title
                 },

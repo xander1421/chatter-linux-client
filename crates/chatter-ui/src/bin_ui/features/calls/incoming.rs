@@ -172,9 +172,9 @@ async fn accept(
                 revision,
                 &call_id,
                 if matches!(e, chatter_core::client::ClientError::CallEnded) {
-                    "Call ended"
+                    chatter_i18n::tr("Call ended")
                 } else {
-                    super::outgoing::CALL_FAILED
+                    super::outgoing::call_failed()
                 },
             );
         }
@@ -182,12 +182,18 @@ async fn accept(
 }
 
 #[cfg(target_os = "android")]
-fn denied_call_permission(is_video: bool) -> Option<(&'static str, &'static str)> {
+fn denied_call_permission(is_video: bool) -> Option<(String, &'static str)> {
     use crate::platform::android::permissions;
     if !permissions::has(permissions::RECORD_AUDIO) {
-        Some(("Microphone permission is needed for calls", "Microphone"))
+        Some((
+            chatter_i18n::tr("Microphone permission is needed for calls"),
+            "Microphone",
+        ))
     } else if is_video && !permissions::has(permissions::CAMERA) {
-        Some(("Camera permission is needed for video calls", "Camera"))
+        Some((
+            chatter_i18n::tr("Camera permission is needed for video calls"),
+            "Camera",
+        ))
     } else {
         None
     }
@@ -198,7 +204,7 @@ fn fail_incoming_call(
     ui_ctx: &Arc<ChatterClient>,
     revision: u64,
     call_id: &str,
-    message: &'static str,
+    message: String,
 ) {
     let weak = weak.clone();
     let ui_ctx = ui_ctx.clone();
@@ -216,7 +222,7 @@ fn fail_incoming_call(
         {
             return;
         }
-        super::outgoing::fail_call(&weak, message);
+        super::outgoing::fail_call(&weak, &message);
     });
 }
 
@@ -242,7 +248,7 @@ fn render_accepted_call(
         .unwrap_or_default();
     let my_display_name = ui_ctx
         .my_display_name()
-        .unwrap_or_else(|| "You".to_string());
+        .unwrap_or_else(|| chatter_i18n::tr("You"));
 
     match accepted {
         AcceptedIncomingCall::Dm {
@@ -593,7 +599,14 @@ pub fn wire_orchestrator_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                                     if w.global::<crate::CallView>().get_active_call_data().call_id.as_str() == id {
                                         w.global::<crate::CallView>().set_active_call_visible(false);
                                     }
-                                    w.set_toast_message(if was_answering { "Call ended" } else { "Missed call" }.into());
+                                    w.set_toast_message(
+                                        if was_answering {
+                                            chatter_i18n::tr("Call ended")
+                                        } else {
+                                            chatter_i18n::tr("Missed call")
+                                        }
+                                        .into(),
+                                    );
                                     w.set_toast_variant("info".into());
                                     w.set_toast_visible(true);
                                 });
@@ -884,7 +897,7 @@ fn handle_orchestrator_event(
                                 }
                             }
                         }
-                        w.set_toast_message("Camera unavailable".into());
+                        w.set_toast_message(chatter_i18n::tr("Camera unavailable").into());
                         w.set_toast_variant("error".into());
                         w.set_toast_visible(true);
                         return;
@@ -909,17 +922,17 @@ fn handle_orchestrator_event(
                 CallEndReason::ReplacedByIncoming => None,
                 // Only ever a withdrawal of a ringing call, never an active one.
                 CallEndReason::AnsweredElsewhere => None,
-                CallEndReason::RemoteHangup => Some(("Call ended", "info")),
-                CallEndReason::Declined => Some(("Call declined", "info")),
-                CallEndReason::NoAnswer => Some(("No answer", "info")),
+                CallEndReason::RemoteHangup => Some((chatter_i18n::tr("Call ended"), "info")),
+                CallEndReason::Declined => Some((chatter_i18n::tr("Call declined"), "info")),
+                CallEndReason::NoAnswer => Some((chatter_i18n::tr("No answer"), "info")),
                 // An established session the SDK and one fresh-token rejoin
                 // could not bring back is a loss, not a failed connect.
                 CallEndReason::Error(ref message)
                     if message == chatter_core::client::calls::CONNECTION_LOST =>
                 {
-                    Some(("Connection lost", "error"))
+                    Some((chatter_i18n::tr("Connection lost"), "error"))
                 }
-                CallEndReason::Error(_) => Some((super::outgoing::CALL_FAILED, "error")),
+                CallEndReason::Error(_) => Some((super::outgoing::call_failed(), "error")),
             };
             let weak = weak.clone();
             let ui_ctx = ui_ctx.clone();

@@ -167,7 +167,7 @@ pub fn handle_pin(
                     // Generate preview from message content
                     let text = msg.content.to_string();
                     preview = if text.is_empty() {
-                        "[Pinned message]".to_string()
+                        chatter_i18n::tr("[Pinned message]")
                     } else {
                         chatter_core::ui::truncate_preview(&text)
                     };

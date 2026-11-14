@@ -95,9 +95,9 @@ fn wire_scan_friend_code(window: &MainWindow) {
     window.global::<crate::ModalHostState>().on_friends_scan_code(move || {
         if let Some(w) = weak_window.upgrade() {
             let rationale = if permissions::has(permissions::CAMERA) {
-                ""
+                String::new()
             } else {
-                "Chatter uses the camera only to read your friend's QR code."
+                chatter_i18n::tr("Chatter uses the camera only to read your friend's QR code.")
             };
             w.global::<crate::ModalHostState>().set_friends_code_status(rationale.into());
         }
@@ -111,12 +111,16 @@ fn wire_scan_friend_code(window: &MainWindow) {
                         let state = w.global::<crate::ModalHostState>();
                         state.set_friends_code_input(text.trim().into());
                         state.set_friends_code_caret_end_seq(state.get_friends_code_caret_end_seq() + 1);
-                        w.global::<crate::ModalHostState>().set_friends_code_status("Code scanned — tap connect".into());
+                        w.global::<crate::ModalHostState>().set_friends_code_status(
+                            chatter_i18n::tr("Code scanned — tap connect").into(),
+                        );
                     }
                     qr_scanner::ScanOutcome::Cancelled => w.global::<crate::ModalHostState>().set_friends_code_status("".into()),
                     qr_scanner::ScanOutcome::CameraDenied => w.global::<crate::ModalHostState>().set_friends_code_status(
-                        "Camera access is off. Paste the code instead, or allow the camera for Chatter in system settings."
-                            .into(),
+                        chatter_i18n::tr(
+                            "Camera access is off. Paste the code instead, or allow the camera for Chatter in system settings.",
+                        )
+                        .into(),
                     ),
                 }
             });
@@ -185,13 +189,16 @@ fn wire_paste_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
 
                 let Some(text) = text else {
                     tracing::warn!("Paste: no clipboard tool succeeded");
-                    show_code_status(weak, "Clipboard unavailable. Enter the code manually.");
+                    show_code_status(
+                        weak,
+                        chatter_i18n::tr("Clipboard unavailable. Enter the code manually."),
+                    );
                     return;
                 };
                 let trimmed = text.trim().to_string();
                 if trimmed.is_empty() {
                     tracing::warn!("Paste: clipboard empty");
-                    show_code_status(weak, "Clipboard is empty.");
+                    show_code_status(weak, chatter_i18n::tr("Clipboard is empty."));
                     return;
                 }
                 let _ = slint::invoke_from_event_loop(move || {
@@ -200,7 +207,9 @@ fn wire_paste_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                         state.set_friends_code_input(trimmed.into());
                         state.set_friends_code_caret_end_seq(state.get_friends_code_caret_end_seq() + 1);
                         w.global::<crate::ModalHostState>()
-                            .set_friends_code_status("Pasted from clipboard".into());
+                            .set_friends_code_status(
+                                chatter_i18n::tr("Pasted from clipboard").into(),
+                            );
                     }
                 });
             });
@@ -263,21 +272,24 @@ fn wire_generate_qr_code(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 tracing::error!("Failed to decode QR code PNG: {}", e);
                                 show_code_status(
                                     weak,
-                                    "Couldn't display QR code. Try Copy instead.",
+                                    chatter_i18n::tr("Couldn't display QR code. Try Copy instead."),
                                 );
                             }
                         }
                     }
                     Err(e) => {
                         tracing::error!("Failed to generate QR code: {}", e);
-                        show_code_status(weak, "Couldn't create QR code. Try Copy instead.");
+                        show_code_status(
+                            weak,
+                            chatter_i18n::tr("Couldn't create QR code. Try Copy instead."),
+                        );
                     }
                 }
             });
         });
 }
 
-fn show_code_status(weak: slint::Weak<MainWindow>, message: &'static str) {
+fn show_code_status(weak: slint::Weak<MainWindow>, message: String) {
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
             w.global::<crate::ModalHostState>()
@@ -317,13 +329,21 @@ fn wire_share_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                     }
                     Err(e) => {
                         tracing::error!("Share sheet failed, copying instead: {}", e);
-                        match crate::platform::clipboard::set_text("Friend code", &code, false) {
+                        match crate::platform::clipboard::set_text(
+                            &chatter_i18n::tr("Friend code"),
+                            &code,
+                            false,
+                        ) {
                             Ok(()) => w
                                 .global::<crate::ModalHostState>()
-                                .set_friends_code_status("Copied to clipboard!".into()),
+                                .set_friends_code_status(
+                                    chatter_i18n::tr("Copied to clipboard!").into(),
+                                ),
                             Err(_) => w
                                 .global::<crate::ModalHostState>()
-                                .set_friends_code_status("Couldn't share — use Copy".into()),
+                                .set_friends_code_status(
+                                    chatter_i18n::tr("Couldn't share — use Copy").into(),
+                                ),
                         }
                     }
                 }
@@ -334,13 +354,23 @@ fn wire_share_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                 let code_clone = code.clone();
                 let weak_copy = weak_window.clone();
                 std::thread::spawn(move || {
-                    match crate::platform::clipboard::set_text("Friend code", &code_clone, false) {
+                    match crate::platform::clipboard::set_text(
+                        &chatter_i18n::tr("Friend code"),
+                        &code_clone,
+                        false,
+                    ) {
                         Ok(()) => {
-                            show_code_status(weak_copy, "Copied — paste anywhere to share");
+                            show_code_status(
+                                weak_copy,
+                                chatter_i18n::tr("Copied — paste anywhere to share"),
+                            );
                         }
                         Err(e) => {
                             tracing::error!("Share-copy failed: {}", e);
-                            show_code_status(weak_copy, "Couldn't copy — use Show QR");
+                            show_code_status(
+                                weak_copy,
+                                chatter_i18n::tr("Couldn't copy — use Show QR"),
+                            );
                         }
                     }
                 });
@@ -368,32 +398,45 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                         let weak_copy = weak_window.clone();
                         std::thread::spawn(move || {
                             match crate::platform::clipboard::set_text(
-                                "Friend code",
+                                &chatter_i18n::tr("Friend code"),
                                 &code_clone,
                                 false,
                             ) {
                                 Ok(()) => {
                                     tracing::info!("Copied friend code to clipboard");
-                                    show_code_status(weak_copy.clone(), "Copied to clipboard!");
+                                    show_code_status(
+                                        weak_copy.clone(),
+                                        chatter_i18n::tr("Copied to clipboard!"),
+                                    );
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to copy to clipboard: {}", e);
-                                    show_code_status(weak_copy, "Couldn't copy — use Show QR");
+                                    show_code_status(
+                                        weak_copy,
+                                        chatter_i18n::tr("Couldn't copy — use Show QR"),
+                                    );
                                 }
                             }
                         });
                     }
                     #[cfg(any(target_os = "android", target_os = "ios"))]
-                    match crate::platform::clipboard::set_text("Friend code", &code, false) {
+                    match crate::platform::clipboard::set_text(
+                        &chatter_i18n::tr("Friend code"),
+                        &code,
+                        false,
+                    ) {
                         Ok(()) => {
                             tracing::info!("Copied friend code to clipboard");
                             w.global::<crate::ModalHostState>()
-                                .set_friends_code_status("Copied to clipboard!".into());
+                                .set_friends_code_status(
+                                    chatter_i18n::tr("Copied to clipboard!").into(),
+                                );
                         }
                         Err(e) => {
                             tracing::error!("Failed to copy friend code to clipboard: {}", e);
-                            w.global::<crate::ModalHostState>()
-                                .set_friends_code_status("Couldn't copy — use Show QR".into());
+                            w.global::<crate::ModalHostState>().set_friends_code_status(
+                                chatter_i18n::tr("Couldn't copy — use Show QR").into(),
+                            );
                         }
                     }
                 } else {
@@ -417,7 +460,9 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
             if code_str.trim().is_empty() {
                 if let Some(w) = weak.upgrade() {
                     w.global::<crate::ModalHostState>()
-                        .set_friends_code_status("Enter a friend code first.".into());
+                        .set_friends_code_status(
+                            chatter_i18n::tr("Enter a friend code first.").into(),
+                        );
                 }
                 return;
             }
@@ -450,11 +495,11 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                         w.global::<crate::ModalHostState>()
                             .set_friends_loading(true);
                         w.global::<crate::ModalHostState>().set_friends_code_status(
-                            (if is_private {
-                                "Secret chat is getting ready…"
+                            if is_private {
+                                chatter_i18n::tr("Secret chat is getting ready…")
                             } else {
-                                "Connecting…"
-                            })
+                                chatter_i18n::tr("Connecting…")
+                            }
                             .into(),
                         );
                     }
@@ -480,7 +525,9 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                                 w.global::<crate::ModalHostState>()
                                     .set_friends_request_note("".into());
                                 w.global::<crate::ModalHostState>()
-                                    .set_friends_code_status("Friend request sent!".into());
+                                    .set_friends_code_status(
+                                        chatter_i18n::tr("Friend request sent!").into(),
+                                    );
                             }
                         });
                     }
@@ -497,7 +544,9 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                                 w.global::<crate::ModalHostState>()
                                     .set_friends_request_note("".into());
                                 w.global::<crate::ModalHostState>()
-                                    .set_friends_code_status("Secret chat started!".into());
+                                    .set_friends_code_status(
+                                        chatter_i18n::tr("Secret chat started!").into(),
+                                    );
                                 crate::bin_ui::features::back::reset_to_chats(&w);
                                 w.global::<crate::SidebarPane>()
                                     .invoke_dm_selected(dm_id.to_string().into());
@@ -515,7 +564,8 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                                 w.global::<crate::ModalHostState>()
                                     .set_friends_request_note("".into());
                                 w.global::<crate::ModalHostState>().set_friends_code_status(
-                                    "You already have a secret chat with them.".into(),
+                                    chatter_i18n::tr("You already have a secret chat with them.")
+                                        .into(),
                                 );
                                 crate::bin_ui::features::back::reset_to_chats(&w);
                                 w.global::<crate::SidebarPane>()

@@ -175,7 +175,7 @@ fn wire_thread_composer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let selected = {
                     use chatter_core::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
                     FilePicker::pick_files(FilePickerConfig::new()
-                        .with_title("Select attachment")
+                        .with_title(chatter_i18n::tr("Select attachment"))
                         .with_filter(FileFilter::all())
                         .with_multiple(true)).await
                 };
@@ -413,7 +413,9 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let reply = thread_composer_reply(&w);
             let quote = super::chat::send_message::quote_intent(reply.as_ref());
             if reply.is_some() && quote.is_none() {
-                w.set_toast_message("The quoted message is unavailable.".into());
+                w.set_toast_message(
+                    chatter_i18n::tr("The quoted message is unavailable.").into(),
+                );
                 w.set_toast_variant("error".into());
                 w.set_toast_visible(true);
                 return false;
@@ -508,15 +510,19 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             if let Some(reply) = ui_ctx.thread_draft_reply(&root) {
                                 show_thread_reply(&w, &ui_ctx, reply);
                             }
-                            "Couldn't send your reply. Try again."
+                            chatter_i18n::tr("Couldn't send your reply. Try again.")
                         } else {
                             ui_ctx.park_failed_thread_composer_reply(&root, &text, failed_reply, session_revision);
                             if ui_ctx.has_failed_thread_reply(&root) {
                                 // Parked behind newer text; it comes back once
                                 // the box and the draft are empty.
-                                "Couldn't send your reply. It's kept with this thread."
+                                chatter_i18n::tr(
+                                    "Couldn't send your reply. It's kept with this thread.",
+                                )
                             } else {
-                                "Couldn't send your reply. It's saved as this thread's draft."
+                                chatter_i18n::tr(
+                                    "Couldn't send your reply. It's saved as this thread's draft.",
+                                )
                             }
                         };
                         w.set_toast_message(message.into());
@@ -589,7 +595,9 @@ fn offer_failed_thread_reply(w: &MainWindow, ui_ctx: &ChatterClient, root: &Mess
     if let Some(reply) = ui_ctx.thread_draft_reply(root) {
         show_thread_reply(w, ui_ctx, reply);
     }
-    w.set_toast_message("Your earlier reply that didn't send is back in the box.".into());
+    w.set_toast_message(
+        chatter_i18n::tr("Your earlier reply that didn't send is back in the box.").into(),
+    );
     w.set_toast_variant("info".into());
     w.set_toast_visible(true);
 }
@@ -809,8 +817,13 @@ fn adjust_root_reply_count(w: &MainWindow, root_id: &str, delta: i32) {
         }
         let mut updated = msg;
         updated.reply_count = (updated.reply_count + delta).max(0);
-        updated.reply_count_text =
-            chatter_core::ui::message_row::format_count(updated.reply_count, "reply", "replies").into();
+        updated.reply_count_text = chatter_i18n::trn(
+            "{n} reply",
+            "{n} replies",
+            updated.reply_count.max(0) as u64,
+            &[],
+        )
+        .into();
         model.set_row_data(i, updated);
         return;
     }
@@ -834,8 +847,13 @@ pub(crate) fn refresh_root_reply_counts(w: &MainWindow, ui_ctx: &ChatterClient) 
         let count = ui_ctx.thread_reply_count(&root) as i32;
         if count != row.reply_count {
             row.reply_count = count;
-            row.reply_count_text =
-                chatter_core::ui::message_row::format_count(count, "reply", "replies").into();
+            row.reply_count_text = chatter_i18n::trn(
+                "{n} reply",
+                "{n} replies",
+                count.max(0) as u64,
+                &[],
+            )
+            .into();
             model.set_row_data(i, row);
         }
     }
@@ -916,7 +934,7 @@ pub fn load_thread_data(
                 .sender_id
                 .as_ref()
                 .map(|id| ui_ctx.display_name(id))
-                .unwrap_or_else(|| "Anonymous".to_string());
+                .unwrap_or_else(|| chatter_i18n::tr("Anonymous"));
             let content_preview = root_message
                 .as_text()
                 .map(|t| chatter_core::domain::message::truncate_preview_text(t, 100))

@@ -54,7 +54,10 @@ pub fn wire_delete_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 // A secret chat stays when its peer could not be told.
                 crate::run_ui!(weak, |w| {
                     w.set_toast_message(
-                        "Could not delete the chat. Check your connection and try again.".into(),
+                        chatter_i18n::tr(
+                            "Could not delete the chat. Check your connection and try again.",
+                        )
+                        .into(),
                     );
                     w.set_toast_variant("error".into());
                     w.set_toast_visible(true);
@@ -75,7 +78,7 @@ fn apply_anon_dm_header(
 ) {
     let (name, avatar) = ui_ctx
         .anon_dm_peer_card(id)
-        .unwrap_or_else(|| ("Private chat".to_string(), None));
+        .unwrap_or_else(|| (chatter_i18n::tr("Private chat"), None));
     let image = avatar
         .as_deref()
         .and_then(crate::bin_ui::converters::avatar_bytes_to_image);
@@ -222,7 +225,7 @@ fn start_secret_chat(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>
             }
             Err(e) => {
                 tracing::warn!(error = %e, "start secret chat failed");
-                let message = format!("Could not start secret chat: {e}");
+                let message = chatter_i18n::trf("Could not start secret chat: {}", &[&e]);
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         w.set_toast_message(message.into());
@@ -363,7 +366,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let preview = pinned[0].as_text()
                         .filter(|t| !t.is_empty())
                         .map(|t| ui_ctx.truncate_message_preview(&t))
-                        .unwrap_or_else(|| "[Pinned message]".to_string());
+                        .unwrap_or_else(|| chatter_i18n::tr("[Pinned message]"));
                     (ids, preview)
                 };
                 if !owner.is_current() { return; }

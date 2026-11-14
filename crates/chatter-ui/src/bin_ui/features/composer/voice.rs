@@ -44,7 +44,7 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         let retry = finish_ready.lock().unwrap().clone();
         if let Some((ticket, note)) = retry {
             g.set_busy(true);
-            g.set_status("Preparing voice message…".into());
+            g.set_status(chatter_i18n::tr("Preparing voice message…").into());
             tokio::spawn(send_recording(
                 weak.clone(),
                 finish_client.clone(),
@@ -57,7 +57,7 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         }
         if let Some((_, recording)) = finish_session.lock().unwrap().take() {
             g.set_busy(true);
-            g.set_status("Preparing voice message…".into());
+            g.set_status(chatter_i18n::tr("Preparing voice message…").into());
             recording.finish();
         }
     });
@@ -83,7 +83,7 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         g.set_live_levels(ModelRc::new(VecModel::from(vec![0; LIVE_LEVEL_BARS])));
         g.set_live_head(-1);
         g.set_pulse_bright(false);
-        g.set_status("Opening microphone…".into());
+        g.set_status(chatter_i18n::tr("Opening microphone…").into());
         let (weak, client, session, generation) = (
             weak.clone(),
             client.clone(),
@@ -102,7 +102,9 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                         weak,
                         generation,
                         ticket,
-                        Err("Allow microphone access to record a voice message".into()),
+                        Err(chatter_i18n::tr(
+                            "Allow microphone access to record a voice message",
+                        )),
                     );
                     return;
                 }
@@ -145,9 +147,13 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                             Err(error) => {
                                 tracing::warn!(%error, "Voice recording failed");
                                 let message = if error == chatter_core::client::NO_MICROPHONE {
-                                    error
+                                    chatter_i18n::tr(
+                                        "No microphone found. Connect one to record a voice message.",
+                                    )
                                 } else {
-                                    "Couldn't record a voice message. Please try again.".into()
+                                    chatter_i18n::tr(
+                                        "Couldn't record a voice message. Please try again.",
+                                    )
                                 };
                                 finish_ui(weak, generation, ticket, Err(message));
                             }
@@ -183,7 +189,10 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                                         format!("{:02}:{:02}", seconds / 60, seconds % 60).into(),
                                     ),
                                     RecordingEvent::Ready => {
-                                        g.set_status("Recording ready (5 minute limit)".into());
+                                        g.set_status(
+                                            chatter_i18n::tr("Recording ready (5 minute limit)")
+                                                .into(),
+                                        );
                                     }
                                     RecordingEvent::Level(_) => {
                                         if let Some((head, level, pulse)) = levels {
@@ -290,7 +299,9 @@ async fn send_recording(
             }
             Err(error) => {
                 tracing::warn!(%error, "Voice upload failed; recording retained for retry");
-                g.set_status("Upload failed. Tap Send to retry.".into());
+                g.set_status(
+                    chatter_i18n::tr("Upload failed. Tap Send to retry.").into(),
+                );
             }
         }
     });

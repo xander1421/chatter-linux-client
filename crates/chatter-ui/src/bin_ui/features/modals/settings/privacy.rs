@@ -129,7 +129,11 @@ pub(super) fn wire_identity(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 };
 
-                match crate::platform::clipboard::set_text("Safety number", &fingerprint, false) {
+                match crate::platform::clipboard::set_text(
+                    &chatter_i18n::tr("Safety number"),
+                    &fingerprint,
+                    false,
+                ) {
                     Ok(()) => tracing::info!("Fingerprint copied to clipboard"),
                     Err(e) => tracing::error!("Failed to copy fingerprint to clipboard: {}", e),
                 }
@@ -326,7 +330,12 @@ fn wire_profile_visibility(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 fn privacy_save_error(w: &MainWindow, setting: &str, error: &dyn std::fmt::Display) {
     tracing::warn!(%error, setting, "privacy setting not saved");
-    w.set_toast_message(format!("Couldn't save {setting}. Try again.").into());
+    let message = match setting {
+        "read receipts" => chatter_i18n::tr("Couldn't save read receipts. Try again."),
+        "typing indicators" => chatter_i18n::tr("Couldn't save typing indicators. Try again."),
+        other => chatter_i18n::trf("Couldn't save {}. Try again.", &[&other]),
+    };
+    w.set_toast_message(message.into());
     w.set_toast_variant("error".into());
     w.set_toast_visible(true);
 }

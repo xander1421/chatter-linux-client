@@ -62,7 +62,9 @@ pub fn open_private_group_invite_modal(
                 return;
             }
             if !allowed {
-                w.set_toast_message("Only the group owner can invite members".into());
+                w.set_toast_message(
+                    chatter_i18n::tr("Only the group owner can invite members").into(),
+                );
                 w.set_toast_variant("error".into());
                 w.set_toast_visible(true);
                 return;
@@ -99,7 +101,9 @@ pub fn open_invite_member_modal(
         if !ui_ctx.can_invite_to_channel(&channel_id) {
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
-                w.set_toast_message("Your role in this channel can't invite members".into());
+                w.set_toast_message(
+                    chatter_i18n::tr("Your role in this channel can't invite members").into(),
+                );
                 w.set_toast_variant("error".into());
                 w.set_toast_visible(true);
             });
@@ -313,8 +317,14 @@ pub(super) fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<Chat
                     // Stay open: the selection is still there and retrying is
                     // one tap, which is the right thing to offer here.
                     w.set_toast_message(
-                        if attempted == 1 { format!("The invite was not sent. {failure_reason}") }
-                        else { format!("None of the {attempted} invites were sent. {failure_reason}") }
+                        if attempted == 1 {
+                            chatter_i18n::trf("The invite was not sent. {}", &[&failure_reason])
+                        } else {
+                            chatter_i18n::trf(
+                                "None of the {} invites were sent. {}",
+                                &[&attempted, &failure_reason],
+                            )
+                        }
                         .into(),
                     );
                     w.set_toast_variant("error".into());
@@ -326,15 +336,22 @@ pub(super) fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<Chat
                 if success_count < attempted {
                     let failed = attempted - success_count;
                     w.set_toast_message(
-                        format!("{success_count} of {attempted} invites sent — {failed} failed. {failure_reason}").into(),
+                        chatter_i18n::trf(
+                            "{} of {} invites sent — {} failed. {}",
+                            &[&success_count, &attempted, &failed, &failure_reason],
+                        )
+                        .into(),
                     );
                     w.set_toast_variant("warning".into());
                 } else {
                     // The modal closing is the only other evidence, and it looks
                     // identical to dismissing it.
                     w.set_toast_message(
-                        if attempted == 1 { "Invite sent.".to_string() }
-                        else { format!("{attempted} invites sent.") }
+                        if attempted == 1 {
+                            chatter_i18n::tr("Invite sent.")
+                        } else {
+                            chatter_i18n::trf("{} invites sent.", &[&attempted])
+                        }
                         .into(),
                     );
                     w.set_toast_variant("success".into());

@@ -62,7 +62,7 @@ pub fn intercept_send(
                 // composer is still empty, so a reply typed in the meantime is
                 // never clobbered.
                 tracing::warn!(%error, "mesh: message not sent");
-                let notice = format!("Not sent: {error}");
+                let notice = chatter_i18n::trf("Not sent: {}", &[&error]);
                 run_ui!(weak, |w| {
                     w.global::<MeshGlobal>().set_notice(notice.clone().into());
                     if w.global::<crate::ChatPane>().get_composer_text().is_empty() {

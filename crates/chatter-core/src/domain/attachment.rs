@@ -472,15 +472,16 @@ impl FileMetadata {
         let category = FileCategory::from_mime_and_filename(&self.mime_type, &self.name);
         let icon = crate::ui::file_data::category_icon(category.as_str());
         match SharedCategory::of(self) {
-            SharedCategory::Voice => "\u{1F3A4} Voice message".to_string(),
+            SharedCategory::Voice => chatter_i18n::tr("\u{1F3A4} Voice message"),
             // 🎬 has emoji presentation by default; 🎞 (U+1F39E) is text-default
             // and shaped from the text font as a box on Android.
-            SharedCategory::Gif => "\u{1F3AC} GIF".to_string(),
-            SharedCategory::Audio => format!("{} Audio", icon),
+            SharedCategory::Gif => chatter_i18n::tr("\u{1F3AC} GIF"),
+            SharedCategory::Audio => chatter_i18n::trf("{} Audio", &[&icon]),
             _ => match category {
-                FileCategory::Image => format!("{} Photo", icon),
-                FileCategory::Video => format!("{} Video", icon),
-                _ if self.name.trim().is_empty() => format!("{} File", icon),
+                FileCategory::Image => chatter_i18n::trf("{} Photo", &[&icon]),
+                FileCategory::Video => chatter_i18n::trf("{} Video", &[&icon]),
+                _ if self.name.trim().is_empty() => chatter_i18n::trf("{} File", &[&icon]),
+                // The filename is user content; the icon is not a word.
                 _ => format!("{} {}", icon, self.name.trim()),
             },
         }
@@ -492,14 +493,16 @@ impl FileMetadata {
     #[must_use]
     pub fn sidebar_preview_label(&self) -> String {
         if self.is_gif() {
-            return "GIF".to_string();
+            return chatter_i18n::tr("GIF");
         }
         match FileCategory::from_mime_and_filename(&self.mime_type, &self.name) {
-            FileCategory::Audio if self.waveform_samples.is_some() => "Voice message".to_string(),
-            FileCategory::Audio => "Audio".to_string(),
-            FileCategory::Image => "Photo".to_string(),
-            FileCategory::Video => "Video".to_string(),
-            _ if self.name.trim().is_empty() => "File".to_string(),
+            FileCategory::Audio if self.waveform_samples.is_some() => {
+                chatter_i18n::tr("Voice message")
+            }
+            FileCategory::Audio => chatter_i18n::tr("Audio"),
+            FileCategory::Image => chatter_i18n::tr("Photo"),
+            FileCategory::Video => chatter_i18n::tr("Video"),
+            _ if self.name.trim().is_empty() => chatter_i18n::tr("File"),
             _ => self.name.clone(),
         }
     }
@@ -591,13 +594,16 @@ pub fn format_bytes(size: u64) -> String {
     const GB: u64 = MB * 1024;
 
     if size >= GB {
-        format!("{:.1} GB", size as f64 / GB as f64)
+        let n = format!("{:.1}", size as f64 / GB as f64);
+        chatter_i18n::trf("{} GB", &[&n])
     } else if size >= MB {
-        format!("{:.1} MB", size as f64 / MB as f64)
+        let n = format!("{:.1}", size as f64 / MB as f64);
+        chatter_i18n::trf("{} MB", &[&n])
     } else if size >= KB {
-        format!("{:.1} KB", size as f64 / KB as f64)
+        let n = format!("{:.1}", size as f64 / KB as f64);
+        chatter_i18n::trf("{} KB", &[&n])
     } else {
-        format!("{} bytes", size)
+        chatter_i18n::trf("{} bytes", &[&size])
     }
 }
 

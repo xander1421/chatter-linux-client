@@ -17,7 +17,7 @@ impl ChatterClient {
             .get()
             .current_user_id
             .as_ref()
-            .ok_or_else(|| ClientError::Validation("Not logged in".into()))?
+            .ok_or_else(|| ClientError::Validation(chatter_i18n::tr("Not logged in").into()))?
             .to_string();
 
         let safety_number = self
@@ -140,7 +140,9 @@ impl ChatterClient {
             .pending_identity_change(&peer_user_id.to_string())
             .map_err(|e| ClientError::Validation(e.to_string()))?
             .ok_or_else(|| {
-                ClientError::Validation("no identity change is pending for this peer".into())
+                ClientError::Validation(
+                    chatter_i18n::tr("no identity change is pending for this peer").into(),
+                )
             })?;
 
         self.services
