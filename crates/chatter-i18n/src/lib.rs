@@ -11,6 +11,10 @@
 //! locale to one of them. Adding a language = one `.po` file plus one
 //! [`LANGUAGES`] row.
 
+mod runtime;
+
+pub use runtime::{set_language, tr, trf, trn};
+
 /// A language the app ships.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Language {

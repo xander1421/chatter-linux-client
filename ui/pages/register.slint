@@ -437,9 +437,9 @@ export component RegisterPage inherits Rectangle {
                                     }
                                 }
                                 Text {
-                                    text: root.password-strength == 1 ? @tr("Weak") :
-                                          root.password-strength == 2 ? @tr("Fair") :
-                                          root.password-strength == 3 ? @tr("Good") : @tr("Strong");
+                                    text: root.password-strength == 1 ? @tr("password strength" => "Weak") :
+                                          root.password-strength == 2 ? @tr("password strength" => "Fair") :
+                                          root.password-strength == 3 ? @tr("password strength" => "Good") : @tr("password strength" => "Strong");
                                     color: root.password-strength == 1 ? Colors.error : 
                                            root.password-strength == 2 ? Colors.warning :
                                            root.password-strength == 3 ? Colors.info : Colors.success;

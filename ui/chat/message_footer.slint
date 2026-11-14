@@ -161,10 +161,10 @@ export component MessageFooter inherits HorizontalLayout {
                     : root.delivery-status == "carried" ? @tr("carried")
                     : root.delivery-status == "waiting" ? @tr("waiting")
                     : root.delivery-status == "undelivered" ? @tr("not delivered")
-                    : root.delivery-status == "delivered" ? @tr("delivered")
-                    : root.delivery-status == "read" ? @tr("read")
+                    : root.delivery-status == "delivered" ? @tr("delivery status" => "delivered")
+                    : root.delivery-status == "read" ? @tr("delivery status" => "read")
                     : root.delivery-status == "broadcast" ? @tr("broadcast")
-                    : @tr("sent");
+                    : @tr("delivery status" => "sent");
                 color: root.overlay-media ? #ffffff : root.delivery-status == "undelivered" ? Colors.text-secondary : Colors.text-muted;
                 font-size: Typography.xs;
                 font-italic: true;
@@ -289,8 +289,8 @@ export component MessageFooter inherits HorizontalLayout {
                 height: 12px;
                 animate width { duration: Materials.motion-standard; easing: Materials.spring; }
                 accessible-role: text;
-                accessible-label: root.delivery-status == "delivered" ? @tr("Delivered")
-                    : root.delivery-status == "read" ? @tr("Read") : @tr("Sent");
+                accessible-label: root.delivery-status == "delivered" ? @tr("delivery status" => "Delivered")
+                    : root.delivery-status == "read" ? @tr("delivery status" => "Read") : @tr("delivery status" => "Sent");
 
                 // Second tick behind, offset left, so the
                 // pair reads as the usual overlapping ✓✓.

@@ -167,7 +167,7 @@ export component ActivitySheet inherits Rectangle {
                                 Rectangle { height: 1px; background: Colors.divider; }
                                 StatusRow { title: root.connection-status == "connected" ? @tr("Connected since") : @tr("Last connected"); value: ActivityGlobal.last-connected; touch: root.touch; tint: Colors.info; }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                StatusRow { title: @tr("Push"); value: ActivityGlobal.push-status; touch: root.touch;
+                                StatusRow { title: @tr("push notifications" => "Push"); value: ActivityGlobal.push-status; touch: root.touch;
                                     tint: ActivityGlobal.push-status == "Registered" ? Colors.success : Colors.warning; }
                                 Rectangle { height: 1px; background: Colors.divider; }
                                 StatusRow { title: @tr("Mesh"); value: root.mesh-value; touch: root.touch;
@@ -177,11 +177,11 @@ export component ActivitySheet inherits Rectangle {
                                 if AnonMode.enabled: StatusRow { title: @tr("Shield / Tor"); touch: root.touch;
                                     value: !AnonMode.onion-built ? @tr("Unavailable") : TorStatus.state == 2 ? @tr("Connected")
                                         : TorStatus.state == 1 ? @tr("Bootstrapping {}", ActivityGlobal.tor-bootstrap)
-                                        : TorStatus.state >= 3 ? @tr("Failed") : @tr("Off");
+                                        : TorStatus.state >= 3 ? @tr("Failed") : @tr("tor status" => "Off");
                                     tint: TorStatus.state == 2 ? Colors.success : TorStatus.state == 1 ? Colors.warning : Colors.error; }
                                 Rectangle { height: 1px; background: Colors.divider; }
                                 StatusRow { title: @tr("App version"); touch: root.touch;
-                                    value: UpdateGlobal.installed-version == "" ? @tr("Unknown") : UpdateGlobal.installed-version;
+                                    value: UpdateGlobal.installed-version == "" ? @tr("installed version" => "Unknown") : UpdateGlobal.installed-version;
                                     tint: Colors.info; }
                                 if root.update-available: Rectangle { height: 1px; background: Colors.divider; }
                                 if root.update-available: StatusRow { title: @tr("Update available"); touch: root.touch;

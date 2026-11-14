@@ -314,7 +314,7 @@ export component ChannelMembersSection inherits Rectangle {
 
                             invited-text := Text {
                                 x: Spacing.xs;
-                                text: @tr("invited");
+                                text: @tr("member status" => "invited");
                                 color: Colors.info;
                                 font-size: Typography.xs;
                                 font-weight: Typography.medium;
@@ -332,7 +332,7 @@ export component ChannelMembersSection inherits Rectangle {
 
                             muted-text := Text {
                                 x: Spacing.xs;
-                                text: @tr("muted");
+                                text: @tr("member moderation" => "muted");
                                 color: Colors.error;
                                 font-size: Typography.xs;
                                 font-weight: Typography.medium;
@@ -350,7 +350,7 @@ export component ChannelMembersSection inherits Rectangle {
 
                             unverified-text := Text {
                                 x: Spacing.xs;
-                                text: @tr("unverified");
+                                text: @tr("member identity" => "unverified");
                                 color: Colors.warning;
                                 font-size: Typography.xs;
                                 font-weight: Typography.medium;
@@ -432,7 +432,7 @@ export component ChannelMembersSection inherits Rectangle {
             background: Colors.divider;
         }
         if row.kind == "banned-header": Text {
-            text: @tr("Banned");
+            text: @tr("member list" => "Banned");
             color: Colors.text-primary;
             font-size: Typography.base;
             font-weight: Typography.semibold;

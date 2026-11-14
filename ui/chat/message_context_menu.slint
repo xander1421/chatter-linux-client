@@ -611,7 +611,7 @@ export component MessageContextMenu inherits Rectangle {
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.reply;
-                    label: @tr("Reply");
+                    label: @tr("message action" => "Reply");
                     clicked => {
                         root.reply-clicked(root.sender-id, root.timestamp-ns);
                         root.close();
@@ -703,7 +703,7 @@ export component MessageContextMenu inherits Rectangle {
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.pin;
-                    label: MessageMenuActions.pinned ? @tr("Unpin") : @tr("Pin");
+                    label: MessageMenuActions.pinned ? @tr("Unpin") : @tr("message action" => "Pin");
                     clicked => {
                         root.pin-clicked(root.sender-id, root.timestamp-ns);
                         root.close();

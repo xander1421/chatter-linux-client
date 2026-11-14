@@ -424,7 +424,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     SettingsRow {
                                         touch: true;
                                         icon: Icons.bell; title: @tr("Notifications");
-                                        detail: root.is-muted ? @tr("Muted") : root.notification-preference == "mentions" ? @tr("Mentions only") : root.notification-preference == "none" ? @tr("Off") : @tr("All messages");
+                                        detail: root.is-muted ? @tr("Muted") : root.notification-preference == "mentions" ? @tr("Mentions only") : root.notification-preference == "none" ? @tr("notifications" => "Off") : @tr("All messages");
                                         clicked => { root.active-section = "notifications"; }
                                     }
                                     Rectangle { height: 1px; background: Colors.divider; }

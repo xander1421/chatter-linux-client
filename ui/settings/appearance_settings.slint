@@ -46,8 +46,8 @@ export component AppearanceSettings inherits VerticalLayout {
 
             for opt in [
                 { key: "system", label: @tr("System"), hint: @tr("Match this device's light or dark setting") },
-                { key: "light", label: @tr("Light"), hint: "" },
-                { key: "dark", label: @tr("Dark"), hint: "" },
+                { key: "light", label: @tr("theme" => "Light"), hint: "" },
+                { key: "dark", label: @tr("theme" => "Dark"), hint: "" },
             ]: Rectangle {
                 property <bool> selected: Appearance.theme == opt.key;
                 min-height: Spacing.touch-target-min;
@@ -248,10 +248,10 @@ export component AppearanceSettings inherits VerticalLayout {
             }
 
             for opt in [
-                { key: "small", label: @tr("Small"), hint: "" },
-                { key: "default", label: @tr("Default"), hint: @tr("Match this device's font size") },
-                { key: "large", label: @tr("Large"), hint: "" },
-                { key: "largest", label: @tr("Largest"), hint: "" },
+                { key: "small", label: @tr("text size" => "Small"), hint: "" },
+                { key: "default", label: @tr("text size" => "Default"), hint: @tr("Match this device's font size") },
+                { key: "large", label: @tr("text size" => "Large"), hint: "" },
+                { key: "largest", label: @tr("text size" => "Largest"), hint: "" },
             ]: Rectangle {
                 property <bool> selected: Appearance.text-size == opt.key;
                 min-height: Spacing.touch-target-min;
@@ -479,8 +479,8 @@ export component AppearanceSettings inherits VerticalLayout {
             }
 
             for opt in [
-                { key: "comfortable", label: @tr("Comfortable"), hint: "" },
-                { key: "compact", label: @tr("Compact"), hint: @tr("Fit more messages and conversations on screen") },
+                { key: "comfortable", label: @tr("message spacing" => "Comfortable"), hint: "" },
+                { key: "compact", label: @tr("message spacing" => "Compact"), hint: @tr("Fit more messages and conversations on screen") },
             ]: Rectangle {
                 property <bool> selected: Appearance.density == opt.key;
                 min-height: Spacing.touch-target-min;
@@ -600,7 +600,7 @@ export component AppearanceSettings inherits VerticalLayout {
                 for opt[idx] in [
                     { key: "k", label: @tr("Ctrl+K") },
                     { key: "f", label: @tr("Ctrl+F") },
-                    { key: "both", label: @tr("Both") },
+                    { key: "both", label: @tr("search shortcut" => "Both") },
                 ]: Rectangle {
                     property <bool> selected: root.search-shortcut == opt.key;
                     accessible-role: button;

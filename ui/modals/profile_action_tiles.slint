@@ -36,12 +36,12 @@ export component ProfileActionTiles inherits HorizontalLayout {
         { id: "more", label: @tr("More"), icon: Icons.more-horizontal },
     ] : AnonMode.enabled && !root.is-friend ? [
         { id: "mute", label: root.is-muted ? @tr("Unmute") : @tr("Mute"), icon: root.is-muted ? Icons.bell-off : Icons.bell },
-        { id: "call", label: @tr("Call"), icon: Icons.phone },
+        { id: "call", label: @tr("action" => "Call"), icon: Icons.phone },
         { id: "more", label: @tr("More"), icon: Icons.more-horizontal },
     ] : [
         { id: "message", label: @tr("Message"), icon: Icons.message-circle },
         { id: "mute", label: root.is-muted ? @tr("Unmute") : @tr("Mute"), icon: root.is-muted ? Icons.bell-off : Icons.bell },
-        { id: "call", label: @tr("Call"), icon: Icons.phone },
+        { id: "call", label: @tr("action" => "Call"), icon: Icons.phone },
         { id: "more", label: @tr("More"), icon: Icons.more-horizontal },
     ]: Rectangle {
         // Equal tiles, as in iOS Contacts: a zero preferred width makes the

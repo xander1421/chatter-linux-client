@@ -140,6 +140,7 @@ fn apply_language(choice: &str) -> &'static str {
             chatter_i18n::language_for_locale(&sys_locale::get_locale().unwrap_or_default()),
         ),
     };
+    chatter_i18n::set_language(language.code);
     if let Err(e) = slint::select_bundled_translation(language.code) {
         tracing::error!("Failed to switch language to {}: {}", language.code, e);
     }

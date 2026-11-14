@@ -104,7 +104,7 @@ export component JarvisMemoryModal inherits GlassSurface {
                     font-size: Typography.xs;
                     vertical-alignment: center;
                 }
-                Button { text: root.narrow ? @tr("Clear") : @tr("Clear history"); variant: "ghost"; touch: root.narrow; disabled: !root.show; clicked => { JarvisGlobal.clear-history(); } }
+                Button { text: root.narrow ? @tr("chat history" => "Clear") : @tr("Clear history"); variant: "ghost"; touch: root.narrow; disabled: !root.show; clicked => { JarvisGlobal.clear-history(); } }
                 Button { text: root.narrow ? @tr("Reload") : @tr("Refresh"); variant: "ghost"; touch: root.narrow; disabled: !root.show; clicked => { root.refresh(); } }
                 // Centered dialog → the shared X on the trailing edge. A "Close"
                 // text button was a fourth spelling of the same action, and it sat

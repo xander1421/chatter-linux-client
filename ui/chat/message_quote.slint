@@ -173,7 +173,7 @@ export component MessageQuote inherits Rectangle {
             if root.reply-to-category != "audio": Text {
                 text: root.reply-to-preview != ""
                     ? root.reply-to-preview
-                    : (root.reply-to-category != "" ? @tr("📎 Attachment") : @tr("Message"));
+                    : (root.reply-to-category != "" ? @tr("📎 Attachment") : @tr("message preview" => "Message"));
                 color: Colors.text-secondary;
                 font-size: Typography.xs;
                 overflow: elide;

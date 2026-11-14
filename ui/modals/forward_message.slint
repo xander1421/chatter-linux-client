@@ -220,7 +220,7 @@ export component ForwardMessageModal inherits Rectangle {
 
                                         type-text := Text {
                                             x: Spacing.sm;
-                                            text: target.target-type == "channel" ? @tr("Channel") : target.target-type == "group" || target.target-type == "anon_group" ? @tr("Group") : target.is-anonymous ? @tr("Secret") : @tr("DM");
+                                            text: target.target-type == "channel" ? @tr("Channel") : target.target-type == "group" || target.target-type == "anon_group" ? @tr("Group") : target.is-anonymous ? @tr("chat type" => "Secret") : @tr("DM");
                                             color: target.target-type == "channel" || target.target-type == "group" || target.target-type == "anon_group" ? Colors.primary : Colors.success;
                                             font-size: Typography.xs;
                                             font-weight: Typography.medium;

@@ -612,13 +612,13 @@ export component UnifiedSearch inherits Rectangle {
                     for category-name[i] in ["All", "Chats", "Messages", "Media", "Files", "Links", "Voice"]: Rectangle {
                         // The array values are category keys (`to-lowercase()` is
                         // stored and compared). The name a person reads is separate.
-                        property <string> tab-name: category-name == "All" ? @tr("All")
+                        property <string> tab-name: category-name == "All" ? @tr("search filter" => "All")
                             : category-name == "Chats" ? @tr("Chats")
                             : category-name == "Messages" ? @tr("Messages")
                             : category-name == "Media" ? @tr("Media")
                             : category-name == "Files" ? @tr("Files")
                             : category-name == "Links" ? @tr("Links")
-                            : @tr("Voice");
+                            : @tr("search filter" => "Voice");
                         x: i * 110px;
                         width: 110px;
                         height: Spacing.touch-target-min;
@@ -626,7 +626,7 @@ export component UnifiedSearch inherits Rectangle {
                         background: tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent;
                         accessible-role: tab;
                         accessible-label: tab-name;
-                        accessible-description: root.category == category-name.to-lowercase() ? @tr("Selected") : "";
+                        accessible-description: root.category == category-name.to-lowercase() ? @tr("tab" => "Selected") : "";
                         accessible-action-default => { root.category = category-name.to-lowercase(); root.selected-index = 0; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
                         border-width: tab-keys.has-focus ? 2px : 0px;
                         border-color: Colors.focus-ring;
@@ -682,7 +682,7 @@ export component UnifiedSearch inherits Rectangle {
                         root.sort-order = root.sort-order == "relevance" ? "newest" : root.sort-order == "newest" ? "oldest" : root.sort-order == "oldest" ? "largest" : "relevance";
                         root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
                     } }
-                    Text { text: root.sort-order == "relevance" ? @tr("Relevance") : root.sort-order == "newest" ? @tr("Newest") : root.sort-order == "oldest" ? @tr("Oldest") : @tr("Largest"); color: root.sort-order != "relevance" ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
+                    Text { text: root.sort-order == "relevance" ? @tr("Relevance") : root.sort-order == "newest" ? @tr("search sort" => "Newest") : root.sort-order == "oldest" ? @tr("search sort" => "Oldest") : @tr("Largest"); color: root.sort-order != "relevance" ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
                 }
                 Rectangle {
                     // Grows to a chosen range ("27 Oct – 28 Oct"), like From/In.
@@ -720,7 +720,7 @@ export component UnifiedSearch inherits Rectangle {
                     chip-touch := TouchArea { mouse-cursor: pointer; clicked => {
                         root.picker-mode = kind; root.picker-query = ""; root.picker-request(kind, "");
                     } }
-                    picker-chip-label := Text { text: kind == "from" ? (root.from-label == "" ? @tr("From") : @tr("From: {}", root.from-label)) : (root.in-label == "" ? @tr("In") : @tr("In: {}", root.in-label));
+                    picker-chip-label := Text { text: kind == "from" ? (root.from-label == "" ? @tr("sender filter" => "From") : @tr("From: {}", root.from-label)) : (root.in-label == "" ? @tr("conversation filter" => "In") : @tr("In: {}", root.in-label));
                         width: parent.width - (((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Spacing.touch-target-min : 0px);
                         height: 100%; color: ((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; wrap: no-wrap; overflow: elide; }
                     if (kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != ""): Rectangle {
@@ -1112,7 +1112,7 @@ export component UnifiedSearch inherits Rectangle {
             VerticalLayout {
                 padding: Spacing.lg;
                 spacing: Spacing.xs;
-                Text { text: @tr("When"); color: Colors.text-primary; font-size: Typography.lg; font-weight: Typography.semibold; }
+                Text { text: @tr("date filter" => "When"); color: Colors.text-primary; font-size: Typography.lg; font-weight: Typography.semibold; }
                 Flickable {
                     height: Spacing.touch-target-min;
                     viewport-width: quick-choices.preferred-width;

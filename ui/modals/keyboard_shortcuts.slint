@@ -121,7 +121,7 @@ export component KeyboardShortcutsDialog inherits Rectangle {
 
                         // The combo Appearance › Search shortcut leaves bound.
                         ShortcutRow {
-                            action: @tr("Search");
+                            action: @tr("action" => "Search");
                             key: root.search-shortcut-pref == "k" ? @tr("Ctrl + K")
                                 : root.search-shortcut-pref == "f" ? @tr("Ctrl + F") : @tr("Ctrl + K / Ctrl + F");
                         }

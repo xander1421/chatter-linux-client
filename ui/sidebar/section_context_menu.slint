@@ -274,7 +274,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.clock;
-                label: @tr("Recent");
+                label: @tr("conversation sort" => "Recent");
                 mobile-mode: root.mobile-mode;
                 selected: root.section-sort-mode == "recent";
                 clicked => {

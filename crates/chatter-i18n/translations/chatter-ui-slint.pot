@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
-"POT-Creation-Date: 2026-11-14 21:22+0000\n"
+"POT-Creation-Date: 2026-11-14 21:34+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -23,9 +23,8 @@ msgstr ""
 msgid "Activity"
 msgstr ""
 
-#: ui/activity/activity_global.slint:15 ui/activity/activity_sheet.slint:105
-#: ui/activity/activity_global.slint:15 ui/activity/activity_sheet.slint:105 ui/mesh/mesh_setup_sheet.slint:122
-#: ui/activity/activity_global.slint:15 ui/activity/activity_sheet.slint:105 ui/mesh/mesh_setup_sheet.slint:122
+#: ui/activity/activity_global.slint:15
+msgctxt "push notifications"
 msgid "Off"
 msgstr ""
 
@@ -33,7 +32,7 @@ msgstr ""
 msgid "Never"
 msgstr ""
 
-#: ui/activity/activity_global.slint:17 ui/activity/activity_sheet.slint:184
+#: ui/activity/activity_global.slint:17
 msgid "Unknown"
 msgstr ""
 
@@ -66,6 +65,10 @@ msgstr ""
 #: ui/activity/activity_sheet.slint:104 ui/activity/activity_sheet.slint:107
 #: ui/activity/activity_sheet.slint:104 ui/activity/activity_sheet.slint:107
 msgid "Unavailable"
+msgstr ""
+
+#: ui/activity/activity_sheet.slint:105 ui/mesh/mesh_setup_sheet.slint:122
+msgid "Off"
 msgstr ""
 
 #: ui/activity/activity_sheet.slint:106 ui/mesh/mesh_list.slint:15
@@ -111,6 +114,7 @@ msgid "Last connected"
 msgstr ""
 
 #: ui/activity/activity_sheet.slint:170
+msgctxt "push notifications"
 msgid "Push"
 msgstr ""
 
@@ -134,8 +138,18 @@ msgstr ""
 msgid "Failed"
 msgstr ""
 
+#: ui/activity/activity_sheet.slint:180
+msgctxt "tor status"
+msgid "Off"
+msgstr ""
+
 #: ui/activity/activity_sheet.slint:183
 msgid "App version"
+msgstr ""
+
+#: ui/activity/activity_sheet.slint:184
+msgctxt "installed version"
+msgid "Unknown"
 msgstr ""
 
 #: ui/activity/activity_sheet.slint:187 ui/sidebar/update_banner.slint:30
@@ -535,13 +549,12 @@ msgstr ""
 msgid "Delete selected"
 msgstr ""
 
-#. stored and compared). The name a person reads is separate.
-#: ui/calls/call_history_screen.slint:215
 #: ui/calls/call_history_screen.slint:215
 msgid "All"
 msgstr ""
 
 #: ui/calls/call_history_screen.slint:216
+msgctxt "call filter"
 msgid "Missed"
 msgstr ""
 
@@ -667,7 +680,6 @@ msgid ""
 "device."
 msgstr ""
 
-#: ui/calls/device_picker.slint:199 ui/calls/device_picker.slint:219
 #: ui/calls/device_picker.slint:199 ui/calls/device_picker.slint:219
 msgid "Default"
 msgstr ""
@@ -924,13 +936,8 @@ msgstr[1] ""
 msgid "Call in progress"
 msgstr ""
 
-#: ui/chat/chat_layout.slint:544 ui/chat/chat_layout.slint:660
-#: ui/chat/chat_layout.slint:544 ui/chat/chat_layout.slint:660 ui/mesh/mesh_compose_sheet.slint:127
-#: ui/chat/chat_layout.slint:544 ui/chat/chat_layout.slint:660 ui/mesh/mesh_compose_sheet.slint:127 ui/mesh/mesh_list.slint:118
-#: ui/chat/chat_layout.slint:544 ui/chat/chat_layout.slint:660 ui/mesh/mesh_compose_sheet.slint:127 ui/mesh/mesh_list.slint:118 ui/modals/create_channel.slint:191
-#: ui/chat/chat_layout.slint:544 ui/chat/chat_layout.slint:660 ui/mesh/mesh_compose_sheet.slint:127 ui/mesh/mesh_list.slint:118 ui/modals/create_channel.slint:191
-#: ui/chat/chat_layout.slint:544 ui/chat/chat_layout.slint:660 ui/mesh/mesh_compose_sheet.slint:127 ui/mesh/mesh_list.slint:118 ui/modals/create_channel.slint:191
-#: ui/chat/chat_layout.slint:544 ui/chat/chat_layout.slint:660 ui/mesh/mesh_compose_sheet.slint:127 ui/mesh/mesh_list.slint:118 ui/modals/create_channel.slint:191
+#: ui/chat/chat_layout.slint:544
+msgctxt "call action"
 msgid "Join"
 msgstr ""
 
@@ -938,6 +945,15 @@ msgstr ""
 #: ui/chat/chat_layout.slint:655 ui/mesh/mesh_peer_sheet.slint:273 ui/modals/friends_blocked_tab.slint:132
 #: ui/chat/chat_layout.slint:655 ui/mesh/mesh_peer_sheet.slint:273 ui/modals/friends_blocked_tab.slint:132
 msgid "Unblock"
+msgstr ""
+
+#: ui/chat/chat_layout.slint:660 ui/components/unified_search.slint:963
+#: ui/chat/chat_layout.slint:660 ui/components/unified_search.slint:963 ui/mesh/mesh_compose_sheet.slint:130
+#: ui/chat/chat_layout.slint:660 ui/components/unified_search.slint:963 ui/mesh/mesh_compose_sheet.slint:130 ui/mesh/mesh_setup_sheet.slint:102
+#: ui/chat/chat_layout.slint:660 ui/components/unified_search.slint:963 ui/mesh/mesh_compose_sheet.slint:130 ui/mesh/mesh_setup_sheet.slint:102 ui/modals/friends_requests_tab.slint:580
+#: ui/chat/chat_layout.slint:660 ui/components/unified_search.slint:963 ui/mesh/mesh_compose_sheet.slint:130 ui/mesh/mesh_setup_sheet.slint:102 ui/modals/friends_requests_tab.slint:580
+#: ui/chat/chat_layout.slint:660 ui/components/unified_search.slint:963 ui/mesh/mesh_compose_sheet.slint:130 ui/mesh/mesh_setup_sheet.slint:102 ui/modals/friends_requests_tab.slint:580
+msgid "Join"
 msgstr ""
 
 #: ui/chat/chat_layout.slint:670 ui/mesh/mesh_list.slint:108
@@ -1091,7 +1107,6 @@ msgstr ""
 msgid "Delete for me"
 msgstr ""
 
-#: ui/chat/disappearing_settings.slint:19
 #: ui/chat/disappearing_settings.slint:19
 #: ui/chat/disappearing_settings.slint:19
 #: ui/chat/disappearing_settings.slint:19
@@ -1375,6 +1390,7 @@ msgid "Resend"
 msgstr ""
 
 #: ui/chat/message_context_menu.slint:614
+msgctxt "message action"
 msgid "Reply"
 msgstr ""
 
@@ -1404,6 +1420,7 @@ msgid "Unpin"
 msgstr ""
 
 #: ui/chat/message_context_menu.slint:706
+msgctxt "message action"
 msgid "Pin"
 msgstr ""
 
@@ -1453,10 +1470,12 @@ msgid "not delivered"
 msgstr ""
 
 #: ui/chat/message_footer.slint:164
+msgctxt "delivery status"
 msgid "delivered"
 msgstr ""
 
 #: ui/chat/message_footer.slint:165
+msgctxt "delivery status"
 msgid "read"
 msgstr ""
 
@@ -1465,6 +1484,7 @@ msgid "broadcast"
 msgstr ""
 
 #: ui/chat/message_footer.slint:167
+msgctxt "delivery status"
 msgid "sent"
 msgstr ""
 
@@ -1559,14 +1579,17 @@ msgid "Delivery could not be confirmed, tap to retry"
 msgstr ""
 
 #: ui/chat/message_footer.slint:292
+msgctxt "delivery status"
 msgid "Delivered"
 msgstr ""
 
 #: ui/chat/message_footer.slint:293
+msgctxt "delivery status"
 msgid "Read"
 msgstr ""
 
 #: ui/chat/message_footer.slint:293
+msgctxt "delivery status"
 msgid "Sent"
 msgstr ""
 
@@ -1660,9 +1683,8 @@ msgstr ""
 msgid "📎 Attachment"
 msgstr ""
 
-#: ui/chat/message_quote.slint:176 ui/mesh/mesh_peer_sheet.slint:109
-#: ui/chat/message_quote.slint:176 ui/mesh/mesh_peer_sheet.slint:109
-#: ui/chat/message_quote.slint:176 ui/mesh/mesh_peer_sheet.slint:109
+#: ui/chat/message_quote.slint:176
+msgctxt "message preview"
 msgid "Message"
 msgstr ""
 
@@ -1915,7 +1937,6 @@ msgid "Close"
 msgstr ""
 
 #. is not a name.
-#: ui/components/emoji_picker.slint:73 ui/components/gif_picker.slint:181
 #: ui/components/emoji_picker.slint:73 ui/components/gif_picker.slint:181
 msgid "Recent"
 msgstr ""
@@ -2183,6 +2204,12 @@ msgstr ""
 msgid "Cancel search"
 msgstr ""
 
+#. stored and compared). The name a person reads is separate.
+#: ui/components/unified_search.slint:615
+msgctxt "search filter"
+msgid "All"
+msgstr ""
+
 #: ui/components/unified_search.slint:617
 #: ui/components/unified_search.slint:617
 #: ui/components/unified_search.slint:617
@@ -2207,7 +2234,13 @@ msgid "Links"
 msgstr ""
 
 #: ui/components/unified_search.slint:621
+msgctxt "search filter"
 msgid "Voice"
+msgstr ""
+
+#: ui/components/unified_search.slint:629
+msgctxt "tab"
+msgid "Selected"
 msgstr ""
 
 #: ui/components/unified_search.slint:654
@@ -2239,14 +2272,15 @@ msgid "Relevance"
 msgstr ""
 
 #: ui/components/unified_search.slint:685
+msgctxt "search sort"
 msgid "Newest"
 msgstr ""
 
 #: ui/components/unified_search.slint:685
+msgctxt "search sort"
 msgid "Oldest"
 msgstr ""
 
-#: ui/components/unified_search.slint:685
 #: ui/components/unified_search.slint:685
 msgid "Largest"
 msgstr ""
@@ -2310,6 +2344,7 @@ msgid "Filter by conversation"
 msgstr ""
 
 #: ui/components/unified_search.slint:723
+msgctxt "sender filter"
 msgid "From"
 msgstr ""
 
@@ -2318,6 +2353,7 @@ msgid "From: {}"
 msgstr ""
 
 #: ui/components/unified_search.slint:723
+msgctxt "conversation filter"
 msgid "In"
 msgstr ""
 
@@ -2341,7 +2377,7 @@ msgstr ""
 msgid "Clear recent searches"
 msgstr ""
 
-#: ui/components/unified_search.slint:765 ui/modals/jarvis_memory.slint:107
+#: ui/components/unified_search.slint:765
 msgid "Clear"
 msgstr ""
 
@@ -2447,6 +2483,7 @@ msgid "No matches on this device"
 msgstr ""
 
 #: ui/components/unified_search.slint:1115
+msgctxt "date filter"
 msgid "When"
 msgstr ""
 
@@ -2529,6 +2566,7 @@ msgid "Join location cell"
 msgstr ""
 
 #: ui/mesh/mesh_compose_sheet.slint:95
+msgctxt "compose menu"
 msgid "New"
 msgstr ""
 
@@ -2882,6 +2920,11 @@ msgstr ""
 
 #: ui/mesh/mesh_peer_sheet.slint:102
 msgid "Verified"
+msgstr ""
+
+#: ui/mesh/mesh_peer_sheet.slint:109 ui/modals/profile_action_tiles.slint:34
+#: ui/mesh/mesh_peer_sheet.slint:109 ui/modals/profile_action_tiles.slint:34
+msgid "Message"
 msgstr ""
 
 #: ui/mesh/mesh_peer_sheet.slint:116 ui/mesh/mesh_peer_sheet.slint:186
@@ -3287,14 +3330,17 @@ msgid "No members to show yet"
 msgstr ""
 
 #: ui/modals/channel_members.slint:317
+msgctxt "member status"
 msgid "invited"
 msgstr ""
 
 #: ui/modals/channel_members.slint:335
+msgctxt "member moderation"
 msgid "muted"
 msgstr ""
 
 #: ui/modals/channel_members.slint:353
+msgctxt "member identity"
 msgid "unverified"
 msgstr ""
 
@@ -3302,7 +3348,8 @@ msgstr ""
 msgid "Actions for {}"
 msgstr ""
 
-#: ui/modals/channel_members.slint:435 ui/modals/invite_member.slint:186
+#: ui/modals/channel_members.slint:435
+msgctxt "member list"
 msgid "Banned"
 msgstr ""
 
@@ -3526,6 +3573,11 @@ msgstr ""
 msgid "Muted"
 msgstr ""
 
+#: ui/modals/channel_settings.slint:427
+msgctxt "notifications"
+msgid "Off"
+msgstr ""
+
 #: ui/modals/channel_settings.slint:449
 msgid "Call history"
 msgstr ""
@@ -3645,10 +3697,12 @@ msgid "Messages expire after the chosen time."
 msgstr ""
 
 #: ui/modals/create_channel.slint:566
+msgctxt "message expiry"
 msgid "After"
 msgstr ""
 
 #: ui/modals/create_channel.slint:591
+msgctxt "message expiry"
 msgid "hours"
 msgstr ""
 
@@ -3740,6 +3794,7 @@ msgid "Group"
 msgstr ""
 
 #: ui/modals/forward_message.slint:223
+msgctxt "chat type"
 msgid "Secret"
 msgstr ""
 
@@ -3916,10 +3971,12 @@ msgid "Private requests use end-to-end encryption\nwith no server involvement"
 msgstr ""
 
 #: ui/modals/friends_requests_tab.slint:408
+msgctxt "request type"
 msgid "Private · {}"
 msgstr ""
 
 #: ui/modals/friends_requests_tab.slint:408
+msgctxt "request type"
 msgid "Private"
 msgstr ""
 
@@ -3955,6 +4012,10 @@ msgstr ""
 msgid "Search by name or username..."
 msgstr ""
 
+#: ui/modals/invite_member.slint:186
+msgid "Banned"
+msgstr ""
+
 #: ui/modals/invite_member.slint:256
 msgid "Invite {n} user"
 msgid_plural "Invite {n} users"
@@ -3981,6 +4042,11 @@ msgstr ""
 
 #: ui/modals/jarvis_memory.slint:94
 msgid "Jarvis memory"
+msgstr ""
+
+#: ui/modals/jarvis_memory.slint:107
+msgctxt "chat history"
+msgid "Clear"
 msgstr ""
 
 #: ui/modals/jarvis_memory.slint:108
@@ -4015,6 +4081,7 @@ msgid "Select an entity to map its connections"
 msgstr ""
 
 #: ui/modals/join_channel.slint:111
+msgctxt "membership status"
 msgid "Joined"
 msgstr ""
 
@@ -4062,9 +4129,8 @@ msgstr ""
 msgid "Navigation"
 msgstr ""
 
-#: ui/modals/keyboard_shortcuts.slint:124 ui/sidebar/sidebar.slint:68
-#: ui/modals/keyboard_shortcuts.slint:124 ui/sidebar/sidebar.slint:68 ui/sidebar/sidebar.slint:463
-#: ui/modals/keyboard_shortcuts.slint:124 ui/sidebar/sidebar.slint:68 ui/sidebar/sidebar.slint:463 ui/sidebar/sidebar_header.slint:66
+#: ui/modals/keyboard_shortcuts.slint:124
+msgctxt "action"
 msgid "Search"
 msgstr ""
 
@@ -4281,11 +4347,12 @@ msgstr ""
 
 #: ui/modals/profile_action_tiles.slint:39
 #: ui/modals/profile_action_tiles.slint:39
+msgctxt "action"
 msgid "Call"
 msgstr ""
 
-#: ui/modals/profile_info_card.slint:57 ui/settings/settings_screen.slint:283
-#: ui/modals/profile_info_card.slint:57 ui/settings/settings_screen.slint:283
+#: ui/modals/profile_info_card.slint:57
+msgctxt "profile bio"
 msgid "About"
 msgstr ""
 
@@ -4840,18 +4907,22 @@ msgid "Password strength: Strong"
 msgstr ""
 
 #: ui/pages/register.slint:440
+msgctxt "password strength"
 msgid "Weak"
 msgstr ""
 
 #: ui/pages/register.slint:441
+msgctxt "password strength"
 msgid "Fair"
 msgstr ""
 
 #: ui/pages/register.slint:442
+msgctxt "password strength"
 msgid "Good"
 msgstr ""
 
 #: ui/pages/register.slint:442
+msgctxt "password strength"
 msgid "Strong"
 msgstr ""
 
@@ -5270,10 +5341,12 @@ msgid "Match this device's light or dark setting"
 msgstr ""
 
 #: ui/settings/appearance_settings.slint:49
+msgctxt "theme"
 msgid "Light"
 msgstr ""
 
 #: ui/settings/appearance_settings.slint:50
+msgctxt "theme"
 msgid "Dark"
 msgstr ""
 
@@ -5290,7 +5363,13 @@ msgid "Text size"
 msgstr ""
 
 #: ui/settings/appearance_settings.slint:251
+msgctxt "text size"
 msgid "Small"
+msgstr ""
+
+#: ui/settings/appearance_settings.slint:252
+msgctxt "text size"
+msgid "Default"
 msgstr ""
 
 #: ui/settings/appearance_settings.slint:252
@@ -5298,7 +5377,13 @@ msgid "Match this device's font size"
 msgstr ""
 
 #: ui/settings/appearance_settings.slint:253
+msgctxt "text size"
 msgid "Large"
+msgstr ""
+
+#: ui/settings/appearance_settings.slint:254
+msgctxt "text size"
+msgid "Largest"
 msgstr ""
 
 #: ui/settings/appearance_settings.slint:341
@@ -5340,10 +5425,12 @@ msgid "Message spacing"
 msgstr ""
 
 #: ui/settings/appearance_settings.slint:482
+msgctxt "message spacing"
 msgid "Comfortable"
 msgstr ""
 
 #: ui/settings/appearance_settings.slint:483
+msgctxt "message spacing"
 msgid "Compact"
 msgstr ""
 
@@ -5368,6 +5455,7 @@ msgid "Ctrl+F"
 msgstr ""
 
 #: ui/settings/appearance_settings.slint:603
+msgctxt "search shortcut"
 msgid "Both"
 msgstr ""
 
@@ -5581,6 +5669,10 @@ msgstr ""
 msgid "Show when you're typing a message"
 msgstr ""
 
+#: ui/settings/settings_screen.slint:283 ui/settings/settings_screen.slint:617
+msgid "About"
+msgstr ""
+
 #: ui/sidebar/channel_list_item.slint:238 ui/sidebar/dm_list_item.slint:238
 msgid "Pinned"
 msgstr ""
@@ -5641,6 +5733,11 @@ msgstr ""
 
 #: ui/sidebar/section_context_menu.slint:259
 msgid "Sort by"
+msgstr ""
+
+#: ui/sidebar/section_context_menu.slint:277
+msgctxt "conversation sort"
+msgid "Recent"
 msgstr ""
 
 #: ui/sidebar/section_context_menu.slint:294
@@ -5719,6 +5816,12 @@ msgstr ""
 #: ui/sidebar/sidebar.slint:65 ui/sidebar/sidebar.slint:539
 #: ui/sidebar/sidebar.slint:65 ui/sidebar/sidebar.slint:539 ui/sidebar/sidebar.slint:552
 msgid "Add contact"
+msgstr ""
+
+#: ui/sidebar/sidebar.slint:68 ui/sidebar/sidebar.slint:459
+#: ui/sidebar/sidebar.slint:68 ui/sidebar/sidebar.slint:459 ui/sidebar/sidebar_header.slint:48
+#: ui/sidebar/sidebar.slint:68 ui/sidebar/sidebar.slint:459 ui/sidebar/sidebar_header.slint:48
+msgid "Search"
 msgstr ""
 
 #. "Archived Chats" bar; its chevron is the way back.

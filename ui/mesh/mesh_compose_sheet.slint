@@ -92,7 +92,7 @@ export component MeshComposeSheet inherits Rectangle {
     property <string> page-title: root.page == "group" ? @tr("New private group")
         : root.page == "channel" ? @tr("Join public channel")
         : root.page == "invite" ? @tr("Join with invite")
-        : root.page == "cell" ? @tr("Join location cell") : @tr("New");
+        : root.page == "cell" ? @tr("Join location cell") : @tr("compose menu" => "New");
 
     ModalContainer {
         show: root.show-modal;

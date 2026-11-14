@@ -405,7 +405,7 @@ export component RequestsTab inherits VerticalLayout {
                                     }
 
                                     Text {
-                                        text: request.sent-at != "" ? @tr("Private · {}", request.sent-at) : @tr("Private");
+                                        text: request.sent-at != "" ? @tr("request type" => "Private · {}", request.sent-at) : @tr("request type" => "Private");
                                         overflow: elide;
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
