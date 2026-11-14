@@ -865,7 +865,9 @@ pub fn load_thread_data(
             let content_preview = root_message
                 .as_text()
                 .map(|t| chatter_core::domain::message::truncate_preview_text(t, 100))
-                .unwrap_or_else(|| "[Attachment]".to_string());
+                // No text body: say what the root is (a call record, a
+                // notice, attachments) as the chat list does, not "[Attachment]".
+                .unwrap_or_else(|| root_message.sidebar_preview(None, None, None));
             let replies = ui_ctx
                 .list_thread_replies(&root_message_id, None, 50)
                 .unwrap_or_default();
