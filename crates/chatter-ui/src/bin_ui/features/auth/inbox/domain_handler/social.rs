@@ -189,6 +189,11 @@ pub(super) fn handle_friend_accepted(
             // Single source of truth: the chat list is rebuilt from core in
             // one pass.
             crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
+            // A profile already open on this user still offered "Add friend".
+            let state = w.global::<crate::ModalHostState>();
+            if state.get_profile_user_id().as_str() == friend_id.to_string() {
+                state.set_profile_is_friend(ui_ctx.is_friend(&friend_id));
+            }
             tracing::info!(
                 friend_id = %friend_id,
                 "Friend accepted - refreshed DM sidebar"

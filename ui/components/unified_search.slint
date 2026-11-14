@@ -798,6 +798,10 @@ export component UnifiedSearch inherits Rectangle {
             // People — exact-handle resolution (resolve-on-Enter, no enumeration).
             if root.query-is-handle || root.person-status != "": VerticalLayout {
                 spacing: Spacing.xxs;
+                // Content height only: stretching with the list below pushed
+                // the row far under its header.
+                vertical-stretch: 0;
+                alignment: start;
                 Text {
                     text: "People";
                     color: Colors.text-muted;
