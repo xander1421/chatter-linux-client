@@ -33,6 +33,7 @@ component ParticipantTile inherits Rectangle {
     // bar: with full 44px device carets the bar holds seven targets, all a
     // 320px phone fits (owner 2026-11-13).
     in property <bool> show-camera-swap: false;
+    in property <length> top-clearance: 0px;
     in property <bool> camera-swap-enabled: true;
     callback clicked();
     callback swap-camera();
@@ -188,7 +189,7 @@ component ParticipantTile inherits Rectangle {
     // Top-left: the screen-share mark owns the top-right corner.
     if root.show-camera-swap: IconAction {
         x: Spacing.xs;
-        y: Spacing.xs;
+        y: root.top-clearance + Spacing.xs;
         width: 44px;
         height: 44px;
         enabled: root.camera-swap-enabled;
@@ -339,6 +340,7 @@ export component ActiveCallView inherits Rectangle {
                 video-frame: source-index >= 0 && source-index == call-data.participants.length - 1 ? local-video-frame
                     : source-index >= 0 && remote-video-frames.length > source-index ? remote-video-frames[source-index] : local-video-frame;
                 bottom-clearance: full-stage ? root.overlay-bottom : 0px;
+                top-clearance: full-stage ? root.call-header-height : 0px;
                 border-radius: full-stage ? 0px : 6px;
                 is-local: source-index == call-data.participants.length - 1;
                 // Mobile + camera on: offer the front/back lens swap.
@@ -549,12 +551,15 @@ export component ActiveCallView inherits Rectangle {
             }
         }
 
-        // Duration and verification share a translucent row over the video.
-        Rectangle {
+        // This material is painted after the full-size stage: it overlays
+        // the video without reserving a separate strip of layout space.
+        GlassSurface {
             y: 0px;
             width: 100%;
             height: root.call-header-height;
-            background: Colors.background.with-alpha(0.6);
+            material-level: 3;
+            elevation: 0;
+            show-edge: false;
             accessible-role: groupbox;
             accessible-label: "Call information";
             HorizontalLayout {

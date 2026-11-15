@@ -4,6 +4,8 @@
 
 #[cfg(target_os = "android")]
 pub mod android_camera;
+#[cfg(target_os = "ios")]
+mod ios_camera;
 #[cfg(target_os = "android")]
 pub mod android_screen;
 mod audio_capture;

@@ -222,6 +222,7 @@ impl RoomManager {
     }
 
     /// Start and publish a new camera before retiring the current capture.
+    #[cfg(not(target_os = "ios"))]
     pub async fn switch_camera(
         &self,
         device_path: Option<&str>,
@@ -272,6 +273,51 @@ impl RoomManager {
         *self.video_capture.write() = replacement;
         *self.camera_track_sid.write() = Some(new_sid);
         Ok(())
+    }
+
+    /// AVFoundation's single-camera session needs the old capture released
+    /// before opening another lens. Keep the published LiveKit source and
+    /// restore the previous lens if the replacement cannot produce a frame.
+    #[cfg(target_os = "ios")]
+    pub async fn switch_camera(
+        &self,
+        device_path: Option<&str>,
+        config: Option<VideoCaptureConfig>,
+    ) -> Result<(), CallError> {
+        let local_id = self.room.read().as_ref().ok_or(CallError::NotInCall)?
+            .local_participant().identity().to_string();
+        let (source, old_path, old_config) = {
+            let capture = self.video_capture.read();
+            let source = capture.active_source().ok_or(CallError::CameraUnavailable)?;
+            let (path, config) = capture.reconnect_selection();
+            (source, path, config)
+        };
+        let preview = self.shared_frames.as_ref().map(|shared| {
+            super::super::video_capture::LocalPreview {
+                shared: shared.clone(),
+                local_id,
+                screen_share: false,
+            }
+        });
+        self.video_capture.write().stop();
+        let replacement = self.video_capture.write().start_with_source(
+            device_path, Some(config.unwrap_or_else(|| old_config.clone())), preview.clone(), Some(source.clone()),
+        );
+        let changed = match replacement {
+            Ok((_, ready)) => matches!(tokio::time::timeout(std::time::Duration::from_secs(60), ready).await, Ok(Ok(()))),
+            Err(_) => false,
+        };
+        if changed { return Ok(()); }
+        self.video_capture.write().stop();
+        let restore = self.video_capture.write().start_with_source(
+            Some(&old_path), Some(old_config), preview, Some(source),
+        );
+        if let Ok((_, ready)) = restore {
+            if !matches!(tokio::time::timeout(std::time::Duration::from_secs(60), ready).await, Ok(Ok(()))) {
+                self.video_capture.write().stop();
+            }
+        }
+        Err(CallError::CameraUnavailable)
     }
 
     /// Flip the active camera between the front and back lens mid-call.

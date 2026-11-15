@@ -3,6 +3,7 @@
 //! - Linux: V4L2 via `v4l` crate
 //! - Windows: GStreamer `ksvideosrc` (Windows Media Foundation)
 //! - Android: CameraX via the registered platform bridge
+//! - iOS: AVFoundation via the native app shell
 //!
 //! Provides camera device enumeration and video frame capture for LiveKit publishing.
 
@@ -137,6 +138,11 @@ impl VideoCapture {
             Self::list_devices_macos()
         }
 
+        #[cfg(target_os = "ios")]
+        {
+            Ok(super::ios_camera::list_devices())
+        }
+
         #[cfg(target_os = "android")]
         {
             // CameraX selects by lens facing rather than device node; surface
@@ -162,6 +168,7 @@ impl VideoCapture {
             target_os = "linux",
             target_os = "windows",
             target_os = "macos",
+            target_os = "ios",
             target_os = "android"
         )))]
         {
@@ -323,6 +330,16 @@ impl VideoCapture {
         config: Option<VideoCaptureConfig>,
         local_preview: Option<LocalPreview>,
     ) -> Result<(NativeVideoSource, tokio::sync::oneshot::Receiver<()>), CallError> {
+        self.start_with_source(device_path, config, local_preview, None)
+    }
+
+    pub(crate) fn start_with_source(
+        &mut self,
+        device_path: Option<&str>,
+        config: Option<VideoCaptureConfig>,
+        local_preview: Option<LocalPreview>,
+        existing_source: Option<NativeVideoSource>,
+    ) -> Result<(NativeVideoSource, tokio::sync::oneshot::Receiver<()>), CallError> {
         if self.running.load(Ordering::SeqCst) {
             return Err(CallError::TrackPublishFailed(
                 "Video capture already running".to_string(),
@@ -346,13 +363,13 @@ impl VideoCapture {
             config.fps
         );
 
-        let video_source = NativeVideoSource::new(
+        let video_source = existing_source.unwrap_or_else(|| NativeVideoSource::new(
             VideoResolution {
                 width: config.width,
                 height: config.height,
             },
             false,
-        );
+        ));
 
         let source_clone = video_source.clone();
         let running = self.running.clone();
@@ -440,13 +457,18 @@ impl VideoCapture {
             );
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+        #[cfg(target_os = "ios")]
+        {
+            super::ios_camera::run_capture(device_path, video_source, running, width, fps, local_preview, ready_tx);
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos", target_os = "ios")))]
         #[cfg(not(target_os = "android"))]
         let _ = local_preview;
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos", target_os = "ios")))]
         {
-            // Unused on platforms without a camera backend (e.g. iOS);
+            // Unused on platforms without a camera backend;
             // only the android branch below consumes it.
             #[cfg(not(target_os = "android"))]
             let _ = &device_path;

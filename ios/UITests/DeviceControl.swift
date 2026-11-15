@@ -97,16 +97,26 @@ final class DeviceControl: XCTestCase {
             } else if step == "activate" {
                 app.activate()
                 Thread.sleep(forTimeInterval: 1.5)
-            } else if step == "allow-microphone" {
-                // Grant only the microphone prompt triggered by the preceding
-                // recording tap. Never accept an unrelated system alert.
+            } else if step == "allow-microphone" || step == "allow-camera" {
+                // Grant only the requested Chatter permission triggered by
+                // the preceding tap. Never accept an unrelated system alert.
+                let permission = step == "allow-camera" ? "camera" : "microphone"
                 let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
                 let alert = springboard.alerts.firstMatch
                 if alert.exists && alert.staticTexts.containing(
-                    NSPredicate(format: "label CONTAINS[c] %@", "microphone")
+                    NSPredicate(format: "label CONTAINS[c] %@", permission)
+                ).firstMatch.exists && alert.staticTexts.containing(
+                    NSPredicate(format: "label CONTAINS[c] %@", "Chatter")
                 ).firstMatch.exists {
                     alert.buttons.matching(NSPredicate(format: "label == %@", "Allow")).firstMatch.tap()
                 }
+            } else if let label = step.dropFirstIfPrefixed("tap-button:") {
+                let button = app.buttons[String(label)].firstMatch
+                guard button.waitForExistence(timeout: 5) else {
+                    XCTFail("Missing app button: \(label)")
+                    return
+                }
+                button.tap()
             } else if let secs = step.dropFirstIfPrefixed("wait:").flatMap(Double.init) {
                 // For steps that kick off slow work (registration does key
                 // generation + several RPCs) — screenshot after it settles.

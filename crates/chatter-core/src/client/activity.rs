@@ -19,6 +19,11 @@ pub struct ActivityStatus {
 
 impl ChatterClient {
     pub fn activity_status(&self) -> ActivityStatus {
+        // The foreground ntfy connection cannot wake a suspended iOS app.
+        // Do not present its subscription as native push registration.
+        #[cfg(target_os = "ios")]
+        let push = "Unavailable on iPhone";
+        #[cfg(not(target_os = "ios"))]
         let push = if self.push_url.lock().is_none() {
             "Off"
         } else if self.anon_mode_enabled() {
